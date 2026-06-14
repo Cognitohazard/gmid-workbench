@@ -10,4 +10,5 @@ export * from './qa';
 export * from './expr';
 export * from './derive';
 export * from './lookup';
+export * from './series';
 export * from './device';

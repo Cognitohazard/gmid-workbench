@@ -90,6 +90,25 @@ describe('generateDemoDevice', () => {
     expect(Array.from(ida)).toEqual(Array.from(idb));
   });
 
+  it('adds an opt-in vds axis with channel-length modulation', () => {
+    const dev = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } }); // 4 vds nodes
+    const nVds = 4;
+    expect(dev.grid.axes.map((a) => a.name)).toEqual(['l', 'vds', 'vgs']);
+    expect(dev.grid.shape).toEqual([4, nVds, 121]);
+
+    const id = col(dev.grid, 'id');
+    const gm = col(dev.grid, 'gm');
+    const [, , nVgs] = dev.grid.shape;
+    const li = 0;
+    const vi = 80; // strong inversion, where CLM is clearly visible
+    const flat = (di: number) => (li * nVds + di) * nVgs + vi;
+    for (let di = 1; di < nVds; di++) {
+      expect(id[flat(di)]).toBeGreaterThan(id[flat(di - 1)]); // id rises with vds
+      // gm/id is vds-independent (the CLM factor cancels).
+      expect(gm[flat(di)] / id[flat(di)]).toBeCloseTo(gm[flat(0)] / id[flat(0)], 12);
+    }
+  });
+
   it('respects a custom vgs sweep and width', () => {
     const dev = generateDemoDevice({
       lengths: [1e-6],

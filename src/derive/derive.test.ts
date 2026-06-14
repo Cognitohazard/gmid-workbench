@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { derive, deriveColumn, tableScope } from './index';
+import { derive, deriveColumn, compileExpr, evalColumn, tableScope } from './index';
 import type { Axis, Grid } from '../types';
 import { generateDemoDevice } from '../demo';
 import { makeGrid } from '../grid';
@@ -49,6 +49,20 @@ describe('tableScope', () => {
   it('returns undefined for unknown names', () => {
     const { grid } = generateDemoDevice();
     expect(tableScope(grid).resolve('does_not_exist')).toBeUndefined();
+  });
+
+  it('resolves derived quantity names by evaluating their definition', () => {
+    const { grid } = generateDemoDevice();
+    const scope = tableScope(grid);
+    const gm = col(grid, 'gm');
+    const id = col(grid, 'id');
+    const ft = scope.resolve('ft') as Float64Array; // gm/(2*pi*cgg)
+    const cgg = col(grid, 'cgg');
+    expect(ft).toBeInstanceOf(Float64Array);
+    expect(ft[10]).toBeCloseTo(gm[10] / (2 * Math.PI * cgg[10]), 18);
+    // usable inside a larger expression, not just as a bare lookup
+    const expr = deriveColumn(grid, 'gm_id * 2'); // gm_id is a derived name
+    expect(expr[10]).toBeCloseTo((gm[10] / id[10]) * 2, 12);
   });
 });
 
@@ -125,5 +139,18 @@ describe('deriveColumn', () => {
     const id = col(grid, 'id');
     expect(out.length).toBe(gm.length);
     expect(out[10]).toBeCloseTo((gm[10] / id[10]) * UT, 12);
+  });
+
+  it('compileExpr + evalColumn evaluate a precompiled expression (compile once)', () => {
+    const { grid } = generateDemoDevice();
+    const compiled = compileExpr('gm/id');
+    const out = evalColumn(grid, compiled);
+    const gm = col(grid, 'gm');
+    const id = col(grid, 'id');
+    expect(out.length).toBe(gm.length);
+    for (let i = 0; i < out.length; i++) expect(out[i]).toBeCloseTo(gm[i] / id[i], 12);
+    // same compiled expr reused over another grid yields that grid's column
+    const dev2 = generateDemoDevice({ W: 5e-6 });
+    expect(evalColumn(dev2.grid, compiled).length).toBe(dev2.grid.shape[0] * dev2.grid.shape[1]);
   });
 });

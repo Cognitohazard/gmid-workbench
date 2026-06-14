@@ -1,0 +1,17 @@
+:root {
+  color-scheme: light dark;
+  font: 13px/1.45 system-ui, sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+#app {
+  display: flex;
+  flex-direction: column;
+}

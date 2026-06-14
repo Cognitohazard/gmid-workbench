@@ -2,7 +2,7 @@
 // engine scopes and dogfoods the expression engine to compute derived columns
 // (gm/ID, fT, V*, FOMs, …). Pure, deterministic, zero DOM imports.
 
-import type { DeviceTable, Grid, Scope, Value } from '../types';
+import type { CompiledExpr, DeviceTable, Grid, Scope, Value } from '../types';
 import { DERIVED_QUANTITIES } from '../namespace';
 import { createEngine } from '../expr';
 
@@ -16,17 +16,27 @@ const DERIVED_COMPILED = new Map(
 const gridSize = (grid: Grid): number => grid.shape.reduce((a, b) => a * b, 1);
 
 /**
- * A Scope over a grid: resolve a base or axis name to its full-length flat
- * column. Axis columns were materialized into `grid.quantities` by makeGrid, so
- * a single map lookup covers both axes and stored quantities. Unknown names
- * return undefined (the engine then falls back to its constant map, else errors).
+ * A Scope over a grid: resolve a name to its full-length flat column.
+ *
+ * Resolution order: stored quantities (base + materialized axis columns) first,
+ * then standard derived quantities by name — a derived key (e.g. "ft", "vstar",
+ * "gm_id") resolves by evaluating its definition against this same scope, so
+ * derived names are usable anywhere in an expression ("ft", "ft*2", "gm_id-1"),
+ * not just as a whole-expression lookup. Stored columns always win, so real data
+ * shadows a same-named derived. Unknown names return undefined (the engine then
+ * tries its constant map, else errors). Derived definitions reference only base
+ * quantities, so the recursion always bottoms out.
  */
 export function tableScope(grid: Grid): Scope {
-  return {
+  const scope: Scope = {
     resolve(name: string): Value | undefined {
-      return grid.quantities.get(name);
+      const stored = grid.quantities.get(name);
+      if (stored) return stored;
+      const def = DERIVED_COMPILED.get(name);
+      return def ? asColumn(def.eval(scope), gridSize(grid)) : undefined;
     },
   };
+  return scope;
 }
 
 /** Broadcast a scalar engine result into a full-length grid column. */
@@ -35,6 +45,16 @@ function asColumn(v: Value, size: number): Float64Array {
   const out = new Float64Array(size);
   out.fill(v);
   return out;
+}
+
+/** Compile an expression once (shared engine) for repeated evaluation. */
+export function compileExpr(src: string): CompiledExpr {
+  return ENGINE.compile(src);
+}
+
+/** Evaluate an already-compiled expression over `grid`, returning a full column. */
+export function evalColumn(grid: Grid, compiled: CompiledExpr): Float64Array {
+  return asColumn(compiled.eval(tableScope(grid)), gridSize(grid));
 }
 
 /**
@@ -46,15 +66,14 @@ export function derive(table: DeviceTable, key: string): Float64Array {
   if (!compiled) {
     throw new Error(`derive: unknown derived quantity "${key}"`);
   }
-  const result = compiled.eval(tableScope(table.grid));
-  return asColumn(result, gridSize(table.grid));
+  return evalColumn(table.grid, compiled);
 }
 
 /**
- * Evaluate an arbitrary expression over `grid`, returning a full-length column.
- * For charting custom expressions against the base namespace + constants.
+ * Compile + evaluate an arbitrary expression over `grid`, returning a full-length
+ * column. For charting custom expressions against the base namespace + constants.
+ * Hot loops that reuse one expression should compileExpr() once and evalColumn().
  */
 export function deriveColumn(grid: Grid, exprSrc: string): Float64Array {
-  const result = ENGINE.evaluate(exprSrc, tableScope(grid));
-  return asColumn(result, gridSize(grid));
+  return evalColumn(grid, compileExpr(exprSrc));
 }

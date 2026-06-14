@@ -5,3 +5,9 @@ coverage/
 *.tsbuildinfo
 *.log
 .DS_Store
+
+# playwright
+test-results/
+playwright-report/
+blob-report/
+__screens__/
