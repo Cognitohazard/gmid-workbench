@@ -11,3 +11,8 @@ test-results/
 playwright-report/
 blob-report/
 __screens__/
+
+# python
+__pycache__/
+*.pyc
+.venv/

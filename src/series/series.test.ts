@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { familyCurves, plottableQuantities } from './index';
+import { familyCurves, plottableQuantities, fixTable } from './index';
 import { generateDemoDevice } from '../demo';
 import { lookup } from '../lookup';
 import { UT } from '../constants';
@@ -70,6 +70,35 @@ describe('familyCurves', () => {
     expect(derived).toContain('ft');
     expect(derived).not.toContain('id_w');
     expect(derived).not.toContain('gm_cgd');
+  });
+
+  it('famName=null yields a single curve over X with the other axes fixed', () => {
+    const dev3 = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } }); // l, vds, vgs
+    const fc = familyCurves(dev3, 'gm/id', 'vgs', null, { vds: 0.6 });
+    expect(fc.lines).toHaveLength(1);
+    expect(fc.famName).toBe('');
+    expect(fc.famValues.length).toBe(0);
+    expect(fc.lines[0].length).toBe(fc.x.length);
+    // The single curve sits at l = first node, vds = 0.6.
+    const i = 70;
+    const L = dev3.grid.axes.find((a) => a.name === 'l')!.values[0];
+    const expected = lookup(dev3, { l: L, vds: 0.6, vgs: fc.x[i] }, ['gm_id']).gm_id;
+    expect(fc.lines[0][i]).toBeCloseTo(expected, 9);
+  });
+
+  it('fixTable collapses an axis into a lower-D table, keeping id + meta', () => {
+    const dev3 = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } }); // l, vds, vgs
+    const t = fixTable(dev3, { vds: 0.6 });
+    expect(t.grid.axes.map((a) => a.name)).toEqual(['l', 'vgs']); // vds collapsed
+    expect(t.id).toBe(dev3.id);
+    expect(t.meta.W).toBe(dev3.meta.W);
+    // values match the original table interpolated at vds = 0.6.
+    const i = 60;
+    const L = t.grid.axes[0].values[0];
+    expect(lookup(t, { l: L, vgs: t.grid.axes[1].values[i] }, ['gm_id']).gm_id).toBeCloseTo(
+      lookup(dev3, { l: L, vds: 0.6, vgs: t.grid.axes[1].values[i] }, ['gm_id']).gm_id,
+      9,
+    );
   });
 
   it('throws on a missing axis, identical x/family axes, or an invalid expression', () => {

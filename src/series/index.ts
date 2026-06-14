@@ -16,11 +16,21 @@ const DERIVED_NAMES = DERIVED_QUANTITIES.map((q) => ({
   names: compileExpr(q.expr).names,
 }));
 
+/**
+ * Collapse the named axes of a table — fixing each at a coordinate (interpolated
+ * by sliceGrid, clamped at the edges) — into a lower-dimensional table, keeping
+ * identity and metadata. Lets a consumer reduce an N-D table to the shape a tool
+ * needs (e.g. an [l × vgs] table for sizeDevice) without hand-rebuilding the type.
+ */
+export function fixTable(table: DeviceTable, fixed: Record<string, number>): DeviceTable {
+  return { ...table, grid: sliceGrid(table.grid, fixed) };
+}
+
 export interface FamilyCurves {
   readonly xName: string;
   readonly x: Float64Array; // shared X lattice (the X axis nodes)
-  readonly famName: string;
-  readonly famValues: Float64Array; // one per curve
+  readonly famName: string; // '' when there is no family (a single curve)
+  readonly famValues: Float64Array; // one per curve; empty when famName is ''
   readonly lines: Float64Array[]; // lines[k] = expr along x at famValues[k]
 }
 
@@ -29,6 +39,10 @@ export interface FamilyCurves {
  * other non-X axis at the coordinate given in `fixed` (or its first node when
  * absent), slice to a 1-D grid over `xName`, and evaluate `expr` over the slice.
  * Every curve aligns to the shared X lattice.
+ *
+ * Pass `famName = null` for a SINGLE curve over X (every other axis fixed) — e.g.
+ * a table whose only sweep axis is X. The result then has `famName: ''`, empty
+ * `famValues`, and one line.
  *
  * `expr` is any expression over the base namespace + constants (e.g. "gm/id",
  * "gm*gds", "2*id/gm"). `fixed` carries the coordinate for each extra axis (vds,
@@ -40,25 +54,38 @@ export function familyCurves(
   table: DeviceTable,
   expr: string,
   xName = 'vgs',
-  famName = 'l',
+  famName: string | null = 'l',
   fixed: Record<string, number> = {},
 ): FamilyCurves {
+  const grid = table.grid;
+  const xAxis = grid.axes.find((a) => a.name === xName);
+  if (!xAxis) throw new Error(`familyCurves: table has no "${xName}" axis`);
+  const compiled = compileExpr(expr); // parse once; reused across every curve
+
+  // Coordinates for every axis except X and `keep` (the family), interpolated.
+  const fixOthers = (at: Record<string, number>, keep: string): void => {
+    for (const a of grid.axes) {
+      if (a.name !== xName && a.name !== keep) at[a.name] = fixed[a.name] ?? a.values[0];
+    }
+  };
+
+  if (famName === null) {
+    const at: Record<string, number> = {};
+    fixOthers(at, xName); // fix everything but X (the would-be family included)
+    const line = evalColumn(sliceGrid(grid, at), compiled);
+    return { xName, x: xAxis.values, famName: '', famValues: new Float64Array(0), lines: [line] };
+  }
+
   if (xName === famName) {
     throw new Error(`familyCurves: xName and famName must differ (both "${xName}")`);
   }
-  const grid = table.grid;
-  const xAxis = grid.axes.find((a) => a.name === xName);
   const famAxis = grid.axes.find((a) => a.name === famName);
-  if (!xAxis) throw new Error(`familyCurves: table has no "${xName}" axis`);
   if (!famAxis) throw new Error(`familyCurves: table has no "${famName}" axis`);
 
-  const compiled = compileExpr(expr); // parse once; reused across every curve
   const lines: Float64Array[] = [];
   for (const fv of famAxis.values) {
     const at: Record<string, number> = { [famName]: fv };
-    for (const a of grid.axes) {
-      if (a.name !== xName && a.name !== famName) at[a.name] = fixed[a.name] ?? a.values[0];
-    }
+    fixOthers(at, famName);
     lines.push(evalColumn(sliceGrid(grid, at), compiled));
   }
 

@@ -92,13 +92,51 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ pag
   expect(errors).toEqual([]);
 });
 
-test('importer: a table without the family (L) axis errors gracefully and recovers', async ({ page }) => {
+test('importer: a single-axis table (no L) charts as one curve, no error', async ({ page }) => {
   await page.goto('/');
-  // Valid file, but no L axis → familyCurves can't build the family → visible error.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
-  await expect(page.locator('header .err')).toBeVisible();
-  // Returning to the demo must rebuild the chart (Effect B creates-when-missing).
-  await page.locator('button.demo').click();
+  await expect(page.locator('header .device')).toContainText('nch_singleL');
+  // family auto-resolves to (none); the chart renders a single curve, no error.
   await expect(page.locator('header .err')).toHaveCount(0);
   await expect(page.locator('.chart canvas').first()).toBeVisible();
+  await expect(page.locator('header .axis select').nth(1)).toHaveValue(''); // family = (none)
+});
+
+test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('header button.size').click();
+  const sizer = page.locator('aside.sizer');
+  await expect(sizer).toBeVisible();
+  await expect(sizer).toContainText('enter exactly two'); // nothing entered yet
+
+  // gm/ID = 15 (below the demo's ~30 ceiling) at ID = 100 µA.
+  await sizer.getByPlaceholder('S/A').fill('15');
+  await sizer.getByPlaceholder('A · e.g. 100u').fill('100u');
+
+  await expect(sizer.locator('.sz')).toContainText('W'); // solved a width
+  await expect(sizer.locator('.feas.ok')).toBeVisible(); // 15 < ceiling → feasible
+
+  // The sizing bias is surfaced and tracks the explore vds slider (not a hidden
+  // midpoint): move vds to 1.2 V and the panel reflects it.
+  await expect(sizer.locator('.bias')).toContainText('vds=');
+  await page.locator('header .slider input').first().fill('1.2');
+  await expect(sizer.locator('.bias')).toContainText('vds=1.2');
+  await page.screenshot({ path: `${SCREENS}/size-panel.png` });
+
+  // An out-of-range gm/ID (above the achievable ceiling) reports a clear error.
+  await sizer.getByPlaceholder('S/A').fill('60');
+  await expect(sizer.locator('.err')).toContainText('range');
+});
+
+test('explore: the X / family axis selector re-pivots the chart', async ({ page }) => {
+  await page.goto('/');
+  // Demo fans out over L by default.
+  await expect(page.locator('footer')).toContainText('l=180nm');
+  // Switch the family axis to vds → curves now fan out over vds, labelled in volts.
+  await page.locator('header .axis select').nth(1).selectOption('vds');
+  await expect(page.locator('footer')).toContainText('vds=');
+  await expect(page.locator('footer')).not.toContainText('l=180nm');
+  // l is now the remaining fixed axis (its slider appears); the chart still renders.
+  await expect(page.locator('.chart canvas').first()).toBeVisible();
+  await page.screenshot({ path: `${SCREENS}/explore-family-vds.png` });
 });
