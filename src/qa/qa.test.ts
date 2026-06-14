@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { validate, canonicalizeTable } from './index';
+import { generateDemoDevice } from '../demo';
 import type { Axis, DeviceTable, Grid, TableMeta } from '../types';
 
 // --- builders ----------------------------------------------------------------
@@ -172,6 +173,102 @@ describe('validate: multi L-slice', () => {
     const t = makeTable([axis('l', l), axis('vgs', vgs)], { gm, id });
     const steps = validate(t).filter((x) => x.rule === 'vgs-step');
     expect(steps.length).toBe(2);
+  });
+});
+
+// --- deepened data-trust checks ----------------------------------------------
+
+describe('validate: gm consistency with d(id)/d(vgs)', () => {
+  const vgs = [0.1, 0.2, 0.3, 0.4];
+  const id = [1e-3, 1.1e-3, 1.2e-3, 1.3e-3]; // slope 1e-3 ⇒ FD gm = 1e-3
+
+  it('warns when stored gm disagrees with the id derivative', () => {
+    const t = makeTable([axis('vgs', vgs)], { id, gm: [5e-3, 5e-3, 5e-3, 5e-3] }); // 5× FD
+    const c = validate(t).find((x) => x.rule === 'gm-consistency');
+    expect(c).toBeDefined();
+    expect(c?.severity).toBe('warning');
+  });
+
+  it('is silent when stored gm equals the id derivative', () => {
+    const t = makeTable([axis('vgs', vgs)], { id, gm: [1e-3, 1e-3, 1e-3, 1e-3] });
+    expect(validate(t).some((x) => x.rule === 'gm-consistency')).toBe(false);
+  });
+
+  it('does NOT warn on a valid signed PMOS sweep (magnitude comparison)', () => {
+    // vgs ascends (signed, left untouched by canonicalization); |id| decreases, so
+    // d(id)/d(vgs) is negative while magnitude gm is positive. Compared as magnitudes
+    // these agree: |−5e-3| == 5e-3 — no false "mislabeled" flag.
+    const t = makeTable([axis('vgs', [-0.6, -0.4, -0.2])], {
+      id: [3e-3, 2e-3, 1e-3], // magnitudes, falling with ascending vgs
+      gm: [5e-3, 5e-3, 5e-3], // = |d(id)/d(vgs)| = |−2e-3/0.4|
+    });
+    expect(validate(t).some((x) => x.rule === 'gm-consistency')).toBe(false);
+    expect(validate(t).some((x) => x.rule === 'id-non-monotonic')).toBe(false);
+  });
+
+  it('catches a single corrupted bias plane (per-line, not slice-wide median)', () => {
+    // 3 vds planes over the same L; gm is 10× wrong on ONLY the last plane. A pooled
+    // slice median (33% bad) would miss it; a per-line bad-fraction must catch it.
+    const vds = [0.4, 0.8, 1.2];
+    const idLine = [1e-3, 1.1e-3, 1.2e-3, 1.3e-3]; // FD gm = 1e-3
+    const id3 = [...idLine, ...idLine, ...idLine];
+    const gm3 = [
+      1e-3, 1e-3, 1e-3, 1e-3, // plane 0 correct
+      1e-3, 1e-3, 1e-3, 1e-3, // plane 1 correct
+      1e-2, 1e-2, 1e-2, 1e-2, // plane 2 corrupted (10×)
+    ];
+    const t = makeTable([axis('l', [1e-7]), axis('vds', vds), axis('vgs', vgs)], { id: id3, gm: gm3 });
+    expect(validate(t).some((x) => x.rule === 'gm-consistency')).toBe(true);
+  });
+});
+
+describe('validate: non-finite / id-monotonic / gm-sign', () => {
+  it('flags a NaN/Inf island as a non-finite error', () => {
+    const vgs = [0.1, 0.2, 0.3];
+    const t = makeTable([axis('vgs', vgs)], {
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+      gds: [1e-6, NaN, 1e-6],
+    });
+    const f = validate(t).find((x) => x.rule === 'non-finite');
+    expect(f?.severity).toBe('error');
+    expect(f?.message).toMatch(/gds/);
+  });
+
+  it('flags id that both rises and falls along vgs', () => {
+    const t = makeTable([axis('vgs', [0.1, 0.2, 0.3, 0.4])], {
+      id: [1e-3, 2e-3, 1.5e-3, 3e-3], // up, down, up
+      gm: [1e-3, 1e-3, 1e-3, 1e-3],
+    });
+    const m = validate(t).find((x) => x.rule === 'id-non-monotonic');
+    expect(m?.severity).toBe('warning');
+  });
+
+  it('flags a negative gm value', () => {
+    const t = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, -1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+    });
+    const s = validate(t).find((x) => x.rule === 'gm-sign');
+    expect(s?.severity).toBe('warning');
+  });
+
+  it('does NOT flag id rising in one bias plane and falling in another (per-line)', () => {
+    // Two vds planes, each individually monotonic (one up, one down). Tracking
+    // up/down slice-wide would falsely cry "glitch"; per-line must not.
+    const t = makeTable([axis('l', [1e-7]), axis('vds', [0.4, 0.8]), axis('vgs', [0.1, 0.2, 0.3, 0.4])], {
+      id: [1e-3, 2e-3, 3e-3, 4e-3, /* plane 1 rising */ 4e-3, 3e-3, 2e-3, 1e-3 /* plane 2 falling */],
+      gm: new Array(8).fill(1e-2), // = |central FD| on both planes ⇒ no gm-consistency noise
+    });
+    expect(validate(t).some((x) => x.rule === 'id-non-monotonic')).toBe(false);
+  });
+});
+
+describe('validate: clean demo triggers none of the deepened checks', () => {
+  it('the analytic EKV demo is consistent, finite, monotonic', () => {
+    const w = validate(generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } }));
+    const noisy = new Set(['gm-consistency', 'id-non-monotonic', 'non-finite', 'gm-sign']);
+    expect(w.filter((x) => noisy.has(x.rule))).toEqual([]);
   });
 });
 

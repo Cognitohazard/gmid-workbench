@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sizeDevice, mismatch, thermalNoise } from './index';
+import { sizeDevice, mismatch, thermalNoise, integratedNoise } from './index';
 import { lookup } from '../lookup';
 import type { DeviceTable } from '../types';
 import { generateDemoDevice } from '../demo';
@@ -178,5 +178,24 @@ describe('thermalNoise', () => {
     // The model vnth_m inside res.quantities is at W_char, so gm differs ⇒ noise differs.
     expect(sized).not.toBeCloseTo(res.quantities.vnth_m, 12);
     expect(sized).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / res.gm), 30);
+  });
+});
+
+describe('integratedNoise (thermal + 1/f over a band)', () => {
+  const sth = 1e-17; // V²/Hz white floor
+
+  it('thermal-only (fc=0) integrates the white floor: √(Sth·BW)', () => {
+    expect(integratedNoise(sth, 0, 1, 1e6)).toBeCloseTo(Math.sqrt(sth * (1e6 - 1)), 18);
+  });
+
+  it('adds the 1/f tail as Sth·fc·ln(fHi/fLo)', () => {
+    const fc = 1e3;
+    const expected = Math.sqrt(sth * (1e6 - 1 + fc * Math.log(1e6 / 1)));
+    expect(integratedNoise(sth, fc, 1, 1e6)).toBeCloseTo(expected, 18);
+  });
+
+  it('grows with the flicker corner and with bandwidth', () => {
+    expect(integratedNoise(sth, 1e5, 1, 1e6)).toBeGreaterThan(integratedNoise(sth, 1e2, 1, 1e6));
+    expect(integratedNoise(sth, 1e3, 1, 1e7)).toBeGreaterThan(integratedNoise(sth, 1e3, 1, 1e6));
   });
 });

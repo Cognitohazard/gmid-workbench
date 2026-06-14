@@ -6,6 +6,7 @@
 # simulator: ngspice
 # AVT: 3.5e-9
 # ABETA: 2e-8
+# FCO: 2e6
 L,VGS,ID,GM,GDS,CGG
 30e-9,0.3,1.0e-6,1.0e-5,1.0e-7,1.0e-15
 30e-9,0.5,2.0e-6,2.0e-5,2.0e-7,2.0e-15

@@ -68,6 +68,7 @@ interface ParsedMeta {
   date?: string;
   AVT?: number;
   ABETA?: number;
+  FCO?: number;
 }
 
 /** Parse a `# key: value` metadata comment line into the accumulator. */
@@ -111,6 +112,11 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
     case 'abeta': {
       const v = Number(value);
       if (Number.isFinite(v)) meta.ABETA = v;
+      break;
+    }
+    case 'fco': {
+      const v = Number(value);
+      if (Number.isFinite(v)) meta.FCO = v;
       break;
     }
     // "mostab version" and any other keys are intentionally ignored.
@@ -342,6 +348,7 @@ export function parseMostabCsv(
   if (meta.date !== undefined) mutMeta.date = meta.date;
   if (meta.AVT !== undefined) mutMeta.AVT = meta.AVT;
   if (meta.ABETA !== undefined) mutMeta.ABETA = meta.ABETA;
+  if (meta.FCO !== undefined) mutMeta.FCO = meta.FCO;
 
   const table: DeviceTable =
     passthroughKeys.size > 0

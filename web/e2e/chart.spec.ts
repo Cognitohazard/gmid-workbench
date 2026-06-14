@@ -89,6 +89,8 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ pag
   // Device swapped to the imported table; QA panel surfaces the 200mV vgs step.
   await expect(page.locator('header .device')).toContainText('nch_lvt');
   await expect(page.locator('.qa')).toContainText('vgs-step');
+  // Deepened data-trust: the fixture's gm is not d(id)/d(vgs), and the QA panel says so.
+  await expect(page.locator('.qa')).toContainText('gm-consistency');
   // Chart re-rendered for the new device (2 L lines from the fixture).
   await expect(page.locator('.chart canvas').first()).toBeVisible();
   await expect(page.locator('footer')).toContainText('l=');
@@ -101,6 +103,9 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ pag
   await expect(sizer.getByPlaceholder('mV·µm')).toHaveValue('3.5');
   await expect(sizer.getByPlaceholder('%·µm')).toHaveValue('2');
   await expect(sizer).toContainText('from device');
+  // The 1/f corner seeds from # FCO: 2e6 too, shown in engineering notation.
+  await expect(sizer.getByPlaceholder('Hz · e.g. 1meg')).toHaveValue('2meg');
+  await expect(sizer).toContainText('corner from device');
   await page.locator('header button.size').click(); // close
 
   // Back to the demo clears QA and restores the EKV device.
@@ -145,6 +150,12 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await expect(sizer).toContainText('matching');
   await expect(sizer.locator('.budget')).toContainText('σ(Vos) pair');
   await expect(sizer.locator('.noise')).toContainText('V/√Hz'); // thermal noise (γ-model)
+  // Total integrated input-referred noise (thermal + 1/f over the band); raising the
+  // 1/f corner increases it.
+  const rms = sizer.locator('.noise dd').last();
+  const rms0 = await rms.textContent();
+  await sizer.getByPlaceholder('Hz · e.g. 1meg').fill('100meg');
+  await expect(rms).not.toHaveText(rms0 ?? '');
   // Offset tracks the matching coefficient — doubling A_Vth changes σ(Vth)
   // (area-domain physics, separate from gm/ID).
   const sigVth = sizer.locator('.budget dd').first();

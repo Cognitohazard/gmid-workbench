@@ -143,6 +143,19 @@ export function thermalNoise(gm: number, gamma?: number): number {
   return Math.sqrt((4 * PHYS.k * PHYS.T * g) / gm);
 }
 
+/**
+ * Total input-referred noise (RMS, [V]) integrated over the band [fLo, fHi], from a
+ * white thermal floor plus a 1/f flicker tail. Flicker is parameterized by its corner
+ * `fc` — the frequency where flicker equals thermal — so S(f) = Sth·(1 + fc/f). Then
+ *   ∫ S df = Sth·[(fHi − fLo) + fc·ln(fHi/fLo)].
+ * `sth` is the thermal PSD [V²/Hz] (= thermalNoise(gm)²). The corner is a process/bias
+ * quantity supplied by the user (or table metadata); it is width-INDEPENDENT because
+ * both Sth and the flicker PSD scale as 1/W. Requires 0 < fLo < fHi and fc ≥ 0.
+ */
+export function integratedNoise(sth: number, fc: number, fLo: number, fHi: number): number {
+  return Math.sqrt(sth * (fHi - fLo + fc * Math.log(fHi / fLo)));
+}
+
 /** Pelgrom matching coefficients (SI): A_Vth in V·m, A_β dimensionless·m. */
 export interface MismatchCoeffs {
   avth: number;

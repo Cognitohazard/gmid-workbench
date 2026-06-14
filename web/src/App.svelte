@@ -8,6 +8,7 @@
     sizeDevice,
     mismatch,
     thermalNoise,
+    integratedNoise,
     fixTable,
     formatEng,
     parseEng,
@@ -268,16 +269,22 @@
   const ABETA_UI_PER_SI = 1e8; // ·m → %·µm (1% = 0.01)
   let inAvth = $state('4'); // mV·µm
   let inAbeta = $state('1'); // %·µm
+  // Noise band + 1/f corner (Hz, engineering notation). Corner seeds from meta.FCO.
+  let inFco = $state('1meg'); // flicker 1/f corner
+  let inFlo = $state('1'); // integration band low
+  let inFhi = $state('1g'); // integration band high
 
-  // Seed the coefficients from the imported device's Pelgrom metadata when it carries
-  // them (meta.AVT [V·m], meta.ABETA [·m]) instead of silently using generic defaults;
-  // fall back to typical values (shown as such) otherwise. Re-seeds on every swap.
+  // Seed the coefficients from the imported device's metadata when it carries them
+  // (meta.AVT [V·m], meta.ABETA [·m], meta.FCO [Hz]) instead of silently using generic
+  // defaults; fall back to typical values (shown as such) otherwise. Re-seeds on swap.
   const matchFromMeta = $derived(device.meta.AVT !== undefined || device.meta.ABETA !== undefined);
+  const noiseFromMeta = $derived(device.meta.FCO !== undefined);
   const toUi = (si: number, k: number) => String(+(si * k).toPrecision(6));
   $effect(() => {
     const m = device.meta;
     inAvth = m.AVT !== undefined ? toUi(m.AVT, AVT_UI_PER_SI) : '4';
     inAbeta = m.ABETA !== undefined ? toUi(m.ABETA, ABETA_UI_PER_SI) : '1';
+    inFco = m.FCO !== undefined ? formatEng(m.FCO) : '1meg';
   });
 
   const mism = $derived.by(() => {
@@ -286,6 +293,21 @@
     const abeta = Number(inAbeta) / ABETA_UI_PER_SI; // %·µm → ·m
     if (!(avth >= 0) || !(abeta >= 0)) return null; // NaN/negative → hide
     return mismatch(sizing.result.W, sizeL, sizing.result.gm_id, { avth, abeta });
+  });
+
+  // Input-referred thermal-noise density (at the sized gm) and the total integrated
+  // RMS over the band share the thermal floor, so compute it once. rms is null on an
+  // invalid band; the whole object is null until a geometry is sized.
+  const noise = $derived.by(() => {
+    if (!sizing.result) return null;
+    const density = thermalNoise(sizing.result.gm, sizing.result.quantities.gamma);
+    const fc = parseNum(inFco);
+    const fLo = parseNum(inFlo);
+    const fHi = parseNum(inFhi);
+    if (fc === undefined || fLo === undefined || fHi === undefined || !(fLo > 0) || !(fHi > fLo) || !(fc >= 0)) {
+      return { density, rms: null };
+    }
+    return { density, rms: integratedNoise(density ** 2, fc, fLo, fHi) };
   });
 
   // Footer operating-point readout: [display label, lookup key, unit].
@@ -417,29 +439,35 @@
         <p class="hint">{sizing.hint}</p>
       {/if}
 
-      <!-- Matching coefficients are device/PDK properties (seeded from metadata), so
-           they show whenever the sizer is open; the offset budget + noise fill in once
-           a geometry is sized. -->
-      <h3>matching &amp; noise</h3>
+      <!-- Noise + matching params are device/PDK properties (seeded from metadata), so
+           they show whenever the sizer is open; the budgets fill in once a geometry is
+           sized. The 1/f corner is width-independent; the band sets the integration. -->
+      <h3>noise</h3>
+      <p class="match-note">1/f corner · band, Hz{noiseFromMeta ? ' · corner from device' : ''}</p>
+      <label>f<sub>co</sub> <input bind:value={inFco} placeholder="Hz · e.g. 1meg" spellcheck="false" /></label>
+      <label>band <span class="band"><input bind:value={inFlo} spellcheck="false" />–<input bind:value={inFhi} spellcheck="false" /></span></label>
+      {#if noise}
+        <!-- γ-model thermal noise uses the SIZED gm (noise ∝ 1/√gm). The table's stored
+             `sth`/`sfl` PSDs are at the characterization width and are shown in Explore. -->
+        <dl class="noise">
+          <dt>v<sub>n,th</sub> <small>γ-model</small></dt>
+          <dd>{formatEng(noise.density)}V/√Hz</dd>
+          {#if noise.rms !== null}
+            <dt>v<sub>n,rms</sub> <small>band</small></dt><dd>{formatEng(noise.rms)}V</dd>
+          {/if}
+        </dl>
+      {/if}
+
+      <h3>matching</h3>
       <p class="match-note">A in mV·µm / %·µm{matchFromMeta ? ' · from device' : ''}</p>
       <label>A<sub>Vth</sub> <input bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label>
       <label>A<sub>β</sub> <input bind:value={inAbeta} placeholder="%·µm" spellcheck="false" /></label>
-      {#if sizing.result}
-        {@const r = sizing.result}
-        <!-- γ-model thermal noise uses the SIZED gm (noise ∝ 1/√gm); it is independent
-             of A_Vth/A_β. The table's stored `sth` PSD is at the characterization width
-             and is shown in Explore, not re-scaled here. -->
-        <dl class="noise">
-          <dt>v<sub>n,th</sub> <small>γ-model</small></dt>
-          <dd>{formatEng(thermalNoise(r.gm, r.quantities.gamma))}V/√Hz</dd>
+      {#if mism}
+        <dl class="budget">
+          <dt>σ(V<sub>th</sub>)</dt><dd>{formatEng(mism.sigmaVth)}V</dd>
+          <dt>σ(V<sub>os</sub>) pair</dt><dd>{formatEng(mism.sigmaVos)}V</dd>
+          <dt>σ(I)/I</dt><dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
         </dl>
-        {#if mism}
-          <dl class="budget">
-            <dt>σ(V<sub>th</sub>)</dt><dd>{formatEng(mism.sigmaVth)}V</dd>
-            <dt>σ(V<sub>os</sub>) pair</dt><dd>{formatEng(mism.sigmaVos)}V</dd>
-            <dt>σ(I)/I</dt><dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
-          </dl>
-        {/if}
       {/if}
     </aside>
   {/if}
@@ -611,6 +639,14 @@
     font: inherit;
     font-family: ui-monospace, monospace;
     padding: 0.1rem 0.3rem;
+  }
+  .band {
+    display: flex;
+    align-items: baseline;
+    gap: 0.25rem;
+  }
+  .band input {
+    width: 4rem;
   }
   .sz,
   .budget,

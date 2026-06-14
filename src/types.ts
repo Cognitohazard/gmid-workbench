@@ -35,6 +35,7 @@ export interface TableMeta {
   readonly polarity?: Polarity;
   readonly AVT?: number; // Pelgrom threshold-mismatch constant [V·m]
   readonly ABETA?: number; // Pelgrom current-factor constant [m]
+  readonly FCO?: number; // 1/f (flicker) noise corner frequency [Hz]
   /** Extra scalar metadata carried through verbatim (the strict-superset pass-through rule). */
   readonly extra?: Readonly<Record<string, string | number>>;
 }

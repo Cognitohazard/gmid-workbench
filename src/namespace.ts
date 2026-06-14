@@ -68,6 +68,11 @@ export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   // as a model so it is never mistaken for measured device noise.
   { key: 'svth_m', expr: '4*k*T*gamma/gm', unit: 'V^2/Hz' }, // input-referred thermal PSD (γ-model)
   { key: 'vnth_m', expr: 'sqrt(4*k*T*gamma/gm)', unit: 'V/sqrt(Hz)' }, // density (γ-model)
+  // Input-referred 1/f (flicker) noise from the simulator's stored flicker PSD @ 1 Hz
+  // (`sfl`). Area-domain, so unlike thermal there is no universal model default — these
+  // are MEASURED-only, resolvable solely when the table carries `sfl`.
+  { key: 'svfl', expr: 'sfl/(gm^2)', unit: 'V^2/Hz' }, // input-referred flicker PSD @1Hz (data)
+  { key: 'vnfl', expr: 'sqrt(sfl)/gm', unit: 'V/sqrt(Hz)' }, // input-referred flicker density @1Hz (data)
 ];
 
 export const DERIVED_KEYS: ReadonlySet<string> = new Set(DERIVED_QUANTITIES.map((q) => q.key));

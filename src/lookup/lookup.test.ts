@@ -135,26 +135,29 @@ describe('lookupByGmId (inverse)', () => {
     expect(strong.gm).toBeGreaterThan(weak.gm);
     expect(strong.vnth_m).toBeLessThan(weak.vnth_m);
 
-    // The MEASURED keys need a stored `sth` PSD; the demo has none, so they are
-    // not reported (a model is never silently presented as measured data).
+    // The MEASURED keys need stored PSDs; the demo has none, so neither thermal
+    // (sth) nor flicker (sfl) measured noise is reported (no model masquerade).
     expect(weak.vnth).toBeUndefined();
     expect(weak.svth).toBeUndefined();
+    expect(weak.vnfl).toBeUndefined();
+    expect(weak.svfl).toBeUndefined();
   });
 
-  it('reports MEASURED thermal noise from a stored sth PSD: Sv = sth/gm², v = √sth/gm', () => {
+  it('reports MEASURED thermal + flicker noise from stored sth/sfl PSDs', () => {
     const csv = [
       '# device: noisy',
       '# W: 1e-6',
-      'L,VGS,ID,GM,STH',
-      '1e-7,0.4,1e-6,1e-5,4e-21',
-      '1e-7,0.6,2e-6,3e-5,9e-21',
+      'L,VGS,ID,GM,STH,SFL',
+      '1e-7,0.4,1e-6,1e-5,4e-21,1e-20',
+      '1e-7,0.6,2e-6,3e-5,9e-21,4e-20',
     ].join('\n');
     const res = importMostab(new TextEncoder().encode(csv), { filename: 'noisy.mostab.csv' });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const out = lookup(res.dataset.tables[0], { l: 1e-7, vgs: 0.4 }); // exact node: sth=4e-21, gm=1e-5
-    expect(out.svth).toBeCloseTo(4e-21 / 1e-5 ** 2, 18); // input-referred PSD
-    expect(out.vnth).toBeCloseTo(Math.sqrt(4e-21) / 1e-5, 18); // density = √PSD
-    expect(out.vnth ** 2).toBeCloseTo(out.svth, 18); // density² == PSD
+    const out = lookup(res.dataset.tables[0], { l: 1e-7, vgs: 0.4 }); // node: sth=4e-21, sfl=1e-20, gm=1e-5
+    expect(out.svth).toBeCloseTo(4e-21 / 1e-5 ** 2, 18); // thermal input-referred PSD
+    expect(out.vnth).toBeCloseTo(Math.sqrt(4e-21) / 1e-5, 18); // thermal density = √PSD
+    expect(out.svfl).toBeCloseTo(1e-20 / 1e-5 ** 2, 18); // flicker input-referred PSD @1Hz
+    expect(out.vnfl).toBeCloseTo(Math.sqrt(1e-20) / 1e-5, 18); // flicker density @1Hz
   });
 });

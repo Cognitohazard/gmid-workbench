@@ -29,6 +29,27 @@ const VGS_STEP_WARN = 0.01; // 10 mV
 /** |vgs| above this (in volts) means the axis is probably in mV, not V. */
 const VGS_UNIT_ERROR = 100;
 
+/**
+ * Per-point relative tolerance for stored gm vs a central-difference d(id)/d(vgs).
+ * Deliberately generous: a coarse vgs grid gives the finite difference real O(h²)
+ * truncation error (tens of % near threshold), so only a clear mismatch — a
+ * mislabeled column or wrong units — should count, not discretization.
+ */
+const GM_FD_TOL = 0.5;
+
+/**
+ * A single vgs sweep trips gm-consistency when more than this fraction of its
+ * interior points exceed GM_FD_TOL. A per-line fraction (not a slice-wide median)
+ * is essential: a corrupted bias region must not be diluted by unrelated good
+ * regions, and a fraction catches a whole-line/whole-plane error without needing a
+ * majority of the entire slice.
+ */
+const GM_BAD_FRACTION = 0.34;
+
+/** An id reversal counts only when the step exceeds this fraction of the line's id
+ *  span — so sub-pA leakage/noise wiggles in the off region are not "glitches". */
+const MONO_EPS = 1e-3;
+
 /** Quantities whose sign is convention-dependent and folded to magnitude. */
 const SIGNED_MAGNITUDE_KEYS: readonly string[] = ['id', 'gm', 'gds', 'gmb'];
 
@@ -244,6 +265,97 @@ export function validate(table: DeviceTable): QAWarning[] {
           severity: 'info',
           message: `gds never falls along ${sweepName} in ${fmtL(lValue)} — device may not reach saturation`,
           location: `gds @ ${fmtL(lValue)}`,
+        });
+      }
+    });
+  }
+
+  // --- non-finite islands: any NaN/Inf poisons interpolation downstream ---
+  for (const [key, col] of q) {
+    let bad = 0;
+    for (let i = 0; i < col.length; i++) if (!Number.isFinite(col[i])) bad++;
+    if (bad > 0) {
+      out.push({
+        rule: 'non-finite',
+        severity: 'error',
+        message: `${key} has ${bad} non-finite value(s) (NaN/Inf)`,
+        location: key,
+      });
+    }
+  }
+
+  // --- gm sign: a usable table reports gm as a magnitude; negatives are suspect ---
+  if (gm) {
+    let neg = 0;
+    for (let i = 0; i < gm.length; i++) if (gm[i] < 0) neg++;
+    if (neg > 0) {
+      out.push({
+        rule: 'gm-sign',
+        severity: 'warning',
+        message: `gm has ${neg} negative value(s) — expected a magnitude (a signed PMOS dump needs sign canonicalization first)`,
+        location: 'gm',
+      });
+    }
+  }
+
+  // --- id monotonic in vgs + stored gm consistent with d(id)/d(vgs) ---
+  // The headline trust check: gm IS the vgs-derivative of id, so a central
+  // difference must track the stored column. Evaluated PER SWEEP LINE (each fixed
+  // (vds, vsb, …) within the L-slice), compared MAGNITUDE-to-magnitude so a signed
+  // PMOS sweep (signed vgs axis, magnitude id/gm) is not falsely flagged, and gated
+  // on a per-line bad-FRACTION so a single corrupted bias plane is not diluted by
+  // unrelated good regions (a slice-wide median would hide it).
+  if (gm && id) {
+    forEachLSlice(grid, (lIndex, lValue) => {
+      const sl = sliceIndices(grid, lIndex, 'vgs');
+      if (!sl) return;
+      const vgs = sl.along.values;
+
+      let glitch = false; // some single line both rises and falls along vgs
+      let worstBadFrac = 0; // worst per-line fraction of gm/FD mismatches
+      for (const line of sl.indices) {
+        // id-monotonicity, per line, with an absolute floor scaled to the line.
+        let maxAbsId = 0;
+        for (const idx of line) maxAbsId = Math.max(maxAbsId, Math.abs(id[idx]));
+        const floor = maxAbsId * MONO_EPS;
+        let up = false;
+        let down = false;
+        for (let j = 1; j < line.length; j++) {
+          const d = id[line[j]] - id[line[j - 1]];
+          if (Math.abs(d) > floor) d > 0 ? (up = true) : (down = true);
+        }
+        if (up && down) glitch = true;
+
+        // gm vs central-difference d(id)/d(vgs), magnitude-to-magnitude.
+        let bad = 0;
+        let total = 0;
+        for (let j = 1; j < line.length - 1; j++) {
+          const dv = vgs[j + 1] - vgs[j - 1];
+          if (dv <= 0) continue;
+          const gmFd = Math.abs((id[line[j + 1]] - id[line[j - 1]]) / dv);
+          const gmStored = Math.abs(gm[line[j]]);
+          const denom = Math.max(gmStored, gmFd);
+          if (denom <= 0) continue;
+          total++;
+          if (Math.abs(gmStored - gmFd) / denom > GM_FD_TOL) bad++;
+        }
+        if (total > 0) worstBadFrac = Math.max(worstBadFrac, bad / total);
+      }
+
+      if (glitch) {
+        out.push({
+          rule: 'id-non-monotonic',
+          severity: 'warning',
+          message: `id both rises and falls along a vgs sweep in ${fmtL(lValue)} — likely a glitch`,
+          location: `id @ ${fmtL(lValue)}`,
+        });
+      }
+      if (worstBadFrac > GM_BAD_FRACTION) {
+        out.push({
+          rule: 'gm-consistency',
+          severity: 'warning',
+          message: `stored gm differs from d(id)/d(vgs) on ${(worstBadFrac * 100).toFixed(0)}% of a vgs sweep in ${fmtL(lValue)} — gm may be mislabeled, in wrong units, or the vgs grid too coarse`,
+          location: `gm @ ${fmtL(lValue)}`,
         });
       }
     });
