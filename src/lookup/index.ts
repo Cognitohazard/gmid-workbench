@@ -1,0 +1,210 @@
+// Forward + inverse operating-point lookup. Interpolates a device table's base
+// grid at a point in axis-space, then evaluates derived quantities from the
+// interpolated base scalars (dogfooding the expression engine). The inverse path
+// recovers vgs from a target gm/ID along a fixed-L slice. Pure, deterministic,
+// zero DOM imports.
+
+import type { DeviceTable, Grid, Scope, Value } from '../types';
+import { BASE_KEYS, DERIVED_QUANTITIES } from '../namespace';
+import { CONSTANTS } from '../constants';
+import { interpolate, sliceGrid } from '../grid';
+import { createEngine } from '../expr';
+
+// Compile every standard derived definition once: key + compiled expression.
+const ENGINE = createEngine();
+const DERIVED_COMPILED = DERIVED_QUANTITIES.map((q) => ({
+  key: q.key,
+  compiled: ENGINE.compile(q.expr),
+}));
+const DERIVED_BY_KEY = new Map(DERIVED_COMPILED.map((d) => [d.key, d]));
+
+/** Base quantity keys actually stored as columns in this grid (axes included). */
+function baseKeysPresent(grid: Grid): string[] {
+  const out: string[] = [];
+  for (const key of grid.quantities.keys()) {
+    if (BASE_KEYS.has(key)) out.push(key);
+  }
+  return out;
+}
+
+/** A Scope over a flat record of interpolated base scalars, plus constants. */
+function scalarScope(base: Record<string, number>): Scope {
+  return {
+    resolve(name: string): Value | undefined {
+      if (Object.prototype.hasOwnProperty.call(base, name)) return base[name];
+      return undefined;
+    },
+  };
+}
+
+/** True if every free name of a derived def is an available base scalar or constant. */
+function computable(names: readonly string[], base: Record<string, number>): boolean {
+  for (const n of names) {
+    if (Object.prototype.hasOwnProperty.call(base, n)) continue;
+    if (Object.prototype.hasOwnProperty.call(CONSTANTS, n)) continue;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Forward lookup: multilinearly interpolate the base grid at `point` (axis-space),
+ * then evaluate any requested derived quantity from the interpolated base scalars.
+ *
+ * When `keys` is omitted the result holds every present base column plus every
+ * standard derived quantity whose definition is computable from those bases.
+ * Requested derived keys are evaluated from the interpolated scalars (NOT
+ * re-interpolated), so vstar = 2/(gm/id) etc. stay self-consistent at the point.
+ */
+export function lookup(
+  table: DeviceTable,
+  point: Record<string, number>,
+  keys?: string[],
+): Record<string, number> {
+  const grid = table.grid;
+
+  // Interpolate the full set of present base quantity columns once (one corner walk).
+  const basePresent = baseKeysPresent(grid);
+  const baseScalars = interpolate(grid, point, basePresent);
+
+  // Always expose the axis coordinates at the point, even when a grid does not
+  // materialize axis columns (e.g. the demo grid). The coordinate is the requested
+  // value clamped to the axis range, matching the grid's clamp-at-edge convention.
+  const axisKeys: string[] = [];
+  for (const axis of grid.axes) {
+    const vals = axis.values;
+    const raw = point[axis.name];
+    const x = raw === undefined ? vals[0] : raw;
+    const clamped = x < vals[0] ? vals[0] : x > vals[vals.length - 1] ? vals[vals.length - 1] : x;
+    if (!Object.prototype.hasOwnProperty.call(baseScalars, axis.name)) {
+      baseScalars[axis.name] = clamped;
+      axisKeys.push(axis.name);
+    }
+  }
+
+  const requested =
+    keys ??
+    [
+      ...basePresent,
+      ...axisKeys,
+      ...DERIVED_COMPILED.filter((d) => computable(d.compiled.names, baseScalars)).map(
+        (d) => d.key,
+      ),
+    ];
+
+  const scope = scalarScope(baseScalars);
+  const out: Record<string, number> = {};
+
+  for (const key of requested) {
+    if (Object.prototype.hasOwnProperty.call(baseScalars, key)) {
+      out[key] = baseScalars[key];
+      continue;
+    }
+    const def = DERIVED_BY_KEY.get(key);
+    if (!def) {
+      throw new Error(`lookup: "${key}" is neither a present base column nor a known derived quantity`);
+    }
+    const v = def.compiled.eval(scope);
+    if (v instanceof Float64Array) {
+      // Derived definitions over scalar bases yield scalars; guard defensively.
+      throw new Error(`lookup: derived "${key}" did not reduce to a scalar`);
+    }
+    out[key] = v;
+  }
+
+  return out;
+}
+
+/**
+ * Inverse lookup by gm/ID along the fixed-length-`L` slice: gm/ID is monotonic in
+ * vgs, so build the gm/ID-vs-vgs curve from the slice columns, bracket `gmId`, and
+ * linearly interpolate to recover vgs; then forward-lookup at {l: L, vgs}.
+ *
+ * Throws if `gmId` lies outside the slice's [min, max] gm/ID range.
+ */
+export function lookupByGmId(
+  table: DeviceTable,
+  gmId: number,
+  L: number,
+  keys?: string[],
+): Record<string, number> {
+  const grid = table.grid;
+  if (!grid.axes.some((a) => a.name === 'l')) {
+    throw new Error('lookupByGmId: table has no "l" axis to slice');
+  }
+
+  // Collapse the l axis at L, leaving a slice grid whose remaining axes include vgs.
+  const slice = sliceGrid(grid, { l: L });
+  const vgsAxis = slice.axes.find((a) => a.name === 'vgs');
+  if (!vgsAxis) {
+    throw new Error('lookupByGmId: slice has no "vgs" axis');
+  }
+  const vgs = vgsAxis.values;
+  const gm = slice.quantities.get('gm');
+  const id = slice.quantities.get('id');
+  if (!gm || !id) {
+    throw new Error('lookupByGmId: slice is missing gm and/or id columns');
+  }
+
+  // The vgs axis must be the only non-degenerate remaining axis for the 1-D curve
+  // to be well defined (vds/vsb would otherwise break monotonic bracketing).
+  for (const a of slice.axes) {
+    if (a.name !== 'vgs' && a.values.length > 1) {
+      throw new Error(`lookupByGmId: cannot bracket gm/id with extra non-degenerate axis "${a.name}"`);
+    }
+  }
+
+  const n = vgs.length;
+  // gm/id over the vgs lattice, holding any trailing degenerate axes at index 0.
+  const curve = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const flat = vgsAxisFlat(slice, i);
+    curve[i] = gm[flat] / id[flat];
+  }
+
+  // Determine monotonic orientation and the [min,max] range.
+  let lo = curve[0];
+  let hi = curve[0];
+  for (let i = 1; i < n; i++) {
+    if (curve[i] < lo) lo = curve[i];
+    if (curve[i] > hi) hi = curve[i];
+  }
+  if (gmId < lo || gmId > hi) {
+    throw new Error(
+      `lookupByGmId: gm/id ${gmId} out of range [${lo}, ${hi}] for L=${L}`,
+    );
+  }
+
+  // Bracket the first adjacent pair that straddles gmId and linearly interpolate vgs.
+  let vgsAt: number | undefined;
+  for (let i = 0; i < n - 1; i++) {
+    const a = curve[i];
+    const b = curve[i + 1];
+    const inSeg = (a <= gmId && gmId <= b) || (b <= gmId && gmId <= a);
+    if (!inSeg) continue;
+    const span = b - a;
+    const t = span === 0 ? 0 : (gmId - a) / span;
+    vgsAt = vgs[i] + t * (vgs[i + 1] - vgs[i]);
+    break;
+  }
+  if (vgsAt === undefined) {
+    // gmId equals an endpoint exactly but no interior segment straddled it.
+    vgsAt = curve[0] === gmId ? vgs[0] : vgs[n - 1];
+  }
+
+  return lookup(table, { l: L, vgs: vgsAt }, keys);
+}
+
+/**
+ * Flat index of the i-th vgs node in a slice grid, holding every other (degenerate)
+ * axis at index 0. Mirrors the row-major layout of makeGrid.
+ */
+function vgsAxisFlat(slice: Grid, vgsIdx: number): number {
+  let flat = 0;
+  for (let d = 0; d < slice.axes.length; d++) {
+    const len = slice.axes[d].values.length;
+    const idx = slice.axes[d].name === 'vgs' ? vgsIdx : 0;
+    flat = flat * len + idx;
+  }
+  return flat;
+}
