@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { lookup, lookupByGmId } from './index';
 import type { DeviceTable } from '../types';
 import { generateDemoDevice } from '../demo';
+import { importMostab } from '../import';
+import { PHYS, GAMMA_DEFAULT } from '../constants';
 
 /** Read the stored column value at the (li, vi) lattice node of a 2-D (l,vgs) grid. */
 function nodeValue(table: DeviceTable, key: string, li: number, vi: number): number {
@@ -116,5 +118,43 @@ describe('lookupByGmId (inverse)', () => {
     const fwd = lookup(table, { l: L, vgs: 0.6 });
     const back = lookupByGmId(table, fwd.gm_id, L, ['vgs', 'id']);
     expect(Object.keys(back).sort()).toEqual(['id', 'vgs']);
+  });
+
+  it('models input-referred thermal noise vnth_m = √(4kTγ/gm), falling as gm rises', () => {
+    const table = generateDemoDevice();
+    const L = table.grid.axes[0].values[0];
+    const weak = lookup(table, { l: L, vgs: 0.45 }); // low gm
+    const strong = lookup(table, { l: L, vgs: 0.9 }); // high gm
+
+    // The γ-model quantity is exactly the closed form with the default γ.
+    const expected = Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / weak.gm);
+    expect(weak.vnth_m).toBeCloseTo(expected, 18);
+    expect(weak.svth_m).toBeCloseTo(weak.vnth_m * weak.vnth_m, 30); // PSD = density²
+
+    // Higher gm (stronger inversion) ⇒ lower input-referred thermal noise.
+    expect(strong.gm).toBeGreaterThan(weak.gm);
+    expect(strong.vnth_m).toBeLessThan(weak.vnth_m);
+
+    // The MEASURED keys need a stored `sth` PSD; the demo has none, so they are
+    // not reported (a model is never silently presented as measured data).
+    expect(weak.vnth).toBeUndefined();
+    expect(weak.svth).toBeUndefined();
+  });
+
+  it('reports MEASURED thermal noise from a stored sth PSD: Sv = sth/gm², v = √sth/gm', () => {
+    const csv = [
+      '# device: noisy',
+      '# W: 1e-6',
+      'L,VGS,ID,GM,STH',
+      '1e-7,0.4,1e-6,1e-5,4e-21',
+      '1e-7,0.6,2e-6,3e-5,9e-21',
+    ].join('\n');
+    const res = importMostab(new TextEncoder().encode(csv), { filename: 'noisy.mostab.csv' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const out = lookup(res.dataset.tables[0], { l: 1e-7, vgs: 0.4 }); // exact node: sth=4e-21, gm=1e-5
+    expect(out.svth).toBeCloseTo(4e-21 / 1e-5 ** 2, 18); // input-referred PSD
+    expect(out.vnth).toBeCloseTo(Math.sqrt(4e-21) / 1e-5, 18); // density = √PSD
+    expect(out.vnth ** 2).toBeCloseTo(out.svth, 18); // density² == PSD
   });
 });

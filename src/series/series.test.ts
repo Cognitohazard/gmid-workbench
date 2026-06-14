@@ -64,12 +64,19 @@ describe('familyCurves', () => {
     expect(base).not.toContain('l');
     expect(base).not.toContain('vds');
     expect(base).not.toContain('w');
+    // `gamma` is a CONSTANT as well as a base-quantity slot; a constant must NOT
+    // leak in as a flat plottable "quantity" when no gamma column is stored.
+    expect(base).not.toContain('gamma');
     // Derived expressible from present columns are offered; those needing absent
     // columns (id_w⇐w, gm_cgd⇐cgd) are not.
     expect(derived).toContain('gm_id');
     expect(derived).toContain('ft');
     expect(derived).not.toContain('id_w');
     expect(derived).not.toContain('gm_cgd');
+    // The γ-model thermal noise needs only gm, so it is always offered; the
+    // MEASURED noise needs a stored `sth` PSD (absent here), so it is not.
+    expect(derived).toContain('vnth_m');
+    expect(derived).not.toContain('vnth');
   });
 
   it('famName=null yields a single curve over X with the other axes fixed', () => {

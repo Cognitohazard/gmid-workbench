@@ -57,6 +57,16 @@ test('explore: renders the gm/ID family chart and reacts to the expression', asy
     await expect(page.locator('.err'), `option "${v}" raised an error`).toHaveCount(0);
   }
 
+  // Input-referred thermal noise is a first-class plottable — the gm/ID methodology
+  // IS the noise-efficiency axis. The demo carries no `sth` PSD, so the γ-MODEL key
+  // (vnth_m) charts; the measured `vnth` would error here (no sth), which is the
+  // honest behaviour — a model is never silently dressed up as measured data.
+  await page.locator('.expr input').fill('vnth_m');
+  await page.locator('.expr input').blur();
+  await expect(page.locator('.err')).toHaveCount(0);
+  await expect(canvas).toBeVisible();
+  await page.screenshot({ path: `${SCREENS}/explore-noise.png` });
+
   // A bad expression surfaces an error and keeps the last good chart.
   await page.locator('.expr input').fill('gm/(');
   await page.locator('.expr input').blur();
@@ -83,6 +93,15 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ pag
   await expect(page.locator('.chart canvas').first()).toBeVisible();
   await expect(page.locator('footer')).toContainText('l=');
   await page.screenshot({ path: `${SCREENS}/import-mostab.png` });
+
+  // The matching panel seeds A_Vth / A_β from the table's Pelgrom metadata, not
+  // generic defaults: # AVT 3.5e-9 V·m → 3.5 mV·µm, # ABETA 2e-8 ·m → 2 %·µm.
+  await page.locator('header button.size').click();
+  const sizer = page.locator('aside.sizer');
+  await expect(sizer.getByPlaceholder('mV·µm')).toHaveValue('3.5');
+  await expect(sizer.getByPlaceholder('%·µm')).toHaveValue('2');
+  await expect(sizer).toContainText('from device');
+  await page.locator('header button.size').click(); // close
 
   // Back to the demo clears QA and restores the EKV device.
   await page.locator('button.demo').click();
@@ -121,6 +140,23 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await expect(sizer.locator('.bias')).toContainText('vds=');
   await page.locator('header .slider input').first().fill('1.2');
   await expect(sizer.locator('.bias')).toContainText('vds=1.2');
+  // Matching & noise budget: the sized geometry yields a Pelgrom offset, and the
+  // thermal-noise density (γ-model) sits in its own line.
+  await expect(sizer).toContainText('matching');
+  await expect(sizer.locator('.budget')).toContainText('σ(Vos) pair');
+  await expect(sizer.locator('.noise')).toContainText('V/√Hz'); // thermal noise (γ-model)
+  // Offset tracks the matching coefficient — doubling A_Vth changes σ(Vth)
+  // (area-domain physics, separate from gm/ID).
+  const sigVth = sizer.locator('.budget dd').first();
+  const before = await sigVth.textContent();
+  await sizer.getByPlaceholder('mV·µm').fill('8'); // 2× A_Vth
+  await expect(sigVth).not.toHaveText(before ?? '');
+  // Noise is independent of the matching coeffs: a garbage A_Vth hides the matching
+  // budget but the noise line stays visible.
+  await sizer.getByPlaceholder('mV·µm').fill('oops');
+  await expect(sizer.locator('.budget')).toHaveCount(0);
+  await expect(sizer.locator('.noise')).toContainText('V/√Hz');
+  await sizer.getByPlaceholder('mV·µm').fill('4'); // restore
   await page.screenshot({ path: `${SCREENS}/size-panel.png` });
 
   // An out-of-range gm/ID (above the achievable ceiling) reports a clear error.

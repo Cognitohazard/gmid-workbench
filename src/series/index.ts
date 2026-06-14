@@ -8,7 +8,6 @@ import type { DeviceTable, Grid } from '../types';
 import { sliceGrid } from '../grid';
 import { compileExpr, evalColumn } from '../derive';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
-import { CONSTANTS } from '../constants';
 
 // Free identifiers of each standard derived definition, compiled once.
 const DERIVED_NAMES = DERIVED_QUANTITIES.map((q) => ({
@@ -95,17 +94,19 @@ export function familyCurves(
 /**
  * The canonical quantities a familyCurves chart over `xName` can plot as Y: every
  * name a per-curve slice can resolve. The slice collapses the family axis and
- * every other non-X axis, so the resolvable namespace is the X axis + the
- * non-axis columns + constants — axis quantities other than X (l, vds, …) are NOT
- * plottable here. Returns the present base keys and the standard derived keys
- * expressible from them, for building a Y picker honestly per table.
+ * every other non-X axis, so the resolvable namespace is the X axis + the present
+ * non-axis columns — axis quantities other than X (l, vds, …) are NOT plottable
+ * here. Constants (pi, k, gamma, …) are deliberately NOT counted as plottable: a
+ * derived's free names already exclude constants, so a constant only ever leaks in
+ * as a flat base "quantity" (e.g. a `gamma` constant masquerading as device data).
+ * Returns the present base keys and the standard derived keys expressible from
+ * them, for building a Y picker honestly per table.
  */
 export function plottableQuantities(grid: Grid, xName = 'vgs'): { base: string[]; derived: string[] } {
   const axisNames = new Set(grid.axes.map((a) => a.name));
   const resolvable = new Set<string>([
     xName,
     ...[...grid.quantities.keys()].filter((k) => !axisNames.has(k)),
-    ...Object.keys(CONSTANTS),
   ]);
   const base = BASE_QUANTITIES.filter((q) => resolvable.has(q.key)).map((q) => q.key);
   const derived = DERIVED_NAMES.filter((d) => d.names.every((n) => resolvable.has(n))).map(

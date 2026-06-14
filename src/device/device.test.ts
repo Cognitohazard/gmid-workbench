@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { sizeDevice } from './index';
+import { sizeDevice, mismatch, thermalNoise } from './index';
 import { lookup } from '../lookup';
 import type { DeviceTable } from '../types';
 import { generateDemoDevice } from '../demo';
+import { PHYS, GAMMA_DEFAULT } from '../constants';
 
 /** A known operating point: forward-lookup the demo at (L, vgs) to get a self-consistent (gm, id, gm/id). */
 function knownPoint(table: DeviceTable, L: number, vgs: number) {
@@ -122,5 +123,60 @@ describe('sizeDevice (bind-any-2)', () => {
     }
     expect(res.quantities.W).toBeCloseTo(res.W, 12);
     expect(res.quantities.id_w).toBeCloseTo(res.id / res.W, 6);
+  });
+});
+
+describe('mismatch (Pelgrom budget)', () => {
+  const c = { avth: 4e-9, abeta: 1e-8 }; // 4 mV·µm, 1 %·µm
+
+  it('σ scales as 1/√area: 4× the area halves every spread', () => {
+    const a = mismatch(1e-6, 1e-7, 15, c);
+    const b = mismatch(4e-6, 1e-7, 15, c); // 4× width → 2× √area
+    expect(b.sigmaVth).toBeCloseTo(a.sigmaVth / 2, 18);
+    expect(b.sigmaBeta).toBeCloseTo(a.sigmaBeta / 2, 18);
+    expect(b.sigmaVos).toBeCloseTo(a.sigmaVos / 2, 18);
+  });
+
+  it('matches the closed-form pair offset and mirror current spread', () => {
+    const W = 2e-6,
+      L = 1.8e-7,
+      gmId = 20;
+    const r = mismatch(W, L, gmId, c);
+    const sVth = 4e-9 / Math.sqrt(W * L);
+    const sB = 1e-8 / Math.sqrt(W * L);
+    expect(r.sigmaVth).toBeCloseTo(sVth, 18);
+    expect(r.sigmaVos).toBeCloseTo(Math.SQRT2 * Math.hypot(sVth, sB / gmId), 18);
+    expect(r.sigmaIrel).toBeCloseTo(Math.hypot(gmId * sVth, sB), 18);
+  });
+
+  it('gm/ID is the matching-vs-bias knob: higher gm/ID lowers offset, raises current spread', () => {
+    const lo = mismatch(2e-6, 1.8e-7, 8, c); // low gm/ID
+    const hi = mismatch(2e-6, 1.8e-7, 25, c); // high gm/ID
+    expect(hi.sigmaVos).toBeLessThan(lo.sigmaVos); // β term referred in by 1/(gm/ID)
+    expect(hi.sigmaIrel).toBeGreaterThan(lo.sigmaIrel); // Vth amplified by gm/ID
+    expect(hi.sigmaVth).toBeCloseTo(lo.sigmaVth, 18); // Vth spread is bias-independent
+  });
+});
+
+describe('thermalNoise', () => {
+  it('is √(4kTγ/gm) and falls as 1/√gm (width-dependent)', () => {
+    const v1 = thermalNoise(1e-3);
+    const v4 = thermalNoise(4e-3); // 4× gm (≈4× width) → half the noise density
+    expect(v4).toBeCloseTo(v1 / 2, 18);
+    expect(v1).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / 1e-3), 30);
+  });
+
+  it('honors an explicit operating-point γ over the default', () => {
+    expect(thermalNoise(1e-3, 1.5)).toBeGreaterThan(thermalNoise(1e-3)); // γ>default ⇒ more noise
+  });
+
+  it('must use the SIZED gm, not the characterization-width derived value', () => {
+    const table = generateDemoDevice();
+    const L = table.grid.axes[0].values[1];
+    const res = sizeDevice({ table, L, gm_id: 12, id: 50e-6 });
+    const sized = thermalNoise(res.gm, res.quantities.gamma); // correct: sized gm
+    // The model vnth_m inside res.quantities is at W_char, so gm differs ⇒ noise differs.
+    expect(sized).not.toBeCloseTo(res.quantities.vnth_m, 12);
+    expect(sized).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / res.gm), 30);
   });
 });

@@ -6,6 +6,8 @@
     lookup,
     importMostab,
     sizeDevice,
+    mismatch,
+    thermalNoise,
     fixTable,
     formatEng,
     parseEng,
@@ -259,6 +261,33 @@
     }
   });
 
+  // Matching/offset budget on the sized geometry. A_Vth / A_β are PDK constants the
+  // UI takes in conventional units (mV·µm, %·µm) but the core wants in SI (V·m, ·m).
+  // One factor each way: UI = SI × K (display), SI = UI ÷ K (binding) — reciprocal.
+  const AVT_UI_PER_SI = 1e9; // V·m → mV·µm
+  const ABETA_UI_PER_SI = 1e8; // ·m → %·µm (1% = 0.01)
+  let inAvth = $state('4'); // mV·µm
+  let inAbeta = $state('1'); // %·µm
+
+  // Seed the coefficients from the imported device's Pelgrom metadata when it carries
+  // them (meta.AVT [V·m], meta.ABETA [·m]) instead of silently using generic defaults;
+  // fall back to typical values (shown as such) otherwise. Re-seeds on every swap.
+  const matchFromMeta = $derived(device.meta.AVT !== undefined || device.meta.ABETA !== undefined);
+  const toUi = (si: number, k: number) => String(+(si * k).toPrecision(6));
+  $effect(() => {
+    const m = device.meta;
+    inAvth = m.AVT !== undefined ? toUi(m.AVT, AVT_UI_PER_SI) : '4';
+    inAbeta = m.ABETA !== undefined ? toUi(m.ABETA, ABETA_UI_PER_SI) : '1';
+  });
+
+  const mism = $derived.by(() => {
+    if (!sizing.result) return null;
+    const avth = Number(inAvth) / AVT_UI_PER_SI; // mV·µm → V·m
+    const abeta = Number(inAbeta) / ABETA_UI_PER_SI; // %·µm → ·m
+    if (!(avth >= 0) || !(abeta >= 0)) return null; // NaN/negative → hide
+    return mismatch(sizing.result.W, sizeL, sizing.result.gm_id, { avth, abeta });
+  });
+
   // Footer operating-point readout: [display label, lookup key, unit].
   const OP_FIELDS: [string, string, string][] = [
     ['vgs', 'vgs', 'V'],
@@ -386,6 +415,31 @@
         <p class="err">{sizing.err}</p>
       {:else}
         <p class="hint">{sizing.hint}</p>
+      {/if}
+
+      <!-- Matching coefficients are device/PDK properties (seeded from metadata), so
+           they show whenever the sizer is open; the offset budget + noise fill in once
+           a geometry is sized. -->
+      <h3>matching &amp; noise</h3>
+      <p class="match-note">A in mV·µm / %·µm{matchFromMeta ? ' · from device' : ''}</p>
+      <label>A<sub>Vth</sub> <input bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label>
+      <label>A<sub>β</sub> <input bind:value={inAbeta} placeholder="%·µm" spellcheck="false" /></label>
+      {#if sizing.result}
+        {@const r = sizing.result}
+        <!-- γ-model thermal noise uses the SIZED gm (noise ∝ 1/√gm); it is independent
+             of A_Vth/A_β. The table's stored `sth` PSD is at the characterization width
+             and is shown in Explore, not re-scaled here. -->
+        <dl class="noise">
+          <dt>v<sub>n,th</sub> <small>γ-model</small></dt>
+          <dd>{formatEng(thermalNoise(r.gm, r.quantities.gamma))}V/√Hz</dd>
+        </dl>
+        {#if mism}
+          <dl class="budget">
+            <dt>σ(V<sub>th</sub>)</dt><dd>{formatEng(mism.sigmaVth)}V</dd>
+            <dt>σ(V<sub>os</sub>) pair</dt><dd>{formatEng(mism.sigmaVos)}V</dd>
+            <dt>σ(I)/I</dt><dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
+          </dl>
+        {/if}
       {/if}
     </aside>
   {/if}
@@ -539,6 +593,12 @@
     opacity: 0.5;
     font-weight: 400;
   }
+  .sizer h3 {
+    font-size: 0.85rem;
+    margin: 0.5rem 0 0;
+    padding-top: 0.5rem;
+    border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  }
   .sizer label {
     display: flex;
     justify-content: space-between;
@@ -552,17 +612,26 @@
     font-family: ui-monospace, monospace;
     padding: 0.1rem 0.3rem;
   }
-  .sz {
+  .sz,
+  .budget,
+  .noise {
     display: grid;
     grid-template-columns: auto 1fr;
     gap: 0.12rem 0.6rem;
     margin: 0.3rem 0 0;
     font-family: ui-monospace, monospace;
   }
-  .sz dt {
+  .sz dt,
+  .budget dt,
+  .noise dt {
     opacity: 0.6;
   }
-  .sz dd {
+  .noise dt small {
+    opacity: 0.7;
+  }
+  .sz dd,
+  .budget dd,
+  .noise dd {
     margin: 0;
     text-align: right;
   }
@@ -576,7 +645,8 @@
   .feas.bad {
     color: #e6194b;
   }
-  .bias {
+  .bias,
+  .match-note {
     margin: 0.1rem 0 0;
     font-family: ui-monospace, monospace;
     font-size: 0.9em;

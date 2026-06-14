@@ -7,6 +7,7 @@
 import type { DeviceTable } from '../types';
 import { lookup, lookupByGmId } from '../lookup';
 import { sliceGrid } from '../grid';
+import { PHYS, CONSTANTS } from '../constants';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two of {gm, gm_id, id}. The
@@ -129,4 +130,52 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   };
 
   return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities };
+}
+
+/**
+ * Input-referred channel thermal-noise density √(4kTγ/gm) [V/√Hz] at the device's
+ * actual transconductance gm. Noise is width-dependent (gm ∝ W), so a sized device
+ * must pass its SIZED gm — the characterization-width value would be wrong. γ comes
+ * from the operating point when the table carries it, else GAMMA_DEFAULT.
+ */
+export function thermalNoise(gm: number, gamma?: number): number {
+  const g = gamma ?? CONSTANTS.gamma;
+  return Math.sqrt((4 * PHYS.k * PHYS.T * g) / gm);
+}
+
+/** Pelgrom matching coefficients (SI): A_Vth in V·m, A_β dimensionless·m. */
+export interface MismatchCoeffs {
+  avth: number;
+  abeta: number;
+}
+
+/** Random-mismatch budget for a sized device, evaluated at its operating point. */
+export interface MismatchResult {
+  sigmaVth: number; // σ(ΔVth) of one device [V] — the area-set threshold spread
+  sigmaBeta: number; // σ(Δβ/β) of one device [1] — current-factor spread
+  sigmaVos: number; // σ(Vos) of a matched pair, input-referred [V]
+  sigmaIrel: number; // σ(ΔI/I) of ONE device at fixed VGS [1]; a mirror PAIR is √2 larger
+}
+
+/**
+ * Pelgrom random-mismatch budget. σ scales as 1/√(W·L) — bigger area averages out
+ * more grains — so the sized geometry sets matching, NOT the gm/ID bias. gm/ID
+ * couples the two: it refers the β-spread to the input as ΔI/gm = (Δβ/β)/(gm/ID)
+ * — exact at any inversion level, not a square-law approximation — and amplifies
+ * the Vth-spread into current spread. So:
+ *   σ(Vos,pair) = √2 · √( σ(ΔVth)² + (σ(Δβ/β)/(gm/ID))² )   — input offset of a pair
+ *   σ(ΔI/I)     = √( (gm/ID · σ(ΔVth))² + σ(Δβ/β)² )         — mirror current spread
+ * High gm/ID (low Vov) shrinks the offset's β term but grows current spread: the
+ * matching-vs-bias trade the methodology makes visible. Pure; no table needed.
+ */
+export function mismatch(W: number, L: number, gm_id: number, c: MismatchCoeffs): MismatchResult {
+  const rtArea = Math.sqrt(W * L);
+  const sigmaVth = c.avth / rtArea;
+  const sigmaBeta = c.abeta / rtArea;
+  return {
+    sigmaVth,
+    sigmaBeta,
+    sigmaVos: Math.SQRT2 * Math.hypot(sigmaVth, sigmaBeta / gm_id),
+    sigmaIrel: Math.hypot(gm_id * sigmaVth, sigmaBeta),
+  };
 }
