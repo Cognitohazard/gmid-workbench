@@ -1,0 +1,8 @@
+# device: nch_singleL
+# corner: tt
+# temp: 27
+# W: 1e-6
+VGS,ID,GM
+0.3,1.0e-6,1.0e-5
+0.5,2.0e-6,2.0e-5
+0.7,3.0e-6,3.0e-5

@@ -65,3 +65,40 @@ test('explore: renders the gm/ID family chart and reacts to the expression', asy
 
   expect(errors).toEqual([]);
 });
+
+test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await expect(page.locator('header .device')).toContainText('nmos_demo'); // demo first
+
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+
+  // Device swapped to the imported table; QA panel surfaces the 200mV vgs step.
+  await expect(page.locator('header .device')).toContainText('nch_lvt');
+  await expect(page.locator('.qa')).toContainText('vgs-step');
+  // Chart re-rendered for the new device (2 L lines from the fixture).
+  await expect(page.locator('.chart canvas').first()).toBeVisible();
+  await expect(page.locator('footer')).toContainText('l=');
+  await page.screenshot({ path: `${SCREENS}/import-mostab.png` });
+
+  // Back to the demo clears QA and restores the EKV device.
+  await page.locator('button.demo').click();
+  await expect(page.locator('header .device')).toContainText('nmos_demo');
+  await expect(page.locator('.qa')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('importer: a table without the family (L) axis errors gracefully and recovers', async ({ page }) => {
+  await page.goto('/');
+  // Valid file, but no L axis → familyCurves can't build the family → visible error.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
+  await expect(page.locator('header .err')).toBeVisible();
+  // Returning to the demo must rebuild the chart (Effect B creates-when-missing).
+  await page.locator('button.demo').click();
+  await expect(page.locator('header .err')).toHaveCount(0);
+  await expect(page.locator('.chart canvas').first()).toBeVisible();
+});

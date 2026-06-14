@@ -33,6 +33,11 @@ export const BASE_QUANTITIES: readonly BaseQuantity[] = [
 
 export const BASE_KEYS: ReadonlySet<string> = new Set(BASE_QUANTITIES.map((q) => q.key));
 
+/** Keys a usable table must carry (vgs, id, gm) — every chart/lookup needs them. */
+export const REQUIRED_KEYS: readonly string[] = BASE_QUANTITIES.filter((q) => q.required).map(
+  (q) => q.key,
+);
+
 /**
  * Standard derived quantities, each defined as an expression over the base
  * namespace + constants. The derive module evaluates these with the expression
