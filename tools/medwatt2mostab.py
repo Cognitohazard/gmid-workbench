@@ -22,12 +22,13 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import csv
 import os
 import re
 import sys
 
 import numpy as np
+
+from mostab_io import write_mostab
 
 # Dimension order of the mosplot 4-D parameter arrays.
 ARRAY_AXES = ("length", "vbs", "vgs", "vds")
@@ -133,16 +134,6 @@ def _oneline(s) -> str | None:
 
 def _opt(v) -> str | None:
     return None if v is None else format(float(v), ".10g")
-
-
-def write_mostab(path: str, header, rows, meta) -> None:
-    with open(path, "w", newline="") as f:
-        for k, v in meta.items():
-            if v:
-                f.write(f"# {k}: {v}\n")
-        w = csv.writer(f)
-        w.writerow([h.upper() for h in header])
-        w.writerows(rows)
 
 
 def convert(npz_path: str, out_dir: str, *, trust: bool = False, overwrite: bool = False):

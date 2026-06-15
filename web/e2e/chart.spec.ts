@@ -216,6 +216,29 @@ test('a panel that does not fan L exposes an L bias slider (no silent first-L bi
   await expect(page.locator('header .slider').last()).toContainText('vds');
 });
 
+test('column toggle: charts shrink back and do not overlap (2 → 1 → 2 columns)', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.grid canvas')).toHaveCount(5);
+  const fewer = page.locator('.cols button').first(); // −
+  const more = page.locator('.cols button').last(); // +
+
+  // Widen to a single column (charts grow to full width), then back to two.
+  await fewer.click();
+  await expect(page.locator('.tabs .cols')).toContainText('1 col');
+  await more.click();
+  await expect(page.locator('.tabs .cols')).toContainText('2 col');
+
+  // The two top-row panels sit side by side: their canvases must not overlap — i.e. the chart
+  // shrank back instead of keeping its 1-column width and spilling into its neighbor.
+  await expect
+    .poll(async () => {
+      const c0 = await page.locator('.grid .panel').nth(0).locator('canvas').boundingBox();
+      const c1 = await page.locator('.grid .panel').nth(1).locator('canvas').boundingBox();
+      return c0 && c1 ? c0.x + c0.width <= c1.x + 4 : false;
+    })
+    .toBe(true);
+});
+
 test('overlay: a second loaded device draws alongside the active one, dashed and labelled', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));

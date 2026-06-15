@@ -433,11 +433,15 @@
     position: relative;
     flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
     display: flex;
   }
   .pchart {
     flex: 1 1 auto;
     min-height: 0;
+    /* min-width:0 lets the chart shrink below the uPlot canvas's current width when the column
+       count grows (else a chart sized in 1-col can't shrink back and overflows its neighbor). */
+    min-width: 0;
     margin-left: 1.1em; /* room for the rotated Y-axis label strip */
   }
   .cbar {

@@ -16,3 +16,6 @@ __screens__/
 __pycache__/
 *.pyc
 .venv/
+
+# generated example data (reproduce with tools/make_examples.py)
+examples/
