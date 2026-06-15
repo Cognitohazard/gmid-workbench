@@ -15,6 +15,9 @@ export interface ChartData {
   lineLabels: string[];
   /** Optional per-line stroke colours (e.g. a colormap gradient); else PALETTE cycles. */
   lineColors?: string[];
+  /** Optional per-line dash pattern (uPlot `[on, off]`); null/absent ⇒ a solid line.
+   *  Used to distinguish overlaid devices (solid = primary, dashed = overlays). */
+  lineDash?: (number[] | null)[];
 }
 
 export interface CursorInfo {
@@ -33,10 +36,16 @@ export class ChartAdapter {
   private ro: ResizeObserver;
   private focusedSeries: number | null = null;
   private colors: string[] = [];
+  private dashes: (number[] | null)[] = [];
 
   /** Stroke colour for line `i`: the supplied per-line colour, else the PALETTE cycle. */
   private colorAt(i: number): string {
     return this.colors[i] ?? PALETTE[i % PALETTE.length];
+  }
+
+  /** Dash pattern for line `i`, or undefined (solid). */
+  private dashAt(i: number): number[] | undefined {
+    return this.dashes[i] ?? undefined;
   }
 
   constructor(
@@ -45,6 +54,7 @@ export class ChartAdapter {
     private onCursor?: (info: CursorInfo | null) => void,
   ) {
     this.colors = data.lineColors ?? [];
+    this.dashes = data.lineDash ?? [];
     this.u = this.build(data);
     this.ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
@@ -56,13 +66,16 @@ export class ChartAdapter {
     this.ro.observe(el);
   }
 
-  /** Replace the data. Recreates if the line count OR the per-line colours changed (uPlot
-   * fixes both at construction); else refits in place. */
+  /** Replace the data. Recreates if the line count OR the per-line colours OR dashes changed
+   * (uPlot fixes all three at construction); else refits in place. */
   setData(data: ChartData): void {
     const next = data.lineColors ?? [];
+    const nextDash = data.lineDash ?? [];
     const sameColors = next.length === this.colors.length && next.every((c, i) => c === this.colors[i]);
+    const sameDash = sameDashes(nextDash, this.dashes);
     this.colors = next;
-    if (sameColors && this.u.series.length - 1 === data.lines.length) {
+    this.dashes = nextDash;
+    if (sameColors && sameDash && this.u.series.length - 1 === data.lines.length) {
       this.u.setData(aligned(data)); // resetScales: true — refit to the new quantity's range
     } else {
       this.u.destroy();
@@ -102,6 +115,7 @@ export class ChartAdapter {
           (label, i): Series => ({
             label,
             stroke: this.colorAt(i),
+            dash: this.dashAt(i),
             width: 1.5,
             points: { show: false },
           }),
@@ -144,4 +158,19 @@ export class ChartAdapter {
 
 function aligned(data: ChartData): AlignedData {
   return [data.x, ...data.lines] as AlignedData;
+}
+
+/** Per-line dash arrays equal? (null === solid; compared structurally.) */
+function sameDashes(a: (number[] | null)[], b: (number[] | null)[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x == null || y == null) {
+      if (x !== y) return false;
+    } else if (x.length !== y.length || x.some((v, k) => v !== y[k])) {
+      return false;
+    }
+  }
+  return true;
 }

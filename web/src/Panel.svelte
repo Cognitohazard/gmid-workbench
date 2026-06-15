@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
-    familyCurvesXY,
+    overlayCurvesXY,
+    familyUnionCount,
     invertX,
     lookup,
     subsample,
@@ -8,7 +9,8 @@
     parseEng,
     BASE_QUANTITIES,
     type DeviceTable,
-    type FamilyCurvesXY,
+    type OverlayCurvesXY,
+    type OverlayLine,
   } from '@gmid/mostab-core';
   import { ChartAdapter, PALETTE, type ChartData, type CursorInfo } from './chart';
   import { viridis, viridisGradient, LARGE_FAMILY } from './colormap';
@@ -17,6 +19,7 @@
 
   let {
     device,
+    overlays = [],
     sweep,
     sharedBias,
     cfg,
@@ -25,6 +28,7 @@
     onRemove,
   }: {
     device: DeviceTable;
+    overlays?: DeviceTable[];
     sweep: string;
     sharedBias: Record<string, number>;
     cfg: Panel;
@@ -36,77 +40,94 @@
   const baseUnit = new Map(BASE_QUANTITIES.map((q) => [q.key, q.unit]));
   const axisUnit = (name: string) => baseUnit.get(name) ?? '';
 
+  // Primary first, then overlays — `meta.tableIndex` indexes this list.
+  const tablesAll = $derived([device, ...overlays]);
+  const overlaid = $derived(overlays.length > 0);
+  // Dash by device: the primary (table 0) is always solid; overlays cycle dash-only patterns so
+  // no overlay can ever render solid and be mistaken for the active device (even at table 4, 8…).
+  const OVERLAY_DASHES: number[][] = [[6, 3], [2, 3], [6, 3, 2, 3], [1, 2]];
+  const dashFor = (tableIndex: number): number[] | null =>
+    tableIndex === 0 ? null : OVERLAY_DASHES[(tableIndex - 1) % OVERLAY_DASHES.length];
+
   // Pin every shared-bias axis except this panel's own family (which fans into the
-  // curves); the sweep axis is consumed by familyCurvesXY itself. A panel whose
+  // curves); the sweep axis is consumed by overlayCurvesXY itself. A panel whose
   // family sits on a bias slider simply ignores that slider — by omission.
   const pinned = $derived(
     Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== cfg.family)),
   );
 
-  // The raw family of curves. A degenerate X (flat / non-monotone along the sweep) or a
-  // bad expression yields no curves and a message; the last good chart stays.
+  // The overlaid family of curves across the primary + any overlay devices, on one shared X
+  // lattice. A degenerate X or bad expression yields no curves and a message; the last good
+  // chart stays. Phase 1 draws overlays only for a DISCRETE (small) family — with overlays and
+  // a dense family, fall back to the primary alone and note it; the colorbar/sample machinery
+  // below is therefore always single-device.
   const built = $derived.by(() => {
     try {
-      const fc = familyCurvesXY(device, cfg.xExpr, cfg.yExpr, sweep, cfg.family || null, pinned);
-      return fc.degenerate
-        ? { fc: null as FamilyCurvesXY | null, err: fc.reason }
-        : { fc, err: null as string | null };
+      // Gate a dense overlay from the cheap count up front, so we never build curves we'd discard.
+      const famCount = overlaid ? familyUnionCount([device, ...overlays], cfg.family) : 0;
+      const gated = famCount > LARGE_FAMILY ? famCount : 0;
+      const tables = gated ? [device] : [device, ...overlays];
+      const ov = overlayCurvesXY(tables, cfg.xExpr, cfg.yExpr, sweep, cfg.family || null, pinned);
+      // Nothing drawable (a degenerate single device, or every table failed) is a blocking
+      // message; a partial failure (some tables drew) surfaces per-table below instead.
+      const err = ov.lines.length === 0 ? (ov.notes.find((n) => n) ?? null) : null;
+      return { ov, err, gated };
     } catch (e) {
-      return { fc: null as FamilyCurvesXY | null, err: (e as Error).message };
+      return { ov: null as OverlayCurvesXY | null, err: (e as Error).message, gated: 0 };
     }
   });
 
-  // Decide how a many-valued family renders: a small family always uses the discrete
-  // palette + per-curve legend; a large one defaults to a colormap+colorbar, or the
-  // sampled subset the user chose. The SAME derived produces the drawn lines, their
-  // colours, and the family value behind each drawn line (load-bearing for hover).
+  // Decide how a many-valued family renders: a small family always uses the discrete palette +
+  // per-curve legend; a large one defaults to a colormap+colorbar, or the sampled subset chosen.
   const cbarGradient = viridisGradient();
-  function resolveMode(fc: FamilyCurvesXY): 'discrete' | 'colorbar' | 'sample' {
-    if (fc.famName === '' || fc.famValues.length <= LARGE_FAMILY) return 'discrete';
+  function resolveMode(ov: OverlayCurvesXY): 'discrete' | 'colorbar' | 'sample' {
+    if (ov.famName === '' || ov.famValues.length <= LARGE_FAMILY) return 'discrete';
     return cfg.legend?.mode === 'sample' ? 'sample' : 'colorbar';
   }
+  // Produces the drawn lines, their colours (family value → colour on the shared scale), their
+  // dashes (device → dash), and the meta behind each drawn line (load-bearing for hover).
   const display = $derived.by(() => {
-    const fc = built.fc;
-    if (!fc) return null;
-    const nLines = fc.lines.length; // 1 when there's no family (famValues is then empty)
-    const nFam = fc.famValues.length;
-    const mode = resolveMode(fc);
-    const famUnit = axisUnit(fc.famName);
+    const ov = built.ov;
+    if (!ov || ov.lines.length === 0) return null;
+    const nFam = ov.famValues.length;
+    const mode = resolveMode(ov);
+    const famUnit = axisUnit(ov.famName);
+    const famMin = nFam ? ov.famValues[0] : 0;
+    const famMax = nFam ? ov.famValues[nFam - 1] : 0;
+    const famIndex = new Map(Array.from(ov.famValues, (v, i) => [v, i] as const));
 
-    let drawIdx: number[];
-    let lineColors: string[];
-    if (mode === 'colorbar') {
-      drawIdx = Array.from({ length: nLines }, (_, i) => i);
-      lineColors = drawIdx.map((i) => viridis(nFam <= 1 ? 0.5 : i / (nFam - 1)));
-    } else if (mode === 'sample') {
-      drawIdx = subsample(fc.famValues, cfg.legend!.count, cfg.legend!.include);
-      lineColors = drawIdx.map((_, k) => PALETTE[k % PALETTE.length]);
-    } else {
-      drawIdx = Array.from({ length: nLines }, (_, i) => i);
-      lineColors = drawIdx.map((_, k) => PALETTE[k % PALETTE.length]);
-    }
+    // Which curves to draw: sample thins a dense family; otherwise draw all. Sample mode is
+    // always single-device (the dense-overlay gate), so subsample's family-value indices ARE
+    // the line indices.
+    const keep =
+      mode === 'sample'
+        ? subsample(ov.famValues, cfg.legend!.count, cfg.legend!.include)
+        : ov.lines.map((_, k) => k);
 
-    const drawnFamValues = drawIdx.map((i) => fc.famValues[i]);
-    const lineLabels =
-      fc.famName === ''
-        ? [device.id.device]
-        : drawnFamValues.map((v) => `${fc.famName}=${formatEng(v)}${famUnit}`);
+    const drawnMeta = keep.map((k) => ov.meta[k]);
+    const colourOf = (m: OverlayLine, pos: number): string => {
+      if (mode === 'colorbar') return viridis(nFam <= 1 ? 0.5 : (m.famValue - famMin) / (famMax - famMin || 1));
+      if (mode === 'sample') return PALETTE[pos % PALETTE.length]; // single device, sequential
+      // discrete: colour by family-value index so the same value matches across devices
+      const fi = Number.isFinite(m.famValue) ? (famIndex.get(m.famValue) ?? pos) : pos;
+      return PALETTE[fi % PALETTE.length];
+    };
+    const labelOf = (m: OverlayLine): string => {
+      const dev = tablesAll[m.tableIndex] ?? device;
+      const fam = ov.famName !== '' && Number.isFinite(m.famValue) ? `${ov.famName}=${formatEng(m.famValue)}${famUnit}` : '';
+      if (!overlaid) return fam || dev.id.device;
+      return fam ? `${dev.id.device} ${fam}` : dev.id.device;
+    };
+
+    const lineColors = drawnMeta.map((m, p) => colourOf(m, p));
     const data: ChartData = {
-      x: Array.from(fc.x),
-      lines: drawIdx.map((i) => Array.from(fc.lines[i], (v) => (Number.isFinite(v) ? v : null))),
-      lineLabels,
+      x: Array.from(ov.x),
+      lines: keep.map((k) => Array.from(ov.lines[k], (v) => (Number.isFinite(v) ? v : null))),
+      lineLabels: drawnMeta.map(labelOf),
       lineColors,
+      lineDash: drawnMeta.map((m) => dashFor(m.tableIndex)),
     };
-    return {
-      mode,
-      data,
-      lineColors,
-      drawnFamValues,
-      famName: fc.famName,
-      famUnit,
-      famMin: nFam ? fc.famValues[0] : 0,
-      famMax: nFam ? fc.famValues[nFam - 1] : 0,
-    };
+    return { mode, data, lineColors, drawnMeta, famName: ov.famName, famUnit, famMin, famMax };
   });
 
   const seriesKey = $derived(
@@ -133,14 +154,17 @@
     const c = cursor;
     const d = display;
     if (!c || c.focusedLine == null || !d) return null;
+    // focusedLine indexes the DRAWN lines (a subset in sample mode); its meta carries the
+    // source table + family value, so invert/look up against THAT device's own grid.
+    const m = d.drawnMeta[c.focusedLine];
+    if (!m) return null;
+    const dev = tablesAll[m.tableIndex] ?? device;
     const fixed: Record<string, number> = { ...pinned };
-    // focusedLine indexes the DRAWN lines (a subset in sample mode), so map through
-    // drawnFamValues — not fc.famValues — to get the correct family value.
-    if (d.famName !== '') fixed[d.famName] = d.drawnFamValues[c.focusedLine];
-    const v = invertX(device, cfg.xExpr, c.x, sweep, fixed);
+    if (d.famName !== '' && Number.isFinite(m.famValue)) fixed[d.famName] = m.famValue;
+    const v = invertX(dev, cfg.xExpr, c.x, sweep, fixed);
     if (v == null) return null;
     try {
-      const q = lookup(device, { [sweep]: v, ...fixed }, OP_FIELDS.map((f) => f[1]));
+      const q = lookup(dev, { [sweep]: v, ...fixed }, OP_FIELDS.map((f) => f[1]));
       return { label: seriesKey[c.focusedLine]?.label ?? '', color: d.lineColors[c.focusedLine] ?? '', q };
     } catch {
       return null;
@@ -225,7 +249,7 @@
 
   <!-- Dense-family legend control: only when the family has too many values to show
        a per-curve legend. Default colorbar; toggle to a sampled subset (N + includes). -->
-  {#if built.fc && built.fc.famName !== '' && built.fc.famValues.length > LARGE_FAMILY}
+  {#if built.ov && built.ov.famName !== '' && built.ov.famValues.length > LARGE_FAMILY}
     {@const lg = cfg.legend ?? { mode: 'colorbar' as const, count: 8, include: [] }}
     <div class="plegend">
       <button
@@ -254,13 +278,21 @@
           onchange={(e) =>
             onChange({ legend: { ...lg, include: parseIncludes((e.currentTarget as HTMLInputElement).value) } })}
         />
-        <span class="of">{built.fc.famValues.length} total</span>
+        <span class="of">{built.ov.famValues.length} total</span>
       {/if}
     </div>
   {/if}
 
   {#if built.err}<p class="perr" title={built.err}>{built.err}</p>{/if}
-  {#if built.fc?.warning}<p class="pwarn" title={built.fc.warning}>⚠ {built.fc.warning}</p>{/if}
+  {#if built.ov?.warning}<p class="pwarn" title={built.ov.warning}>⚠ {built.ov.warning}</p>{/if}
+  {#if built.gated}<p class="pwarn">⚠ overlay hidden — {built.gated} family values exceed {LARGE_FAMILY}; showing the active device only</p>{/if}
+  <!-- Per-table failures (e.g. one overlay degenerate) — only while others still draw; a fully
+       undrawable panel reports through .perr above. -->
+  {#if display}
+    {#each built.ov?.notes ?? [] as note, t}
+      {#if note}<p class="pwarn" title={note}>⚠ {tablesAll[t]?.id.device ?? `table ${t}`}: {note}</p>{/if}
+    {/each}
+  {/if}
 
   {#if cfg.render === 'chart'}
     <div class="plotwrap">

@@ -232,6 +232,174 @@ export function familyCurvesXY(
   };
 }
 
+/** One drawn line's provenance: which input table it came from and its family value. */
+export interface OverlayLine {
+  readonly tableIndex: number; // index into the `tables` passed to overlayCurvesXY
+  readonly famValue: number; // the curve's family value; NaN when that table has no family
+}
+
+/**
+ * Several devices' family-of-curves, cross-plotted on ONE shared X lattice so they can
+ * overlay on a single chart (NMOS vs PMOS, or one device across process corners). Each
+ * input table is resolved independently with `familyCurvesXY`, then every curve is
+ * resampled onto the union lattice; `meta[k]` tags `lines[k]` with its source table and
+ * family value so the UI can colour by family value and dash by device.
+ */
+export interface OverlayCurvesXY {
+  readonly xExpr: string;
+  readonly xLabel: string;
+  readonly sweepName: string;
+  readonly x: Float64Array; // union lattice, monotonic-ascending, spanning every table's range
+  readonly famName: string; // '' when no surviving table fans a family
+  readonly famValues: Float64Array; // sorted-unique UNION of all tables' family values (shared colour scale)
+  readonly lines: Float64Array[]; // table-major; each resampled onto x, NaN outside its native range
+  readonly meta: OverlayLine[]; // parallel to lines
+  readonly warning: string; // first surviving table's near-constant hint, else ''
+  readonly notes: (string | null)[]; // per-INPUT-table reason (throw / degenerate), else null
+}
+
+/**
+ * Overlay `tables` on one X lattice. A single table is the fast path: it returns
+ * `familyCurvesXY`'s own `x`/`lines` unchanged (no second resample) so the lone-device
+ * result is identical to plotting it directly. With several tables, each is resolved
+ * independently and a failing or degenerate one is isolated to `notes[t]` (its curves are
+ * dropped) instead of breaking the whole panel; the survivors share a union lattice.
+ *
+ * A table lacking the requested `family` axis contributes a single curve (famValue NaN)
+ * rather than erroring, so a device without that axis still overlays. Family values are
+ * unioned across tables, so an identical L in two devices maps to the same colour.
+ */
+export function overlayCurvesXY(
+  tables: readonly DeviceTable[],
+  xExpr: string,
+  yExpr: string,
+  sweepName = 'vgs',
+  family: string | null = 'l',
+  fixed: Record<string, number> = {},
+  lattice = 0,
+): OverlayCurvesXY {
+  // Fast path: one table ⇒ familyCurvesXY verbatim (its x/lines by reference, no re-resample).
+  if (tables.length === 1) {
+    const fc = familyCurvesXY(tables[0], xExpr, yExpr, sweepName, family, fixed, lattice);
+    if (fc.degenerate) {
+      return empty(xExpr, fc.xLabel, sweepName, fc.famName, [fc.reason]);
+    }
+    const meta: OverlayLine[] =
+      fc.famName === ''
+        ? [{ tableIndex: 0, famValue: NaN }]
+        : Array.from(fc.famValues, (v) => ({ tableIndex: 0, famValue: v }));
+    return {
+      xExpr,
+      xLabel: fc.xLabel,
+      sweepName,
+      x: fc.x,
+      famName: fc.famName,
+      famValues: fc.famValues,
+      lines: fc.lines,
+      meta,
+      warning: fc.warning,
+      notes: [null],
+    };
+  }
+
+  // Resolve each table independently; isolate per-table failures into notes[t].
+  const notes: (string | null)[] = [];
+  const survivors: { idx: number; fc: FamilyCurvesXY }[] = [];
+  for (let t = 0; t < tables.length; t++) {
+    const tbl = tables[t];
+    // A table without the requested family axis draws as a single curve, not an error.
+    const famForTable = family !== null && tbl.grid.axes.some((a) => a.name === family) ? family : null;
+    try {
+      const fc = familyCurvesXY(tbl, xExpr, yExpr, sweepName, famForTable, fixed, lattice);
+      if (fc.degenerate) notes.push(fc.reason);
+      else {
+        notes.push(null);
+        survivors.push({ idx: t, fc });
+      }
+    } catch (e) {
+      notes.push((e as Error).message);
+    }
+  }
+
+  const xLabel = survivors[0]?.fc.xLabel ?? xExpr;
+  const famName = survivors.find((s) => s.fc.famName !== '')?.fc.famName ?? '';
+  const warning = survivors[0]?.fc.warning ?? '';
+  if (survivors.length === 0) return empty(xExpr, xLabel, sweepName, famName, notes);
+
+  // Union lattice spanning every survivor's range; M = the densest survivor (never downsample).
+  let lo = Infinity;
+  let hi = -Infinity;
+  let M = 0;
+  for (const { fc } of survivors) {
+    if (fc.x.length === 0) continue;
+    if (fc.x[0] < lo) lo = fc.x[0];
+    if (fc.x[fc.x.length - 1] > hi) hi = fc.x[fc.x.length - 1];
+    if (fc.x.length > M) M = fc.x.length;
+  }
+  if (lattice > 0) M = lattice;
+  if (M === 0) return empty(xExpr, xLabel, sweepName, famName, notes);
+
+  const span = hi - lo;
+  const x = new Float64Array(M);
+  for (let j = 0; j < M; j++) x[j] = M > 1 && span > 0 ? lo + (j * span) / (M - 1) : lo;
+
+  // ponytail: double-resample (familyCurvesXY's own lattice → union x) — second-order error on
+  // already-piecewise-linear curves, fine for an overlay; resample from native orient() if exactness ever matters.
+  const lines: Float64Array[] = [];
+  const meta: OverlayLine[] = [];
+  const famSet = new Set<number>();
+  for (const { idx, fc } of survivors) {
+    for (let i = 0; i < fc.lines.length; i++) {
+      const o = orient(fc.x, fc.lines[i]); // drop the NaN gaps, ascending — same prep interp1 expects
+      const line = new Float64Array(M);
+      for (let j = 0; j < M; j++) line[j] = interp1(o.nx, o.ny, x[j]);
+      lines.push(line);
+      const fv = fc.famName === '' ? NaN : fc.famValues[i];
+      meta.push({ tableIndex: idx, famValue: fv });
+      if (Number.isFinite(fv)) famSet.add(fv);
+    }
+  }
+  const famValues = Float64Array.from([...famSet].sort((a, b) => a - b));
+  return { xExpr, xLabel, sweepName, x, famName, famValues, lines, meta, warning, notes };
+}
+
+// An overlay with nothing drawable: empty curves, but the per-table notes still surface.
+function empty(
+  xExpr: string,
+  xLabel: string,
+  sweepName: string,
+  famName: string,
+  notes: (string | null)[],
+): OverlayCurvesXY {
+  return {
+    xExpr,
+    xLabel,
+    sweepName,
+    x: new Float64Array(0),
+    famName,
+    famValues: new Float64Array(0),
+    lines: [],
+    meta: [],
+    warning: '',
+    notes,
+  };
+}
+
+/**
+ * Count the DISTINCT family-axis values across `tables` — the size of the union an overlay
+ * would fan into. Reads axis values only (no curve building), so a caller can decide cheaply
+ * whether an overlay's family is too dense to draw before paying for overlayCurvesXY.
+ */
+export function familyUnionCount(tables: readonly DeviceTable[], family: string): number {
+  if (!family) return 0;
+  const set = new Set<number>();
+  for (const t of tables) {
+    const ax = t.grid.axes.find((a) => a.name === family);
+    if (ax) for (const v of ax.values) set.add(v);
+  }
+  return set.size;
+}
+
 /**
  * Inverse of an X expression along the sweep: the sweep coordinate (e.g. vgs) at which
  * `xExpr` equals `xValue`, on the curve fixed by `fixed` (family value + pinned bias).

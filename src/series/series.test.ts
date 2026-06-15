@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { familyCurves, familyCurvesXY, invertX, subsample, plottableQuantities, fixTable } from './index';
+import {
+  familyCurves,
+  familyCurvesXY,
+  overlayCurvesXY,
+  familyUnionCount,
+  invertX,
+  subsample,
+  plottableQuantities,
+  fixTable,
+} from './index';
 import { generateDemoDevice } from '../demo';
 import { lookup } from '../lookup';
 import { UT } from '../constants';
@@ -237,5 +246,86 @@ describe('familyCurvesXY (X as an expression, parametric in a sweep)', () => {
     expect(invertX(dev, 'gm/id', gmid, 'vgs', { l: L })).toBeCloseTo(vgsNode, 6);
     // Out of range → null (never extrapolates).
     expect(invertX(dev, 'gm/id', 1e6, 'vgs', { l: L })).toBeNull();
+  });
+});
+
+describe('overlayCurvesXY (several devices on one shared X lattice)', () => {
+  const dev = generateDemoDevice(); // l = [0.18, 0.5, 1, 2]µm, vgs 0..1.2
+
+  it('single table is identical to familyCurvesXY (no second resample)', () => {
+    const fc = familyCurvesXY(dev, 'gm/id', 'id/w', 'vgs', 'l');
+    const ov = overlayCurvesXY([dev], 'gm/id', 'id/w', 'vgs', 'l');
+    // Exact (not close) — a double-resample would perturb the last ULP.
+    expect(Array.from(ov.x)).toEqual(Array.from(fc.x));
+    expect(ov.lines.length).toBe(fc.lines.length);
+    for (let k = 0; k < fc.lines.length; k++)
+      expect(Array.from(ov.lines[k])).toEqual(Array.from(fc.lines[k])); // NaN gaps preserved too
+    expect(Array.from(ov.famValues)).toEqual(Array.from(fc.famValues));
+    expect(ov.meta.map((m) => m.tableIndex)).toEqual(Array.from(fc.famValues, () => 0));
+    expect(ov.meta.map((m) => m.famValue)).toEqual(Array.from(fc.famValues));
+    expect(ov.notes).toEqual([null]);
+  });
+
+  it('single table with no family is one curve tagged famValue NaN', () => {
+    const ov = overlayCurvesXY([dev], 'gm/id', 'ft', 'vgs', null);
+    expect(ov.lines).toHaveLength(1);
+    expect(ov.famName).toBe('');
+    expect(ov.meta).toEqual([{ tableIndex: 0, famValue: NaN }]);
+  });
+
+  it('two tables share a union lattice and union family-value set', () => {
+    const a = generateDemoDevice({ lengths: [0.1e-6, 0.5e-6] });
+    const b = generateDemoDevice({ lengths: [0.2e-6, 1e-6] });
+    const ov = overlayCurvesXY([a, b], 'gm/id', 'id/w', 'vgs', 'l');
+    for (let j = 1; j < ov.x.length; j++) expect(ov.x[j]).toBeGreaterThan(ov.x[j - 1]); // ascending
+    expect(ov.lines.length).toBe(4); // 2 L values per table
+    expect(ov.meta.map((m) => m.tableIndex)).toEqual([0, 0, 1, 1]); // table-major
+    // famValues is the sorted union of both tables' L sets.
+    expect(Array.from(ov.famValues)).toEqual([0.1e-6, 0.2e-6, 0.5e-6, 1e-6]);
+    expect(ov.notes).toEqual([null, null]);
+    for (const ln of ov.lines) expect(ln.length).toBe(ov.x.length);
+  });
+
+  it('a narrower table keeps NaN gaps outside its native range; union spans both', () => {
+    const wide = generateDemoDevice({ vgs: { min: 0.0, max: 1.2, step: 0.01 }, lengths: [0.5e-6] });
+    const narrow = generateDemoDevice({ vgs: { min: 0.4, max: 0.8, step: 0.01 }, lengths: [0.5e-6] });
+    const fcW = familyCurvesXY(wide, 'gm/id', 'ft', 'vgs', 'l');
+    const ov = overlayCurvesXY([wide, narrow], 'gm/id', 'ft', 'vgs', 'l');
+    // Union X spans at least the wider table's full range.
+    expect(ov.x[0]).toBeLessThanOrEqual(fcW.x[0] + 1e-12);
+    expect(ov.x[ov.x.length - 1]).toBeGreaterThanOrEqual(fcW.x[fcW.x.length - 1] - 1e-12);
+    const narrowLine = ov.lines[ov.meta.findIndex((m) => m.tableIndex === 1)];
+    expect(narrowLine.some((v) => Number.isFinite(v))).toBe(true); // finite where it overlaps
+    expect(narrowLine.some((v) => Number.isNaN(v))).toBe(true); // gap where the wide table extends past it
+  });
+
+  it('isolates a failing table to notes[t] without dropping the others', () => {
+    const a = generateDemoDevice({ lengths: [0.5e-6] });
+    const bRaw = generateDemoDevice({ lengths: [0.5e-6] });
+    const b = { ...bRaw, meta: { ...bRaw.meta, W: undefined } }; // no width ⇒ X = id/w can't resolve
+    const ov = overlayCurvesXY([a, b], 'id/w', 'gm/id', 'vgs', 'l');
+    expect(ov.notes[0]).toBeNull();
+    expect(ov.notes[1]).toBeTruthy(); // throw or degenerate — either way, isolated
+    expect(ov.meta.every((m) => m.tableIndex === 0)).toBe(true); // only the good table drew
+    for (const ln of ov.lines) expect(ln.some(Number.isFinite)).toBe(true);
+  });
+
+  it('familyUnionCount unions the family-axis values across tables (cheap dense-overlay gate)', () => {
+    const a = generateDemoDevice({ lengths: [0.1e-6, 0.5e-6] });
+    const b = generateDemoDevice({ lengths: [0.2e-6, 0.5e-6] }); // 0.5µm shared
+    expect(familyUnionCount([a, b], 'l')).toBe(3); // {0.1, 0.2, 0.5}µm
+    expect(familyUnionCount([a], 'l')).toBe(2);
+    expect(familyUnionCount([a, b], '')).toBe(0); // no family axis requested
+    expect(familyUnionCount([a], 'vds')).toBe(0); // axis absent on the table
+  });
+
+  it('all tables failing returns empty curves with notes, never throws', () => {
+    // gm/ID against a vds sweep is degenerate (vds-independent) for both tables.
+    const a = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.1 }, lengths: [0.5e-6] });
+    const b = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.1 }, lengths: [1e-6] });
+    const ov = overlayCurvesXY([a, b], 'gm/id', 'id', 'vds', 'l');
+    expect(ov.lines).toEqual([]);
+    expect(ov.notes).toHaveLength(2);
+    expect(ov.notes.every((n) => typeof n === 'string')).toBe(true);
   });
 });

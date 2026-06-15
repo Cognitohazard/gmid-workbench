@@ -216,6 +216,49 @@ test('a panel that does not fan L exposes an L bias slider (no silent first-L bi
   await expect(page.locator('header .slider').last()).toContainText('vds');
 });
 
+test('overlay: a second loaded device draws alongside the active one, dashed and labelled', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // Only the demo is loaded → no device strip.
+  await expect(page.locator('.devices')).toHaveCount(0);
+
+  // Import a real device; it ACCUMULATES (the demo stays) and the strip appears with both.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+  await expect(page.locator('header .device')).toContainText('nch_lvt'); // the import is active
+
+  // QA follows the ACTIVE device (derived, not a stale stored array): nch_lvt has warnings;
+  // making the clean demo active must clear them — not keep showing the last import's QA.
+  await expect(page.locator('.qa')).toContainText('gm-consistency');
+  await page.locator('.devices .dev').first().locator('.dname').click(); // demo active
+  await expect(page.locator('.qa')).toHaveCount(0);
+  await page.locator('.devices .dev').nth(1).locator('.dname').click(); // back to nch_lvt
+  await expect(page.locator('.qa')).toContainText('gm-consistency');
+
+  const p0 = page.locator('.grid .panel').first();
+  const before = await p0.locator('.pfoot .sw').count(); // active device's curves only
+  expect(before).toBeGreaterThan(0);
+  await expect(p0.locator('.pfoot')).not.toContainText('nmos_demo'); // demo not overlaid yet
+
+  // Overlay the demo (device 0, not the active one): its curves join every panel, device-prefixed.
+  await page.locator('.devices .dev').first().locator('input[type=checkbox]').check();
+  await expect(p0.locator('.pfoot')).toContainText('nmos_demo'); // overlay curves present
+  expect(await p0.locator('.pfoot .sw').count()).toBeGreaterThan(before); // more curves than before
+  await expect(p0.locator('.perr')).toHaveCount(0); // both devices resolve the panel's expressions
+  await expect(p0.locator('canvas')).toBeVisible();
+  await page.screenshot({ path: `${SCREENS}/overlay.png`, fullPage: true });
+
+  // Removing the overlaid device drops its curves and collapses the strip.
+  await page.locator('.devices .dev').first().locator('.drm').click();
+  await expect(page.locator('.devices')).toHaveCount(0);
+  await expect(p0.locator('.pfoot')).not.toContainText('nmos_demo');
+
+  expect(errors).toEqual([]);
+});
+
 test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));

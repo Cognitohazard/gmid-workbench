@@ -11,6 +11,7 @@
     fixTable,
     formatEng,
     parseEng,
+    validate,
     BASE_QUANTITIES,
     DERIVED_QUANTITIES,
     type QAWarning,
@@ -33,8 +34,21 @@
   const newDemo = () => generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } });
 
   const INITIAL_DEVICE = newDemo();
-  let device = $state(INITIAL_DEVICE);
-  let warnings = $state<readonly QAWarning[]>([]);
+  // The loaded devices accumulate across imports so any subset can be overlaid for comparison
+  // (NMOS vs PMOS, corner vs corner). `device` is the active/primary one — it drives the
+  // dashboard, the expression pickers, the bias sliders, and the sizer, all unchanged. The
+  // overlay set is chart-only and in-memory (device data is NDA-sensitive, never persisted).
+  // QA warnings live WITH their table so the displayed QA always matches the active device and
+  // can never go stale when the active device changes or a device is removed. The synthetic demo
+  // carries none (its QA notes are noise on teaching data); real imports carry validate(table).
+  type Loaded = { table: DeviceTable; warnings: readonly QAWarning[] };
+  let devices = $state<Loaded[]>([{ table: INITIAL_DEVICE, warnings: [] }]);
+  let activeIdx = $state(0);
+  let overlayIdx = $state<number[]>([]);
+  const active = $derived(devices[activeIdx] ?? devices[0]);
+  const device = $derived(active.table);
+  const overlays = $derived(overlayIdx.map((i) => devices[i]?.table).filter((d): d is DeviceTable => !!d));
+  const warnings = $derived(active.warnings);
   let importError = $state<string | null>(null);
   let dragging = $state(false);
 
@@ -50,7 +64,7 @@
 
   // Dashboard config (tabs → grids of panels). Restored from a saved layout when one
   // is present and valid for this device, else the device's canonical preset. A new
-  // device import re-seeds the preset (in swap()); panel edits never reseed it.
+  // device import re-seeds the preset (in select()); panel edits never reseed it.
   const DASH_KEY = 'gmid.dash';
   function loadDashboard(dev: DeviceTable): Dashboard {
     try {
@@ -144,20 +158,42 @@
       importError = result.errors.map((e) => `${e.kind}: ${e.message}`).join(' · ');
       return;
     }
-    swap(result.dataset.tables[0], result.dataset.warnings);
+    // Append every table in the dataset (a multi-corner export brings TT/SS/FF in at once),
+    // make the first newly-loaded one active, and reset the overlay selection.
+    const first = devices.length;
+    devices = [...devices, ...result.dataset.tables.map((t) => ({ table: t, warnings: validate(t) }))];
+    select(first);
   }
 
-  // Make `dev` the active device and reset the view around it.
-  function swap(dev: DeviceTable, warns: readonly QAWarning[] = []): void {
+  // Make device `i` active and reset the view around it (overlays cleared, dashboard re-seeded).
+  // QA follows automatically — `warnings` is derived from the active device.
+  function select(i: number): void {
     importError = null;
-    warnings = warns;
-    dashboard = presetDashboard(dev); // canonical panels for the new device
-    device = dev; // triggers the reactive cascade
+    activeIdx = i;
+    overlayIdx = [];
+    dashboard = presetDashboard(devices[i].table); // canonical panels for the newly active device
+  }
+
+  // Drop a loaded device from the registry; never remove the last or the active one.
+  function removeDevice(i: number): void {
+    if (devices.length <= 1 || i === activeIdx) return;
+    devices = devices.filter((_, k) => k !== i);
+    // Shift every index past the removed slot down one to track the shrunk list.
+    const shift = (k: number) => (k > i ? k - 1 : k);
+    activeIdx = shift(activeIdx);
+    overlayIdx = overlayIdx.filter((k) => k !== i).map(shift);
+  }
+
+  // Toggle device `i` into/out of the overlay set (the active device can't overlay itself).
+  function toggleOverlay(i: number): void {
+    if (i === activeIdx) return;
+    overlayIdx = overlayIdx.includes(i) ? overlayIdx.filter((k) => k !== i) : [...overlayIdx, i];
   }
 
   function loadDemo(): void {
     importSeq++; // invalidate any in-flight import
-    swap(newDemo());
+    devices = [{ table: newDemo(), warnings: [] }];
+    select(0);
   }
 
   function onDrop(e: DragEvent): void {
@@ -322,6 +358,31 @@
   </div>
 {/if}
 
+{#if devices.length > 1}
+  <nav class="devices" aria-label="loaded devices">
+    <span class="dlabel">devices</span>
+    {#each devices as d, i}
+      <span class="dev" class:active={i === activeIdx}>
+        <button
+          class="dname"
+          class:active={i === activeIdx}
+          onclick={() => select(i)}
+          title="make active — drives the dashboard, pickers, and sizer"
+        >{d.table.id.device} · {d.table.id.corner} · {d.table.id.temp}°C</button>
+        <label class="dov" title="overlay this device on every panel">
+          <input
+            type="checkbox"
+            checked={overlayIdx.includes(i)}
+            disabled={i === activeIdx}
+            onchange={() => toggleOverlay(i)}
+          />overlay
+        </label>
+        <button class="drm" onclick={() => removeDevice(i)} title="remove from registry" aria-label="remove device">×</button>
+      </span>
+    {/each}
+  </nav>
+{/if}
+
   <nav class="tabs">
     {#each dashboard.tabs as tab, i}
       <button
@@ -361,6 +422,7 @@
     {#each activeTab.panels as cfg (cfg.id)}
       <Panel
         {device}
+        {overlays}
         sweep={dashboard.sweep}
         {sharedBias}
         {cfg}
@@ -596,6 +658,66 @@
     font-family: ui-monospace, monospace;
     font-size: 0.85em;
     opacity: 0.85;
+  }
+  .devices {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    padding: 0.3rem 0.75rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .devices .dlabel {
+    opacity: 0.55;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.72rem;
+  }
+  .dev {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    border-radius: 5px;
+    padding: 0.05rem 0.3rem;
+  }
+  .dev.active {
+    border-color: color-mix(in srgb, currentColor 45%, transparent);
+    background: color-mix(in srgb, currentColor 8%, transparent);
+  }
+  .dname {
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    padding: 0.05rem 0.1rem;
+  }
+  .dname.active {
+    font-weight: 600;
+  }
+  .dov {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    opacity: 0.85;
+  }
+  .dov input:disabled {
+    opacity: 0.3;
+  }
+  .drm {
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    opacity: 0.5;
+    padding: 0 0.15rem;
+  }
+  .drm:hover {
+    opacity: 1;
   }
   .sizer {
     width: 17rem;
