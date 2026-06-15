@@ -29,7 +29,9 @@ export interface CursorInfo {
   perLine: { label: string; value: number | null; color: string }[];
 }
 
-export const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#bfef45', '#f032e6'];
+// A muted, pastel-leaning qualitative palette: soft enough to sit on the creamy paper theme,
+// still saturated enough to stay distinguishable on both the light and dark backgrounds.
+export const PALETTE = ['#d2596a', '#5b9e6f', '#5277c4', '#d98a4a', '#9a6cb0', '#3fa0a8', '#b6953f', '#c56fa6'];
 
 export class ChartAdapter {
   private u: uPlot;
@@ -37,6 +39,7 @@ export class ChartAdapter {
   private focusedSeries: number | null = null;
   private colors: string[] = [];
   private dashes: (number[] | null)[] = [];
+  private lastData: ChartData;
 
   /** Stroke colour for line `i`: the supplied per-line colour, else the PALETTE cycle. */
   private colorAt(i: number): string {
@@ -55,6 +58,7 @@ export class ChartAdapter {
   ) {
     this.colors = data.lineColors ?? [];
     this.dashes = data.lineDash ?? [];
+    this.lastData = data;
     this.u = this.build(data);
     this.ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
@@ -75,12 +79,20 @@ export class ChartAdapter {
     const sameDash = sameDashes(nextDash, this.dashes);
     this.colors = next;
     this.dashes = nextDash;
+    this.lastData = data;
     if (sameColors && sameDash && this.u.series.length - 1 === data.lines.length) {
       this.u.setData(aligned(data)); // resetScales: true — refit to the new quantity's range
     } else {
       this.u.destroy();
       this.u = this.build(data);
     }
+  }
+
+  /** Rebuild from the retained data to pick up a theme/colour or tick-font change. uPlot fixes
+   *  axis font + stroke at construction (like series colour/dash), so a restyle needs a rebuild. */
+  restyle(): void {
+    this.u.destroy();
+    this.u = this.build(this.lastData);
   }
 
   destroy(): void {
@@ -92,9 +104,16 @@ export class ChartAdapter {
     // uPlot paints axis labels/ticks/grid on the canvas with its own (light-theme)
     // defaults, ignoring `color-scheme`. Resolve the container's current text colour
     // so the chart tracks light/dark like the rest of the UI. (Re-read on rebuild.)
-    const fg = getComputedStyle(this.el).color || '#888';
+    const cs = getComputedStyle(this.el);
+    const fg = cs.color || '#888';
     const faint = fg.startsWith('rgb(') ? fg.replace('rgb(', 'rgba(').replace(')', ', 0.15)') : fg;
     const axis = { stroke: fg, grid: { stroke: faint }, ticks: { stroke: faint } };
+    // Tick-label font from the user setting (`--font-axis-label`, set on :root and inherited
+    // here); numeric fallback so a missing var can't NaN the size. The x-axis gutter is then
+    // sized to hug the ticks — uPlot's default reserves ~50px, far more than SI ticks need,
+    // which is the empty band that read as a gap under the DOM axis title.
+    const labelPx = parseFloat(cs.getPropertyValue('--font-axis-label')) || 12;
+    const tickFont = `${labelPx}px system-ui, sans-serif`;
     // SI-suffix ticks (200G, 8M, 25m…) — quantities span many decades, so raw integers
     // overflow the gutter. Axis *labels* are rendered as DOM by the Panel (so they can
     // carry subscripts), not drawn here on the canvas.
@@ -106,8 +125,8 @@ export class ChartAdapter {
       legend: { show: false }, // we own the readout/color-key in the app footer
       cursor: { focus: { prox: 24 } },
       axes: [
-        { values: fmtTicks, ...axis },
-        { values: fmtTicks, ...axis },
+        { values: fmtTicks, font: tickFont, size: Math.round(labelPx + 16), ...axis },
+        { values: fmtTicks, font: tickFont, ...axis },
       ],
       series: [
         {},

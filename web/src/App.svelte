@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import {
     generateDemoDevice,
     plottableQuantities,
@@ -19,13 +20,20 @@
     type Grid,
   } from '@gmid/mostab-core';
   import Panel from './Panel.svelte';
+  import Help from './Help.svelte';
+  import { CONTROL_HELP } from './help';
+  import { loadSettings, saveSettings, applySettings, FONT_RANGE, type Settings } from './settings';
+  import { loadJSON, saveJSON } from './storage';
   import {
     presetDashboard,
     sanitizeDashboard,
+    canPlot,
+    TEMPLATES,
     SWEEP_AXIS,
     LENGTH_AXIS,
     GM_ID,
     type Dashboard,
+    type PanelTemplate,
   } from './dashboard';
 
   // The device-level core is the single source of truth. The active device is
@@ -66,27 +74,33 @@
   // is present and valid for this device, else the device's canonical preset. A new
   // device import re-seeds the preset (in select()); panel edits never reseed it.
   const DASH_KEY = 'gmid.dash';
-  function loadDashboard(dev: DeviceTable): Dashboard {
-    try {
-      const raw = localStorage.getItem(DASH_KEY);
-      if (raw) {
-        const d = sanitizeDashboard(JSON.parse(raw), dev);
-        if (d) return d;
-      }
-    } catch {
-      // corrupt/unavailable storage (e.g. file:// with storage blocked) → preset
-    }
-    return presetDashboard(dev);
-  }
+  const loadDashboard = (dev: DeviceTable): Dashboard =>
+    loadJSON(DASH_KEY, (raw) => sanitizeDashboard(raw, dev), () => presetDashboard(dev));
   let dashboard = $state<Dashboard>(loadDashboard(INITIAL_DEVICE));
   const activeTab = $derived(dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]);
   // Persist the layout (not the device — that re-seeds on load) so a customized
   // dashboard survives a reload. Best-effort: a write failure is silently ignored.
+  $effect(() => saveJSON(DASH_KEY, dashboard));
+
+  // Appearance settings (theme + font sizes). Applied to the document root and persisted on
+  // every change. The whole UI and the canvas chart follow (both read system colours + vars).
+  let settings = $state<Settings>(loadSettings());
+  // `styleVersion` signals each Panel to chart.restyle() (the chart re-reads its themed colour
+  // and tick font from CSS only at construction). It is bumped INSIDE the apply effect, AFTER
+  // applySettings has committed color-scheme to the DOM — so the restyle reads the just-applied
+  // scheme, not the previous one. (A plain $derived recomputes the instant settings change and
+  // let the child restyle effect run first, reading the stale scheme and inverting the ticks.)
+  // Only the two canvas-relevant settings (theme + tick font) trigger a bump; UI/title fonts
+  // are pure CSS and need no rebuild.
+  let styleVersion = $state(0);
+  let prevStyleKey = '';
   $effect(() => {
-    try {
-      localStorage.setItem(DASH_KEY, JSON.stringify(dashboard));
-    } catch {
-      // storage quota / unavailable — non-fatal
+    applySettings(settings);
+    saveSettings(settings);
+    const key = `${settings.theme}|${settings.fontAxisLabel}`;
+    if (key !== prevStyleKey) {
+      prevStyleKey = key;
+      untrack(() => (styleVersion += 1));
     }
   });
 
@@ -119,10 +133,35 @@
   });
   const defaultFamily = $derived(multiAxes.includes(LENGTH_AXIS) ? LENGTH_AXIS : '');
 
+  // Offer only the templates the active device can actually plot: both axes must resolve against
+  // this device + sweep (the same plottability the axis pickers and the Overview preset use), so
+  // the no-typing menu never advertises a canonical plot that would open as an erroring panel
+  // (e.g. fT / gm·gds on an import with no CGG / GDS column). Keeps each template's original
+  // index so `addFromTemplate` still resolves it in TEMPLATES.
+  const templateOptions = $derived.by(() => {
+    const ok = new Set(exprOptions.map((o) => o.value));
+    return TEMPLATES.map((t, i) => ({ t, i })).filter(({ t }) => canPlot(t, ok));
+  });
+
   // Dashboard mutations. activeTab / cfg are proxied $state objects, so mutating
   // their fields (or splicing the arrays) is reactive without re-finding by id.
-  function addPanel(): void {
-    activeTab.panels.push({ id: crypto.randomUUID(), xExpr: GM_ID, yExpr: 'id', family: defaultFamily, render: 'chart' });
+  // Add a panel from a template (the canonical plots) or, with no template, a blank one.
+  // A template without its own family fans the device's default (L when present).
+  function addPanel(tpl?: PanelTemplate): void {
+    activeTab.panels.push({
+      id: crypto.randomUUID(),
+      xExpr: tpl?.xExpr ?? GM_ID,
+      yExpr: tpl?.yExpr ?? 'id',
+      family: tpl?.family ?? defaultFamily,
+      render: 'chart',
+    });
+  }
+  // Add from the template <select>, then snap it back to its placeholder.
+  function addFromTemplate(e: Event): void {
+    const sel = e.currentTarget as HTMLSelectElement;
+    const i = Number(sel.value);
+    if (Number.isInteger(i) && i >= 0 && i < TEMPLATES.length) addPanel(TEMPLATES[i]);
+    sel.value = '';
   }
   function removePanel(id: string): void {
     activeTab.panels = activeTab.panels.filter((p) => p.id !== id);
@@ -322,6 +361,7 @@
       {#each multiAxes as ax}<option value={ax}>{ax}</option>{/each}
     </select>
   </label>
+  <Help text={CONTROL_HELP.sweep} />
   {#each shownBiasAxes as a}
     <label class="slider">
       {a.name}
@@ -333,6 +373,7 @@
         bind:value={sharedBias[a.name]}
       />
       <span class="val">{formatEng(sharedBias[a.name])}{axisUnit(a.name)}</span>
+      <Help text={CONTROL_HELP.bias} />
     </label>
   {/each}
   <span class="grow"></span>
@@ -346,7 +387,31 @@
     />
   </label>
   <button class="btn demo" onclick={loadDemo}>demo</button>
-  <button class="btn size" class:on={sizerOpen} onclick={() => (sizerOpen = !sizerOpen)}>size</button>
+  <button class="btn size" class:on={sizerOpen} onclick={() => (sizerOpen = !sizerOpen)} title={CONTROL_HELP.size}>size</button>
+  <details class="prefs">
+    <summary class="btn" title="appearance: theme and font sizes">⚙</summary>
+    <div class="prefs-pop">
+      <label class="prow">theme
+        <select bind:value={settings.theme}>
+          <option value="auto">auto</option>
+          <option value="light">light</option>
+          <option value="dark">dark</option>
+        </select>
+      </label>
+      <label class="prow">UI font
+        <input type="range" min={FONT_RANGE.min} max={FONT_RANGE.max} bind:value={settings.fontUi} />
+        <span class="pval">{settings.fontUi}px</span>
+      </label>
+      <label class="prow">axis titles
+        <input type="range" min={FONT_RANGE.min} max={FONT_RANGE.max} bind:value={settings.fontAxisTitle} />
+        <span class="pval">{settings.fontAxisTitle}px</span>
+      </label>
+      <label class="prow">axis labels
+        <input type="range" min={FONT_RANGE.min} max={FONT_RANGE.max} bind:value={settings.fontAxisLabel} />
+        <span class="pval">{settings.fontAxisLabel}px</span>
+      </label>
+    </div>
+  </details>
 </header>
 
 {#if importError}
@@ -361,15 +426,16 @@
 {#if devices.length > 1}
   <nav class="devices" aria-label="loaded devices">
     <span class="dlabel">devices</span>
+    <Help text={CONTROL_HELP.overlay} />
     {#each devices as d, i}
       <span class="dev" class:active={i === activeIdx}>
         <button
           class="dname"
           class:active={i === activeIdx}
           onclick={() => select(i)}
-          title="make active — drives the dashboard, pickers, and sizer"
+          title={CONTROL_HELP.active}
         >{d.table.id.device} · {d.table.id.corner} · {d.table.id.temp}°C</button>
-        <label class="dov" title="overlay this device on every panel">
+        <label class="dov" title={CONTROL_HELP.overlay}>
           <input
             type="checkbox"
             checked={overlayIdx.includes(i)}
@@ -400,7 +466,11 @@
       {activeTab.cols} col
       <button class="btn" onclick={() => setCols(1)} title="more columns">+</button>
     </span>
-    <button class="btn" onclick={addPanel}>+ panel</button>
+    <select class="btn tpl" onchange={addFromTemplate} title={CONTROL_HELP.template}>
+      <option value="" selected>+ panel from…</option>
+      {#each templateOptions as { t, i }}<option value={i}>{t.name}</option>{/each}
+    </select>
+    <button class="btn" onclick={() => addPanel()} title="add a blank panel">+ panel</button>
     {#if dashboard.tabs.length > 1}
       <button class="btn" onclick={() => removeTab(dashboard.activeTab)}>remove tab</button>
     {/if}
@@ -427,6 +497,8 @@
         {sharedBias}
         {cfg}
         families={multiAxes}
+        options={exprOptions}
+        {styleVersion}
         onChange={(patch) => Object.assign(cfg, patch)}
         onRemove={() => removePanel(cfg.id)}
       />
@@ -439,7 +511,7 @@
 
   {#if sizerOpen}
     <aside class="sizer">
-      <h2>size <small>bind any two</small></h2>
+      <h2>size <small>bind any two</small> <Help text={CONTROL_HELP.bind} /></h2>
       <label>L
         <select bind:value={sizeL}>
           {#each lAxis?.values ?? [] as L}<option value={L}>{formatEng(L)}m</option>{/each}
@@ -480,10 +552,10 @@
       <!-- Noise + matching params are device/PDK properties (seeded from metadata), so
            they show whenever the sizer is open; the budgets fill in once a geometry is
            sized. The 1/f corner is width-independent; the band sets the integration. -->
-      <h3>noise</h3>
+      <h3>noise <Help text={CONTROL_HELP.noise} /></h3>
       <p class="match-note">1/f corner · band, Hz{noiseFromMeta ? ' · corner from device' : ''}</p>
-      <label>f<sub>co</sub> <input bind:value={inFco} placeholder="Hz · e.g. 1meg" spellcheck="false" /></label>
-      <label>band <span class="band"><input bind:value={inFlo} spellcheck="false" />–<input bind:value={inFhi} spellcheck="false" /></span></label>
+      <label><span>f<sub>co</sub> <Help text={CONTROL_HELP.fco} /></span> <input bind:value={inFco} placeholder="Hz · e.g. 1meg" spellcheck="false" /></label>
+      <label><span>band <Help text={CONTROL_HELP.band} /></span> <span class="band"><input bind:value={inFlo} spellcheck="false" />–<input bind:value={inFhi} spellcheck="false" /></span></label>
       {#if noise}
         <!-- γ-model thermal noise uses the SIZED gm (noise ∝ 1/√gm). The table's stored
              `sth`/`sfl` PSDs are at the characterization width and are shown in Explore. -->
@@ -496,10 +568,10 @@
         </dl>
       {/if}
 
-      <h3>matching</h3>
+      <h3>matching <Help text={CONTROL_HELP.matching} /></h3>
       <p class="match-note">A in mV·µm / %·µm{matchFromMeta ? ' · from device' : ''}</p>
-      <label>A<sub>Vth</sub> <input bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label>
-      <label>A<sub>β</sub> <input bind:value={inAbeta} placeholder="%·µm" spellcheck="false" /></label>
+      <label><span>A<sub>Vth</sub> <Help text={CONTROL_HELP.avth} /></span> <input bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label>
+      <label><span>A<sub>β</sub> <Help text={CONTROL_HELP.abeta} /></span> <input bind:value={inAbeta} placeholder="%·µm" spellcheck="false" /></label>
       {#if mism}
         <dl class="budget">
           <dt>σ(V<sub>th</sub>)</dt><dd>{formatEng(mism.sigmaVth)}V</dd>
@@ -603,6 +675,46 @@
   }
   .btn.on {
     background: color-mix(in srgb, currentColor 15%, transparent);
+  }
+  /* Appearance popover: a native <details> disclosure so there's no popover/positioning JS. */
+  .prefs {
+    position: relative;
+  }
+  .prefs summary {
+    list-style: none;
+  }
+  .prefs summary::-webkit-details-marker {
+    display: none;
+  }
+  .prefs-pop {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.35rem);
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    min-width: 14rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 6px;
+    background: var(--bg);
+    box-shadow: 0 4px 16px color-mix(in srgb, currentColor 22%, transparent);
+  }
+  .prow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .prow input[type='range'] {
+    flex: 1 1 auto;
+    min-width: 5rem;
+  }
+  .pval {
+    font-family: ui-monospace, monospace;
+    min-width: 2.8rem;
+    text-align: right;
   }
   .main {
     flex: 1 1 auto;

@@ -39,6 +39,42 @@ export interface Panel {
   legend?: LegendConfig; // dense-family display; absent ⇒ colorbar
 }
 
+/** A named starting point for a panel, so the user picks a canonical plot instead of
+ *  typing expressions. `family` absent ⇒ the device's default family (L when present). */
+export interface PanelTemplate {
+  name: string;
+  xExpr: string;
+  yExpr: string;
+  family?: string;
+}
+
+// The canonical plots offered in the "add panel" menu: the gm/ID design FOMs (X = gm/ID,
+// fan L) followed by the classic device characteristic curves (swept over VGS / ID). The
+// gm/ID subset (xExpr === GM_ID) doubles as the freshly-loaded "Overview" preset, so there
+// is one source of truth for "the canonical charts".
+export const TEMPLATES: readonly PanelTemplate[] = [
+  { name: 'I_D/W vs gm/ID', xExpr: GM_ID, yExpr: 'id_w' },
+  { name: 'f_T vs gm/ID', xExpr: GM_ID, yExpr: 'ft' },
+  { name: 'gain (gm/g_ds) vs gm/ID', xExpr: GM_ID, yExpr: 'gm_gds' },
+  { name: 'V* vs gm/ID', xExpr: GM_ID, yExpr: 'vstar' },
+  { name: 'noise (v_n,th) vs gm/ID', xExpr: GM_ID, yExpr: 'vnth_m' },
+  { name: 'I_D vs V_GS', xExpr: SWEEP_AXIS, yExpr: 'id' },
+  { name: 'g_m vs V_GS', xExpr: SWEEP_AXIS, yExpr: 'gm' },
+  { name: 'gm/ID vs V_GS', xExpr: SWEEP_AXIS, yExpr: GM_ID },
+  { name: 'f_T vs I_D', xExpr: 'id', yExpr: 'ft' },
+];
+
+// The gm/ID design set, in preset order — the Overview tab is exactly these (filtered to
+// what the device can compute). Derived from TEMPLATES so the menu and the preset agree.
+const CANON_TEMPLATES = TEMPLATES.filter((t) => t.xExpr === GM_ID);
+
+/** A template is plottable when BOTH its axes resolve for a device. `resolvable` is the set of
+ *  quantity keys plottableQuantities reports (base ∪ derived) for that device + sweep. One rule
+ *  behind both the Overview preset and the "+ panel" template menu, so they never diverge. */
+export function canPlot(t: PanelTemplate, resolvable: Set<string>): boolean {
+  return resolvable.has(t.xExpr) && resolvable.has(t.yExpr);
+}
+
 export interface Tab {
   id: string;
   name: string;
@@ -66,26 +102,21 @@ function sanitizeLegend(v: unknown): LegendConfig | undefined {
   return { mode: o.mode === 'sample' ? 'sample' : 'colorbar', count, include };
 }
 
-// The canonical gm/ID design charts (all X = gm/ID, family = L): current density
-// for sizing, transit frequency for speed, intrinsic gain, overdrive, and the
-// input-referred thermal-noise density that the gm/ID axis makes a first-class FOM.
-const CANON: string[] = ['id_w', 'ft', 'gm_gds', 'vstar', 'vnth_m'];
-
 /**
- * The default "Overview" tab for a freshly loaded device: one panel per canonical
- * quantity the table can actually compute (filtered by plottableQuantities, with the
+ * The default "Overview" tab for a freshly loaded device: one panel per canonical gm/ID
+ * design chart the table can actually compute (filtered by plottableQuantities, with the
  * metadata width scalar so id/w counts), family = L when the table sweeps length.
  */
 export function presetTab(dev: DeviceTable): Tab {
   const ok = plottableQuantities(dev.grid, SWEEP_AXIS, Object.keys(metaScalars(dev.meta)));
-  const can = (q: string) => ok.base.includes(q) || ok.derived.includes(q);
+  const resolvable = new Set([...ok.base, ...ok.derived]);
   const fam = dev.grid.axes.some((a) => a.name === LENGTH_AXIS && a.values.length > 1)
     ? LENGTH_AXIS
     : '';
-  const panels: Panel[] = CANON.filter(can).map((yExpr) => ({
+  const panels: Panel[] = CANON_TEMPLATES.filter((t) => canPlot(t, resolvable)).map((t) => ({
     id: uid(),
-    xExpr: GM_ID,
-    yExpr,
+    xExpr: t.xExpr,
+    yExpr: t.yExpr,
     family: fam,
     render: 'chart',
   }));

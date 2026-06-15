@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import {
     overlayCurvesXY,
     familyUnionCount,
@@ -15,6 +16,8 @@
   import { ChartAdapter, PALETTE, type ChartData, type CursorInfo } from './chart';
   import { viridis, viridisGradient, LARGE_FAMILY } from './colormap';
   import { qLabel } from './labels';
+  import { QUANTITY_HELP, CONTROL_HELP } from './help';
+  import Help from './Help.svelte';
   import { clampLegendCount, type Panel } from './dashboard';
 
   let {
@@ -24,6 +27,8 @@
     sharedBias,
     cfg,
     families,
+    options,
+    styleVersion,
     onChange,
     onRemove,
   }: {
@@ -33,9 +38,40 @@
     sharedBias: Record<string, number>;
     cfg: Panel;
     families: string[];
+    options: { value: string; label: string }[];
+    styleVersion: number;
     onChange: (patch: Partial<Panel>) => void;
     onRemove: () => void;
   } = $props();
+
+  // Axis picker: a dropdown of the quantities this device computes, with a custom-expression
+  // escape hatch. A panel is in custom mode when the user chose "ƒx custom…" OR the stored
+  // expression isn't a known option (e.g. a typed expression restored from a saved layout) —
+  // so a custom expression is shown in its text field and never silently dropped.
+  const optionValues = $derived(new Set(options.map((o) => o.value)));
+  let yCustom = $state(false);
+  let xCustom = $state(false);
+  const setCustom = (which: 'x' | 'y', v: boolean) => {
+    if (which === 'y') yCustom = v;
+    else xCustom = v;
+  };
+  const setExpr = (which: 'x' | 'y', v: string) =>
+    onChange(which === 'y' ? { yExpr: v } : { xExpr: v });
+  function onPickAxis(which: 'x' | 'y', v: string): void {
+    if (v === '__custom__') {
+      setCustom(which, true); // reveal the text field, keep the current expression to edit
+      return;
+    }
+    setCustom(which, false);
+    setExpr(which, v);
+  }
+  // Return to the dropdown: leave custom mode, snapping a non-option expression back to a
+  // known quantity so the select has something to show (the typed expression is abandoned).
+  function backToList(which: 'x' | 'y'): void {
+    setCustom(which, false);
+    const cur = which === 'y' ? cfg.yExpr : cfg.xExpr;
+    if (!optionValues.has(cur)) setExpr(which, options[0]?.value ?? 'id');
+  }
 
   const baseUnit = new Map(BASE_QUANTITIES.map((q) => [q.key, q.unit]));
   const axisUnit = (name: string) => baseUnit.get(name) ?? '';
@@ -183,10 +219,24 @@
   });
   // Create when data first arrives, else refit in place. A null build (bad expr / degenerate)
   // leaves the chart untouched.
+  let builtStyle = -1; // the styleVersion the live chart was last built / restyled at
   $effect(() => {
     if (cfg.render !== 'chart' || !el || !display?.data) return;
     if (chart) chart.setData(display.data);
-    else chart = new ChartAdapter(el, display.data, (info) => (cursor = info));
+    else {
+      chart = new ChartAdapter(el, display.data, (info) => (cursor = info));
+      builtStyle = untrack(() => styleVersion); // a fresh build already reflects the current style
+    }
+  });
+  // Rebuild the chart only when the theme or tick-font setting changed since it was last built —
+  // the chart reads its colour and tick font from CSS only at construction. The version guard
+  // skips redundantly rebuilding a chart just created at this style (e.g. every panel on first
+  // load, where styleVersion bumps to 1 around chart creation).
+  $effect(() => {
+    if (chart && styleVersion !== builtStyle) {
+      chart.restyle();
+      builtStyle = styleVersion;
+    }
   });
 
   const fmt = (v: number | null | undefined) =>
@@ -210,25 +260,40 @@
 
 {#snippet sw(color: string)}<i class="sw" style:background={color}></i>{/snippet}
 
+<!-- One axis control: a dropdown of computable quantities + a "ƒx custom…" entry that
+     swaps to a datalist-backed text field for a typed expression. -->
+{#snippet axis(which: 'x' | 'y', label: string)}
+  {@const expr = which === 'y' ? cfg.yExpr : cfg.xExpr}
+  {@const custom = (which === 'y' ? yCustom : xCustom) || !optionValues.has(expr)}
+  <span class="axl">{label}</span>
+  {#if custom}
+    <input
+      class="ex"
+      list="exprs"
+      value={expr}
+      onchange={(e) => setExpr(which, (e.currentTarget as HTMLInputElement).value)}
+      spellcheck="false"
+      title={`${label}: ${CONTROL_HELP.custom}`}
+    />
+    <button class="rm tiny" onclick={() => backToList(which)} title="back to the list">↩</button>
+  {:else}
+    <select
+      class="exsel"
+      value={expr}
+      onchange={(e) => onPickAxis(which, (e.currentTarget as HTMLSelectElement).value)}
+      title="{label} quantity"
+    >
+      {#each options as o}<option value={o.value}>{o.label}</option>{/each}
+      <option value="__custom__">ƒx custom…</option>
+    </select>
+  {/if}
+  {#if QUANTITY_HELP[expr]}<Help text={QUANTITY_HELP[expr]} />{/if}
+{/snippet}
+
 <div class="panel">
   <div class="ptools">
-    <input
-      class="ex"
-      list="exprs"
-      value={cfg.yExpr}
-      onchange={(e) => onChange({ yExpr: (e.currentTarget as HTMLInputElement).value })}
-      spellcheck="false"
-      title="Y expression"
-    />
-    <span class="vs">vs</span>
-    <input
-      class="ex"
-      list="exprs"
-      value={cfg.xExpr}
-      onchange={(e) => onChange({ xExpr: (e.currentTarget as HTMLInputElement).value })}
-      spellcheck="false"
-      title="X expression"
-    />
+    {@render axis('y', 'Y')}
+    {@render axis('x', 'X')}
     <select
       class="fam"
       value={cfg.family}
@@ -238,6 +303,43 @@
       <option value="">(none)</option>
       {#each families as f}<option value={f}>{f}</option>{/each}
     </select>
+    <Help text={CONTROL_HELP.family} />
+    <!-- Legend control for a dense family — lives in the toolbar (not its own row) so it
+         never steals height from the plot. Only shown when the family has too many values
+         for a per-curve legend; default colorbar, toggle to a sampled subset (N + includes). -->
+    {#if built.ov && built.ov.famName !== '' && built.ov.famValues.length > LARGE_FAMILY}
+      {@const lg = cfg.legend ?? { mode: 'colorbar' as const, count: 8, include: [] }}
+      <span class="plegend">
+        <button
+          class="rm"
+          onclick={() => onChange({ legend: { ...lg, mode: lg.mode === 'sample' ? 'colorbar' : 'sample' } })}
+          title="many curves: a colour scale + colorbar, or a sampled subset with a legend"
+        >{lg.mode === 'sample' ? 'sample' : 'colorbar'}</button>
+        {#if lg.mode === 'sample'}
+          <label
+            >N
+            <input
+              class="num"
+              type="number"
+              min="2"
+              max="32"
+              value={lg.count}
+              onchange={(e) =>
+                onChange({ legend: { ...lg, count: clampLegendCount(+(e.currentTarget as HTMLInputElement).value) } })}
+            /></label
+          >
+          <input
+            class="inc"
+            placeholder="include e.g. 0.5, 0.7"
+            title="family values to always show"
+            value={lg.include.map((v) => formatEng(v)).join(', ')}
+            onchange={(e) =>
+              onChange({ legend: { ...lg, include: parseIncludes((e.currentTarget as HTMLInputElement).value) } })}
+          />
+          <span class="of">{built.ov.famValues.length} total</span>
+        {/if}
+      </span>
+    {/if}
     <span class="grow"></span>
     <button
       class="rm"
@@ -246,42 +348,6 @@
     >{cfg.render === 'chart' ? 'table' : 'chart'}</button>
     <button class="rm" onclick={onRemove} title="remove panel">×</button>
   </div>
-
-  <!-- Dense-family legend control: only when the family has too many values to show
-       a per-curve legend. Default colorbar; toggle to a sampled subset (N + includes). -->
-  {#if built.ov && built.ov.famName !== '' && built.ov.famValues.length > LARGE_FAMILY}
-    {@const lg = cfg.legend ?? { mode: 'colorbar' as const, count: 8, include: [] }}
-    <div class="plegend">
-      <button
-        class="rm"
-        onclick={() => onChange({ legend: { ...lg, mode: lg.mode === 'sample' ? 'colorbar' : 'sample' } })}
-        title="legend for many curves"
-      >{lg.mode === 'sample' ? 'sample' : 'colorbar'}</button>
-      {#if lg.mode === 'sample'}
-        <label
-          >N
-          <input
-            class="num"
-            type="number"
-            min="2"
-            max="32"
-            value={lg.count}
-            onchange={(e) =>
-              onChange({ legend: { ...lg, count: clampLegendCount(+(e.currentTarget as HTMLInputElement).value) } })}
-          /></label
-        >
-        <input
-          class="inc"
-          placeholder="include e.g. 0.5, 0.7"
-          title="family values to always show"
-          value={lg.include.map((v) => formatEng(v)).join(', ')}
-          onchange={(e) =>
-            onChange({ legend: { ...lg, include: parseIncludes((e.currentTarget as HTMLInputElement).value) } })}
-        />
-        <span class="of">{built.ov.famValues.length} total</span>
-      {/if}
-    </div>
-  {/if}
 
   {#if built.err}<p class="perr" title={built.err}>{built.err}</p>{/if}
   {#if built.ov?.warning}<p class="pwarn" title={built.ov.warning}>⚠ {built.ov.warning}</p>{/if}
@@ -356,6 +422,7 @@
   }
   .ptools {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.3rem;
     font-family: ui-monospace, monospace;
@@ -364,14 +431,22 @@
   .ptools .grow {
     flex: 1 1 auto;
   }
+  .axl {
+    opacity: 0.55;
+    font-weight: 600;
+  }
+  .exsel {
+    font: inherit;
+    max-width: 9rem;
+  }
   .ex {
-    width: 5.5rem;
+    width: 8rem;
     font: inherit;
     font-family: ui-monospace, monospace;
     padding: 0.05rem 0.25rem;
   }
-  .vs {
-    opacity: 0.45;
+  .tiny {
+    padding: 0 0.3rem;
   }
   .fam {
     font: inherit;
@@ -400,11 +475,9 @@
     opacity: 0.8;
   }
   .plegend {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    margin-top: 0.2rem;
-    font-family: ui-monospace, monospace;
     font-size: 0.75rem;
     opacity: 0.9;
   }
@@ -419,8 +492,7 @@
     font-family: ui-monospace, monospace;
   }
   .inc {
-    flex: 1 1 auto;
-    min-width: 5rem;
+    width: 9rem;
     font: inherit;
     font-family: ui-monospace, monospace;
     padding: 0.05rem 0.25rem;
@@ -442,7 +514,9 @@
     /* min-width:0 lets the chart shrink below the uPlot canvas's current width when the column
        count grows (else a chart sized in 1-col can't shrink back and overflows its neighbor). */
     min-width: 0;
-    margin-left: 1.1em; /* room for the rotated Y-axis label strip */
+    /* room for the rotated Y-axis label strip; tracks the axis-title font so a larger title
+       can't overlap the plot. */
+    margin-left: calc(var(--font-axis-title) + 0.5rem);
   }
   .cbar {
     flex: none;
@@ -467,6 +541,7 @@
   .clabel {
     writing-mode: vertical-rl;
     transform: rotate(180deg);
+    font-size: var(--font-axis-title);
     opacity: 0.7;
   }
   .ylabel {
@@ -474,11 +549,11 @@
     left: 0;
     top: 0;
     bottom: 0;
-    width: 1.1em;
+    width: calc(var(--font-axis-title) + 0.5rem);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.82rem;
+    font-size: var(--font-axis-title);
     opacity: 0.85;
   }
   .ylabel span {
@@ -487,7 +562,7 @@
   }
   .xlabel {
     text-align: center;
-    font-size: 0.82rem;
+    font-size: var(--font-axis-title);
     opacity: 0.85;
     padding-top: 0.05rem;
   }
@@ -512,7 +587,7 @@
   .ptable th {
     position: sticky;
     top: 0;
-    background: Canvas;
+    background: var(--bg);
     text-align: right;
     font-weight: 600;
     border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);

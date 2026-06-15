@@ -28,16 +28,20 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
   await expect(p0.locator('.pfoot')).toContainText('l=180nm');
   await expect(p0.locator('.pfoot')).toContainText('l=2um');
 
-  // Every advertised picker option is computable on this device — setting it as a panel's
-  // Y must NOT raise the per-panel error (the picker reflects what the grid can resolve).
-  const opts = await page
-    .locator('#exprs option')
-    .evaluateAll((o) => o.map((x) => (x as HTMLOptionElement).value));
+  // Help icons explain the selected quantities in place via a native title tooltip.
+  await expect(p0.locator('.help').first()).toHaveAttribute('title', /.+/);
+
+  // Every quantity the picker dropdown offers is computable on this device — selecting it as
+  // a panel's Y must NOT raise the per-panel error (the picker reflects what the grid resolves).
+  const ySel = p0.locator('.exsel').first();
+  const opts = await ySel
+    .locator('option')
+    .evaluateAll((o) =>
+      o.map((x) => (x as HTMLOptionElement).value).filter((v) => v && v !== '__custom__'),
+    );
   expect(opts.length).toBeGreaterThan(3);
-  const yInput = p0.locator('.ex').first();
   for (const v of opts) {
-    await yInput.fill(v);
-    await yInput.blur();
+    await ySel.selectOption(v);
     await expect(p0.locator('.perr'), `option "${v}" raised an error`).toHaveCount(0);
   }
 
@@ -50,9 +54,12 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
   await expect(gmgds.locator('.pfoot')).toContainText('fT');
   await page.screenshot({ path: `${SCREENS}/panels.png`, fullPage: true });
 
-  // A bad expression shows the panel error and keeps the last good chart.
-  await yInput.fill('gm/(');
-  await yInput.blur();
+  // The custom-expression escape hatch still works: switch Y to custom, type a bad expression
+  // → the panel error shows and the last good chart stays.
+  await ySel.selectOption('__custom__');
+  const yCustom = p0.locator('.ex').first();
+  await yCustom.fill('gm/(');
+  await yCustom.blur();
   await expect(p0.locator('.perr')).toBeVisible();
   await expect(p0.locator('canvas')).toBeVisible();
 
@@ -107,6 +114,53 @@ test('importer: a single-axis table (no L) renders one curve per panel, no error
   await expect(page.locator('.grid canvas').first()).toBeVisible();
   await expect(page.locator('.grid .perr')).toHaveCount(0);
   await expect(page.locator('.grid .panel').first().locator('select.fam')).toHaveValue('');
+});
+
+test('templates: add a canonical panel from the menu, no expression typing', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.grid .panel')).toHaveCount(5);
+
+  // Pick "I_D vs V_GS" from the template menu → a 6th panel pre-set to X=vgs, Y=id, drawn.
+  await page.locator('select.tpl').selectOption({ label: 'I_D vs V_GS' });
+  await expect(page.locator('.grid .panel')).toHaveCount(6);
+  const last = page.locator('.grid .panel').last();
+  await expect(last.locator('.exsel').first()).toHaveValue('id'); // Y
+  await expect(last.locator('.exsel').nth(1)).toHaveValue('vgs'); // X
+  await expect(last.locator('canvas')).toBeVisible();
+  await expect(last.locator('.perr')).toHaveCount(0);
+
+  // The menu snaps back to its placeholder after adding (ready for the next pick).
+  await expect(page.locator('select.tpl')).toHaveValue('');
+});
+
+test('templates: the menu only offers plots the active device can compute', async ({ page }) => {
+  await page.goto('/');
+  // Import a sparse table — VGS/ID/GM + W metadata only, no CGG and no GDS columns.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
+  await expect(page.locator('header .device')).toContainText('nch_singleL');
+
+  const offered = () =>
+    page
+      .locator('select.tpl option')
+      .evaluateAll((os) =>
+        os
+          .map((o) => (o as HTMLOptionElement).textContent?.trim() ?? '')
+          .filter((t) => t && !t.startsWith('+ panel')),
+      );
+  const names = await offered();
+  // Computable from VGS/ID/GM (+ W metadata) → stay offered.
+  expect(names).toContain('I_D vs V_GS');
+  expect(names).toContain('I_D/W vs gm/ID');
+  // Need CGG / GDS columns this table lacks → must NOT be advertised (would open as a .perr panel).
+  expect(names).not.toContain('f_T vs gm/ID');
+  expect(names).not.toContain('gain (gm/g_ds) vs gm/ID');
+  expect(names).not.toContain('f_T vs I_D');
+
+  // An offered template still adds a real, non-erroring panel.
+  const before = await page.locator('.grid .panel').count();
+  await page.locator('select.tpl').selectOption({ label: 'I_D vs V_GS' });
+  await expect(page.locator('.grid .panel')).toHaveCount(before + 1);
+  await expect(page.locator('.grid .panel').last().locator('.perr')).toHaveCount(0);
 });
 
 test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async ({ page }) => {
@@ -172,6 +226,8 @@ test('dense family: colorbar by default, switchable to a sampled subset, persist
   await expect(pg.locator('.cbar')).toBeVisible();
   await expect(pg.locator('.cbar')).toContainText('1.2'); // colorbar max label
   await expect(pg.locator('.plegend')).toContainText('colorbar');
+  // The legend control lives in the panel toolbar, not its own row above the chart.
+  await expect(pg.locator('.ptools .plegend')).toBeVisible();
   expect(await pg.locator('.pfoot .sw').count()).toBeLessThanOrEqual(1); // no swatch dump
 
   // Switch to a sampled subset: N=5 → 5 discrete legend swatches, no colorbar; the sampled
@@ -293,8 +349,8 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   await expect(page.locator('.grid .panel')).toHaveCount(5);
   await expect(page.locator('.grid canvas')).toHaveCount(5);
   const p0 = page.locator('.grid .panel').first();
-  await expect(p0.locator('.ex').nth(1)).toHaveValue('gm_id'); // the X picker reads gm_id
-  await expect(p0.locator('.ex').first()).toHaveValue('id_w'); // first canonical Y
+  await expect(p0.locator('.exsel').first()).toHaveValue('id_w'); // first canonical Y
+  await expect(p0.locator('.exsel').nth(1)).toHaveValue('gm_id'); // the X picker reads gm_id
 
   // One shared bias slider (vds): vgs is the sweep, l is every panel's family. Driving it
   // re-slices every panel with no error (fT / ID-W are vds-sensitive, gm/ID is not).
@@ -336,6 +392,106 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   await page.reload();
   await expect(page.locator('.grid .panel')).toHaveCount(5);
   await expect(page.locator('.grid canvas')).toHaveCount(5);
+
+  expect(errors).toEqual([]);
+});
+
+test('settings: a forced theme overrides the OS scheme, keeping text and background in sync', async ({ page }) => {
+  // Simulate an OS in dark mode — the regression was forced-light showing white-on-white here
+  // (the page background followed the forced scheme but the text colour did not).
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/');
+  await page.locator('.prefs summary').click();
+
+  // Mean luminance of the document root's resolved text + background colours.
+  const root = () =>
+    page.evaluate(() => {
+      const s = getComputedStyle(document.documentElement);
+      const lum = (c: string) =>
+        (c.match(/\d+(\.\d+)?/g) ?? ['0', '0', '0']).slice(0, 3).reduce((a, b) => a + +b, 0) / 3;
+      return { fg: lum(s.color), bg: lum(s.backgroundColor) };
+    });
+
+  // Count dark vs light *drawn* pixels in the chart canvas's bottom tick-label gutter (below the
+  // plot, so the coloured curves don't reach it). This catches the lag bug where the canvas ticks
+  // kept the previous scheme's colour and rendered invisibly (e.g. white-on-white in light theme).
+  const ticks = () =>
+    page.evaluate(() => {
+      const c = document.querySelector('.grid .panel canvas') as HTMLCanvasElement;
+      const ctx = c.getContext('2d')!;
+      const band = ctx.getImageData(0, Math.floor(c.height * 0.9), c.width, Math.max(1, Math.floor(c.height * 0.1)));
+      let dark = 0;
+      let light = 0;
+      for (let i = 0; i < band.data.length; i += 4) {
+        if (band.data[i + 3] < 50) continue; // skip transparent (the canvas shows the themed bg)
+        const lum = (band.data[i] + band.data[i + 1] + band.data[i + 2]) / 3;
+        if (lum < 110) dark++;
+        else if (lum > 160) light++;
+      }
+      return { dark, light };
+    });
+
+  // Forced light: a genuinely light background with darker text, despite the dark OS, AND the
+  // canvas tick labels drawn dark (visible on the light plot — the reported bug was white-on-white).
+  await page.locator('.prefs-pop select').selectOption('light');
+  await expect.poll(async () => (await root()).bg).toBeGreaterThan(170);
+  expect((await root()).bg).toBeGreaterThan((await root()).fg);
+  await expect.poll(async () => (await ticks()).dark).toBeGreaterThan(0);
+  await page.screenshot({ path: `${SCREENS}/settings-light-on-dark-os.png`, fullPage: true });
+
+  // Forced dark: a genuinely dark background with lighter text, AND the tick labels drawn light.
+  await page.locator('.prefs-pop select').selectOption('dark');
+  await expect.poll(async () => (await root()).bg).toBeLessThan(90);
+  expect((await root()).bg).toBeLessThan((await root()).fg);
+  await expect.poll(async () => (await ticks()).light).toBeGreaterThan(0);
+});
+
+test('settings: theme toggle and font sliders apply, rebuild the chart, and persist', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await expect(page.locator('.grid canvas').first()).toBeVisible();
+
+  // Open the appearance popover (native <details>).
+  await page.locator('.prefs summary').click();
+  await expect(page.locator('.prefs-pop')).toBeVisible();
+
+  // Dark theme forces color-scheme on the document root; the canvas chart still renders.
+  await page.locator('.prefs-pop select').selectOption('dark');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.colorScheme))
+    .toBe('dark');
+  await expect(page.locator('.grid canvas').first()).toBeVisible();
+
+  // Bumping the UI font updates the --font-ui custom property.
+  await setSlider(page.locator('.prow', { hasText: 'UI font' }).locator('input'), '20');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--font-ui').trim(),
+      ),
+    )
+    .toBe('20px');
+
+  // Bumping the tick (axis-label) font goes through the chart-rebuild path without error.
+  await setSlider(page.locator('.prow', { hasText: 'axis labels' }).locator('input'), '18');
+  await expect(page.locator('.grid canvas').first()).toBeVisible();
+  await page.screenshot({ path: `${SCREENS}/settings-dark.png`, fullPage: true });
+
+  // All of it persists across a reload.
+  await page.reload();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.colorScheme))
+    .toBe('dark');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--font-ui').trim(),
+      ),
+    )
+    .toBe('20px');
 
   expect(errors).toEqual([]);
 });
