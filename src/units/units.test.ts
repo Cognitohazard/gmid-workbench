@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseEng, formatEng } from './index';
+import { parseEng, formatEng, formatSI } from './index';
 
 describe('parseEng', () => {
   it('parses the spec examples', () => {
@@ -104,5 +104,18 @@ describe('formatEng', () => {
     expect(huge).toMatch(/e/);
     const back = Number(huge); // plain JS scientific notation parses directly
     expect(Math.abs(back - 1e40) / 1e40).toBeLessThan(1e-6);
+  });
+});
+
+describe('formatSI', () => {
+  it('uses standard SI prefixes (capital ≥1e3, µ for micro)', () => {
+    expect(formatSI(1e9)).toBe('1G');
+    expect(formatSI(1e6)).toBe('1M');
+    expect(formatSI(1e3)).toBe('1k');
+    expect(formatSI(200e9, 3)).toBe('200G');
+    expect(formatSI(1.5e-6)).toBe('1.5µ');
+    expect(formatSI(1e-3)).toBe('1m');
+    expect(formatSI(0)).toBe('0');
+    expect(formatSI(-2.5e9)).toBe('-2.5G');
   });
 });

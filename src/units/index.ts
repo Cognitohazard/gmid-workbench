@@ -82,18 +82,15 @@ const ENG_SUFFIXES: readonly string[] = [
   'g', // 1e9
   't', // 1e12
 ];
-const ZERO_INDEX = 5; // position of '' (1e0) in ENG_SUFFIXES
+// Standard SI prefixes (capital for ≥1e3, single-char). Same ladder positions as
+// ENG_SUFFIXES, so they share ZERO_INDEX. For DISPLAY only — `M`/`G` do NOT round-trip
+// through parseEng (case-insensitive, where 'm' is milli), which is why parse-coupled
+// values keep formatEng and only labels/ticks use formatSI.
+const SI_SUFFIXES: readonly string[] = ['f', 'p', 'n', 'µ', 'm', '', 'k', 'M', 'G', 'T'];
+const ZERO_INDEX = 5; // position of '' (1e0) in either ladder
 
-/**
- * Format a number using engineering notation with a metric suffix.
- *
- * Picks the suffix so the mantissa lands in [1, 1000), renders `sig`
- * significant figures, strips trailing zeros, and emits "0" for zero.
- *
- * @param x   the value to format
- * @param sig significant figures (default 4)
- */
-export function formatEng(x: number, sig = 4): string {
+/** Shared engineering-notation core: pick a 1e3-group suffix from `suffixes`. */
+function formatLadder(x: number, sig: number, suffixes: readonly string[]): string {
   if (!Number.isFinite(x)) {
     // NaN / ±Infinity have no engineering suffix; render the JS string.
     return String(x);
@@ -120,12 +117,29 @@ export function formatEng(x: number, sig = 4): string {
   }
 
   const idx = ZERO_INDEX + exp3 / 3;
-  if (idx >= 0 && idx < ENG_SUFFIXES.length) {
-    return sign + trimZeros(mantissa, safeSig) + ENG_SUFFIXES[idx];
+  if (idx >= 0 && idx < suffixes.length) {
+    return sign + trimZeros(mantissa, safeSig) + suffixes[idx];
   }
 
   // Out of suffix range: fall back to scientific notation with the same sig-figs.
   return sign + trimZeros(abs / 10 ** exp3, safeSig) + 'e' + (exp3 >= 0 ? '+' : '') + exp3;
+}
+
+/**
+ * Format a number in engineering notation with a SPICE/SI suffix (k, meg, g, m, u, …).
+ * Round-trips through parseEng. Picks the suffix so the mantissa lands in [1, 1000),
+ * renders `sig` significant figures, strips trailing zeros, emits "0" for zero.
+ */
+export function formatEng(x: number, sig = 4): string {
+  return formatLadder(x, sig, ENG_SUFFIXES);
+}
+
+/**
+ * Like formatEng but with standard SI prefixes (1e9 → "1G", 1e6 → "1M", 1e-6 → "1µ").
+ * Display only (axis ticks, labels) — does NOT round-trip through parseEng.
+ */
+export function formatSI(x: number, sig = 4): string {
+  return formatLadder(x, sig, SI_SUFFIXES);
 }
 
 /** Round a positive value to `sig` significant figures. */

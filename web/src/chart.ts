@@ -3,7 +3,7 @@
 // path is framework-free. uPlot's own CSS must be imported or it won't lay out.
 import uPlot from 'uplot';
 import type { AlignedData, Options, Series } from 'uplot';
-import { formatEng } from '@gmid/mostab-core';
+import { formatSI } from '@gmid/mostab-core';
 import 'uplot/dist/uPlot.min.css';
 
 export interface ChartData {
@@ -13,7 +13,8 @@ export interface ChartData {
   lines: (number | null)[][];
   /** One label per line (legend + cursor readout). */
   lineLabels: string[];
-  xLabel: string;
+  /** Optional per-line stroke colours (e.g. a colormap gradient); else PALETTE cycles. */
+  lineColors?: string[];
 }
 
 export interface CursorInfo {
@@ -31,12 +32,19 @@ export class ChartAdapter {
   private u: uPlot;
   private ro: ResizeObserver;
   private focusedSeries: number | null = null;
+  private colors: string[] = [];
+
+  /** Stroke colour for line `i`: the supplied per-line colour, else the PALETTE cycle. */
+  private colorAt(i: number): string {
+    return this.colors[i] ?? PALETTE[i % PALETTE.length];
+  }
 
   constructor(
     private el: HTMLElement,
     data: ChartData,
     private onCursor?: (info: CursorInfo | null) => void,
   ) {
+    this.colors = data.lineColors ?? [];
     this.u = this.build(data);
     this.ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
@@ -48,9 +56,13 @@ export class ChartAdapter {
     this.ro.observe(el);
   }
 
-  /** Replace the data. Recreates only if the line count changed; else refits in place. */
+  /** Replace the data. Recreates if the line count OR the per-line colours changed (uPlot
+   * fixes both at construction); else refits in place. */
   setData(data: ChartData): void {
-    if (this.u.series.length - 1 === data.lines.length) {
+    const next = data.lineColors ?? [];
+    const sameColors = next.length === this.colors.length && next.every((c, i) => c === this.colors[i]);
+    this.colors = next;
+    if (sameColors && this.u.series.length - 1 === data.lines.length) {
       this.u.setData(aligned(data)); // resetScales: true — refit to the new quantity's range
     } else {
       this.u.destroy();
@@ -64,21 +76,32 @@ export class ChartAdapter {
   }
 
   private build(data: ChartData): uPlot {
+    // uPlot paints axis labels/ticks/grid on the canvas with its own (light-theme)
+    // defaults, ignoring `color-scheme`. Resolve the container's current text colour
+    // so the chart tracks light/dark like the rest of the UI. (Re-read on rebuild.)
+    const fg = getComputedStyle(this.el).color || '#888';
+    const faint = fg.startsWith('rgb(') ? fg.replace('rgb(', 'rgba(').replace(')', ', 0.15)') : fg;
+    const axis = { stroke: fg, grid: { stroke: faint }, ticks: { stroke: faint } };
+    // SI-suffix ticks (200G, 8M, 25m…) — quantities span many decades, so raw integers
+    // overflow the gutter. Axis *labels* are rendered as DOM by the Panel (so they can
+    // carry subscripts), not drawn here on the canvas.
+    const fmtTicks = (_u: uPlot, splits: number[]) => splits.map((v) => formatSI(v, 3));
     const opts: Options = {
       width: this.el.clientWidth || 800,
       height: this.el.clientHeight || 360,
       scales: { x: { time: false } },
       legend: { show: false }, // we own the readout/color-key in the app footer
       cursor: { focus: { prox: 24 } },
-      // Engineering-suffix Y ticks (70G, 8G, 25m…) — the quantity spans many
-      // decades across expressions; raw integers overflow the gutter.
-      axes: [{ label: data.xLabel }, { values: (_u, splits) => splits.map((v) => formatEng(v, 3)) }],
+      axes: [
+        { values: fmtTicks, ...axis },
+        { values: fmtTicks, ...axis },
+      ],
       series: [
         {},
         ...data.lineLabels.map(
           (label, i): Series => ({
             label,
-            stroke: PALETTE[i % PALETTE.length],
+            stroke: this.colorAt(i),
             width: 1.5,
             points: { show: false },
           }),
@@ -111,7 +134,7 @@ export class ChartAdapter {
       return {
         label: String(s.label ?? ''),
         value: raw == null ? null : (raw as number),
-        color: PALETTE[i % PALETTE.length],
+        color: this.colorAt(i),
       };
     });
     const fs = this.focusedSeries;

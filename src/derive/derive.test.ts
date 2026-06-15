@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { derive, deriveColumn, compileExpr, evalColumn, tableScope } from './index';
+import { derive, deriveColumn, compileExpr, evalColumn, tableScope, metaScalars } from './index';
 import type { Axis, Grid } from '../types';
 import { generateDemoDevice } from '../demo';
 import { makeGrid } from '../grid';
@@ -49,6 +49,30 @@ describe('tableScope', () => {
   it('returns undefined for unknown names', () => {
     const { grid } = generateDemoDevice();
     expect(tableScope(grid).resolve('does_not_exist')).toBeUndefined();
+  });
+
+  it('resolves a supplied scalar (current density id/w via width); a stored column wins', () => {
+    const axes: Axis[] = [{ name: 'vgs', values: Float64Array.from([0, 0.5, 1]) }];
+    const id = Float64Array.from([1, 2, 3]);
+    const grid = makeGrid(axes, new Map([['id', id]]));
+    // Without a scalar `w` is unresolved; with one, id/w (current density) evaluates.
+    expect(tableScope(grid).resolve('w')).toBeUndefined();
+    expect(Array.from(evalColumn(grid, compileExpr('id/w'), { w: 2 }))).toEqual([0.5, 1, 1.5]);
+    // A stored `w` column shadows the scalar (data always wins).
+    const grid2 = makeGrid(
+      axes,
+      new Map([
+        ['id', id],
+        ['w', Float64Array.from([10, 10, 10])],
+      ]),
+    );
+    expect(Array.from(evalColumn(grid2, compileExpr('id/w'), { w: 2 }))).toEqual([0.1, 0.2, 0.3]);
+  });
+
+  it('metaScalars exposes characterization width W as w (and only when finite)', () => {
+    expect(metaScalars({ W: 5e-6 } as never)).toEqual({ w: 5e-6 });
+    expect(metaScalars({} as never)).toEqual({});
+    expect(metaScalars({ W: Number.NaN } as never)).toEqual({});
   });
 
   it('resolves derived quantity names by evaluating their definition', () => {

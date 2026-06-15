@@ -2,81 +2,64 @@ import { test, expect } from '@playwright/test';
 
 const SCREENS = 'e2e/__screens__';
 
-test('explore: renders the gm/ID family chart and reacts to the expression', async ({ page }) => {
+// Drive a range <input> reliably (Playwright's fill() is flaky on type=range).
+async function setSlider(input: import('@playwright/test').Locator, value: string) {
+  await input.evaluate((el, v) => {
+    (el as HTMLInputElement).value = v as string;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, value);
+}
+
+test('panels: canonical grid renders, every picker option computes, hover gives the operating point', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
 
-  // uPlot mounts a <div class="uplot"> with a <canvas> inside our .chart container.
-  const canvas = page.locator('.chart canvas').first();
-  await expect(canvas).toBeVisible();
-  const cbox = await canvas.boundingBox();
-  expect(cbox!.width).toBeGreaterThan(200);
-  expect(cbox!.height).toBeGreaterThan(150);
+  // Five canonical gm/ID design charts are drawn immediately, no expression typing.
+  await expect(page.locator('.grid canvas')).toHaveCount(5);
+  const p0 = page.locator('.grid .panel').first();
+  const cbox = await p0.locator('canvas').boundingBox();
+  expect(cbox!.width).toBeGreaterThan(150);
+  expect(cbox!.height).toBeGreaterThan(120);
 
-  // We own the color key in the footer (uPlot's own legend is off): demo nMOS
-  // has 4 lengths, shown immediately on load before any hover.
-  await expect(page.locator('footer')).toContainText('l=180nm');
-  await expect(page.locator('footer')).toContainText('l=2um');
+  // Each panel owns its L color key (uPlot's own legend is off): demo nMOS has 4 lengths.
+  await expect(p0.locator('.pfoot')).toContainText('l=180nm');
+  await expect(p0.locator('.pfoot')).toContainText('l=2um');
 
-  // Hover the plot → footer readout reacts (vgs value appears).
-  const box = await page.locator('.chart').boundingBox();
-  await page.mouse.move(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
-  await expect(page.locator('footer')).toContainText('vgs');
-  await page.screenshot({ path: `${SCREENS}/explore-gm_id.png` });
-
-  // Switch the Y expression to fT (a derived NAME, resolved by the engine) →
-  // chart refits to a new scale, no error, still renders.
-  await page.locator('.expr input').fill('ft');
-  await page.locator('.expr input').blur();
-  await expect(page.locator('.err')).toHaveCount(0); // resolved as a derived name, no error
-  await page.mouse.move(box!.x + box!.width * 0.6, box!.y + box!.height * 0.4);
-  await expect(canvas).toBeVisible();
-  await page.screenshot({ path: `${SCREENS}/explore-ft.png` });
-
-  // Move the vds slider to its max — fT is vds-sensitive (CLM), so the chart
-  // re-slices and refits; the value readout tracks the slider; no error.
-  const vds = page.locator('.slider input').first();
-  await vds.fill('1.2');
-  await expect(page.locator('.slider .val')).toContainText('1.2');
-  await expect(page.locator('.err')).toHaveCount(0);
-  await expect(canvas).toBeVisible();
-  await page.mouse.move(box!.x + box!.width * 0.6, box!.y + box!.height * 0.4);
-  await page.screenshot({ path: `${SCREENS}/explore-ft-vds.png` });
-
-  // Every advertised picker option is computable on the active table — selecting
-  // any of them must NOT raise the error banner (the picker reflects the grid).
-  const optionValues = await page
+  // Every advertised picker option is computable on this device — setting it as a panel's
+  // Y must NOT raise the per-panel error (the picker reflects what the grid can resolve).
+  const opts = await page
     .locator('#exprs option')
-    .evaluateAll((opts) => opts.map((o) => (o as HTMLOptionElement).value));
-  expect(optionValues.length).toBeGreaterThan(3);
-  for (const v of optionValues) {
-    await page.locator('.expr input').fill(v);
-    await expect(page.locator('.err'), `option "${v}" raised an error`).toHaveCount(0);
+    .evaluateAll((o) => o.map((x) => (x as HTMLOptionElement).value));
+  expect(opts.length).toBeGreaterThan(3);
+  const yInput = p0.locator('.ex').first();
+  for (const v of opts) {
+    await yInput.fill(v);
+    await yInput.blur();
+    await expect(p0.locator('.perr'), `option "${v}" raised an error`).toHaveCount(0);
   }
 
-  // Input-referred thermal noise is a first-class plottable — the gm/ID methodology
-  // IS the noise-efficiency axis. The demo carries no `sth` PSD, so the γ-MODEL key
-  // (vnth_m) charts; the measured `vnth` would error here (no sth), which is the
-  // honest behaviour — a model is never silently dressed up as measured data.
-  await page.locator('.expr input').fill('vnth_m');
-  await page.locator('.expr input').blur();
-  await expect(page.locator('.err')).toHaveCount(0);
-  await expect(canvas).toBeVisible();
-  await page.screenshot({ path: `${SCREENS}/explore-noise.png` });
+  // Hover a panel with spread curves (gm/gds) → the FULL operating point: the sweep
+  // coordinate (vgs) is recovered from the gm/ID cursor (invertX), then looked up.
+  const gmgds = page.locator('.grid .panel').nth(2);
+  const b = await gmgds.locator('canvas').boundingBox();
+  await page.mouse.move(b!.x + b!.width * 0.7, b!.y + b!.height * 0.4);
+  await expect(gmgds.locator('.pfoot')).toContainText('vgs');
+  await expect(gmgds.locator('.pfoot')).toContainText('fT');
+  await page.screenshot({ path: `${SCREENS}/panels.png`, fullPage: true });
 
-  // A bad expression surfaces an error and keeps the last good chart.
-  await page.locator('.expr input').fill('gm/(');
-  await page.locator('.expr input').blur();
-  await expect(page.locator('.err')).toBeVisible();
-  await expect(canvas).toBeVisible();
+  // A bad expression shows the panel error and keeps the last good chart.
+  await yInput.fill('gm/(');
+  await yInput.blur();
+  await expect(p0.locator('.perr')).toBeVisible();
+  await expect(p0.locator('canvas')).toBeVisible();
 
   expect(errors).toEqual([]);
 });
 
-test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ page }) => {
+test('importer: loads a mostab CSV, swaps the device, surfaces QA, seeds the sizer', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -91,13 +74,13 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ pag
   await expect(page.locator('.qa')).toContainText('vgs-step');
   // Deepened data-trust: the fixture's gm is not d(id)/d(vgs), and the QA panel says so.
   await expect(page.locator('.qa')).toContainText('gm-consistency');
-  // Chart re-rendered for the new device (2 L lines from the fixture).
-  await expect(page.locator('.chart canvas').first()).toBeVisible();
-  await expect(page.locator('footer')).toContainText('l=');
+  // Panels re-seed for the new device and render (fixture has 2 L lines).
+  await expect(page.locator('.grid canvas').first()).toBeVisible();
+  await expect(page.locator('.grid .panel').first().locator('.pfoot')).toContainText('l=');
   await page.screenshot({ path: `${SCREENS}/import-mostab.png` });
 
-  // The matching panel seeds A_Vth / A_β from the table's Pelgrom metadata, not
-  // generic defaults: # AVT 3.5e-9 V·m → 3.5 mV·µm, # ABETA 2e-8 ·m → 2 %·µm.
+  // The matching panel seeds A_Vth / A_β from the table's Pelgrom metadata, not generic
+  // defaults: # AVT 3.5e-9 V·m → 3.5 mV·µm, # ABETA 2e-8 ·m → 2 %·µm.
   await page.locator('header button.size').click();
   const sizer = page.locator('aside.sizer');
   await expect(sizer.getByPlaceholder('mV·µm')).toHaveValue('3.5');
@@ -116,14 +99,14 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA', async ({ pag
   expect(errors).toEqual([]);
 });
 
-test('importer: a single-axis table (no L) charts as one curve, no error', async ({ page }) => {
+test('importer: a single-axis table (no L) renders one curve per panel, no error', async ({ page }) => {
   await page.goto('/');
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
   await expect(page.locator('header .device')).toContainText('nch_singleL');
-  // family auto-resolves to (none); the chart renders a single curve, no error.
-  await expect(page.locator('header .err')).toHaveCount(0);
-  await expect(page.locator('.chart canvas').first()).toBeVisible();
-  await expect(page.locator('header .axis select').nth(1)).toHaveValue(''); // family = (none)
+  // No L axis → the preset family is (none); panels chart a single curve, no per-panel error.
+  await expect(page.locator('.grid canvas').first()).toBeVisible();
+  await expect(page.locator('.grid .perr')).toHaveCount(0);
+  await expect(page.locator('.grid .panel').first().locator('select.fam')).toHaveValue('');
 });
 
 test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async ({ page }) => {
@@ -140,10 +123,10 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await expect(sizer.locator('.sz')).toContainText('W'); // solved a width
   await expect(sizer.locator('.feas.ok')).toBeVisible(); // 15 < ceiling → feasible
 
-  // The sizing bias is surfaced and tracks the explore vds slider (not a hidden
+  // The sizing bias is surfaced and tracks the dashboard's shared vds slider (not a hidden
   // midpoint): move vds to 1.2 V and the panel reflects it.
   await expect(sizer.locator('.bias')).toContainText('vds=');
-  await page.locator('header .slider input').first().fill('1.2');
+  await setSlider(page.locator('header .slider input').first(), '1.2');
   await expect(sizer.locator('.bias')).toContainText('vds=1.2');
   // Matching & noise budget: the sized geometry yields a Pelgrom offset, and the
   // thermal-noise density (γ-model) sits in its own line.
@@ -175,15 +158,118 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await expect(sizer.locator('.err')).toContainText('range');
 });
 
-test('explore: the X / family axis selector re-pivots the chart', async ({ page }) => {
+test('dense family: colorbar by default, switchable to a sampled subset, persisted', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
   await page.goto('/');
-  // Demo fans out over L by default.
-  await expect(page.locator('footer')).toContainText('l=180nm');
-  // Switch the family axis to vds → curves now fan out over vds, labelled in volts.
-  await page.locator('header .axis select').nth(1).selectOption('vds');
-  await expect(page.locator('footer')).toContainText('vds=');
-  await expect(page.locator('footer')).not.toContainText('l=180nm');
-  // l is now the remaining fixed axis (its slider appears); the chart still renders.
-  await expect(page.locator('.chart canvas').first()).toBeVisible();
-  await page.screenshot({ path: `${SCREENS}/explore-family-vds.png` });
+
+  // Fan gm/gds over vds (19 values > 8) → a colormap + colorbar, NOT a 19-swatch legend
+  // that would bury the chart.
+  const pg = page.locator('.grid .panel').nth(2);
+  await pg.locator('select.fam').selectOption('vds');
+  await expect(pg.locator('.cbar')).toBeVisible();
+  await expect(pg.locator('.cbar')).toContainText('1.2'); // colorbar max label
+  await expect(pg.locator('.plegend')).toContainText('colorbar');
+  expect(await pg.locator('.pfoot .sw').count()).toBeLessThanOrEqual(1); // no swatch dump
+
+  // Switch to a sampled subset: N=5 → 5 discrete legend swatches, no colorbar; the sampled
+  // labels span the family (endpoints kept — confirms the drawn subset's identity).
+  await pg.locator('.plegend button', { hasText: 'colorbar' }).click();
+  await expect(pg.locator('.plegend')).toContainText('sample');
+  await pg.locator('.num').fill('5');
+  await pg.locator('.num').blur();
+  await expect(pg.locator('.cbar')).toHaveCount(0);
+  await expect(pg.locator('.pfoot .sw')).toHaveCount(5);
+  await expect(pg.locator('.pfoot')).toContainText('vds=300mV');
+  await expect(pg.locator('.pfoot')).toContainText('vds=1.2V');
+
+  // The legend config persists across a reload.
+  await page.reload();
+  const pg2 = page.locator('.grid .panel').nth(2);
+  await expect(pg2.locator('.plegend')).toContainText('sample');
+  await expect(pg2.locator('.pfoot .sw')).toHaveCount(5);
+
+  expect(errors).toEqual([]);
+});
+
+test('near-constant X (gm/ID swept over L) draws with a non-fatal warning', async ({ page }) => {
+  await page.goto('/');
+  const p0 = page.locator('.grid .panel').first();
+  await p0.locator('select.fam').selectOption('vds'); // family ≠ l so the sweep ≠ family
+  await page.locator('header .axis select').selectOption('l'); // gm/ID barely varies along L
+  await expect(p0.locator('.pwarn')).toContainText(/nearly constant/i);
+  await expect(p0.locator('canvas')).toBeVisible(); // non-fatal — the chart still draws
+});
+
+test('a panel that does not fan L exposes an L bias slider (no silent first-L bias)', async ({ page }) => {
+  await page.goto('/');
+  // Overview: every panel fans L → only the vds slider is shown (L would be inert).
+  await expect(page.locator('header .slider')).toHaveCount(1);
+  await expect(page.locator('header .slider')).toContainText('vds');
+  // Make the first panel single-curve (family = none): it now pins L, so the L slider must
+  // appear — otherwise L would be silently fixed to its first node with no control.
+  await page.locator('.grid .panel').first().locator('select.fam').selectOption('');
+  await expect(page.locator('header .slider')).toHaveCount(2);
+  await expect(page.locator('header .slider').first()).toContainText('l'); // l axis, first
+  await expect(page.locator('header .slider').last()).toContainText('vds');
+});
+
+test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+
+  // Canonical preset: five gm/ID charts, every one with X = gm_id and family = L.
+  await expect(page.locator('.grid .panel')).toHaveCount(5);
+  await expect(page.locator('.grid canvas')).toHaveCount(5);
+  const p0 = page.locator('.grid .panel').first();
+  await expect(p0.locator('.ex').nth(1)).toHaveValue('gm_id'); // the X picker reads gm_id
+  await expect(p0.locator('.ex').first()).toHaveValue('id_w'); // first canonical Y
+
+  // One shared bias slider (vds): vgs is the sweep, l is every panel's family. Driving it
+  // re-slices every panel with no error (fT / ID-W are vds-sensitive, gm/ID is not).
+  await expect(page.locator('header .slider')).toHaveCount(1);
+  await expect(page.locator('header .slider')).toContainText('vds');
+  await setSlider(page.locator('header .slider input'), '1.0');
+  await expect(page.locator('.grid canvas')).toHaveCount(5);
+  await expect(page.locator('.grid .perr')).toHaveCount(0);
+
+  // Table view of a panel: the resampled curves as a numeric grid (X column + one column
+  // per L), no canvas. Toggling reuses the same derived data.
+  await p0.getByRole('button', { name: 'table', exact: true }).click();
+  await expect(p0.locator('table')).toBeVisible();
+  await expect(p0.locator('canvas')).toHaveCount(0);
+  await expect(p0.locator('thead th').first()).toHaveText('gm/ID'); // subscripted label
+  await expect(p0.locator('thead th')).toHaveCount(5); // gm/ID + four L curves
+
+  // Degeneracy guard: gm/ID is ~constant along a vds sweep, so switching the sweep to vds
+  // flags every panel instead of drawing a collapsed smear.
+  await page.locator('header .axis select').selectOption('vds');
+  await expect(page.locator('.grid .perr').first()).toContainText(/constant|monoton/i);
+  await page.locator('header .axis select').selectOption('vgs'); // restore
+
+  // Tabs: add an empty tab (charts gone, hint shown), switch back (charts return; p0 is a
+  // table now, so four canvases).
+  await page.locator('.tab.add').click();
+  await expect(page.locator('.empty')).toBeVisible();
+  await expect(page.locator('.grid canvas')).toHaveCount(0);
+  await page.locator('.tab').first().click();
+  await expect(page.locator('.grid canvas')).toHaveCount(4);
+  await page.screenshot({ path: `${SCREENS}/dashboard.png`, fullPage: true });
+
+  // Persistence: the customized layout (p0 = table) survives a reload.
+  await page.reload();
+  await expect(page.locator('.grid .panel').first().locator('table')).toBeVisible();
+
+  // A corrupt saved layout falls back to the canonical preset rather than crashing.
+  await page.evaluate(() => localStorage.setItem('gmid.dash', '{not valid json'));
+  await page.reload();
+  await expect(page.locator('.grid .panel')).toHaveCount(5);
+  await expect(page.locator('.grid canvas')).toHaveCount(5);
+
+  expect(errors).toEqual([]);
 });

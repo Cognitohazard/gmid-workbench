@@ -2,7 +2,7 @@
 // engine scopes and dogfoods the expression engine to compute derived columns
 // (gm/ID, fT, V*, FOMs, …). Pure, deterministic, zero DOM imports.
 
-import type { CompiledExpr, DeviceTable, Grid, Scope, Value } from '../types';
+import type { CompiledExpr, DeviceTable, Grid, Scope, TableMeta, Value } from '../types';
 import { DERIVED_QUANTITIES } from '../namespace';
 import { createEngine } from '../expr';
 
@@ -22,18 +22,20 @@ const gridSize = (grid: Grid): number => grid.shape.reduce((a, b) => a * b, 1);
  * then standard derived quantities by name — a derived key (e.g. "ft", "vstar",
  * "gm_id") resolves by evaluating its definition against this same scope, so
  * derived names are usable anywhere in an expression ("ft", "ft*2", "gm_id-1"),
- * not just as a whole-expression lookup. Stored columns always win, so real data
- * shadows a same-named derived. Unknown names return undefined (the engine then
- * tries its constant map, else errors). Derived definitions reference only base
- * quantities, so the recursion always bottoms out.
+ * not just as a whole-expression lookup — then any scalar `scalars` passed in
+ * (device-metadata scalars such as width `w`, see metaScalars). Stored columns
+ * always win, so real data shadows a same-named derived or scalar. Unknown names
+ * return undefined (the engine then tries its constant map, else errors). Derived
+ * definitions reference only base quantities + scalars, so recursion bottoms out.
  */
-export function tableScope(grid: Grid): Scope {
+export function tableScope(grid: Grid, scalars: Record<string, number> = {}): Scope {
   const scope: Scope = {
     resolve(name: string): Value | undefined {
       const stored = grid.quantities.get(name);
       if (stored) return stored;
       const def = DERIVED_COMPILED.get(name);
-      return def ? asColumn(def.eval(scope), gridSize(grid)) : undefined;
+      if (def) return asColumn(def.eval(scope), gridSize(grid));
+      return name in scalars ? scalars[name] : undefined;
     },
   };
   return scope;
@@ -53,8 +55,25 @@ export function compileExpr(src: string): CompiledExpr {
 }
 
 /** Evaluate an already-compiled expression over `grid`, returning a full column. */
-export function evalColumn(grid: Grid, compiled: CompiledExpr): Float64Array {
-  return asColumn(compiled.eval(tableScope(grid)), gridSize(grid));
+export function evalColumn(
+  grid: Grid,
+  compiled: CompiledExpr,
+  scalars: Record<string, number> = {},
+): Float64Array {
+  return asColumn(compiled.eval(tableScope(grid, scalars)), gridSize(grid));
+}
+
+/**
+ * Scalar device-metadata exposed to the expression scope as named identifiers
+ * (currently characterization width `meta.W` → `w`), so width-relative quantities
+ * like `id/w` (current density) resolve on tables that store width as a metadata
+ * scalar rather than a per-point column. A stored column of the same name still
+ * wins — it is resolved before scalars in tableScope.
+ */
+export function metaScalars(meta: TableMeta): Record<string, number> {
+  const s: Record<string, number> = {};
+  if (meta.W !== undefined && Number.isFinite(meta.W)) s.w = meta.W;
+  return s;
 }
 
 /**
@@ -66,7 +85,7 @@ export function derive(table: DeviceTable, key: string): Float64Array {
   if (!compiled) {
     throw new Error(`derive: unknown derived quantity "${key}"`);
   }
-  return evalColumn(table.grid, compiled);
+  return evalColumn(table.grid, compiled, metaScalars(table.meta));
 }
 
 /**

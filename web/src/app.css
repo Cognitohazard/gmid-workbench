@@ -15,3 +15,18 @@ body,
   display: flex;
   flex-direction: column;
 }
+/* Form controls must follow the theme explicitly: with `color-scheme: light dark`
+   a UA may adapt a control's background but not its text (or vice-versa), giving
+   dark-on-dark. Pin text to the inherited foreground and tint the background from it
+   so both track the active scheme. Option popups are the classic dark-on-dark spot,
+   so theme them with the Canvas/CanvasText system pair. */
+input:not([type='range']):not([type='file']),
+select,
+textarea {
+  color: inherit;
+  background-color: color-mix(in srgb, currentColor 8%, transparent);
+}
+option {
+  color: CanvasText;
+  background-color: Canvas;
+}

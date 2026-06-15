@@ -1,14 +1,13 @@
 <script lang="ts">
   import {
     generateDemoDevice,
-    familyCurves,
     plottableQuantities,
-    lookup,
     importMostab,
     sizeDevice,
     mismatch,
     thermalNoise,
     integratedNoise,
+    metaScalars,
     fixTable,
     formatEng,
     parseEng,
@@ -18,7 +17,15 @@
     type DeviceTable,
     type Grid,
   } from '@gmid/mostab-core';
-  import { ChartAdapter, PALETTE, type ChartData, type CursorInfo } from './chart';
+  import Panel from './Panel.svelte';
+  import {
+    presetDashboard,
+    sanitizeDashboard,
+    SWEEP_AXIS,
+    LENGTH_AXIS,
+    GM_ID,
+    type Dashboard,
+  } from './dashboard';
 
   // The device-level core is the single source of truth. The active device is
   // swappable at runtime by importing a mostab file; the demo (with a vds axis so
@@ -41,130 +48,85 @@
     grid.axes.filter((a) => a.values.length > 1).map((a) => a.name);
   const multiAxes = $derived(multiAxisNames(device.grid));
 
-  // Sensible default X / family for a device: X = vgs if swept (else the first
-  // swept axis); family = l if available (≠X, else the next swept axis, else none).
-  function defaultAxes(dev: DeviceTable): { x: string; fam: string } {
-    const multi = multiAxisNames(dev.grid);
-    const x = multi.includes('vgs') ? 'vgs' : (multi[0] ?? dev.grid.axes[0]?.name ?? 'vgs');
-    const fams = multi.filter((n) => n !== x);
-    return { x, fam: fams.includes('l') ? 'l' : (fams[0] ?? '') };
-  }
-
-  const seed = defaultAxes(INITIAL_DEVICE);
-  let xName = $state(seed.x);
-  let famName = $state(seed.fam); // '' = no family (a single curve)
-  // Re-seed X/family to sensible defaults whenever the device swaps.
-  $effect(() => {
-    const { x, fam } = defaultAxes(device);
-    xName = x;
-    famName = fam;
-  });
-  // Effective X / family, validated against the current device every render. This
-  // keeps the CHART consistent even in the sub-frame before the re-seed effect
-  // runs on a device swap (no error flash), and when X would equal family. The
-  // dropdowns bind the raw selection; everything downstream uses the effective ones.
-  const effX = $derived(
-    multiAxes.includes(xName) ? xName : (multiAxes[0] ?? device.grid.axes[0]?.name ?? 'vgs'),
-  );
-  const effFam = $derived(
-    famName !== '' && famName !== effX && multiAxes.includes(famName) ? famName : '',
-  );
-
-  let expr = $state('gm/id');
-
-  // Axes that are neither X nor family get a slider (multi-value only).
-  const fixedAxes = $derived(
-    device.grid.axes.filter((a) => a.name !== effX && a.name !== effFam && a.values.length > 1),
-  );
-  // Slider coordinate per fixed axis (interpolated). Re-seeded to the current
-  // axes' first nodes on any device/axis-role change — stale keys are ignored.
-  const freshFixed = () => Object.fromEntries(fixedAxes.map((a) => [a.name, a.values[0]]));
-  let fixedVals = $state<Record<string, number>>(freshFixed());
-  $effect(() => {
-    fixedVals = freshFixed(); // reads fixedAxes ⇒ re-runs on device/X/family change
-  });
-
-  let el: HTMLDivElement;
-  let chart: ChartAdapter | undefined;
-  let cursor = $state<CursorInfo | null>(null);
-
-  // Family of curves (one per L) + chart-ready data for the current expression.
-  // A bad expression keeps `err` and leaves the last good chart untouched.
-  const built = $derived.by(() => {
+  // Dashboard config (tabs → grids of panels). Restored from a saved layout when one
+  // is present and valid for this device, else the device's canonical preset. A new
+  // device import re-seeds the preset (in swap()); panel edits never reseed it.
+  const DASH_KEY = 'gmid.dash';
+  function loadDashboard(dev: DeviceTable): Dashboard {
     try {
-      const fc = familyCurves(device, expr, effX, effFam || null, { ...fixedVals });
-      const famUnit = axisUnit(fc.famName);
-      const lineLabels =
-        fc.famName === ''
-          ? [device.id.device] // single curve: label it by the device
-          : Array.from(fc.famValues, (v) => `${fc.famName}=${formatEng(v)}${famUnit}`);
-      const data: ChartData = {
-        x: Array.from(fc.x),
-        lines: fc.lines.map((line) => Array.from(line, (v) => (Number.isFinite(v) ? v : null))),
-        lineLabels,
-        xLabel: fc.xName,
-      };
-      return { fc, data, err: null as string | null };
-    } catch (e) {
-      return { fc: null, data: null, err: (e as Error).message };
-    }
-  });
-
-  // Always-visible color key for the L family (uPlot's own legend is off). The
-  // single source of the family label + palette colour.
-  const seriesKey = $derived(
-    (built.data?.lineLabels ?? []).map((label, i) => ({ label, color: PALETTE[i % PALETTE.length] })),
-  );
-
-  // Full operating point at the hovered vgs on the focused L curve, via the core
-  // lookup() — dogfooding the same interpolation the sizing tools use. Label +
-  // colour reuse seriesKey so the family identity is defined in exactly one place.
-  const opPoint = $derived.by(() => {
-    const c = cursor;
-    const fc = built.fc;
-    if (!c || c.focusedLine == null || !fc) return null;
-    const key = seriesKey[c.focusedLine];
-    const point: Record<string, number> = { [fc.xName]: c.x, ...fixedVals };
-    if (fc.famName !== '') point[fc.famName] = fc.famValues[c.focusedLine];
-    try {
-      const q = lookup(device, point, ['vgs', 'id', 'gm_id', 'vstar', 'gm_gds', 'ft']);
-      return { label: key.label, color: key.color, q };
+      const raw = localStorage.getItem(DASH_KEY);
+      if (raw) {
+        const d = sanitizeDashboard(JSON.parse(raw), dev);
+        if (d) return d;
+      }
     } catch {
-      return null;
+      // corrupt/unavailable storage (e.g. file:// with storage blocked) → preset
+    }
+    return presetDashboard(dev);
+  }
+  let dashboard = $state<Dashboard>(loadDashboard(INITIAL_DEVICE));
+  const activeTab = $derived(dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]);
+  // Persist the layout (not the device — that re-seeds on load) so a customized
+  // dashboard survives a reload. Best-effort: a write failure is silently ignored.
+  $effect(() => {
+    try {
+      localStorage.setItem(DASH_KEY, JSON.stringify(dashboard));
+    } catch {
+      // storage quota / unavailable — non-fatal
     }
   });
 
-  // Effect A — tear the chart down when the device swaps (its axis set / line
-  // count can change, which uPlot fixes at construction) and on unmount. Effect B
-  // rebuilds it for the new device. NOT triggered by expr/slider changes.
+  // Operating point: sharedBias carries a value for EVERY non-sweep multi-value axis, so
+  // any panel can pin the axes it doesn't fan. Seeded on a device/sweep change only (never
+  // on tab/panel edits), so the operating point persists.
+  const biasAxes = $derived(
+    device.grid.axes.filter((a) => a.name !== dashboard.sweep && a.values.length > 1),
+  );
+  let sharedBias = $state<Record<string, number>>({});
   $effect(() => {
-    device; // destroy + rebuild on a device swap or an X/family role change
-    effX;
-    effFam;
-    return () => {
-      chart?.destroy();
-      chart = undefined;
-    };
+    sharedBias = Object.fromEntries(biasAxes.map((a) => [a.name, a.values[0]]));
   });
+  // Sliders shown = bias axes that at least one panel in the ACTIVE tab actually pins (does
+  // not fan into its family). An axis every visible panel fans is inert here, so it's
+  // hidden — but its value is still held, and a panel that DOES pin it (single-curve, or a
+  // differently-fanned panel) gets the right bias and brings its slider back.
+  const shownBiasAxes = $derived(
+    biasAxes.filter((a) => activeTab.panels.some((p) => p.family !== a.name)),
+  );
 
-  // Effect B — create the chart when data is available, else push an update.
-  // Creating-when-missing makes recovery automatic: after a build error clears
-  // (or a new device loads), the next valid build rebuilds the chart. A null
-  // build (bad expr / incompatible table) leaves the last chart untouched.
-  $effect(() => {
-    if (!el || !built.data) return;
-    if (chart) chart.setData(built.data);
-    else chart = new ChartAdapter(el, built.data, (info) => (cursor = info));
+  // Picker for panel X/Y: every quantity THIS device resolves along the sweep,
+  // including derived ones the width scalar unlocks (id/w).
+  const exprOptions = $derived.by(() => {
+    const pq = plottableQuantities(device.grid, dashboard.sweep, Object.keys(metaScalars(device.meta)));
+    return [
+      ...pq.base.map((k) => ({ value: k, label: `${k} [${baseUnit.get(k)}]` })),
+      ...pq.derived.map((k) => ({ value: k, label: `${k} = ${derivedExpr.get(k)}` })),
+    ];
   });
+  const defaultFamily = $derived(multiAxes.includes(LENGTH_AXIS) ? LENGTH_AXIS : '');
 
-  // The picker reflects what THIS table can chart as Y — core decides, accounting
-  // for the family/fixed axes the per-curve slice collapses. Labels come from the
-  // canonical namespace (baseUnit / derivedExpr).
-  const plottable = $derived(plottableQuantities(device.grid, effX));
-  const exprOptions = $derived([
-    ...plottable.base.map((k) => ({ value: k, label: `${k} [${baseUnit.get(k)}]` })),
-    ...plottable.derived.map((k) => ({ value: k, label: `${k} = ${derivedExpr.get(k)}` })),
-  ]);
+  // Dashboard mutations. activeTab / cfg are proxied $state objects, so mutating
+  // their fields (or splicing the arrays) is reactive without re-finding by id.
+  function addPanel(): void {
+    activeTab.panels.push({ id: crypto.randomUUID(), xExpr: GM_ID, yExpr: 'id', family: defaultFamily, render: 'chart' });
+  }
+  function removePanel(id: string): void {
+    activeTab.panels = activeTab.panels.filter((p) => p.id !== id);
+  }
+  function addTab(): void {
+    dashboard.tabs.push({ id: crypto.randomUUID(), name: `Tab ${dashboard.tabs.length + 1}`, cols: 2, panels: [] });
+    dashboard.activeTab = dashboard.tabs.length - 1;
+  }
+  function removeTab(i: number): void {
+    if (dashboard.tabs.length <= 1) return;
+    dashboard.tabs.splice(i, 1);
+    if (dashboard.activeTab >= dashboard.tabs.length) dashboard.activeTab = dashboard.tabs.length - 1;
+  }
+  function renameTab(i: number): void {
+    const name = prompt('Tab name', dashboard.tabs[i].name);
+    if (name != null && name.trim() !== '') dashboard.tabs[i].name = name.trim();
+  }
+  const setCols = (d: number) => (activeTab.cols = Math.min(4, Math.max(1, activeTab.cols + d)));
 
   // Monotonic token so a slow earlier file read can't clobber a newer load/demo
   // (last-selected wins, not last-resolved).
@@ -189,7 +151,7 @@
   function swap(dev: DeviceTable, warns: readonly QAWarning[] = []): void {
     importError = null;
     warnings = warns;
-    expr = 'gm/id'; // a column every valid table has
+    dashboard = presetDashboard(dev); // canonical panels for the new device
     device = dev; // triggers the reactive cascade
   }
 
@@ -212,19 +174,19 @@
   let inId = $state('');
   let inGm = $state('');
 
-  const lAxis = $derived(device.grid.axes.find((a) => a.name === 'l'));
+  const lAxis = $derived(device.grid.axes.find((a) => a.name === LENGTH_AXIS));
   $effect(() => {
     sizeL = lAxis ? lAxis.values[0] : NaN; // reset to the first L on a device swap
   });
 
-  // Bias for sizing: every axis except l/vgs, fixed at the explore slider value
-  // when shared (so you size at the bias you're viewing), else a mid node. Shown
-  // in the panel so the operating point of W/vgs/fT/gm-gds is never implicit.
+  // Bias for sizing: every axis except l/vgs, fixed at the dashboard's shared-bias
+  // slider value (so you size at the operating point you're viewing), else a mid node.
+  // Shown in the panel so the operating point of W/vgs/fT/gm-gds is never implicit.
   const sizingFixed = $derived.by(() => {
     const out: Record<string, number> = {};
     for (const a of device.grid.axes) {
-      if (a.name === 'l' || a.name === 'vgs') continue;
-      out[a.name] = a.name in fixedVals ? fixedVals[a.name] : a.values[Math.floor(a.values.length / 2)];
+      if (a.name === LENGTH_AXIS || a.name === SWEEP_AXIS) continue;
+      out[a.name] = a.name in sharedBias ? sharedBias[a.name] : a.values[Math.floor(a.values.length / 2)];
     }
     return out;
   });
@@ -310,31 +272,21 @@
     return { density, rms: integratedNoise(density ** 2, fc, fLo, fHi) };
   });
 
-  // Footer operating-point readout: [display label, lookup key, unit].
-  const OP_FIELDS: [string, string, string][] = [
-    ['vgs', 'vgs', 'V'],
-    ['gm/ID', 'gm_id', 'S/A'],
-    ['V*', 'vstar', 'V'],
-    ['gm/gds', 'gm_gds', ''],
-    ['fT', 'ft', 'Hz'],
-    ['ID', 'id', 'A'],
-  ];
-
-  const fmt = (v: number | null | undefined) => (v == null ? '—' : formatEng(v));
 </script>
 
 <header>
-  <h1>gm/ID Workbench <small>· explore</small></h1>
-  <label class="expr">
-    Y =
-    <input list="exprs" bind:value={expr} spellcheck="false" autocomplete="off" />
-  </label>
+  <h1>gm/ID Workbench</h1>
   <datalist id="exprs">
     {#each exprOptions as o}
       <option value={o.value} label={o.label}></option>
     {/each}
   </datalist>
-  {#each fixedAxes as a}
+  <label class="axis">sweep
+    <select bind:value={dashboard.sweep}>
+      {#each multiAxes as ax}<option value={ax}>{ax}</option>{/each}
+    </select>
+  </label>
+  {#each shownBiasAxes as a}
     <label class="slider">
       {a.name}
       <input
@@ -342,23 +294,11 @@
         min={a.values[0]}
         max={a.values[a.values.length - 1]}
         step={(a.values[a.values.length - 1] - a.values[0]) / 100}
-        bind:value={fixedVals[a.name]}
+        bind:value={sharedBias[a.name]}
       />
-      <span class="val">{formatEng(fixedVals[a.name])}{axisUnit(a.name)}</span>
+      <span class="val">{formatEng(sharedBias[a.name])}{axisUnit(a.name)}</span>
     </label>
   {/each}
-  <label class="axis">X
-    <select bind:value={xName}>
-      {#each multiAxes.filter((n) => n !== famName) as ax}<option value={ax}>{ax}</option>{/each}
-    </select>
-  </label>
-  <label class="axis">family
-    <select bind:value={famName}>
-      <option value="">(none)</option>
-      {#each multiAxes.filter((n) => n !== xName) as ax}<option value={ax}>{ax}</option>{/each}
-    </select>
-  </label>
-  {#if built.err}<span class="err">{built.err}</span>{/if}
   <span class="grow"></span>
   <span class="device" title="active device">{device.id.device} · {device.id.corner} · {device.id.temp}°C</span>
   <label class="load">
@@ -382,22 +322,58 @@
   </div>
 {/if}
 
-<div class="main">
-  <div
-    class="chart-wrap"
-    class:dragging
-    role="region"
-    aria-label="chart — drop a mostab CSV here to load"
-    ondragover={(e) => {
-      e.preventDefault();
-      dragging = true;
-    }}
-    ondragleave={() => (dragging = false)}
-    ondrop={onDrop}
-  >
-    <div class="chart" bind:this={el}></div>
-    {#if dragging}<div class="drophint">drop a mostab .csv</div>{/if}
+  <nav class="tabs">
+    {#each dashboard.tabs as tab, i}
+      <button
+        class="tab"
+        class:on={i === dashboard.activeTab}
+        onclick={() => (dashboard.activeTab = i)}
+        ondblclick={() => renameTab(i)}
+        title="double-click to rename"
+      >{tab.name}</button>
+    {/each}
+    <button class="tab add" onclick={addTab} title="add tab">+</button>
+    <span class="grow"></span>
+    <span class="cols">
+      <button class="btn" onclick={() => setCols(-1)} title="fewer columns">−</button>
+      {activeTab.cols} col
+      <button class="btn" onclick={() => setCols(1)} title="more columns">+</button>
+    </span>
+    <button class="btn" onclick={addPanel}>+ panel</button>
+    {#if dashboard.tabs.length > 1}
+      <button class="btn" onclick={() => removeTab(dashboard.activeTab)}>remove tab</button>
+    {/if}
+  </nav>
+
+<div
+  class="main"
+  class:dragging
+  role="region"
+  aria-label="drop a mostab CSV here to load"
+  ondragover={(e) => {
+    e.preventDefault();
+    dragging = true;
+  }}
+  ondragleave={() => (dragging = false)}
+  ondrop={onDrop}
+>
+  <div class="grid" style:--cols={activeTab.cols}>
+    {#each activeTab.panels as cfg (cfg.id)}
+      <Panel
+        {device}
+        sweep={dashboard.sweep}
+        {sharedBias}
+        {cfg}
+        families={multiAxes}
+        onChange={(patch) => Object.assign(cfg, patch)}
+        onRemove={() => removePanel(cfg.id)}
+      />
+    {/each}
+    {#if activeTab.panels.length === 0}
+      <p class="empty">no panels — use <strong>+ panel</strong> above</p>
+    {/if}
   </div>
+  {#if dragging}<div class="drophint">drop a mostab .csv</div>{/if}
 
   {#if sizerOpen}
     <aside class="sizer">
@@ -473,21 +449,6 @@
   {/if}
 </div>
 
-{#snippet sw(color: string)}<i class="sw" style:background={color}></i>{/snippet}
-
-<footer>
-  {#if opPoint}
-    <strong>{@render sw(opPoint.color)}{opPoint.label}</strong>
-    {#each OP_FIELDS as [label, key, unit]}<span>{label} {fmt(opPoint.q[key])}{unit}</span>{/each}
-  {:else if cursor}
-    <span>vgs {fmt(cursor.x)}V</span>
-    {#each cursor.perLine as p}<span>{@render sw(p.color)}{p.label} {fmt(p.value)}</span>{/each}
-  {:else}
-    {#each seriesKey as s}<span>{@render sw(s.color)}{s.label}</span>{/each}
-    <span class="hint">hover a curve for its operating point</span>
-  {/if}
-</footer>
-
 <style>
   header {
     display: flex;
@@ -500,16 +461,6 @@
   h1 {
     font-size: 1rem;
     margin: 0;
-  }
-  h1 small {
-    opacity: 0.55;
-    font-weight: 400;
-  }
-  .expr input {
-    width: 14rem;
-    font: inherit;
-    font-family: ui-monospace, monospace;
-    padding: 0.15rem 0.4rem;
   }
   .axis {
     display: inline-flex;
@@ -595,13 +546,56 @@
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
+    position: relative;
   }
-  .chart-wrap {
+  .main.dragging {
+    outline: 2px dashed color-mix(in srgb, currentColor 50%, transparent);
+    outline-offset: -4px;
+  }
+  .grid {
     flex: 1 1 auto;
     min-width: 0;
     min-height: 0;
-    position: relative;
+    display: grid;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+    gap: 0.5rem;
+    padding: 0.5rem;
+    overflow: auto;
+  }
+  .empty {
+    grid-column: 1 / -1;
+    opacity: 0.5;
+    text-align: center;
+    padding: 2rem;
+  }
+  .tabs {
     display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+    padding: 0.3rem 0.75rem;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  }
+  .tab {
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 4px 4px 0 0;
+    padding: 0.1rem 0.6rem;
+  }
+  .tab.on {
+    background: color-mix(in srgb, currentColor 15%, transparent);
+    font-weight: 600;
+  }
+  .cols {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85em;
+    opacity: 0.85;
   }
   .sizer {
     width: 17rem;
@@ -696,15 +690,6 @@
   .sizer .hint {
     opacity: 0.55;
   }
-  .chart-wrap.dragging {
-    outline: 2px dashed color-mix(in srgb, currentColor 50%, transparent);
-    outline-offset: -4px;
-  }
-  .chart {
-    flex: 1 1 auto;
-    min-height: 0;
-    width: 100%;
-  }
   .drophint {
     position: absolute;
     inset: 0;
@@ -714,29 +699,5 @@
     font: 600 1rem system-ui, sans-serif;
     background: color-mix(in srgb, Canvas 70%, transparent);
     pointer-events: none;
-  }
-  footer {
-    display: flex;
-    gap: 0.9rem;
-    flex-wrap: wrap;
-    align-items: baseline;
-    padding: 0.4rem 0.75rem;
-    border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-    font-family: ui-monospace, monospace;
-  }
-  footer span {
-    display: inline-flex;
-    align-items: center;
-  }
-  .sw {
-    display: inline-block;
-    width: 0.7em;
-    height: 0.7em;
-    border-radius: 2px;
-    margin-right: 0.35em;
-  }
-  footer .hint {
-    opacity: 0.5;
-    font-family: system-ui, sans-serif;
   }
 </style>
