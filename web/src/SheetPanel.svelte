@@ -2,27 +2,97 @@
   // A leaf design-sheet panel: pick a vetted example, tune the design variables, and
   // watch the author equations and pass/fail constraints recompute with signed margins.
   // It holds no numerics — runSheet (core) does all evaluation and never throws.
+  import { untrack } from 'svelte';
   import {
     runSheet,
+    sweepSheet,
     formatEng,
     EXAMPLES,
     type DeviceTable,
     type SheetDoc,
     type RuleStatus,
   } from '@gmid/mostab-core';
+  import { ChartAdapter, type ChartData } from './chart';
   import { CONTROL_HELP } from './help';
 
   let {
     device,
     cfg,
+    sweep = '',
+    styleVersion = 0,
     onChange,
+    onSweep,
   }: {
     device: DeviceTable;
     cfg: SheetDoc;
+    sweep?: string;
+    styleVersion?: number;
     onChange: (s: SheetDoc) => void;
+    onSweep: (s: string) => void;
   } = $props();
 
   const result = $derived(runSheet(cfg, device));
+
+  // ── Feasibility sweep: vary one slider parameter across its range and chart every rule's
+  // relative margin. Only finitely-bounded params can be swept (the sweep walks [min,max]).
+  const sweepable = $derived(
+    cfg.params.filter(
+      (p) =>
+        p.min !== undefined && p.max !== undefined && Number.isFinite(p.min) && Number.isFinite(p.max) && p.max > p.min,
+    ),
+  );
+  // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
+  const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
+  const swept = $derived(active ? sweepSheet(cfg, active, device) : null);
+
+  // One line per rule, margin as a percentage; guardrails dashed (advisory, never gate). The
+  // y = 0 gridline is the constraint boundary; PALETTE cycles the colours by default.
+  const chartData = $derived.by((): ChartData | null => {
+    if (!swept || swept.x.length === 0) return null;
+    return {
+      x: swept.x,
+      lines: swept.rules.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
+      lineLabels: swept.rules.map((r) => r.id),
+      lineDash: swept.rules.map((r) => (r.kind === 'guardrail' ? [4, 3] : null)),
+    };
+  });
+
+  // The contiguous span of the swept param where the whole design closes (the feasibility window).
+  const feasWindow = $derived.by(() => {
+    if (!swept || swept.feasible.length === 0) return null;
+    const idx = swept.feasible.flatMap((f, i) => (f ? [i] : []));
+    if (idx.length === 0) return { none: true as const };
+    const lo = idx[0];
+    const hi = idx[idx.length - 1];
+    return { none: false as const, lo: swept.x[lo], hi: swept.x[hi], gap: idx.length !== hi - lo + 1 };
+  });
+
+  // The embedded uPlot chart, owned outside Svelte (mirrors Panel.svelte's lifecycle): rebuilt on
+  // entering/leaving sweep mode, refit in place on data edits, restyled on a theme/font change.
+  let el: HTMLDivElement | undefined = $state();
+  let chart: ChartAdapter | undefined;
+  let builtStyle = 0;
+  $effect(() => {
+    void active; // destroy when the sweep is turned off or the panel unmounts
+    return () => {
+      chart?.destroy();
+      chart = undefined;
+    };
+  });
+  $effect(() => {
+    if (!active || !el || !chartData) return;
+    if (chart) chart.setData(chartData);
+    else {
+      chart = new ChartAdapter(el, chartData);
+      builtStyle = untrack(() => styleVersion);
+    }
+  });
+  $effect(() => {
+    if (chart && styleVersion !== builtStyle) {
+      chart.restyle();
+      builtStyle = styleVersion;
+    }
+  });
 
   // Immutable edits: every change emits a fresh doc so the parent's Object.assign + persist
   // path (identical to every other panel) carries it. structuredClone on example-switch so a
@@ -58,6 +128,15 @@
       {:else}
         <span class="perr" title={result.bind.error}>sizing: {result.bind.error}</span>
       {/if}
+    {/if}
+    {#if sweepable.length}
+      <label class="swsel" title={CONTROL_HELP.sheetSweep}>
+        sweep
+        <select value={active} onchange={(e) => onSweep((e.currentTarget as HTMLSelectElement).value)}>
+          <option value="">off</option>
+          {#each sweepable as p}<option value={p.name}>{p.name}</option>{/each}
+        </select>
+      </label>
     {/if}
   </div>
 
@@ -108,6 +187,20 @@
     </tbody>
   </table>
 
+  {#if active && chartData}
+    <div class="scap">margin (%) vs <b>{active}</b>{#if swept?.unit} ({swept.unit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory)</div>
+    <div class="pchart" bind:this={el}></div>
+    {#if feasWindow}
+      <p class="feas">
+        {#if feasWindow.none}
+          no feasible {active} in this range
+        {:else}
+          feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(feasWindow.hi)}{swept?.unit ?? ''}{#if feasWindow.gap} (non-contiguous){/if}
+        {/if}
+      </p>
+    {/if}
+  {/if}
+
   {#each result.warnings.filter((w) => w.severity !== 'info') as w}
     <p class="pwarn" title={w.message}>⚠ {w.message}</p>
   {/each}
@@ -133,6 +226,28 @@
   .bind {
     font-family: ui-monospace, monospace;
     opacity: 0.8;
+  }
+  .swsel {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    opacity: 0.85;
+  }
+  .scap {
+    font-size: 0.76rem;
+    opacity: 0.7;
+  }
+  .pchart {
+    height: 220px;
+    min-width: 0;
+  }
+  .feas {
+    margin: 0;
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+    opacity: 0.85;
   }
   .svars {
     display: grid;

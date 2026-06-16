@@ -45,15 +45,81 @@ test('design sheet: add, evaluate to a mix of pass/fail, recompute on edit, pers
   expect(errors).toEqual([]);
 });
 
+test('design sheet: sweep a parameter into a feasibility curve, persisted', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // Sweep the efficiency knob → a margin-vs-gm/ID chart and a feasibility-window readout appear.
+  await sp.locator('.swsel select').selectOption('gm_id');
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  await expect(sp.locator('.feas')).toContainText('feasible');
+  await page.screenshot({ path: `${SCREENS}/sheet-sweep.png`, fullPage: true });
+
+  // The sweep selection survives a reload through the dashboard sanitizer.
+  await page.reload();
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('.swsel select')).toHaveValue('gm_id');
+  await expect(sp2.locator('.pchart canvas')).toBeVisible();
+
+  expect(errors).toEqual([]);
+});
+
+test('device swap preserves the user’s tabs (an authored sheet is not wiped)', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(page.locator('.grid .panel')).toHaveCount(6);
+
+  // Swap the active device (reload the demo). The user's panels — including the sheet — must
+  // survive; before the fix this re-seeded the canonical preset and dropped them back to 5.
+  await page.getByRole('button', { name: 'demo', exact: true }).click();
+  await expect(page.locator('.grid .panel')).toHaveCount(6);
+  await expect(page.locator('.grid .panel').last().locator('.sheet')).toBeVisible();
+});
+
+test('device swap keeps an EDITED canonical panel (editing clears its auto marker)', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.grid .panel')).toHaveCount(5);
+
+  // Edit a canonical panel — flip the first one to a table. That makes it the user's own.
+  await page.locator('.grid .panel').first().getByRole('button', { name: 'table', exact: true }).click();
+  await expect(page.locator('.grid .ptable')).toHaveCount(1);
+
+  // Swap the device: the canonical charts regenerate, but the edited (now user-owned) table
+  // survives. Before the fix it kept auto:true and was deleted with the rest of the preset.
+  await page.getByRole('button', { name: 'demo', exact: true }).click();
+  await expect(page.locator('.grid .panel')).toHaveCount(6);
+  await expect(page.locator('.grid .ptable')).toHaveCount(1);
+});
+
+test('device swap respects a deleted Overview tab (no canonical panels misplaced into a user tab)', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.grid .panel')).toHaveCount(5);
+
+  // Add a user tab, then delete the (active) Overview tab so no auto-marked tab remains.
+  await page.locator('.tab.add').click();
+  await page.getByRole('button', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'remove tab' }).click();
+
+  // The surviving user tab is now at index 0. A device swap must NOT inject the canonical panels
+  // into it (the old code assumed Overview was always tab 0 and dumped them there).
+  await page.getByRole('button', { name: 'demo', exact: true }).click();
+  await expect(page.locator('.grid .panel')).toHaveCount(0);
+});
+
 test('design sheet: switching the example replaces the doc; a removed sheet is gone', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
   // The example picker offers the vetted sheets and (re)loads one without typing.
-  await sp.locator('.shead select').selectOption({ label: 'Single NMOS gm/ID sizing' });
+  await sp.locator('.shead select.rm').selectOption({ label: 'Single NMOS gm/ID sizing' });
   await expect(sp.locator('.srules tr')).not.toHaveCount(0);
-  await expect(sp.locator('.shead select')).toHaveValue(''); // snaps back to the placeholder
+  await expect(sp.locator('.shead select.rm')).toHaveValue(''); // snaps back to the placeholder
 
   // Removing the sheet panel drops it.
   await sp.locator('.ptools .rm', { hasText: '×' }).click();

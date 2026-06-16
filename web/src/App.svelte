@@ -28,6 +28,7 @@
   import {
     presetDashboard,
     sanitizeDashboard,
+    reseatDashboard,
     canPlot,
     sizingBias,
     TEMPLATES,
@@ -73,9 +74,13 @@
   const multiAxes = $derived(multiAxisNames(device.grid));
 
   // Dashboard config (tabs → grids of panels). Restored from a saved layout when one
-  // is present and valid for this device, else the device's canonical preset. A new
-  // device import re-seeds the preset (in select()); panel edits never reseed it.
-  const DASH_KEY = 'gmid.dash';
+  // is present and valid for this device, else the device's canonical preset. A device
+  // swap re-validates the live layout against the new device (in select()), preserving the
+  // user's tabs and panels; panel edits never reseed it.
+  // Bumped to .v2 when panels/tabs gained the `auto` origin marker: a layout saved before that
+  // has no markers, so a device swap could not tell its canonical panels apart and would
+  // duplicate them. Reseeding the preset once on upgrade is cleaner than half-migrating.
+  const DASH_KEY = 'gmid.dash.v2';
   const loadDashboard = (dev: DeviceTable): Dashboard =>
     loadJSON(DASH_KEY, (raw) => sanitizeDashboard(raw, dev), () => presetDashboard(dev));
   let dashboard = $state<Dashboard>(loadDashboard(INITIAL_DEVICE));
@@ -218,13 +223,14 @@
     select(first);
   }
 
-  // Make device `i` active and reset the view around it (overlays cleared, dashboard re-seeded).
-  // QA follows automatically — `warnings` is derived from the active device.
+  // Make device `i` active (overlays cleared). The user's authored panels and tabs are preserved
+  // across the swap; only the auto-generated canonical panels are re-seeded for the new device
+  // (reseatDashboard). QA follows automatically — `warnings` is derived from the active device.
   function select(i: number): void {
     importError = null;
     activeIdx = i;
     overlayIdx = [];
-    dashboard = presetDashboard(devices[i].table); // canonical panels for the newly active device
+    dashboard = reseatDashboard(dashboard, devices[i].table);
   }
 
   // Drop a loaded device from the registry; never remove the last or the active one.
@@ -507,7 +513,12 @@
         families={multiAxes}
         options={exprOptions}
         {styleVersion}
-        onChange={(patch) => Object.assign(cfg, patch)}
+        onChange={(patch) => {
+          // Editing a canonical (auto) panel makes it the user's own, so it survives a device
+          // swap instead of being regenerated away (reseatDashboard preserves non-auto panels).
+          Object.assign(cfg, patch);
+          if (cfg.auto) cfg.auto = false;
+        }}
         onRemove={() => removePanel(cfg.id)}
       />
     {/each}

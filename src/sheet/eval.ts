@@ -136,19 +136,21 @@ function evalRule(
     return { ...base, margin: NaN, marginPct: NaN, status: 'na', detail: 'a side did not resolve to a finite number' };
   }
 
-  const margin = rule.op === '>=' ? lhs - rhs : rule.op === '<=' ? rhs - lhs : -Math.abs(lhs - rhs);
+  let margin: number;
+  if (rule.op === '>=') margin = lhs - rhs;
+  else if (rule.op === '<=') margin = rhs - lhs;
+  else {
+    // '==' : the SIGNED distance INSIDE the tolerance band (≥ 0 ⟺ within tolerance ⟺ pass), so
+    // the zero line is the real pass/fail boundary on the chart and in the margin column, exactly
+    // like '>='/'<='. tolPct is relative to |rhs|, so it is inert when rhs is 0 (exact match only).
+    margin = ((rule.tolPct ?? 0) / 100) * Math.abs(rhs) - Math.abs(lhs - rhs);
+  }
   const marginPct = margin / Math.max(Math.abs(rhs), TINY);
 
   let status: RuleStatus;
-  if (rule.op === '==') {
-    // tolPct is relative to |rhs|, so it is inert when rhs is 0 (only an exact match passes).
-    const tol = (rule.tolPct ?? 0) / 100;
-    status = Math.abs(lhs - rhs) <= tol * Math.abs(rhs) ? 'pass' : 'fail';
-  } else if (margin < 0) {
-    status = 'fail';
-  } else {
-    status = marginPct < AMBER_BAND ? 'amber' : 'pass';
-  }
+  if (margin < 0) status = 'fail';
+  else if (rule.op === '==') status = 'pass'; // '==' is pass/fail only — no near-miss (amber) band
+  else status = marginPct < AMBER_BAND ? 'amber' : 'pass';
   return { ...base, margin, marginPct, status };
 }
 

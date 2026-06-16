@@ -124,3 +124,29 @@ export interface SheetResult {
   feasible: boolean;
   warnings: QAWarning[];
 }
+
+/**
+ * One rule's relative margin traced across a parameter sweep, parallel to the sweep's `x`.
+ * `null` where the rule was `na` (a side could not be computed at that point). The relative
+ * (dimensionless) margin — not the raw SI margin — is what lets rules of different units share
+ * one axis.
+ */
+export interface SheetSweepRule {
+  id: string;
+  kind: RuleKind;
+  marginPct: (number | null)[];
+}
+
+/**
+ * A leaf sheet evaluated across a grid of one parameter's [min,max] range: the X samples, each
+ * rule's relative-margin curve, and the overall feasibility at each point. The classic gm/ID
+ * feasibility-region view — wherever every hard rule's curve sits at or above zero, the design
+ * closes. Empty (`x: []`) when the named parameter is not a finitely-bounded slider variable.
+ */
+export interface SheetSweep {
+  param: string;
+  unit: string;
+  x: number[];
+  rules: SheetSweepRule[];
+  feasible: boolean[];
+}

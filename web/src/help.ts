@@ -49,6 +49,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   active: 'Make this the active device: it drives the dashboard, the pickers, the bias sliders, and the sizer.',
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
   sheet: 'Add a design sheet: variables, author equations, and pass/fail constraints with margins, sized on the active device.',
+  sheetSweep: 'Sweep one variable across its range and chart every rule’s margin — the feasibility region where the design closes.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
   size: 'Sizing: bind any two of {gm/ID, I_D, gm} at a chosen L → width, V_GS, f_T, gain, and feasibility.',
   bind: 'Enter exactly two of gm/ID, I_D, gm; the third and the geometry are solved at this L.',

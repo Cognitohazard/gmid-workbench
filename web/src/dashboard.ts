@@ -67,6 +67,9 @@ export interface Panel {
   render: 'chart' | 'table' | 'sheet';
   legend?: LegendConfig; // dense-family display; absent ⇒ colorbar
   sheet?: SheetDoc; // render === 'sheet': the authored leaf design-sheet, stored verbatim
+  sheetSweep?: string; // render === 'sheet': the param the feasibility view sweeps; '' = card only
+  auto?: boolean; // an auto-generated canonical panel — regenerated per device on a swap, not
+  // user-authored; absent on every panel the user adds, so user work survives a device swap.
 }
 
 /** A named starting point for a panel, so the user picks a canonical plot instead of
@@ -110,6 +113,8 @@ export interface Tab {
   name: string;
   cols: number; // CSS-grid column count
   panels: Panel[];
+  auto?: boolean; // the canonical Overview tab — located by this marker (not by index) so a device
+  // swap re-seeds its auto panels wherever it sits, and never if the user has deleted it.
 }
 
 export interface Dashboard {
@@ -227,13 +232,33 @@ export function presetTab(dev: DeviceTable): Tab {
     yExpr: t.yExpr,
     family: fam,
     render: 'chart',
+    auto: true, // device-derived; regenerated on a swap (see reseatDashboard)
   }));
-  return { id: uid(), name: 'Overview', cols: 2, panels };
+  return { id: uid(), name: 'Overview', cols: 2, panels, auto: true };
 }
 
 /** A fresh dashboard around a device: the canonical tab, swept over VGS. */
 export function presetDashboard(dev: DeviceTable): Dashboard {
   return { tabs: [presetTab(dev)], activeTab: 0, sweep: SWEEP_AXIS };
+}
+
+/**
+ * Carry a live layout onto a newly active device. Only the auto-generated canonical panels are
+ * device-specific, so they are regenerated for the new device; every user-authored panel (a
+ * panel the user added, or a canonical one they edited, which clears its `auto` marker) and tab
+ * is preserved and re-validated against it (families it lacks relax to a single curve, design
+ * sheets kept verbatim). This is what lets a device swap keep the user's work instead of wiping
+ * it. The Overview tab is found by its `auto` marker, not by position, so it re-seeds wherever it
+ * sits — and not at all if the user has deleted it (their choice is respected).
+ */
+export function reseatDashboard(dash: Dashboard, dev: DeviceTable): Dashboard {
+  const san = sanitizeDashboard(dash, dev);
+  if (!san) return presetDashboard(dev);
+  const fresh = presetTab(dev).panels;
+  san.tabs = san.tabs.map((t) =>
+    t.auto ? { ...t, panels: [...fresh, ...t.panels.filter((p) => !p.auto)] } : t,
+  );
+  return san;
 }
 
 /**
@@ -263,6 +288,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       // A sheet panel always carries a valid doc so it can render; a corrupt one falls
       // back to the first vetted example rather than dropping the panel.
       const sheet = render === 'sheet' ? (sanitizeSheet(pp.sheet) ?? EXAMPLES[0]) : undefined;
+      const sheetSweep = render === 'sheet' && typeof pp.sheetSweep === 'string' ? pp.sheetSweep : undefined;
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,
@@ -271,6 +297,8 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
         render,
         ...(legend ? { legend } : {}),
         ...(sheet ? { sheet } : {}),
+        ...(sheetSweep ? { sheetSweep } : {}),
+        ...(pp.auto === true ? { auto: true } : {}),
       });
     }
     const cols = tt.cols;
@@ -279,6 +307,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       name: str(tt.name, 'Tab'),
       cols: typeof cols === 'number' && cols >= 1 && cols <= 4 ? Math.floor(cols) : 2,
       panels,
+      ...(tt.auto === true ? { auto: true } : {}),
     });
   }
   if (tabs.length === 0) return null;

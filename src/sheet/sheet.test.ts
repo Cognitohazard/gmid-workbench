@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { sizeDevice } from '../device';
-import { evaluateSheet, runSheet, validateSheet } from './index';
+import { evaluateSheet, runSheet, validateSheet, sweepSheet } from './index';
 import { EXAMPLES } from './examples';
 import type { SheetDoc } from './types';
 
@@ -76,6 +76,28 @@ describe('evaluateSheet — rules', () => {
     expect(le.status).toBe('fail');
     expect(le.margin).toBeCloseTo(-2, 9);
     expect(eq.status).toBe('fail');
+  });
+
+  it('gives a passing == rule a non-negative margin so the zero line is the real boundary', () => {
+    // The feasibility chart and the margin column read margin >= 0 as passing; an '==' rule that
+    // holds within tolPct must sit at/above zero, not below it (it once always did, being |Δ|).
+    const within = boundDoc({
+      params: [{ name: 'a', value: 10.3 }, { name: 'b', value: 10 }],
+      bind: undefined,
+      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=0.3 ≤ 0.5
+    });
+    const pass = evaluateSheet(within, dev).rules[0];
+    expect(pass.status).toBe('pass');
+    expect(pass.marginPct).toBeGreaterThanOrEqual(0);
+
+    const outside = boundDoc({
+      params: [{ name: 'a', value: 11 }, { name: 'b', value: 10 }],
+      bind: undefined,
+      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=1 > 0.5
+    });
+    const fail = evaluateSheet(outside, dev).rules[0];
+    expect(fail.status).toBe('fail');
+    expect(fail.marginPct).toBeLessThan(0);
   });
 
   it('marks a non-finite rule side as na, never a false pass', () => {
@@ -167,5 +189,37 @@ describe('the shipped example', () => {
     const statuses = res.rules.map((r) => r.status);
     expect(statuses).toContain('pass');
     expect(statuses).toContain('fail'); // headroom fails at the default gm/ID = 12
+  });
+});
+
+describe('sweepSheet — feasibility curve', () => {
+  it('traces a rule margin across a parameter range and bounds the feasible window', () => {
+    const doc = structuredClone(EXAMPLES[0]);
+    const sw = sweepSheet(doc, 'gm_id', dev, 21);
+
+    expect(sw.x.length).toBe(21);
+    expect(sw.x[0]).toBeCloseTo(6, 9); // the example's gm/ID slider spans 6..18
+    expect(sw.x[20]).toBeCloseTo(18, 9);
+    expect(sw.rules.map((r) => r.id)).toEqual(doc.rules.map((r) => r.id)); // parallel, in order
+
+    // V* ≈ 2/(gm/ID) falls as gm/ID rises, so the headroom margin shrinks monotonically and
+    // crosses zero — the whole point of the view (the efficiency↔headroom trade made visible).
+    const head = sw.rules.find((r) => r.id === 'headroom')!;
+    const finite = head.marginPct.filter((m): m is number => m != null);
+    expect(finite[0]).toBeGreaterThan(finite.at(-1)!);
+    expect(Math.max(...finite)).toBeGreaterThan(0); // passes at the low-gm/ID end
+    expect(Math.min(...finite)).toBeLessThan(0); // fails at the high-gm/ID end
+
+    // A bounded feasible window exists: some samples close, some do not, and the highest
+    // gm/ID (least headroom) is infeasible.
+    expect(sw.feasible.some((f) => f)).toBe(true);
+    expect(sw.feasible.some((f) => !f)).toBe(true);
+    expect(sw.feasible.at(-1)).toBe(false);
+  });
+
+  it('returns an empty sweep for an unbounded or unknown parameter', () => {
+    const doc = structuredClone(EXAMPLES[0]);
+    expect(sweepSheet(doc, 'CL', dev).x).toEqual([]); // CL has no min/max → not sweepable
+    expect(sweepSheet(doc, 'no_such_param', dev).x).toEqual([]);
   });
 });

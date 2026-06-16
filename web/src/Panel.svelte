@@ -382,7 +382,14 @@
 
   {#if cfg.render === 'sheet'}
     {#if cfg.sheet}
-      <SheetPanel device={sheetDevice} cfg={cfg.sheet} onChange={(s) => onChange({ sheet: s })} />
+      <SheetPanel
+        device={sheetDevice}
+        cfg={cfg.sheet}
+        sweep={cfg.sheetSweep ?? ''}
+        {styleVersion}
+        onChange={(s) => onChange({ sheet: s })}
+        onSweep={(s) => onChange({ sheetSweep: s })}
+      />
     {:else}
       <p class="perr">this panel has no sheet</p>
     {/if}
