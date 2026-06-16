@@ -5,6 +5,7 @@
     familyUnionCount,
     invertX,
     lookup,
+    fixTable,
     subsample,
     formatEng,
     parseEng,
@@ -18,7 +19,8 @@
   import { qLabel } from './labels';
   import { QUANTITY_HELP, CONTROL_HELP } from './help';
   import Help from './Help.svelte';
-  import { clampLegendCount, type Panel } from './dashboard';
+  import SheetPanel from './SheetPanel.svelte';
+  import { clampLegendCount, sizingBias, type Panel } from './dashboard';
 
   let {
     device,
@@ -92,12 +94,24 @@
     Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== cfg.family)),
   );
 
+  // A sheet sizes at an [l × vgs] point (lookupByGmId brackets gm/ID along vgs), so collapse
+  // every other axis (vds, vsb, …) at the shared bias first — the same reduction the sizer does
+  // (shared sizingBias policy) — else the inverse lookup can't bracket.
+  const sheetDevice = $derived.by(() => {
+    if (cfg.render !== 'sheet') return device;
+    const fixed = sizingBias(device, sharedBias);
+    return Object.keys(fixed).length ? fixTable(device, fixed) : device;
+  });
+
   // The overlaid family of curves across the primary + any overlay devices, on one shared X
   // lattice. A degenerate X or bad expression yields no curves and a message; the last good
   // chart stays. Phase 1 draws overlays only for a DISCRETE (small) family — with overlays and
   // a dense family, fall back to the primary alone and note it; the colorbar/sample machinery
   // below is therefore always single-device.
   const built = $derived.by(() => {
+    // A sheet panel draws no curves: skip the build entirely so its '' axes never reach
+    // overlayCurvesXY (which would otherwise report a degenerate-axis error).
+    if (cfg.render === 'sheet') return { ov: null as OverlayCurvesXY | null, err: null as string | null, gated: 0 };
     try {
       // Gate a dense overlay from the cheap count up front, so we never build curves we'd discard.
       const famCount = overlaid ? familyUnionCount([device, ...overlays], cfg.family) : 0;
@@ -292,6 +306,11 @@
 
 <div class="panel">
   <div class="ptools">
+    {#if cfg.render === 'sheet'}
+    <span class="axl">design sheet</span>
+    <span class="grow"></span>
+    <button class="rm" onclick={onRemove} title="remove panel">×</button>
+    {:else}
     {@render axis('y', 'Y')}
     {@render axis('x', 'X')}
     <select
@@ -347,6 +366,7 @@
       title="switch chart / table"
     >{cfg.render === 'chart' ? 'table' : 'chart'}</button>
     <button class="rm" onclick={onRemove} title="remove panel">×</button>
+    {/if}
   </div>
 
   {#if built.err}<p class="perr" title={built.err}>{built.err}</p>{/if}
@@ -360,7 +380,13 @@
     {/each}
   {/if}
 
-  {#if cfg.render === 'chart'}
+  {#if cfg.render === 'sheet'}
+    {#if cfg.sheet}
+      <SheetPanel device={sheetDevice} cfg={cfg.sheet} onChange={(s) => onChange({ sheet: s })} />
+    {:else}
+      <p class="perr">this panel has no sheet</p>
+    {/if}
+  {:else if cfg.render === 'chart'}
     <div class="plotwrap">
       <div class="ylabel"><span>{@html qLabel(cfg.yExpr)}</span></div>
       <div class="pchart" bind:this={el}></div>

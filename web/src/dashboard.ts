@@ -2,7 +2,21 @@
 // cross-plot — Y vs X (both expressions over the device lookup tables), one curve
 // per family value, at the shared operating-point bias. The canonical preset is the
 // classic gm/ID design set, auto-built for whatever device loads.
-import { plottableQuantities, metaScalars, type DeviceTable } from '@gmid/mostab-core';
+import {
+  plottableQuantities,
+  metaScalars,
+  EXAMPLES,
+  RULE_KINDS,
+  RULE_OPS,
+  type DeviceTable,
+  type SheetDoc,
+  type SheetVar,
+  type SheetRow,
+  type SheetRule,
+  type SheetBind,
+  type RuleKind,
+  type RuleOp,
+} from '@gmid/mostab-core';
 
 // Canonical axis names the core's import seam guarantees (the `axis: true` base
 // quantities in src/namespace.ts: vgs/l/vds/vsb). The gm/ID methodology sweeps VGS and
@@ -20,6 +34,21 @@ export function clampLegendCount(n: number): number {
 }
 
 /**
+ * The non-(l, vgs) axes pinned for sizing, each fixed at the dashboard's shared-bias value being
+ * viewed (so you size at the operating point on screen) else a mid node. sizeDevice/lookupByGmId
+ * need an [l × vgs] table, so the caller collapses these axes (via fixTable) before sizing. One
+ * home for this policy, shared by the sizer and every design-sheet panel.
+ */
+export function sizingBias(device: DeviceTable, sharedBias: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const a of device.grid.axes) {
+    if (a.name === LENGTH_AXIS || a.name === SWEEP_AXIS) continue;
+    out[a.name] = a.name in sharedBias ? sharedBias[a.name] : a.values[Math.floor(a.values.length / 2)];
+  }
+  return out;
+}
+
+/**
  * How a panel renders a MANY-valued family (small families always use the discrete
  * palette + per-curve legend). Absent ⇒ colorbar. `include` is a list of family VALUES
  * to always keep when sampling (snapped to the nearest node, so it survives device swaps).
@@ -32,11 +61,12 @@ export interface LegendConfig {
 
 export interface Panel {
   id: string;
-  xExpr: string; // X axis as an expression (the gm/ID view uses 'gm_id')
-  yExpr: string; // Y axis as an expression / derived-quantity name
+  xExpr: string; // X axis as an expression (the gm/ID view uses 'gm_id'); '' on a sheet panel
+  yExpr: string; // Y axis as an expression / derived-quantity name; '' on a sheet panel
   family: string; // axis whose values fan into curves; '' = a single curve
-  render: 'chart' | 'table';
+  render: 'chart' | 'table' | 'sheet';
   legend?: LegendConfig; // dense-family display; absent ⇒ colorbar
+  sheet?: SheetDoc; // render === 'sheet': the authored leaf design-sheet, stored verbatim
 }
 
 /** A named starting point for a panel, so the user picks a canonical plot instead of
@@ -102,6 +132,84 @@ function sanitizeLegend(v: unknown): LegendConfig | undefined {
   return { mode: o.mode === 'sample' ? 'sample' : 'colorbar', count, include };
 }
 
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * Coerce an untrusted saved leaf design-sheet (e.g. from localStorage) into a valid
+ * SheetDoc, dropping malformed entries but keeping every author expression verbatim —
+ * an unresolvable one surfaces as a per-rule 'na' chip at evaluation, never a silent
+ * drop. A bind is kept only when well-formed (L + exactly two of {gm,gm_id,id}); else
+ * it is dropped and its rules go 'na'. Returns undefined only when `v` is not an object.
+ */
+function sanitizeSheet(v: unknown): SheetDoc | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  const str = (x: unknown, fallback: string) => (typeof x === 'string' && x ? x : fallback);
+
+  const params: SheetVar[] = Array.isArray(o.params)
+    ? o.params.flatMap((p) => {
+        if (!p || typeof p !== 'object') return [];
+        const pp = p as Record<string, unknown>;
+        if (typeof pp.name !== 'string' || !finite(pp.value)) return [];
+        const out: SheetVar = { name: pp.name, value: pp.value };
+        if (finite(pp.min)) out.min = pp.min;
+        if (finite(pp.max)) out.max = pp.max;
+        if (typeof pp.unit === 'string') out.unit = pp.unit;
+        return [out];
+      })
+    : [];
+
+  const rows: SheetRow[] = Array.isArray(o.rows)
+    ? o.rows.flatMap((r) => {
+        if (!r || typeof r !== 'object') return [];
+        const rr = r as Record<string, unknown>;
+        if (typeof rr.name !== 'string' || typeof rr.expr !== 'string') return [];
+        const out: SheetRow = { name: rr.name, expr: rr.expr };
+        if (typeof rr.unit === 'string') out.unit = rr.unit;
+        return [out];
+      })
+    : [];
+
+  const rules: SheetRule[] = Array.isArray(o.rules)
+    ? o.rules.flatMap((r) => {
+        if (!r || typeof r !== 'object') return [];
+        const rr = r as Record<string, unknown>;
+        if (typeof rr.lhs !== 'string' || typeof rr.rhs !== 'string') return [];
+        if (!RULE_OPS.has(rr.op as string) || !RULE_KINDS.has(rr.kind as string)) return [];
+        const out: SheetRule = {
+          id: str(rr.id, uid()),
+          kind: rr.kind as RuleKind,
+          lhs: rr.lhs,
+          op: rr.op as RuleOp,
+          rhs: rr.rhs,
+        };
+        if (finite(rr.tolPct)) out.tolPct = rr.tolPct;
+        if (typeof rr.justification === 'string') out.justification = rr.justification;
+        return [out];
+      })
+    : [];
+
+  let bind: SheetBind | undefined;
+  if (o.bind && typeof o.bind === 'object') {
+    const b = o.bind as Record<string, unknown>;
+    if (typeof b.L === 'string') {
+      const cand: SheetBind = { L: b.L };
+      for (const k of ['gm', 'gm_id', 'id'] as const) if (typeof b[k] === 'string') cand[k] = b[k] as string;
+      const n = (['gm', 'gm_id', 'id'] as const).filter((k) => cand[k] !== undefined).length;
+      if (n === 2) bind = cand;
+    }
+  }
+
+  return {
+    title: str(o.title, 'Sheet'),
+    polarity: o.polarity === 'p' ? 'p' : 'n',
+    params,
+    rows,
+    rules,
+    ...(bind ? { bind } : {}),
+  };
+}
+
 /**
  * The default "Overview" tab for a freshly loaded device: one panel per canonical gm/ID
  * design chart the table can actually compute (filtered by plottableQuantities, with the
@@ -151,13 +259,18 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       const pp = p as Record<string, unknown>;
       if (typeof pp.xExpr !== 'string' || typeof pp.yExpr !== 'string') continue;
       const legend = sanitizeLegend(pp.legend);
+      const render = pp.render === 'table' ? 'table' : pp.render === 'sheet' ? 'sheet' : 'chart';
+      // A sheet panel always carries a valid doc so it can render; a corrupt one falls
+      // back to the first vetted example rather than dropping the panel.
+      const sheet = render === 'sheet' ? (sanitizeSheet(pp.sheet) ?? EXAMPLES[0]) : undefined;
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,
         yExpr: pp.yExpr,
         family: typeof pp.family === 'string' && axes.has(pp.family) ? pp.family : '',
-        render: pp.render === 'table' ? 'table' : 'chart',
+        render,
         ...(legend ? { legend } : {}),
+        ...(sheet ? { sheet } : {}),
       });
     }
     const cols = tt.cols;

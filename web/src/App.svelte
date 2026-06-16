@@ -13,6 +13,7 @@
     formatEng,
     parseEng,
     validate,
+    EXAMPLES,
     BASE_QUANTITIES,
     DERIVED_QUANTITIES,
     type QAWarning,
@@ -28,6 +29,7 @@
     presetDashboard,
     sanitizeDashboard,
     canPlot,
+    sizingBias,
     TEMPLATES,
     SWEEP_AXIS,
     LENGTH_AXIS,
@@ -163,6 +165,18 @@
     if (Number.isInteger(i) && i >= 0 && i < TEMPLATES.length) addPanel(TEMPLATES[i]);
     sel.value = '';
   }
+  // A sheet panel carries '' axes (so the chart axis guard in sanitizeDashboard keeps
+  // it) and a copy of the first vetted example as its starting doc.
+  function addSheetPanel(): void {
+    activeTab.panels.push({
+      id: crypto.randomUUID(),
+      xExpr: '',
+      yExpr: '',
+      family: '',
+      render: 'sheet',
+      sheet: structuredClone(EXAMPLES[0]),
+    });
+  }
   function removePanel(id: string): void {
     activeTab.panels = activeTab.panels.filter((p) => p.id !== id);
   }
@@ -254,17 +268,10 @@
     sizeL = lAxis ? lAxis.values[0] : NaN; // reset to the first L on a device swap
   });
 
-  // Bias for sizing: every axis except l/vgs, fixed at the dashboard's shared-bias
-  // slider value (so you size at the operating point you're viewing), else a mid node.
-  // Shown in the panel so the operating point of W/vgs/fT/gm-gds is never implicit.
-  const sizingFixed = $derived.by(() => {
-    const out: Record<string, number> = {};
-    for (const a of device.grid.axes) {
-      if (a.name === LENGTH_AXIS || a.name === SWEEP_AXIS) continue;
-      out[a.name] = a.name in sharedBias ? sharedBias[a.name] : a.values[Math.floor(a.values.length / 2)];
-    }
-    return out;
-  });
+  // Bias for sizing: every axis except l/vgs, fixed at the dashboard's shared-bias slider value
+  // (so you size at the operating point you're viewing), else a mid node. Shown in the panel so
+  // the operating point of W/vgs/fT/gm-gds is never implicit.
+  const sizingFixed = $derived(sizingBias(device, sharedBias));
 
   // sizeDevice/lookupByGmId need an [l × vgs] table; collapse the extra axes at the bias.
   const sizingTable = $derived(
@@ -471,6 +478,7 @@
       {#each templateOptions as { t, i }}<option value={i}>{t.name}</option>{/each}
     </select>
     <button class="btn" onclick={() => addPanel()} title="add a blank panel">+ panel</button>
+    <button class="btn" onclick={addSheetPanel} title={CONTROL_HELP.sheet}>+ sheet</button>
     {#if dashboard.tabs.length > 1}
       <button class="btn" onclick={() => removeTab(dashboard.activeTab)}>remove tab</button>
     {/if}

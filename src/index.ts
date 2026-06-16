@@ -13,3 +13,4 @@ export * from './derive';
 export * from './lookup';
 export * from './series';
 export * from './device';
+export * from './sheet';
