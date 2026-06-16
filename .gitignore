@@ -19,3 +19,5 @@ __pycache__/
 
 # generated example data (reproduce with tools/make_examples.py)
 examples/
+
+.claude/
