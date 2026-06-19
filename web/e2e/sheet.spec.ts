@@ -125,3 +125,54 @@ test('design sheet: switching the example replaces the doc; a removed sheet is g
   await sp.locator('.ptools .rm', { hasText: '×' }).click();
   await expect(page.locator('.grid .panel')).toHaveCount(5);
 });
+
+test('design sheet: the noise & matching example evaluates and sweeps to a feasible window', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  await sp.locator('.shead select.rm').selectOption({ label: 'NMOS noise & matching' });
+  // The integrated-noise and Pelgrom-offset constraints are present.
+  await expect(sp.locator('.srules tr', { hasText: 'noise-spec' })).toBeVisible();
+  await expect(sp.locator('.srules tr', { hasText: 'offset-spec' })).toBeVisible();
+
+  // Sweep gm/ID → a margin chart and a bounded feasible window.
+  await sp.locator('.swsel select').selectOption('gm_id');
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  await expect(sp.locator('.feas')).toContainText('feasible');
+});
+
+test('design sheet: a composed cascode shows its child block and composes feasibility, persisted', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // Switch to the composed (parent → child) cascode example.
+  await sp.locator('.shead select.rm').selectOption({ label: 'NMOS cascode (gain-boosted output)' });
+
+  // The embedded common-source child renders in the children summary and is feasible,
+  // and the scalars it exposes (cs__av0, …) are shown.
+  await expect(sp.locator('.suse')).toHaveCount(1);
+  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
+  await expect(sp.locator('.suse .prov')).toContainText('cs__av0');
+  // The parent's composed gain rule evaluates over the child's provided scalars.
+  await expect(sp.locator('.srules tr', { hasText: 'gain-spec' })).toBeVisible();
+
+  // Sweep the shared knob → a feasibility curve over the WHOLE composition.
+  await sp.locator('.swsel select').selectOption('gm_id');
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  await expect(sp.locator('.feas')).toContainText('feasible');
+  await page.screenshot({ path: `${SCREENS}/sheet-cascode.png`, fullPage: true });
+
+  // The nested child doc survives a reload through the dashboard sanitizer.
+  await page.reload();
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('.suse', { hasText: 'cs' })).toBeVisible();
+  await expect(sp2.locator('.swsel select')).toHaveValue('gm_id');
+
+  expect(errors).toEqual([]);
+});

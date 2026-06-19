@@ -49,9 +49,21 @@ function asColumn(v: Value, size: number): Float64Array {
   return out;
 }
 
-/** Compile an expression once (shared engine) for repeated evaluation. */
+// Memoize compiled expressions by source string. A CompiledExpr is immutable and its
+// eval(scope) is pure, so sharing one per distinct source is safe — it collapses the
+// per-sample re-parse that a sheet sweep (now over a composed child tree) would otherwise
+// repeat for every identical string. ponytail: unbounded Map — sheet/derive expression
+// strings are a small, author-fixed set, so it cannot grow without bound in practice.
+const COMPILE_CACHE = new Map<string, CompiledExpr>();
+
+/** Compile an expression (shared engine), memoized by source string for repeated evaluation. */
 export function compileExpr(src: string): CompiledExpr {
-  return ENGINE.compile(src);
+  let compiled = COMPILE_CACHE.get(src);
+  if (compiled === undefined) {
+    compiled = ENGINE.compile(src);
+    COMPILE_CACHE.set(src, compiled);
+  }
+  return compiled;
 }
 
 /** Evaluate an already-compiled expression over `grid`, returning a full column. */

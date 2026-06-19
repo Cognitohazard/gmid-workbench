@@ -26,6 +26,13 @@ const GM_ID_UNIT_ERROR = 45;
 /** Per-step vgs spacing above this (in volts) is coarse enough to warn. */
 const VGS_STEP_WARN = 0.01; // 10 mV
 
+/** Plausible range for the thermal-noise factor γ; outside it is likely a unit/model error.
+ *  The long-channel value is 2/3; short-channel devices run higher (hot-carrier / velocity
+ *  saturation can reach ~2–3), so the ceiling is generous — it targets gross errors (γ stored
+ *  as a percentage, or a wrong-model γ≈10) without flagging valid deep-submicron γ. */
+const GAMMA_LO = 0.4;
+const GAMMA_HI = 4.0;
+
 /** |vgs| above this (in volts) means the axis is probably in mV, not V. */
 const VGS_UNIT_ERROR = 100;
 
@@ -150,6 +157,13 @@ function sliceIndices(
 
 function fmtL(lValue: number): string {
   return Number.isNaN(lValue) ? 'L-slice' : `L=${lValue.toExponential(3)}`;
+}
+
+/** Count column entries matching a predicate (shared by the cheap sign/positivity checks). */
+function countWhere(col: Float64Array, pred: (x: number) => boolean): number {
+  let n = 0;
+  for (let i = 0; i < col.length; i++) if (pred(col[i])) n++;
+  return n;
 }
 
 /**
@@ -284,17 +298,36 @@ export function validate(table: DeviceTable): QAWarning[] {
     }
   }
 
-  // --- gm sign: a usable table reports gm as a magnitude; negatives are suspect ---
-  if (gm) {
-    let neg = 0;
-    for (let i = 0; i < gm.length; i++) if (gm[i] < 0) neg++;
-    if (neg > 0) {
-      out.push({
-        rule: 'gm-sign',
-        severity: 'warning',
-        message: `gm has ${neg} negative value(s) — expected a magnitude (a signed PMOS dump needs sign canonicalization first)`,
-        location: 'gm',
-      });
+  // --- magnitude / positivity checks ---
+  // gm and gds are reported as magnitudes; the total gate capacitance cgg is a self-term and
+  // must be non-negative. A signed PMOS dump trips these until canonicalization folds it to
+  // magnitude. The cross/trans-capacitances (cgd, cgb, cdb, csb) are deliberately NOT checked
+  // — they are legitimately negative under the common ∂Qi/∂Vj convention.
+  const signCheck = (col: Float64Array | undefined, rule: string, label: string, why: string): void => {
+    if (!col) return;
+    const neg = countWhere(col, (x) => x < 0);
+    if (neg > 0) out.push({ rule, severity: 'warning', message: `${label} has ${neg} negative value(s) — ${why}`, location: label });
+  };
+  signCheck(gm, 'gm-sign', 'gm', 'expected a magnitude (a signed PMOS dump needs sign canonicalization first)');
+  signCheck(gds, 'gds-sign', 'gds', 'expected a magnitude (a signed PMOS dump needs canonicalization first)');
+  signCheck(q.get('cgg'), 'cap-sign', 'cgg', 'the total gate capacitance should be a magnitude');
+
+  // A non-positive sth/sfl poisons every input-referred noise quantity (sqrt of ≤0, or a 0 in fco).
+  for (const key of ['sth', 'sfl'] as const) {
+    const col = q.get(key);
+    if (!col) continue;
+    const bad = countWhere(col, (x) => !(x > 0));
+    if (bad > 0) {
+      out.push({ rule: 'noise-psd', severity: 'error', message: `${key} has ${bad} non-positive value(s) — a noise PSD must be > 0`, location: key });
+    }
+  }
+
+  // γ outside a physical band (long-channel 2/3; short-channel runs higher) is likely a unit/model error.
+  const gammaCol = q.get('gamma');
+  if (gammaCol) {
+    const oob = countWhere(gammaCol, (g) => Number.isFinite(g) && (g < GAMMA_LO || g > GAMMA_HI));
+    if (oob > 0) {
+      out.push({ rule: 'gamma-range', severity: 'warning', message: `gamma has ${oob} value(s) outside [${GAMMA_LO}, ${GAMMA_HI}] — likely a unit or model error`, location: 'gamma' });
     }
   }
 

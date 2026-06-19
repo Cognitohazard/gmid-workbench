@@ -65,7 +65,48 @@ export interface SheetRule {
   justification?: string;
 }
 
-/** A leaf sheet document — the authored model the GUI edits and persists verbatim. */
+/**
+ * A child block this sheet composes. The child is a full SheetDoc embedded inline
+ * (self-contained — the whole tree persists as one document). `params` overrides the
+ * child's param VALUES with expressions evaluated in the PARENT's param scope, so a
+ * parent budget flows down (e.g. a shared length or current). `device` names the
+ * device table the child sizes against (by id); absent ⇒ the child inherits the
+ * parent's table.
+ *
+ * The child exposes its `provide`d names to the parent as flat scalars `name__key`
+ * (the engine has no member access, so the join is a `__` separator — neither the use
+ * `name` nor a provided key may contain `__`). This is scalar composition only: the
+ * parent references child outputs and writes its own author math over them. There is
+ * NO node/port/KCL machinery — those remain the deferred coupling channels.
+ */
+export interface SheetUse {
+  name: string;
+  doc: SheetDoc;
+  device?: string;
+  params?: Record<string, string>;
+}
+
+/** Maximum composition nesting depth — a backstop against a pathologically deep
+ *  authored tree (embedded docs form a finite tree, so this is a sanity cap, not a
+ *  cycle guard). Shared by the evaluator and the validator. */
+export const MAX_USE_DEPTH = 8;
+
+/** The separator joining a child use-name to a provided key. The engine has no member
+ *  access (`child.key` cannot parse), so a child's scalars surface in the parent scope as
+ *  the flat name `child__key`. One source of truth for the producer (eval), the collision
+ *  check (validate), and the UI display; neither a use-name nor a provided key may contain it. */
+export const PROVIDE_SEP = '__';
+export const joinProvide = (useName: string, key: string): string => `${useName}${PROVIDE_SEP}${key}`;
+
+/** Re-attribute a composed child's warning to its use site, so a rolled-up warning points at
+ *  the offending block (and a child error still blocks the parent's closed feasibility). */
+export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
+  return { ...w, message: `use "${useName}": ${w.message}`, location: `${useName}.${w.location ?? ''}` };
+}
+
+/** A sheet document — the authored model the GUI edits and persists verbatim. A leaf
+ *  has no `uses`; a composed sheet embeds child blocks and references their `provide`d
+ *  scalars. `provide` lists the names THIS sheet exposes to a parent (ignored at the top). */
 export interface SheetDoc {
   title: string;
   polarity: 'n' | 'p'; // a self-description label only; no contract enforced at leaf
@@ -73,6 +114,17 @@ export interface SheetDoc {
   bind?: SheetBind;
   rows: SheetRow[];
   rules: SheetRule[];
+  uses?: SheetUse[];
+  provide?: string[];
+}
+
+/** A child block's evaluated summary, surfaced so the UI can show each child's title,
+ *  feasibility, and the scalar values it exposed — without re-evaluating the tree. */
+export interface SheetChildReport {
+  name: string;
+  title: string;
+  feasible: boolean;
+  provides: Record<string, number>;
 }
 
 export type RuleStatus = 'pass' | 'amber' | 'fail' | 'na';
@@ -123,6 +175,8 @@ export interface SheetResult {
   rules: RuleResult[];
   feasible: boolean;
   warnings: QAWarning[];
+  /** Present (possibly empty) only when the sheet composes children; absent for a leaf. */
+  children?: SheetChildReport[];
 }
 
 /**

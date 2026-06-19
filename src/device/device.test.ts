@@ -123,6 +123,9 @@ describe('sizeDevice (bind-any-2)', () => {
     }
     expect(res.quantities.W).toBeCloseTo(res.W, 12);
     expect(res.quantities.id_w).toBeCloseTo(res.id / res.W, 6);
+    // w0 is the characterization width — pinned directly (not via a ratio) so a w0:W
+    // mis-report is observable rather than cancelling in a width-referral consumer.
+    expect(res.quantities.w0).toBeCloseTo(table.meta.W as number, 18);
   });
 });
 

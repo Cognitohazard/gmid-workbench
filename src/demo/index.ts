@@ -3,7 +3,7 @@
 // Pure and deterministic: same options in => same table out. Zero DOM imports.
 
 import type { Axis, DeviceTable } from '../types';
-import { UT } from '../constants';
+import { UT, PHYS, GAMMA_DEFAULT } from '../constants';
 import { makeGrid } from '../grid';
 
 /** Options for the synthetic generator; every field has a physical default. */
@@ -31,6 +31,11 @@ const COX = 0.01; // gate oxide capacitance per area [F/m^2]
 const VTH0 = 0.4; // nominal threshold [V]
 const ISPEC_REF = 1e-6; // specific-current scale [A] at the reference geometry W/L = 1
 const VA_PER_L = 5e6; // Early voltage slope: VA = VA_PER_L * L [V] (∝ L)
+// Flicker coefficient: input-referred 1/f PSD at 1 Hz is area-domain,
+// svfl = KFLICKER/(Cox·W·L) [V²/Hz], so the stored drain PSD is sfl = svfl·gm².
+// Tuned so the flicker corner fco = sfl/sth lands at a few tens of kHz on the
+// default geometry — a realistic crossover for a sub-µm device.
+const KFLICKER = 3e-25;
 
 /**
  * Inclusive ascending sweep grid for `{min, max, step}`. The number of samples is
@@ -117,6 +122,15 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
   const cgg = new Float64Array(size);
   const vth = new Float64Array(size);
   const vdsat = new Float64Array(size);
+  // Noise columns: a constant thermal factor γ, the channel thermal PSD
+  // sth = 4kTγ·gm [A²/Hz], and the 1/f flicker PSD at 1 Hz sfl [A²/Hz]. These
+  // make the data-thermal / flicker / corner (fco) derived quantities live on the
+  // demo device. Clearly synthetic-model-derived (so data == the γ-model thermal
+  // here) — never how a real measured import is treated.
+  const gamma = new Float64Array(size);
+  const sth = new Float64Array(size);
+  const sfl = new Float64Array(size);
+  const kT4 = 4 * PHYS.k * PHYS.T;
 
   for (let li = 0; li < nL; li++) {
     const L = lVals[li];
@@ -138,12 +152,16 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
         // saturation; factor is 1 when there is no vds axis. gds = ∂id/∂vds = idSat/VA.
         const factor = vdsVals ? 1 + vdsVals[di] / VA : 1;
         const flat = (li * nVds + di) * nVgs + vi;
+        const gmv = gmSat * factor;
         id[flat] = idSat * factor;
-        gm[flat] = gmSat * factor;
+        gm[flat] = gmv;
         gds[flat] = gdsSat;
         cgg[flat] = cggL;
         vth[flat] = vthL;
         vdsat[flat] = vdsatVal;
+        gamma[flat] = GAMMA_DEFAULT;
+        sth[flat] = kT4 * GAMMA_DEFAULT * gmv; // 4kTγ·gm
+        sfl[flat] = (KFLICKER * gmv * gmv) / cggL; // area-domain: svfl = sfl/gm² = KFLICKER/(W·L·Cox)
       }
     }
   }
@@ -161,6 +179,9 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
     ['cgg', cgg],
     ['vth', vth],
     ['vdsat', vdsat],
+    ['gamma', gamma],
+    ['sth', sth],
+    ['sfl', sfl],
   ]);
 
   const grid = makeGrid(axes, quantities);

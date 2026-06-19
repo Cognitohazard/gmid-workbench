@@ -265,10 +265,56 @@ describe('validate: non-finite / id-monotonic / gm-sign', () => {
 });
 
 describe('validate: clean demo triggers none of the deepened checks', () => {
-  it('the analytic EKV demo is consistent, finite, monotonic', () => {
+  it('the analytic EKV demo is consistent, finite, monotonic, and noise-clean', () => {
     const w = validate(generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } }));
-    const noisy = new Set(['gm-consistency', 'id-non-monotonic', 'non-finite', 'gm-sign']);
+    // Including the noise/sign checks: the demo ships gamma=2/3, sth>0, sfl>0, gds>0, cgg>0.
+    const noisy = new Set([
+      'gm-consistency', 'id-non-monotonic', 'non-finite', 'gm-sign',
+      'gds-sign', 'cap-sign', 'noise-psd', 'gamma-range',
+    ]);
     expect(w.filter((x) => noisy.has(x.rule))).toEqual([]);
+  });
+});
+
+describe('validate: deepened sign / noise / gamma checks', () => {
+  it('flags a negative gds value', () => {
+    const t = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], gds: [1e-6, -1e-6, 1e-6],
+    });
+    expect(validate(t).find((x) => x.rule === 'gds-sign')?.severity).toBe('warning');
+  });
+
+  it('flags a negative cgg but NOT a legitimately-signed cross-capacitance', () => {
+    const badCgg = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], cgg: [1e-15, -1e-15, 1e-15],
+    });
+    expect(validate(badCgg).find((x) => x.rule === 'cap-sign')?.severity).toBe('warning');
+    // cross/trans-caps (cgd, …) are legitimately negative by convention → must NOT warn.
+    const signedCgd = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], cgg: [1e-15, 1e-15, 1e-15], cgd: [-1e-16, -1e-16, -1e-16],
+    });
+    expect(validate(signedCgd).some((x) => x.rule === 'cap-sign')).toBe(false);
+  });
+
+  it('flags a non-positive noise PSD as an error (it poisons input-referred noise)', () => {
+    const t = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], sth: [1e-20, 0, 1e-20], sfl: [1e-20, 1e-20, -1e-20],
+    });
+    const w = validate(t).filter((x) => x.rule === 'noise-psd');
+    expect(w.length).toBe(2); // one for sth, one for sfl
+    expect(w.every((x) => x.severity === 'error')).toBe(true);
+  });
+
+  it('flags an out-of-band gamma but allows a high short-channel gamma', () => {
+    const bad = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], gamma: [0.7, 5.0, 0.7], // 5.0 > 4.0 → unit/model error
+    });
+    expect(validate(bad).find((x) => x.rule === 'gamma-range')?.severity).toBe('warning');
+    // Valid deep-submicron γ (up to ~3) must NOT be flagged.
+    const shortChan = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], gamma: [0.7, 2.5, 3.5],
+    });
+    expect(validate(shortChan).some((x) => x.rule === 'gamma-range')).toBe(false);
   });
 });
 

@@ -64,7 +64,12 @@ describe('familyCurves', () => {
   });
 
   it('plottableQuantities reflects the per-curve slice namespace', () => {
-    const dev3 = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
+    // Strip the demo's noise columns so this still tests the constant-doesn't-leak
+    // and measured-noise-needs-PSD semantics (the demo now ships sth/sfl/gamma).
+    const full = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
+    const q = new Map(full.grid.quantities);
+    for (const k of ['sth', 'sfl', 'gamma']) q.delete(k);
+    const dev3 = { ...full, grid: { ...full.grid, quantities: q } };
     const { base, derived } = plottableQuantities(dev3.grid, 'vgs');
     // X axis is plottable; axes collapsed by the slice (l, vds) are not, nor is
     // an absent column (w).

@@ -73,6 +73,10 @@ export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   // are MEASURED-only, resolvable solely when the table carries `sfl`.
   { key: 'svfl', expr: 'sfl/(gm^2)', unit: 'V^2/Hz' }, // input-referred flicker PSD @1Hz (data)
   { key: 'vnfl', expr: 'sqrt(sfl)/gm', unit: 'V/sqrt(Hz)' }, // input-referred flicker density @1Hz (data)
+  // Flicker corner: the frequency where the 1/f tail equals the thermal floor.
+  // Since S_fl(f) = sfl/f and S_th = sth, they cross at f = sfl/sth — drain or
+  // input-referred (both PSDs divide by gm²), data-only (needs sth and sfl).
+  { key: 'fco', expr: 'sfl/sth', unit: 'Hz' },
 ];
 
 export const DERIVED_KEYS: ReadonlySet<string> = new Set(DERIVED_QUANTITIES.map((q) => q.key));

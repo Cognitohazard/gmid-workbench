@@ -7,6 +7,7 @@
     runSheet,
     sweepSheet,
     formatEng,
+    joinProvide,
     EXAMPLES,
     type DeviceTable,
     type SheetDoc,
@@ -165,6 +166,18 @@
     {/each}
   </div>
 
+  {#if result.children?.length}
+    <div class="suses">
+      {#each result.children as c}
+        <div class="suse st-{c.feasible ? 'pass' : 'fail'}" title={c.title}>
+          <span class="chip">{c.feasible ? '✓' : '✗'}</span>
+          <b>{c.name}</b><i>{c.title}</i>
+          <span class="prov">{#each Object.entries(c.provides) as [k, v]}<code>{joinProvide(c.name, k)}={fmt(v)}</code>{/each}</span>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
   {#if cfg.rows.length}
     <div class="srows">
       {#each cfg.rows as row}
@@ -312,6 +325,34 @@
     font-style: normal;
     margin-left: 0.4rem;
     font-size: 0.72rem;
+  }
+  /* composed-child summary: one row per `use`, its feasibility chip + exposed scalars */
+  .suses {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin: 0.2rem 0;
+  }
+  .suse {
+    display: flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .suse i {
+    opacity: 0.5;
+    font-style: normal;
+    font-size: 0.72rem;
+  }
+  .suse .prov {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .suse .prov code {
+    opacity: 0.85;
+    margin-left: 0.5rem;
   }
   .rtext {
     width: 99%;

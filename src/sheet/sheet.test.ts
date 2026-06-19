@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
-import { sizeDevice } from '../device';
+import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { evaluateSheet, runSheet, validateSheet, sweepSheet } from './index';
 import { EXAMPLES } from './examples';
 import type { SheetDoc } from './types';
@@ -192,6 +192,57 @@ describe('the shipped example', () => {
   });
 });
 
+describe('the noise & matching example', () => {
+  const ex = EXAMPLES.find((e) => e.title === 'NMOS noise & matching')!;
+
+  it('its author formulas reproduce the core noise/mismatch oracles (no drift from the trusted impls)', () => {
+    const res = runSheet(ex, dev);
+    expect(res.bind?.ok).toBe(true);
+    const v = res.values;
+    // Integrated input noise == core integratedNoise on the W-referred thermal PSD (svth·w0/W)
+    // and the intensive flicker corner fco. (svth·fco == svfl, so the flicker term matches too.)
+    const expectedVn = integratedNoise((v.svth * v.w0) / v.W, v.fco, v.f_lo, v.f_hi);
+    expect(v.vn_int / expectedVn).toBeCloseTo(1, 12);
+    // Input offset == core Pelgrom mismatch().sigmaVos at the sized geometry.
+    const m = mismatch(v.W, v.L, v.gm_id, { avth: v.avt, abeta: v.abeta });
+    expect(v.sigma_vos / m.sigmaVos).toBeCloseTo(1, 12);
+  });
+
+  it('vn_int matches an INDEPENDENT numerical integral of the input PSD (not the closed form)', () => {
+    // The cross-check above shares the analytic closed form, so it cannot catch a wrong band
+    // integral. Anchor it with a numerical quadrature of S(f) = svth_w + svfl_w/f over the band
+    // (log-grid trapezoid — the 1/f tail spans decades), a genuinely separate computation path.
+    const v = runSheet(ex, dev).values;
+    const svth_w = (v.svth * v.w0) / v.W;
+    const svfl_w = (v.svfl * v.w0) / v.W;
+    const N = 40000;
+    const r = Math.log(v.f_hi / v.f_lo) / N;
+    let integral = 0;
+    for (let i = 0; i < N; i++) {
+      const fa = v.f_lo * Math.exp(i * r);
+      const fb = v.f_lo * Math.exp((i + 1) * r);
+      integral += 0.5 * (svth_w + svfl_w / fa + (svth_w + svfl_w / fb)) * (fb - fa);
+    }
+    expect(v.vn_int / Math.sqrt(integral)).toBeCloseTo(1, 4);
+  });
+
+  it('sweeping gm/ID opens a bounded feasible window: noise binds the low end, headroom the high end', () => {
+    const sw = sweepSheet(ex, 'gm_id', dev, 13);
+    const margins = (id: string) =>
+      sw.rules.find((r) => r.id === id)!.marginPct.filter((x): x is number => x != null);
+    const noise = margins('noise-spec');
+    const head = margins('headroom');
+    // noise margin IMPROVES as gm/ID rises (more gm ⇒ less integrated thermal noise) ...
+    expect(noise.at(-1)!).toBeGreaterThan(noise[0]!);
+    // ... while the headroom margin DEGRADES (V* = 2/(gm/ID) shrinks).
+    expect(head.at(-1)!).toBeLessThan(head[0]!);
+    // A bounded window: infeasible at both ends, feasible in the middle.
+    expect(sw.feasible[0]).toBe(false);
+    expect(sw.feasible.at(-1)).toBe(false);
+    expect(sw.feasible.some((f) => f)).toBe(true);
+  });
+});
+
 describe('sweepSheet — feasibility curve', () => {
   it('traces a rule margin across a parameter range and bounds the feasible window', () => {
     const doc = structuredClone(EXAMPLES[0]);
@@ -221,5 +272,134 @@ describe('sweepSheet — feasibility curve', () => {
     const doc = structuredClone(EXAMPLES[0]);
     expect(sweepSheet(doc, 'CL', dev).x).toEqual([]); // CL has no min/max → not sweepable
     expect(sweepSheet(doc, 'no_such_param', dev).x).toEqual([]);
+  });
+});
+
+describe('composition — scalar provide/use', () => {
+  const cascode = EXAMPLES.find((e) => e.title.startsWith('NMOS cascode'))!;
+
+  it('evaluates children first, exposes provides as name__key, and reports each child', () => {
+    const res = runSheet(cascode, dev);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.children).toHaveLength(1);
+    const cs = res.children![0];
+    expect(cs.name).toBe('cs');
+    expect(cs.feasible).toBe(true);
+    // the provided scalars are visible in the parent scope as cs__*
+    expect(res.values['cs__av0']).toBeCloseTo(cs.provides.av0, 12);
+    // the parent's author math composed them: Av == av0 · cs__av0 (the cascode gain)
+    expect(res.values.Av).toBeCloseTo(res.values.av0 * res.values['cs__av0'], 9);
+    // and the parent bound its OWN device to the child's current (the series stack)
+    expect(res.values.id).toBeCloseTo(cs.provides.id, 15);
+  });
+
+  it('a leaf reports no children', () => {
+    expect(runSheet(EXAMPLES[0], dev).children).toBeUndefined();
+  });
+
+  it('is fail-closed: an infeasible child drags the parent infeasible, attributed to the use site', () => {
+    const badChild: SheetDoc = {
+      title: 'bad', polarity: 'n',
+      params: [{ name: 'L', value: 0.5e-6 }, { name: 'gm_id', value: 999 }, { name: 'I_bias', value: 20e-6 }],
+      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, // gm/ID 999 ≫ ceiling ⇒ the child cannot size
+      rows: [], rules: [], provide: ['id'],
+    };
+    const parent: SheetDoc = {
+      title: 'p', polarity: 'n', params: [], rows: [], rules: [],
+      uses: [{ name: 'c', doc: badChild }],
+    };
+    const res = runSheet(parent, dev);
+    expect(res.children![0].feasible).toBe(false);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => w.message.includes('use "c":'))).toBe(true);
+  });
+
+  it('sweeping the shared knob bounds a feasible window over the whole tree', () => {
+    const sw = sweepSheet(cascode, 'gm_id', dev, 13);
+    expect(sw.feasible[0]).toBe(false); // gain too low at low gm/ID
+    expect(sw.feasible.at(-1)).toBe(false); // headroom gone at high gm/ID
+    expect(sw.feasible.some((f) => f)).toBe(true);
+    const gain = sw.rules.find((r) => r.id === 'gain-spec')!.marginPct.filter((x): x is number => x != null);
+    expect(gain.at(-1)!).toBeGreaterThan(gain[0]!); // gain improves with gm/ID
+  });
+
+  it('a child sizes against the device its `use` names (resolver), or inherits the parent table', () => {
+    const child: SheetDoc = {
+      title: 'k', polarity: 'n',
+      params: [{ name: 'L', value: 0.5e-6 }, { name: 'gm_id', value: 10 }, { name: 'I_bias', value: 20e-6 }],
+      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, rows: [], rules: [], provide: ['id'],
+    };
+    const parent = (device?: string): SheetDoc => ({
+      title: 'p', polarity: 'n', params: [], rows: [], rules: [],
+      uses: [{ name: 'k', doc: child, ...(device ? { device } : {}) }],
+    });
+    const resolve = (id: string) => (id === 'wide' ? generateDemoDevice({ W: 40e-6 }) : undefined);
+    expect(runSheet(parent('wide'), dev, resolve).children![0].feasible).toBe(true); // resolved
+    expect(runSheet(parent('missing'), dev, resolve).children![0].feasible).toBe(false); // unresolved ⇒ no table
+    expect(runSheet(parent(undefined), dev, resolve).children![0].feasible).toBe(true); // inherited
+  });
+
+  it('fails closed on a broken param override (no silent fallback to the child default)', () => {
+    const child: SheetDoc = {
+      title: 'c', polarity: 'n',
+      params: [{ name: 'L', value: 0.5e-6 }, { name: 'gm_id', value: 12 }, { name: 'I_bias', value: 20e-6 }],
+      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, rows: [], rules: [], provide: ['id'],
+    };
+    const parent: SheetDoc = {
+      title: 'p', polarity: 'n',
+      params: [{ name: 'I_budget', value: 30e-6 }],
+      rows: [{ name: 'echo', expr: 'c__id' }], rules: [],
+      uses: [{ name: 'c', doc: child, params: { I_bias: 'I_budgett' } }], // typo ⇒ unresolvable
+    };
+    const res = runSheet(parent, dev);
+    expect(res.warnings.some((w) => w.severity === 'error' && /override "I_bias"/.test(w.message))).toBe(true);
+    expect(res.children![0].feasible).toBe(false); // wiring broke ⇒ child infeasible
+    expect(res.feasible).toBe(false); // ⇒ parent infeasible
+    // the child's provides are withheld, so dependent parent math is `na`, not a stale number
+    expect('c__id' in res.values).toBe(false);
+    expect('echo' in res.values).toBe(false);
+  });
+});
+
+describe('validateSheet — composition', () => {
+  it('flags a separator in a use name, a duplicate name, and a stray override', () => {
+    const child: SheetDoc = { title: 'c', polarity: 'n', params: [{ name: 'L', value: 1e-6 }], rows: [], rules: [], provide: [] };
+    const doc: SheetDoc = {
+      title: 't', polarity: 'n', params: [], rows: [], rules: [],
+      uses: [
+        { name: 'a__b', doc: child },
+        { name: 'x', doc: child, params: { nope: '1' } },
+        { name: 'x', doc: child },
+      ],
+    };
+    const w = validateSheet(doc);
+    expect(w.some((x) => x.rule === 'sheet-use' && /must not contain/.test(x.message))).toBe(true);
+    expect(w.some((x) => x.rule === 'sheet-use' && /duplicate/.test(x.message))).toBe(true);
+    expect(w.some((x) => x.rule === 'sheet-use-param')).toBe(true);
+  });
+
+  it('warns when a parent param/row name collides with a child-provided scalar', () => {
+    const child: SheetDoc = { title: 'c', polarity: 'n', params: [{ name: 'L', value: 1e-6 }], rows: [], rules: [], provide: ['av0'] };
+    const doc: SheetDoc = {
+      title: 't', polarity: 'n',
+      params: [{ name: 'cs__av0', value: 1 }], // collides with the injected cs__av0
+      rows: [{ name: 'cs__id', expr: '1' }], // child provides only av0, so this does NOT collide
+      rules: [],
+      uses: [{ name: 'cs', doc: child }],
+    };
+    const w = validateSheet(doc);
+    expect(w.some((x) => x.rule === 'sheet-collision' && /cs__av0/.test(x.message))).toBe(true);
+    expect(w.some((x) => x.rule === 'sheet-collision' && /cs__id/.test(x.message))).toBe(false);
+  });
+
+  it('recurses into a child and attributes its structural error to the use site', () => {
+    const child: SheetDoc = {
+      title: 'c', polarity: 'n',
+      params: [{ name: 'p', value: Number.NaN }], // non-finite param ⇒ child structural error
+      rows: [], rules: [],
+    };
+    const doc: SheetDoc = { title: 't', polarity: 'n', params: [], rows: [], rules: [], uses: [{ name: 'kid', doc: child }] };
+    const w = validateSheet(doc);
+    expect(w.some((x) => x.rule === 'sheet-param' && x.message.includes('use "kid":'))).toBe(true);
   });
 });

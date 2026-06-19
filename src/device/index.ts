@@ -120,6 +120,10 @@ export function sizeDevice(q: SizeQuery): SizeResult {
 
   // Report the operating point's quantities, augmented with the bound targets and
   // the sized current density (id_w is not in the grid because there is no w col).
+  // `w0` is the characterization width: the lookup's extensive quantities (caps,
+  // conductances, the noise PSDs sth/sfl/svth/svfl) are reported at w0, so an author
+  // refers them to the SIZED device by the width ratio — e.g. an input-referred noise
+  // PSD (∝ 1/W) scales by `w0/W`. gm/id/W above are already the sized values.
   const quantities: Record<string, number> = {
     ...lookup(q.table, { l: L, vgs }),
     id_w,
@@ -127,6 +131,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     gm_id,
     id,
     W,
+    w0: Wchar,
   };
 
   return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities };

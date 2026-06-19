@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from './index';
 import type { Grid } from '../types';
-import { UT } from '../constants';
+import { UT, PHYS, GAMMA_DEFAULT } from '../constants';
 
 function col(grid: Grid, key: string): Float64Array {
   const c = grid.quantities.get(key);
@@ -122,5 +122,23 @@ describe('generateDemoDevice', () => {
     for (let i = 0; i < cgg.length; i++) {
       expect(cgg[i]).toBeCloseTo(20e-6 * 1e-6 * 0.01, 18);
     }
+  });
+
+  it('ships gamma/sth/sfl noise columns so the data-noise quantities are live', () => {
+    const dev = generateDemoDevice();
+    const gamma = col(dev.grid, 'gamma');
+    const sth = col(dev.grid, 'sth');
+    const sfl = col(dev.grid, 'sfl');
+    const gm = col(dev.grid, 'gm');
+    for (let i = 0; i < gamma.length; i++) {
+      expect(gamma[i]).toBeCloseTo(GAMMA_DEFAULT, 12);
+      expect(sth[i]).toBeGreaterThan(0);
+      expect(sfl[i]).toBeGreaterThan(0);
+    }
+    // sth = 4kTγ·gm by construction, so the data thermal PSD svth = sth/gm² == the γ-model.
+    const i = Math.floor(gm.length / 2);
+    expect(sth[i]).toBeCloseTo(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * gm[i], 30);
+    // the flicker corner fco = sfl/sth is a positive, finite LUT quantity.
+    expect(sfl[i] / sth[i]).toBeGreaterThan(0);
   });
 });

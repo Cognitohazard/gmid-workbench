@@ -14,6 +14,7 @@ import {
   type SheetRow,
   type SheetRule,
   type SheetBind,
+  type SheetUse,
   type RuleKind,
   type RuleOp,
 } from '@gmid/mostab-core';
@@ -205,6 +206,35 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
     }
   }
 
+  // Composition: each child is a full SheetDoc recursively sanitized; the param-override
+  // map and the provide list are kept verbatim so a composed sheet round-trips intact.
+  // NOTE: `use.device` is intentionally NOT persisted. The web evaluates every sheet against
+  // the active device only (children inherit the parent table) and threads no device resolver,
+  // so a named child device would size against `undefined` and read falsely infeasible.
+  // Re-enable it here together with a real device resolver when a multi-device UI lands.
+  const uses: SheetUse[] = Array.isArray(o.uses)
+    ? o.uses.flatMap((u) => {
+        if (!u || typeof u !== 'object') return [];
+        const uu = u as Record<string, unknown>;
+        if (typeof uu.name !== 'string' || !uu.name) return [];
+        const childDoc = sanitizeSheet(uu.doc);
+        if (!childDoc) return [];
+        const use: SheetUse = { name: uu.name, doc: childDoc };
+        if (uu.params && typeof uu.params === 'object' && !Array.isArray(uu.params)) {
+          const ov: Record<string, string> = {};
+          for (const [k, val] of Object.entries(uu.params as Record<string, unknown>)) {
+            if (typeof val === 'string') ov[k] = val;
+          }
+          if (Object.keys(ov).length) use.params = ov;
+        }
+        return [use];
+      })
+    : [];
+
+  const provide: string[] = Array.isArray(o.provide)
+    ? o.provide.filter((x): x is string => typeof x === 'string')
+    : [];
+
   return {
     title: str(o.title, 'Sheet'),
     polarity: o.polarity === 'p' ? 'p' : 'n',
@@ -212,6 +242,8 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
     rows,
     rules,
     ...(bind ? { bind } : {}),
+    ...(uses.length ? { uses } : {}),
+    ...(provide.length ? { provide } : {}),
   };
 }
 

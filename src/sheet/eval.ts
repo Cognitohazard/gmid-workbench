@@ -8,7 +8,21 @@ import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr } from '../derive';
 import { sizeDevice, type SizeQuery } from '../device';
-import type { BindReport, RuleResult, RuleStatus, SheetBind, SheetDoc, SheetResult } from './types';
+import { MAX_USE_DEPTH, joinProvide, prefixUseWarning } from './types';
+import type {
+  BindReport,
+  RuleResult,
+  RuleStatus,
+  SheetBind,
+  SheetChildReport,
+  SheetDoc,
+  SheetResult,
+  SheetUse,
+} from './types';
+
+/** Resolve a device id to its lookup table (for a child `use` that names its own device).
+ *  Absent ⇒ children inherit the parent's table. */
+export type DeviceResolver = (id: string) => DeviceTable | undefined;
 
 /** A rule passing by a smaller relative margin than this reads as a near-miss (amber). */
 export const AMBER_BAND = 0.05; // 5% of the bound
@@ -155,24 +169,128 @@ function evalRule(
 }
 
 /**
- * Evaluate a leaf sheet against an optional device table. One pass, never throws:
- * seed params → size → author-order rows → signed-margin rules → aggregate feasibility.
+ * Build a child doc with its param values overridden by expressions evaluated in the
+ * PARENT scope (parent params + constants — children run before the parent's own bind,
+ * so they do not see the parent's sized device; that reverse coupling is deferred).
+ *
+ * Fail-closed: a declared override is the parent EXPLICITLY supplying a value, so one that
+ * cannot resolve to a finite number must NOT silently fall back to the child's embedded
+ * default — that would size a different design than the author wired and could still read
+ * feasible. A failed override raises an error (blocking feasibility) and returns ok:false
+ * so the caller withholds the child's provides too.
  */
-export function evaluateSheet(doc: SheetDoc, table?: DeviceTable): SheetResult {
+function applyUseParams(
+  use: SheetUse,
+  parentValues: Record<string, number>,
+  parentScope: Scope,
+  warn: (w: QAWarning) => void,
+): { doc: SheetDoc; ok: boolean } {
+  if (!use.params) return { doc: use.doc, ok: true };
+  const overrides: Record<string, number> = {};
+  let ok = true;
+  for (const [k, expr] of Object.entries(use.params)) {
+    const v = evalScalar(expr, parentValues, parentScope, warn, `use "${use.name}" param ${k}`);
+    if (v === undefined || !Number.isFinite(v)) {
+      ok = false;
+      warn({ rule: 'sheet-use-param', severity: 'error', message: `use "${use.name}": override "${k}" did not resolve to a finite number (refusing to fall back to the child default)`, location: use.name });
+      continue;
+    }
+    overrides[k] = v;
+  }
+  return {
+    doc: {
+      ...use.doc,
+      params: use.doc.params.map((p) =>
+        Object.prototype.hasOwnProperty.call(overrides, p.name) ? { ...p, value: overrides[p.name] } : p,
+      ),
+    },
+    ok,
+  };
+}
+
+/**
+ * Evaluate each child block, merge its `provide`d scalars into the parent `values` as
+ * flat `name__key` names, roll up its warnings (prefixed + attributed), and return a
+ * per-child report. Runs BEFORE the parent's bind/rows so the parent can reference a
+ * child's outputs anywhere — including its own bind (e.g. a cascode carrying the child's
+ * current). Fail-closed: a child that errors or is infeasible drags the parent down via
+ * the rolled-up error warning + the children-feasibility fold in evaluateSheet.
+ */
+function evalChildren(
+  uses: SheetUse[],
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+  depth: number,
+  values: Record<string, number>,
+  scope: Scope,
+  warn: (w: QAWarning) => void,
+): SheetChildReport[] {
+  const reports: SheetChildReport[] = [];
+  for (const use of uses) {
+    if (depth >= MAX_USE_DEPTH) {
+      warn({ rule: 'sheet-use', severity: 'error', message: `use "${use.name}": composition nested deeper than ${MAX_USE_DEPTH}`, location: use.name });
+      reports.push({ name: use.name, title: use.doc.title, feasible: false, provides: {} });
+      continue;
+    }
+    const { doc: childDoc, ok: paramsOk } = applyUseParams(use, values, scope, warn);
+    const childTable = use.device !== undefined ? resolveDevice?.(use.device) : table;
+    const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1);
+
+    // Roll up child warnings, attributed to the use site (so a child error fails the
+    // parent's closed feasibility, and the message points at the offending block).
+    for (const w of res.warnings) warn(prefixUseWarning(use.name, w));
+
+    // Expose the child's declared `provide` names as flat parent scalars — but ONLY when the
+    // parent wiring was honored (paramsOk). On a broken override the child sized with the wrong
+    // input, so its outputs are meaningless: withhold them so dependent parent math goes `na`.
+    const provides: Record<string, number> = {};
+    if (paramsOk) {
+      for (const key of use.doc.provide ?? []) {
+        const v = res.values[key];
+        if (v !== undefined && Number.isFinite(v)) {
+          provides[key] = v;
+          values[joinProvide(use.name, key)] = v;
+        }
+      }
+    }
+    reports.push({ name: use.name, title: use.doc.title, feasible: paramsOk && res.feasible, provides });
+  }
+  return reports;
+}
+
+/**
+ * Evaluate a sheet against an optional device table. One pass, never throws: seed
+ * params → (compose children) → size → author-order rows → signed-margin rules →
+ * aggregate feasibility. A leaf (no `uses`) behaves exactly as before. `resolveDevice`
+ * is only consulted by a child `use` that names its own device; `_depth` is internal.
+ */
+export function evaluateSheet(
+  doc: SheetDoc,
+  table?: DeviceTable,
+  resolveDevice?: DeviceResolver,
+  _depth = 0,
+): SheetResult {
   const warnings: QAWarning[] = [];
   const warn = (w: QAWarning): void => void warnings.push(w);
   const values: Record<string, number> = {};
 
-  // 1. Seed top-level scalar params (no parent supplies them at a leaf).
+  // 1. Seed top-level scalar params (a parent supplies a child's via use.params).
   for (const p of doc.params) {
     if (Number.isFinite(p.value)) values[p.name] = p.value;
   }
   const scope = scalarScope(values); // closes over the mutated `values`
 
-  // 2. Size the device — the ONLY place physics enters — when bound.
+  // 2. Compose children FIRST, so the parent can reference their provided scalars
+  //    (name__key) in its own bind/rows/rules.
+  const children =
+    doc.uses && doc.uses.length > 0
+      ? evalChildren(doc.uses, table, resolveDevice, _depth, values, scope, warn)
+      : undefined;
+
+  // 3. Size the device — the ONLY place physics enters — when bound.
   const bind = doc.bind ? runBind(doc.bind, table, values, scope, warn) : undefined;
 
-  // 3. Author rows, in document order; a row that cannot resolve is skipped, not fatal.
+  // 4. Author rows, in document order; a row that cannot resolve is skipped, not fatal.
   for (const row of doc.rows) {
     const r = evalScalar(row.expr, values, scope, warn, `row "${row.name}"`);
     if (r === undefined) continue;
@@ -183,17 +301,18 @@ export function evaluateSheet(doc: SheetDoc, table?: DeviceTable): SheetResult {
     values[row.name] = r;
   }
 
-  // 4. Rules → signed margins.
+  // 5. Rules → signed margins.
   const rules = doc.rules.map((rule) => evalRule(rule, values, scope, warn));
 
-  // 5. Overall feasibility, fail-closed: a declared bind sized successfully, every HARD rule
+  // 6. Overall feasibility, fail-closed: a declared bind sized successfully, every HARD rule
   //    (invariant = physical floor, requirement = application spec) holds (pass or near-miss),
-  //    and nothing errored. Guardrails are advisory and deliberately excluded.
+  //    EVERY child is feasible, and nothing errored. Guardrails are advisory and excluded.
   const hard = rules.filter((r) => r.kind === 'invariant' || r.kind === 'requirement');
   const feasible =
     (!doc.bind || (bind?.ok ?? false)) &&
     hard.every((r) => r.status === 'pass' || r.status === 'amber') &&
+    (children?.every((c) => c.feasible) ?? true) &&
     !warnings.some((w) => w.severity === 'error');
 
-  return { values, bind, rules, feasible, warnings };
+  return { values, bind, rules, feasible, warnings, ...(children ? { children } : {}) };
 }

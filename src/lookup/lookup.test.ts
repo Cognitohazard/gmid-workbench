@@ -5,6 +5,14 @@ import { generateDemoDevice } from '../demo';
 import { importMostab } from '../import';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 
+/** A copy of `table` with the named quantity columns removed (for testing the
+ *  measured-noise-absent path now that the demo carries sth/sfl/gamma). */
+function stripCols(table: DeviceTable, keys: string[]): DeviceTable {
+  const q = new Map(table.grid.quantities);
+  for (const k of keys) q.delete(k);
+  return { ...table, grid: { ...table.grid, quantities: q } };
+}
+
 /** Read the stored column value at the (li, vi) lattice node of a 2-D (l,vgs) grid. */
 function nodeValue(table: DeviceTable, key: string, li: number, vi: number): number {
   const col = table.grid.quantities.get(key);
@@ -135,12 +143,14 @@ describe('lookupByGmId (inverse)', () => {
     expect(strong.gm).toBeGreaterThan(weak.gm);
     expect(strong.vnth_m).toBeLessThan(weak.vnth_m);
 
-    // The MEASURED keys need stored PSDs; the demo has none, so neither thermal
-    // (sth) nor flicker (sfl) measured noise is reported (no model masquerade).
-    expect(weak.vnth).toBeUndefined();
-    expect(weak.svth).toBeUndefined();
-    expect(weak.vnfl).toBeUndefined();
-    expect(weak.svfl).toBeUndefined();
+    // The MEASURED keys need stored PSDs: a device WITHOUT them reports no measured
+    // thermal (sth) or flicker (sfl) noise — no model masquerades as data.
+    const bare = stripCols(table, ['sth', 'sfl', 'gamma']);
+    const w2 = lookup(bare, { l: L, vgs: 0.45 });
+    expect(w2.vnth).toBeUndefined();
+    expect(w2.svth).toBeUndefined();
+    expect(w2.vnfl).toBeUndefined();
+    expect(w2.svfl).toBeUndefined();
   });
 
   it('reports MEASURED thermal + flicker noise from stored sth/sfl PSDs', () => {

@@ -5,19 +5,21 @@
 import type { DeviceTable } from '../types';
 import type { SheetDoc, SheetResult, SheetSweep, SheetSweepRule } from './types';
 import { validateSheet } from './validate';
-import { evaluateSheet } from './eval';
+import { evaluateSheet, type DeviceResolver } from './eval';
 
 export * from './types';
 export * from './eval';
 export * from './validate';
 export * from './examples';
 
-/** Validate + evaluate a leaf sheet, merging validation warnings ahead of eval warnings. A
- *  validation error (e.g. a non-finite param, which eval silently skips) also forces the
- *  feasibility verdict false, so a structurally broken sheet is never reported feasible. */
-export function runSheet(doc: SheetDoc, table?: DeviceTable): SheetResult {
+/** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
+ *  validation error (e.g. a non-finite param, which eval silently skips, or a child block's
+ *  structural error) also forces the feasibility verdict false, so a structurally broken
+ *  sheet is never reported feasible. `validateSheet` and `evaluateSheet` both recurse into
+ *  composed children, so the whole tree is covered. */
+export function runSheet(doc: SheetDoc, table?: DeviceTable, resolveDevice?: DeviceResolver): SheetResult {
   const pre = validateSheet(doc);
-  const res = evaluateSheet(doc, table);
+  const res = evaluateSheet(doc, table, resolveDevice);
   const blocked = pre.some((w) => w.severity === 'error');
   return { ...res, feasible: res.feasible && !blocked, warnings: [...pre, ...res.warnings] };
 }
@@ -37,6 +39,7 @@ export function sweepSheet(
   param: string,
   table?: DeviceTable,
   n = SWEEP_POINTS,
+  resolveDevice?: DeviceResolver,
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (
@@ -60,7 +63,7 @@ export function sweepSheet(
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
     x.push(t);
     const at: SheetDoc = { ...doc, params: doc.params.map((p) => (p.name === param ? { ...p, value: t } : p)) };
-    const res = evaluateSheet(at, table);
+    const res = evaluateSheet(at, table, resolveDevice);
     feasible.push(!blocked && res.feasible);
     res.rules.forEach((rr, j) =>
       rules[j].marginPct.push(rr.status === 'na' || !Number.isFinite(rr.marginPct) ? null : rr.marginPct),
