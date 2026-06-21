@@ -50,6 +50,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
   sheet: 'Add a design sheet: variables, author equations, and pass/fail constraints with margins, sized on the active device.',
   sheetSweep: 'Sweep one variable across its range and chart every rule’s margin — the feasibility region where the design closes.',
+  useDevice: 'Size this child block against a specific loaded device (e.g. an LVT/SVT flavor or the PMOS table); “active device” inherits the parent’s.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
   size: 'Sizing: bind any two of {gm/ID, I_D, gm} at a chosen L → width, V_GS, f_T, gain, and feasibility.',
   bind: 'Enter exactly two of gm/ID, I_D, gm; the third and the geometry are solved at this L.',

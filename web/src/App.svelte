@@ -9,7 +9,6 @@
     thermalNoise,
     integratedNoise,
     metaScalars,
-    fixTable,
     formatEng,
     parseEng,
     validate,
@@ -31,6 +30,9 @@
     reseatDashboard,
     canPlot,
     sizingBias,
+    reduceForSizing,
+    deviceKey,
+    tableUid,
     TEMPLATES,
     SWEEP_AXIS,
     LENGTH_AXIS,
@@ -60,6 +62,12 @@
   const device = $derived(active.table);
   const overlays = $derived(overlayIdx.map((i) => devices[i]?.table).filter((d): d is DeviceTable => !!d));
   const warnings = $derived(active.warnings);
+  // Loaded devices for the per-child device picker in composed sheets: a unique stable uid (the
+  // resolver/persistence key), a human label, and the raw table (reduced to an [l × vgs] sizing
+  // slice inside Panel, like the active device).
+  const sheetDevices = $derived(
+    devices.map((d) => ({ uid: tableUid(d.table), label: deviceKey(d.table), table: d.table })),
+  );
   let importError = $state<string | null>(null);
   let dragging = $state(false);
 
@@ -277,12 +285,10 @@
   // Bias for sizing: every axis except l/vgs, fixed at the dashboard's shared-bias slider value
   // (so you size at the operating point you're viewing), else a mid node. Shown in the panel so
   // the operating point of W/vgs/fT/gm-gds is never implicit.
-  const sizingFixed = $derived(sizingBias(device, sharedBias));
+  const sizingFixed = $derived(sizingBias(device, sharedBias)); // shown in the bias readout
 
   // sizeDevice/lookupByGmId need an [l × vgs] table; collapse the extra axes at the bias.
-  const sizingTable = $derived(
-    Object.keys(sizingFixed).length === 0 ? device : fixTable(device, sizingFixed),
-  );
+  const sizingTable = $derived(reduceForSizing(device, sharedBias));
 
   const parseNum = (s: string): number | undefined => {
     if (s.trim() === '') return undefined;
@@ -390,7 +396,7 @@
     </label>
   {/each}
   <span class="grow"></span>
-  <span class="device" title="active device">{device.id.device} · {device.id.corner} · {device.id.temp}°C</span>
+  <span class="device" title="active device">{deviceKey(device)}</span>
   <label class="load">
     Load .csv
     <input
@@ -447,7 +453,7 @@
           class:active={i === activeIdx}
           onclick={() => select(i)}
           title={CONTROL_HELP.active}
-        >{d.table.id.device} · {d.table.id.corner} · {d.table.id.temp}°C</button>
+        >{deviceKey(d.table)}</button>
         <label class="dov" title={CONTROL_HELP.overlay}>
           <input
             type="checkbox"
@@ -507,6 +513,7 @@
       <Panel
         {device}
         {overlays}
+        {sheetDevices}
         sweep={dashboard.sweep}
         {sharedBias}
         {cfg}

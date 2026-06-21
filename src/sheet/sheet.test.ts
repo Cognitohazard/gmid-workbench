@@ -335,8 +335,29 @@ describe('composition — scalar provide/use', () => {
     });
     const resolve = (id: string) => (id === 'wide' ? generateDemoDevice({ W: 40e-6 }) : undefined);
     expect(runSheet(parent('wide'), dev, resolve).children![0].feasible).toBe(true); // resolved
-    expect(runSheet(parent('missing'), dev, resolve).children![0].feasible).toBe(false); // unresolved ⇒ no table
     expect(runSheet(parent(undefined), dev, resolve).children![0].feasible).toBe(true); // inherited
+
+    // A named device the resolver cannot supply fails closed with a clear, attributed message.
+    const missing = runSheet(parent('missing'), dev, resolve);
+    expect(missing.children![0].feasible).toBe(false);
+    expect(missing.feasible).toBe(false);
+    expect(missing.warnings.some((w) => w.severity === 'error' && /device "missing" did not resolve/.test(w.message))).toBe(true);
+  });
+
+  it('a named-but-unresolved device fails even a BINDLESS child closed (not vacuously feasible)', () => {
+    // The regression this guards: without the unresolved-device branch, a bindless child sized
+    // against no table is vacuously feasible (no bind ⇒ no error), so the parent reads feasible
+    // while its child's named device silently does not exist. A child WITH a bind would fail on
+    // the bind regardless, so only a bindless child distinguishes the branch.
+    const bindless: SheetDoc = { title: 'k0', polarity: 'n', params: [], rows: [], rules: [], provide: [] };
+    const parent: SheetDoc = {
+      title: 'p', polarity: 'n', params: [], rows: [], rules: [],
+      uses: [{ name: 'k', doc: bindless, device: 'missing' }],
+    };
+    const res = runSheet(parent, dev, () => undefined);
+    expect(res.children![0].feasible).toBe(false);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => /device "missing" did not resolve/.test(w.message))).toBe(true);
   });
 
   it('fails closed on a broken param override (no silent fallback to the child default)', () => {

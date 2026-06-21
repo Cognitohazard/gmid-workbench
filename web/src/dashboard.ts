@@ -5,6 +5,7 @@
 import {
   plottableQuantities,
   metaScalars,
+  fixTable,
   EXAMPLES,
   RULE_KINDS,
   RULE_OPS,
@@ -47,6 +48,44 @@ export function sizingBias(device: DeviceTable, sharedBias: Record<string, numbe
     out[a.name] = a.name in sharedBias ? sharedBias[a.name] : a.values[Math.floor(a.values.length / 2)];
   }
   return out;
+}
+
+/** Collapse a table's non-(l, vgs) axes to the shared bias point, yielding the [l × vgs] slice a
+ *  sheet sizes on (lookupByGmId brackets gm/ID along vgs and cannot with extra live axes). The one
+ *  home for the sizing reduction — the App sizer, sheet panels, and resolved child devices all use it. */
+export function reduceForSizing(device: DeviceTable, sharedBias: Record<string, number>): DeviceTable {
+  const fixed = sizingBias(device, sharedBias);
+  return Object.keys(fixed).length ? fixTable(device, fixed) : device;
+}
+
+/** A loaded device's display identity — `device · corner · temp°C`. Human-readable but NOT
+ *  unique (two metadata-less or same-corner imports can collide), so it is for DISPLAY only. */
+export function deviceKey(t: DeviceTable): string {
+  return `${t.id.device} · ${t.id.corner} · ${t.id.temp}°C`;
+}
+
+/**
+ * A content-stable, collision-resistant unique id for a loaded table: the display label plus a
+ * short FNV-1a hash of the table's identity, geometry, and per-column sentinels. This is the
+ * resolver / persisted `use.device` key (the label is only for display). Two imports of the SAME
+ * file get the same uid (so a persisted child→device binding survives a re-import); two DIFFERENT
+ * tables that happen to share a label get DISTINCT uids (so each is individually selectable and
+ * the resolver targets the right one — fixing the non-unique-label ambiguity). Hash collisions
+ * between genuinely different tables are negligible and would only degrade to a first-match, never
+ * a crash.
+ */
+export function tableUid(t: DeviceTable): string {
+  let h = 0x811c9dc5;
+  const mix = (s: string): void => {
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+  };
+  mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${t.meta.W ?? ''}`);
+  for (const a of t.grid.axes) mix(`${a.name}:${a.values.length}:${a.values[0]}:${a.values[a.values.length - 1]}`);
+  for (const [k, col] of t.grid.quantities) mix(`${k}:${col.length}:${col[0]}:${col[col.length >> 1]}:${col[col.length - 1]}`);
+  return `${deviceKey(t)}#${(h >>> 0).toString(36)}`;
 }
 
 /**
@@ -206,12 +245,10 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
     }
   }
 
-  // Composition: each child is a full SheetDoc recursively sanitized; the param-override
-  // map and the provide list are kept verbatim so a composed sheet round-trips intact.
-  // NOTE: `use.device` is intentionally NOT persisted. The web evaluates every sheet against
-  // the active device only (children inherit the parent table) and threads no device resolver,
-  // so a named child device would size against `undefined` and read falsely infeasible.
-  // Re-enable it here together with a real device resolver when a multi-device UI lands.
+  // Composition: each child is a full SheetDoc recursively sanitized; the param-override map,
+  // the provide list, and the per-child `device` (a table uid the resolver matches against the
+  // loaded devices) are kept verbatim so a composed sheet round-trips intact. A persisted device
+  // that is not currently loaded simply reads infeasible until re-loaded.
   const uses: SheetUse[] = Array.isArray(o.uses)
     ? o.uses.flatMap((u) => {
         if (!u || typeof u !== 'object') return [];
@@ -220,6 +257,7 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
         const childDoc = sanitizeSheet(uu.doc);
         if (!childDoc) return [];
         const use: SheetUse = { name: uu.name, doc: childDoc };
+        if (typeof uu.device === 'string') use.device = uu.device;
         if (uu.params && typeof uu.params === 'object' && !Array.isArray(uu.params)) {
           const ov: Record<string, string> = {};
           for (const [k, val] of Object.entries(uu.params as Record<string, unknown>)) {

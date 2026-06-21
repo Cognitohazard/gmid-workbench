@@ -232,8 +232,20 @@ function evalChildren(
       reports.push({ name: use.name, title: use.doc.title, feasible: false, provides: {} });
       continue;
     }
+    // A child names its own device id (else it inherits the parent table). A named device that the
+    // resolver cannot supply fails closed with a clear, attributed message — rather than the generic
+    // "no device to size against" the bind would otherwise raise.
+    let childTable = table;
+    if (use.device !== undefined) {
+      childTable = resolveDevice?.(use.device);
+      if (childTable === undefined) {
+        warn({ rule: 'sheet-use', severity: 'error', message: `use "${use.name}": device "${use.device}" did not resolve`, location: use.name });
+        reports.push({ name: use.name, title: use.doc.title, feasible: false, provides: {} });
+        continue;
+      }
+    }
+
     const { doc: childDoc, ok: paramsOk } = applyUseParams(use, values, scope, warn);
-    const childTable = use.device !== undefined ? resolveDevice?.(use.device) : table;
     const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1);
 
     // Roll up child warnings, attributed to the use site (so a child error fails the

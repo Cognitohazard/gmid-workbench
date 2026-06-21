@@ -8,8 +8,10 @@
     sweepSheet,
     formatEng,
     joinProvide,
+    SWEEP_POINTS,
     EXAMPLES,
     type DeviceTable,
+    type DeviceResolver,
     type SheetDoc,
     type RuleStatus,
   } from '@gmid/mostab-core';
@@ -20,6 +22,8 @@
     device,
     cfg,
     sweep = '',
+    resolveDevice = undefined,
+    deviceOptions = [],
     styleVersion = 0,
     onChange,
     onSweep,
@@ -27,12 +31,14 @@
     device: DeviceTable;
     cfg: SheetDoc;
     sweep?: string;
+    resolveDevice?: DeviceResolver;
+    deviceOptions?: { uid: string; label: string }[];
     styleVersion?: number;
     onChange: (s: SheetDoc) => void;
     onSweep: (s: string) => void;
   } = $props();
 
-  const result = $derived(runSheet(cfg, device));
+  const result = $derived(runSheet(cfg, device, resolveDevice));
 
   // ── Feasibility sweep: vary one slider parameter across its range and chart every rule's
   // relative margin. Only finitely-bounded params can be swept (the sweep walks [min,max]).
@@ -44,7 +50,7 @@
   );
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
   const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
-  const swept = $derived(active ? sweepSheet(cfg, active, device) : null);
+  const swept = $derived(active ? sweepSheet(cfg, active, device, SWEEP_POINTS, resolveDevice) : null);
 
   // One line per rule, margin as a percentage; guardrails dashed (advisory, never gate). The
   // y = 0 gridline is the constraint boundary; PALETTE cycles the colours by default.
@@ -108,6 +114,15 @@
     if (Number.isInteger(i) && i >= 0 && i < EXAMPLES.length) onChange(structuredClone(EXAMPLES[i]));
     sel.value = '';
   }
+  // Point a composed child at a specific loaded device (a table uid), or '' to inherit the parent.
+  function setUseDevice(i: number, uid: string): void {
+    const uses = (cfg.uses ?? []).map((u, j) => {
+      if (j !== i) return u;
+      const { device: _drop, ...rest } = u;
+      return uid ? { ...rest, device: uid } : rest;
+    });
+    onChange({ ...cfg, uses });
+  }
 
   const fmt = (v: number | undefined): string =>
     v == null || !Number.isFinite(v) ? '—' : formatEng(v);
@@ -166,13 +181,28 @@
     {/each}
   </div>
 
-  {#if result.children?.length}
+  {#if cfg.uses?.length}
     <div class="suses">
-      {#each result.children as c}
-        <div class="suse st-{c.feasible ? 'pass' : 'fail'}" title={c.title}>
-          <span class="chip">{c.feasible ? '✓' : '✗'}</span>
-          <b>{c.name}</b><i>{c.title}</i>
-          <span class="prov">{#each Object.entries(c.provides) as [k, v]}<code>{joinProvide(c.name, k)}={fmt(v)}</code>{/each}</span>
+      {#each cfg.uses as u, i}
+        {@const c = result.children?.[i]}
+        <div class="suse st-{c?.feasible ? 'pass' : 'fail'}" title={u.doc.title}>
+          <span class="chip">{c?.feasible ? '✓' : '✗'}</span>
+          <b>{u.name}</b><i>{u.doc.title}</i>
+          {#if deviceOptions.length > 1 || u.device}
+            <select
+              class="dsel"
+              title={CONTROL_HELP.useDevice}
+              value={u.device ?? ''}
+              onchange={(e) => setUseDevice(i, (e.currentTarget as HTMLSelectElement).value)}
+            >
+              <option value="">↳ active device</option>
+              {#if u.device && !deviceOptions.some((o) => o.uid === u.device)}
+                <option value={u.device}>{u.device} (not loaded)</option>
+              {/if}
+              {#each deviceOptions as o}<option value={o.uid}>{o.label}</option>{/each}
+            </select>
+          {/if}
+          <span class="prov">{#each Object.entries(c?.provides ?? {}) as [k, v]}<code>{joinProvide(u.name, k)}={fmt(v)}</code>{/each}</span>
         </div>
       {/each}
     </div>
@@ -345,6 +375,10 @@
     opacity: 0.5;
     font-style: normal;
     font-size: 0.72rem;
+  }
+  .suse .dsel {
+    font-size: 0.72rem;
+    max-width: 12rem;
   }
   .suse .prov {
     overflow: hidden;

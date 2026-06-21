@@ -5,12 +5,12 @@
     familyUnionCount,
     invertX,
     lookup,
-    fixTable,
     subsample,
     formatEng,
     parseEng,
     BASE_QUANTITIES,
     type DeviceTable,
+    type DeviceResolver,
     type OverlayCurvesXY,
     type OverlayLine,
   } from '@gmid/mostab-core';
@@ -20,11 +20,12 @@
   import { QUANTITY_HELP, CONTROL_HELP } from './help';
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
-  import { clampLegendCount, sizingBias, type Panel } from './dashboard';
+  import { clampLegendCount, reduceForSizing, type Panel } from './dashboard';
 
   let {
     device,
     overlays = [],
+    sheetDevices = [],
     sweep,
     sharedBias,
     cfg,
@@ -36,6 +37,7 @@
   }: {
     device: DeviceTable;
     overlays?: DeviceTable[];
+    sheetDevices?: { uid: string; label: string; table: DeviceTable }[];
     sweep: string;
     sharedBias: Record<string, number>;
     cfg: Panel;
@@ -94,13 +96,40 @@
     Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== cfg.family)),
   );
 
-  // A sheet sizes at an [l × vgs] point (lookupByGmId brackets gm/ID along vgs), so collapse
-  // every other axis (vds, vsb, …) at the shared bias first — the same reduction the sizer does
-  // (shared sizingBias policy) — else the inverse lookup can't bracket.
-  const sheetDevice = $derived.by(() => {
-    if (cfg.render !== 'sheet') return device;
-    const fixed = sizingBias(device, sharedBias);
-    return Object.keys(fixed).length ? fixTable(device, fixed) : device;
+  // A sheet sizes at an [l × vgs] point (lookupByGmId brackets gm/ID along vgs), so collapse every
+  // other axis (vds, vsb, …) at the shared bias first (shared reduceForSizing policy) — else the
+  // inverse lookup can't bracket.
+  const sheetDevice = $derived(cfg.render === 'sheet' ? reduceForSizing(device, sharedBias) : device);
+
+  // Per-child device resolution for composed sheets: a child `use.device` is a table uid; resolve
+  // it to that loaded table, reduced for sizing exactly like the active device. uids are unique
+  // per distinct content, so a first match is safe (same uid ⇒ same device); an absent uid returns
+  // undefined ⇒ the child fails closed. Memoized per (sheetDevices, sharedBias) so a feasibility
+  // sweep reduces each distinct child device once, not once per sample.
+  const resolveDevice: DeviceResolver = $derived.by(() => {
+    const cache = new Map<string, DeviceTable | undefined>();
+    return (uid: string) => {
+      if (!cache.has(uid)) {
+        const t = sheetDevices.find((d) => d.uid === uid)?.table;
+        cache.set(uid, t ? reduceForSizing(t, sharedBias) : undefined);
+      }
+      return cache.get(uid);
+    };
+  });
+  // Picker options: one per distinct uid (a re-imported identical table collapses to one), with a
+  // disambiguating suffix when two DIFFERENT devices share a display label.
+  const deviceOptions = $derived.by(() => {
+    const seenUid = new Set<string>();
+    const labelSeen = new Map<string, number>();
+    const out: { uid: string; label: string }[] = [];
+    for (const d of sheetDevices) {
+      if (seenUid.has(d.uid)) continue;
+      seenUid.add(d.uid);
+      const n = (labelSeen.get(d.label) ?? 0) + 1;
+      labelSeen.set(d.label, n);
+      out.push({ uid: d.uid, label: n > 1 ? `${d.label} #${n}` : d.label });
+    }
+    return out;
   });
 
   // The overlaid family of curves across the primary + any overlay devices, on one shared X
@@ -386,6 +415,8 @@
         device={sheetDevice}
         cfg={cfg.sheet}
         sweep={cfg.sheetSweep ?? ''}
+        {resolveDevice}
+        {deviceOptions}
         {styleVersion}
         onChange={(s) => onChange({ sheet: s })}
         onSweep={(s) => onChange({ sheetSweep: s })}

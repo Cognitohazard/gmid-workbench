@@ -176,3 +176,79 @@ test('design sheet: a composed cascode shows its child block and composes feasib
 
   expect(errors).toEqual([]);
 });
+
+test('design sheet: a composed child sizes against a chosen loaded device (multi-device), persisted', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // Load a second device so children have a choice. The import accumulates and becomes active,
+  // so switch back to the demo (the cascode's defaults size cleanly on it).
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+  await page.locator('.devices .dev').first().locator('.dname').click(); // demo active
+  await expect(page.locator('header .device')).toContainText('nmos_demo');
+
+  // Add a composed sheet (the cascode); its child gets a per-child device picker now that >1
+  // device is loaded.
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await sp.locator('.shead select.rm').selectOption({ label: 'NMOS cascode (gain-boosted output)' });
+  const child = sp.locator('.suse', { hasText: 'cs' });
+  await expect(child.locator('.dsel')).toBeVisible();
+
+  // The child inherits the active (demo) device; point it at the imported device → a different
+  // table ⇒ a different sized result.
+  const before = (await child.locator('.prov').innerText()).trim();
+  await child.locator('.dsel').selectOption({ index: 2 }); // the imported nch_lvt
+  await expect(child.locator('.prov')).not.toHaveText(before);
+
+  // The choice persists. After reload only the demo is loaded, so the still-set device no longer
+  // resolves and the child fails closed with a clear message — proving the key was stored.
+  await page.reload();
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
+  // The persisted device key (nch_lvt) is what fails to resolve — proving the choice was stored.
+  await expect(sp2.locator('.pwarn', { hasText: 'nch_lvt' })).toContainText('did not resolve');
+  // The picker honestly surfaces the still-set-but-absent device (not a false "active device")
+  // and stays available so it can be cleared in place even with one device loaded.
+  await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toContainText('not loaded');
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: two loaded devices sharing a label are each individually selectable (unique keys)', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // Two DIFFERENT tables that share the same display label (device·corner·temp), different data.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2); // let the first import land
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample-alt.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(3); // demo + two same-label nch_lvt
+  await page.locator('.devices .dev').first().locator('.dname').click(); // demo active (sizes the parent)
+
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await sp.locator('.shead select.rm').selectOption({ label: 'NMOS cascode (gain-boosted output)' });
+  const dsel = sp.locator('.suse', { hasText: 'cs' }).locator('.dsel');
+
+  // The two same-label devices appear as DISTINCT options (one disambiguated with a suffix) —
+  // not collapsed to a single unselectable entry.
+  const opts = dsel.locator('option');
+  await expect(opts.filter({ hasText: 'nch_lvt' })).toHaveCount(2);
+  await expect(opts.filter({ hasText: '#2' })).toHaveCount(1);
+
+  // Selecting the second same-label device takes effect (the child now sizes against the fixture,
+  // which can't reach gm/ID=12, so it goes infeasible — proving the selection is not inherit/demo)
+  // AND the device RESOLVES (no "device … did not resolve"; the unique key targeted the right table).
+  const second = await opts.filter({ hasText: '#2' }).getAttribute('value');
+  await dsel.selectOption(second!);
+  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
+  await expect(sp.locator('.pwarn', { hasText: 'device "' })).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
