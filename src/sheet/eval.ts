@@ -83,7 +83,7 @@ function evalScalar(
     return undefined;
   }
   if (v instanceof Float64Array) {
-    // ponytail: defensive — the sheet scope is scalar-only, so this never fires, but
+    // defensive — the sheet scope is scalar-only, so this never fires, but
     // the engine's Value type allows arrays, so we refuse one rather than mis-read it.
     warn({ rule: 'sheet-array', severity: 'warning', message: `${where}: expression is array-valued, expected a scalar`, location: where });
     return undefined;
@@ -126,6 +126,12 @@ function runBind(
     Object.assign(values, res.quantities); // gm/gm_id/id/W/vgs/vstar/cgg/vnth_m/… at the point
     values.ceiling = res.ceiling; // not in the quantities bag
     values.feasible = res.feasible ? 1 : 0;
+    // Surface the sizer's own engineering notes (e.g. an L clamped onto the table's
+    // hull) as advisory sheet warnings — same pattern children use at evalChildren.
+    // Severity 'warning', not 'error', so a clamp does not flip feasibility closed.
+    for (const m of res.warnings) {
+      warn({ rule: 'sheet-bind', severity: 'warning', message: m, location: 'bind' });
+    }
     return { ok: true, W: res.W, vgs: res.vgs, id: res.id };
   } catch (e) {
     return fail(`sizing failed: ${msg(e)}`);

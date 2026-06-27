@@ -1,3 +1,5 @@
+import { BASE_QUANTITIES } from '@gmid/mostab-core';
+
 // Pretty quantity labels with subscripts, for DISPLAY only (axis labels, table headers)
 // — rendered via Svelte's {@html}. Editor inputs keep the raw keys (you can't type a
 // subscript). Any expression not in the map falls back to ESCAPED plain text, so {@html}
@@ -53,3 +55,10 @@ const escapeHtml = (s: string): string =>
 export function qLabel(expr: string): string {
   return SUBSCRIPTED[expr] ?? escapeHtml(expr);
 }
+
+/** Canonical base-quantity key → SI unit (e.g. 'vgs' → 'V'); for axis and bias readouts. */
+export const baseUnit: ReadonlyMap<string, string> = new Map(
+  BASE_QUANTITIES.map((q) => [q.key, q.unit]),
+);
+/** Unit string for a base-quantity key, '' if unknown. */
+export const axisUnit = (name: string): string => baseUnit.get(name) ?? '';

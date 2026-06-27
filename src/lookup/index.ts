@@ -7,7 +7,7 @@
 import type { DeviceTable, Grid, Scope, Value } from '../types';
 import { BASE_KEYS, DERIVED_QUANTITIES } from '../namespace';
 import { CONSTANTS } from '../constants';
-import { interpolate, sliceGrid } from '../grid';
+import { interpolate, sliceGrid, orient, interp1 } from '../grid';
 import { createEngine } from '../expr';
 
 // Compile every standard derived definition once: key + compiled expression.
@@ -120,7 +120,9 @@ export function lookup(
  * vgs, so build the gm/ID-vs-vgs curve from the slice columns, bracket `gmId`, and
  * linearly interpolate to recover vgs; then forward-lookup at {l: L, vgs}.
  *
- * Throws if `gmId` lies outside the slice's [min, max] gm/ID range.
+ * Fails closed: throws if the slice carries no invertible gm/ID data (e.g. every
+ * id==0), if gm/ID is non-monotonic in vgs (an ambiguous fold), or if `gmId` lies
+ * outside the slice's [min, max] gm/ID range.
  */
 export function lookupByGmId(
   table: DeviceTable,
@@ -162,34 +164,33 @@ export function lookupByGmId(
     curve[i] = gm[flat] / id[flat];
   }
 
-  // Determine monotonic orientation and the [min,max] range.
-  let lo = curve[0];
-  let hi = curve[0];
-  for (let i = 1; i < n; i++) {
-    if (curve[i] < lo) lo = curve[i];
-    if (curve[i] > hi) hi = curve[i];
-  }
-  if (gmId < lo || gmId > hi) {
+  // Invert gm/id → vgs with the SAME monotone bracket-and-interpolate kernel the
+  // cursor (series.invertX) uses, so endpoint/ULP handling is identical. orient
+  // drops any non-finite node (an id==0 sample yields ±∞) so it cannot widen the
+  // range or match a bracket; interp1 carries the shared ULP-overshoot clamp.
+  const o = orient(curve, vgs);
+  // The sizer is a guardrail: fail closed on any uninvertible slice rather than let
+  // orient's fail-soft NaN bounds / arbitrary-branch sort fabricate an operating point.
+  if (o.nx.length === 0) {
     throw new Error(
-      `lookupByGmId: gm/id ${gmId} out of range [${lo}, ${hi}] for L=${L}`,
+      `lookupByGmId: no invertible gm/id data on the L=${L} slice (e.g. every sample has id==0)`,
     );
   }
-
-  // Bracket the first adjacent pair that straddles gmId and linearly interpolate vgs.
-  let vgsAt: number | undefined;
-  for (let i = 0; i < n - 1; i++) {
-    const a = curve[i];
-    const b = curve[i + 1];
-    const inSeg = (a <= gmId && gmId <= b) || (b <= gmId && gmId <= a);
-    if (!inSeg) continue;
-    const span = b - a;
-    const t = span === 0 ? 0 : (gmId - a) / span;
-    vgsAt = vgs[i] + t * (vgs[i + 1] - vgs[i]);
-    break;
+  if (!o.mono) {
+    throw new Error(
+      `lookupByGmId: gm/id is not monotonic in vgs on the L=${L} slice; cannot invert gm/id ${gmId} unambiguously`,
+    );
   }
-  if (vgsAt === undefined) {
-    // gmId equals an endpoint exactly but no interior segment straddled it.
-    vgsAt = curve[0] === gmId ? vgs[0] : vgs[n - 1];
+  if (gmId < o.xmin || gmId > o.xmax) {
+    throw new Error(
+      `lookupByGmId: gm/id ${gmId} out of range [${o.xmin}, ${o.xmax}] for L=${L}`,
+    );
+  }
+  const vgsAt = interp1(o.nx, o.ny, gmId);
+  if (!Number.isFinite(vgsAt)) {
+    throw new Error(
+      `lookupByGmId: could not invert gm/id ${gmId} to a finite vgs on the L=${L} slice`,
+    );
   }
 
   return lookup(table, { l: L, vgs: vgsAt }, keys);

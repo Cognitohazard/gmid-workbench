@@ -356,6 +356,23 @@ describe('canonicalizeTable', () => {
     expect(c.meta.polarity).toEqual({ device: 'p', signedInput: false });
   });
 
+  it('folds the self-term cgg but PRESERVES a signed cross-capacitance cgd', () => {
+    const t = makeTable(
+      [axis('vgs', [-0.6, -0.4, -0.2])],
+      {
+        id: [-3e-3, -2e-3, -1e-3],
+        gm: [-1e-3, -1e-3, -1e-3],
+        cgg: [-1e-15, -1e-15, -1e-15], // self-term gate cap → folded to magnitude
+        cgd: [-1e-16, -1e-16, -1e-16], // cross/trans-cap → legitimately signed, left as-is
+      },
+      { polarity: { device: 'p', signedInput: true } },
+    );
+    const c = canonicalizeTable(t);
+    expect(Array.from(c.grid.quantities.get('cgg')!).every((x) => x > 0)).toBe(true);
+    // cgd is NOT abs-ed: its sign carries ∂Qg/∂Vd information that a fold would destroy.
+    expect(Array.from(c.grid.quantities.get('cgd')!)).toEqual([-1e-16, -1e-16, -1e-16]);
+  });
+
   it('does not mutate the source table', () => {
     const id = [-3e-3, -2e-3];
     const t = makeTable(

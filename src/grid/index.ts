@@ -253,3 +253,79 @@ export function sliceGrid(grid: Grid, fixed: Record<string, number>): Grid {
 
   return makeGrid(remainingAxes, outCols);
 }
+
+/**
+ * One monotone curve oriented for inversion: the finite (x, y) pairs ordered by
+ * ascending X, plus the X range and a monotonicity flag. The shared substrate for
+ * 1-D inverse lookup — the sizer (lookup.lookupByGmId, gm/ID → vgs) and the cursor
+ * (series.invertX, an X-expression → its sweep coordinate) both build one of these
+ * and read it back with interp1, so their endpoint/ULP handling is identical.
+ */
+export interface Oriented {
+  readonly nx: number[]; // finite X values, ascending
+  readonly ny: number[]; // matching Y values
+  readonly xmin: number; // nx[0] (NaN when empty)
+  readonly xmax: number; // nx[last] (NaN when empty)
+  readonly mono: boolean; // X traces a single direction along the sweep (no real fold)
+}
+
+// A monotone curve's total variation equals its span; a folded one doubles back
+// (tv ≈ 2·span). Allow this much excess for sweep noise before calling it folded —
+// generous, so valid (slightly noisy) silicon data is never false-flagged.
+const FOLD_TOL = 0.25;
+
+/**
+ * Keep finite (x, y) pairs, order them by ascending X (so interp1 can bracket), and
+ * decide whether X is a usable monotone axis — true unless the curve genuinely folds
+ * back on itself (total variation along the sweep exceeds the span by > FOLD_TOL).
+ * Sorting handles a descending sweep (gm/ID falls as vgs rises) and minor wiggles
+ * uniformly; the fold test, not the sort, is what flags a non-monotone X. Dropping
+ * the non-finite pairs is also the guard against a divide-by-zero node (e.g. an id==0
+ * sample whose gm/ID is ±∞): such a node never widens [xmin, xmax] or matches a bracket.
+ */
+export function orient(xs: Float64Array, ys: Float64Array): Oriented {
+  const fx: number[] = [];
+  const fy: number[] = [];
+  for (let i = 0; i < xs.length; i++) {
+    if (Number.isFinite(xs[i]) && Number.isFinite(ys[i])) {
+      fx.push(xs[i]);
+      fy.push(ys[i]);
+    }
+  }
+  let tv = 0; // total variation of X in sweep order
+  for (let i = 1; i < fx.length; i++) tv += Math.abs(fx[i] - fx[i - 1]);
+  const order = fx.map((_, i) => i).sort((a, b) => fx[a] - fx[b]);
+  const nx = order.map((i) => fx[i]);
+  const ny = order.map((i) => fy[i]);
+  const n = nx.length;
+  const span = n ? nx[n - 1] - nx[0] : NaN;
+  const mono = n < 2 ? true : tv <= (1 + FOLD_TOL) * span;
+  return { nx, ny, xmin: n ? nx[0] : NaN, xmax: n ? nx[n - 1] : NaN, mono };
+}
+
+/**
+ * Linear interpolation of an ascending (nx, ny) curve at xq. Returns NaN outside the
+ * native range — a gap, never an extrapolation. A query a few ULP past either end (from
+ * float rounding in the X expression, which can differ curve-to-curve at a shared bias)
+ * is clamped in rather than dropped, so curves that share a range don't get spurious
+ * one-point gaps; a genuine gap (query well outside) still returns NaN.
+ */
+export function interp1(nx: number[], ny: number[], xq: number): number {
+  const n = nx.length;
+  if (n === 0) return NaN;
+  const tol = (nx[n - 1] - nx[0]) * 1e-9 + Number.EPSILON;
+  if (xq < nx[0] - tol || xq > nx[n - 1] + tol) return NaN;
+  const q = xq <= nx[0] ? nx[0] : xq >= nx[n - 1] ? nx[n - 1] : xq; // clamp the ULP overshoot
+  if (n === 1) return ny[0];
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (nx[mid] <= q) lo = mid;
+    else hi = mid;
+  }
+  const x0 = nx[lo];
+  const x1 = nx[hi];
+  if (x1 === x0) return ny[lo];
+  return ny[lo] + ((ny[hi] - ny[lo]) * (q - x0)) / (x1 - x0);
+}

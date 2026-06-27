@@ -60,10 +60,11 @@ const MONO_EPS = 1e-3;
 /** Quantities whose sign is convention-dependent and folded to magnitude. */
 const SIGNED_MAGNITUDE_KEYS: readonly string[] = ['id', 'gm', 'gds', 'gmb'];
 
-/** Capacitance keys (also folded to magnitude on signed input). */
-const CAP_KEYS: readonly string[] = BASE_QUANTITIES
-  .filter((q) => q.unit === 'F')
-  .map((q) => q.key);
+/** Only the self-term gate capacitance cgg is a magnitude folded on signed input.
+ *  The cross/trans-capacitances (cgd, cgb, cdb, csb) are legitimately signed under the
+ *  common ∂Qi/∂Vj convention (see signCheck below), so they are deliberately NOT folded —
+ *  abs-ing them would corrupt their sign information. */
+const SELF_CAP_KEYS: readonly string[] = ['cgg'];
 
 /** Voltage axis/column keys (folded to |v| on signed input). */
 const VOLTAGE_KEYS: readonly string[] = BASE_QUANTITIES
@@ -401,8 +402,9 @@ export function validate(table: DeviceTable): QAWarning[] {
 
 /**
  * Fold signed (e.g. PMOS) source conventions into magnitudes. When
- * meta.polarity.signedInput is set, replace id/gm/gds/gmb, capacitances and
- * NON-AXIS voltages (vth, vdsat) with |value|, and record the polarity. Sweep
+ * meta.polarity.signedInput is set, replace id/gm/gds/gmb, the self-term gate
+ * capacitance cgg and NON-AXIS voltages (vth, vdsat) with |value|, and record the
+ * polarity. The cross/trans-capacitances (cgd/cgb/cdb/csb) are left signed. Sweep
  * AXES are left untouched: a signed sweep is still ascending and valid, and the
  * data row order already matches it — abs-ing + re-sorting an axis without
  * reindexing the data would corrupt the mapping. |V| axis presentation, if ever
@@ -414,12 +416,12 @@ export function canonicalizeTable(table: DeviceTable): DeviceTable {
 
   const grid = table.grid;
 
-  // Magnitude for currents/conductances, capacitances, and non-axis voltages.
-  // Axis-name columns are skipped so the materialized axis column keeps matching
-  // its (untouched) axis.
+  // Magnitude for currents/conductances, the self-term capacitance cgg, and
+  // non-axis voltages. Axis-name columns are skipped so the materialized axis
+  // column keeps matching its (untouched) axis.
   const magKeys = new Set<string>([
     ...SIGNED_MAGNITUDE_KEYS,
-    ...CAP_KEYS,
+    ...SELF_CAP_KEYS,
     ...VOLTAGE_KEYS,
   ]);
   const axisNames = new Set(grid.axes.map((ax) => ax.name));

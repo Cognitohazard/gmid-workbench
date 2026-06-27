@@ -1,7 +1,12 @@
-// Full mostab import: parse → canonicalize (fold signed PMOS conventions into
-// magnitudes) → validate (QA). parseMostabCsv deliberately stops at parsing, so
-// this is the single seam every consumer should use — canonicalization and QA
-// can't be forgotten. Pure, deterministic, zero DOM imports.
+// Full mostab import: parse → canonicalize → validate (QA). parseMostabCsv
+// deliberately stops at parsing, so this is the single seam every consumer should
+// use — canonicalization and QA can't be forgotten. A signed PMOS dump is FLAGGED
+// by QA warnings, never sniffed-and-repaired: magnitude-canonicalization only runs
+// when the SOURCE declares its polarity (`# polarity: p`), which the parser records
+// as meta.polarity.signedInput. With that declaration the fold runs BEFORE QA, so a
+// properly-declared signed PMOS table folds to magnitudes (and records its polarity)
+// and raises no sign warnings; an UNDECLARED signed dump stays signed and QA warns.
+// Pure, deterministic, zero DOM imports.
 
 import type { ImportError, ImportHints, ImportResult } from '../types';
 import { parseMostabCsv } from '../parse';
@@ -18,6 +23,10 @@ import { canonicalizeTable, validate } from '../qa';
 export function importMostab(input: string | Uint8Array, hints?: ImportHints): ImportResult {
   const parsed = parseMostabCsv(input, hints);
   if (!parsed.ok) return parsed;
+  // canonicalizeTable folds the value columns to magnitudes only when the source
+  // declared a signed polarity (meta.polarity.signedInput, set by the parser from
+  // `# polarity: p`); otherwise it is a no-op and the QA pass below FLAGS a signed
+  // PMOS dump rather than silently folding an undeclared one.
   const tables = parsed.dataset.tables.map(canonicalizeTable);
 
   const errors: ImportError[] = [];

@@ -62,7 +62,7 @@ export class ChartAdapter {
     this.u = this.build(data);
     this.ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
-      // ponytail: skip 0-size (hidden tab / pre-layout) — uPlot.setSize(0,0) breaks its canvas.
+      // skip 0-size (hidden tab / pre-layout) — uPlot.setSize(0,0) breaks its canvas.
       if (r.width > 0 && r.height > 0) {
         this.u.setSize({ width: Math.round(r.width), height: Math.round(r.height) });
       }

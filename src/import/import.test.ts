@@ -54,4 +54,54 @@ describe('importMostab', () => {
     const r = importMostab('VGS,ID,GM\n0.3,1e-6,1e-5\n0.5,2e-6,2e-5\n');
     expect(r.ok).toBe(true); // l is optional; the family chart handles its absence
   });
+
+  // A hand-written signed PMOS dump: negative id/gm/gds/cgg/vth, a signed cross-cap
+  // cgd, and a negative-Vgs sweep axis (ascending -0.7 < -0.5 < -0.3).
+  const PMOS_BODY = `L,VGS,ID,GM,GDS,CGG,CGD,VTH
+1e-8,-0.7,-3e-6,-5e-6,-3e-7,-3e-15,-1e-15,-0.4
+1e-8,-0.5,-2e-6,-5e-6,-2e-7,-2e-15,-1e-15,-0.4
+1e-8,-0.3,-1e-6,-5e-6,-1e-7,-1e-15,-1e-15,-0.4
+`;
+  const SIGN_RULES = new Set(['gm-sign', 'gds-sign', 'cap-sign']);
+
+  it('folds a DECLARED signed PMOS dump to magnitude before QA (no sign warnings)', () => {
+    const r = importMostab(`# device: pch_lvt\n# polarity: p\n${PMOS_BODY}`);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const t = r.dataset.tables[0];
+    const q = t.grid.quantities;
+
+    // Value columns folded to magnitude (positive).
+    for (const key of ['id', 'gm', 'gds', 'cgg', 'vth']) {
+      const col = q.get(key)!;
+      expect([...col].every((x) => x > 0)).toBe(true);
+    }
+    // The cross-cap cgd is left signed (NOT folded).
+    expect([...q.get('cgd')!].every((x) => x < 0)).toBe(true);
+
+    // The vgs sweep axis is untouched: still negative and ascending.
+    const vgs = t.grid.axes.find((a) => a.name === 'vgs')!;
+    expect([...vgs.values]).toEqual([-0.7, -0.5, -0.3]);
+
+    // Polarity recorded, input no longer signed.
+    expect(t.meta.polarity).toEqual({ device: 'p', signedInput: false });
+
+    // Folded before QA, so no sign-rule warnings survive.
+    expect(r.dataset.warnings.some((w) => SIGN_RULES.has(w.rule))).toBe(false);
+  });
+
+  it('leaves an UNDECLARED signed PMOS dump signed and flags it (regression)', () => {
+    const r = importMostab(`# device: pch_lvt\n${PMOS_BODY}`); // no polarity line
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const t = r.dataset.tables[0];
+    // Not folded: id stays signed (negative).
+    expect([...t.grid.quantities.get('id')!].every((x) => x < 0)).toBe(true);
+    expect(t.meta.polarity).toBeUndefined();
+    // QA carries the sign warnings the declared case suppressed.
+    const rules = new Set(r.dataset.warnings.map((w) => w.rule));
+    expect(rules.has('gm-sign')).toBe(true);
+    expect(rules.has('gds-sign')).toBe(true);
+    expect(rules.has('cap-sign')).toBe(true);
+  });
 });

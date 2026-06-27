@@ -79,8 +79,6 @@ export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   { key: 'fco', expr: 'sfl/sth', unit: 'Hz' },
 ];
 
-export const DERIVED_KEYS: ReadonlySet<string> = new Set(DERIVED_QUANTITIES.map((q) => q.key));
-
 /**
  * Header alias map: lower-cased source header -> canonical key. Used by importers
  * to canonicalize column names. (The vbs -> vsb mapping additionally requires a

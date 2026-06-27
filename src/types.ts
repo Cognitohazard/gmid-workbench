@@ -87,13 +87,6 @@ export interface ImportHints {
   readonly corner?: string;
 }
 
-/** An importer plugin: sniffs filename/head bytes and produces a Dataset. */
-export interface Importer {
-  readonly id: string;
-  sniff(filename: string, head: Uint8Array): boolean;
-  import(bytes: Uint8Array, hints?: ImportHints): ImportResult;
-}
-
 /** Definition of a canonical base quantity. */
 export interface BaseQuantity {
   readonly key: string; // canonical, lower-case, e.g. "gm", "id", "vgs"

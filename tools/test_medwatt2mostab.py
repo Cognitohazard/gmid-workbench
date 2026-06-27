@@ -99,8 +99,80 @@ def safety_checks() -> None:
             pass
 
 
+def build_pmos_npz(path: str, *, with_type_field: bool, model: str = "pch_demo") -> None:
+    """A signed-PMOS lookup table: negative id/gm/gds and a negative-Vgs sweep.
+    ``with_type_field`` toggles a `device_parameters` channel-type field so the test
+    can exercise both the field source and the --polarity override."""
+    length = np.array([1e-8])             # nL = 1
+    vbs = np.array([0.0])                 # nVbs = 1
+    vgs = np.array([-0.7, -0.5, -0.3])    # nVgs = 3 (ascending, negative)
+    vds = np.array([-1.0])               # nVds = 1
+    shape = (len(length), len(vbs), len(vgs), len(vds))
+
+    # |id| = 3e-6, 2e-6, 1e-6 along ascending vgs -> signed PMOS id is negative.
+    mag = np.array([3e-6, 2e-6, 1e-6]).reshape(shape)
+    ida = -mag
+    gm = np.full(shape, -5e-6)            # |gm| ~ d|id|/d|vgs| = 1e-6/0.2 = 5e-6
+    gds = -mag * 0.1
+
+    entry = {
+        "vgs": vgs, "vds": vds, "vbs": vbs, "length": length,
+        "model_name": model,
+        "parameter_names": ["id", "gm", "gds"],
+        "device_parameters": {"width": 1e-6, **({"type": "pmos"} if with_type_field else {})},
+        "id": ida, "gm": gm, "gds": gds,
+    }
+    table = {
+        "description": "synthetic signed PMOS table",
+        "simulator": "NgspiceSimulator",
+        "parameter_names": ["id", "gm", "gds"],
+        "device_parameters": {},
+        model: entry,
+    }
+    np.savez_compressed(path, lookup_table=np.array(table, dtype=object))
+
+
+def polarity_checks() -> None:
+    """The converter emits `# polarity: p` from a device_parameters type field and
+    from the --polarity override, omits it when neither is known, and the emitted
+    signed-PMOS CSV folds (abs of value columns) to a magnitude table with the
+    Vgs sweep axis left untouched — exactly the importer's contract."""
+    model = "pch_demo"
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = os.path.join(tmp, "out")
+
+        # 1) Polarity learned from the device_parameters type field.
+        npz_field = os.path.join(tmp, "pmos_field.npz")
+        build_pmos_npz(npz_field, with_type_field=True)
+        m2m.convert(npz_field, out_dir, trust=True, overwrite=True)
+        meta, _, rows = read_mostab(os.path.join(out_dir, f"{model}.mostab.csv"))
+        assert meta.get("polarity") == "p", meta
+
+        # The emitted CSV is signed (converter never folds) and the Vgs axis stays
+        # negative; abs-folding the value columns yields the magnitude table.
+        assert {float(r["VGS"]) for r in rows} == {-0.7, -0.5, -0.3}, rows
+        assert all(float(r["ID"]) < 0 and float(r["GM"]) < 0 for r in rows), rows
+        assert {abs(float(r["ID"])) for r in rows} == {1e-6, 2e-6, 3e-6}, rows
+        assert {abs(float(r["GM"])) for r in rows} == {5e-6}, rows
+
+        # 2) No type field, but the --polarity override supplies it (and wins).
+        npz_bare = os.path.join(tmp, "pmos_bare.npz")
+        build_pmos_npz(npz_bare, with_type_field=False)
+        m2m.convert(npz_bare, out_dir, trust=True, overwrite=True, polarity="p")
+        meta2, _, _ = read_mostab(os.path.join(out_dir, f"{model}.mostab.csv"))
+        assert meta2.get("polarity") == "p", meta2
+
+        # 3) Neither field nor flag -> no polarity line (today's behavior, no fold).
+        m2m.convert(npz_bare, out_dir, trust=True, overwrite=True)
+        meta3, _, _ = read_mostab(os.path.join(out_dir, f"{model}.mostab.csv"))
+        assert "polarity" not in meta3, meta3
+
+    print("OK — polarity emitted from field and --polarity, omitted when unknown")
+
+
 def main() -> None:
     safety_checks()
+    polarity_checks()
 
     with tempfile.TemporaryDirectory() as tmp:
         npz = os.path.join(tmp, "lut.npz")

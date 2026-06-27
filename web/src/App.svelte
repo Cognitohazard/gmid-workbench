@@ -4,22 +4,18 @@
     generateDemoDevice,
     plottableQuantities,
     importMostab,
-    sizeDevice,
-    mismatch,
-    thermalNoise,
-    integratedNoise,
     metaScalars,
     formatEng,
-    parseEng,
     validate,
     EXAMPLES,
-    BASE_QUANTITIES,
     DERIVED_QUANTITIES,
     type QAWarning,
     type DeviceTable,
     type Grid,
   } from '@gmid/mostab-core';
+  import { axisUnit, baseUnit } from './labels';
   import Panel from './Panel.svelte';
+  import Sizer from './Sizer.svelte';
   import Help from './Help.svelte';
   import { CONTROL_HELP } from './help';
   import { loadSettings, saveSettings, applySettings, FONT_RANGE, type Settings } from './settings';
@@ -29,8 +25,6 @@
     sanitizeDashboard,
     reseatDashboard,
     canPlot,
-    sizingBias,
-    reduceForSizing,
     deviceKey,
     tableUid,
     TEMPLATES,
@@ -72,9 +66,7 @@
   let dragging = $state(false);
 
   // Canonical key → display metadata (static; reused by the picker and sliders).
-  const baseUnit = new Map(BASE_QUANTITIES.map((q) => [q.key, q.unit]));
   const derivedExpr = new Map(DERIVED_QUANTITIES.map((q) => [q.key, q.expr]));
-  const axisUnit = (name: string) => baseUnit.get(name) ?? '';
 
   // Names of the multi-value axes — the only ones worth charting or sweeping.
   const multiAxisNames = (grid: Grid) =>
@@ -269,102 +261,10 @@
     void loadFiles(e.dataTransfer?.files);
   }
 
-  // ── Sizing panel (the "design" workflow): bind any two of {gm, gm/ID, ID} at a
-  // chosen L → width, vgs, fT, and feasibility against the gm/ID ceiling.
+  // ── Sizing panel (the "design" workflow). The whole feature lives in <Sizer>; App
+  // owns only the open/close toggle and renders it (against the active device + bias)
+  // while open.
   let sizerOpen = $state(false);
-  let sizeL = $state(NaN);
-  let inGmId = $state('');
-  let inId = $state('');
-  let inGm = $state('');
-
-  const lAxis = $derived(device.grid.axes.find((a) => a.name === LENGTH_AXIS));
-  $effect(() => {
-    sizeL = lAxis ? lAxis.values[0] : NaN; // reset to the first L on a device swap
-  });
-
-  // Bias for sizing: every axis except l/vgs, fixed at the dashboard's shared-bias slider value
-  // (so you size at the operating point you're viewing), else a mid node. Shown in the panel so
-  // the operating point of W/vgs/fT/gm-gds is never implicit.
-  const sizingFixed = $derived(sizingBias(device, sharedBias)); // shown in the bias readout
-
-  // sizeDevice/lookupByGmId need an [l × vgs] table; collapse the extra axes at the bias.
-  const sizingTable = $derived(reduceForSizing(device, sharedBias));
-
-  const parseNum = (s: string): number | undefined => {
-    if (s.trim() === '') return undefined;
-    try {
-      return parseEng(s); // accepts engineering notation: 100u, 1m, 2.5n …
-    } catch {
-      return undefined;
-    }
-  };
-
-  const sizing = $derived.by(() => {
-    if (!lAxis) return { hint: 'this table has no L axis to size against' };
-    const supplied: { gm_id?: number; id?: number; gm?: number } = {};
-    const gmId = parseNum(inGmId);
-    const id = parseNum(inId);
-    const gm = parseNum(inGm);
-    if (gmId !== undefined) supplied.gm_id = gmId;
-    if (id !== undefined) supplied.id = id;
-    if (gm !== undefined) supplied.gm = gm;
-    if (Object.keys(supplied).length !== 2) {
-      return { hint: 'enter exactly two of gm/ID, ID, gm' };
-    }
-    try {
-      return { result: sizeDevice({ table: sizingTable, L: sizeL, ...supplied }) };
-    } catch (e) {
-      return { err: (e as Error).message };
-    }
-  });
-
-  // Matching/offset budget on the sized geometry. A_Vth / A_β are PDK constants the
-  // UI takes in conventional units (mV·µm, %·µm) but the core wants in SI (V·m, ·m).
-  // One factor each way: UI = SI × K (display), SI = UI ÷ K (binding) — reciprocal.
-  const AVT_UI_PER_SI = 1e9; // V·m → mV·µm
-  const ABETA_UI_PER_SI = 1e8; // ·m → %·µm (1% = 0.01)
-  let inAvth = $state('4'); // mV·µm
-  let inAbeta = $state('1'); // %·µm
-  // Noise band + 1/f corner (Hz, engineering notation). Corner seeds from meta.FCO.
-  let inFco = $state('1meg'); // flicker 1/f corner
-  let inFlo = $state('1'); // integration band low
-  let inFhi = $state('1g'); // integration band high
-
-  // Seed the coefficients from the imported device's metadata when it carries them
-  // (meta.AVT [V·m], meta.ABETA [·m], meta.FCO [Hz]) instead of silently using generic
-  // defaults; fall back to typical values (shown as such) otherwise. Re-seeds on swap.
-  const matchFromMeta = $derived(device.meta.AVT !== undefined || device.meta.ABETA !== undefined);
-  const noiseFromMeta = $derived(device.meta.FCO !== undefined);
-  const toUi = (si: number, k: number) => String(+(si * k).toPrecision(6));
-  $effect(() => {
-    const m = device.meta;
-    inAvth = m.AVT !== undefined ? toUi(m.AVT, AVT_UI_PER_SI) : '4';
-    inAbeta = m.ABETA !== undefined ? toUi(m.ABETA, ABETA_UI_PER_SI) : '1';
-    inFco = m.FCO !== undefined ? formatEng(m.FCO) : '1meg';
-  });
-
-  const mism = $derived.by(() => {
-    if (!sizing.result) return null;
-    const avth = Number(inAvth) / AVT_UI_PER_SI; // mV·µm → V·m
-    const abeta = Number(inAbeta) / ABETA_UI_PER_SI; // %·µm → ·m
-    if (!(avth >= 0) || !(abeta >= 0)) return null; // NaN/negative → hide
-    return mismatch(sizing.result.W, sizeL, sizing.result.gm_id, { avth, abeta });
-  });
-
-  // Input-referred thermal-noise density (at the sized gm) and the total integrated
-  // RMS over the band share the thermal floor, so compute it once. rms is null on an
-  // invalid band; the whole object is null until a geometry is sized.
-  const noise = $derived.by(() => {
-    if (!sizing.result) return null;
-    const density = thermalNoise(sizing.result.gm, sizing.result.quantities.gamma);
-    const fc = parseNum(inFco);
-    const fLo = parseNum(inFlo);
-    const fHi = parseNum(inFhi);
-    if (fc === undefined || fLo === undefined || fHi === undefined || !(fLo > 0) || !(fHi > fLo) || !(fc >= 0)) {
-      return { density, rms: null };
-    }
-    return { density, rms: integratedNoise(density ** 2, fc, fLo, fHi) };
-  });
 
 </script>
 
@@ -536,76 +436,7 @@
   {#if dragging}<div class="drophint">drop a mostab .csv</div>{/if}
 
   {#if sizerOpen}
-    <aside class="sizer">
-      <h2>size <small>bind any two</small> <Help text={CONTROL_HELP.bind} /></h2>
-      <label>L
-        <select bind:value={sizeL}>
-          {#each lAxis?.values ?? [] as L}<option value={L}>{formatEng(L)}m</option>{/each}
-        </select>
-      </label>
-      <label>gm/ID <input bind:value={inGmId} placeholder="S/A" spellcheck="false" /></label>
-      <label>ID <input bind:value={inId} placeholder="A · e.g. 100u" spellcheck="false" /></label>
-      <label>gm <input bind:value={inGm} placeholder="S" spellcheck="false" /></label>
-
-      {#if Object.keys(sizingFixed).length}
-        <p class="bias">
-          bias · {Object.entries(sizingFixed)
-            .map(([k, v]) => `${k}=${formatEng(v)}${axisUnit(k)}`)
-            .join(' · ')}
-        </p>
-      {/if}
-
-      {#if sizing.result}
-        {@const r = sizing.result}
-        <dl class="sz">
-          <dt>W</dt><dd>{formatEng(r.W)}m</dd>
-          <dt>vgs</dt><dd>{formatEng(r.vgs)}V</dd>
-          <dt>gm/ID</dt><dd>{formatEng(r.gm_id)}</dd>
-          <dt>ID</dt><dd>{formatEng(r.id)}A</dd>
-          <dt>gm</dt><dd>{formatEng(r.gm)}S</dd>
-          <dt>fT</dt><dd>{formatEng(r.quantities.ft)}Hz</dd>
-          <dt>gm/gds</dt><dd>{formatEng(r.quantities.gm_gds)}</dd>
-        </dl>
-        <p class="feas {r.feasible ? 'ok' : 'bad'}">
-          {r.feasible ? '✓ feasible' : '✗ infeasible'} · ceiling {formatEng(r.ceiling)}
-        </p>
-      {:else if sizing.err}
-        <p class="err">{sizing.err}</p>
-      {:else}
-        <p class="hint">{sizing.hint}</p>
-      {/if}
-
-      <!-- Noise + matching params are device/PDK properties (seeded from metadata), so
-           they show whenever the sizer is open; the budgets fill in once a geometry is
-           sized. The 1/f corner is width-independent; the band sets the integration. -->
-      <h3>noise <Help text={CONTROL_HELP.noise} /></h3>
-      <p class="match-note">1/f corner · band, Hz{noiseFromMeta ? ' · corner from device' : ''}</p>
-      <label><span>f<sub>co</sub> <Help text={CONTROL_HELP.fco} /></span> <input bind:value={inFco} placeholder="Hz · e.g. 1meg" spellcheck="false" /></label>
-      <label><span>band <Help text={CONTROL_HELP.band} /></span> <span class="band"><input bind:value={inFlo} spellcheck="false" />–<input bind:value={inFhi} spellcheck="false" /></span></label>
-      {#if noise}
-        <!-- γ-model thermal noise uses the SIZED gm (noise ∝ 1/√gm). The table's stored
-             `sth`/`sfl` PSDs are at the characterization width and are shown in Explore. -->
-        <dl class="noise">
-          <dt>v<sub>n,th</sub> <small>γ-model</small></dt>
-          <dd>{formatEng(noise.density)}V/√Hz</dd>
-          {#if noise.rms !== null}
-            <dt>v<sub>n,rms</sub> <small>band</small></dt><dd>{formatEng(noise.rms)}V</dd>
-          {/if}
-        </dl>
-      {/if}
-
-      <h3>matching <Help text={CONTROL_HELP.matching} /></h3>
-      <p class="match-note">A in mV·µm / %·µm{matchFromMeta ? ' · from device' : ''}</p>
-      <label><span>A<sub>Vth</sub> <Help text={CONTROL_HELP.avth} /></span> <input bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label>
-      <label><span>A<sub>β</sub> <Help text={CONTROL_HELP.abeta} /></span> <input bind:value={inAbeta} placeholder="%·µm" spellcheck="false" /></label>
-      {#if mism}
-        <dl class="budget">
-          <dt>σ(V<sub>th</sub>)</dt><dd>{formatEng(mism.sigmaVth)}V</dd>
-          <dt>σ(V<sub>os</sub>) pair</dt><dd>{formatEng(mism.sigmaVos)}V</dd>
-          <dt>σ(I)/I</dt><dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
-        </dl>
-      {/if}
-    </aside>
+    <Sizer {device} {sharedBias} />
   {/if}
 </div>
 
@@ -642,10 +473,6 @@
   .slider .val {
     font-family: ui-monospace, monospace;
     min-width: 3.5rem;
-  }
-  .err {
-    color: #e6194b;
-    font-family: ui-monospace, monospace;
   }
   .grow {
     flex: 1 1 auto;
@@ -856,99 +683,6 @@
   }
   .drm:hover {
     opacity: 1;
-  }
-  .sizer {
-    width: 17rem;
-    flex: none;
-    overflow: auto;
-    border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-    padding: 0.6rem 0.8rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-  }
-  .sizer h2 {
-    font-size: 0.95rem;
-    margin: 0;
-  }
-  .sizer h2 small {
-    opacity: 0.5;
-    font-weight: 400;
-  }
-  .sizer h3 {
-    font-size: 0.85rem;
-    margin: 0.5rem 0 0;
-    padding-top: 0.5rem;
-    border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
-  }
-  .sizer label {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.5rem;
-  }
-  .sizer input,
-  .sizer select {
-    width: 9rem;
-    font: inherit;
-    font-family: ui-monospace, monospace;
-    padding: 0.1rem 0.3rem;
-  }
-  .band {
-    display: flex;
-    align-items: baseline;
-    gap: 0.25rem;
-  }
-  .band input {
-    width: 4rem;
-  }
-  .sz,
-  .budget,
-  .noise {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.12rem 0.6rem;
-    margin: 0.3rem 0 0;
-    font-family: ui-monospace, monospace;
-  }
-  .sz dt,
-  .budget dt,
-  .noise dt {
-    opacity: 0.6;
-  }
-  .noise dt small {
-    opacity: 0.7;
-  }
-  .sz dd,
-  .budget dd,
-  .noise dd {
-    margin: 0;
-    text-align: right;
-  }
-  .feas {
-    margin: 0.2rem 0 0;
-    font-family: ui-monospace, monospace;
-  }
-  .feas.ok {
-    color: #3cb44b;
-  }
-  .feas.bad {
-    color: #e6194b;
-  }
-  .bias,
-  .match-note {
-    margin: 0.1rem 0 0;
-    font-family: ui-monospace, monospace;
-    font-size: 0.9em;
-    opacity: 0.6;
-  }
-  .sizer .hint,
-  .sizer .err {
-    margin: 0.2rem 0 0;
-    font-size: 0.92em;
-  }
-  .sizer .hint {
-    opacity: 0.55;
   }
   .drophint {
     position: absolute;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMostabCsv, mostabCsvImporter } from './index';
+import { parseMostabCsv } from './index';
 import type { Dataset } from '../types';
 
 // 2 lengths x 3 vgs = 6 rows. Columns: L, VGS, ID, GM, GDS, CGG, plus an unknown
@@ -198,6 +198,50 @@ describe('parseMostabCsv', () => {
     expect([...vsb.values]).toEqual([0, 0.6]); // {0, -0.6} -> {0, 0.6}
   });
 
+  it('records a declared `# polarity: p` as signed PMOS for the fold', () => {
+    const csv = `# device: pch_lvt
+# polarity: p
+L,VGS,ID,GM
+1e-8,-0.3,-1e-6,-1e-5
+1e-8,-0.5,-2e-6,-2e-5
+`;
+    const t = expectOk(parseMostabCsv(csv)).tables[0];
+    expect(t.meta.polarity).toEqual({ device: 'p', signedInput: true });
+  });
+
+  it('accepts polarity aliases (pmos, pch) and the `type:` key', () => {
+    const mk = (kv: string) =>
+      expectOk(parseMostabCsv(`${kv}\nL,VGS,ID,GM\n1e-8,0.3,1e-6,1e-5\n1e-8,0.5,2e-6,2e-5\n`))
+        .tables[0].meta.polarity;
+    expect(mk('# polarity: pmos')).toEqual({ device: 'p', signedInput: true });
+    expect(mk('# polarity: PCH')).toEqual({ device: 'p', signedInput: true });
+    expect(mk('# type: p')).toEqual({ device: 'p', signedInput: true });
+    expect(mk('# type: nmos')).toEqual({ device: 'n', signedInput: false });
+  });
+
+  it('records a declared `# polarity: n` with nothing to fold', () => {
+    const csv = `# polarity: n
+L,VGS,ID,GM
+1e-8,0.3,1e-6,1e-5
+1e-8,0.5,2e-6,2e-5
+`;
+    const t = expectOk(parseMostabCsv(csv)).tables[0];
+    expect(t.meta.polarity).toEqual({ device: 'n', signedInput: false });
+  });
+
+  it('leaves polarity undefined when absent and when the value is unrecognized', () => {
+    // No polarity line (the device NAME is never sniffed for type).
+    const absent = expectOk(parseMostabCsv(CSV)).tables[0];
+    expect(absent.meta.polarity).toBeUndefined();
+    // An unrecognized value is ignored, same as a missing line.
+    const bad = `# polarity: depletion
+L,VGS,ID,GM
+1e-8,0.3,1e-6,1e-5
+1e-8,0.5,2e-6,2e-5
+`;
+    expect(expectOk(parseMostabCsv(bad)).tables[0].meta.polarity).toBeUndefined();
+  });
+
   it('rejects a blank or non-numeric quantity cell', () => {
     const blank = parseMostabCsv('L,VGS,ID,GM\n1e-8,0.3,,1e-5\n1e-8,0.5,2e-6,2e-5\n');
     expect(blank.ok).toBe(false);
@@ -205,28 +249,5 @@ describe('parseMostabCsv', () => {
     const nan = parseMostabCsv('L,VGS,ID,GM\n1e-8,0.3,1e-6,1e-5\n1e-8,0.5,2e-6,abc\n');
     expect(nan.ok).toBe(false);
     if (!nan.ok) expect(nan.errors[0].kind).toBe('bad-cell');
-  });
-});
-
-describe('mostabCsvImporter', () => {
-  it('sniffs .csv filenames', () => {
-    expect(mostabCsvImporter.sniff('foo.csv', new Uint8Array())).toBe(true);
-    expect(mostabCsvImporter.sniff('foo.txt', new Uint8Array())).toBe(true);
-  });
-
-  it('sniffs a leading comment block by content', () => {
-    const head = new TextEncoder().encode('# device: x\nL,VGS\n');
-    expect(mostabCsvImporter.sniff('foo.dat', head)).toBe(true);
-    expect(mostabCsvImporter.sniff('foo.dat', new TextEncoder().encode('L,VGS\n'))).toBe(false);
-  });
-
-  it('imports bytes via the plugin surface', () => {
-    const res = mostabCsvImporter.import(new TextEncoder().encode(CSV));
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.dataset.tables[0].grid.shape).toEqual([2, 3]);
-  });
-
-  it('has the expected id', () => {
-    expect(mostabCsvImporter.id).toBe('mostab-csv');
   });
 });

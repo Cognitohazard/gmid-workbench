@@ -9,7 +9,6 @@ import type {
   ImportError,
   ImportHints,
   ImportResult,
-  Importer,
   TableId,
   TableMeta,
 } from '../types';
@@ -69,6 +68,30 @@ interface ParsedMeta {
   AVT?: number;
   ABETA?: number;
   FCO?: number;
+  /** Declared device type from a `# polarity:`/`# type:` line, NOT sniffed from
+   *  data signs or the device NAME — only an explicit, authoritative declaration. */
+  polarity?: 'n' | 'p';
+}
+
+/** Map a declared polarity/type value to 'n'|'p', or undefined if unrecognized
+ *  (an unknown value is ignored, exactly as a missing line is). */
+function normalizePolarity(value: string): 'n' | 'p' | undefined {
+  switch (value.trim().toLowerCase()) {
+    case 'p':
+    case 'pmos':
+    case 'pch':
+    case 'pfet':
+    case 'pmosfet':
+      return 'p';
+    case 'n':
+    case 'nmos':
+    case 'nch':
+    case 'nfet':
+    case 'nmosfet':
+      return 'n';
+    default:
+      return undefined;
+  }
 }
 
 /** Parse a `# key: value` metadata comment line into the accumulator. */
@@ -117,6 +140,14 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
     case 'fco': {
       const v = Number(value);
       if (Number.isFinite(v)) meta.FCO = v;
+      break;
+    }
+    case 'polarity':
+    case 'type': {
+      // Authoritative declared device type only — never inferred from the device
+      // NAME field. An unrecognized value is ignored (no polarity set).
+      const p = normalizePolarity(value);
+      if (p !== undefined) meta.polarity = p;
       break;
     }
     // "mostab version" and any other keys are intentionally ignored.
@@ -349,6 +380,11 @@ export function parseMostabCsv(
   if (meta.AVT !== undefined) mutMeta.AVT = meta.AVT;
   if (meta.ABETA !== undefined) mutMeta.ABETA = meta.ABETA;
   if (meta.FCO !== undefined) mutMeta.FCO = meta.FCO;
+  // A declared P device is in the raw signed convention, so flag it for the
+  // magnitude fold; a declared N device is recorded with nothing to fold.
+  if (meta.polarity !== undefined) {
+    mutMeta.polarity = { device: meta.polarity, signedInput: meta.polarity === 'p' };
+  }
 
   const table: DeviceTable =
     passthroughKeys.size > 0
@@ -358,18 +394,3 @@ export function parseMostabCsv(
   const dataset: Dataset = { tables: [table], warnings: [] };
   return { ok: true, dataset };
 }
-
-/** mostab CSV importer plugin. */
-export const mostabCsvImporter: Importer = {
-  id: 'mostab-csv',
-  sniff(filename: string, head: Uint8Array): boolean {
-    const name = filename.toLowerCase();
-    if (name.endsWith('.csv') || name.endsWith('.txt')) return true;
-    // Sniff content: a leading `#`-comment block is the mostab fingerprint.
-    const text = stripBom(new TextDecoder('utf-8').decode(head.subarray(0, 256)));
-    return /^\s*#/.test(text);
-  },
-  import(bytes: Uint8Array, hints?: ImportHints): ImportResult {
-    return parseMostabCsv(bytes, hints);
-  },
-};

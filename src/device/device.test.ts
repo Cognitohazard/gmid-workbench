@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { sizeDevice, mismatch, thermalNoise, integratedNoise } from './index';
 import { lookup } from '../lookup';
+import { makeGrid } from '../grid';
 import type { DeviceTable } from '../types';
 import { generateDemoDevice } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
@@ -109,6 +110,51 @@ describe('sizeDevice (bind-any-2)', () => {
     expect(() => sizeDevice({ table, L, gm_id: res.ceiling + 5, id: 1e-6 })).toThrow(
       /out of range/,
     );
+  });
+
+  it('guards an id==0 (infinite-ratio) sample so the gm/ID ceiling stays finite', () => {
+    // A slice carrying one id==0 sample: gm/id there is ∞. Before the guard the ceiling
+    // scan took max = Infinity, so feasibility (gm_id <= ceiling) was vacuously true.
+    const l = new Float64Array([1e-7]);
+    const vgs = new Float64Array([0.2, 0.4, 0.6, 0.8]);
+    const gm = new Float64Array([1e-5, 2e-5, 2.4e-5, 2.7e-5]);
+    const id = new Float64Array([0, 1e-6, 2e-6, 3e-6]); // node 0: id==0 ⇒ gm/id = ∞
+    const table: DeviceTable = {
+      id: { device: 'n', corner: 'tt', temp: 27 },
+      grid: makeGrid(
+        [
+          { name: 'l', values: l },
+          { name: 'vgs', values: vgs },
+        ],
+        new Map([
+          ['gm', gm],
+          ['id', id],
+        ]),
+      ),
+      meta: { W: 1e-6 },
+    };
+
+    const res = sizeDevice({ table, L: 1e-7, gm_id: 15, id: 1e-6 });
+    expect(Number.isFinite(res.ceiling)).toBe(true); // not Infinity
+    expect(res.ceiling).toBeCloseTo(20, 9); // max(20, 12, 9) over the FINITE samples
+    expect(res.feasible).toBe(true); // 15 <= 20
+
+    // A gm/ID above the finite ceiling is out of the bracketable range (the ∞ node no
+    // longer widens it), so it is rejected — not silently sized as "feasible".
+    expect(() => sizeDevice({ table, L: 1e-7, gm_id: 25, id: 1e-6 })).toThrow(/out of range/);
+  });
+
+  it('warns (not silently) when the requested L falls off the table L hull', () => {
+    const table = generateDemoDevice();
+    const offL = 5e-6; // above the demo's max L (2 µm); locate() clamps to the nearest node
+    const res = sizeDevice({ table, L: offL, gm_id: 15, id: 1e-6 });
+    expect(res.warnings.length).toBeGreaterThan(0);
+    expect(res.warnings.some((w) => /L range/.test(w))).toBe(true);
+
+    // An in-range L (an exact node) raises no such warning.
+    const inL = table.grid.axes[0].values[1];
+    const ok = sizeDevice({ table, L: inL, gm_id: 15, id: 1e-6 });
+    expect(ok.warnings).toEqual([]);
   });
 
   it('reports operating-point quantities at the point', () => {

@@ -35,6 +35,39 @@ ARRAY_AXES = ("length", "vbs", "vgs", "vds")
 # Axis-like names that must not be re-emitted as operating-point columns.
 _AXIS_LIKE = {"length", "l", "vgs", "vds", "vbs", "vsb"}
 
+# Declared-value aliases for the device channel type, matching the mostab parser.
+_POLARITY_ALIASES = {
+    "p": "p", "pmos": "p", "pch": "p", "pfet": "p", "pmosfet": "p",
+    "n": "n", "nmos": "n", "nch": "n", "nfet": "n", "nmosfet": "n",
+}
+# device_parameters keys that may carry a declared channel type. A small, deliberately
+# inclusive set — an unrecognized value is ignored, so over-listing is harmless.
+_POLARITY_FIELDS = ("polarity", "type", "device_type", "channel_type", "mos_type")
+
+
+def _normalize_polarity(value) -> str | None:
+    """Map a declared device-type value to 'n'|'p', or None if unrecognized."""
+    if value is None:
+        return None
+    return _POLARITY_ALIASES.get(str(value).strip().lower())
+
+
+def _find_polarity(table: dict, entry: dict, override=None) -> str | None:
+    """Resolve the device polarity 'n'|'p' from an explicit override (wins) or a
+    device-type field in the model/table ``device_parameters``. Returns None when
+    the polarity is KNOWN nowhere — it is never guessed from the model name."""
+    p = _normalize_polarity(override)
+    if p is not None:
+        return p
+    for src in (entry.get("device_parameters"), table.get("device_parameters")):
+        if isinstance(src, dict):
+            for k in _POLARITY_FIELDS:
+                if k in src:
+                    p = _normalize_polarity(src[k])
+                    if p is not None:
+                        return p
+    return None
+
 
 def load_table(path: str, *, trust: bool = False) -> dict:
     """Load the pickled mosplot lookup-table dict from an ``.npz``.
@@ -86,7 +119,7 @@ def _num(x) -> str:
     return format(v, ".10g")
 
 
-def convert_entry(table: dict, name: str, entry: dict):
+def convert_entry(table: dict, name: str, entry: dict, *, polarity=None):
     """Return ``(header, rows, meta)`` for one model entry."""
     length = np.asarray(entry["length"], float).ravel()
     vbs = np.asarray(entry["vbs"], float).ravel()
@@ -124,6 +157,9 @@ def convert_entry(table: dict, name: str, entry: dict):
         "simulator": _oneline(table.get("simulator")),
         "description": _oneline(table.get("description")),
         "W": _opt(_find_width(table, entry)),
+        # Emitted only when KNOWN (flag override or a device_parameters field); a
+        # `# polarity: p` line lets the importer fold a signed PMOS dump to magnitude.
+        "polarity": _find_polarity(table, entry, polarity),
     }
     return header, rows, meta
 
@@ -136,19 +172,27 @@ def _opt(v) -> str | None:
     return None if v is None else format(float(v), ".10g")
 
 
-def convert(npz_path: str, out_dir: str, *, trust: bool = False, overwrite: bool = False):
+def convert(
+    npz_path: str,
+    out_dir: str,
+    *,
+    trust: bool = False,
+    overwrite: bool = False,
+    polarity=None,
+):
     """Convert every model in ``npz_path`` to a mostab CSV under ``out_dir``.
 
     Model keys are reduced to a safe basename and the resolved output path is
     verified to stay under ``out_dir`` (a crafted model name cannot escape it).
-    Existing files are not overwritten unless ``overwrite`` is set.
+    Existing files are not overwritten unless ``overwrite`` is set. An explicit
+    ``polarity`` ('n'|'p') overrides any per-model device-type field.
     """
     table = load_table(npz_path, trust=trust)
     out_dir_real = os.path.realpath(out_dir)
     os.makedirs(out_dir_real, exist_ok=True)
     written = []
     for name, entry in device_entries(table):
-        header, rows, meta = convert_entry(table, name, entry)
+        header, rows, meta = convert_entry(table, name, entry, polarity=polarity)
         out = os.path.join(out_dir_real, f"{_safe_name(name)}.mostab.csv")
         if os.path.commonpath([os.path.realpath(out), out_dir_real]) != out_dir_real:
             raise ValueError(f"unsafe output path for model {name!r}: {out}")
@@ -173,13 +217,21 @@ def main(argv=None) -> None:
         help="REQUIRED: confirm you trust this .npz — it is unpickled, which runs arbitrary code",
     )
     ap.add_argument("-f", "--force", action="store_true", help="overwrite existing .mostab.csv outputs")
+    ap.add_argument(
+        "--polarity",
+        choices=("n", "p"),
+        help="declare the device channel type (overrides any device_parameters field); "
+        "emits a `# polarity:` line so the importer can fold a signed PMOS dump to magnitude",
+    )
     args = ap.parse_args(argv)
     if args.trust_pickle:
         print(
             "medwatt2mostab: --trust-pickle set; unpickling (only do this for trusted files).",
             file=sys.stderr,
         )
-    for out, n in convert(args.npz, args.out_dir, trust=args.trust_pickle, overwrite=args.force):
+    for out, n in convert(
+        args.npz, args.out_dir, trust=args.trust_pickle, overwrite=args.force, polarity=args.polarity
+    ):
         print(f"wrote {out} ({n} rows)")
 
 

@@ -8,7 +8,6 @@
     subsample,
     formatEng,
     parseEng,
-    BASE_QUANTITIES,
     type DeviceTable,
     type DeviceResolver,
     type OverlayCurvesXY,
@@ -16,7 +15,7 @@
   } from '@gmid/mostab-core';
   import { ChartAdapter, PALETTE, type ChartData, type CursorInfo } from './chart';
   import { viridis, viridisGradient, LARGE_FAMILY } from './colormap';
-  import { qLabel } from './labels';
+  import { axisUnit, qLabel } from './labels';
   import { QUANTITY_HELP, CONTROL_HELP } from './help';
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
@@ -76,9 +75,6 @@
     const cur = which === 'y' ? cfg.yExpr : cfg.xExpr;
     if (!optionValues.has(cur)) setExpr(which, options[0]?.value ?? 'id');
   }
-
-  const baseUnit = new Map(BASE_QUANTITIES.map((q) => [q.key, q.unit]));
-  const axisUnit = (name: string) => baseUnit.get(name) ?? '';
 
   // Primary first, then overlays — `meta.tableIndex` indexes this list.
   const tablesAll = $derived([device, ...overlays]);

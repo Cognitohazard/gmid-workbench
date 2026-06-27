@@ -4,10 +4,12 @@
 // from the current density id/w. The gm/ID ceiling at the L-slice gates
 // feasibility. Pure, deterministic, zero DOM imports.
 
-import type { DeviceTable } from '../types';
+import type { DeviceTable, Scope, Value } from '../types';
 import { lookup, lookupByGmId } from '../lookup';
 import { sliceGrid } from '../grid';
-import { PHYS, CONSTANTS } from '../constants';
+import { CONSTANTS } from '../constants';
+import { compileExpr } from '../derive';
+import { DERIVED_QUANTITIES } from '../namespace';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two of {gm, gm_id, id}. The
@@ -32,6 +34,11 @@ export interface SizeResult {
   ceiling: number;
   /** Every base + derived quantity reported by the forward lookup at the point. */
   quantities: Record<string, number>;
+  /**
+   * Human-readable engineering notes for this sizing (e.g. a requested L that fell
+   * off the table's L hull and was clamped). Empty when nothing needs flagging.
+   */
+  warnings: string[];
 }
 
 /**
@@ -82,8 +89,9 @@ function gmIdCeiling(table: DeviceTable, L: number): number {
   }
   let max = -Infinity;
   for (let i = 0; i < gm.length; i++) {
+    if (id[i] === 0) continue; // undefined ratio; skip (mirrors qa/validate's ceiling scan)
     const r = gm[i] / id[i];
-    if (r > max) max = r;
+    if (Number.isFinite(r) && r > max) max = r; // skip ±∞/NaN so they can't pin the ceiling
   }
   return max;
 }
@@ -100,6 +108,22 @@ function gmIdCeiling(table: DeviceTable, L: number): number {
 export function sizeDevice(q: SizeQuery): SizeResult {
   const { gm, gm_id, id } = bindThree(q);
   const L = q.L;
+
+  // Surface — never silently substitute — a length the table cannot represent: the
+  // grid's locate() clamps an off-hull L to the nearest characterized node, so the
+  // sizing then runs at a different L than requested. This is a warned clamp, NOT an
+  // infeasibility (unlike a gm/ID past the ceiling, which lookupByGmId throws on).
+  const warnings: string[] = [];
+  const lAxis = q.table.grid.axes.find((a) => a.name === 'l');
+  if (lAxis && lAxis.values.length > 0) {
+    const lLo = lAxis.values[0];
+    const lHi = lAxis.values[lAxis.values.length - 1];
+    if (L < lLo || L > lHi) {
+      warnings.push(
+        `requested L ${L} m is outside the table's L range [${lLo}, ${lHi}] m; clamped to the nearest characterized length`,
+      );
+    }
+  }
 
   const ceiling = gmIdCeiling(q.table, L);
   const feasible = gm_id <= ceiling;
@@ -134,18 +158,42 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     w0: Wchar,
   };
 
-  return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities };
+  return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities, warnings };
 }
+
+// The input-referred thermal-noise density √(4kTγ/gm), compiled ONCE from its single
+// home in namespace.ts (the `vnth_m` derived quantity). thermalNoise evaluates this
+// compiled definition rather than re-coding the formula, so the two can never drift.
+const VNTH_M = compileExpr(
+  (() => {
+    const def = DERIVED_QUANTITIES.find((d) => d.key === 'vnth_m');
+    if (!def) throw new Error('thermalNoise: namespace is missing the vnth_m definition');
+    return def.expr;
+  })(),
+);
 
 /**
  * Input-referred channel thermal-noise density √(4kTγ/gm) [V/√Hz] at the device's
  * actual transconductance gm. Noise is width-dependent (gm ∝ W), so a sized device
  * must pass its SIZED gm — the characterization-width value would be wrong. γ comes
  * from the operating point when the table carries it, else GAMMA_DEFAULT.
+ *
+ * The formula itself lives only in namespace.ts (vnth_m); here we just bind gm and γ
+ * and evaluate that definition. k and T fall through resolve() to the engine's
+ * constant scope; a bound `gamma` shadows the constant γ so an explicit value wins.
  */
 export function thermalNoise(gm: number, gamma?: number): number {
   const g = gamma ?? CONSTANTS.gamma;
-  return Math.sqrt((4 * PHYS.k * PHYS.T * g) / gm);
+  const scope: Scope = {
+    resolve(name: string): Value | undefined {
+      if (name === 'gm') return gm;
+      if (name === 'gamma') return g;
+      return undefined;
+    },
+  };
+  // vnth_m over scalar gm,γ reduces to a scalar; the engine's Value admits an array,
+  // which this scalar-only scope never produces, so read it back as a number.
+  return VNTH_M.eval(scope) as number;
 }
 
 /**

@@ -1,9 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import { lookup, lookupByGmId } from './index';
-import type { DeviceTable } from '../types';
+import { invertX } from '../series';
+import { makeGrid } from '../grid';
+import type { Axis, DeviceTable } from '../types';
 import { generateDemoDevice } from '../demo';
 import { importMostab } from '../import';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
+
+/** Build a single-L (l, vgs) DeviceTable from explicit gm/id columns so a slice's
+ *  gm/id-vs-vgs curve can be made deliberately degenerate (all id==0) or folded
+ *  (non-monotone), exercising the inverse guardrail. gm[i]/id[i] is gm/id at vgs[i]. */
+function makeFixedLTable(L: number, vgs: number[], gm: number[], id: number[]): DeviceTable {
+  const axes: Axis[] = [
+    { name: 'l', values: Float64Array.from([L]) },
+    { name: 'vgs', values: Float64Array.from(vgs) },
+  ];
+  const quantities = new Map<string, Float64Array>([
+    ['gm', Float64Array.from(gm)],
+    ['id', Float64Array.from(id)],
+  ]);
+  return {
+    id: { device: 'fixture', corner: 'tt', temp: 27 },
+    grid: makeGrid(axes, quantities),
+    meta: { polarity: { device: 'n', signedInput: false } },
+  };
+}
 
 /** A copy of `table` with the named quantity columns removed (for testing the
  *  measured-noise-absent path now that the demo carries sth/sfl/gamma). */
@@ -120,6 +141,26 @@ describe('lookupByGmId (inverse)', () => {
     expect(() => lookupByGmId(table, -1, L)).toThrow(/out of range/);
   });
 
+  it('shares its inverse kernel with series.invertX (agree interior + at endpoints)', () => {
+    const table = generateDemoDevice();
+    const L = table.grid.axes[0].values[1];
+    const vgsAxis = table.grid.axes.find((a) => a.name === 'vgs')!.values;
+
+    // An interior gm/ID plus BOTH curve endpoints (max gm/ID at the lowest vgs, min at
+    // the highest) — the spots where the old hand-rolled bracket, lacking interp1's ULP
+    // clamp, could disagree with the cursor's invertX. They must now match exactly.
+    const interior = lookup(table, { l: L, vgs: 0.6 }).gm_id;
+    const hiEnd = lookup(table, { l: L, vgs: vgsAxis[0] }).gm_id;
+    const loEnd = lookup(table, { l: L, vgs: vgsAxis[vgsAxis.length - 1] }).gm_id;
+
+    for (const gmId of [interior, hiEnd, loEnd]) {
+      const viaLookup = lookupByGmId(table, gmId, L).vgs;
+      const viaCursor = invertX(table, 'gm/id', gmId, 'vgs', { l: L });
+      expect(viaCursor).not.toBeNull();
+      expect(viaLookup).toBeCloseTo(viaCursor as number, 12);
+    }
+  });
+
   it('forwards an explicit keys list through to the recovered point', () => {
     const table = generateDemoDevice();
     const L = table.grid.axes[0].values[0];
@@ -169,5 +210,43 @@ describe('lookupByGmId (inverse)', () => {
     expect(out.vnth).toBeCloseTo(Math.sqrt(4e-21) / 1e-5, 18); // thermal density = √PSD
     expect(out.svfl).toBeCloseTo(1e-20 / 1e-5 ** 2, 18); // flicker input-referred PSD @1Hz
     expect(out.vnfl).toBeCloseTo(Math.sqrt(1e-20) / 1e-5, 18); // flicker density @1Hz
+  });
+
+  it('fails closed on a degenerate slice where every id==0 (gm/id is ±∞ everywhere)', () => {
+    // id==0 at every vgs node makes gm/id = ±∞, so orient drops every node and its
+    // bounds are NaN; the range gate (gmId < NaN || gmId > NaN) is false, so the old
+    // code interpolated an empty curve to NaN and forward-looked-up at vgs:NaN —
+    // fabricating an operating point. The sizer must throw instead.
+    const L = 1e-7;
+    const vgs = [0.3, 0.4, 0.5, 0.6];
+    const gm = [1e-5, 2e-5, 3e-5, 4e-5]; // nonzero
+    const id = [0, 0, 0, 0]; // every sample id==0
+    const table = makeFixedLTable(L, vgs, gm, id);
+
+    let result: Record<string, number> | null = null;
+    let threw = false;
+    try {
+      result = lookupByGmId(table, 10, L);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    // And specifically: no fabricated record with a NaN vgs/quantity leaked out.
+    expect(result).toBeNull();
+    expect(() => lookupByGmId(table, 10, L)).toThrow(/invertible/);
+  });
+
+  it('fails closed on a folded (non-monotone) gm/id-vs-vgs slice instead of sizing an arbitrary branch', () => {
+    // gm/id rises 1→2→3 then falls 3→2→1 across vgs: total variation (4) exceeds the
+    // span (2) by more than FOLD_TOL, so orient.mono is false. The target gmId=2 sits
+    // inside [xmin,xmax]=[1,3], so the range gate passes; without honouring o.mono the
+    // old code interp1'd against an arbitrary sorted branch and returned a value.
+    const L = 1e-7;
+    const vgs = [0.3, 0.4, 0.5, 0.6, 0.7];
+    const id = [1e-6, 1e-6, 1e-6, 1e-6, 1e-6];
+    const gm = [1e-6, 2e-6, 3e-6, 2e-6, 1e-6]; // gm/id = [1,2,3,2,1] — a fold
+    const table = makeFixedLTable(L, vgs, gm, id);
+
+    expect(() => lookupByGmId(table, 2, L)).toThrow(/monoton/);
   });
 });

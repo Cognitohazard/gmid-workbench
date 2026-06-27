@@ -52,7 +52,7 @@ function asColumn(v: Value, size: number): Float64Array {
 // Memoize compiled expressions by source string. A CompiledExpr is immutable and its
 // eval(scope) is pure, so sharing one per distinct source is safe — it collapses the
 // per-sample re-parse that a sheet sweep (now over a composed child tree) would otherwise
-// repeat for every identical string. ponytail: unbounded Map — sheet/derive expression
+// repeat for every identical string. The Map is unbounded, but sheet/derive expression
 // strings are a small, author-fixed set, so it cannot grow without bound in practice.
 const COMPILE_CACHE = new Map<string, CompiledExpr>();
 
