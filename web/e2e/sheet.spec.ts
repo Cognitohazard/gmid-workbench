@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loadDemo } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -8,6 +9,7 @@ test('design sheet: add, evaluate to a mix of pass/fail, recompute on edit, pers
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
   await expect(page.locator('.grid .panel')).toHaveCount(5); // canonical preset
 
   // Add a design sheet → a 6th panel, pre-loaded with the vetted single-device sizing example.
@@ -35,8 +37,10 @@ test('design sheet: add, evaluate to a mix of pass/fail, recompute on edit, pers
   await gmId.blur();
   await expect(headroom).toHaveClass(/st-pass/);
 
-  // The edited sheet (and the panel) survive a reload through the dashboard sanitizer.
+  // The edited sheet (and the panel) survive a reload through the dashboard sanitizer (the device
+  // is not persisted, so re-load the demo; the saved layout — including the sheet — then restores).
   await page.reload();
+  await loadDemo(page);
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('.sheet')).toBeVisible();
   await expect(sp2.locator('.svar', { hasText: 'gm_id' }).locator('.num')).toHaveValue('8');
@@ -51,6 +55,7 @@ test('design sheet: sweep a parameter into a feasibility curve, persisted', asyn
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
@@ -60,8 +65,10 @@ test('design sheet: sweep a parameter into a feasibility curve, persisted', asyn
   await expect(sp.locator('.feas')).toContainText('feasible');
   await page.screenshot({ path: `${SCREENS}/sheet-sweep.png`, fullPage: true });
 
-  // The sweep selection survives a reload through the dashboard sanitizer.
+  // The sweep selection survives a reload through the dashboard sanitizer (re-load the demo, since
+  // the device itself is not persisted; the saved layout then restores).
   await page.reload();
+  await loadDemo(page);
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('.swsel select')).toHaveValue('gm_id');
   await expect(sp2.locator('.pchart canvas')).toBeVisible();
@@ -71,33 +78,37 @@ test('design sheet: sweep a parameter into a feasibility curve, persisted', asyn
 
 test('device swap preserves the user’s tabs (an authored sheet is not wiped)', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
   await expect(page.locator('.grid .panel')).toHaveCount(6);
 
-  // Swap the active device (reload the demo). The user's panels — including the sheet — must
-  // survive; before the fix this re-seeded the canonical preset and dropped them back to 5.
-  await page.getByRole('button', { name: 'demo', exact: true }).click();
+  // Swap the active device by loading a DIFFERENT device. The user's panels — including the
+  // sheet — must survive the reseat; before the fix this re-seeded the canonical preset and
+  // dropped them back to 5.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
   await expect(page.locator('.grid .panel')).toHaveCount(6);
   await expect(page.locator('.grid .panel').last().locator('.sheet')).toBeVisible();
 });
 
 test('device swap keeps an EDITED canonical panel (editing clears its auto marker)', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await expect(page.locator('.grid .panel')).toHaveCount(5);
 
   // Edit a canonical panel — flip the first one to a table. That makes it the user's own.
   await page.locator('.grid .panel').first().getByRole('button', { name: 'table', exact: true }).click();
   await expect(page.locator('.grid .ptable')).toHaveCount(1);
 
-  // Swap the device: the canonical charts regenerate, but the edited (now user-owned) table
-  // survives. Before the fix it kept auto:true and was deleted with the rest of the preset.
-  await page.getByRole('button', { name: 'demo', exact: true }).click();
+  // Swap the device (load a DIFFERENT one): the canonical charts regenerate, but the edited (now
+  // user-owned) table survives. Before the fix it kept auto:true and was deleted with the preset.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
   await expect(page.locator('.grid .panel')).toHaveCount(6);
   await expect(page.locator('.grid .ptable')).toHaveCount(1);
 });
 
 test('device swap respects a deleted Overview tab (no canonical panels misplaced into a user tab)', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await expect(page.locator('.grid .panel')).toHaveCount(5);
 
   // Add a user tab, then delete the (active) Overview tab so no auto-marked tab remains.
@@ -105,14 +116,15 @@ test('device swap respects a deleted Overview tab (no canonical panels misplaced
   await page.getByRole('button', { name: 'Overview', exact: true }).click();
   await page.getByRole('button', { name: 'remove tab' }).click();
 
-  // The surviving user tab is now at index 0. A device swap must NOT inject the canonical panels
-  // into it (the old code assumed Overview was always tab 0 and dumped them there).
-  await page.getByRole('button', { name: 'demo', exact: true }).click();
+  // The surviving user tab is now at index 0. A device swap (load a DIFFERENT device) must NOT
+  // inject the canonical panels into it (the old code assumed Overview was always tab 0).
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
   await expect(page.locator('.grid .panel')).toHaveCount(0);
 });
 
 test('design sheet: switching the example replaces the doc; a removed sheet is gone', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
@@ -128,6 +140,7 @@ test('design sheet: switching the example replaces the doc; a removed sheet is g
 
 test('design sheet: the noise & matching example evaluates and sweeps to a feasible window', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
@@ -148,6 +161,7 @@ test('design sheet: a composed cascode shows its child block and composes feasib
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
@@ -168,8 +182,10 @@ test('design sheet: a composed cascode shows its child block and composes feasib
   await expect(sp.locator('.feas')).toContainText('feasible');
   await page.screenshot({ path: `${SCREENS}/sheet-cascode.png`, fullPage: true });
 
-  // The nested child doc survives a reload through the dashboard sanitizer.
+  // The nested child doc survives a reload through the dashboard sanitizer (re-load the demo, since
+  // the device is not persisted; the saved layout with the nested child then restores).
   await page.reload();
+  await loadDemo(page);
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('.suse', { hasText: 'cs' })).toBeVisible();
   await expect(sp2.locator('.swsel select')).toHaveValue('gm_id');
@@ -183,6 +199,7 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
   // Load a second device so children have a choice. The import accumulates and becomes active,
   // so switch back to the demo (the cascode's defaults size cleanly on it).
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
@@ -204,9 +221,10 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   await child.locator('.dsel').selectOption({ index: 2 }); // the imported nch_lvt
   await expect(child.locator('.prov')).not.toHaveText(before);
 
-  // The choice persists. After reload only the demo is loaded, so the still-set device no longer
-  // resolves and the child fails closed with a clear message — proving the key was stored.
+  // The choice persists. After reload re-load ONLY the demo, so the still-set device (nch_lvt) no
+  // longer resolves and the child fails closed with a clear message — proving the key was stored.
   await page.reload();
+  await loadDemo(page);
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
   // The persisted device key (nch_lvt) is what fails to resolve — proving the choice was stored.
@@ -224,9 +242,10 @@ test('design sheet: two loaded devices sharing a label are each individually sel
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
   // Two DIFFERENT tables that share the same display label (device·corner·temp), different data.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
-  await expect(page.locator('.devices .dev')).toHaveCount(2); // let the first import land
+  await expect(page.locator('.devices .dev')).toHaveCount(2); // demo + first import
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample-alt.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(3); // demo + two same-label nch_lvt
   await page.locator('.devices .dev').first().locator('.dname').click(); // demo active (sizes the parent)

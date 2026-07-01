@@ -1,7 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import {
-    generateDemoDevice,
     plottableQuantities,
     importMostab,
     metaScalars,
@@ -35,27 +34,24 @@
     type PanelTemplate,
   } from './dashboard';
 
-  // The device-level core is the single source of truth. The active device is
-  // swappable at runtime by importing a mostab file; the demo (with a vds axis so
-  // the N-D sliders have something to navigate) stands in until then.
-  const newDemo = () => generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } });
-
-  const INITIAL_DEVICE = newDemo();
+  // The device-level core is the single source of truth. Devices are loaded at runtime by
+  // importing a mostab file; the app boots EMPTY (no built-in data) and shows a load prompt
+  // until the first import.
   // The loaded devices accumulate across imports so any subset can be overlaid for comparison
   // (NMOS vs PMOS, corner vs corner). `device` is the active/primary one — it drives the
-  // dashboard, the expression pickers, the bias sliders, and the sizer, all unchanged. The
-  // overlay set is chart-only and in-memory (device data is NDA-sensitive, never persisted).
-  // QA warnings live WITH their table so the displayed QA always matches the active device and
-  // can never go stale when the active device changes or a device is removed. The synthetic demo
-  // carries none (its QA notes are noise on teaching data); real imports carry validate(table).
+  // dashboard, the expression pickers, the bias sliders, and the sizer. It is `undefined` only in
+  // the empty boot state, which the template gates behind a load prompt. The overlay set is
+  // chart-only and in-memory (device data is NDA-sensitive, never persisted). QA warnings live
+  // WITH their table so the displayed QA always matches the active device and can never go stale
+  // when the active device changes or a device is removed.
   type Loaded = { table: DeviceTable; warnings: readonly QAWarning[] };
-  let devices = $state<Loaded[]>([{ table: INITIAL_DEVICE, warnings: [] }]);
+  let devices = $state<Loaded[]>([]);
   let activeIdx = $state(0);
   let overlayIdx = $state<number[]>([]);
-  const active = $derived(devices[activeIdx] ?? devices[0]);
-  const device = $derived(active.table);
+  const active = $derived(devices[activeIdx]);
+  const device = $derived(active?.table);
   const overlays = $derived(overlayIdx.map((i) => devices[i]?.table).filter((d): d is DeviceTable => !!d));
-  const warnings = $derived(active.warnings);
+  const warnings = $derived(active?.warnings ?? []);
   // Loaded devices for the per-child device picker in composed sheets: a unique stable uid (the
   // resolver/persistence key), a human label, and the raw table (reduced to an [l × vgs] sizing
   // slice inside Panel, like the active device).
@@ -71,7 +67,7 @@
   // Names of the multi-value axes — the only ones worth charting or sweeping.
   const multiAxisNames = (grid: Grid) =>
     grid.axes.filter((a) => a.values.length > 1).map((a) => a.name);
-  const multiAxes = $derived(multiAxisNames(device.grid));
+  const multiAxes = $derived(device ? multiAxisNames(device.grid) : []);
 
   // Dashboard config (tabs → grids of panels). Restored from a saved layout when one
   // is present and valid for this device, else the device's canonical preset. A device
@@ -83,11 +79,16 @@
   const DASH_KEY = 'gmid.dash.v2';
   const loadDashboard = (dev: DeviceTable): Dashboard =>
     loadJSON(DASH_KEY, (raw) => sanitizeDashboard(raw, dev), () => presetDashboard(dev));
-  let dashboard = $state<Dashboard>(loadDashboard(INITIAL_DEVICE));
-  const activeTab = $derived(dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]);
-  // Persist the layout (not the device — that re-seeds on load) so a customized
-  // dashboard survives a reload. Best-effort: a write failure is silently ignored.
-  $effect(() => saveJSON(DASH_KEY, dashboard));
+  // Null until the first device loads — the dashboard can only be seeded/validated against a
+  // device (sanitizeDashboard/presetDashboard both need one). The saved layout in localStorage is
+  // restored at that point, so a customized dashboard still survives a reload.
+  let dashboard = $state<Dashboard | null>(null);
+  const activeTab = $derived(dashboard ? (dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]) : undefined);
+  // Persist the layout (not the device — that re-seeds on load) so a customized dashboard
+  // survives a reload. Best-effort. Never clobber the saved layout with the empty-boot null.
+  $effect(() => {
+    if (dashboard) saveJSON(DASH_KEY, dashboard);
+  });
 
   // Appearance settings (theme + font sizes). Applied to the document root and persisted on
   // every change. The whole UI and the canvas chart follow (both read system colours + vars).
@@ -114,9 +115,11 @@
   // Operating point: sharedBias carries a value for EVERY non-sweep multi-value axis, so
   // any panel can pin the axes it doesn't fan. Seeded on a device/sweep change only (never
   // on tab/panel edits), so the operating point persists.
-  const biasAxes = $derived(
-    device.grid.axes.filter((a) => a.name !== dashboard.sweep && a.values.length > 1),
-  );
+  const biasAxes = $derived.by(() => {
+    if (!device || !dashboard) return [];
+    const sweep = dashboard.sweep;
+    return device.grid.axes.filter((a) => a.name !== sweep && a.values.length > 1);
+  });
   let sharedBias = $state<Record<string, number>>({});
   $effect(() => {
     sharedBias = Object.fromEntries(biasAxes.map((a) => [a.name, a.values[0]]));
@@ -126,12 +129,13 @@
   // hidden — but its value is still held, and a panel that DOES pin it (single-curve, or a
   // differently-fanned panel) gets the right bias and brings its slider back.
   const shownBiasAxes = $derived(
-    biasAxes.filter((a) => activeTab.panels.some((p) => p.family !== a.name)),
+    activeTab ? biasAxes.filter((a) => activeTab.panels.some((p) => p.family !== a.name)) : [],
   );
 
   // Picker for panel X/Y: every quantity THIS device resolves along the sweep,
   // including derived ones the width scalar unlocks (id/w).
   const exprOptions = $derived.by(() => {
+    if (!device || !dashboard) return [];
     const pq = plottableQuantities(device.grid, dashboard.sweep, Object.keys(metaScalars(device.meta)));
     return [
       ...pq.base.map((k) => ({ value: k, label: `${k} [${baseUnit.get(k)}]` })),
@@ -155,6 +159,7 @@
   // Add a panel from a template (the canonical plots) or, with no template, a blank one.
   // A template without its own family fans the device's default (L when present).
   function addPanel(tpl?: PanelTemplate): void {
+    if (!activeTab) return;
     activeTab.panels.push({
       id: crypto.randomUUID(),
       xExpr: tpl?.xExpr ?? GM_ID,
@@ -173,6 +178,7 @@
   // A sheet panel carries '' axes (so the chart axis guard in sanitizeDashboard keeps
   // it) and a copy of the first vetted example as its starting doc.
   function addSheetPanel(): void {
+    if (!activeTab) return;
     activeTab.panels.push({
       id: crypto.randomUUID(),
       xExpr: '',
@@ -183,24 +189,27 @@
     });
   }
   function removePanel(id: string): void {
+    if (!activeTab) return;
     activeTab.panels = activeTab.panels.filter((p) => p.id !== id);
   }
   function addTab(): void {
+    if (!dashboard) return;
     dashboard.tabs.push({ id: crypto.randomUUID(), name: `Tab ${dashboard.tabs.length + 1}`, cols: 2, panels: [] });
     dashboard.activeTab = dashboard.tabs.length - 1;
   }
   function removeTab(i: number): void {
-    if (dashboard.tabs.length <= 1) return;
+    if (!dashboard || dashboard.tabs.length <= 1) return;
     dashboard.tabs.splice(i, 1);
     if (dashboard.activeTab >= dashboard.tabs.length) dashboard.activeTab = dashboard.tabs.length - 1;
   }
   function renameTab(i: number): void {
+    if (!dashboard) return;
     const name = prompt('Tab name', dashboard.tabs[i].name);
     if (name != null && name.trim() !== '') dashboard.tabs[i].name = name.trim();
   }
-  const setCols = (d: number) => (activeTab.cols = Math.min(4, Math.max(1, activeTab.cols + d)));
+  const setCols = (d: number) => activeTab && (activeTab.cols = Math.min(4, Math.max(1, activeTab.cols + d)));
 
-  // Monotonic token so a slow earlier file read can't clobber a newer load/demo
+  // Monotonic token so a slow earlier file read can't clobber a newer load
   // (last-selected wins, not last-resolved).
   let importSeq = 0;
 
@@ -210,7 +219,7 @@
     if (!file) return;
     const seq = ++importSeq;
     const bytes = new Uint8Array(await file.arrayBuffer());
-    if (seq !== importSeq) return; // superseded by a newer load/demo
+    if (seq !== importSeq) return; // superseded by a newer load
     const result = importMostab(bytes, { filename: file.name });
     if (!result.ok) {
       importError = result.errors.map((e) => `${e.kind}: ${e.message}`).join(' · ');
@@ -230,7 +239,10 @@
     importError = null;
     activeIdx = i;
     overlayIdx = [];
-    dashboard = reseatDashboard(dashboard, devices[i].table);
+    // First device seeds the dashboard (restoring any saved layout); later swaps reseat the live one.
+    dashboard = dashboard
+      ? reseatDashboard(dashboard, devices[i].table)
+      : loadDashboard(devices[i].table);
   }
 
   // Drop a loaded device from the registry; never remove the last or the active one.
@@ -247,12 +259,6 @@
   function toggleOverlay(i: number): void {
     if (i === activeIdx) return;
     overlayIdx = overlayIdx.includes(i) ? overlayIdx.filter((k) => k !== i) : [...overlayIdx, i];
-  }
-
-  function loadDemo(): void {
-    importSeq++; // invalidate any in-flight import
-    devices = [{ table: newDemo(), warnings: [] }];
-    select(0);
   }
 
   function onDrop(e: DragEvent): void {
@@ -275,28 +281,30 @@
       <option value={o.value} label={o.label}></option>
     {/each}
   </datalist>
-  <label class="axis">sweep
-    <select bind:value={dashboard.sweep}>
-      {#each multiAxes as ax}<option value={ax}>{ax}</option>{/each}
-    </select>
-  </label>
-  <Help text={CONTROL_HELP.sweep} />
-  {#each shownBiasAxes as a}
-    <label class="slider">
-      {a.name}
-      <input
-        type="range"
-        min={a.values[0]}
-        max={a.values[a.values.length - 1]}
-        step={(a.values[a.values.length - 1] - a.values[0]) / 100}
-        bind:value={sharedBias[a.name]}
-      />
-      <span class="val">{formatEng(sharedBias[a.name])}{axisUnit(a.name)}</span>
-      <Help text={CONTROL_HELP.bias} />
+  {#if dashboard}
+    <label class="axis">sweep
+      <select bind:value={dashboard.sweep}>
+        {#each multiAxes as ax}<option value={ax}>{ax}</option>{/each}
+      </select>
     </label>
-  {/each}
+    <Help text={CONTROL_HELP.sweep} />
+    {#each shownBiasAxes as a}
+      <label class="slider">
+        {a.name}
+        <input
+          type="range"
+          min={a.values[0]}
+          max={a.values[a.values.length - 1]}
+          step={(a.values[a.values.length - 1] - a.values[0]) / 100}
+          bind:value={sharedBias[a.name]}
+        />
+        <span class="val">{formatEng(sharedBias[a.name])}{axisUnit(a.name)}</span>
+        <Help text={CONTROL_HELP.bias} />
+      </label>
+    {/each}
+  {/if}
   <span class="grow"></span>
-  <span class="device" title="active device">{deviceKey(device)}</span>
+  {#if device}<span class="device" title="active device">{deviceKey(device)}</span>{/if}
   <label class="load">
     Load .csv
     <input
@@ -305,8 +313,7 @@
       onchange={(e) => loadFiles((e.currentTarget as HTMLInputElement).files)}
     />
   </label>
-  <button class="btn demo" onclick={loadDemo}>demo</button>
-  <button class="btn size" class:on={sizerOpen} onclick={() => (sizerOpen = !sizerOpen)} title={CONTROL_HELP.size}>size</button>
+  {#if device}<button class="btn size" class:on={sizerOpen} onclick={() => (sizerOpen = !sizerOpen)} title={CONTROL_HELP.size}>size</button>{/if}
   <details class="prefs">
     <summary class="btn" title="appearance: theme and font sizes">⚙</summary>
     <div class="prefs-pop">
@@ -368,12 +375,14 @@
   </nav>
 {/if}
 
+  {#if dashboard && activeTab}
+  {@const d = dashboard}
   <nav class="tabs">
-    {#each dashboard.tabs as tab, i}
+    {#each d.tabs as tab, i}
       <button
         class="tab"
-        class:on={i === dashboard.activeTab}
-        onclick={() => (dashboard.activeTab = i)}
+        class:on={i === d.activeTab}
+        onclick={() => (d.activeTab = i)}
         ondblclick={() => renameTab(i)}
         title="double-click to rename"
       >{tab.name}</button>
@@ -391,10 +400,11 @@
     </select>
     <button class="btn" onclick={() => addPanel()} title="add a blank panel">+ panel</button>
     <button class="btn" onclick={addSheetPanel} title={CONTROL_HELP.sheet}>+ sheet</button>
-    {#if dashboard.tabs.length > 1}
-      <button class="btn" onclick={() => removeTab(dashboard.activeTab)}>remove tab</button>
+    {#if d.tabs.length > 1}
+      <button class="btn" onclick={() => removeTab(d.activeTab)}>remove tab</button>
     {/if}
   </nav>
+  {/if}
 
 <div
   class="main"
@@ -408,36 +418,43 @@
   ondragleave={() => (dragging = false)}
   ondrop={onDrop}
 >
-  <div class="grid" style:--cols={activeTab.cols}>
-    {#each activeTab.panels as cfg (cfg.id)}
-      <Panel
-        {device}
-        {overlays}
-        {sheetDevices}
-        sweep={dashboard.sweep}
-        {sharedBias}
-        {cfg}
-        families={multiAxes}
-        options={exprOptions}
-        {styleVersion}
-        onChange={(patch) => {
-          // Editing a canonical (auto) panel makes it the user's own, so it survives a device
-          // swap instead of being regenerated away (reseatDashboard preserves non-auto panels).
-          Object.assign(cfg, patch);
-          if (cfg.auto) cfg.auto = false;
-        }}
-        onRemove={() => removePanel(cfg.id)}
-      />
-    {/each}
-    {#if activeTab.panels.length === 0}
-      <p class="empty">no panels — use <strong>+ panel</strong> above</p>
+  {#if device && dashboard && activeTab}
+    <div class="grid" style:--cols={activeTab.cols}>
+      {#each activeTab.panels as cfg (cfg.id)}
+        <Panel
+          {device}
+          {overlays}
+          {sheetDevices}
+          sweep={dashboard.sweep}
+          {sharedBias}
+          {cfg}
+          families={multiAxes}
+          options={exprOptions}
+          {styleVersion}
+          onChange={(patch) => {
+            // Editing a canonical (auto) panel makes it the user's own, so it survives a device
+            // swap instead of being regenerated away (reseatDashboard preserves non-auto panels).
+            Object.assign(cfg, patch);
+            if (cfg.auto) cfg.auto = false;
+          }}
+          onRemove={() => removePanel(cfg.id)}
+        />
+      {/each}
+      {#if activeTab.panels.length === 0}
+        <p class="empty">no panels — use <strong>+ panel</strong> above</p>
+      {/if}
+    </div>
+    {#if sizerOpen}
+      <Sizer {device} {sharedBias} />
     {/if}
-  </div>
-  {#if dragging}<div class="drophint">drop a mostab .csv</div>{/if}
-
-  {#if sizerOpen}
-    <Sizer {device} {sharedBias} />
+  {:else}
+    <div class="welcome">
+      <h2>No device loaded</h2>
+      <p>Import a mostab <code>.csv</code> to begin — use <strong>Load .csv</strong> above, or drop a file here.</p>
+      <p class="hint">Generate open-PDK tables with <code>tools/gen_gmid.py</code> (see <code>data/pdk/PROVENANCE.md</code>).</p>
+    </div>
   {/if}
+  {#if dragging}<div class="drophint">drop a mostab .csv</div>{/if}
 </div>
 
 <style>
@@ -594,6 +611,29 @@
     opacity: 0.5;
     text-align: center;
     padding: 2rem;
+  }
+  .welcome {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    text-align: center;
+    opacity: 0.75;
+    padding: 2rem;
+  }
+  .welcome h2 {
+    margin: 0;
+    font-weight: 600;
+    font-size: 1.1rem;
+  }
+  .welcome .hint {
+    opacity: 0.7;
+    font-size: 0.9em;
+  }
+  .welcome code {
+    font-family: ui-monospace, monospace;
   }
   .tabs {
     display: flex;

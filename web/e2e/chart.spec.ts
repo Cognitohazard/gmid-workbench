@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loadDemo } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -16,8 +17,9 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
 
-  // Five canonical gm/ID design charts are drawn immediately, no expression typing.
+  // Five canonical gm/ID design charts are drawn after the demo device loads, no expression typing.
   await expect(page.locator('.grid canvas')).toHaveCount(5);
   const p0 = page.locator('.grid .panel').first();
   const cbox = await p0.locator('canvas').boundingBox();
@@ -72,7 +74,7 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA, seeds the siz
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
-  await expect(page.locator('header .device')).toContainText('nmos_demo'); // demo first
+  await loadDemo(page); // app boots empty; load the demo device first
 
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
 
@@ -98,10 +100,12 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA, seeds the siz
   await expect(sizer).toContainText('corner from device');
   await page.locator('header button.size').click(); // close
 
-  // Back to the demo clears QA and restores the EKV device.
-  await page.locator('button.demo').click();
+  // Switch back to the demo via the device strip (the import accumulated, so both are loaded).
+  // QA follows the ACTIVE device: the import's gm-consistency warning is gone — the demo has its
+  // own (different) QA, not the stale import's.
+  await page.locator('.devices .dev').first().locator('.dname').click();
   await expect(page.locator('header .device')).toContainText('nmos_demo');
-  await expect(page.locator('.qa')).toHaveCount(0);
+  await expect(page.locator('.qa')).not.toContainText('gm-consistency');
 
   expect(errors).toEqual([]);
 });
@@ -118,6 +122,7 @@ test('importer: a single-axis table (no L) renders one curve per panel, no error
 
 test('templates: add a canonical panel from the menu, no expression typing', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await expect(page.locator('.grid .panel')).toHaveCount(5);
 
   // Pick "I_D vs V_GS" from the template menu → a 6th panel pre-set to X=vgs, Y=id, drawn.
@@ -165,6 +170,7 @@ test('templates: the menu only offers plots the active device can compute', asyn
 
 test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await page.locator('header button.size').click();
   const sizer = page.locator('aside.sizer');
   await expect(sizer).toBeVisible();
@@ -218,6 +224,7 @@ test('dense family: colorbar by default, switchable to a sampled subset, persist
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
 
   // Fan gm/gds over vds (19 values > 8) → a colormap + colorbar, NOT a 19-swatch legend
   // that would bury the chart.
@@ -241,8 +248,10 @@ test('dense family: colorbar by default, switchable to a sampled subset, persist
   await expect(pg.locator('.pfoot')).toContainText('vds=300mV');
   await expect(pg.locator('.pfoot')).toContainText('vds=1.2V');
 
-  // The legend config persists across a reload.
+  // The legend config persists across a reload (the device isn't persisted, so re-load the demo;
+  // the saved layout — sampled legend, N=5 — then restores).
   await page.reload();
+  await loadDemo(page);
   const pg2 = page.locator('.grid .panel').nth(2);
   await expect(pg2.locator('.plegend')).toContainText('sample');
   await expect(pg2.locator('.pfoot .sw')).toHaveCount(5);
@@ -252,6 +261,7 @@ test('dense family: colorbar by default, switchable to a sampled subset, persist
 
 test('near-constant X (gm/ID swept over L) draws with a non-fatal warning', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   const p0 = page.locator('.grid .panel').first();
   await p0.locator('select.fam').selectOption('vds'); // family ≠ l so the sweep ≠ family
   await page.locator('header .axis select').selectOption('l'); // gm/ID barely varies along L
@@ -261,6 +271,7 @@ test('near-constant X (gm/ID swept over L) draws with a non-fatal warning', asyn
 
 test('a panel that does not fan L exposes an L bias slider (no silent first-L bias)', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   // Overview: every panel fans L → only the vds slider is shown (L would be inert).
   await expect(page.locator('header .slider')).toHaveCount(1);
   await expect(page.locator('header .slider')).toContainText('vds');
@@ -274,6 +285,7 @@ test('a panel that does not fan L exposes an L bias slider (no silent first-L bi
 
 test('column toggle: charts shrink back and do not overlap (2 → 1 → 2 columns)', async ({ page }) => {
   await page.goto('/');
+  await loadDemo(page);
   await expect(page.locator('.grid canvas')).toHaveCount(5);
   const fewer = page.locator('.cols button').first(); // −
   const more = page.locator('.cols button').last(); // +
@@ -301,6 +313,7 @@ test('overlay: a second loaded device draws alongside the active one, dashed and
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
   // Only the demo is loaded → no device strip.
   await expect(page.locator('.devices')).toHaveCount(0);
 
@@ -313,7 +326,7 @@ test('overlay: a second loaded device draws alongside the active one, dashed and
   // making the clean demo active must clear them — not keep showing the last import's QA.
   await expect(page.locator('.qa')).toContainText('gm-consistency');
   await page.locator('.devices .dev').first().locator('.dname').click(); // demo active
-  await expect(page.locator('.qa')).toHaveCount(0);
+  await expect(page.locator('.qa')).not.toContainText('gm-consistency'); // demo's QA differs
   await page.locator('.devices .dev').nth(1).locator('.dname').click(); // back to nch_lvt
   await expect(page.locator('.qa')).toContainText('gm-consistency');
 
@@ -344,6 +357,7 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
 
   // Canonical preset: five gm/ID charts, every one with X = gm_id and family = L.
   await expect(page.locator('.grid .panel')).toHaveCount(5);
@@ -383,13 +397,16 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   await expect(page.locator('.grid canvas')).toHaveCount(4);
   await page.screenshot({ path: `${SCREENS}/dashboard.png`, fullPage: true });
 
-  // Persistence: the customized layout (p0 = table) survives a reload.
+  // Persistence: the customized LAYOUT survives a reload (the device does not — it's never
+  // persisted — so re-load the demo, after which the saved layout restores: p0 = table).
   await page.reload();
+  await loadDemo(page);
   await expect(page.locator('.grid .panel').first().locator('table')).toBeVisible();
 
   // A corrupt saved layout falls back to the canonical preset rather than crashing.
   await page.evaluate(() => localStorage.setItem('gmid.dash.v2', '{not valid json'));
   await page.reload();
+  await loadDemo(page);
   await expect(page.locator('.grid .panel')).toHaveCount(5);
   await expect(page.locator('.grid canvas')).toHaveCount(5);
 
@@ -401,6 +418,7 @@ test('settings: a forced theme overrides the OS scheme, keeping text and backgro
   // (the page background followed the forced scheme but the text colour did not).
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/');
+  await loadDemo(page);
   await page.locator('.prefs summary').click();
 
   // Mean luminance of the document root's resolved text + background colours.
@@ -452,6 +470,7 @@ test('settings: theme toggle and font sliders apply, rebuild the chart, and pers
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
+  await loadDemo(page);
   await expect(page.locator('.grid canvas').first()).toBeVisible();
 
   // Open the appearance popover (native <details>).
