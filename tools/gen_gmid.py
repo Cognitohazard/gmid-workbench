@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import itertools
 import os
 import subprocess
 import sys
@@ -53,20 +54,35 @@ SOURCES = {
 VGS_STEP = 0.008  # 10 mV is the workbench's gm/ID-fidelity bar; 8 mV clears it with margin.
 
 # The matrix IS the spec: per device a valid-L grid (respecting each device's
-# model-bin min L), per PDK the corner/temp/char-width/vsb sweep and vds step.
+# model-bin min L); per PDK the corner LIST, temperature LIST, char width, vsb
+# sweep, and vds step. Every (device x corner x temp) combination yields one
+# mostab table (named <device>__<corner>__<temp>C.mostab.csv).
+#
+# Corners: only the process corners that change the FET model (tt/ss/ff for the
+# transistor itself; sky130's sf/fs are N-vs-P skew, _mm/mc are statistical, and
+# ll/hh are interconnect-only — all out of scope for a per-device gm/ID table).
+# Temps: the standard -40/27/125 C verification bracket. Devices: the standard
+# analog-sizing flavors only; native/zero-Vt devices (nfet_*_nvt) are excluded
+# because they ship as discrete fixed-geometry ESD models, not continuously
+# sizable transistors, so they cannot carry a gm/ID L-sweep.
 MATRIX = {
     "sky130": {
-        "pdk": SKY130, "corner": "tt", "temp": 27.0, "W_um": 1.0,
+        "pdk": SKY130, "W_um": 1.0,
+        "corners": ["tt", "ss", "ff"], "temps": [27.0, -40.0, 125.0],
         "vsb": [0.0, 0.3, 0.6, 0.9], "vds_step": lambda vdd: 0.2,
         "devices": [
             ("sky130_fd_pr__nfet_01v8", "n", 1.8, [0.15, 0.18, 0.25, 0.5, 1.0, 2.0]),
             ("sky130_fd_pr__pfet_01v8", "p", 1.8, [0.15, 0.18, 0.25, 0.5, 1.0, 2.0]),
             ("sky130_fd_pr__nfet_01v8_lvt", "n", 1.8, [0.15, 0.18, 0.25, 0.5, 1.0, 2.0]),
             ("sky130_fd_pr__pfet_01v8_lvt", "p", 1.8, [0.35, 0.5, 1.0, 2.0]),  # lvt pfet min L = 0.35u
+            ("sky130_fd_pr__pfet_01v8_hvt", "p", 1.8, [0.15, 0.18, 0.25, 0.5, 1.0, 2.0]),  # completes the 1.8V Vt triad
+            ("sky130_fd_pr__nfet_g5v0d10v5", "n", 5.0, [0.5, 0.7, 1.0, 2.0]),  # 5V-gate/10.5V-drain I/O NMOS (min L 0.5u)
+            ("sky130_fd_pr__pfet_g5v0d10v5", "p", 5.0, [0.5, 0.7, 1.0, 2.0]),  # 5V-gate/10.5V-drain I/O PMOS
         ],
     },
     "gf180": {
-        "pdk": GF180, "corner": "typical", "temp": 27.0, "W_um": 10.0,
+        "pdk": GF180, "W_um": 10.0,
+        "corners": ["typical", "ss", "ff"], "temps": [27.0, -40.0, 125.0],
         "vsb": [0.0, 0.3, 0.6, 0.9], "vds_step": lambda vdd: vdd / 12.0,
         "devices": [
             ("nfet_03v3", "n", 3.3, [0.28, 0.5, 1.0, 2.0]),
@@ -169,7 +185,8 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     spec = MATRIX[args.pdk]
-    pdk, corner, temp, W = spec["pdk"], spec["corner"], spec["temp"], spec["W_um"]
+    pdk, W = spec["pdk"], spec["W_um"]
+    corners, temps = spec["corners"], spec["temps"]
     outdir = os.path.join(args.out, pdk.name)
     os.makedirs(outdir, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix="gen_gmid_")
@@ -177,18 +194,23 @@ def main(argv=None) -> None:
     # (the default ngbehavior's LTspice-compat mode reads the corner as a filename).
     open(os.path.join(workdir, ".spiceinit"), "w").write("set ngbehavior=hsa\n")
 
-    print(f"== {pdk.name}: generating into {outdir} (ngspice={args.ngspice}) ==")
+    ntab = len(corners) * len(temps) * len(spec["devices"])
+    print(f"== {pdk.name}: {ntab} tables ({len(spec['devices'])} devices x "
+          f"{len(corners)} corners x {len(temps)} temps) into {outdir} "
+          f"(ngspice={args.ngspice}) ==")
     failures = 0
-    for subckt, t, vdd, LS in spec["devices"]:
+    # product() iterates leftmost-slowest, so corner/temp stay outer and the
+    # nominal (tt/typical, 27C) tables still generate first.
+    for corner, temp, (subckt, t, vdd, LS) in itertools.product(corners, temps, spec["devices"]):
         vds_step = spec["vds_step"](vdd)
         rows = []
         for L in LS:
             for vsb in spec["vsb"]:
                 try:
-                    pts = _run_one(pdk, subckt, t, vdd, corner, temp, L, W, vsb, vds_step,
-                                   workdir, args.ngspice)
+                    pts = _run_one(pdk, subckt, t, vdd, corner, temp, L, W, vsb,
+                                   vds_step, workdir, args.ngspice)
                 except Exception as e:  # noqa: BLE001 — report and continue the matrix
-                    print(f"   FAIL {subckt} L={L} vsb={vsb}: {e}")
+                    print(f"   FAIL {subckt} {corner}/{int(temp)}C L={L} vsb={vsb}: {e}")
                     failures += 1
                     continue
                 for vgs, vds, params in pts:
@@ -202,7 +224,8 @@ def main(argv=None) -> None:
         out = os.path.join(outdir, f"{subckt}__{corner}__{int(temp)}C.mostab.csv")
         write_mostab(out, ["l", "vds", "vsb", "vgs", *SAVE_PARAMS], rows, meta)
         ok, msgs = _qa(out, t)
-        print(f"[{'ok ' if ok else 'WARN'}] {subckt:32s} {len(rows):6d} rows  {'; '.join(msgs) or 'clean'}")
+        print(f"[{'ok ' if ok else 'WARN'}] {subckt:30s} {corner:8s} {int(temp):4d}C  "
+              f"{len(rows):6d} rows  {'; '.join(msgs) or 'clean'}")
     if failures:
         print(f"\n{failures} deck(s) failed — see above.")
         sys.exit(1)

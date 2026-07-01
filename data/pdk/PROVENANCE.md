@@ -14,6 +14,24 @@ needs only python + ngspice + a fetched PDK):
     PDK_ROOT=/path/to/pdks python3 tools/gen_gmid.py sky130 --out data/pdk
     PDK_ROOT=/path/to/pdks python3 tools/gen_gmid.py gf180  --out data/pdk
 
+## Coverage
+
+One `mostab` table per `(device, process corner, temperature)` — 99 tables total,
+named `<device>__<corner>__<temp>C.mostab.csv`:
+
+- **Process corners:** the three that move the transistor model — `tt`/`ss`/`ff`
+  for sky130, `typical`/`ss`/`ff` for gf180mcu.
+- **Temperatures:** −40, 27, and 125 °C (the standard verification bracket).
+- **Devices (11):**
+  - sky130 (W = 1 µm): `nfet_01v8`, `pfet_01v8`, `nfet_01v8_lvt`, `pfet_01v8_lvt`,
+    `pfet_01v8_hvt` (1.8 V core, standard/low/high-Vt), plus the `nfet_g5v0d10v5` /
+    `pfet_g5v0d10v5` 5 V-gate I/O pair.
+  - gf180mcu (W = 10 µm): `nfet_03v3`, `pfet_03v3` (3.3 V) and `nfet_06v0`,
+    `pfet_06v0` (6 V).
+
+Native/zero-Vt and ESD devices are intentionally excluded: they ship as discrete
+fixed-geometry models and cannot carry a continuous gm/ID length sweep.
+
 ## Sources & attribution
 
 Both PDKs are licensed under the **Apache License, Version 2.0** (full text in
@@ -44,4 +62,4 @@ than being the original files) also satisfies Apache-2.0 §4(b) ("state changes"
 - The **gf180mcu** PDK is published by its authors as *not intended for production* use; that
   caveat carries through to data derived from it.
 
-Generated 2026-06-29 with ngspice-42.
+Generated 2026-06-30 with ngspice-42.
