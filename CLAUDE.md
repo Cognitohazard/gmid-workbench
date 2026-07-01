@@ -49,8 +49,8 @@ Before declaring web work done, the bar is: core tests pass, `svelte-check` is c
 - **Core is pure and DOM-free.** All numerics live in `src/`, reusable outside the UI. Bulk data is `Float64Array`. Functions are deterministic. The chart system is imperative and lives *outside* Svelte, behind the owned `ChartAdapter`.
 - **Store raw, derive everything.** Tables hold raw simulator outputs only; every figure of merit is derived through the expression engine. Each derived quantity has exactly one definition in `namespace.ts` — add there, don't hand-roll the formula elsewhere.
 - **QA surfaces warnings, never silent fixes.** Data trust is a core differentiator: gm/gds are derivatives, exquisitely sensitive to sweep quality, so bad inputs must be flagged, not quietly repaired. New checks go in `qa/validate()` and should not false-flag valid data (including signed PMOS).
-- **Importing loses nothing.** Unknown columns and metadata scalars pass through verbatim (strict-superset rule). The required columns are `vgs`, `id`, `gm`.
-- **SI units throughout.** Sign convention: `vsb = -vbs`. PMOS exports are accepted signed and canonicalized to magnitudes with polarity recorded.
+- **Importing loses nothing.** Unknown columns pass through as normalized (lower-cased) numeric quantity columns; unrecognized `# key: value` metadata scalars are preserved in `meta.extra` (strict-superset rule). The required columns are `vgs`, `id`, `gm`.
+- **SI units throughout.** Sign convention: `vsb = -vbs`. PMOS exports are accepted signed; the **value columns** (id/gm/gds/…) are canonicalized to magnitudes with polarity recorded, while the swept **axis** columns (e.g. a negative `vgs`) stay signed.
 - **Client-only, no network after load.** Characterization data is NDA-sensitive; the offline single-file build is a first-class release artifact. Never add a runtime network dependency.
 - **medwatt `.npz` is converted out-of-browser only.** Its `.npz` is a pickled dict; the Python converter refuses to unpickle without `--trust-pickle` (arbitrary-code-execution risk). Keep that guard.
 

@@ -14,7 +14,9 @@ def write_mostab(path: str, header, rows, meta) -> None:
     or of pre-formatted strings (written verbatim by csv)."""
     with open(path, "w", newline="") as f:
         for k, v in meta.items():
-            if v:
+            # Emit any non-empty value, including falsey-but-valid scalars like temp=0
+            # (a bare `if v` would silently drop 0 / False and shift table identity on re-import).
+            if v is not None and v != "":
                 f.write(f"# {k}: {v}\n")
         w = csv.writer(f)
         w.writerow([h.upper() for h in header])

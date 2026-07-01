@@ -71,6 +71,8 @@ interface ParsedMeta {
   /** Declared device type from a `# polarity:`/`# type:` line, NOT sniffed from
    *  data signs or the device NAME — only an explicit, authoritative declaration. */
   polarity?: 'n' | 'p';
+  /** Unrecognized `# key: value` scalars, preserved verbatim (strict-superset rule). */
+  extra?: Record<string, string>;
 }
 
 /** Map a declared polarity/type value to 'n'|'p', or undefined if unrecognized
@@ -99,7 +101,8 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
   const body = line.replace(/^#+/, '').trim();
   const idx = body.indexOf(':');
   if (idx < 0) return;
-  const key = body.slice(0, idx).trim().toLowerCase();
+  const rawKey = body.slice(0, idx).trim();
+  const key = rawKey.toLowerCase();
   const value = body.slice(idx + 1).trim();
   if (value === '') return;
   switch (key) {
@@ -150,8 +153,11 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
       if (p !== undefined) meta.polarity = p;
       break;
     }
-    // "mostab version" and any other keys are intentionally ignored.
+    // Any other key (e.g. mostab, license, source) is preserved verbatim under the
+    // strict-superset rule, so provenance/licensing survives import instead of being dropped.
+    // Stored under the original-case key so case-distinct keys don't collapse.
     default:
+      (meta.extra ??= {})[rawKey] = value;
       break;
   }
 }
@@ -385,6 +391,7 @@ export function parseMostabCsv(
   if (meta.polarity !== undefined) {
     mutMeta.polarity = { device: meta.polarity, signedInput: meta.polarity === 'p' };
   }
+  if (meta.extra !== undefined) mutMeta.extra = meta.extra;
 
   const table: DeviceTable =
     passthroughKeys.size > 0
