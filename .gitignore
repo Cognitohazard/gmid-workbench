@@ -17,7 +17,21 @@ __pycache__/
 *.pyc
 .venv/
 
-# generated example data (reproduce with tools/make_examples.py)
-examples/
-
 .claude/
+
+# ltspice-mcp server config + run artifacts (working dir is this repo)
+ltspice-mcp.toml
+.ltspice-mcp/
+
+# PDK gm/ID generation: fetched PDKs + staging, plus the generated tables themselves.
+# The tables are large and fully reproducible with `tools/gen_gmid.py`, so they are not
+# committed; the provenance notes + license text under data/pdk/ ARE tracked.
+.pdk/
+.pdkgen/
+data/pdk/**/*.mostab.csv
+
+# e2e demo fixture (regenerated from the EKV oracle by web/e2e/global-setup.ts)
+web/e2e/fixtures/demo.mostab.csv
+
+# ngspice init (ngbehavior=hsa so sectioned .lib works)
+.spiceinit
