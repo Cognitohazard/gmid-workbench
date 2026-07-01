@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loadDemo } from './helpers';
+import { loadDemo, pickQuantity } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -35,15 +35,15 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
 
   // Every quantity the picker dropdown offers is computable on this device — selecting it as
   // a panel's Y must NOT raise the per-panel error (the picker reflects what the grid resolves).
-  const ySel = p0.locator('.exsel').first();
+  const ySel = p0.locator('.qpick').first();
+  await ySel.locator('.qtrigger').click();
   const opts = await ySel
-    .locator('option')
-    .evaluateAll((o) =>
-      o.map((x) => (x as HTMLOptionElement).value).filter((v) => v && v !== '__custom__'),
-    );
+    .locator('.qopt[data-value]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute('data-value')!).filter(Boolean));
+  await page.keyboard.press('Escape');
   expect(opts.length).toBeGreaterThan(3);
   for (const v of opts) {
-    await ySel.selectOption(v);
+    await pickQuantity(ySel, v);
     await expect(p0.locator('.perr'), `option "${v}" raised an error`).toHaveCount(0);
   }
 
@@ -58,7 +58,7 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
 
   // The custom-expression escape hatch still works: switch Y to custom, type a bad expression
   // → the panel error shows and the last good chart stays.
-  await ySel.selectOption('__custom__');
+  await pickQuantity(ySel, '__custom__');
   const yCustom = p0.locator('.ex').first();
   await yCustom.fill('gm/(');
   await yCustom.blur();
@@ -129,8 +129,8 @@ test('templates: add a canonical panel from the menu, no expression typing', asy
   await page.locator('select.tpl').selectOption({ label: 'I_D vs V_GS' });
   await expect(page.locator('.grid .panel')).toHaveCount(6);
   const last = page.locator('.grid .panel').last();
-  await expect(last.locator('.exsel').first()).toHaveValue('id'); // Y
-  await expect(last.locator('.exsel').nth(1)).toHaveValue('vgs'); // X
+  await expect(last.locator('.qpick').first()).toHaveAttribute('data-value', 'id'); // Y
+  await expect(last.locator('.qpick').nth(1)).toHaveAttribute('data-value', 'vgs'); // X
   await expect(last.locator('canvas')).toBeVisible();
   await expect(last.locator('.perr')).toHaveCount(0);
 
@@ -363,8 +363,8 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   await expect(page.locator('.grid .panel')).toHaveCount(5);
   await expect(page.locator('.grid canvas')).toHaveCount(5);
   const p0 = page.locator('.grid .panel').first();
-  await expect(p0.locator('.exsel').first()).toHaveValue('id_w'); // first canonical Y
-  await expect(p0.locator('.exsel').nth(1)).toHaveValue('gm_id'); // the X picker reads gm_id
+  await expect(p0.locator('.qpick').first()).toHaveAttribute('data-value', 'id_w'); // first canonical Y
+  await expect(p0.locator('.qpick').nth(1)).toHaveAttribute('data-value', 'gm_id'); // the X picker reads gm_id
 
   // One shared bias slider (vds): vgs is the sweep, l is every panel's family. Driving it
   // re-slices every panel with no error (fT / ID-W are vds-sensitive, gm/ID is not).
@@ -511,6 +511,64 @@ test('settings: theme toggle and font sliders apply, rebuild the chart, and pers
       ),
     )
     .toBe('20px');
+
+  expect(errors).toEqual([]);
+});
+
+test('axis scale: titles toggle linear⇄log, defaults apply, derived equation renders', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // Panel 0 is I_D/W vs gm/ID: id_w defaults to a log Y (decade-spanning FOM), gm/ID to linear X.
+  const p0 = page.locator('.grid .panel').first();
+  await expect(p0.locator('.ylabel .logtag')).toBeVisible();
+  await expect(p0.locator('.xlabel .logtag')).toHaveCount(0);
+
+  // The picker menu renders each derived quantity's definition (id_w → I_D/W) — the whole point
+  // of the custom dropdown, since a native <select> can't show subscripts or fractions.
+  const yPick = p0.locator('.qpick').first();
+  await yPick.locator('.qtrigger').click();
+  await expect(yPick.locator('.qopt[data-value="id_w"] .qeq')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  // Clicking the Y title flips it to linear and rebuilds the chart (canvas stays up, no error).
+  await p0.locator('.ylabel .axlabel').click();
+  await expect(p0.locator('.ylabel .logtag')).toHaveCount(0);
+  await expect(p0.locator('canvas')).toBeVisible();
+
+  // Clicking the X title flips it to log — this is the path that used to crash on tiny magnitudes.
+  await p0.locator('.xlabel .axlabel').click();
+  await expect(p0.locator('.xlabel .logtag')).toBeVisible();
+  await expect(p0.locator('canvas')).toBeVisible();
+
+  expect(errors).toEqual([]);
+});
+
+test('axis scale: a log request on non-positive data renders linear and drops the log tag', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  const p0 = page.locator('.grid .panel').first();
+
+  // Force Y to an expression that is negative across the whole sweep (no log-safe samples).
+  await pickQuantity(p0.locator('.qpick').first(), '__custom__');
+  const yCustom = p0.locator('.ex').first();
+  await yCustom.fill('0-id');
+  await yCustom.blur();
+  await expect(p0.locator('canvas')).toBeVisible();
+
+  // Request a log Y: the chart can't log non-positive data, so it must render linear AND the axis
+  // must not claim "log" — the effective scale, not the request, drives the tag.
+  await p0.locator('.ylabel .axlabel').click();
+  await expect(p0.locator('.ylabel .logtag')).toHaveCount(0);
+  await expect(p0.locator('canvas')).toBeVisible();
 
   expect(errors).toEqual([]);
 });

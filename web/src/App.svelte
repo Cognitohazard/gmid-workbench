@@ -26,6 +26,7 @@
     canPlot,
     deviceKey,
     tableUid,
+    defaultBias,
     TEMPLATES,
     SWEEP_AXIS,
     LENGTH_AXIS,
@@ -122,7 +123,7 @@
   });
   let sharedBias = $state<Record<string, number>>({});
   $effect(() => {
-    sharedBias = Object.fromEntries(biasAxes.map((a) => [a.name, a.values[0]]));
+    sharedBias = Object.fromEntries(biasAxes.map((a) => [a.name, defaultBias(a)]));
   });
   // Sliders shown = bias axes that at least one panel in the ACTIVE tab actually pins (does
   // not fan into its family). An axis every visible panel fans is inert here, so it's
@@ -139,7 +140,7 @@
     const pq = plottableQuantities(device.grid, dashboard.sweep, Object.keys(metaScalars(device.meta)));
     return [
       ...pq.base.map((k) => ({ value: k, label: `${k} [${baseUnit.get(k)}]` })),
-      ...pq.derived.map((k) => ({ value: k, label: `${k} = ${derivedExpr.get(k)}` })),
+      ...pq.derived.map((k) => ({ value: k, label: `${k} = ${derivedExpr.get(k)}`, formula: derivedExpr.get(k) })),
     ];
   });
   const defaultFamily = $derived(multiAxes.includes(LENGTH_AXIS) ? LENGTH_AXIS : '');

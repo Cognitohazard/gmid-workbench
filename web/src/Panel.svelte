@@ -19,7 +19,8 @@
   import { QUANTITY_HELP, CONTROL_HELP } from './help';
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
-  import { clampLegendCount, reduceForSizing, type Panel } from './dashboard';
+  import QuantityPicker from './QuantityPicker.svelte';
+  import { clampLegendCount, defaultScale, reduceForSizing, type Panel, type Scale } from './dashboard';
 
   let {
     device,
@@ -41,7 +42,7 @@
     sharedBias: Record<string, number>;
     cfg: Panel;
     families: string[];
-    options: { value: string; label: string }[];
+    options: { value: string; label: string; formula?: string }[];
     styleVersion: number;
     onChange: (patch: Partial<Panel>) => void;
     onRemove: () => void;
@@ -75,6 +76,21 @@
     const cur = which === 'y' ? cfg.yExpr : cfg.xExpr;
     if (!optionValues.has(cur)) setExpr(which, options[0]?.value ?? 'id');
   }
+
+  // Axis scale: the panel's pinned choice, else the quantity's default (log for decade-spanning
+  // FOMs). Toggling flips it; the chart reads these through display.data and rebuilds.
+  const scaleOf = (which: 'x' | 'y'): Scale =>
+    which === 'x' ? (cfg.xScale ?? defaultScale(cfg.xExpr)) : (cfg.yScale ?? defaultScale(cfg.yExpr));
+  const xLog = $derived(scaleOf('x') === 'log');
+  const yLog = $derived(scaleOf('y') === 'log');
+  const toggleScale = (which: 'x' | 'y'): void => {
+    const next: Scale = scaleOf(which) === 'log' ? 'lin' : 'log';
+    onChange(which === 'x' ? { xScale: next } : { yScale: next });
+  };
+  // The scale the chart ACTUALLY drew, reported by ChartAdapter: a requested log axis is silently
+  // downgraded to linear on non-positive data, so the axis tag must follow this, not the request —
+  // otherwise a linear chart could wear a "log" label.
+  let effScale = $state({ x: false, y: false });
 
   // Primary first, then overlays — `meta.tableIndex` indexes this list.
   const tablesAll = $derived([device, ...overlays]);
@@ -201,6 +217,8 @@
       lineLabels: drawnMeta.map(labelOf),
       lineColors,
       lineDash: drawnMeta.map((m) => dashFor(m.tableIndex)),
+      xLog,
+      yLog,
     };
     return { mode, data, lineColors, drawnMeta, famName: ov.famName, famUnit, famMin, famMax };
   });
@@ -263,7 +281,13 @@
     if (cfg.render !== 'chart' || !el || !display?.data) return;
     if (chart) chart.setData(display.data);
     else {
-      chart = new ChartAdapter(el, display.data, (info) => (cursor = info));
+      chart = new ChartAdapter(
+        el,
+        display.data,
+        (info) => (cursor = info),
+        (axis) => toggleScale(axis),
+        (eff) => (effScale = eff),
+      );
       builtStyle = untrack(() => styleVersion); // a fresh build already reflects the current style
     }
   });
@@ -299,6 +323,18 @@
 
 {#snippet sw(color: string)}<i class="sw" style:background={color}></i>{/snippet}
 
+<!-- A clickable axis title that doubles as the linear⇄log toggle. `eff` is the scale the chart
+     actually drew (a log request downgrades to linear on non-positive data); `requested` only
+     drives the explanatory tail so the toggle never looks broken. -->
+{#snippet axisTitle(which: 'x' | 'y', prefix: string, expr: string, requested: boolean, eff: boolean)}
+  <button
+    type="button"
+    class="axlabel"
+    onclick={() => toggleScale(which)}
+    title="{prefix} scale: {eff ? 'log' : 'linear'}{requested && !eff ? ' (log needs positive data)' : ''} — click or right-click the axis to toggle"
+  >{@html qLabel(expr)}{#if eff}<span class="logtag"> log</span>{/if}</button>
+{/snippet}
+
 <!-- One axis control: a dropdown of computable quantities + a "ƒx custom…" entry that
      swaps to a datalist-backed text field for a typed expression. -->
 {#snippet axis(which: 'x' | 'y', label: string)}
@@ -316,15 +352,7 @@
     />
     <button class="rm tiny" onclick={() => backToList(which)} title="back to the list">↩</button>
   {:else}
-    <select
-      class="exsel"
-      value={expr}
-      onchange={(e) => onPickAxis(which, (e.currentTarget as HTMLSelectElement).value)}
-      title="{label} quantity"
-    >
-      {#each options as o}<option value={o.value}>{o.label}</option>{/each}
-      <option value="__custom__">ƒx custom…</option>
-    </select>
+    <QuantityPicker value={expr} {options} title="{label} quantity" onPick={(v) => onPickAxis(which, v)} />
   {/if}
   {#if QUANTITY_HELP[expr]}<Help text={QUANTITY_HELP[expr]} />{/if}
 {/snippet}
@@ -422,7 +450,7 @@
     {/if}
   {:else if cfg.render === 'chart'}
     <div class="plotwrap">
-      <div class="ylabel"><span>{@html qLabel(cfg.yExpr)}</span></div>
+      <div class="ylabel">{@render axisTitle('y', 'Y', cfg.yExpr, yLog, effScale.y)}</div>
       <div class="pchart" bind:this={el}></div>
       {#if display && display.mode === 'colorbar'}
         <div class="cbar" aria-hidden="true">
@@ -433,7 +461,7 @@
         </div>
       {/if}
     </div>
-    <div class="xlabel">{@html qLabel(cfg.xExpr)}</div>
+    <div class="xlabel">{@render axisTitle('x', 'X', cfg.xExpr, xLog, effScale.x)}</div>
   {:else if display?.data}
     <div class="ptable">
       <table>
@@ -494,10 +522,6 @@
   .axl {
     opacity: 0.55;
     font-weight: 600;
-  }
-  .exsel {
-    font: inherit;
-    max-width: 9rem;
   }
   .ex {
     width: 8rem;
@@ -616,7 +640,7 @@
     font-size: var(--font-axis-title);
     opacity: 0.85;
   }
-  .ylabel span {
+  .ylabel .axlabel {
     transform: rotate(-90deg);
     white-space: nowrap;
   }
@@ -625,6 +649,19 @@
     font-size: var(--font-axis-title);
     opacity: 0.85;
     padding-top: 0.05rem;
+  }
+  /* Axis titles double as the linear⇄log toggle; reset the button chrome so they read as labels. */
+  .axlabel {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+  .logtag {
+    font-size: 0.8em;
+    opacity: 0.6;
   }
   .ptable {
     flex: 1 1 auto;

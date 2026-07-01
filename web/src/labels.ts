@@ -56,6 +56,19 @@ export function qLabel(expr: string): string {
   return SUBSCRIPTED[expr] ?? escapeHtml(expr);
 }
 
+/**
+ * Render a formula string with subscripted identifiers and prettified operators (e.g.
+ * `gm/(2*pi*cgg)` → `g_m/(2·π·C_gg)`), for showing a derived quantity's definition next to the
+ * axis picker. Each identifier run is mapped through SUBSCRIPTED (else escaped); every other run
+ * is escaped, with `*`→`·`. Always safe for {@html} — no token reaches output unescaped.
+ */
+export function qFormula(expr: string): string {
+  return expr.replace(/[A-Za-z_][A-Za-z0-9_]*|[^A-Za-z_]+/g, (tok) => {
+    if (/^[A-Za-z_]/.test(tok)) return tok === 'pi' ? 'π' : qLabel(tok);
+    return escapeHtml(tok).replace(/\*/g, '·');
+  });
+}
+
 /** Canonical base-quantity key → SI unit (e.g. 'vgs' → 'V'); for axis and bias readouts. */
 export const baseUnit: ReadonlyMap<string, string> = new Map(
   BASE_QUANTITIES.map((q) => [q.key, q.unit]),

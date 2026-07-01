@@ -18,6 +18,9 @@ export interface ChartData {
   /** Optional per-line dash pattern (uPlot `[on, off]`); null/absent ⇒ a solid line.
    *  Used to distinguish overlaid devices (solid = primary, dashed = overlays). */
   lineDash?: (number[] | null)[];
+  /** Log-scale the X / Y axis (uPlot `distr: 3`); absent/false ⇒ linear. */
+  xLog?: boolean;
+  yLog?: boolean;
 }
 
 export interface CursorInfo {
@@ -39,7 +42,10 @@ export class ChartAdapter {
   private focusedSeries: number | null = null;
   private colors: string[] = [];
   private dashes: (number[] | null)[] = [];
+  private xLog = false;
+  private yLog = false;
   private lastData: ChartData;
+  private onCtx: (e: MouseEvent) => void;
 
   /** Stroke colour for line `i`: the supplied per-line colour, else the PALETTE cycle. */
   private colorAt(i: number): string {
@@ -55,11 +61,30 @@ export class ChartAdapter {
     private el: HTMLElement,
     data: ChartData,
     private onCursor?: (info: CursorInfo | null) => void,
+    private onAxisToggle?: (axis: 'x' | 'y') => void,
+    // Reports the EFFECTIVE log flags after every build — which can differ from the requested
+    // ones when effLog downgrades a log axis to linear on non-positive data. The UI reads this
+    // (not the request) so the axis label can never claim "log" while the chart renders linear.
+    private onScale?: (eff: { x: boolean; y: boolean }) => void,
   ) {
     this.colors = data.lineColors ?? [];
     this.dashes = data.lineDash ?? [];
+    const eff = effLog(data);
+    this.xLog = eff.x;
+    this.yLog = eff.y;
     this.lastData = data;
     this.u = this.build(data);
+    this.emitScale();
+    // Right-click a gutter (left of the plot ⇒ Y, below it ⇒ X) to toggle that axis' scale.
+    // Reads `this.u` live so it keeps working across rebuilds; only pre-empts the browser menu
+    // when it actually hits a gutter, so a right-click inside the plot behaves normally.
+    this.onCtx = (e: MouseEvent) => {
+      if (!this.onAxisToggle) return;
+      const r = this.u.over.getBoundingClientRect();
+      if (e.clientX < r.left) { e.preventDefault(); this.onAxisToggle('y'); }
+      else if (e.clientY > r.bottom) { e.preventDefault(); this.onAxisToggle('x'); }
+    };
+    el.addEventListener('contextmenu', this.onCtx);
     this.ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
       // skip 0-size (hidden tab / pre-layout) — uPlot.setSize(0,0) breaks its canvas.
@@ -77,15 +102,22 @@ export class ChartAdapter {
     const nextDash = data.lineDash ?? [];
     const sameColors = next.length === this.colors.length && next.every((c, i) => c === this.colors[i]);
     const sameDash = sameDashes(nextDash, this.dashes);
+    const eff = effLog(data);
+    const sameScale = eff.x === this.xLog && eff.y === this.yLog;
     this.colors = next;
     this.dashes = nextDash;
+    this.xLog = eff.x;
+    this.yLog = eff.y;
     this.lastData = data;
-    if (sameColors && sameDash && this.u.series.length - 1 === data.lines.length) {
+    if (sameColors && sameDash && sameScale && this.u.series.length - 1 === data.lines.length) {
       this.u.setData(aligned(data)); // resetScales: true — refit to the new quantity's range
     } else {
       this.u.destroy();
       this.u = this.build(data);
     }
+    // Only report when the effective scale moved — the flags rarely change, but setData runs on
+    // every bias-drag frame, and a fresh object would re-trigger the UI's tag/tooltip each time.
+    if (!sameScale) this.emitScale();
   }
 
   /** Rebuild from the retained data to pick up a theme/colour or tick-font change. uPlot fixes
@@ -93,9 +125,16 @@ export class ChartAdapter {
   restyle(): void {
     this.u.destroy();
     this.u = this.build(this.lastData);
+    this.emitScale();
+  }
+
+  /** Surface the effective (post-downgrade) log flags to the UI. */
+  private emitScale(): void {
+    this.onScale?.({ x: this.xLog, y: this.yLog });
   }
 
   destroy(): void {
+    this.el.removeEventListener('contextmenu', this.onCtx);
     this.ro.disconnect();
     this.u.destroy();
   }
@@ -117,16 +156,27 @@ export class ChartAdapter {
     // SI-suffix ticks (200G, 8M, 25m…) — quantities span many decades, so raw integers
     // overflow the gutter. Axis *labels* are rendered as DOM by the Panel (so they can
     // carry subscripts), not drawn here on the canvas.
-    const fmtTicks = (_u: uPlot, splits: number[]) => splits.map((v) => formatSI(v, 3));
+    // uPlot's log axis nulls out minor-tick labels (the 2×/5× between decades) to leave them as
+    // unlabelled gridlines; those null splits must map back to null, not the string "null".
+    const fmtTicks = (_u: uPlot, splits: number[]) =>
+      splits.map((v) => (Number.isFinite(v) ? formatSI(v, 3) : null));
     const opts: Options = {
       width: this.el.clientWidth || 800,
       height: this.el.clientHeight || 360,
-      scales: { x: { time: false } },
+      // distr 3 = log10, 1 = linear. effLog downgrades a requested log axis to linear when the
+      // data isn't strictly positive, so uPlot never sees a non-positive log range.
+      scales: {
+        x: { time: false, distr: this.xLog ? 3 : 1 },
+        y: { distr: this.yLog ? 3 : 1 },
+      },
       legend: { show: false }, // we own the readout/color-key in the app footer
       cursor: { focus: { prox: 24 } },
+      // On log axes we supply our own decade splits: uPlot's built-in log-tick generator
+      // infinite-loops on very small magnitudes (noise PSDs ~1e-24), throwing "Invalid array
+      // length". Ours is bounded and correct across the full magnitude range.
       axes: [
-        { values: fmtTicks, font: tickFont, size: Math.round(labelPx + 16), ...axis },
-        { values: fmtTicks, font: tickFont, ...axis },
+        { values: fmtTicks, ...(this.xLog ? { splits: logSplits } : {}), font: tickFont, size: Math.round(labelPx + 16), ...axis },
+        { values: fmtTicks, ...(this.yLog ? { splits: logSplits } : {}), font: tickFont, ...axis },
       ],
       series: [
         {},
@@ -177,6 +227,42 @@ export class ChartAdapter {
 
 function aligned(data: ChartData): AlignedData {
   return [data.x, ...data.lines] as AlignedData;
+}
+
+/** A series is log-safe when it has at least one sample and every non-gap sample is finite and
+ *  strictly positive. null/NaN are gaps (ignored); ±Infinity or a value ≤ 0 disqualifies it. */
+function logSafe(vals: ArrayLike<number | null>): boolean {
+  let pos = false;
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i];
+    if (v == null || Number.isNaN(v)) continue;
+    if (!Number.isFinite(v) || v <= 0) return false;
+    pos = true;
+  }
+  return pos;
+}
+
+/** Effective log flags: a requested log axis is honoured only if its data is log-safe (strictly
+ *  positive), so uPlot never gets a non-positive log range. Tiny positive magnitudes are handled
+ *  by logSplits below, not by falling back to linear. */
+function effLog(data: ChartData): { x: boolean; y: boolean } {
+  return {
+    x: !!data.xLog && logSafe(data.x),
+    y: !!data.yLog && data.lines.every(logSafe),
+  };
+}
+
+/** Decade tick splits for a log axis (1×10^e, plus 2× and 5× when the span is ≤ 3 decades).
+ *  Replaces uPlot's built-in generator, which infinite-loops on very small magnitudes; the
+ *  count is hard-capped so no range can ever explode. uPlot clips ticks outside [min,max]. */
+function logSplits(_u: uPlot, _axisIdx: number, scaleMin: number, scaleMax: number): number[] {
+  if (!(scaleMin > 0) || !(scaleMax > 0)) return [scaleMin];
+  const e0 = Math.floor(Math.log10(scaleMin));
+  const e1 = Math.ceil(Math.log10(scaleMax));
+  const mant = e1 - e0 <= 3 ? [1, 2, 5] : [1];
+  const out: number[] = [];
+  for (let e = e0; e <= e1 && out.length < 200; e++) for (const m of mant) out.push(m * 10 ** e);
+  return out;
 }
 
 /** Per-line dash arrays equal? (null === solid; compared structurally.) */

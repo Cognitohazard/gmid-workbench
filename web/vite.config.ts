@@ -7,5 +7,6 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 // dead weight once everything is inlined.
 export default defineConfig({
   plugins: [svelte(), viteSingleFile({ removeViteModuleLoader: true })],
+  server: { port: 5174 },
   build: { sourcemap: false },
 });

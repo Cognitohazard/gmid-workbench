@@ -26,8 +26,39 @@ import {
 // family, the sizer's [L × VGS] binding). Kept in one place rather than scattered.
 export const SWEEP_AXIS = 'vgs';
 export const LENGTH_AXIS = 'l';
+export const DRAIN_AXIS = 'vds';
 /** Default X for a canonical panel: the gm/ID efficiency coordinate. */
 export const GM_ID = 'gm_id';
+
+/**
+ * Seed value for a shared-bias axis: its first grid value, EXCEPT the drain–source axis, which
+ * seeds near mid-range (≈ VDD/2, in saturation). Characterization grids legitimately include
+ * vds = 0, but pinning the operating point there turns the device off (id = gm = 0), so gm/ID is
+ * 0/0 = NaN and every canonical gm/ID panel goes blank. Nearest-to-midpoint keeps the device in
+ * saturation and works for signed PMOS axes too. Other axes keep the first value (vsb = 0 for no
+ * back-bias, l = min length).
+ */
+export function defaultBias(axis: { name: string; values: ArrayLike<number> }): number {
+  const v = axis.values;
+  if (axis.name !== DRAIN_AXIS || v.length < 2) return v[0];
+  const mid = (v[0] + v[v.length - 1]) / 2;
+  let best = v[0];
+  for (let i = 1; i < v.length; i++) if (Math.abs(v[i] - mid) < Math.abs(best - mid)) best = v[i];
+  return best;
+}
+
+// Quantities that span decades and stay strictly positive (currents, transit frequency, output
+// resistance, noise PSDs/densities) read better on a log axis; everything else (ratios, voltages,
+// capacitances that can go negative) defaults to linear. Right-clicking an axis overrides this.
+const LOG_QUANTITIES = new Set([
+  'id', 'id_w', 'ft', 'gm', 'gds', 'ro', 'ft_eff', 'av0_ft', 'gm_cgd',
+  'sth', 'sfl', 'svth', 'svth_m', 'svfl', 'vnth', 'vnth_m', 'vnfl',
+]);
+export type Scale = 'lin' | 'log';
+/** Preferred scale for an axis quantity when the panel hasn't pinned one. */
+export function defaultScale(expr: string): Scale {
+  return LOG_QUANTITIES.has(expr) ? 'log' : 'lin';
+}
 
 /** Clamp a sampled-legend curve count to the UI's [2, 32] range; non-finite ⇒ default 8.
  *  Single source of truth for the bound, shared by the panel input and the save sanitizer. */
@@ -105,6 +136,8 @@ export interface Panel {
   yExpr: string; // Y axis as an expression / derived-quantity name; '' on a sheet panel
   family: string; // axis whose values fan into curves; '' = a single curve
   render: 'chart' | 'table' | 'sheet';
+  xScale?: Scale; // axis scale; absent ⇒ defaultScale(xExpr)
+  yScale?: Scale; // axis scale; absent ⇒ defaultScale(yExpr)
   legend?: LegendConfig; // dense-family display; absent ⇒ colorbar
   sheet?: SheetDoc; // render === 'sheet': the authored leaf design-sheet, stored verbatim
   sheetSweep?: string; // render === 'sheet': the param the feasibility view sweeps; '' = card only
@@ -365,6 +398,8 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
         yExpr: pp.yExpr,
         family: typeof pp.family === 'string' && axes.has(pp.family) ? pp.family : '',
         render,
+        ...(pp.xScale === 'log' || pp.xScale === 'lin' ? { xScale: pp.xScale } : {}),
+        ...(pp.yScale === 'log' || pp.yScale === 'lin' ? { yScale: pp.yScale } : {}),
         ...(legend ? { legend } : {}),
         ...(sheet ? { sheet } : {}),
         ...(sheetSweep ? { sheetSweep } : {}),
