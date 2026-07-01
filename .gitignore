@@ -30,6 +30,9 @@ ltspice-mcp.toml
 .pdkgen/
 data/pdk/**/*.mostab.csv
 
+# Local release staging (packaged dataset tarball + checksum + notes, ready to upload)
+release/
+
 # e2e demo fixture (regenerated from the EKV oracle by web/e2e/global-setup.ts)
 web/e2e/fixtures/demo.mostab.csv
 
