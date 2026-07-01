@@ -24,8 +24,11 @@ bulk bias (NMOS bulk below source, PMOS bulk above); temperature via ``.temp``.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from mostab_io import fmt_num
 
 # BSIM4 small-signal op-point outputs to save. gm/gds/id are load-bearing for
 # gm/ID; the rest are standard. An unrecognized name surfaces as the tool's
@@ -131,18 +134,16 @@ def build_deck(
 
 
 def _g(x: float) -> str:
-    v = float(x)
-    if v == 0.0:
-        v = 0.0
-    return format(v, ".6g")
+    """A 6 sig-fig number for decks and generated tables (-0.0 normalised); a
+    non-finite value passes through as 'inf'/'nan' for the QA gate to catch."""
+    return fmt_num(x, 6, allow_nonfinite=True)
 
 
 # ---- PDK registry (sky130 + gf180 verified; IHP pending OSDI build) ----
 # PDK_ROOT locates the fetched PDKs so the recipe is portable; defaults to the
-# repo-local `.pdk/` used during development.
-import os as _os
-
-_PDK_ROOT = _os.environ.get("PDK_ROOT", ".pdk")
+# repo-local `.pdk/` (two levels up from this file) used during development.
+_DEFAULT_PDK_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".pdk")
+_PDK_ROOT = os.environ.get("PDK_ROOT", _DEFAULT_PDK_ROOT)
 _SKY_NG = f"{_PDK_ROOT}/sky130A/libs.tech/ngspice"
 _GF_NG = f"{_PDK_ROOT}/gf180mcuD/libs.tech/ngspice"
 
@@ -203,4 +204,6 @@ def _selftest() -> None:
 
 
 if __name__ == "__main__":
+    if not __debug__:
+        raise SystemExit("run this self-test without -O; it relies on assert")
     _selftest()

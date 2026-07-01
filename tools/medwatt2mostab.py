@@ -25,10 +25,11 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 import numpy as np
 
-from mostab_io import write_mostab
+from mostab_io import fmt_num, write_mostab
 
 # Dimension order of the mosplot 4-D parameter arrays.
 ARRAY_AXES = ("length", "vbs", "vgs", "vds")
@@ -111,12 +112,8 @@ def _find_width(table: dict, entry: dict):
 
 
 def _num(x) -> str:
-    v = float(x)
-    if not np.isfinite(v):
-        raise ValueError(f"non-finite value {v!r} in lookup table")
-    if v == 0.0:
-        v = 0.0  # normalise -0.0 (e.g. -vbs at vbs=0) to 0
-    return format(v, ".10g")
+    """A mostab-precision (10 sig-fig) cell; rejects a non-finite lookup-table value."""
+    return fmt_num(x, 10)
 
 
 def convert_entry(table: dict, name: str, entry: dict, *, polarity=None):
@@ -138,6 +135,8 @@ def convert_entry(table: dict, name: str, entry: dict, *, polarity=None):
         if a.shape != shape:
             if a.size != int(np.prod(shape)):
                 raise ValueError(f"{name}.{p}: shape {a.shape} != sweep grid {shape}")
+            # reshape assumes C-order over ARRAY_AXES (length, vbs, vgs, vds); a
+            # differently-ordered flat array would reshape cleanly into wrong rows.
             a = a.reshape(shape)
         arrays[p] = a
 
@@ -169,7 +168,7 @@ def _oneline(s) -> str | None:
 
 
 def _opt(v) -> str | None:
-    return None if v is None else format(float(v), ".10g")
+    return None if v is None else fmt_num(v, 10)
 
 
 def convert(
@@ -188,18 +187,20 @@ def convert(
     ``polarity`` ('n'|'p') overrides any per-model device-type field.
     """
     table = load_table(npz_path, trust=trust)
-    out_dir_real = os.path.realpath(out_dir)
-    os.makedirs(out_dir_real, exist_ok=True)
+    out_root = Path(out_dir).resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
     written = []
     for name, entry in device_entries(table):
         header, rows, meta = convert_entry(table, name, entry, polarity=polarity)
-        out = os.path.join(out_dir_real, f"{_safe_name(name)}.mostab.csv")
-        if os.path.commonpath([os.path.realpath(out), out_dir_real]) != out_dir_real:
+        out = out_root / f"{_safe_name(name)}.mostab.csv"
+        # _safe_name already strips separators; re-check the resolved path stays under
+        # out_dir so a crafted model name can never escape it.
+        if not out.resolve().is_relative_to(out_root):
             raise ValueError(f"unsafe output path for model {name!r}: {out}")
-        if os.path.exists(out) and not overwrite:
+        if out.exists() and not overwrite:
             raise SystemExit(f"medwatt2mostab: {out} exists; pass --force to overwrite")
         write_mostab(out, header, rows, meta)
-        written.append((out, len(rows)))
+        written.append((str(out), len(rows)))
     if not written:
         raise SystemExit("medwatt2mostab: no transistor-model entries found in the .npz")
     return written

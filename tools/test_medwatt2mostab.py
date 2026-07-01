@@ -12,6 +12,7 @@ the TypeScript importer round-trip test consumes.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import tempfile
@@ -68,7 +69,7 @@ def read_mostab(path: str):
                 if header is None:
                     header = r
                 elif r:
-                    rows.append(dict(zip(header, r)))
+                    rows.append(dict(zip(header, r, strict=True)))
     return meta, header, rows
 
 
@@ -170,41 +171,58 @@ def polarity_checks() -> None:
     print("OK — polarity emitted from field and --polarity, omitted when unknown")
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description="self-test for medwatt2mostab")
+    ap.add_argument("--write-fixture", action="store_true",
+                    help="regenerate the committed __fixtures__ CSV instead of only verifying it")
+    args = ap.parse_args(argv)
+
     safety_checks()
     polarity_checks()
 
+    fixture = os.path.join(os.path.realpath(FIXTURE_DIR), f"{MODEL}.mostab.csv")
     with tempfile.TemporaryDirectory() as tmp:
         npz = os.path.join(tmp, "lut.npz")
         build_npz(npz)
-        written = m2m.convert(npz, FIXTURE_DIR, trust=True, overwrite=True)  # committed fixture
+        # Read-only by default: convert into a temp dir and compare to the committed
+        # fixture, so running the test never dirties the working tree.
+        out_dir = FIXTURE_DIR if args.write_fixture else tmp
+        written = m2m.convert(npz, out_dir, trust=True, overwrite=True)
 
-    out = os.path.join(FIXTURE_DIR, f"{MODEL}.mostab.csv")
-    assert written == [(out, 24)], written  # 2*2*3*2 grid points
-    meta, header, rows = read_mostab(out)
+        out = os.path.join(os.path.realpath(out_dir), f"{MODEL}.mostab.csv")
+        assert written == [(out, 24)], written  # 2*2*3*2 grid points
+        meta, header, rows = read_mostab(out)
 
-    assert meta["device"] == MODEL, meta
-    assert meta["W"] == "1e-06", meta
-    assert meta["simulator"] == "NgspiceSimulator", meta
-    assert header == ["L", "VDS", "VSB", "VGS", "ID", "GM", "GDS", "VTH"], header
-    assert len(rows) == 24, len(rows)
+        assert meta["device"] == MODEL, meta
+        assert meta["W"] == "1e-06", meta
+        assert meta["simulator"] == "NgspiceSimulator", meta
+        assert header == ["L", "VDS", "VSB", "VGS", "ID", "GM", "GDS", "VTH"], header
+        assert len(rows) == 24, len(rows)
 
-    # vsb = -vbs: vbs [0, -0.3] -> vsb {0, 0.3}
-    assert {r["VSB"] for r in rows} == {"0", "0.3"}, sorted({r["VSB"] for r in rows})
+        # vsb = -vbs: vbs [0, -0.3] -> vsb {0, 0.3}
+        assert {r["VSB"] for r in rows} == {"0", "0.3"}, sorted({r["VSB"] for r in rows})
 
-    # spot value: length=100e-9 (li=1), vsb=0 (bi=0), vgs=0.7 (gi=2), vds=1.0
-    # id = 1e-6 * (1+1) * (2+1) = 6e-6, gm = 6e-5 -> gm/id = 10
-    hit = [
-        r for r in rows
-        if float(r["L"]) == 100e-9 and float(r["VSB"]) == 0.0
-        and float(r["VGS"]) == 0.7 and float(r["VDS"]) == 1.0
-    ]
-    assert len(hit) == 1, hit
-    assert abs(float(hit[0]["ID"]) - 6e-6) < 1e-18, hit[0]
-    assert abs(float(hit[0]["GM"]) / float(hit[0]["ID"]) - 10.0) < 1e-9, hit[0]
+        # spot value: length=100e-9 (li=1), vsb=0 (bi=0), vgs=0.7 (gi=2), vds=1.0
+        # id = 1e-6 * (1+1) * (2+1) = 6e-6, gm = 6e-5 -> gm/id = 10
+        hit = [
+            r for r in rows
+            if float(r["L"]) == 100e-9 and float(r["VSB"]) == 0.0
+            and float(r["VGS"]) == 0.7 and float(r["VDS"]) == 1.0
+        ]
+        assert len(hit) == 1, hit
+        assert abs(float(hit[0]["ID"]) - 6e-6) < 1e-18, hit[0]
+        assert abs(float(hit[0]["GM"]) / float(hit[0]["ID"]) - 10.0) < 1e-9, hit[0]
 
-    print(f"OK — converted 24 rows, wrote {out}")
+        if not args.write_fixture:
+            with open(out) as gen, open(fixture) as committed:
+                assert gen.read() == committed.read(), (
+                    "committed fixture is stale — rerun with --write-fixture")
+
+    action = "wrote" if args.write_fixture else "verified"
+    print(f"OK — converted 24 rows, {action} {fixture}")
 
 
 if __name__ == "__main__":
+    if not __debug__:
+        raise SystemExit("run this self-test without -O; it relies on assert")
     main()

@@ -1,0 +1,10 @@
+# Lint config for the tools/ scripts. A dedicated ruff.toml (not a pyproject.toml) so
+# `uv run --with numpy python3 tools/x.py` never mistakes tools/ for a Python project.
+
+[lint]
+# Pyflakes/pycodestyle + bugbear, simplify, and blind-except (so the one deliberate
+# broad `except` carries a meaningful `# noqa: BLE001`).
+select = ["E", "F", "W", "B", "SIM", "BLE"]
+# Line length is not enforced: the MATRIX device rows and PDK recipe use aligned
+# trailing comments that read better unwrapped. There is no autoformatter here.
+ignore = ["E501"]

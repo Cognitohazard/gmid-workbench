@@ -100,7 +100,8 @@ def _run_one(pdk, subckt, t, vdd, corner, temp, L_um, W_um, vsb, vds_step, workd
     deck = build_deck(pdk, subckt=subckt, dev_type=t, vdd=vdd, corner=corner, temp=temp,
                       L_um=L_um, W_um=W_um, vsb=vsb, vgs_step=VGS_STEP, vds_step=vds_step,
                       wrdata_to="d.csv")
-    open(cir, "w").write(deck)
+    with open(cir, "w") as f:
+        f.write(deck)
     if os.path.exists(out):
         os.remove(out)
     r = subprocess.run([ngspice, "-b", "d.cir"], cwd=workdir, capture_output=True,
@@ -109,47 +110,64 @@ def _run_one(pdk, subckt, t, vdd, corner, temp, L_um, W_um, vsb, vds_step, workd
         raise RuntimeError(f"{subckt} L={L_um} vsb={vsb}: ngspice wrote no output\n{r.stderr[-600:]}")
     # Decode wrdata (headerless (scale,value) pairs) via the layout owner in gmid_decks.
     ncol = wrdata_columns()
-    rows = []
-    for line in open(out):
-        parts = line.split()
-        if len(parts) < ncol:
-            continue
-        try:
-            v = [float(x) for x in parts[:ncol]]
-        except ValueError:
-            continue
-        rows.append(parse_wrdata_row(v))
+    rows, skipped = [], 0
+    with open(out) as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) < ncol:
+                if parts:  # a non-blank but malformed line; blank lines don't count
+                    skipped += 1
+                continue
+            try:
+                v = [float(x) for x in parts[:ncol]]
+            except ValueError:
+                skipped += 1
+                continue
+            rows.append(parse_wrdata_row(v))
     if not rows:
         raise RuntimeError(f"{subckt} L={L_um} vsb={vsb}: empty wrdata")
+    if skipped:  # surface silent data loss rather than shipping a short table as valid
+        print(f"   note: {subckt} L={L_um} vsb={vsb}: skipped {skipped} unparseable "
+              f"wrdata line(s)", file=sys.stderr)
     return rows
 
 
 def _qa(path, dev_type):
-    """Sanity-check one assembled mostab. Returns (ok, [messages]).
-
-    The real data-trust gate is the workbench importer + ``qa``; this catches gross
-    generation faults (a collided/missing block, an off-by-1e6 unit slip, a dead
-    device, a polarity-axis mix-up) before anything ships.
+    """Sanity-check one assembled mostab. Returns ``(faults, warns)`` — two message
+    lists. Any ``faults`` is a HARD problem — a missing column, a non-finite value, a
+    duplicated or incomplete grid, a dead device, or a sweep-axis polarity mix-up — and
+    fails the generator's exit code. ``warns`` are soft suspicions (a gm/Id peak outside
+    the sane window) that a valid corner device can trip, so they don't fail. The real
+    data-trust gate is the workbench importer + ``qa``; this catches gross generation
+    faults before anything ships. Severity is decided by which list a check appends to.
     """
-    msgs = []
-    rows = [r for r in csv.reader(open(path)) if r and not r[0].startswith("#")]
+    with open(path) as f:
+        rows = [r for r in csv.reader(f) if r and not r[0].startswith("#")]
     head, data = rows[0], rows[1:]
     col = {name: i for i, name in enumerate(head)}
     for k in ("L", "VDS", "VSB", "VGS", "ID", "GM", "GDS"):
         if k not in col:
-            return False, [f"missing column {k}"]
+            return [f"missing column {k}"], []
+    faults, warns = [], []
     # finiteness
     bad = sum(1 for r in data for v in r if v in ("nan", "inf", "-inf"))
     if bad:
-        msgs.append(f"{bad} non-finite values")
-    # grid completeness: every (L,VSB) block is a rectangular VGS x VDS grid
+        faults.append(f"{bad} non-finite values")
+    # grid completeness: every (L,VSB) block must be a duplicate-free, complete
+    # rectangular VGS x VDS grid. Every coordinate lies in xs*ys by construction, so a
+    # unique count below len(xs)*len(ys) means a missing point, and a row count above the
+    # unique count means a duplicate masking one (e.g. two sweep values that collapse to
+    # the same formatted coordinate).
     blocks = {}
     for r in data:
         blocks.setdefault((r[col["L"]], r[col["VSB"]]), []).append((r[col["VGS"]], r[col["VDS"]]))
     for (L, vsb), pts in blocks.items():
-        nvg, nvd = len({p[0] for p in pts}), len({p[1] for p in pts})
-        if nvg * nvd != len(pts):
-            msgs.append(f"L={L} vsb={vsb}: grid {nvg}x{nvd} != {len(pts)} rows (incomplete)")
+        xs, ys, uniq = {p[0] for p in pts}, {p[1] for p in pts}, set(pts)
+        if len(uniq) != len(pts):
+            faults.append(f"L={L} vsb={vsb}: {len(pts) - len(uniq)} duplicate (VGS,VDS) point(s)")
+        if len(uniq) != len(xs) * len(ys):
+            faults.append(f"L={L} vsb={vsb}: grid {len(xs)}x{len(ys)} incomplete "
+                          f"({len(uniq)} of {len(xs) * len(ys)} points)")
     # physical: id/W at strong inversion, gm/Id peak, polarity. Use the smallest-L,
     # vsb=0 block at max |VGS|,|VDS|.
     v0 = [r for r in data if r[col["VSB"]] == "0"]
@@ -161,20 +179,19 @@ def _qa(path, dev_type):
         # ngspice + workbench PMOS convention: MAGNITUDE id/gm/gds, SIGNED-negative vgs axis.
         # So check the device is alive (|id| sane) and the sweep axis sign matches the type.
         if abs(idv) < 1e-9:
-            msgs.append(f"id={idv:.2e} ~0 at full drive (dead device?)")
+            faults.append(f"id={idv:.2e} ~0 at full drive (dead device?)")
         if dev_type == "p" and vgsv >= 0:
-            msgs.append(f"PMOS vgs={vgsv} >=0 (expected signed-negative axis)")
+            faults.append(f"PMOS vgs={vgsv} >=0 (expected signed-negative axis)")
         if dev_type == "n" and vgsv <= 0:
-            msgs.append(f"NMOS vgs={vgsv} <=0 (expected positive axis)")
+            faults.append(f"NMOS vgs={vgsv} <=0 (expected positive axis)")
         # gm/Id peak across the smallest-L vsb=0 sweep should land in a sane window
         ratios = [abs(float(r[col["GM"]])) / abs(float(r[col["ID"]]))
                   for r in blk if abs(float(r[col["ID"]])) > 1e-12]
         if ratios:
             pk = max(ratios)
             if not (5 < pk < 60):
-                msgs.append(f"gm/Id peak {pk:.1f} outside [5,60] (suspect)")
-    return (not any("!=" in m or "missing" in m or "non-finite" in m
-                    or "dead" in m or "sign wrong" in m for m in msgs)), msgs
+                warns.append(f"gm/Id peak {pk:.1f} outside [5,60] (suspect)")
+    return faults, warns
 
 
 def main(argv=None) -> None:
@@ -189,47 +206,57 @@ def main(argv=None) -> None:
     corners, temps = spec["corners"], spec["temps"]
     outdir = os.path.join(args.out, pdk.name)
     os.makedirs(outdir, exist_ok=True)
-    workdir = tempfile.mkdtemp(prefix="gen_gmid_")
-    # ngbehavior=hsa (sourced from CWD) so sectioned `.lib file corner` parses
-    # (the default ngbehavior's LTspice-compat mode reads the corner as a filename).
-    open(os.path.join(workdir, ".spiceinit"), "w").write("set ngbehavior=hsa\n")
+    # TemporaryDirectory cleans the scratch decks/rawfiles on exit (incl. errors).
+    with tempfile.TemporaryDirectory(prefix="gen_gmid_") as workdir:
+        # ngbehavior=hsa (sourced from CWD) so sectioned `.lib file corner` parses
+        # (the default ngbehavior's LTspice-compat mode reads the corner as a filename).
+        with open(os.path.join(workdir, ".spiceinit"), "w") as f:
+            f.write("set ngbehavior=hsa\n")
 
-    ntab = len(corners) * len(temps) * len(spec["devices"])
-    print(f"== {pdk.name}: {ntab} tables ({len(spec['devices'])} devices x "
-          f"{len(corners)} corners x {len(temps)} temps) into {outdir} "
-          f"(ngspice={args.ngspice}) ==")
-    failures = 0
-    # product() iterates leftmost-slowest, so corner/temp stay outer and the
-    # nominal (tt/typical, 27C) tables still generate first.
-    for corner, temp, (subckt, t, vdd, LS) in itertools.product(corners, temps, spec["devices"]):
-        vds_step = spec["vds_step"](vdd)
-        rows = []
-        for L in LS:
-            for vsb in spec["vsb"]:
-                try:
-                    pts = _run_one(pdk, subckt, t, vdd, corner, temp, L, W, vsb,
-                                   vds_step, workdir, args.ngspice)
-                except Exception as e:  # noqa: BLE001 — report and continue the matrix
-                    print(f"   FAIL {subckt} {corner}/{int(temp)}C L={L} vsb={vsb}: {e}")
-                    failures += 1
-                    continue
-                for vgs, vds, params in pts:
-                    rows.append([_g(L * 1e-6), _g(vds), _g(vsb), _g(vgs)]
-                                + [_g(p) for p in params])
-        meta = {"mostab": "0.1", "device": subckt, "corner": corner, "temp": temp,
-                "W": W * 1e-6, "simulator": SIM, "license": "Apache-2.0",
-                "source": SOURCES.get(pdk.name, pdk.name)}
-        if t == "p":
-            meta["polarity"] = "p"
-        out = os.path.join(outdir, f"{subckt}__{corner}__{int(temp)}C.mostab.csv")
-        write_mostab(out, ["l", "vds", "vsb", "vgs", *SAVE_PARAMS], rows, meta)
-        ok, msgs = _qa(out, t)
-        print(f"[{'ok ' if ok else 'WARN'}] {subckt:30s} {corner:8s} {int(temp):4d}C  "
-              f"{len(rows):6d} rows  {'; '.join(msgs) or 'clean'}")
-    if failures:
-        print(f"\n{failures} deck(s) failed — see above.")
-        sys.exit(1)
-    print(f"== done: {pdk.name} -> {outdir} ==")
+        ntab = len(corners) * len(temps) * len(spec["devices"])
+        print(f"== {pdk.name}: {ntab} tables ({len(spec['devices'])} devices x "
+              f"{len(corners)} corners x {len(temps)} temps) into {outdir} "
+              f"(ngspice={args.ngspice}) ==")
+        failures = 0    # decks that failed to run
+        qa_faults = 0   # assembled tables that failed the sanity gate
+        # product() iterates leftmost-slowest, so corner/temp stay outer and the
+        # nominal (tt/typical, 27C) tables still generate first.
+        for corner, temp, (subckt, t, vdd, LS) in itertools.product(corners, temps, spec["devices"]):
+            vds_step = spec["vds_step"](vdd)
+            rows = []
+            for L in LS:
+                for vsb in spec["vsb"]:
+                    try:
+                        pts = _run_one(pdk, subckt, t, vdd, corner, temp, L, W, vsb,
+                                       vds_step, workdir, args.ngspice)
+                    except Exception as e:  # noqa: BLE001 — report and continue the matrix
+                        print(f"   FAIL {subckt} {corner}/{int(temp)}C L={L} vsb={vsb}: {e}",
+                              file=sys.stderr)
+                        failures += 1
+                        continue
+                    for vgs, vds, params in pts:
+                        rows.append([_g(L * 1e-6), _g(vds), _g(vsb), _g(vgs)]
+                                    + [_g(p) for p in params])
+            meta = {"mostab": "0.1", "device": subckt, "corner": corner, "temp": temp,
+                    "W": W * 1e-6, "simulator": SIM, "license": "Apache-2.0",
+                    "source": SOURCES.get(pdk.name, pdk.name)}
+            if t == "p":
+                meta["polarity"] = "p"
+            out = os.path.join(outdir, f"{subckt}__{corner}__{int(temp)}C.mostab.csv")
+            write_mostab(out, ["l", "vds", "vsb", "vgs", *SAVE_PARAMS], rows, meta)
+            faults, warns = _qa(out, t)
+            if faults:
+                qa_faults += 1
+            tag = "FAIL" if faults else ("WARN" if warns else "ok ")
+            print(f"[{tag}] {subckt:30s} {corner:8s} {int(temp):4d}C  "
+                  f"{len(rows):6d} rows  {'; '.join(faults + warns) or 'clean'}")
+        if failures or qa_faults:
+            if failures:
+                print(f"\n{failures} deck(s) failed to run — see above.", file=sys.stderr)
+            if qa_faults:
+                print(f"{qa_faults} table(s) failed QA — see above.", file=sys.stderr)
+            sys.exit(1)
+        print(f"== done: {pdk.name} -> {outdir} ==")
 
 
 if __name__ == "__main__":
