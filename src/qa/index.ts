@@ -12,15 +12,20 @@ import type {
   QAWarning,
   TableMeta,
 } from '../types';
-import { UT } from '../constants';
+import { PHYS, UT } from '../constants';
 import { BASE_QUANTITIES } from '../namespace';
 
 // --- physical thresholds -----------------------------------------------------
 
-/** Physical ceiling on gm/ID ≈ 1/U_T (weak-inversion limit), in S/A. */
+// Both gm/ID ceilings below are anchored at 27 °C and scaled to each table's
+// temperature at the check site: the weak-inversion limit gm/ID → 1/(n·U_T) rises
+// as it gets colder (U_T = kT/q ∝ T), so a fixed room-temperature ceiling would
+// false-flag valid cold-corner data (gm/ID ~48 at −40 °C is physical).
+
+/** Physical ceiling on gm/ID ≈ 1/U_T (weak-inversion limit) at 27 °C, in S/A. */
 const GM_ID_CEILING = 1 / UT; // ~38.7 at 27 °C
 
-/** Above this, a gm/ID value is almost certainly a unit error, not physics. */
+/** gm/ID above this at 27 °C is almost certainly a unit error, not physics. */
 const GM_ID_UNIT_ERROR = 45;
 
 /** Per-step vgs spacing above this (in volts) is coarse enough to warn. */
@@ -230,6 +235,12 @@ export function validate(table: DeviceTable): QAWarning[] {
   const gm = q.get('gm');
   const id = q.get('id');
   if (gm && id) {
+    // Scale both 27 °C anchors by this table's temperature (1/U_T ∝ 1/T): rises
+    // when colder, falls when hotter, and their ratio is preserved automatically.
+    const tempC = table.meta.temp ?? 27;
+    const scale = PHYS.T / (tempC + 273.15); // 1 @27 °C, >1 colder, <1 hotter
+    const ceiling = GM_ID_CEILING * scale; // ~38.7@27, ~49.8@−40, ~29.2@125
+    const unitError = GM_ID_UNIT_ERROR * scale; // ~45@27, temp-scaled
     let maxGmId = 0;
     const n = Math.min(gm.length, id.length);
     for (let i = 0; i < n; i++) {
@@ -238,18 +249,18 @@ export function validate(table: DeviceTable): QAWarning[] {
       const r = Math.abs(gm[i] / idv);
       if (Number.isFinite(r) && r > maxGmId) maxGmId = r;
     }
-    if (maxGmId > GM_ID_UNIT_ERROR) {
+    if (maxGmId > unitError) {
       out.push({
         rule: 'gm-id-ceiling',
         severity: 'error',
-        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds ${GM_ID_UNIT_ERROR} — likely a unit error`,
+        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds ${unitError.toFixed(1)} at ${tempC} °C — likely a unit error`,
         location: 'gm/id',
       });
-    } else if (maxGmId > GM_ID_CEILING) {
+    } else if (maxGmId > ceiling) {
       out.push({
         rule: 'gm-id-ceiling',
         severity: 'warning',
-        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds the physical ceiling ~${GM_ID_CEILING.toFixed(1)} (1/U_T)`,
+        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds the physical ceiling ~${ceiling.toFixed(1)} (1/U_T at ${tempC} °C)`,
         location: 'gm/id',
       });
     }

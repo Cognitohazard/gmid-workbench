@@ -94,6 +94,30 @@ describe('validate: gm/ID ceiling', () => {
     expect(validate(t).some((x) => x.rule === 'gm-id-ceiling')).toBe(false);
   });
 
+  it('does not flag cold-corner gm/ID that is physical at −40 °C but would error at 27 °C', () => {
+    const vgs = [0.2, 0.4];
+    const gm = [4.8e-3, 4.8e-3];
+    const id = [1e-4, 4.8e-3]; // gm/id = 48 at the first sample
+    // 48 is under the −40 °C ceiling (1/U_T ≈ 49.8), so no flag …
+    const cold = makeTable([axis('vgs', vgs)], { gm, id }, { temp: -40 });
+    expect(validate(cold).some((x) => x.rule === 'gm-id-ceiling')).toBe(false);
+    // … but the SAME data at 27 °C exceeds the 45 unit-error line → error.
+    const room = makeTable([axis('vgs', vgs)], { gm, id }, { temp: 27 });
+    expect(validate(room).find((x) => x.rule === 'gm-id-ceiling')?.severity).toBe('error');
+  });
+
+  it('tightens the ceiling at hot temperature (125 °C)', () => {
+    const vgs = [0.2, 0.4];
+    const gm = [3.2e-3, 3.2e-3];
+    const id = [1e-4, 3.2e-3]; // gm/id = 32
+    // At 125 °C the ceiling drops to ~29.2 (unit-error ~34), so 32 warns …
+    const hot = makeTable([axis('vgs', vgs)], { gm, id }, { temp: 125 });
+    expect(validate(hot).find((x) => x.rule === 'gm-id-ceiling')?.severity).toBe('warning');
+    // … while 32 is comfortably physical at 27 °C (< 38.7).
+    const room = makeTable([axis('vgs', vgs)], { gm, id }, { temp: 27 });
+    expect(validate(room).some((x) => x.rule === 'gm-id-ceiling')).toBe(false);
+  });
+
   it('skips the check gracefully when gm or id is absent', () => {
     const t = makeTable([axis('vgs', [0.2, 0.4])], { gm: [1e-3, 1e-3] });
     expect(validate(t).some((x) => x.rule === 'gm-id-ceiling')).toBe(false);
