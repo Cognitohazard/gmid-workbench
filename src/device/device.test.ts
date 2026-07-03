@@ -5,6 +5,8 @@ import { makeGrid } from '../grid';
 import type { DeviceTable } from '../types';
 import { generateDemoDevice } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
+import { compileExpr } from '../derive';
+import { ExprError } from '../types';
 
 /** A known operating point: forward-lookup the demo at (L, vgs) to get a self-consistent (gm, id, gm/id). */
 function knownPoint(table: DeviceTable, L: number, vgs: number) {
@@ -283,5 +285,120 @@ describe('thermalNoise temperature', () => {
     expect(at125 / at27).toBeCloseTo(Math.sqrt((125 + 273.15) / PHYS.T), 12);
     // 27 °C explicitly matches the default exactly.
     expect(thermalNoise(gm, undefined, 27)).toBeCloseTo(at27, 15);
+  });
+});
+
+describe('sizeDevice — unphysical binds are rejected', () => {
+  const table = generateDemoDevice();
+  const L = table.grid.axes[0].values[1];
+
+  it('throws by name on a non-positive supplied quantity', () => {
+    expect(() => sizeDevice({ table, L, gm: -1e-3, gm_id: 12 })).toThrow(/gm must be > 0/);
+    expect(() => sizeDevice({ table, L, gm_id: 12, id: 0 })).toThrow(/id must be > 0/);
+    expect(() => sizeDevice({ table, L, gm_id: -12, id: 1e-5 })).toThrow(/gm_id must be > 0/);
+  });
+
+  it('throws when the DERIVED third quantity is non-positive (sign disagreement)', () => {
+    // gm > 0 with id < 0 derives gm_id < 0 — the bind is internally inconsistent
+    // with magnitude tables and must fail here, not size a negative width.
+    expect(() => sizeDevice({ table, L, gm: 1e-3, id: -1e-5 })).toThrow(/must be > 0/);
+  });
+});
+
+describe('sizeDevice — quantities describe the SIZED device (width rescale)', () => {
+  const table = generateDemoDevice();
+  const L = table.grid.axes[0].values[1];
+
+  it('parallel-composition invariance: per-width quantities scale by W/w0, ratios do not', () => {
+    const res = sizeDevice({ table, L, gm_id: 12, id: 20e-6 });
+    const w0 = table.meta.W as number;
+    const k = res.W / w0;
+    const char = lookup(table, { l: L, vgs: res.vgs }); // characterization-width point
+    expect(res.quantities.gds).toBeCloseTo(char.gds * k, 15);
+    expect(res.quantities.cgg).toBeCloseTo(char.cgg * k, 20);
+    expect(res.quantities.w).toBeCloseTo(res.W, 12);
+    // intensive quantities unchanged
+    expect(res.quantities.vstar).toBeCloseTo(char.vstar, 12);
+    expect(res.quantities.av0).toBeCloseTo(char.av0, 9);
+    expect(res.quantities.id_w).toBeCloseTo(char.id / w0, 18);
+  });
+
+  it('hand-written author math now agrees with the derived ratios (the gm/gds trap)', () => {
+    const res = sizeDevice({ table, L, gm_id: 12, id: 20e-6 });
+    const q = res.quantities;
+    // Before the rescale, gm/gds disagreed with av0 by the width ratio W/w0 (a silent
+    // ~2–20× gain error). Now the only residue is the inverse-lookup interpolation gap
+    // between the BOUND gm (the exact design target, overlaid) and the table's gm at
+    // the recovered vgs — sub-percent on the demo grid, versus ×k before.
+    expect(Math.abs(q.gm / q.gds / q.av0 - 1)).toBeLessThan(0.01);
+    expect(Math.abs(q.gm / (2 * Math.PI * q.cgg) / q.ft - 1)).toBeLessThan(0.01);
+    // ro is derived from the same scaled gds — exact.
+    expect(1 / q.gds / q.ro).toBeCloseTo(1, 12);
+  });
+});
+
+describe('sizeDevice — width-first binding (any 2 of {gm, gm_id, id, W})', () => {
+  const table = generateDemoDevice();
+  const L = table.grid.axes[0].values[1];
+  // Reference point from the classic electrical bind.
+  const ref = sizeDevice({ table, L, gm_id: 12, id: 20e-6 });
+
+  it('W + gm_id recovers the same operating point as the electrical bind', () => {
+    const res = sizeDevice({ table, L, W: ref.W, gm_id: 12 });
+    expect(res.vgs).toBeCloseTo(ref.vgs, 12);
+    expect(res.id).toBeCloseTo(ref.id, 12);
+    expect(res.gm).toBeCloseTo(ref.gm, 12);
+  });
+
+  // The W+id / W+gm paths invert the raw COLUMN curve, while the reference inverted the
+  // gm/id RATIO curve; between grid nodes the two piecewise-linear interpolants differ at
+  // sub-percent level, so the round-trips below assert grid-interpolation agreement (and
+  // exactness of the supplied quantities), not bit equality.
+  it('W + id inverts the current-density curve back to the same point', () => {
+    const res = sizeDevice({ table, L, W: ref.W, id: ref.id });
+    expect(res.id).toBe(ref.id); // supplied — exact
+    expect(res.W).toBe(ref.W);
+    expect(Math.abs(res.vgs - ref.vgs)).toBeLessThan(1e-3);
+    expect(Math.abs(res.gm_id / ref.gm_id - 1)).toBeLessThan(0.01);
+  });
+
+  it('W + gm inverts the gm-density curve back to the same point', () => {
+    const res = sizeDevice({ table, L, W: ref.W, gm: ref.gm });
+    expect(res.gm).toBe(ref.gm); // supplied — exact
+    expect(Math.abs(res.vgs - ref.vgs)).toBeLessThan(1e-3);
+    expect(Math.abs(res.gm_id / ref.gm_id - 1)).toBeLessThan(0.01);
+  });
+
+  it('rejects three bound quantities and a non-positive W by name', () => {
+    expect(() => sizeDevice({ table, L, W: 1e-6, gm_id: 12, id: 1e-6 })).toThrow(/EXACTLY two/);
+    expect(() => sizeDevice({ table, L, W: -1e-6, gm_id: 12 })).toThrow(/W must be > 0/);
+  });
+});
+
+describe('author-callable oracles (registered expression functions)', () => {
+  it('noise_rms / pelgrom_vos / pelgrom_irel call the core implementations', () => {
+    const scope = {
+      resolve: (n: string) =>
+        ({ sth: 1e-16, fc: 1e4, flo: 1, fhi: 1e6, avt: 5e-9, ab: 1e-8, W: 1e-5, L: 1e-6, g: 12 })[
+          n
+        ],
+    };
+    expect(compileExpr('noise_rms(sth, fc, flo, fhi)').eval(scope)).toBeCloseTo(
+      integratedNoise(1e-16, 1e4, 1, 1e6),
+      18,
+    );
+    expect(compileExpr('pelgrom_vos(avt, ab, W, L, g)').eval(scope)).toBeCloseTo(
+      mismatch(1e-5, 1e-6, 12, { avth: 5e-9, abeta: 1e-8 }).sigmaVos,
+      18,
+    );
+    expect(compileExpr('pelgrom_irel(avt, ab, W, L, g)').eval(scope)).toBeCloseTo(
+      mismatch(1e-5, 1e-6, 12, { avth: 5e-9, abeta: 1e-8 }).sigmaIrel,
+      18,
+    );
+  });
+
+  it('a violated precondition surfaces as an engine error (na chip), not a crash', () => {
+    const scope = { resolve: () => undefined };
+    expect(() => compileExpr('noise_rms(0-1e-16, 1e4, 1, 1e6)').eval(scope)).toThrow(ExprError);
   });
 });

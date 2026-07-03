@@ -93,6 +93,15 @@ export interface BaseQuantity {
   readonly unit: string; // SI unit string, e.g. "S", "A", "V", "F"
   readonly required: boolean;
   readonly axis?: boolean; // true if it is a sweep axis (vgs, l, vds, vsb)
+  /**
+   * True for quantities proportional to device width under the parallel-composition
+   * model (a device of width k·w0 behaves as k characterized unit devices in
+   * parallel): currents, (trans)conductances, capacitances, current-noise PSDs — and
+   * the width itself. Voltages and ratios are intensive and carry no flag. Sizing
+   * uses this to rescale an operating point from the characterization width to the
+   * sized width, so author math over gds/cgg reads the SIZED device.
+   */
+  readonly perWidth?: boolean;
 }
 
 /** Definition of a derived quantity as an expression over the base namespace. */

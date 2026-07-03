@@ -11,28 +11,33 @@ export const BASE_QUANTITIES: readonly BaseQuantity[] = [
   { key: 'vds', unit: 'V', required: false, axis: true },
   { key: 'vsb', unit: 'V', required: false, axis: true },
   // required operating-point quantities
-  { key: 'id', unit: 'A', required: true },
-  { key: 'gm', unit: 'S', required: true },
+  { key: 'id', unit: 'A', required: true, perWidth: true },
+  { key: 'gm', unit: 'S', required: true, perWidth: true },
   // recommended / optional
-  { key: 'gds', unit: 'S', required: false },
-  { key: 'gmb', unit: 'S', required: false },
-  { key: 'cgg', unit: 'F', required: false },
-  { key: 'cgs', unit: 'F', required: false },
-  { key: 'cgd', unit: 'F', required: false },
-  { key: 'cgb', unit: 'F', required: false },
-  { key: 'cdb', unit: 'F', required: false },
-  { key: 'csb', unit: 'F', required: false },
+  { key: 'gds', unit: 'S', required: false, perWidth: true },
+  { key: 'gmb', unit: 'S', required: false, perWidth: true },
+  { key: 'cgg', unit: 'F', required: false, perWidth: true },
+  { key: 'cgs', unit: 'F', required: false, perWidth: true },
+  { key: 'cgd', unit: 'F', required: false, perWidth: true },
+  { key: 'cgb', unit: 'F', required: false, perWidth: true },
+  { key: 'cdb', unit: 'F', required: false, perWidth: true },
+  { key: 'csb', unit: 'F', required: false, perWidth: true },
   { key: 'vth', unit: 'V', required: false },
   { key: 'vdsat', unit: 'V', required: false },
-  { key: 'w', unit: 'm', required: false }, // may be metadata instead of a column
-  { key: 'sth', unit: 'A^2/Hz', required: false }, // thermal noise PSD
-  { key: 'sfl', unit: 'A^2/Hz', required: false }, // flicker noise PSD @ 1 Hz
+  { key: 'w', unit: 'm', required: false, perWidth: true }, // may be metadata instead of a column
+  { key: 'sth', unit: 'A^2/Hz', required: false, perWidth: true }, // thermal noise PSD
+  { key: 'sfl', unit: 'A^2/Hz', required: false, perWidth: true }, // flicker noise PSD @ 1 Hz
   { key: 'gamma', unit: '1', required: false }, // thermal-noise factor γ (defaults to GAMMA_DEFAULT)
-  { key: 'igd', unit: 'A', required: false },
-  { key: 'igs', unit: 'A', required: false },
+  { key: 'igd', unit: 'A', required: false, perWidth: true },
+  { key: 'igs', unit: 'A', required: false, perWidth: true },
 ];
 
 export const BASE_KEYS: ReadonlySet<string> = new Set(BASE_QUANTITIES.map((q) => q.key));
+
+/** Base keys that scale with device width (see BaseQuantity.perWidth). */
+export const PER_WIDTH_KEYS: ReadonlySet<string> = new Set(
+  BASE_QUANTITIES.filter((q) => q.perWidth).map((q) => q.key),
+);
 
 /** Keys a usable table must carry (vgs, id, gm) — every chart/lookup needs them. */
 export const REQUIRED_KEYS: readonly string[] = BASE_QUANTITIES.filter((q) => q.required).map(

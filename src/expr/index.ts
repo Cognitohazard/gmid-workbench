@@ -67,6 +67,35 @@ const UNARY_FNS = new Set(['sqrt', 'log10', 'log', 'exp', 'abs', 'atan', 'sign']
 const VARIADIC_FNS = new Set(['min', 'max']);
 const FUNCTION_NAMES: ReadonlySet<string> = new Set([...UNARY_FNS, ...VARIADIC_FNS, 'par']);
 
+/**
+ * Domain functions registered by other core modules (registerExprFunction below).
+ * The registry keeps each formula in its single home — e.g. the Pelgrom mismatch and
+ * band-integrated noise closed-forms live in device/, which registers them here so
+ * author expressions call the trusted implementation instead of re-typing the math.
+ * Scalar-only by contract (sheet scopes are scalar; column math can spell the formula).
+ */
+const REGISTERED: Record<string, { arity: number; impl: (...args: number[]) => number }> = {};
+
+/** Register a named scalar domain function. Collisions with any existing function,
+ *  or re-registration with a different shape, throw — a silent override could change
+ *  the meaning of saved author expressions. Idempotent for identical re-registration
+ *  (module double-loading in tests). */
+export function registerExprFunction(
+  name: string,
+  arity: number,
+  impl: (...args: number[]) => number,
+): void {
+  const existing = REGISTERED[name];
+  if (existing) {
+    if (existing.arity === arity) return; // idempotent re-registration
+    throw new ExprError(`registerExprFunction: "${name}" is already registered`);
+  }
+  if (FUNCTION_NAMES.has(name)) {
+    throw new ExprError(`registerExprFunction: "${name}" is a built-in function name`);
+  }
+  REGISTERED[name] = { arity, impl };
+}
+
 // --- eng-notation literal preprocessing --------------------------------------
 
 // A number body immediately followed by a known SPICE/SI suffix at a word
@@ -257,6 +286,20 @@ function evalNode(node: Node, scope: Scope, constants: Record<string, number>): 
           .reduce((acc, cur) => broadcast2(acc, cur, (x, y) => x + y));
         return map1(recipSum, (x) => 1 / x);
       }
+      const reg = REGISTERED[fn];
+      if (reg) {
+        if (args.length !== reg.arity) {
+          throw new ExprError(`${fn}() takes exactly ${reg.arity} arguments, got ${args.length}`);
+        }
+        const nums = args.map((a, i) => asScalar(a, `${fn}() argument ${i + 1}`));
+        try {
+          return reg.impl(...nums);
+        } catch (e) {
+          // Domain preconditions (e.g. a negative PSD) surface as engine errors so every
+          // caller's existing ExprError handling (na chips, skipped rows) applies.
+          throw new ExprError(`${fn}(): ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       throw new ExprError(`unknown function: ${fn}`);
     }
     default: {
@@ -272,6 +315,7 @@ function collectNames(node: Node, constants: Record<string, number>, acc: Set<st
     case 'Identifier':
       if (
         !FUNCTION_NAMES.has(node.name) &&
+        !Object.prototype.hasOwnProperty.call(REGISTERED, node.name) &&
         !Object.prototype.hasOwnProperty.call(constants, node.name)
       ) {
         acc.add(node.name);

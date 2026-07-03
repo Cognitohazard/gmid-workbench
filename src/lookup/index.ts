@@ -128,22 +128,53 @@ export function lookupByGmId(
   L: number,
   keys?: string[],
 ): Record<string, number> {
+  return lookup(table, { l: L, vgs: invertOnSlice(table, L, 'gm/id', gmId) }, keys);
+}
+
+/**
+ * Inverse lookup by a raw column value (gm or id, at the characterization width)
+ * along the fixed-L slice — both are monotonic in vgs on healthy data. This is the
+ * kernel behind width-first sizing: a target density gm/W or id/W maps to a
+ * characterization-column target via the width ratio, which this inverts to vgs.
+ */
+export function lookupByColumn(
+  table: DeviceTable,
+  key: 'gm' | 'id',
+  target: number,
+  L: number,
+  keys?: string[],
+): Record<string, number> {
+  return lookup(table, { l: L, vgs: invertOnSlice(table, L, key, target) }, keys);
+}
+
+/**
+ * Shared inversion kernel: build the requested curve ('gm/id' ratio, or a raw gm/id
+ * column) over vgs on the L-slice and invert it to a vgs coordinate. Fails closed on
+ * any uninvertible slice (missing columns, extra live axes, non-monotonic data,
+ * out-of-range target) rather than fabricating an operating point.
+ */
+function invertOnSlice(
+  table: DeviceTable,
+  L: number,
+  what: 'gm/id' | 'gm' | 'id',
+  target: number,
+): number {
   const grid = table.grid;
   if (!grid.axes.some((a) => a.name === 'l')) {
-    throw new Error('lookupByGmId: table has no "l" axis to slice');
+    throw new Error('inverse lookup: table has no "l" axis to slice');
   }
 
   // Collapse the l axis at L, leaving a slice grid whose remaining axes include vgs.
   const slice = sliceGrid(grid, { l: L });
   const vgsAxis = slice.axes.find((a) => a.name === 'vgs');
   if (!vgsAxis) {
-    throw new Error('lookupByGmId: slice has no "vgs" axis');
+    throw new Error('inverse lookup: slice has no "vgs" axis');
   }
   const vgs = vgsAxis.values;
   const gm = slice.quantities.get('gm');
   const id = slice.quantities.get('id');
   if (!gm || !id) {
-    throw new Error('lookupByGmId: slice is missing gm and/or id columns');
+    throw new Error('inverse lookup: slice is missing gm and/or id columns');
   }
 
   // The vgs axis must be the only non-degenerate remaining axis for the 1-D curve
@@ -151,20 +182,20 @@ export function lookupByGmId(
   for (const a of slice.axes) {
     if (a.name !== 'vgs' && a.values.length > 1) {
       throw new Error(
-        `lookupByGmId: cannot bracket gm/id with extra non-degenerate axis "${a.name}"`,
+        `inverse lookup: cannot bracket ${what} with extra non-degenerate axis "${a.name}"`,
       );
     }
   }
 
   const n = vgs.length;
-  // gm/id over the vgs lattice, holding any trailing degenerate axes at index 0.
+  // The curve over the vgs lattice, holding any trailing degenerate axes at index 0.
   const curve = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     const flat = vgsAxisFlat(slice, i);
-    curve[i] = gm[flat] / id[flat];
+    curve[i] = what === 'gm/id' ? gm[flat] / id[flat] : what === 'gm' ? gm[flat] : id[flat];
   }
 
-  // Invert gm/id → vgs with the SAME monotone bracket-and-interpolate kernel the
+  // Invert curve → vgs with the SAME monotone bracket-and-interpolate kernel the
   // cursor (series.invertX) uses, so endpoint/ULP handling is identical. orient
   // drops any non-finite node (an id==0 sample yields ±∞) so it cannot widen the
   // range or match a bracket; interp1 carries the shared ULP-overshoot clamp.
@@ -173,25 +204,26 @@ export function lookupByGmId(
   // orient's fail-soft NaN bounds / arbitrary-branch sort fabricate an operating point.
   if (o.nx.length === 0) {
     throw new Error(
-      `lookupByGmId: no invertible gm/id data on the L=${L} slice (e.g. every sample has id==0)`,
+      `inverse lookup: no invertible ${what} data on the L=${L} slice (e.g. every sample has id==0)`,
     );
   }
   if (!o.mono) {
     throw new Error(
-      `lookupByGmId: gm/id is not monotonic in vgs on the L=${L} slice; cannot invert gm/id ${gmId} unambiguously`,
+      `inverse lookup: ${what} is not monotonic in vgs on the L=${L} slice; cannot invert ${what} ${target} unambiguously`,
     );
   }
-  if (gmId < o.xmin || gmId > o.xmax) {
-    throw new Error(`lookupByGmId: gm/id ${gmId} out of range [${o.xmin}, ${o.xmax}] for L=${L}`);
+  if (target < o.xmin || target > o.xmax) {
+    throw new Error(
+      `inverse lookup: ${what} ${target} out of range [${o.xmin}, ${o.xmax}] for L=${L}`,
+    );
   }
-  const vgsAt = interp1(o.nx, o.ny, gmId);
+  const vgsAt = interp1(o.nx, o.ny, target);
   if (!Number.isFinite(vgsAt)) {
     throw new Error(
-      `lookupByGmId: could not invert gm/id ${gmId} to a finite vgs on the L=${L} slice`,
+      `inverse lookup: could not invert ${what} ${target} to a finite vgs on the L=${L} slice`,
     );
   }
-
-  return lookup(table, { l: L, vgs: vgsAt }, keys);
+  return vgsAt;
 }
 
 /**
