@@ -58,8 +58,23 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Add a design sheet: variables, author equations, and pass/fail constraints with margins, sized on the active device.',
   sheetSweep:
     'Sweep one variable across its range and chart every rule’s margin — the feasibility region where the design closes.',
+  sheetSweep2:
+    'Add a second variable to sweep the design plane: a feasibility heatmap (green = the design closes, red = a hard rule fails) instead of the 1-D margin chart.',
   useDevice:
     'Size this child block against a specific loaded device (e.g. an LVT/SVT flavor or the PMOS table); “active device” inherits the parent’s.',
+  // design-sheet vocabulary (rule kinds, statuses, composition, bias, param roles)
+  ruleKind:
+    'invariant = a hard physical floor; requirement = a hard application spec — both must hold for a feasible design. guardrail = advisory only: shown, never blocks.',
+  amber:
+    'The rule holds but by under 5% margin — a near-miss worth a look. A spec pinned by its own bind snaps to amber instead of coin-flipping pass/fail on rounding.',
+  ruleNa:
+    'na = a side could not be computed (an undeclared name or a non-finite value). Never a silent pass: a hard rule reading na fails the design closed.',
+  provide:
+    'Names this block exposes to a parent sheet. The parent reads each as child__name and writes its own math over it — scalar composition, no circuit solving.',
+  bindBias:
+    'The operating point (vds/vsb, signed) the device is sized at. gds shifts ~4–5× across vds; declare it, or an undeclared axis falls back to the shared bias with a warning.',
+  paramRole:
+    'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
   size: 'Sizing: bind any two of {gm/ID, I_D, gm} at a chosen L → width, V_GS, f_T, gain, and feasibility.',
   bind: 'Enter exactly two of gm/ID, I_D, gm; the third and the geometry are solved at this L.',

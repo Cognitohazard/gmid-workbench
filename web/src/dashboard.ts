@@ -7,6 +7,7 @@ import {
   metaScalars,
   fixTable,
   EXAMPLES,
+  MAX_USE_DEPTH,
   RULE_KINDS,
   RULE_OPS,
   type DeviceTable,
@@ -165,6 +166,7 @@ export interface Panel {
   legend?: LegendConfig; // dense-family display; absent ⇒ colorbar
   sheet?: SheetDoc; // render === 'sheet': the authored leaf design-sheet, stored verbatim
   sheetSweep?: string; // render === 'sheet': the param the feasibility view sweeps; '' = card only
+  sheetSweep2?: string; // render === 'sheet': the second (×) param; with sheetSweep set ⇒ a 2-D map
   auto?: boolean; // an auto-generated canonical panel — regenerated per device on a swap, not
   // user-authored; absent on every panel the user adds, so user work survives a device swap.
 }
@@ -243,8 +245,13 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  * drop. A bind is kept only when well-formed (L + exactly two of {gm,gm_id,id}); else
  * it is dropped and its rules go 'na'. Returns undefined only when `v` is not an object.
  */
-function sanitizeSheet(v: unknown): SheetDoc | undefined {
+function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
   if (!v || typeof v !== 'object') return undefined;
+  // Depth backstop: the evaluator/validator error out past MAX_USE_DEPTH, but they can
+  // only do so if loading the doc didn't blow the stack first. One level beyond the cap
+  // is kept so the validator still sees a non-empty `uses` at the cap and raises its
+  // depth error rather than the truncation reading as a shallower (silently valid) tree.
+  if (depth > MAX_USE_DEPTH + 1) return undefined;
   const o = v as Record<string, unknown>;
   const str = (x: unknown, fallback: string) => (typeof x === 'string' && x ? x : fallback);
 
@@ -257,6 +264,8 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
         if (finite(pp.min)) out.min = pp.min;
         if (finite(pp.max)) out.max = pp.max;
         if (typeof pp.unit === 'string') out.unit = pp.unit;
+        if (pp.role === 'spec' || pp.role === 'choice') out.role = pp.role;
+        if (typeof pp.note === 'string') out.note = pp.note;
         return [out];
       })
     : [];
@@ -268,6 +277,7 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
         if (typeof rr.name !== 'string' || typeof rr.expr !== 'string') return [];
         const out: SheetRow = { name: rr.name, expr: rr.expr };
         if (typeof rr.unit === 'string') out.unit = rr.unit;
+        if (typeof rr.note === 'string') out.note = rr.note;
         return [out];
       })
     : [];
@@ -287,19 +297,22 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
         };
         if (finite(rr.tolPct)) out.tolPct = rr.tolPct;
         if (typeof rr.justification === 'string') out.justification = rr.justification;
+        if (typeof rr.note === 'string') out.note = rr.note;
         return [out];
       })
     : [];
 
+  // A bind with the wrong {gm, gm_id, id} arity is kept, NOT dropped: validateSheet
+  // raises a visible "exactly two" error the author can fix, whereas dropping it here
+  // would silently turn a mis-authored sized sheet into an unsized one.
   let bind: SheetBind | undefined;
   if (o.bind && typeof o.bind === 'object') {
     const b = o.bind as Record<string, unknown>;
     if (typeof b.L === 'string') {
       const cand: SheetBind = { L: b.L };
-      for (const k of ['gm', 'gm_id', 'id'] as const)
+      for (const k of ['gm', 'gm_id', 'id', 'W', 'vds', 'vsb'] as const)
         if (typeof b[k] === 'string') cand[k] = b[k] as string;
-      const n = (['gm', 'gm_id', 'id'] as const).filter((k) => cand[k] !== undefined).length;
-      if (n === 2) bind = cand;
+      bind = cand;
     }
   }
 
@@ -312,7 +325,7 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
         if (!u || typeof u !== 'object') return [];
         const uu = u as Record<string, unknown>;
         if (typeof uu.name !== 'string' || !uu.name) return [];
-        const childDoc = sanitizeSheet(uu.doc);
+        const childDoc = sanitizeSheet(uu.doc, depth + 1);
         if (!childDoc) return [];
         const use: SheetUse = { name: uu.name, doc: childDoc };
         if (typeof uu.device === 'string') use.device = uu.device;
@@ -333,6 +346,7 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
 
   return {
     title: str(o.title, 'Sheet'),
+    ...(typeof o.description === 'string' && o.description ? { description: o.description } : {}),
     polarity: o.polarity === 'p' ? 'p' : 'n',
     params,
     rows,
@@ -419,6 +433,8 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       const sheet = render === 'sheet' ? (sanitizeSheet(pp.sheet) ?? EXAMPLES[0]) : undefined;
       const sheetSweep =
         render === 'sheet' && typeof pp.sheetSweep === 'string' ? pp.sheetSweep : undefined;
+      const sheetSweep2 =
+        render === 'sheet' && typeof pp.sheetSweep2 === 'string' ? pp.sheetSweep2 : undefined;
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,
@@ -430,6 +446,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
         ...(legend ? { legend } : {}),
         ...(sheet ? { sheet } : {}),
         ...(sheetSweep ? { sheetSweep } : {}),
+        ...(sheetSweep2 ? { sheetSweep2 } : {}),
         ...(pp.auto === true ? { auto: true } : {}),
       });
     }

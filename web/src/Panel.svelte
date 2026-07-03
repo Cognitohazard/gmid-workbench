@@ -20,13 +20,7 @@
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
   import QuantityPicker from './QuantityPicker.svelte';
-  import {
-    clampLegendCount,
-    defaultScale,
-    reduceForSizing,
-    type Panel,
-    type Scale,
-  } from './dashboard';
+  import { clampLegendCount, defaultScale, sizingBias, type Panel, type Scale } from './dashboard';
 
   let {
     device,
@@ -133,28 +127,19 @@
     Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== cfg.family)),
   );
 
-  // A sheet sizes at an [l × vgs] point (lookupByGmId brackets gm/ID along vgs), so collapse every
-  // other axis (vds, vsb, …) at the shared bias first (shared reduceForSizing policy) — else the
-  // inverse lookup can't bracket.
-  const sheetDevice = $derived(
-    cfg.render === 'sheet' ? reduceForSizing(device, sharedBias) : device,
-  );
+  // Sheets receive the UNREDUCED table: a bind that declares its vds/vsb slices the table
+  // itself (the authored operating point wins), and any live bias axis a bind does NOT
+  // declare is collapsed core-side at this fallback — with an advisory warning naming the
+  // assumed value, so the panel's slider bias is never an invisible sizing assumption.
+  const sheetBias = $derived(cfg.render === 'sheet' ? sizingBias(device, sharedBias) : {});
 
   // Per-child device resolution for composed sheets: a child `use.device` is a table uid; resolve
-  // it to that loaded table, reduced for sizing exactly like the active device. uids are unique
-  // per distinct content, so a first match is safe (same uid ⇒ same device); an absent uid returns
-  // undefined ⇒ the child fails closed. Memoized per (sheetDevices, sharedBias) so a feasibility
-  // sweep reduces each distinct child device once, not once per sample.
+  // it to that loaded table (unreduced — the child's own bind/fallback picks the bias point).
+  // uids are unique per distinct content, so a first match is safe (same uid ⇒ same device); an
+  // absent uid returns undefined ⇒ the child fails closed.
   const resolveDevice: DeviceResolver = $derived.by(() => {
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive memo cache, rebuilt per recompute
-    const cache = new Map<string, DeviceTable | undefined>();
-    return (uid: string) => {
-      if (!cache.has(uid)) {
-        const t = sheetDevices.find((d) => d.uid === uid)?.table;
-        cache.set(uid, t ? reduceForSizing(t, sharedBias) : undefined);
-      }
-      return cache.get(uid);
-    };
+    const list = sheetDevices;
+    return (uid: string) => list.find((d) => d.uid === uid)?.table;
   });
   // Picker options: one per distinct uid (a re-imported identical table collapses to one), with a
   // disambiguating suffix when two DIFFERENT devices share a display label.
@@ -483,14 +468,17 @@
   {#if cfg.render === 'sheet'}
     {#if cfg.sheet}
       <SheetPanel
-        device={sheetDevice}
+        {device}
         cfg={cfg.sheet}
         sweep={cfg.sheetSweep ?? ''}
+        sweep2={cfg.sheetSweep2 ?? ''}
+        fallbackBias={sheetBias}
         {resolveDevice}
         {deviceOptions}
         {styleVersion}
         onChange={(s) => onChange({ sheet: s })}
         onSweep={(s) => onChange({ sheetSweep: s })}
+        onSweep2={(s) => onChange({ sheetSweep2: s })}
       />
     {:else}
       <p class="perr">this panel has no sheet</p>

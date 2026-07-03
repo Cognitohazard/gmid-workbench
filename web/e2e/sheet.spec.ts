@@ -323,3 +323,82 @@ test('design sheet: two loaded devices sharing a label are each individually sel
 
   expect(errors).toEqual([]);
 });
+
+test('design sheet: a failing guardrail reads as advisory, distinct from a hard failure', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // At the default gm/ID = 12 two rules fail with DIFFERENT severities: headroom (an invariant, a
+  // hard failure) and gbw-margin (a guardrail, advisory). Only the guardrail carries the advisory
+  // marker + wording — the two must be visually distinct (the audit finding this addresses).
+  const headroom = sp.locator('.srules tr', { hasText: 'headroom' });
+  const gbw = sp.locator('.srules tr', { hasText: 'gbw-margin' });
+  await expect(headroom).toHaveClass(/st-fail/);
+  await expect(headroom).not.toHaveClass(/advisory/);
+  await expect(gbw).toHaveClass(/st-fail/);
+  await expect(gbw).toHaveClass(/advisory/);
+  await expect(gbw).toContainText('advisory');
+
+  // Lower the efficiency knob so every HARD rule passes → the design is feasible-labeled, yet the
+  // guardrail still fails (cgg loads GBW below target) and still reads advisory — a red guardrail
+  // over a feasible design must not look like the design failed.
+  const gmId = sp.locator('.svar', { hasText: 'gm_id' }).locator('.num');
+  await gmId.fill('8');
+  await gmId.blur();
+  await expect(sp.locator('.feasb')).toHaveClass(/ok/);
+  await expect(gbw).toHaveClass(/st-fail/);
+  await expect(gbw).toHaveClass(/advisory/);
+});
+
+test('design sheet: a second sweep param renders a 2-D feasibility heatmap, persisted', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // First sweep param → the 1-D margin chart.
+  await sp.locator('.swsel select').selectOption('gm_id');
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+
+  // Add the second (×) param → the heatmap replaces the 1-D chart, with a caption that names what
+  // limits the region.
+  await sp.locator('.swsel2 select').selectOption('L');
+  const canvas = sp.locator('.smapc');
+  await expect(canvas).toBeVisible();
+  await expect(sp.locator('.pchart')).toHaveCount(0);
+  await expect(sp.locator('.scap')).toContainText('×');
+
+  // The heatmap canvas has a real (nonzero) size.
+  const box = await canvas.boundingBox();
+  expect(box!.width).toBeGreaterThan(0);
+  expect(box!.height).toBeGreaterThan(0);
+
+  // The second param survives a reload through the dashboard sanitizer.
+  await page.reload();
+  await loadDemo(page);
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('.swsel2 select')).toHaveValue('L');
+  await expect(sp2.locator('.smapc')).toBeVisible();
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a param note surfaces as a title tooltip', async ({ page }) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // The CL spec param carries a note; it shows as the param row's title attribute.
+  await expect(sp.locator('.svar', { hasText: 'CL' })).toHaveAttribute('title', 'load capacitance');
+});
