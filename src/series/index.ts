@@ -61,6 +61,7 @@ export function familyCurves(
   const xAxis = grid.axes.find((a) => a.name === xName);
   if (!xAxis) throw new Error(`familyCurves: table has no "${xName}" axis`);
   const compiled = compileExpr(expr); // parse once; reused across every curve
+  const scalars = metaScalars(table.meta); // so `id/w` and T-dependent exprs resolve, as in the XY path
 
   // Coordinates for every axis except X and `keep` (the family), interpolated.
   const fixOthers = (at: Record<string, number>, keep: string): void => {
@@ -72,7 +73,7 @@ export function familyCurves(
   if (famName === null) {
     const at: Record<string, number> = {};
     fixOthers(at, xName); // fix everything but X (the would-be family included)
-    const line = evalColumn(sliceGrid(grid, at), compiled);
+    const line = evalColumn(sliceGrid(grid, at), compiled, scalars);
     return { xName, x: xAxis.values, famName: '', famValues: new Float64Array(0), lines: [line] };
   }
 
@@ -86,7 +87,7 @@ export function familyCurves(
   for (const fv of famAxis.values) {
     const at: Record<string, number> = { [famName]: fv };
     fixOthers(at, famName);
-    lines.push(evalColumn(sliceGrid(grid, at), compiled));
+    lines.push(evalColumn(sliceGrid(grid, at), compiled, scalars));
   }
 
   return { xName, x: xAxis.values, famName, famValues: famAxis.values, lines };
@@ -156,7 +157,10 @@ export function familyCurvesXY(
   };
   // Evaluate (xExpr, yExpr) along the sweep for one fixed bias point.
   const curveAt = (at: Record<string, number>): Oriented =>
-    orient(evalColumn(sliceGrid(grid, at), cx, scalars), evalColumn(sliceGrid(grid, at), cy, scalars));
+    orient(
+      evalColumn(sliceGrid(grid, at), cx, scalars),
+      evalColumn(sliceGrid(grid, at), cy, scalars),
+    );
 
   let famValues: Float64Array;
   const curves: Oriented[] = [];
@@ -309,7 +313,8 @@ export function overlayCurvesXY(
   for (let t = 0; t < tables.length; t++) {
     const tbl = tables[t];
     // A table without the requested family axis draws as a single curve, not an error.
-    const famForTable = family !== null && tbl.grid.axes.some((a) => a.name === family) ? family : null;
+    const famForTable =
+      family !== null && tbl.grid.axes.some((a) => a.name === family) ? family : null;
     try {
       const fc = familyCurvesXY(tbl, xExpr, yExpr, sweepName, famForTable, fixed, lattice);
       if (fc.degenerate) notes.push(fc.reason);
@@ -437,7 +442,11 @@ export function invertX(
  * returned ascending. `count >= length` keeps all; explicit includes are honored even if
  * they exceed `count`. Pure index math — the caller slices the curves/labels/colors.
  */
-export function subsample(famValues: Float64Array, count: number, include: number[] = []): number[] {
+export function subsample(
+  famValues: Float64Array,
+  count: number,
+  include: number[] = [],
+): number[] {
   const len = famValues.length;
   if (len === 0) return [];
   const n = Math.max(1, Math.min(Math.floor(count), len));
@@ -460,7 +469,9 @@ export function subsample(famValues: Float64Array, count: number, include: numbe
   const out = new Set<number>(forced);
   const denom = Math.max(1, n - 1); // n === 1 ⇒ a single point at index 0, not a div-by-zero NaN
   for (let k = 0; k < n && out.size < n; k++) out.add(Math.round((k * (len - 1)) / denom));
-  return Array.from(out).sort((a, b) => a - b).slice(0, Math.max(n, forced.size));
+  return Array.from(out)
+    .sort((a, b) => a - b)
+    .slice(0, Math.max(n, forced.size));
 }
 
 /**

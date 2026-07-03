@@ -4,19 +4,16 @@
 // recovers vgs from a target gm/ID along a fixed-L slice. Pure, deterministic,
 // zero DOM imports.
 
-import type { DeviceTable, Grid, Scope, Value } from '../types';
-import { BASE_KEYS, DERIVED_QUANTITIES } from '../namespace';
+import type { DeviceTable, Grid } from '../types';
+import { BASE_KEYS } from '../namespace';
 import { CONSTANTS } from '../constants';
 import { interpolate, sliceGrid, orient, interp1 } from '../grid';
-import { createEngine } from '../expr';
+import { scalarScope } from '../expr';
+import { DERIVED_COMPILED, metaScalars } from '../derive';
 
-// Compile every standard derived definition once: key + compiled expression.
-const ENGINE = createEngine();
-const DERIVED_COMPILED = DERIVED_QUANTITIES.map((q) => ({
-  key: q.key,
-  compiled: ENGINE.compile(q.expr),
-}));
-const DERIVED_BY_KEY = new Map(DERIVED_COMPILED.map((d) => [d.key, d]));
+// The Map is authoritative (shared with derive); a module-level entries array keeps
+// the per-lookup default-keys walk allocation-free.
+const DERIVED_ENTRIES = [...DERIVED_COMPILED];
 
 /** Base quantity keys actually stored as columns in this grid (axes included). */
 function baseKeysPresent(grid: Grid): string[] {
@@ -25,16 +22,6 @@ function baseKeysPresent(grid: Grid): string[] {
     if (BASE_KEYS.has(key)) out.push(key);
   }
   return out;
-}
-
-/** A Scope over a flat record of interpolated base scalars, plus constants. */
-function scalarScope(base: Record<string, number>): Scope {
-  return {
-    resolve(name: string): Value | undefined {
-      if (Object.prototype.hasOwnProperty.call(base, name)) return base[name];
-      return undefined;
-    },
-  };
 }
 
 /** True if every free name of a derived def is an available base scalar or constant. */
@@ -67,6 +54,17 @@ export function lookup(
   const basePresent = baseKeysPresent(grid);
   const baseScalars = interpolate(grid, point, basePresent);
 
+  // Device-metadata scalars — the same scope derive/tableScope uses: T/UT overrides
+  // (so the γ-model noise evaluates at this table's characterization temperature; the
+  // scope shadows the engine's 27 °C defaults) and the width `w` (so width-relative
+  // deriveds like id_w are computable on tables that carry W as metadata). Assign only
+  // if absent: an interpolated stored column of the same name keeps winning, matching
+  // tableScope's stored-before-scalars precedence.
+  const metaVals = metaScalars(table.meta);
+  for (const k of Object.keys(metaVals)) {
+    if (!Object.prototype.hasOwnProperty.call(baseScalars, k)) baseScalars[k] = metaVals[k];
+  }
+
   // Always expose the axis coordinates at the point, even when a grid does not
   // materialize axis columns (e.g. the demo grid). The coordinate is the requested
   // value clamped to the axis range, matching the grid's clamp-at-edge convention.
@@ -82,15 +80,13 @@ export function lookup(
     }
   }
 
-  const requested =
-    keys ??
-    [
-      ...basePresent,
-      ...axisKeys,
-      ...DERIVED_COMPILED.filter((d) => computable(d.compiled.names, baseScalars)).map(
-        (d) => d.key,
-      ),
-    ];
+  const requested = keys ?? [
+    ...basePresent,
+    ...axisKeys,
+    ...DERIVED_ENTRIES.filter(([, compiled]) => computable(compiled.names, baseScalars)).map(
+      ([key]) => key,
+    ),
+  ];
 
   const scope = scalarScope(baseScalars);
   const out: Record<string, number> = {};
@@ -100,11 +96,13 @@ export function lookup(
       out[key] = baseScalars[key];
       continue;
     }
-    const def = DERIVED_BY_KEY.get(key);
+    const def = DERIVED_COMPILED.get(key);
     if (!def) {
-      throw new Error(`lookup: "${key}" is neither a present base column nor a known derived quantity`);
+      throw new Error(
+        `lookup: "${key}" is neither a present base column nor a known derived quantity`,
+      );
     }
-    const v = def.compiled.eval(scope);
+    const v = def.eval(scope);
     if (v instanceof Float64Array) {
       // Derived definitions over scalar bases yield scalars; guard defensively.
       throw new Error(`lookup: derived "${key}" did not reduce to a scalar`);
@@ -152,7 +150,9 @@ export function lookupByGmId(
   // to be well defined (vds/vsb would otherwise break monotonic bracketing).
   for (const a of slice.axes) {
     if (a.name !== 'vgs' && a.values.length > 1) {
-      throw new Error(`lookupByGmId: cannot bracket gm/id with extra non-degenerate axis "${a.name}"`);
+      throw new Error(
+        `lookupByGmId: cannot bracket gm/id with extra non-degenerate axis "${a.name}"`,
+      );
     }
   }
 
@@ -182,9 +182,7 @@ export function lookupByGmId(
     );
   }
   if (gmId < o.xmin || gmId > o.xmax) {
-    throw new Error(
-      `lookupByGmId: gm/id ${gmId} out of range [${o.xmin}, ${o.xmax}] for L=${L}`,
-    );
+    throw new Error(`lookupByGmId: gm/id ${gmId} out of range [${o.xmin}, ${o.xmax}] for L=${L}`);
   }
   const vgsAt = interp1(o.nx, o.ny, gmId);
   if (!Number.isFinite(vgsAt)) {

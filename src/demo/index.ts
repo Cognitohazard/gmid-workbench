@@ -88,7 +88,6 @@ function satPoint(
   return { idSat, gmSat, gdsSat: idSat / VA };
 }
 
-
 /**
  * Generate a synthetic EKV-like nMOS DeviceTable over (l, vgs).
  *

@@ -99,9 +99,7 @@ function isArray(v: Value): v is Float64Array {
 function broadcast2(a: Value, b: Value, op: (x: number, y: number) => number): Value {
   if (isArray(a) && isArray(b)) {
     if (a.length !== b.length) {
-      throw new ExprError(
-        `array length mismatch: ${a.length} vs ${b.length}`,
-      );
+      throw new ExprError(`array length mismatch: ${a.length} vs ${b.length}`);
     }
     const out = new Float64Array(a.length);
     for (let i = 0; i < a.length; i++) out[i] = op(a[i], b[i]);
@@ -204,9 +202,7 @@ function evalNode(node: Node, scope: Scope, constants: Record<string, number>): 
         const l = asScalar(evalNode(node.left, scope, constants), `logical "${op}"`);
         if (op === '&&') {
           if (!l) return 0;
-          return asScalar(evalNode(node.right, scope, constants), `logical "${op}"`)
-            ? 1
-            : 0;
+          return asScalar(evalNode(node.right, scope, constants), `logical "${op}"`) ? 1 : 0;
         }
         // '||'
         if (l) return 1;
@@ -271,11 +267,7 @@ function evalNode(node: Node, scope: Scope, constants: Record<string, number>): 
 }
 
 /** Collect free identifiers that are neither constants nor function names. */
-function collectNames(
-  node: Node,
-  constants: Record<string, number>,
-  acc: Set<string>,
-): void {
+function collectNames(node: Node, constants: Record<string, number>, acc: Set<string>): void {
   switch (node.type) {
     case 'Identifier':
       if (
@@ -338,4 +330,18 @@ export function createEngine(constants: Record<string, number> = { ...CONSTANTS 
   }
 
   return { compile, evaluate };
+}
+
+/**
+ * A Scope over a flat record of named scalars. Unknown names return undefined and
+ * fall through to the engine's constant map. Resolves against the LIVE record — it
+ * closes over `values`, so entries written after construction are visible (sheet
+ * rows rely on this). The shared helper for every scalar-evaluation site.
+ */
+export function scalarScope(values: Record<string, number>): Scope {
+  return {
+    resolve(name: string): Value | undefined {
+      return Object.prototype.hasOwnProperty.call(values, name) ? values[name] : undefined;
+    },
+  };
 }

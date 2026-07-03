@@ -3,7 +3,7 @@ import { derive, deriveColumn, compileExpr, evalColumn, tableScope, metaScalars 
 import type { Axis, Grid } from '../types';
 import { generateDemoDevice } from '../demo';
 import { makeGrid } from '../grid';
-import { UT } from '../constants';
+import { PHYS, UT } from '../constants';
 
 function col(grid: Grid, key: string): Float64Array {
   const c = grid.quantities.get(key);
@@ -176,5 +176,23 @@ describe('deriveColumn', () => {
     // same compiled expr reused over another grid yields that grid's column
     const dev2 = generateDemoDevice({ W: 5e-6 });
     expect(evalColumn(dev2.grid, compiled).length).toBe(dev2.grid.shape[0] * dev2.grid.shape[1]);
+  });
+});
+
+describe('metaScalars temperature', () => {
+  it('exposes T/UT from meta.temp so the γ-model noise tracks the table temperature', () => {
+    const dev = generateDemoDevice();
+    const hot = { ...dev, meta: { ...dev.meta, temp: 125 } };
+    const base = derive(dev, 'svth_m');
+    const hotCol = derive(hot, 'svth_m');
+    // svth_m = 4kTγ/gm is linear in T at a fixed point.
+    expect(hotCol[10] / base[10]).toBeCloseTo((125 + 273.15) / PHYS.T, 12);
+  });
+
+  it('emits T/UT only when meta carries a finite temp', () => {
+    expect(metaScalars({})).not.toHaveProperty('T');
+    const s = metaScalars({ temp: 125 });
+    expect(s.T).toBeCloseTo(398.15, 12);
+    expect(s.UT).toBeCloseTo((PHYS.k * 398.15) / PHYS.q, 18);
   });
 });

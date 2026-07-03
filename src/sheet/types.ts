@@ -47,7 +47,11 @@ export type RuleOp = '>=' | '<=' | '==';
 
 /** Runtime membership sets mirroring the RuleKind/RuleOp unions — one place to coerce untrusted
  *  input (saved layouts, raw core callers). Typed ReadonlySet<string> so `.has(rawString)` works. */
-export const RULE_KINDS: ReadonlySet<string> = new Set<RuleKind>(['invariant', 'guardrail', 'requirement']);
+export const RULE_KINDS: ReadonlySet<string> = new Set<RuleKind>([
+  'invariant',
+  'guardrail',
+  'requirement',
+]);
 export const RULE_OPS: ReadonlySet<string> = new Set<RuleOp>(['>=', '<=', '==']);
 
 /**
@@ -96,12 +100,17 @@ export const MAX_USE_DEPTH = 8;
  *  the flat name `child__key`. One source of truth for the producer (eval), the collision
  *  check (validate), and the UI display; neither a use-name nor a provided key may contain it. */
 export const PROVIDE_SEP = '__';
-export const joinProvide = (useName: string, key: string): string => `${useName}${PROVIDE_SEP}${key}`;
+export const joinProvide = (useName: string, key: string): string =>
+  `${useName}${PROVIDE_SEP}${key}`;
 
 /** Re-attribute a composed child's warning to its use site, so a rolled-up warning points at
  *  the offending block (and a child error still blocks the parent's closed feasibility). */
 export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
-  return { ...w, message: `use "${useName}": ${w.message}`, location: `${useName}.${w.location ?? ''}` };
+  return {
+    ...w,
+    message: `use "${useName}": ${w.message}`,
+    location: `${useName}.${w.location ?? ''}`,
+  };
 }
 
 /** A sheet document — the authored model the GUI edits and persists verbatim. A leaf

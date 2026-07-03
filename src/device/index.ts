@@ -4,10 +4,11 @@
 // from the current density id/w. The gm/ID ceiling at the L-slice gates
 // feasibility. Pure, deterministic, zero DOM imports.
 
-import type { DeviceTable, Scope, Value } from '../types';
+import type { DeviceTable } from '../types';
 import { lookup, lookupByGmId } from '../lookup';
 import { sliceGrid } from '../grid';
-import { CONSTANTS } from '../constants';
+import { scalarScope } from '../expr';
+import { CONSTANTS, thermalScalars } from '../constants';
 import { compileExpr } from '../derive';
 import { DERIVED_QUANTITIES } from '../namespace';
 
@@ -43,7 +44,9 @@ export interface SizeResult {
 
 /**
  * Solve the third of {gm, gm_id, id} from the two that are supplied, using the
- * single relation gm = gm_id * id. Throws unless EXACTLY two are present.
+ * single relation gm = gm_id * id. Throws unless EXACTLY two are present, and
+ * throws on a supplied non-finite value — a NaN must fail here, by name, not
+ * surface downstream as a misleading out-of-range lookup error.
  */
 function bindThree(q: SizeQuery): { gm: number; gm_id: number; id: number } {
   const has = {
@@ -57,6 +60,12 @@ function bindThree(q: SizeQuery): { gm: number; gm_id: number; id: number } {
       `sizeDevice: require EXACTLY two of {gm, gm_id, id}; got ${count} ` +
         `(gm=${q.gm}, gm_id=${q.gm_id}, id=${q.id})`,
     );
+  }
+  for (const k of ['gm', 'gm_id', 'id'] as const) {
+    const v = q[k];
+    if (v !== undefined && !Number.isFinite(v)) {
+      throw new Error(`sizeDevice: ${k} must be a finite number, got ${v}`);
+    }
   }
 
   if (has.gm && has.id) {
@@ -176,21 +185,16 @@ const VNTH_M = compileExpr(
  * Input-referred channel thermal-noise density √(4kTγ/gm) [V/√Hz] at the device's
  * actual transconductance gm. Noise is width-dependent (gm ∝ W), so a sized device
  * must pass its SIZED gm — the characterization-width value would be wrong. γ comes
- * from the operating point when the table carries it, else GAMMA_DEFAULT.
+ * from the operating point when the table carries it, else GAMMA_DEFAULT. Pass the
+ * table's characterization temperature `tempC` (meta.temp, °C) so kT tracks the
+ * data; omitted, T falls through to the engine's 27 °C default.
  *
- * The formula itself lives only in namespace.ts (vnth_m); here we just bind gm and γ
- * and evaluate that definition. k and T fall through resolve() to the engine's
- * constant scope; a bound `gamma` shadows the constant γ so an explicit value wins.
+ * The formula itself lives only in namespace.ts (vnth_m); here we just bind gm, γ,
+ * and the temperature and evaluate that definition. k falls through resolve() to
+ * the engine's constant scope; bound names shadow constants so explicit values win.
  */
-export function thermalNoise(gm: number, gamma?: number): number {
-  const g = gamma ?? CONSTANTS.gamma;
-  const scope: Scope = {
-    resolve(name: string): Value | undefined {
-      if (name === 'gm') return gm;
-      if (name === 'gamma') return g;
-      return undefined;
-    },
-  };
+export function thermalNoise(gm: number, gamma?: number, tempC?: number): number {
+  const scope = scalarScope({ ...thermalScalars(tempC), gm, gamma: gamma ?? CONSTANTS.gamma });
   // vnth_m over scalar gm,γ reduces to a scalar; the engine's Value admits an array,
   // which this scalar-only scope never produces, so read it back as a number.
   return VNTH_M.eval(scope) as number;
@@ -203,9 +207,16 @@ export function thermalNoise(gm: number, gamma?: number): number {
  *   ∫ S df = Sth·[(fHi − fLo) + fc·ln(fHi/fLo)].
  * `sth` is the thermal PSD [V²/Hz] (= thermalNoise(gm)²). The corner is a process/bias
  * quantity supplied by the user (or table metadata); it is width-INDEPENDENT because
- * both Sth and the flicker PSD scale as 1/W. Requires 0 < fLo < fHi and fc ≥ 0.
+ * both Sth and the flicker PSD scale as 1/W. Requires sth ≥ 0, fc ≥ 0, and
+ * 0 < fLo < fHi — violated preconditions throw rather than silently returning
+ * NaN/Infinity (fLo = 0 would make the flicker integral diverge).
  */
 export function integratedNoise(sth: number, fc: number, fLo: number, fHi: number): number {
+  if (!(sth >= 0)) throw new Error(`integratedNoise: sth must be >= 0, got ${sth}`);
+  if (!(fc >= 0)) throw new Error(`integratedNoise: fc must be >= 0, got ${fc}`);
+  if (!(fLo > 0) || !(fHi > fLo) || !Number.isFinite(fLo) || !Number.isFinite(fHi)) {
+    throw new Error(`integratedNoise: require 0 < fLo < fHi (finite), got fLo=${fLo}, fHi=${fHi}`);
+  }
   return Math.sqrt(sth * (fHi - fLo + fc * Math.log(fHi / fLo)));
 }
 
@@ -233,8 +244,16 @@ export interface MismatchResult {
  *   σ(ΔI/I)     = √( (gm/ID · σ(ΔVth))² + σ(Δβ/β)² )         — mirror current spread
  * High gm/ID (low Vov) shrinks the offset's β term but grows current spread: the
  * matching-vs-bias trade the methodology makes visible. Pure; no table needed.
+ * Requires W > 0, L > 0, gm_id > 0, and non-negative coefficients — violated
+ * preconditions throw rather than silently returning NaN/Infinity σ.
  */
 export function mismatch(W: number, L: number, gm_id: number, c: MismatchCoeffs): MismatchResult {
+  if (!(W > 0) || !(L > 0))
+    throw new Error(`mismatch: require W > 0 and L > 0, got W=${W}, L=${L}`);
+  if (!(gm_id > 0)) throw new Error(`mismatch: require gm_id > 0, got ${gm_id}`);
+  if (!(c.avth >= 0) || !(c.abeta >= 0)) {
+    throw new Error(`mismatch: coefficients must be >= 0, got avth=${c.avth}, abeta=${c.abeta}`);
+  }
   const rtArea = Math.sqrt(W * L);
   const sigmaVth = c.avth / rtArea;
   const sigmaBeta = c.abeta / rtArea;

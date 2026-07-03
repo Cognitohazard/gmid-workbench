@@ -164,10 +164,11 @@ describe('validate: saturation', () => {
     const vgs = [0.5];
     // axes order: l, vds, vgs -> gds rising monotonically (never saturates)
     const gdsCol = [1e-6, 2e-6, 3e-6]; // rising along vds, never falls
-    const t = makeTable(
-      [axis('l', l), axis('vds', vds), axis('vgs', vgs)],
-      { gds: gdsCol, gm: [1, 1, 1], id: [1, 1, 1] },
-    );
+    const t = makeTable([axis('l', l), axis('vds', vds), axis('vgs', vgs)], {
+      gds: gdsCol,
+      gm: [1, 1, 1],
+      id: [1, 1, 1],
+    });
     const info = validate(t).find((x) => x.rule === 'no-saturation');
     expect(info).toBeDefined();
     expect(info?.severity).toBe('info');
@@ -178,10 +179,7 @@ describe('validate: saturation', () => {
     const vds = [0.1, 0.2, 0.3];
     const vgs = [0.5];
     const gdsCol = [3e-6, 2e-6, 1e-6]; // falls along vds
-    const t = makeTable(
-      [axis('l', l), axis('vds', vds), axis('vgs', vgs)],
-      { gds: gdsCol },
-    );
+    const t = makeTable([axis('l', l), axis('vds', vds), axis('vgs', vgs)], { gds: gdsCol });
     expect(validate(t).some((x) => x.rule === 'no-saturation')).toBe(false);
   });
 });
@@ -189,14 +187,16 @@ describe('validate: saturation', () => {
 // --- per-L-slice multi-slice -------------------------------------------------
 
 describe('validate: multi L-slice', () => {
-  it('reports vgs-step once per L-slice (axis shared)', () => {
+  it('reports a coarse vgs step ONCE for the shared axis, not per L-slice', () => {
     const l = [1e-7, 2e-7];
     const vgs = [0, 0.05, 0.1];
     const gm = fill(l, vgs, () => 1e-3);
     const id = fill(l, vgs, () => 1e-3);
     const t = makeTable([axis('l', l), axis('vgs', vgs)], { gm, id });
     const steps = validate(t).filter((x) => x.rule === 'vgs-step');
-    expect(steps.length).toBe(2);
+    // One vgs values array serves every slice — one defect is one finding.
+    expect(steps.length).toBe(1);
+    expect(steps[0].location).toBe('vgs');
   });
 });
 
@@ -237,11 +237,23 @@ describe('validate: gm consistency with d(id)/d(vgs)', () => {
     const idLine = [1e-3, 1.1e-3, 1.2e-3, 1.3e-3]; // FD gm = 1e-3
     const id3 = [...idLine, ...idLine, ...idLine];
     const gm3 = [
-      1e-3, 1e-3, 1e-3, 1e-3, // plane 0 correct
-      1e-3, 1e-3, 1e-3, 1e-3, // plane 1 correct
-      1e-2, 1e-2, 1e-2, 1e-2, // plane 2 corrupted (10×)
+      1e-3,
+      1e-3,
+      1e-3,
+      1e-3, // plane 0 correct
+      1e-3,
+      1e-3,
+      1e-3,
+      1e-3, // plane 1 correct
+      1e-2,
+      1e-2,
+      1e-2,
+      1e-2, // plane 2 corrupted (10×)
     ];
-    const t = makeTable([axis('l', [1e-7]), axis('vds', vds), axis('vgs', vgs)], { id: id3, gm: gm3 });
+    const t = makeTable([axis('l', [1e-7]), axis('vds', vds), axis('vgs', vgs)], {
+      id: id3,
+      gm: gm3,
+    });
     expect(validate(t).some((x) => x.rule === 'gm-consistency')).toBe(true);
   });
 });
@@ -280,10 +292,15 @@ describe('validate: non-finite / id-monotonic / gm-sign', () => {
   it('does NOT flag id rising in one bias plane and falling in another (per-line)', () => {
     // Two vds planes, each individually monotonic (one up, one down). Tracking
     // up/down slice-wide would falsely cry "glitch"; per-line must not.
-    const t = makeTable([axis('l', [1e-7]), axis('vds', [0.4, 0.8]), axis('vgs', [0.1, 0.2, 0.3, 0.4])], {
-      id: [1e-3, 2e-3, 3e-3, 4e-3, /* plane 1 rising */ 4e-3, 3e-3, 2e-3, 1e-3 /* plane 2 falling */],
-      gm: new Array(8).fill(1e-2), // = |central FD| on both planes ⇒ no gm-consistency noise
-    });
+    const t = makeTable(
+      [axis('l', [1e-7]), axis('vds', [0.4, 0.8]), axis('vgs', [0.1, 0.2, 0.3, 0.4])],
+      {
+        id: [
+          1e-3, 2e-3, 3e-3, 4e-3, /* plane 1 rising */ 4e-3, 3e-3, 2e-3, 1e-3 /* plane 2 falling */,
+        ],
+        gm: new Array(8).fill(1e-2), // = |central FD| on both planes ⇒ no gm-consistency noise
+      },
+    );
     expect(validate(t).some((x) => x.rule === 'id-non-monotonic')).toBe(false);
   });
 });
@@ -293,8 +310,14 @@ describe('validate: clean demo triggers none of the deepened checks', () => {
     const w = validate(generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } }));
     // Including the noise/sign checks: the demo ships gamma=2/3, sth>0, sfl>0, gds>0, cgg>0.
     const noisy = new Set([
-      'gm-consistency', 'id-non-monotonic', 'non-finite', 'gm-sign',
-      'gds-sign', 'cap-sign', 'noise-psd', 'gamma-range',
+      'gm-consistency',
+      'id-non-monotonic',
+      'non-finite',
+      'gm-sign',
+      'gds-sign',
+      'cap-sign',
+      'noise-psd',
+      'gamma-range',
     ]);
     expect(w.filter((x) => noisy.has(x.rule))).toEqual([]);
   });
@@ -303,26 +326,36 @@ describe('validate: clean demo triggers none of the deepened checks', () => {
 describe('validate: deepened sign / noise / gamma checks', () => {
   it('flags a negative gds value', () => {
     const t = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
-      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], gds: [1e-6, -1e-6, 1e-6],
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+      gds: [1e-6, -1e-6, 1e-6],
     });
     expect(validate(t).find((x) => x.rule === 'gds-sign')?.severity).toBe('warning');
   });
 
   it('flags a negative cgg but NOT a legitimately-signed cross-capacitance', () => {
     const badCgg = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
-      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], cgg: [1e-15, -1e-15, 1e-15],
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+      cgg: [1e-15, -1e-15, 1e-15],
     });
     expect(validate(badCgg).find((x) => x.rule === 'cap-sign')?.severity).toBe('warning');
     // cross/trans-caps (cgd, …) are legitimately negative by convention → must NOT warn.
     const signedCgd = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
-      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], cgg: [1e-15, 1e-15, 1e-15], cgd: [-1e-16, -1e-16, -1e-16],
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+      cgg: [1e-15, 1e-15, 1e-15],
+      cgd: [-1e-16, -1e-16, -1e-16],
     });
     expect(validate(signedCgd).some((x) => x.rule === 'cap-sign')).toBe(false);
   });
 
   it('flags a non-positive noise PSD as an error (it poisons input-referred noise)', () => {
     const t = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
-      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], sth: [1e-20, 0, 1e-20], sfl: [1e-20, 1e-20, -1e-20],
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+      sth: [1e-20, 0, 1e-20],
+      sfl: [1e-20, 1e-20, -1e-20],
     });
     const w = validate(t).filter((x) => x.rule === 'noise-psd');
     expect(w.length).toBe(2); // one for sth, one for sfl
@@ -331,12 +364,16 @@ describe('validate: deepened sign / noise / gamma checks', () => {
 
   it('flags an out-of-band gamma but allows a high short-channel gamma', () => {
     const bad = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
-      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], gamma: [0.7, 5.0, 0.7], // 5.0 > 4.0 → unit/model error
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+      gamma: [0.7, 5.0, 0.7], // 5.0 > 4.0 → unit/model error
     });
     expect(validate(bad).find((x) => x.rule === 'gamma-range')?.severity).toBe('warning');
     // Valid deep-submicron γ (up to ~3) must NOT be flagged.
     const shortChan = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
-      gm: [1e-3, 1e-3, 1e-3], id: [1e-3, 2e-3, 3e-3], gamma: [0.7, 2.5, 3.5],
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [1e-3, 2e-3, 3e-3],
+      gamma: [0.7, 2.5, 3.5],
     });
     expect(validate(shortChan).some((x) => x.rule === 'gamma-range')).toBe(false);
   });

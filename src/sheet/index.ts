@@ -17,7 +17,11 @@ export * from './examples';
  *  structural error) also forces the feasibility verdict false, so a structurally broken
  *  sheet is never reported feasible. `validateSheet` and `evaluateSheet` both recurse into
  *  composed children, so the whole tree is covered. */
-export function runSheet(doc: SheetDoc, table?: DeviceTable, resolveDevice?: DeviceResolver): SheetResult {
+export function runSheet(
+  doc: SheetDoc,
+  table?: DeviceTable,
+  resolveDevice?: DeviceResolver,
+): SheetResult {
   const pre = validateSheet(doc);
   const res = evaluateSheet(doc, table, resolveDevice);
   const blocked = pre.some((w) => w.severity === 'error');
@@ -62,11 +66,16 @@ export function sweepSheet(
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
     x.push(t);
-    const at: SheetDoc = { ...doc, params: doc.params.map((p) => (p.name === param ? { ...p, value: t } : p)) };
+    const at: SheetDoc = {
+      ...doc,
+      params: doc.params.map((p) => (p.name === param ? { ...p, value: t } : p)),
+    };
     const res = evaluateSheet(at, table, resolveDevice);
     feasible.push(!blocked && res.feasible);
     res.rules.forEach((rr, j) =>
-      rules[j].marginPct.push(rr.status === 'na' || !Number.isFinite(rr.marginPct) ? null : rr.marginPct),
+      rules[j].marginPct.push(
+        rr.status === 'na' || !Number.isFinite(rr.marginPct) ? null : rr.marginPct,
+      ),
     );
   }
   return { param, unit: v.unit ?? '', x, rules, feasible };

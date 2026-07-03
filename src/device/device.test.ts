@@ -71,9 +71,9 @@ describe('sizeDevice (bind-any-2)', () => {
     const table = generateDemoDevice();
     const L = table.grid.axes[0].values[1];
     const pt = knownPoint(table, L, 0.6);
-    expect(() =>
-      sizeDevice({ table, L, gm: pt.gm, gm_id: pt.gm_id, id: pt.id }),
-    ).toThrow(/EXACTLY two/);
+    expect(() => sizeDevice({ table, L, gm: pt.gm, gm_id: pt.gm_id, id: pt.id })).toThrow(
+      /EXACTLY two/,
+    );
   });
 
   it('under-constrained input (only one) throws', () => {
@@ -246,5 +246,42 @@ describe('integratedNoise (thermal + 1/f over a band)', () => {
   it('grows with the flicker corner and with bandwidth', () => {
     expect(integratedNoise(sth, 1e5, 1, 1e6)).toBeGreaterThan(integratedNoise(sth, 1e2, 1, 1e6));
     expect(integratedNoise(sth, 1e3, 1, 1e7)).toBeGreaterThan(integratedNoise(sth, 1e3, 1, 1e6));
+  });
+
+  it('throws on violated preconditions instead of returning NaN/Infinity', () => {
+    expect(() => integratedNoise(sth, 0, 0, 1e6)).toThrow(/fLo/); // fLo=0 diverges
+    expect(() => integratedNoise(sth, 0, 1e6, 1e3)).toThrow(/fLo/); // fHi < fLo
+    expect(() => integratedNoise(sth, -1, 1, 1e6)).toThrow(/fc/);
+    expect(() => integratedNoise(-1e-17, 0, 1, 1e6)).toThrow(/sth/);
+    expect(() => integratedNoise(sth, 0, 1, Infinity)).toThrow(/finite/);
+  });
+});
+
+describe('argument validation', () => {
+  it('sizeDevice rejects a supplied NaN by name (not a downstream lookup error)', () => {
+    const table = generateDemoDevice();
+    const L = table.grid.axes[0].values[1];
+    expect(() => sizeDevice({ table, L, gm: NaN, id: 1e-5 })).toThrow(/gm must be a finite/);
+    expect(() => sizeDevice({ table, L, gm_id: 12, id: Infinity })).toThrow(/id must be a finite/);
+  });
+
+  it('mismatch rejects non-positive geometry/bias and negative coefficients', () => {
+    const c = { avth: 3.5e-9, abeta: 1e-8 };
+    expect(() => mismatch(0, 1e-7, 15, c)).toThrow(/W > 0/);
+    expect(() => mismatch(1e-6, -1e-7, 15, c)).toThrow(/L > 0/);
+    expect(() => mismatch(1e-6, 1e-7, 0, c)).toThrow(/gm_id > 0/);
+    expect(() => mismatch(1e-6, 1e-7, 15, { avth: -1, abeta: 0 })).toThrow(/>= 0/);
+  });
+});
+
+describe('thermalNoise temperature', () => {
+  it('scales kT with the table temperature instead of pinning 27 °C', () => {
+    const gm = 1e-3;
+    const at27 = thermalNoise(gm); // default T = 300.15 K
+    const at125 = thermalNoise(gm, undefined, 125); // 398.15 K
+    // vnth ∝ √T at fixed gm and γ.
+    expect(at125 / at27).toBeCloseTo(Math.sqrt((125 + 273.15) / PHYS.T), 12);
+    // 27 °C explicitly matches the default exactly.
+    expect(thermalNoise(gm, undefined, 27)).toBeCloseTo(at27, 15);
   });
 });

@@ -12,6 +12,17 @@ export function flatIndex(shape: readonly number[], idx: readonly number[]): num
   return flat;
 }
 
+/** Row-major strides for `shape` (last axis fastest): flat = Σ idx[d]·strides[d]. */
+export function strides(shape: readonly number[]): number[] {
+  const s = new Array<number>(shape.length);
+  let acc = 1;
+  for (let d = shape.length - 1; d >= 0; d--) {
+    s[d] = acc;
+    acc *= shape[d];
+  }
+  return s;
+}
+
 /** Product of axis lengths (= number of grid samples). */
 function gridSize(shape: readonly number[]): number {
   let n = 1;
@@ -303,6 +314,10 @@ export function orient(xs: Float64Array, ys: Float64Array): Oriented {
   return { nx, ny, xmin: n ? nx[0] : NaN, xmax: n ? nx[n - 1] : NaN, mono };
 }
 
+// A query this far (relative to the curve's span) past either end is float rounding
+// from the X expression, not a real gap — clamp it in rather than return NaN.
+const EDGE_SNAP_REL = 1e-9;
+
 /**
  * Linear interpolation of an ascending (nx, ny) curve at xq. Returns NaN outside the
  * native range — a gap, never an extrapolation. A query a few ULP past either end (from
@@ -313,7 +328,7 @@ export function orient(xs: Float64Array, ys: Float64Array): Oriented {
 export function interp1(nx: number[], ny: number[], xq: number): number {
   const n = nx.length;
   if (n === 0) return NaN;
-  const tol = (nx[n - 1] - nx[0]) * 1e-9 + Number.EPSILON;
+  const tol = (nx[n - 1] - nx[0]) * EDGE_SNAP_REL + Number.EPSILON;
   if (xq < nx[0] - tol || xq > nx[n - 1] + tol) return NaN;
   const q = xq <= nx[0] ? nx[0] : xq >= nx[n - 1] ? nx[n - 1] : xq; // clamp the ULP overshoot
   if (n === 1) return ny[0];

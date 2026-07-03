@@ -62,7 +62,13 @@ export function parseEng(s: string): number {
   if (factor === undefined) {
     throw new TypeError(`parseEng: unrecognized suffix "${rest}" in "${s}"`);
   }
-  return mantissa * factor;
+  const value = mantissa * factor;
+  // The mantissa check above cannot catch an overflow introduced by the suffix
+  // (e.g. "1e307k" → Infinity); a parsed magnitude must always be a real number.
+  if (!Number.isFinite(value)) {
+    throw new TypeError(`parseEng: "${s}" overflows to a non-finite value`);
+  }
+  return value;
 }
 
 // Engineering-suffix ladder for formatting. Index 0 is the lowest group; entries

@@ -55,6 +55,12 @@ describe('parseEng', () => {
     // @ts-expect-error non-string input
     expect(() => parseEng(5)).toThrow(TypeError);
   });
+
+  it('throws when the suffix overflows a finite mantissa to Infinity', () => {
+    // The mantissa alone is finite, so only a post-multiply check catches this.
+    expect(() => parseEng('1e307k')).toThrow(TypeError);
+    expect(() => parseEng('-1e308t')).toThrow(TypeError);
+  });
 });
 
 describe('formatEng', () => {

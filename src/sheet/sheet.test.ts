@@ -47,7 +47,13 @@ describe('evaluateSheet — sizing reuse', () => {
 
 describe('evaluateSheet — rules', () => {
   it('flips an invariant pass<->fail across its boundary', () => {
-    const rule = { id: 'headroom', kind: 'invariant' as const, lhs: 'vstar', op: '>=' as const, rhs: 'vstar_floor' };
+    const rule = {
+      id: 'headroom',
+      kind: 'invariant' as const,
+      lhs: 'vstar',
+      op: '>=' as const,
+      rhs: 'vstar_floor',
+    };
     // vstar = 2/12 ≈ 0.1667
     const passDoc = boundDoc({ params: [...boundDoc().params], rules: [rule] });
     passDoc.params.find((p) => p.name === 'vstar_floor')!.value = 0.15;
@@ -62,7 +68,10 @@ describe('evaluateSheet — rules', () => {
 
   it('reports the correct signed margin for >=, <= and ==', () => {
     const doc = boundDoc({
-      params: [{ name: 'a', value: 10 }, { name: 'b', value: 8 }],
+      params: [
+        { name: 'a', value: 10 },
+        { name: 'b', value: 8 },
+      ],
       bind: undefined,
       rules: [
         { id: 'ge', kind: 'guardrail', lhs: 'a', op: '>=', rhs: 'b' }, // 10>=8  margin +2
@@ -82,7 +91,10 @@ describe('evaluateSheet — rules', () => {
     // The feasibility chart and the margin column read margin >= 0 as passing; an '==' rule that
     // holds within tolPct must sit at/above zero, not below it (it once always did, being |Δ|).
     const within = boundDoc({
-      params: [{ name: 'a', value: 10.3 }, { name: 'b', value: 10 }],
+      params: [
+        { name: 'a', value: 10.3 },
+        { name: 'b', value: 10 },
+      ],
       bind: undefined,
       rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=0.3 ≤ 0.5
     });
@@ -91,7 +103,10 @@ describe('evaluateSheet — rules', () => {
     expect(pass.marginPct).toBeGreaterThanOrEqual(0);
 
     const outside = boundDoc({
-      params: [{ name: 'a', value: 11 }, { name: 'b', value: 10 }],
+      params: [
+        { name: 'a', value: 11 },
+        { name: 'b', value: 10 },
+      ],
       bind: undefined,
       rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=1 > 0.5
     });
@@ -102,7 +117,10 @@ describe('evaluateSheet — rules', () => {
 
   it('marks a non-finite rule side as na, never a false pass', () => {
     const doc = boundDoc({
-      params: [{ name: 'z', value: 0 }, { name: 'lim', value: 1 }],
+      params: [
+        { name: 'z', value: 0 },
+        { name: 'lim', value: 1 },
+      ],
       bind: undefined,
       rules: [{ id: 'div0', kind: 'guardrail', lhs: '1/z', op: '<=', rhs: 'lim' }], // 1/0 = Inf
     });
@@ -153,17 +171,33 @@ describe('feasibility is fail-closed', () => {
   });
 
   it('a failed requirement is infeasible, but a failed guardrail is only advisory', () => {
-    const base = boundDoc({ params: [{ name: 'a', value: 10 }, { name: 'lim', value: 5 }], bind: undefined });
-    const req = evaluateSheet({ ...base, rules: [{ id: 'spec', kind: 'requirement', lhs: 'a', op: '<=', rhs: 'lim' }] }, dev);
+    const base = boundDoc({
+      params: [
+        { name: 'a', value: 10 },
+        { name: 'lim', value: 5 },
+      ],
+      bind: undefined,
+    });
+    const req = evaluateSheet(
+      { ...base, rules: [{ id: 'spec', kind: 'requirement', lhs: 'a', op: '<=', rhs: 'lim' }] },
+      dev,
+    );
     expect(req.rules[0].status).toBe('fail');
     expect(req.feasible).toBe(false);
-    const soft = evaluateSheet({ ...base, rules: [{ id: 'soft', kind: 'guardrail', lhs: 'a', op: '<=', rhs: 'lim' }] }, dev);
+    const soft = evaluateSheet(
+      { ...base, rules: [{ id: 'soft', kind: 'guardrail', lhs: 'a', op: '<=', rhs: 'lim' }] },
+      dev,
+    );
     expect(soft.rules[0].status).toBe('fail');
     expect(soft.feasible).toBe(true); // guardrails never block
   });
 
   it('runSheet folds a validation error (non-finite param) into feasibility', () => {
-    const doc = boundDoc({ params: [{ name: 'x', value: Number.NaN }], bind: undefined, rules: [] });
+    const doc = boundDoc({
+      params: [{ name: 'x', value: Number.NaN }],
+      bind: undefined,
+      rules: [],
+    });
     const res = runSheet(doc, dev);
     expect(res.warnings.some((w) => w.rule === 'sheet-param')).toBe(true);
     expect(res.feasible).toBe(false);
@@ -299,13 +333,24 @@ describe('composition — scalar provide/use', () => {
 
   it('is fail-closed: an infeasible child drags the parent infeasible, attributed to the use site', () => {
     const badChild: SheetDoc = {
-      title: 'bad', polarity: 'n',
-      params: [{ name: 'L', value: 0.5e-6 }, { name: 'gm_id', value: 999 }, { name: 'I_bias', value: 20e-6 }],
+      title: 'bad',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'gm_id', value: 999 },
+        { name: 'I_bias', value: 20e-6 },
+      ],
       bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, // gm/ID 999 ≫ ceiling ⇒ the child cannot size
-      rows: [], rules: [], provide: ['id'],
+      rows: [],
+      rules: [],
+      provide: ['id'],
     };
     const parent: SheetDoc = {
-      title: 'p', polarity: 'n', params: [], rows: [], rules: [],
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
       uses: [{ name: 'c', doc: badChild }],
     };
     const res = runSheet(parent, dev);
@@ -319,18 +364,32 @@ describe('composition — scalar provide/use', () => {
     expect(sw.feasible[0]).toBe(false); // gain too low at low gm/ID
     expect(sw.feasible.at(-1)).toBe(false); // headroom gone at high gm/ID
     expect(sw.feasible.some((f) => f)).toBe(true);
-    const gain = sw.rules.find((r) => r.id === 'gain-spec')!.marginPct.filter((x): x is number => x != null);
+    const gain = sw.rules
+      .find((r) => r.id === 'gain-spec')!
+      .marginPct.filter((x): x is number => x != null);
     expect(gain.at(-1)!).toBeGreaterThan(gain[0]!); // gain improves with gm/ID
   });
 
   it('a child sizes against the device its `use` names (resolver), or inherits the parent table', () => {
     const child: SheetDoc = {
-      title: 'k', polarity: 'n',
-      params: [{ name: 'L', value: 0.5e-6 }, { name: 'gm_id', value: 10 }, { name: 'I_bias', value: 20e-6 }],
-      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, rows: [], rules: [], provide: ['id'],
+      title: 'k',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'gm_id', value: 10 },
+        { name: 'I_bias', value: 20e-6 },
+      ],
+      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      rows: [],
+      rules: [],
+      provide: ['id'],
     };
     const parent = (device?: string): SheetDoc => ({
-      title: 'p', polarity: 'n', params: [], rows: [], rules: [],
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
       uses: [{ name: 'k', doc: child, ...(device ? { device } : {}) }],
     });
     const resolve = (id: string) => (id === 'wide' ? generateDemoDevice({ W: 40e-6 }) : undefined);
@@ -341,7 +400,11 @@ describe('composition — scalar provide/use', () => {
     const missing = runSheet(parent('missing'), dev, resolve);
     expect(missing.children![0].feasible).toBe(false);
     expect(missing.feasible).toBe(false);
-    expect(missing.warnings.some((w) => w.severity === 'error' && /device "missing" did not resolve/.test(w.message))).toBe(true);
+    expect(
+      missing.warnings.some(
+        (w) => w.severity === 'error' && /device "missing" did not resolve/.test(w.message),
+      ),
+    ).toBe(true);
   });
 
   it('a named-but-unresolved device fails even a BINDLESS child closed (not vacuously feasible)', () => {
@@ -349,9 +412,20 @@ describe('composition — scalar provide/use', () => {
     // against no table is vacuously feasible (no bind ⇒ no error), so the parent reads feasible
     // while its child's named device silently does not exist. A child WITH a bind would fail on
     // the bind regardless, so only a bindless child distinguishes the branch.
-    const bindless: SheetDoc = { title: 'k0', polarity: 'n', params: [], rows: [], rules: [], provide: [] };
+    const bindless: SheetDoc = {
+      title: 'k0',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      provide: [],
+    };
     const parent: SheetDoc = {
-      title: 'p', polarity: 'n', params: [], rows: [], rules: [],
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
       uses: [{ name: 'k', doc: bindless, device: 'missing' }],
     };
     const res = runSheet(parent, dev, () => undefined);
@@ -362,18 +436,30 @@ describe('composition — scalar provide/use', () => {
 
   it('fails closed on a broken param override (no silent fallback to the child default)', () => {
     const child: SheetDoc = {
-      title: 'c', polarity: 'n',
-      params: [{ name: 'L', value: 0.5e-6 }, { name: 'gm_id', value: 12 }, { name: 'I_bias', value: 20e-6 }],
-      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, rows: [], rules: [], provide: ['id'],
+      title: 'c',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'gm_id', value: 12 },
+        { name: 'I_bias', value: 20e-6 },
+      ],
+      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      rows: [],
+      rules: [],
+      provide: ['id'],
     };
     const parent: SheetDoc = {
-      title: 'p', polarity: 'n',
+      title: 'p',
+      polarity: 'n',
       params: [{ name: 'I_budget', value: 30e-6 }],
-      rows: [{ name: 'echo', expr: 'c__id' }], rules: [],
+      rows: [{ name: 'echo', expr: 'c__id' }],
+      rules: [],
       uses: [{ name: 'c', doc: child, params: { I_bias: 'I_budgett' } }], // typo ⇒ unresolvable
     };
     const res = runSheet(parent, dev);
-    expect(res.warnings.some((w) => w.severity === 'error' && /override "I_bias"/.test(w.message))).toBe(true);
+    expect(
+      res.warnings.some((w) => w.severity === 'error' && /override "I_bias"/.test(w.message)),
+    ).toBe(true);
     expect(res.children![0].feasible).toBe(false); // wiring broke ⇒ child infeasible
     expect(res.feasible).toBe(false); // ⇒ parent infeasible
     // the child's provides are withheld, so dependent parent math is `na`, not a stale number
@@ -384,9 +470,20 @@ describe('composition — scalar provide/use', () => {
 
 describe('validateSheet — composition', () => {
   it('flags a separator in a use name, a duplicate name, and a stray override', () => {
-    const child: SheetDoc = { title: 'c', polarity: 'n', params: [{ name: 'L', value: 1e-6 }], rows: [], rules: [], provide: [] };
+    const child: SheetDoc = {
+      title: 'c',
+      polarity: 'n',
+      params: [{ name: 'L', value: 1e-6 }],
+      rows: [],
+      rules: [],
+      provide: [],
+    };
     const doc: SheetDoc = {
-      title: 't', polarity: 'n', params: [], rows: [], rules: [],
+      title: 't',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
       uses: [
         { name: 'a__b', doc: child },
         { name: 'x', doc: child, params: { nope: '1' } },
@@ -400,9 +497,17 @@ describe('validateSheet — composition', () => {
   });
 
   it('warns when a parent param/row name collides with a child-provided scalar', () => {
-    const child: SheetDoc = { title: 'c', polarity: 'n', params: [{ name: 'L', value: 1e-6 }], rows: [], rules: [], provide: ['av0'] };
+    const child: SheetDoc = {
+      title: 'c',
+      polarity: 'n',
+      params: [{ name: 'L', value: 1e-6 }],
+      rows: [],
+      rules: [],
+      provide: ['av0'],
+    };
     const doc: SheetDoc = {
-      title: 't', polarity: 'n',
+      title: 't',
+      polarity: 'n',
       params: [{ name: 'cs__av0', value: 1 }], // collides with the injected cs__av0
       rows: [{ name: 'cs__id', expr: '1' }], // child provides only av0, so this does NOT collide
       rules: [],
@@ -415,12 +520,47 @@ describe('validateSheet — composition', () => {
 
   it('recurses into a child and attributes its structural error to the use site', () => {
     const child: SheetDoc = {
-      title: 'c', polarity: 'n',
+      title: 'c',
+      polarity: 'n',
       params: [{ name: 'p', value: Number.NaN }], // non-finite param ⇒ child structural error
-      rows: [], rules: [],
+      rows: [],
+      rules: [],
     };
-    const doc: SheetDoc = { title: 't', polarity: 'n', params: [], rows: [], rules: [], uses: [{ name: 'kid', doc: child }] };
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'kid', doc: child }],
+    };
     const w = validateSheet(doc);
     expect(w.some((x) => x.rule === 'sheet-param' && x.message.includes('use "kid":'))).toBe(true);
+  });
+});
+
+describe('table temperature in the sheet scope', () => {
+  const tDoc: SheetDoc = {
+    title: 't',
+    polarity: 'n',
+    params: [],
+    rows: [{ name: 'tk', expr: 'T' }],
+    rules: [],
+  };
+
+  it('seeds T from the table so temperature-aware author math tracks the data', () => {
+    const hot = { ...dev, meta: { ...dev.meta, temp: 125 } };
+    expect(evaluateSheet(tDoc, hot).values.tk).toBeCloseTo(398.15, 12);
+  });
+
+  it('falls back to the 27 °C engine default without a table (or at default temp)', () => {
+    expect(evaluateSheet(tDoc).values.tk).toBeCloseTo(300.15, 12);
+    expect(evaluateSheet(tDoc, dev).values.tk).toBeCloseTo(300.15, 12);
+  });
+
+  it('a same-named author param deliberately wins over the seeded constant', () => {
+    const doc: SheetDoc = { ...tDoc, params: [{ name: 'T', value: 42 }] };
+    const hot = { ...dev, meta: { ...dev.meta, temp: 125 } };
+    expect(evaluateSheet(doc, hot).values.tk).toBe(42);
   });
 });

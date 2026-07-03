@@ -4,11 +4,18 @@
 
 import type { CompiledExpr, DeviceTable, Grid, Scope, TableMeta, Value } from '../types';
 import { DERIVED_QUANTITIES } from '../namespace';
+import { thermalScalars } from '../constants';
 import { createEngine } from '../expr';
 
 // Compile each standard derived definition once, shared across all calls.
 const ENGINE = createEngine();
-const DERIVED_COMPILED = new Map(
+
+/**
+ * Every standard derived quantity, compiled once against the shared engine —
+ * key → CompiledExpr. The single compile of the namespace: other modules (e.g.
+ * lookup) evaluate these instead of re-compiling their own copies.
+ */
+export const DERIVED_COMPILED: ReadonlyMap<string, CompiledExpr> = new Map(
   DERIVED_QUANTITIES.map((q) => [q.key, ENGINE.compile(q.expr)] as const),
 );
 
@@ -76,14 +83,16 @@ export function evalColumn(
 }
 
 /**
- * Scalar device-metadata exposed to the expression scope as named identifiers
- * (currently characterization width `meta.W` → `w`), so width-relative quantities
- * like `id/w` (current density) resolve on tables that store width as a metadata
- * scalar rather than a per-point column. A stored column of the same name still
- * wins — it is resolved before scalars in tableScope.
+ * Scalar device-metadata exposed to the expression scope as named identifiers:
+ * the characterization width `meta.W` → `w` (so width-relative quantities like
+ * `id/w` resolve on tables that store width as metadata rather than a column),
+ * and the table temperature `meta.temp` → `T`/`UT` overrides (so the γ-model
+ * noise quantities and any temperature-aware author math evaluate at the table's
+ * characterization temperature, not the 27 °C engine default). A stored column
+ * of the same name still wins — it is resolved before scalars in tableScope.
  */
 export function metaScalars(meta: TableMeta): Record<string, number> {
-  const s: Record<string, number> = {};
+  const s: Record<string, number> = { ...thermalScalars(meta.temp) };
   if (meta.W !== undefined && Number.isFinite(meta.W)) s.w = meta.W;
   return s;
 }
@@ -103,8 +112,15 @@ export function derive(table: DeviceTable, key: string): Float64Array {
 /**
  * Compile + evaluate an arbitrary expression over `grid`, returning a full-length
  * column. For charting custom expressions against the base namespace + constants.
- * Hot loops that reuse one expression should compileExpr() once and evalColumn().
+ * Table-backed callers should pass `metaScalars(table.meta)` as `scalars` so
+ * width-relative (`id/w`) and temperature-dependent (T/UT) expressions evaluate
+ * against the table's own metadata rather than the 27 °C engine defaults. Hot
+ * loops that reuse one expression should compileExpr() once and evalColumn().
  */
-export function deriveColumn(grid: Grid, exprSrc: string): Float64Array {
-  return evalColumn(grid, compileExpr(exprSrc));
+export function deriveColumn(
+  grid: Grid,
+  exprSrc: string,
+  scalars: Record<string, number> = {},
+): Float64Array {
+  return evalColumn(grid, compileExpr(exprSrc), scalars);
 }

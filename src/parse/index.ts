@@ -13,14 +13,13 @@ import type {
   TableMeta,
 } from '../types';
 import { ALIASES, BASE_KEYS } from '../namespace';
-import { makeGrid } from '../grid';
+import { makeGrid, strides } from '../grid';
 
 // The canonical sweep-axis keys, in their conventional grid order
 // (first axis varies slowest in row-major storage).
 const AXIS_KEYS = ['l', 'vds', 'vsb', 'vgs'] as const;
 type AxisKey = (typeof AXIS_KEYS)[number];
 const AXIS_KEY_SET: ReadonlySet<string> = new Set(AXIS_KEYS);
-
 
 /** Strip a UTF-8 BOM if present. */
 function stripBom(s: string): string {
@@ -190,10 +189,7 @@ function fail(...errors: ImportError[]): ImportResult {
  * - Axis columns among {l, vgs, vds, vsb} define a complete rectangular grid; every
  *   non-axis quantity is assembled row-major into a Float64Array.
  */
-export function parseMostabCsv(
-  text: string | Uint8Array,
-  hints?: ImportHints,
-): ImportResult {
+export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): ImportResult {
   const meta: ParsedMeta = {};
   const decoded = stripBom(toText(text));
   const rawLines = decoded.split(/\r\n|\r|\n/);
@@ -201,8 +197,7 @@ export function parseMostabCsv(
   let headerLine: string | undefined;
   const dataLines: string[] = [];
 
-  for (const rawLine of rawLines) {
-    const line = rawLine;
+  for (const line of rawLines) {
     const trimmed = line.trim();
     if (trimmed === '') continue;
     if (trimmed.startsWith('#')) {
@@ -323,14 +318,7 @@ export function parseMostabCsv(
   });
 
   // Strides for row-major flat indexing (first axis slowest).
-  const strides = new Array<number>(presentAxisKeys.length);
-  {
-    let acc = 1;
-    for (let d = presentAxisKeys.length - 1; d >= 0; d--) {
-      strides[d] = acc;
-      acc *= shape[d];
-    }
-  }
+  const st = strides(shape);
 
   // Allocate flat columns for every value quantity.
   const quantities = new Map<string, Float64Array>();
@@ -348,7 +336,7 @@ export function parseMostabCsv(
           err('grid-coord', `Row has off-grid coordinate on axis "${presentAxisKeys[d]}".`),
         );
       }
-      flat += p * strides[d];
+      flat += p * st[d];
     }
     if (filled[flat]) {
       return fail(err('duplicate-grid-point', 'Two rows map to the same grid coordinate.'));
@@ -367,11 +355,7 @@ export function parseMostabCsv(
   const grid = makeGrid(axes, quantities);
 
   // Resolve identity (hints > metadata > filename > default).
-  const device =
-    hints?.device ??
-    meta.device ??
-    deviceFromFilename(hints?.filename) ??
-    'dev0';
+  const device = hints?.device ?? meta.device ?? deviceFromFilename(hints?.filename) ?? 'dev0';
   const corner = hints?.corner ?? meta.corner ?? 'tt';
   const temp = meta.temp ?? 27;
 

@@ -293,7 +293,10 @@ describe('overlayCurvesXY (several devices on one shared X lattice)', () => {
 
   it('a narrower table keeps NaN gaps outside its native range; union spans both', () => {
     const wide = generateDemoDevice({ vgs: { min: 0.0, max: 1.2, step: 0.01 }, lengths: [0.5e-6] });
-    const narrow = generateDemoDevice({ vgs: { min: 0.4, max: 0.8, step: 0.01 }, lengths: [0.5e-6] });
+    const narrow = generateDemoDevice({
+      vgs: { min: 0.4, max: 0.8, step: 0.01 },
+      lengths: [0.5e-6],
+    });
     const fcW = familyCurvesXY(wide, 'gm/id', 'ft', 'vgs', 'l');
     const ov = overlayCurvesXY([wide, narrow], 'gm/id', 'ft', 'vgs', 'l');
     // Union X spans at least the wider table's full range.

@@ -6,7 +6,8 @@
 
 import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
-import { compileExpr } from '../derive';
+import { compileExpr, metaScalars } from '../derive';
+import { scalarScope } from '../expr';
 import { sizeDevice, type SizeQuery } from '../device';
 import { MAX_USE_DEPTH, joinProvide, prefixUseWarning } from './types';
 import type {
@@ -33,19 +34,6 @@ const TINY = 1e-300;
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
- * A flat scalar scope over `values`. Unknown names return undefined and fall through
- * to the engine's constant map (so pi/k/T/gamma resolve). It closes over the mutated
- * `values`, so a row evaluated later sees values written by an earlier row.
- */
-function scalarScope(values: Record<string, number>): Scope {
-  return {
-    resolve(name: string): Value | undefined {
-      return Object.prototype.hasOwnProperty.call(values, name) ? values[name] : undefined;
-    },
-  };
-}
-
-/**
  * Compile + evaluate one expression to a scalar against `scope`, or undefined when it
  * cannot resolve (parse error, an undeclared free name, an eval error, or — defensively
  * — an array result, which a scalar-only sheet scope never actually produces). Pushes a
@@ -63,7 +51,12 @@ function evalScalar(
   try {
     compiled = compileExpr(src);
   } catch (e) {
-    warn({ rule: 'sheet-parse', severity: 'error', message: `${where}: ${msg(e)}`, location: where });
+    warn({
+      rule: 'sheet-parse',
+      severity: 'error',
+      message: `${where}: ${msg(e)}`,
+      location: where,
+    });
     return undefined;
   }
   for (const n of compiled.names) {
@@ -71,7 +64,12 @@ function evalScalar(
       !Object.prototype.hasOwnProperty.call(values, n) &&
       !Object.prototype.hasOwnProperty.call(CONSTANTS, n)
     ) {
-      warn({ rule: 'sheet-undeclared', severity: 'warning', message: `${where}: "${n}" is not defined`, location: where });
+      warn({
+        rule: 'sheet-undeclared',
+        severity: 'warning',
+        message: `${where}: "${n}" is not defined`,
+        location: where,
+      });
       return undefined;
     }
   }
@@ -79,13 +77,23 @@ function evalScalar(
   try {
     v = compiled.eval(scope);
   } catch (e) {
-    warn({ rule: 'sheet-eval', severity: 'warning', message: `${where}: ${msg(e)}`, location: where });
+    warn({
+      rule: 'sheet-eval',
+      severity: 'warning',
+      message: `${where}: ${msg(e)}`,
+      location: where,
+    });
     return undefined;
   }
   if (v instanceof Float64Array) {
     // defensive — the sheet scope is scalar-only, so this never fires, but
     // the engine's Value type allows arrays, so we refuse one rather than mis-read it.
-    warn({ rule: 'sheet-array', severity: 'warning', message: `${where}: expression is array-valued, expected a scalar`, location: where });
+    warn({
+      rule: 'sheet-array',
+      severity: 'warning',
+      message: `${where}: expression is array-valued, expected a scalar`,
+      location: where,
+    });
     return undefined;
   }
   return v;
@@ -109,15 +117,18 @@ function runBind(
   if (!table) return fail('no device to size against');
 
   const supplied = (['gm', 'gm_id', 'id'] as const).filter((k) => b[k] !== undefined);
-  if (supplied.length !== 2) return fail(`bind needs exactly two of {gm, gm_id, id}, got ${supplied.length}`);
+  if (supplied.length !== 2)
+    return fail(`bind needs exactly two of {gm, gm_id, id}, got ${supplied.length}`);
 
   const L = evalScalar(b.L, values, scope, warn, 'bind L');
-  if (L === undefined || !Number.isFinite(L)) return fail('bind L did not resolve to a finite number');
+  if (L === undefined || !Number.isFinite(L))
+    return fail('bind L did not resolve to a finite number');
 
   const q: SizeQuery = { table, L };
   for (const k of supplied) {
     const v = evalScalar(b[k] as string, values, scope, warn, `bind ${k}`);
-    if (v === undefined || !Number.isFinite(v)) return fail(`bind ${k} did not resolve to a finite number`);
+    if (v === undefined || !Number.isFinite(v))
+      return fail(`bind ${k} did not resolve to a finite number`);
     q[k] = v;
   }
 
@@ -153,7 +164,13 @@ function evalRule(
   const base = { id: rule.id, kind: rule.kind, text, lhsValue, rhsValue };
 
   if (lhs === undefined || rhs === undefined || !Number.isFinite(lhs) || !Number.isFinite(rhs)) {
-    return { ...base, margin: NaN, marginPct: NaN, status: 'na', detail: 'a side did not resolve to a finite number' };
+    return {
+      ...base,
+      margin: NaN,
+      marginPct: NaN,
+      status: 'na',
+      detail: 'a side did not resolve to a finite number',
+    };
   }
 
   let margin: number;
@@ -169,7 +186,8 @@ function evalRule(
 
   let status: RuleStatus;
   if (margin < 0) status = 'fail';
-  else if (rule.op === '==') status = 'pass'; // '==' is pass/fail only — no near-miss (amber) band
+  else if (rule.op === '==')
+    status = 'pass'; // '==' is pass/fail only — no near-miss (amber) band
   else status = marginPct < AMBER_BAND ? 'amber' : 'pass';
   return { ...base, margin, marginPct, status };
 }
@@ -198,7 +216,12 @@ function applyUseParams(
     const v = evalScalar(expr, parentValues, parentScope, warn, `use "${use.name}" param ${k}`);
     if (v === undefined || !Number.isFinite(v)) {
       ok = false;
-      warn({ rule: 'sheet-use-param', severity: 'error', message: `use "${use.name}": override "${k}" did not resolve to a finite number (refusing to fall back to the child default)`, location: use.name });
+      warn({
+        rule: 'sheet-use-param',
+        severity: 'error',
+        message: `use "${use.name}": override "${k}" did not resolve to a finite number (refusing to fall back to the child default)`,
+        location: use.name,
+      });
       continue;
     }
     overrides[k] = v;
@@ -207,7 +230,9 @@ function applyUseParams(
     doc: {
       ...use.doc,
       params: use.doc.params.map((p) =>
-        Object.prototype.hasOwnProperty.call(overrides, p.name) ? { ...p, value: overrides[p.name] } : p,
+        Object.prototype.hasOwnProperty.call(overrides, p.name)
+          ? { ...p, value: overrides[p.name] }
+          : p,
       ),
     },
     ok,
@@ -234,7 +259,12 @@ function evalChildren(
   const reports: SheetChildReport[] = [];
   for (const use of uses) {
     if (depth >= MAX_USE_DEPTH) {
-      warn({ rule: 'sheet-use', severity: 'error', message: `use "${use.name}": composition nested deeper than ${MAX_USE_DEPTH}`, location: use.name });
+      warn({
+        rule: 'sheet-use',
+        severity: 'error',
+        message: `use "${use.name}": composition nested deeper than ${MAX_USE_DEPTH}`,
+        location: use.name,
+      });
       reports.push({ name: use.name, title: use.doc.title, feasible: false, provides: {} });
       continue;
     }
@@ -245,7 +275,12 @@ function evalChildren(
     if (use.device !== undefined) {
       childTable = resolveDevice?.(use.device);
       if (childTable === undefined) {
-        warn({ rule: 'sheet-use', severity: 'error', message: `use "${use.name}": device "${use.device}" did not resolve`, location: use.name });
+        warn({
+          rule: 'sheet-use',
+          severity: 'error',
+          message: `use "${use.name}": device "${use.device}" did not resolve`,
+          location: use.name,
+        });
         reports.push({ name: use.name, title: use.doc.title, feasible: false, provides: {} });
         continue;
       }
@@ -271,7 +306,12 @@ function evalChildren(
         }
       }
     }
-    reports.push({ name: use.name, title: use.doc.title, feasible: paramsOk && res.feasible, provides });
+    reports.push({
+      name: use.name,
+      title: use.doc.title,
+      feasible: paramsOk && res.feasible,
+      provides,
+    });
   }
   return reports;
 }
@@ -291,6 +331,12 @@ export function evaluateSheet(
   const warnings: QAWarning[] = [];
   const warn = (w: QAWarning): void => void warnings.push(w);
   const values: Record<string, number> = {};
+
+  // 0. Device-metadata scalars — the same scope derive/tableScope uses: T/UT (so
+  //    temperature-aware author math and the γ-model noise evaluate at the table's
+  //    characterization temperature) and the characterization width `w`. Seeded
+  //    before params, so a same-named param deliberately wins.
+  if (table) Object.assign(values, metaScalars(table.meta));
 
   // 1. Seed top-level scalar params (a parent supplies a child's via use.params).
   for (const p of doc.params) {
@@ -313,7 +359,12 @@ export function evaluateSheet(
     const r = evalScalar(row.expr, values, scope, warn, `row "${row.name}"`);
     if (r === undefined) continue;
     if (!Number.isFinite(r)) {
-      warn({ rule: 'sheet-nonfinite', severity: 'warning', message: `row "${row.name}" is not finite`, location: row.name });
+      warn({
+        rule: 'sheet-nonfinite',
+        severity: 'warning',
+        message: `row "${row.name}" is not finite`,
+        location: row.name,
+      });
       continue;
     }
     values[row.name] = r;

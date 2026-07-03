@@ -76,8 +76,10 @@ describe('lookup (forward)', () => {
       expect(out[key]).toBeDefined();
       expect(Number.isFinite(out[key])).toBe(true);
     }
-    // Not computable: id_w (no w column), gmb_gm (no gmb), cgd_cgg / gm_cgd (no cgd).
-    for (const key of ['id_w', 'gmb_gm', 'cgd_cgg', 'gm_cgd']) {
+    // id_w resolves through the metadata width (meta.W → w), same as tableScope.
+    expect(out.id_w).toBeCloseTo(out.id / (table.meta.W as number), 12);
+    // Not computable: gmb_gm (no gmb), cgd_cgg / gm_cgd (no cgd column or scalar).
+    for (const key of ['gmb_gm', 'cgd_cgg', 'gm_cgd']) {
       expect(out[key]).toBeUndefined();
     }
   });
@@ -248,5 +250,18 @@ describe('lookupByGmId (inverse)', () => {
     const table = makeFixedLTable(L, vgs, gm, id);
 
     expect(() => lookupByGmId(table, 2, L)).toThrow(/monoton/);
+  });
+});
+
+describe('lookup temperature', () => {
+  it('evaluates the γ-model noise at the table temperature, not the 27 °C default', () => {
+    const dev = generateDemoDevice();
+    const hot = { ...dev, meta: { ...dev.meta, temp: 125 } };
+    const L = dev.grid.axes[0].values[1];
+    const a = lookup(dev, { l: L, vgs: 0.6 });
+    const b = lookup(hot, { l: L, vgs: 0.6 });
+    // svth_m = 4kTγ/gm: same interpolated point, T scaled 300.15 K → 398.15 K.
+    expect(b.svth_m / a.svth_m).toBeCloseTo((125 + 273.15) / PHYS.T, 12);
+    expect(a.gm).toBeCloseTo(b.gm, 15); // the data itself is untouched
   });
 });

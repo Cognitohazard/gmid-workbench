@@ -4,15 +4,9 @@
 // returns structured QAWarnings. canonicalizeTable() folds signed (PMOS) source
 // conventions into magnitudes, recording the polarity that was applied.
 
-import type {
-  Axis,
-  DeviceTable,
-  Grid,
-  Polarity,
-  QAWarning,
-  TableMeta,
-} from '../types';
-import { PHYS, UT } from '../constants';
+import type { Axis, DeviceTable, Grid, Polarity, QAWarning, TableMeta } from '../types';
+import { PHYS, UT, kelvin } from '../constants';
+import { strides } from '../grid';
 import { BASE_QUANTITIES } from '../namespace';
 
 // --- physical thresholds -----------------------------------------------------
@@ -72,9 +66,9 @@ const SIGNED_MAGNITUDE_KEYS: readonly string[] = ['id', 'gm', 'gds', 'gmb'];
 const SELF_CAP_KEYS: readonly string[] = ['cgg'];
 
 /** Voltage axis/column keys (folded to |v| on signed input). */
-const VOLTAGE_KEYS: readonly string[] = BASE_QUANTITIES
-  .filter((q) => q.unit === 'V')
-  .map((q) => q.key);
+const VOLTAGE_KEYS: readonly string[] = BASE_QUANTITIES.filter((q) => q.unit === 'V').map(
+  (q) => q.key,
+);
 
 // --- grid helpers ------------------------------------------------------------
 
@@ -83,26 +77,12 @@ function axisIndex(grid: Grid, name: string): number {
   return grid.axes.findIndex((a) => a.name === name);
 }
 
-/** Row-major strides for the given shape (last axis fastest). */
-function strides(shape: readonly number[]): number[] {
-  const s = new Array<number>(shape.length);
-  let acc = 1;
-  for (let i = shape.length - 1; i >= 0; i--) {
-    s[i] = acc;
-    acc *= shape[i];
-  }
-  return s;
-}
-
 /**
  * Walk every L-slice. For each value on the `l` axis (or a single synthetic
  * slice if there is no `l` axis), invoke `fn` with the slice's index on the L
  * axis and the L value (NaN when absent).
  */
-function forEachLSlice(
-  grid: Grid,
-  fn: (lIndex: number, lValue: number) => void,
-): void {
+function forEachLSlice(grid: Grid, fn: (lIndex: number, lValue: number) => void): void {
   const li = axisIndex(grid, 'l');
   if (li < 0) {
     fn(0, NaN);
@@ -200,35 +180,34 @@ export function validate(table: DeviceTable): QAWarning[] {
       });
     }
 
-    // Per-L-slice monotonicity + step. The vgs axis is shared across slices, so
-    // the sequence is identical per slice; we still attribute findings to a slice.
-    forEachLSlice(grid, (_li, lValue) => {
-      let prev = v[0];
-      let maxStep = 0;
-      let nonMonotonic = false;
-      for (let i = 1; i < v.length; i++) {
-        const step = v[i] - prev;
-        if (step <= 0) nonMonotonic = true;
-        if (step > maxStep) maxStep = step;
-        prev = v[i];
-      }
-      if (nonMonotonic) {
-        out.push({
-          rule: 'non-monotonic',
-          severity: 'error',
-          message: `vgs is not strictly increasing in ${fmtL(lValue)}`,
-          location: `vgs @ ${fmtL(lValue)}`,
-        });
-      }
-      if (maxStep > VGS_STEP_WARN) {
-        out.push({
-          rule: 'vgs-step',
-          severity: 'warning',
-          message: `vgs step up to ${(maxStep * 1e3).toFixed(1)} mV exceeds 10 mV in ${fmtL(lValue)}`,
-          location: `vgs @ ${fmtL(lValue)}`,
-        });
-      }
-    });
+    // Monotonicity + step, once for the axis. The vgs axis is one shared values
+    // array for the whole grid, so one defect is one finding attributed to the
+    // axis (like the |vgs| ceiling above) — not repeated per L-slice.
+    let prev = v[0];
+    let maxStep = 0;
+    let nonMonotonic = false;
+    for (let i = 1; i < v.length; i++) {
+      const step = v[i] - prev;
+      if (step <= 0) nonMonotonic = true;
+      if (step > maxStep) maxStep = step;
+      prev = v[i];
+    }
+    if (nonMonotonic) {
+      out.push({
+        rule: 'non-monotonic',
+        severity: 'error',
+        message: 'vgs axis is not strictly increasing',
+        location: 'vgs',
+      });
+    }
+    if (maxStep > VGS_STEP_WARN) {
+      out.push({
+        rule: 'vgs-step',
+        severity: 'warning',
+        message: `vgs step up to ${(maxStep * 1e3).toFixed(1)} mV exceeds 10 mV`,
+        location: 'vgs',
+      });
+    }
   }
 
   // --- gm/ID ceiling (needs gm and id columns) ---
@@ -238,7 +217,7 @@ export function validate(table: DeviceTable): QAWarning[] {
     // Scale both 27 °C anchors by this table's temperature (1/U_T ∝ 1/T): rises
     // when colder, falls when hotter, and their ratio is preserved automatically.
     const tempC = table.meta.temp ?? 27;
-    const scale = PHYS.T / (tempC + 273.15); // 1 @27 °C, >1 colder, <1 hotter
+    const scale = PHYS.T / kelvin(tempC); // 1 @27 °C, >1 colder, <1 hotter
     const ceiling = GM_ID_CEILING * scale; // ~38.7@27, ~49.8@−40, ~29.2@125
     const unitError = GM_ID_UNIT_ERROR * scale; // ~45@27, temp-scaled
     let maxGmId = 0;
@@ -315,13 +294,34 @@ export function validate(table: DeviceTable): QAWarning[] {
   // must be non-negative. A signed PMOS dump trips these until canonicalization folds it to
   // magnitude. The cross/trans-capacitances (cgd, cgb, cdb, csb) are deliberately NOT checked
   // — they are legitimately negative under the common ∂Qi/∂Vj convention.
-  const signCheck = (col: Float64Array | undefined, rule: string, label: string, why: string): void => {
+  const signCheck = (
+    col: Float64Array | undefined,
+    rule: string,
+    label: string,
+    why: string,
+  ): void => {
     if (!col) return;
     const neg = countWhere(col, (x) => x < 0);
-    if (neg > 0) out.push({ rule, severity: 'warning', message: `${label} has ${neg} negative value(s) — ${why}`, location: label });
+    if (neg > 0)
+      out.push({
+        rule,
+        severity: 'warning',
+        message: `${label} has ${neg} negative value(s) — ${why}`,
+        location: label,
+      });
   };
-  signCheck(gm, 'gm-sign', 'gm', 'expected a magnitude (a signed PMOS dump needs sign canonicalization first)');
-  signCheck(gds, 'gds-sign', 'gds', 'expected a magnitude (a signed PMOS dump needs canonicalization first)');
+  signCheck(
+    gm,
+    'gm-sign',
+    'gm',
+    'expected a magnitude (a signed PMOS dump needs sign canonicalization first)',
+  );
+  signCheck(
+    gds,
+    'gds-sign',
+    'gds',
+    'expected a magnitude (a signed PMOS dump needs canonicalization first)',
+  );
   signCheck(q.get('cgg'), 'cap-sign', 'cgg', 'the total gate capacitance should be a magnitude');
 
   // A non-positive sth/sfl poisons every input-referred noise quantity (sqrt of ≤0, or a 0 in fco).
@@ -330,7 +330,12 @@ export function validate(table: DeviceTable): QAWarning[] {
     if (!col) continue;
     const bad = countWhere(col, (x) => !(x > 0));
     if (bad > 0) {
-      out.push({ rule: 'noise-psd', severity: 'error', message: `${key} has ${bad} non-positive value(s) — a noise PSD must be > 0`, location: key });
+      out.push({
+        rule: 'noise-psd',
+        severity: 'error',
+        message: `${key} has ${bad} non-positive value(s) — a noise PSD must be > 0`,
+        location: key,
+      });
     }
   }
 
@@ -339,7 +344,12 @@ export function validate(table: DeviceTable): QAWarning[] {
   if (gammaCol) {
     const oob = countWhere(gammaCol, (g) => Number.isFinite(g) && (g < GAMMA_LO || g > GAMMA_HI));
     if (oob > 0) {
-      out.push({ rule: 'gamma-range', severity: 'warning', message: `gamma has ${oob} value(s) outside [${GAMMA_LO}, ${GAMMA_HI}] — likely a unit or model error`, location: 'gamma' });
+      out.push({
+        rule: 'gamma-range',
+        severity: 'warning',
+        message: `gamma has ${oob} value(s) outside [${GAMMA_LO}, ${GAMMA_HI}] — likely a unit or model error`,
+        location: 'gamma',
+      });
     }
   }
 
@@ -367,7 +377,10 @@ export function validate(table: DeviceTable): QAWarning[] {
         let down = false;
         for (let j = 1; j < line.length; j++) {
           const d = id[line[j]] - id[line[j - 1]];
-          if (Math.abs(d) > floor) d > 0 ? (up = true) : (down = true);
+          if (Math.abs(d) > floor) {
+            if (d > 0) up = true;
+            else down = true;
+          }
         }
         if (up && down) glitch = true;
 
@@ -430,11 +443,7 @@ export function canonicalizeTable(table: DeviceTable): DeviceTable {
   // Magnitude for currents/conductances, the self-term capacitance cgg, and
   // non-axis voltages. Axis-name columns are skipped so the materialized axis
   // column keeps matching its (untouched) axis.
-  const magKeys = new Set<string>([
-    ...SIGNED_MAGNITUDE_KEYS,
-    ...SELF_CAP_KEYS,
-    ...VOLTAGE_KEYS,
-  ]);
+  const magKeys = new Set<string>([...SIGNED_MAGNITUDE_KEYS, ...SELF_CAP_KEYS, ...VOLTAGE_KEYS]);
   const axisNames = new Set(grid.axes.map((ax) => ax.name));
 
   const nextQ = new Map<string, Float64Array>();
