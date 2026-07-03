@@ -1,0 +1,15 @@
+# Build outputs, vendored/generated data, and staging areas.
+# (node_modules is ignored by both tools out of the box.)
+dist/
+web/dist/
+data/
+.pdk/
+.pdkgen/
+release/
+web/e2e/__screens__/
+web/test-results/
+web/playwright-report/
+# Prose is authored by hand; don't reflow it.
+*.md
+# Python tooling is formatted by ruff conventions, not prettier.
+tools/

@@ -14,6 +14,8 @@ Core (run from repo root):
 - `npm test` — Vitest (the numeric/golden suite; run this on any `src/` change)
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run build` — `tsc` to `dist/`
+- `npm run lint` — ESLint over `src/`, `web/src/`, `web/e2e/`
+- `npm run format:check` — Prettier check (`npm run format` to fix)
 
 Web (run from `web/`):
 - `npm run dev` — Vite dev server
@@ -22,10 +24,10 @@ Web (run from `web/`):
 - `npm run build` — Vite single-file offline build (`dist/index.html`, fully inlined)
 
 Tools (`tools/`, no system numpy):
-- `uv run --with numpy python3 tools/medwatt2mostab.py <file.npz> -o out/` — convert medwatt/mosplot `.npz` to mostab CSV
+- `uv run --with numpy python3 tools/medwatt2mostab.py --trust-pickle <file.npz> -o out/` — convert medwatt/mosplot `.npz` to mostab CSV
 - `uv run --with numpy python3 tools/test_medwatt2mostab.py` — converter self-test
 
-Before declaring web work done, the bar is: core tests pass, `svelte-check` is clean, e2e passes, and the offline build succeeds.
+Before declaring web work done, the bar is: core tests pass, typecheck, `npm run lint` and `npm run format:check` are clean, `svelte-check` is clean, e2e passes, and the offline build succeeds (this is what CI enforces).
 
 ## Layout
 

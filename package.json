@@ -1,10 +1,20 @@
 {
   "name": "@gmid/mostab-core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Pure TypeScript core for the gm/ID Workbench: mostab parsing, grid interpolation, derived quantities, lookup, and the expression engine. Zero DOM imports.",
-  "license": "MIT",
+  "keywords": [
+    "gm/ID",
+    "analog design",
+    "transistor sizing",
+    "lookup table",
+    "mostab",
+    "characterization",
+    "MOSFET",
+    "circuit design"
+  ],
+  "license": "GPL-3.0-only",
   "exports": {
     ".": "./src/index.ts"
   },
@@ -12,14 +22,22 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "tsc"
+    "build": "tsc",
+    "lint": "eslint src web/src web/e2e",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "jsep": "^1.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "eslint": "^10.6.0",
+    "eslint-plugin-svelte": "^3.20.0",
+    "prettier": "^3.9.4",
+    "prettier-plugin-svelte": "^4.1.1",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.62.1",
     "vitest": "^2.1.8"
   }
 }
