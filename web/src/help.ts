@@ -55,7 +55,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Make this the active device: it drives the dashboard, the pickers, the bias sliders, and the sizer.',
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
   sheet:
-    'Add a design sheet: variables, author equations, and pass/fail constraints with margins, sized on the active device.',
+    'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device.',
   sheetSweep:
     'Sweep one variable across its range and chart every rule’s margin — the feasibility region where the design closes.',
   sheetSweep2:

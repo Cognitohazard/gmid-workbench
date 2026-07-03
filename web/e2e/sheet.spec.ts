@@ -402,3 +402,35 @@ test('design sheet: a param note surfaces as a title tooltip', async ({ page }) 
   // The CL spec param carries a note; it shows as the param row's title attribute.
   await expect(sp.locator('.svar', { hasText: 'CL' })).toHaveAttribute('title', 'load capacitance');
 });
+
+test('design sheet: library topologies load from the grouped picker and evaluate', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // The picker groups examples and the curated library; load a Stages topology by title.
+  await sp.locator('.shead select.rm').selectOption({ label: 'CS amp, current-source load' });
+  await expect(sp.locator('.shead')).toContainText('CS amp, current-source load');
+
+  // It binds on the demo device, reports the declared operating point, evaluates its
+  // composed load child, and closes at defaults (the core golden pins the same numbers).
+  await expect(sp.locator('.bind')).toContainText('W=');
+  await expect(sp.locator('.sbias')).toContainText('vds');
+  await expect(sp.locator('.suse', { hasText: 'load' })).toBeVisible();
+  await expect(sp.locator('.feasb')).toHaveText('feasible');
+
+  // A composed multi-child library sheet (no parent bind) loads from another group.
+  await sp.locator('.shead select.rm').selectOption({ label: '5T OTA' });
+  await expect(sp.locator('.shead')).toContainText('5T OTA');
+  await expect(sp.locator('.suse')).toHaveCount(3);
+  await expect(sp.locator('.srules tr').first()).toBeVisible();
+
+  expect(errors).toEqual([]);
+});

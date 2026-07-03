@@ -11,7 +11,6 @@
     joinProvide,
     SWEEP_POINTS,
     SWEEP2_POINTS,
-    EXAMPLES,
     type DeviceTable,
     type DeviceResolver,
     type SheetDoc,
@@ -25,6 +24,7 @@
   import { chartHost } from './chartHost.svelte';
   import { axisUnit } from './labels';
   import { CONTROL_HELP } from './help';
+  import { SHEET_MENU } from './library';
 
   let {
     device,
@@ -126,18 +126,18 @@
   });
 
   // Immutable edits: every change emits a fresh doc so the parent's Object.assign + persist
-  // path (identical to every other panel) carries it. structuredClone on example-switch so a
-  // panel never aliases the shared EXAMPLES literal.
+  // path (identical to every other panel) carries it. structuredClone on sheet-switch so a
+  // panel never aliases the shared menu literals.
   function setParam(name: string, value: number): void {
     if (!Number.isFinite(value)) return;
     onChange({ ...cfg, params: cfg.params.map((p) => (p.name === name ? { ...p, value } : p)) });
   }
-  function pickExample(e: Event): void {
+  function pickSheet(e: Event): void {
     const sel = e.currentTarget as HTMLSelectElement;
-    const i = Number(sel.value);
-    if (Number.isInteger(i) && i >= 0 && i < EXAMPLES.length)
-      onChange(structuredClone(EXAMPLES[i]));
+    const [gi, si] = sel.value.split(':').map(Number);
     sel.value = '';
+    const src = SHEET_MENU[gi]?.sheets[si];
+    if (src) onChange(structuredClone(src) as SheetDoc);
   }
   // Point a composed child at a specific loaded device (a table uid), or '' to inherit the parent.
   function setUseDevice(i: number, uid: string): void {
@@ -291,9 +291,13 @@
 
 <div class="sheet">
   <div class="shead">
-    <select class="rm" onchange={pickExample} title={CONTROL_HELP.sheet}>
-      <option value="" selected>example…</option>
-      {#each EXAMPLES as ex, i}<option value={i}>{ex.title}</option>{/each}
+    <select class="rm" onchange={pickSheet} title={CONTROL_HELP.sheet}>
+      <option value="" selected>sheet…</option>
+      {#each SHEET_MENU as g, gi}
+        <optgroup label={g.label}>
+          {#each g.sheets as s, si}<option value={`${gi}:${si}`}>{s.title}</option>{/each}
+        </optgroup>
+      {/each}
     </select>
     <strong>{cfg.title}</strong>
     <span class="feasb {result.feasible ? 'ok' : 'no'}"
