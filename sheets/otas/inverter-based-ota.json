@@ -1,0 +1,194 @@
+{
+  "title": "Inverter-based OTA",
+  "description": "A complementary common-source (inverter) transconductor: an NMOS and a PMOS input device stacked between the rails share the same bias current, and their gates tie together as the input. Because both devices transconduct the input, the composite transconductance is the sum gm_tot = gm_n + gm_p — current reuse buys roughly double the gm for the same current, so the effective gm/ID is gm_id_n + gm_id_p. Gain is gm_tot/(gds_n + gds_p) and, for the same current, the input-referred thermal density is about sqrt(2) lower than a single device. The cost is supply sensitivity: the bias current and hence gm depend directly on VDD, so the inverter needs a replica or common-mode bias loop and has poor native PSRR — sim owns the supply rejection. The PMOS device takes a sign param like the mirror-load convention so it binds against either an N-style or a signed-PMOS table.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
+    { "name": "Av_target", "value": 30, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 20e6, "unit": "Hz", "role": "spec" },
+    { "name": "SR_target", "value": 8e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 12e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget (the current-reuse benefit should beat a single device)"
+    },
+    {
+      "name": "vos_target",
+      "value": 8e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "input offset budget, 1 sigma"
+    },
+    {
+      "name": "V_out_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level (mid-supply for symmetric swing); sets both devices' vds"
+    },
+    { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
+    { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
+    {
+      "name": "sign_p",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the PMOS table: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    },
+    {
+      "name": "I_bias",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "the single current shared by the N and P devices (current reuse)"
+    },
+    {
+      "name": "gm_id_n",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "NMOS inversion: its share of the composite transconductance and noise"
+    },
+    {
+      "name": "gm_id_p",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "PMOS inversion: its share of the composite transconductance and noise"
+    },
+    { "name": "L_n", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    { "name": "L_p", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
+  ],
+  "uses": [
+    {
+      "name": "n",
+      "doc": {
+        "title": "NMOS input device",
+        "description": "The common-source NMOS half of the inverter; its source at ground, drain at the output DC level.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_d", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_d", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_d", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_d",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m"]
+      },
+      "params": {
+        "I_d": "I_bias",
+        "L_d": "L_n",
+        "gm_id_d": "gm_id_n",
+        "vds_d": "V_out_dc"
+      }
+    },
+    {
+      "name": "p",
+      "doc": {
+        "title": "PMOS input device",
+        "description": "The common-source PMOS half of the inverter; its source at VDD, drain at the output DC level. Shares the NMOS bias current (current reuse).",
+        "polarity": "p",
+        "params": [
+          { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_d", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_d", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_d", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_d",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat", "W"]
+      },
+      "params": {
+        "I_d": "I_bias",
+        "L_d": "L_p",
+        "gm_id_d": "gm_id_p",
+        "vds_d": "sign_p*(VDD - V_out_dc)"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "gm_tot",
+      "expr": "n__gm + p__gm",
+      "unit": "S",
+      "note": "current reuse: both devices transconduct the input, so their gm add"
+    },
+    {
+      "name": "gm_id_eff",
+      "expr": "gm_tot/I_bias",
+      "unit": "1/V",
+      "note": "effective composite gm/ID = gm_id_n + gm_id_p — the current-reuse efficiency win"
+    },
+    {
+      "name": "Av",
+      "expr": "gm_tot/(n__gds + p__gds)",
+      "unit": "V/V",
+      "note": "composite transconductance into the two output conductances in parallel"
+    },
+    { "name": "GBW", "expr": "gm_tot/(2*pi*CL)", "unit": "Hz" },
+    { "name": "SR", "expr": "I_bias/CL", "unit": "V/s" },
+    {
+      "name": "vn_in",
+      "expr": "sqrt(4*k*T*(2/3)/gm_tot)",
+      "unit": "V/sqrt(Hz)",
+      "note": "input-referred thermal density at the composite gm_tot; ~sqrt(2) below a single device at the same current"
+    },
+    {
+      "name": "vos",
+      "expr": "sqrt(pelgrom_vos(avt, abeta, n__W, L_n, gm_id_n)^2 + pelgrom_vos(avt, abeta, p__W, L_p, gm_id_p)^2)",
+      "unit": "V",
+      "note": "estimate: the N and P threshold-mismatch offsets combined, input-referred"
+    }
+  ],
+  "rules": [
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    {
+      "id": "stacked-headroom",
+      "kind": "invariant",
+      "lhs": "VDD",
+      "op": ">=",
+      "rhs": "n__vdsat + p__vdsat + 2*0.05",
+      "note": "the stacked N and P must both stay saturated between the rails with a little margin"
+    },
+    {
+      "id": "supply-sensitivity",
+      "kind": "guardrail",
+      "lhs": "gm_id_eff",
+      "op": "<=",
+      "rhs": "40",
+      "note": "estimate: very high composite gm/ID means weak inversion and strong VDD dependence of the bias — budget a common-mode bias loop; sim owns PSRR"
+    }
+  ]
+}

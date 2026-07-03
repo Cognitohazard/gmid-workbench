@@ -1,0 +1,307 @@
+{
+  "title": "Current-mirror OTA",
+  "description": "A current-mirror (or current-amplifier) OTA: the input pair drives diode-connected mirror loads, and each mirror is copied with ratio K_m to a push-out output branch, so the effective output transconductance is K_m*gm_in. This buys bandwidth and slew almost for free — GBW = K_m*gm_in/(2*pi*CL) and SR = K_m*I_tail/CL — but not DC gain: raising K_m scales both the output transconductance and the output conductance together, so the low-frequency gain is nearly independent of K_m. The catch shows up in noise: to hit a fixed GBW at larger K_m the input pair shrinks (gm_in falls as 1/K_m), so its input-referred thermal density grows as sqrt(K_m). The current-mirror node carries a real pole; its estimate is shown but settling is sim-owned.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
+    { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 12e6, "unit": "Hz", "role": "spec" },
+    { "name": "SR_target", "value": 10e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 20e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "V_out_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level; sets the output mirror devices' vds"
+    },
+    {
+      "name": "CM_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "nominal input CM at which the operating point is evaluated"
+    },
+    {
+      "name": "sign_p",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the PMOS-side tables: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    },
+    {
+      "name": "I_tail",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice"
+    },
+    {
+      "name": "K_m",
+      "value": 2,
+      "min": 1,
+      "max": 8,
+      "unit": "1",
+      "role": "choice",
+      "note": "mirror ratio: multiplies GBW and SR, but raises input noise as sqrt(K_m) at fixed GBW"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion: sets gm per current and the input-referred noise floor"
+    },
+    {
+      "name": "gm_id_ml",
+      "value": 10,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-mirror (diode) inversion: sets the mirror-node pole"
+    },
+    {
+      "name": "gm_id_mo",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "output-mirror inversion: lower gm/ID gives higher output resistance"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_mir",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vgs_est_in",
+      "value": 0.57,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the input-pair vgs, used to place the tail node; retune until input-bias-consistent is green"
+    },
+    {
+      "name": "vgs_est_ml",
+      "value": 0.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the input-mirror diode vgs, used as its own vds; retune until mirror-bias-consistent is green"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input-pair device",
+        "description": "Half-circuit input device at half the tail current, driving the diode mirror load.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.77, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_i": "L_in",
+        "gm_id_i": "gm_id_in",
+        "vds_i": "VDD - vgs_est_ml - CM_dc + vgs_est_in"
+      }
+    },
+    {
+      "name": "mload",
+      "doc": {
+        "title": "Input mirror device (diode)",
+        "description": "Diode-connected mirror load at half the tail current; its vds equals its own vgs and its gate node carries the mirror pole.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_m", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vds_m", "value": 0.7, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "vds": "vds_m" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_m",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_m": "L_mir",
+        "gm_id_m": "gm_id_ml",
+        "vds_m": "vgs_est_ml"
+      }
+    },
+    {
+      "name": "moutp",
+      "doc": {
+        "title": "Output mirror device (PMOS side)",
+        "description": "The K_m-scaled output copy carrying K_m times the input-branch current; its gds is one half of the output conductance and its gate cap loads the mirror node.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_o", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_o", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_o", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vds_o", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_o", "id": "I_o", "gm_id": "gm_id_o", "vds": "vds_o" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_o",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gds", "vdsat", "cgg"]
+      },
+      "params": {
+        "I_o": "K_m*I_tail/2",
+        "L_o": "L_mir",
+        "gm_id_o": "gm_id_mo",
+        "vds_o": "sign_p*(VDD - V_out_dc)"
+      }
+    },
+    {
+      "name": "moutn",
+      "doc": {
+        "title": "Output mirror device (NMOS side)",
+        "description": "The NMOS output copy sinking K_m times the input-branch current; its gds is the other half of the output conductance.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_o", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_o", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_o", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vds_o", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_o", "id": "I_o", "gm_id": "gm_id_o", "vds": "vds_o" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_o",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gds", "vdsat"]
+      },
+      "params": {
+        "I_o": "K_m*I_tail/2",
+        "L_o": "L_mir",
+        "gm_id_o": "gm_id_mo",
+        "vds_o": "V_out_dc"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "Gm_out",
+      "expr": "K_m*in__gm",
+      "unit": "S",
+      "note": "output transconductance = mirror ratio times the input gm"
+    },
+    {
+      "name": "Rout",
+      "expr": "1/(moutp__gds + moutn__gds)",
+      "unit": "ohm",
+      "note": "output node loaded by both output mirror devices' conductance"
+    },
+    {
+      "name": "Av",
+      "expr": "Gm_out*Rout",
+      "unit": "V/V",
+      "note": "DC gain; K_m scales Gm_out and (via the K_m-larger output devices) Rout inversely, so gain is nearly K_m-independent"
+    },
+    { "name": "GBW", "expr": "K_m*in__gm/(2*pi*CL)", "unit": "Hz" },
+    { "name": "SR", "expr": "K_m*I_tail/CL", "unit": "V/s" },
+    {
+      "name": "vn_in",
+      "expr": "in__vnth_m*sqrt(1 + mload__gm/in__gm)",
+      "unit": "V/sqrt(Hz)",
+      "note": "input pair plus the input mirror-load density at the actual input gm"
+    },
+    {
+      "name": "vn_gbw",
+      "expr": "sqrt(4*k*T*(2/3)/(2*pi*CL*GBW_target/K_m))",
+      "unit": "V/sqrt(Hz)",
+      "note": "estimate: input density if the pair were sized to just meet GBW_target at this K_m — grows as sqrt(K_m), the current-mirror OTA's noise-for-bandwidth trade"
+    },
+    {
+      "name": "f_pole",
+      "expr": "mload__gm/(2*pi*(mload__cgg + moutp__cgg))",
+      "unit": "Hz",
+      "note": "estimate: the mirror-node pole, set by the diode gm over its own plus the K_m-scaled output gate cap"
+    }
+  ],
+  "rules": [
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "mirror-pole",
+      "kind": "guardrail",
+      "lhs": "f_pole",
+      "op": ">=",
+      "rhs": "3*GBW_target",
+      "note": "estimate: keep the mirror-node pole well above GBW for phase margin; sim owns the real stability"
+    },
+    {
+      "id": "input-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(in__vgs - vgs_est_in)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the tail-node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+    },
+    {
+      "id": "mirror-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(mload__vgs - vgs_est_ml)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the diode mirror's declared vds should equal its actual vgs; retune vgs_est_ml if this trips"
+    }
+  ]
+}

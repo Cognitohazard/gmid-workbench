@@ -1,0 +1,198 @@
+{
+  "title": "Class-AB output stage (Monticelli)",
+  "description": "A push-pull class-AB output stage with Monticelli floating-battery bias. The NMOS pull-down and PMOS pull-up output devices carry a quiescent current I_q set by a floating voltage source between their gates. That battery defines a translinear loop: the sum of the two output devices' gate-source voltages equals the battery voltage, which fixes the quiescent current and lets it be small (low static power) while still turning fully on under drive. The consistency check is the translinear-loop equation as an equality rule with tolerance: Vgs_n + |Vgs_p| must equal V_bat at the chosen quiescent point. The swing rows give the rail-to-rail output range set by the two saturation voltages. Raising I_q lowers crossover distortion but wastes static power — the class-AB quiescent/efficiency trade. On the demo NMOS table both output devices size against the same data, so the PMOS sign param stays at +1.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.3,
+      "max": 1.5,
+      "unit": "V",
+      "role": "spec",
+      "note": "quiescent output DC level; sets each output device's vds"
+    },
+    {
+      "name": "swing_target",
+      "value": 1.0,
+      "unit": "V",
+      "role": "spec",
+      "note": "required peak-to-peak output swing"
+    },
+    {
+      "name": "I_q",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "class-AB quiescent current: higher I_q lowers crossover distortion but wastes static power"
+    },
+    {
+      "name": "V_bat",
+      "value": 1.336,
+      "min": 0.8,
+      "max": 2.0,
+      "unit": "V",
+      "role": "choice",
+      "note": "floating-battery voltage the bias network sets; the translinear loop forces Vgs_n + |Vgs_p| = V_bat at quiescent — retune to the reported vgs sum"
+    },
+    {
+      "name": "gm_id_n",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "NMOS output-device inversion (low gm/ID for current drive)"
+    },
+    {
+      "name": "gm_id_p",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "PMOS output-device inversion"
+    },
+    { "name": "L_n", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    { "name": "L_p", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "p_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign of the PMOS device table: +1 for the N-style demo axis, -1 for a signed-PMOS axis"
+    }
+  ],
+  "uses": [
+    {
+      "name": "mn",
+      "doc": {
+        "title": "NMOS pull-down output device",
+        "description": "The NMOS output device at the quiescent current; its vds is the output DC level. Its vgs is one half of the translinear-loop sum.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "id", "vgs", "vdsat"]
+      },
+      "params": { "Ix": "I_q", "Lx": "L_n", "gx": "gm_id_n", "vx": "V_out" }
+    },
+    {
+      "name": "mp",
+      "doc": {
+        "title": "PMOS pull-up output device",
+        "description": "The PMOS output device at the quiescent current; its vds magnitude is the supply minus the output DC. Its vgs is the other half of the translinear-loop sum.",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "id", "vgs", "vdsat"]
+      },
+      "params": { "Ix": "I_q", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*(VDD - V_out)" }
+    }
+  ],
+  "rows": [
+    {
+      "name": "vgs_sum",
+      "expr": "mn__vgs + abs(mp__vgs)",
+      "unit": "V",
+      "note": "the translinear-loop sum: the floating battery must supply this to bias both devices at I_q"
+    },
+    {
+      "name": "gm_out",
+      "expr": "mn__gm + mp__gm",
+      "unit": "S",
+      "note": "push-pull transconductance at quiescent (both devices contribute)"
+    },
+    {
+      "name": "swing_hi",
+      "expr": "VDD - mp__vdsat",
+      "unit": "V",
+      "note": "highest output the PMOS can pull up to while saturated"
+    },
+    {
+      "name": "swing_lo",
+      "expr": "mn__vdsat",
+      "unit": "V",
+      "note": "lowest output the NMOS can pull down to while saturated"
+    },
+    {
+      "name": "swing",
+      "expr": "VDD - mn__vdsat - mp__vdsat",
+      "unit": "V",
+      "note": "peak-to-peak output swing between the two saturation limits"
+    }
+  ],
+  "rules": [
+    {
+      "id": "monticelli-consistency",
+      "kind": "requirement",
+      "lhs": "vgs_sum",
+      "op": "==",
+      "rhs": "V_bat",
+      "tolPct": 5,
+      "note": "translinear-loop consistency: the floating-battery voltage must equal Vgs_n + |Vgs_p| at the quiescent current, or the design biases at a different I_q than intended — retune V_bat to the reported vgs_sum"
+    },
+    {
+      "id": "swing-spec",
+      "kind": "requirement",
+      "lhs": "swing",
+      "op": ">=",
+      "rhs": "swing_target",
+      "note": "the rail-to-rail output swing meets the target"
+    },
+    {
+      "id": "out-hi-sat",
+      "kind": "invariant",
+      "lhs": "VDD - V_out",
+      "op": ">=",
+      "rhs": "mp__vdsat",
+      "note": "PMOS output device saturated at the quiescent output level"
+    },
+    {
+      "id": "out-lo-sat",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "mn__vdsat",
+      "note": "NMOS output device saturated at the quiescent output level"
+    }
+  ]
+}

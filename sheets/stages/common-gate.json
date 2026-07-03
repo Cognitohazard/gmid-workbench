@@ -1,0 +1,142 @@
+{
+  "title": "Common gate",
+  "description": "A common-gate stage: the input drives the source, the gate is AC-grounded, and the output is taken at the drain. It presents a low input resistance Rin = 1/gm (a current-mode input, so it is the classic input matching / current-buffer stage) and a non-inverting voltage gain Av = gm*par(R_load, 1/gds) equal in magnitude to a common source. Its current transfer from source to drain is essentially unity, so it passes an input current to the load with a low input impedance. The device source sits at the input DC level V_in, so the bind declares vsb = V_in (body grounded); on a table without a vsb axis this is advisory and the body effect gmb is omitted from Rin.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.2,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "output (drain) DC level"
+    },
+    {
+      "name": "V_in",
+      "value": 0.3,
+      "min": 0.05,
+      "max": 1.0,
+      "unit": "V",
+      "role": "spec",
+      "note": "input (source) DC level"
+    },
+    {
+      "name": "R_load",
+      "value": 50e3,
+      "min": 1e3,
+      "max": 500e3,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "load resistor at the drain: sets the gain"
+    },
+    {
+      "name": "Rin_target",
+      "value": 2e3,
+      "unit": "ohm",
+      "role": "spec",
+      "note": "input-resistance budget (e.g. a source-matching target)"
+    },
+    { "name": "Av_target", "value": 10, "unit": "V/V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
+    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "cdd_est",
+      "value": 0.2e-12,
+      "unit": "F",
+      "role": "spec",
+      "note": "output-node parasitic estimate; refine from extraction"
+    },
+    {
+      "name": "I_bias",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "branch current budget"
+    },
+    {
+      "name": "gm_id",
+      "value": 10,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "lower gm/ID raises gm, so it lowers Rin = 1/gm (better matching) at the cost of headroom"
+    },
+    {
+      "name": "L",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "id": "I_bias",
+    "gm_id": "gm_id",
+    "vds": "V_out - V_in",
+    "vsb": "V_in"
+  },
+  "rows": [
+    {
+      "name": "Rin",
+      "expr": "1/gm",
+      "unit": "ohm",
+      "note": "low-frequency input resistance looking into the source; gmb omitted (not on every table)"
+    },
+    {
+      "name": "Av",
+      "expr": "gm*par(R_load, 1/gds)",
+      "unit": "V/V",
+      "note": "non-inverting gain, gm into the load in parallel with the device output resistance"
+    },
+    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
+    {
+      "name": "vn_in",
+      "expr": "vnth_m",
+      "unit": "V/sqrt(Hz)",
+      "note": "device channel thermal density; a common-gate input also passes the source's own noise, which is set outside this stage"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "headroom",
+      "kind": "invariant",
+      "lhs": "V_out - V_in",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "device saturated: the drain-to-source voltage is the drain level minus the source (input) level"
+    },
+    {
+      "id": "input-match",
+      "kind": "requirement",
+      "lhs": "Rin",
+      "op": "<=",
+      "rhs": "Rin_target",
+      "note": "1/gm must meet the input-resistance budget"
+    },
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    {
+      "id": "gbw-margin",
+      "kind": "guardrail",
+      "lhs": "GBW",
+      "op": ">=",
+      "rhs": "GBW_target",
+      "note": "actual GBW into CL plus the parasitic estimate"
+    }
+  ]
+}

@@ -1,0 +1,397 @@
+{
+  "title": "Folded cascode OTA",
+  "description": "A folded cascode: the input pair steers current into a folding node, and a cascoded output branch carries it to a high-impedance output. It is the branch-current bookkeeping showcase. The input pair evaluates FIRST at half the tail current; each folding-branch current source is biased at I_branch, and the output cascode and mirror carry the fold current I_fold = I_branch - I_tail/2 — a later child reads the earlier input device's provided current to compute its own bias. The fold current is a real design knob: it must exceed the peak steered current (I_tail/2) so the branch never starves during slew, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is gm_in times the folded-cascode output resistance; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
+    { "name": "Av_target", "value": 300, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
+    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 18e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget, including the folding current sources"
+    },
+    {
+      "name": "vos_target",
+      "value": 5e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "input offset budget, 1 sigma"
+    },
+    {
+      "name": "CM_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "nominal input CM at which the operating point is evaluated"
+    },
+    { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
+    { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
+    {
+      "name": "sign_p",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the PMOS-side tables: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    },
+    {
+      "name": "I_tail",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "input-pair tail current; sets gm_in and the slew current into CL"
+    },
+    {
+      "name": "I_branch",
+      "value": 30e-6,
+      "min": 4e-6,
+      "max": 400e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "folding-branch bias current; the fold current I_fold = I_branch - I_tail/2 must stay positive (slew headroom vs current-source noise)"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 14,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion: sets gm per current and the input-referred noise"
+    },
+    {
+      "name": "gm_id_casc",
+      "value": 10,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "cascode-device inversion: higher gm/ID lifts cascode gain but costs vdsat headroom"
+    },
+    {
+      "name": "gm_id_cs",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "current-source and mirror inversion: lower gm/ID adds less noise and offset"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_casc",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    { "name": "L_cs", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "vds_in_est",
+      "value": 0.6,
+      "min": 0.1,
+      "max": 1.1,
+      "unit": "V",
+      "role": "choice",
+      "note": "input-device vds (folding node above the input source)"
+    },
+    {
+      "name": "vds_pcs_est",
+      "value": 0.4,
+      "min": 0.1,
+      "max": 1.0,
+      "unit": "V",
+      "role": "choice",
+      "note": "top current-source vds magnitude (VDD minus the folding node)"
+    },
+    {
+      "name": "vds_pcasc_est",
+      "value": 0.4,
+      "min": 0.1,
+      "max": 1.0,
+      "unit": "V",
+      "role": "choice",
+      "note": "PMOS-cascode vds magnitude (folding node minus the output)"
+    },
+    {
+      "name": "vds_ncasc_est",
+      "value": 0.5,
+      "min": 0.1,
+      "max": 1.0,
+      "unit": "V",
+      "role": "choice",
+      "note": "NMOS-cascode vds (output minus the NMOS mirror drain)"
+    },
+    {
+      "name": "vds_nmir_est",
+      "value": 0.25,
+      "min": 0.05,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "note": "NMOS-mirror vds (its drain node above ground)"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input-pair device",
+        "description": "Half-circuit input device at half the tail current; evaluates first so the folding branch can read its current.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 14, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_i": "L_in",
+        "gm_id_i": "gm_id_in",
+        "vds_i": "vds_in_est"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "Carries the full bias current; its vds reads the input vgs to place the tail node.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_t", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vds_t", "value": 0.35, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_t",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gds", "vdsat"]
+      },
+      "params": {
+        "I_t": "I_tail",
+        "L_t": "L_cs",
+        "gm_id_t": "gm_id_cs",
+        "vds_t": "CM_dc - in__vgs"
+      }
+    },
+    {
+      "name": "pcs",
+      "doc": {
+        "title": "Folding current source (PMOS)",
+        "description": "The top current source biased at I_branch; feeds the folding node. Its ro (cascoded) sets the PMOS-side output resistance, and it adds input-referred noise.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_b", "value": 30e-6, "unit": "A", "role": "spec" },
+          { "name": "L_p", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_p", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vds_p", "value": 0.4, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_p", "id": "I_b", "gm_id": "gm_id_p", "vds": "vds_p" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_p",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat"]
+      },
+      "params": {
+        "I_b": "I_branch",
+        "L_p": "L_cs",
+        "gm_id_p": "gm_id_cs",
+        "vds_p": "sign_p*vds_pcs_est"
+      }
+    },
+    {
+      "name": "pcasc",
+      "doc": {
+        "title": "PMOS cascode (folded branch)",
+        "description": "Cascodes the folding current source; carries the fold current I_fold = I_branch - I_tail/2 read from the input device. Its av0 sets the PMOS-side cascode boost.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vds_c", "value": 0.4, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_c",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["av0", "gds", "vdsat"]
+      },
+      "params": {
+        "I_f": "I_branch - in__id",
+        "L_c": "L_casc",
+        "gm_id_c": "gm_id_casc",
+        "vds_c": "sign_p*vds_pcasc_est"
+      }
+    },
+    {
+      "name": "ncasc",
+      "doc": {
+        "title": "NMOS cascode (output branch)",
+        "description": "Cascodes the NMOS mirror; carries the fold current. Its av0 sets the NMOS-side cascode boost.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vds_c", "value": 0.5, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_c",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["av0", "gds", "vdsat"]
+      },
+      "params": {
+        "I_f": "I_branch - in__id",
+        "L_c": "L_casc",
+        "gm_id_c": "gm_id_casc",
+        "vds_c": "vds_ncasc_est"
+      }
+    },
+    {
+      "name": "nmir",
+      "doc": {
+        "title": "NMOS mirror (output branch)",
+        "description": "Bottom of the output branch; its ro (cascoded by ncasc) sets the NMOS-side output resistance, and it adds input-referred noise.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_m", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vds_m", "value": 0.25, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_m", "id": "I_f", "gm_id": "gm_id_m", "vds": "vds_m" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_m",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat", "W"]
+      },
+      "params": {
+        "I_f": "I_branch - in__id",
+        "L_m": "L_cs",
+        "gm_id_m": "gm_id_cs",
+        "vds_m": "vds_nmir_est"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "I_fold",
+      "expr": "I_branch - in__id",
+      "unit": "A",
+      "note": "the folded branch current: the branch bias minus the peak steered input current"
+    },
+    {
+      "name": "Rout_p",
+      "expr": "pcasc__av0/pcs__gds",
+      "unit": "ohm",
+      "note": "PMOS side: the folding current source ro boosted by the PMOS-cascode gain"
+    },
+    {
+      "name": "Rout_n",
+      "expr": "ncasc__av0/nmir__gds",
+      "unit": "ohm",
+      "note": "NMOS side: the output mirror ro boosted by the NMOS-cascode gain"
+    },
+    {
+      "name": "Rout",
+      "expr": "par(Rout_p, Rout_n)",
+      "unit": "ohm",
+      "note": "the two cascoded sides in parallel"
+    },
+    {
+      "name": "Av",
+      "expr": "in__gm*Rout",
+      "unit": "V/V",
+      "note": "folded-cascode gain gm_in * Rout"
+    },
+    { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
+    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "vn_in",
+      "expr": "in__vnth_m*sqrt(1 + (pcs__gm + nmir__gm)/in__gm)",
+      "unit": "V/sqrt(Hz)",
+      "note": "input pair plus the top and bottom current-source pairs; the folding sources are the price of the fold"
+    },
+    {
+      "name": "vos",
+      "expr": "sqrt(pelgrom_vos(avt, abeta, in__W, L_in, gm_id_in)^2 + (pelgrom_vos(avt, abeta, nmir__W, L_cs, gm_id_cs)*nmir__gm/in__gm)^2)",
+      "unit": "V",
+      "note": "input-pair offset plus the output-mirror offset referred by the gm ratio"
+    }
+  ],
+  "rules": [
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+    {
+      "id": "fold-current",
+      "kind": "invariant",
+      "lhs": "I_fold",
+      "op": ">=",
+      "rhs": "I_tail/2",
+      "note": "the folded branch must carry at least the peak steered current so it does not starve during slew"
+    },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" }
+  ]
+}

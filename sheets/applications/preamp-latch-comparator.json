@@ -1,0 +1,166 @@
+{
+  "title": "Preamp + latch comparator",
+  "description": "A preamplifier in front of a dynamic latch, sized to trade gain against delay. One resistively-loaded gain stage sets the preamp gain A_pre = gm*(R_L || ro); that gain divides the latch's standalone offset when it is referred to the input, so the total input offset is the preamp's own Pelgrom offset in quadrature with the referred latch offset. The teaching point is the tension: raising A_pre suppresses the latch offset but the preamp's output pole tau_pre = Rout*C_p grows with the same Rout, so gain costs recovery delay. Both trade rows are shown. The latch's standalone offset and the output-node cap are estimates; the dynamic latch is sim-verified.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "I_pre",
+      "value": 5e-5,
+      "min": 5e-6,
+      "max": 5e-4,
+      "unit": "A",
+      "role": "choice",
+      "note": "preamp bias current"
+    },
+    {
+      "name": "gm_id_pre",
+      "value": 15,
+      "min": 6,
+      "max": 20,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "preamp input inversion; higher gm/ID raises gain per current and lowers noise"
+    },
+    {
+      "name": "L_pre",
+      "value": 5e-7,
+      "min": 1.8e-7,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vds_pre",
+      "value": 0.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "preamp drain bias, signed to the table axis"
+    },
+    {
+      "name": "R_L",
+      "value": 2e4,
+      "min": 1e3,
+      "max": 2e5,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "preamp load resistor; larger raises gain and the output time constant together"
+    },
+    {
+      "name": "C_p_est",
+      "value": 5e-14,
+      "unit": "F",
+      "role": "spec",
+      "note": "preamp output-node capacitance estimate (latch input + wiring); refine from extraction"
+    },
+    {
+      "name": "vos_latch_est",
+      "value": 3e-2,
+      "unit": "V",
+      "role": "spec",
+      "note": "standalone dynamic-latch input-referred offset, 1 sigma; from a latch characterization"
+    },
+    {
+      "name": "avt",
+      "value": 5e-9,
+      "unit": "V*m",
+      "role": "spec",
+      "note": "Pelgrom A_VT from the PDK"
+    },
+    {
+      "name": "abeta",
+      "value": 1e-8,
+      "unit": "m",
+      "role": "spec",
+      "note": "Pelgrom A_beta from the PDK"
+    },
+    {
+      "name": "vos_target",
+      "value": 5e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "total input-referred offset budget, 1 sigma"
+    },
+    {
+      "name": "A_pre_min",
+      "value": 5,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "minimum preamp gain to suppress the latch offset and kickback"
+    },
+    {
+      "name": "tau_budget",
+      "value": 1e-9,
+      "unit": "s",
+      "role": "spec",
+      "note": "preamp settling/overdrive-recovery time budget"
+    }
+  ],
+  "bind": { "L": "L_pre", "id": "I_pre", "gm_id": "gm_id_pre", "vds": "vds_pre" },
+  "rows": [
+    { "name": "ro", "expr": "1/gds", "unit": "ohm", "note": "preamp intrinsic output resistance" },
+    {
+      "name": "Rout",
+      "expr": "par(R_L, ro)",
+      "unit": "ohm",
+      "note": "output resistance: load resistor in parallel with the device ro"
+    },
+    {
+      "name": "A_pre",
+      "expr": "gm*Rout",
+      "unit": "V/V",
+      "note": "preamp gain: gain kills the referred latch offset (the win)"
+    },
+    {
+      "name": "vos_pre",
+      "expr": "pelgrom_vos(avt, abeta, W, L_pre, gm_id_pre)",
+      "unit": "V",
+      "note": "preamp input-pair Pelgrom offset at the sized geometry"
+    },
+    {
+      "name": "vos_total",
+      "expr": "sqrt(vos_pre^2 + (vos_latch_est/A_pre)^2)",
+      "unit": "V",
+      "note": "total input offset: preamp offset in quadrature with the latch offset referred by 1/A_pre"
+    },
+    {
+      "name": "tau_pre",
+      "expr": "Rout*C_p_est",
+      "unit": "s",
+      "note": "preamp output time constant: the same Rout that gave the gain costs recovery delay (the price); estimate"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_pre",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "offset-spec",
+      "kind": "requirement",
+      "lhs": "vos_total",
+      "op": "<=",
+      "rhs": "vos_target",
+      "note": "total input-referred offset under budget"
+    },
+    {
+      "id": "preamp-gain",
+      "kind": "guardrail",
+      "lhs": "A_pre",
+      "op": ">=",
+      "rhs": "A_pre_min",
+      "note": "enough gain to suppress the latch offset and kickback"
+    },
+    {
+      "id": "recovery-delay",
+      "kind": "guardrail",
+      "lhs": "tau_pre",
+      "op": "<=",
+      "rhs": "tau_budget",
+      "note": "the gain's cost: the output pole must still settle in the budget; estimate-grade"
+    }
+  ]
+}

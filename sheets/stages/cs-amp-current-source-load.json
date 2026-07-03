@@ -1,0 +1,183 @@
+{
+  "title": "CS amp, current-source load",
+  "description": "Common-source stage with a current-source load: the canonical gm/ID first sheet. gm is fixed from the bandwidth spec (with an explicit over-design factor), gm/ID is the efficiency knob, and the load device is a composed child so its output conductance and noise enter the gain and noise budgets honestly. Pick the load child's device table to the opposite polarity (set load_sign to -1 for a signed-PMOS table).",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.2,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level; sets both devices' operating vds"
+    },
+    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
+    { "name": "Av_target", "value": 15, "unit": "V/V", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 20e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "cdd_est",
+      "value": 0.2e-12,
+      "unit": "F",
+      "role": "spec",
+      "note": "output-node parasitic estimate (both drains + wiring); refine from extraction"
+    },
+    {
+      "name": "gbw_margin",
+      "value": 0.25,
+      "min": 0,
+      "max": 1,
+      "unit": "1",
+      "role": "choice",
+      "note": "over-design factor on gm for parasitics and PVT"
+    },
+    {
+      "name": "L",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input inversion: high = efficient/slow, low = fast/thirsty"
+    },
+    {
+      "name": "L_load",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "longer load L raises the load's output resistance (and the gain)"
+    },
+    {
+      "name": "gm_id_load",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "load inversion: lower gm/ID costs headroom but adds less noise (noise scales with the load's gm)"
+    },
+    {
+      "name": "load_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    }
+  ],
+  "uses": [
+    {
+      "name": "load",
+      "doc": {
+        "title": "Current-source load device",
+        "description": "One device biased as a current source: carries the stage current at a declared vds, exposing its output conductance, transconductance (its drain-noise scale), and saturation headroom.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_load", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_ld", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_ld", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_ld",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this device table's axis convention"
+          }
+        ],
+        "bind": { "L": "L_ld", "id": "I_load", "gm_id": "gm_id_ld", "vds": "vds_ld" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_ld",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "I_load": "2*pi*GBW_target*CL*(1 + gbw_margin)/gm_id",
+        "L_ld": "L_load",
+        "gm_id_ld": "gm_id_load",
+        "vds_ld": "load_sign*(VDD - V_out)"
+      }
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
+    "gm_id": "gm_id",
+    "vds": "V_out"
+  },
+  "rows": [
+    {
+      "name": "Av",
+      "expr": "gm/(gds + load__gds)",
+      "unit": "V/V",
+      "note": "both devices' output conductances load the gain"
+    },
+    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
+    {
+      "name": "vn_in",
+      "expr": "vnth_m*sqrt(1 + load__gm/gm)",
+      "unit": "V/sqrt(Hz)",
+      "note": "the load's 4kTgamma*gm drain noise referred to the input by 1/gm_in"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "input-sat",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "input device saturated at the output DC level"
+    },
+    {
+      "id": "load-sat",
+      "kind": "invariant",
+      "lhs": "VDD - V_out",
+      "op": ">=",
+      "rhs": "load__vdsat",
+      "note": "load device saturated: its headroom is the supply minus the output level"
+    },
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "gbw-margin",
+      "kind": "guardrail",
+      "lhs": "GBW",
+      "op": ">=",
+      "rhs": "GBW_target",
+      "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
+    }
+  ]
+}

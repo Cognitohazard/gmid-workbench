@@ -1,0 +1,223 @@
+{
+  "title": "Degenerated current mirror",
+  "description": "A source-degenerated current mirror: each leg puts a resistor in series with the source. Degeneration does two things. It raises the output resistance by the local-feedback factor (1 + gm*R_s), so the output current holds steadier against the output node voltage. And it improves matching: a threshold mismatch now competes with the IR drop across R_s, so its effect on the current divides by (1 + gm*R_s). The price is headroom, the resistor drops I*R_s that the output node must clear on top of the device saturation voltage. Both legs are arranged to drop the same I_in*R_s (the K-times output leg uses R_s/K), so the degeneration voltage matches and the source-body bias vsb = I_in*R_s is common to both. The demo table has no vsb axis, so that declaration only warns. The output resistance and matching-improvement formulas ignore the body effect and so are estimates; the LUT gds and Pelgrom spread are the ground truth they annotate.",
+  "polarity": "n",
+  "params": [
+    { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
+    {
+      "name": "K",
+      "value": 1,
+      "min": 1,
+      "max": 8,
+      "unit": "1",
+      "role": "choice",
+      "note": "mirror ratio W_out/W_ref; degeneration mirrors are usually 1:1, and the output leg scales its resistor to R_s/K to keep the IR drops matched"
+    },
+    {
+      "name": "R_s",
+      "value": 5000,
+      "min": 100,
+      "max": 100000,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "reference-leg source-degeneration resistor; the output leg uses R_s/K"
+    },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.05,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "DC level of the node the mirror serves"
+    },
+    {
+      "name": "L",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id_m",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "mirror inversion"
+    },
+    {
+      "name": "vgs_est",
+      "value": 0.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the reference diode vgs (the transistor's own vds); retune until diode-bias-consistent is green"
+    },
+    {
+      "name": "avt",
+      "value": 5e-9,
+      "unit": "V*m",
+      "role": "spec",
+      "note": "Pelgrom A_VT from the PDK"
+    },
+    {
+      "name": "abeta",
+      "value": 1e-8,
+      "unit": "m",
+      "role": "spec",
+      "note": "Pelgrom A_beta from the PDK"
+    },
+    {
+      "name": "err_target",
+      "value": 0.05,
+      "unit": "1",
+      "role": "spec",
+      "note": "systematic (lambda) error budget"
+    },
+    {
+      "name": "match_target",
+      "value": 0.05,
+      "unit": "1",
+      "role": "spec",
+      "note": "1-sigma random ratio-error budget"
+    }
+  ],
+  "uses": [
+    {
+      "name": "ref",
+      "doc": {
+        "title": "Reference (diode) device",
+        "description": "The diode-connected reference, its source lifted I_in*R_s above ground by the degeneration resistor. Its vds is the transistor's own diode drop; its source-body bias is the resistor drop. Exposes its width so the output side sizes as a unit-device multiple.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_r",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "diode connection: the transistor vds equals its vgs"
+          },
+          {
+            "name": "vsb_r",
+            "value": 0.1,
+            "unit": "V",
+            "role": "spec",
+            "note": "source above ground by the reference-leg IR drop (body grounded)"
+          }
+        ],
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r", "vsb": "vsb_r" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_r",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["W", "vgs", "vdsat", "gm", "id", "gds"]
+      },
+      "params": {
+        "I_ref": "I_in",
+        "L_r": "L",
+        "gm_id_r": "gm_id_m",
+        "vds_r": "vgs_est",
+        "vsb_r": "I_in*R_s"
+      }
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "W": "K*ref__W",
+    "gm_id": "gm_id_m",
+    "vds": "V_out - I_in*R_s",
+    "vsb": "I_in*R_s"
+  },
+  "rows": [
+    { "name": "I_out", "expr": "id", "unit": "A" },
+    { "name": "I_target", "expr": "K*I_in", "unit": "A" },
+    {
+      "name": "sys_err",
+      "expr": "(I_out - I_target)/I_target",
+      "unit": "1",
+      "note": "lambda mismatch between the output transistor vds and the diode point"
+    },
+    {
+      "name": "R_s_out",
+      "expr": "R_s/K",
+      "unit": "ohm",
+      "note": "output-leg resistor; carries K*I_in and drops the same I_in*R_s as the reference leg"
+    },
+    {
+      "name": "V_deg",
+      "expr": "I_in*R_s",
+      "unit": "V",
+      "note": "the degeneration voltage dropped across each leg's resistor"
+    },
+    {
+      "name": "Rout",
+      "expr": "(1/gds)*(1 + gm*R_s_out)",
+      "unit": "ohm",
+      "note": "output resistance boosted by local series feedback; estimate (ignores the body effect and the series R_s itself)"
+    },
+    { "name": "irel_ref", "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)", "unit": "1" },
+    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
+    {
+      "name": "sigma_ratio_raw",
+      "expr": "sqrt(irel_ref^2 + irel_out^2)",
+      "unit": "1",
+      "note": "undegenerated K:1 ratio spread"
+    },
+    {
+      "name": "sigma_ratio",
+      "expr": "sigma_ratio_raw/(1 + gm*R_s_out)",
+      "unit": "1",
+      "note": "degeneration divides the current spread by the local-feedback factor; estimate, exact only where threshold mismatch dominates"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_m",
+      "op": "<=",
+      "rhs": "ceiling"
+    },
+    {
+      "id": "compliance",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "vdsat + V_deg",
+      "note": "the output node must clear the device saturation voltage plus the resistor drop (the headroom cost of degeneration)"
+    },
+    {
+      "id": "systematic-error",
+      "kind": "requirement",
+      "lhs": "abs(sys_err)",
+      "op": "<=",
+      "rhs": "err_target"
+    },
+    {
+      "id": "random-matching",
+      "kind": "requirement",
+      "lhs": "sigma_ratio",
+      "op": "<=",
+      "rhs": "match_target"
+    },
+    {
+      "id": "diode-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(ref__vgs - vgs_est)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
+    }
+  ]
+}

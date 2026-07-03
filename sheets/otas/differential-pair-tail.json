@@ -1,0 +1,268 @@
+{
+  "title": "Differential pair + tail",
+  "description": "The bare differential-pair transconductor sized by half-circuit: one input device at half the tail current, plus the tail source that reads the input vgs to place its own headroom. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance R_L) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. Differential gain, GBW, slew, input noise, offset, and the input common-mode range are author math over the two children. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
+    { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
+    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 15e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget (one side)"
+    },
+    {
+      "name": "vos_target",
+      "value": 5e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "input offset budget, 1 sigma"
+    },
+    {
+      "name": "gds_load_est",
+      "value": 3e-6,
+      "unit": "S",
+      "role": "spec",
+      "note": "conductance loading each drain; R_L = 1/gds_load_est. Set from the terminating load (mirror gds, resistor, or cascode)"
+    },
+    {
+      "name": "CM_lo",
+      "value": 0.85,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range, low edge"
+    },
+    {
+      "name": "CM_hi",
+      "value": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range, high edge"
+    },
+    {
+      "name": "CM_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "nominal input CM at which the operating point is evaluated"
+    },
+    {
+      "name": "V_out_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "drain DC level; sets the input device vds"
+    },
+    { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
+    { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
+    {
+      "name": "I_tail",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion: sets gm per current, noise, and the CM-low edge"
+    },
+    {
+      "name": "gm_id_tail",
+      "value": 10,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "tail inversion: higher V* costs CM-low headroom but tightens the current source"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_tail",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vgs_est_in",
+      "value": 0.57,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the input-pair vgs, used to place the input drain node; retune until input-bias-consistent is green"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input-pair device",
+        "description": "Half-circuit input device at half the tail current. Its drain sits at V_out_dc; its source sits one vgs below the input CM.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.57, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_i": "L_in",
+        "gm_id_i": "gm_id_in",
+        "vds_i": "V_out_dc - CM_dc + vgs_est_in"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device carrying the full bias current; its saturation headroom sets the CM-low edge, and its output conductance sets the common-mode rejection.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_t", "value": 10, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_t",
+            "value": 0.33,
+            "unit": "V",
+            "role": "spec",
+            "note": "the tail node: one input vgs below the input CM"
+          }
+        ],
+        "bind": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_t",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat"]
+      },
+      "params": {
+        "I_t": "I_tail",
+        "L_t": "L_tail",
+        "gm_id_t": "gm_id_tail",
+        "vds_t": "CM_dc - in__vgs"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "Gm",
+      "expr": "in__gm",
+      "unit": "S",
+      "note": "differential-pair transconductance is the half-circuit gm"
+    },
+    {
+      "name": "Av",
+      "expr": "in__gm/(in__gds + gds_load_est)",
+      "unit": "V/V",
+      "note": "half-circuit gain into the device gds in parallel with the load conductance"
+    },
+    { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
+    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "vn_in",
+      "expr": "in__vnth_m",
+      "unit": "V/sqrt(Hz)",
+      "note": "input-pair thermal density; add the load's own contribution per the terminating device"
+    },
+    {
+      "name": "vos",
+      "expr": "pelgrom_vos(avt, abeta, in__W, L_in, gm_id_in)",
+      "unit": "V",
+      "note": "input-pair Pelgrom offset; the load pair adds in quadrature once its geometry is known"
+    },
+    {
+      "name": "Acm",
+      "expr": "tail__gds/(2*in__gm)",
+      "unit": "V/V",
+      "note": "estimate: common-mode gain magnitude, set by the tail output conductance splitting between the two halves"
+    },
+    {
+      "name": "CMRR",
+      "expr": "Av/Acm",
+      "unit": "V/V",
+      "note": "estimate: differential gain over common-mode gain; a real CMRR also depends on load and layout mismatch, so trust the sim"
+    },
+    {
+      "name": "cm_lo_edge",
+      "expr": "in__vgs + tail__vdsat",
+      "unit": "V",
+      "note": "lowest input CM that keeps the tail saturated"
+    },
+    {
+      "name": "cm_hi_edge",
+      "expr": "V_out_dc + in__vgs - in__vdsat",
+      "unit": "V",
+      "note": "highest input CM that keeps the input device saturated at the drain DC level"
+    }
+  ],
+  "rules": [
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    {
+      "id": "icmr-low",
+      "kind": "invariant",
+      "lhs": "CM_lo",
+      "op": ">=",
+      "rhs": "cm_lo_edge",
+      "note": "the spec'd CM-low must sit above the tail-saturation edge"
+    },
+    {
+      "id": "icmr-high",
+      "kind": "invariant",
+      "lhs": "cm_hi_edge",
+      "op": ">=",
+      "rhs": "CM_hi",
+      "note": "the spec'd CM-high must sit below the input-saturation edge"
+    },
+    {
+      "id": "cmrr-spec",
+      "kind": "guardrail",
+      "lhs": "CMRR",
+      "op": ">=",
+      "rhs": "1000",
+      "note": "estimate: a longer tail L (lower tail gds) lifts CMRR; sim owns the real number"
+    },
+    {
+      "id": "input-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(in__vgs - vgs_est_in)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the input drain node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+    }
+  ]
+}

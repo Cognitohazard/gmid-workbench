@@ -1,0 +1,250 @@
+{
+  "title": "Wide-swing cascode mirror",
+  "description": "The low-voltage cascode mirror. It keeps the matched-vds accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full vgs above ground), an explicit bias V_bias = vgs_casc + vdsat_mirror places the mirror node at exactly one saturation voltage. The output then only has to clear two stacked saturation voltages, V_out(min) = vdsat_mirror + vdsat_casc, with no threshold overhead, so the output can swing far lower than a standard cascode's vgs + vdsat floor. The two mirror devices still sit at the same low drain voltage, so the systematic error stays near zero. Both mirror devices bind width-first (output width = K times the reference); the cascode is modelled by one representative device (the matched reference and output cascodes share an inversion level). V_bias is author math, and a rule checks it is realizable under the supply.",
+  "polarity": "n",
+  "params": [
+    { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
+    {
+      "name": "K",
+      "value": 4,
+      "min": 1,
+      "max": 16,
+      "unit": "1",
+      "role": "choice",
+      "note": "mirror ratio W_out/W_ref (a unit-device multiple)"
+    },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "note": "supply" },
+    {
+      "name": "V_out",
+      "value": 0.6,
+      "min": 0.05,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "DC level of the node the mirror serves; the wide-swing floor lets this go low"
+    },
+    {
+      "name": "L",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "mirror-device length"
+    },
+    {
+      "name": "L_c",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "cascode-device length"
+    },
+    {
+      "name": "gm_id_m",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "mirror inversion: lower gm/ID (higher V*) tightens matching but raises the saturation voltage the node sits at"
+    },
+    {
+      "name": "gm_id_c",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "cascode inversion"
+    },
+    {
+      "name": "vds_lo",
+      "value": 0.3,
+      "min": 0.05,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "note": "the wide-swing mirror node: one saturation voltage above ground, shared by both mirror devices. Retune until wideswing-node-consistent is green (it should equal vdsat_mirror)"
+    },
+    {
+      "name": "avt",
+      "value": 5e-9,
+      "unit": "V*m",
+      "role": "spec",
+      "note": "Pelgrom A_VT from the PDK"
+    },
+    {
+      "name": "abeta",
+      "value": 1e-8,
+      "unit": "m",
+      "role": "spec",
+      "note": "Pelgrom A_beta from the PDK"
+    },
+    {
+      "name": "err_target",
+      "value": 0.05,
+      "unit": "1",
+      "role": "spec",
+      "note": "systematic (lambda) error budget"
+    },
+    {
+      "name": "match_target",
+      "value": 0.05,
+      "unit": "1",
+      "role": "spec",
+      "note": "1-sigma random ratio-error budget"
+    }
+  ],
+  "uses": [
+    {
+      "name": "ref",
+      "doc": {
+        "title": "Reference mirror device (bottom)",
+        "description": "The bottom reference device at the input current, biased at the wide-swing low node. Its saturation voltage sets where that node should sit, and the output mirror device shares the same vds.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_r",
+            "value": 0.3,
+            "unit": "V",
+            "role": "spec",
+            "note": "the wide-swing mirror node voltage"
+          }
+        ],
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_r",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+      },
+      "params": {
+        "I_ref": "I_in",
+        "L_r": "L",
+        "gm_id_r": "gm_id_m",
+        "vds_r": "vds_lo"
+      }
+    },
+    {
+      "name": "casc",
+      "doc": {
+        "title": "Cascode device (representative)",
+        "description": "One cascode device carrying the reference current; the matched reference-branch and output-branch cascodes share this inversion level. Its vgs sets the cascode gate bias and its saturation voltage sets the second term of the output compliance floor.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_c", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_cc", "value": 1e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_cc", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_cc",
+            "value": 0.3,
+            "unit": "V",
+            "role": "spec",
+            "note": "a representative cascode vds (its vgs and vdsat are the values used, and both are drain-voltage independent here)"
+          }
+        ],
+        "bind": { "L": "L_cc", "id": "I_c", "gm_id": "gm_id_cc", "vds": "vds_cc" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_cc",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["vgs", "vdsat", "W"]
+      },
+      "params": {
+        "I_c": "I_in",
+        "L_cc": "L_c",
+        "gm_id_cc": "gm_id_c",
+        "vds_cc": "V_out - vds_lo"
+      }
+    }
+  ],
+  "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "vds_lo" },
+  "rows": [
+    { "name": "I_out", "expr": "id", "unit": "A" },
+    { "name": "I_target", "expr": "K*I_in", "unit": "A" },
+    {
+      "name": "sys_err",
+      "expr": "(I_out - I_target)/I_target",
+      "unit": "1",
+      "note": "lambda mismatch between the two mirror devices; near zero because both sit at the same wide-swing node voltage"
+    },
+    {
+      "name": "V_bias",
+      "expr": "casc__vgs + ref__vdsat",
+      "unit": "V",
+      "note": "wide-swing cascode gate bias: one cascode vgs above the mirror-node saturation voltage, which parks the mirror node at exactly vdsat_mirror"
+    },
+    { "name": "irel_ref", "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)", "unit": "1" },
+    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
+    {
+      "name": "sigma_ratio",
+      "expr": "sqrt(irel_ref^2 + irel_out^2)",
+      "unit": "1",
+      "note": "random 1-sigma error of the K:1 ratio; the K-times-larger output device contributes 1/sqrt(K) of the reference spread"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_m",
+      "op": "<=",
+      "rhs": "ceiling"
+    },
+    {
+      "id": "compliance",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "ref__vdsat + casc__vdsat",
+      "note": "wide-swing output floor: two stacked saturation voltages, with no threshold overhead (contrast vgs + vdsat for a standard cascode)"
+    },
+    {
+      "id": "vbias-realizable",
+      "kind": "requirement",
+      "lhs": "V_bias",
+      "op": "<=",
+      "rhs": "VDD",
+      "note": "the cascode gate bias must be a voltage the supply can produce"
+    },
+    {
+      "id": "systematic-error",
+      "kind": "requirement",
+      "lhs": "abs(sys_err)",
+      "op": "<=",
+      "rhs": "err_target"
+    },
+    {
+      "id": "random-matching",
+      "kind": "requirement",
+      "lhs": "sigma_ratio",
+      "op": "<=",
+      "rhs": "match_target"
+    },
+    {
+      "id": "wideswing-node-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(vds_lo - ref__vdsat)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the mirror node should sit at exactly one saturation voltage; retune vds_lo to the reported vdsat_mirror if this trips"
+    }
+  ]
+}

@@ -1,0 +1,185 @@
+{
+  "title": "StrongARM comparator",
+  "description": "A dynamic StrongARM latch budgeted through the integration phase, where all the analog action lives. One input device is bound at the integration-phase current so the sheet ends in silicon; the integration time follows from charging the output node C_int to dV_int, the input-referred noise is the kT/C-style thermal floor of that integration, the offset is the Pelgrom spread of the input pair, and the decision time adds a regeneration time constant tau_reg = C_int/gm_latch. Every closed form here is estimate-grade: dynamic comparators are sim-verified for offset, noise, and metastability, and this sheet only budgets. gamma is the constant thermal-noise factor (the table's gamma column refines it when present).",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "C_int",
+      "value": 2e-14,
+      "unit": "F",
+      "role": "spec",
+      "note": "integration/regeneration node capacitance"
+    },
+    {
+      "name": "dV_int",
+      "value": 0.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "voltage built on C_int during integration before regeneration takes over"
+    },
+    {
+      "name": "I_int",
+      "value": 2e-5,
+      "min": 2e-6,
+      "max": 2e-4,
+      "unit": "A",
+      "role": "choice",
+      "note": "input-device current during the integration phase"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion knob"
+    },
+    {
+      "name": "L_in",
+      "value": 5e-7,
+      "min": 1.8e-7,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vds_in",
+      "value": 0.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "input-device drain bias during integration, signed to the table axis"
+    },
+    {
+      "name": "avt",
+      "value": 5e-9,
+      "unit": "V*m",
+      "role": "spec",
+      "note": "Pelgrom A_VT from the PDK"
+    },
+    {
+      "name": "abeta",
+      "value": 1e-8,
+      "unit": "m",
+      "role": "spec",
+      "note": "Pelgrom A_beta from the PDK"
+    },
+    {
+      "name": "vos_target",
+      "value": 1e-2,
+      "unit": "V",
+      "role": "spec",
+      "note": "input-referred offset budget, 1 sigma"
+    },
+    {
+      "name": "noise_target",
+      "value": 1e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "input-referred noise budget, RMS"
+    },
+    {
+      "name": "gm_latch_est",
+      "value": 1e-3,
+      "unit": "S",
+      "role": "spec",
+      "note": "regeneration transconductance estimate of the cross-coupled latch; sim refines it"
+    },
+    {
+      "name": "V_logic",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "logic level the regeneration must reach for a valid decision"
+    },
+    {
+      "name": "T_clk_half",
+      "value": 1e-9,
+      "unit": "s",
+      "role": "spec",
+      "note": "half the clock period: the time budget for integration plus regeneration"
+    },
+    {
+      "name": "vstar_floor",
+      "value": 0.1,
+      "unit": "V",
+      "role": "spec",
+      "note": "input-device saturation-headroom floor"
+    }
+  ],
+  "bind": { "L": "L_in", "id": "I_int", "gm_id": "gm_id_in", "vds": "vds_in" },
+  "rows": [
+    {
+      "name": "t_int",
+      "expr": "C_int*dV_int/I_int",
+      "unit": "s",
+      "note": "integration time to build dV_int on C_int; estimate"
+    },
+    {
+      "name": "sigma_n",
+      "expr": "sqrt(2*k*T*gamma/C_int)",
+      "unit": "V",
+      "note": "input-referred thermal noise of the integration phase, kT/C-style; estimate, gamma is the model factor"
+    },
+    {
+      "name": "vos",
+      "expr": "pelgrom_vos(avt, abeta, W, L_in, gm_id_in)",
+      "unit": "V",
+      "note": "input-pair Pelgrom offset at the sized geometry"
+    },
+    {
+      "name": "tau_reg",
+      "expr": "C_int/gm_latch_est",
+      "unit": "s",
+      "note": "regeneration time constant of the cross-coupled latch; estimate"
+    },
+    {
+      "name": "t_decide",
+      "expr": "t_int + tau_reg*log(V_logic/dV_int)",
+      "unit": "s",
+      "note": "integration plus exponential regeneration from dV_int to the logic level; estimate"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_in",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "headroom",
+      "kind": "invariant",
+      "lhs": "vstar",
+      "op": ">=",
+      "rhs": "vstar_floor",
+      "note": "input device saturated during integration"
+    },
+    {
+      "id": "offset-spec",
+      "kind": "requirement",
+      "lhs": "vos",
+      "op": "<=",
+      "rhs": "vos_target",
+      "note": "input-pair offset under budget"
+    },
+    {
+      "id": "noise-spec",
+      "kind": "requirement",
+      "lhs": "sigma_n",
+      "op": "<=",
+      "rhs": "noise_target",
+      "note": "integration-phase noise under budget; estimate-grade, sim signs off"
+    },
+    {
+      "id": "decision-time",
+      "kind": "guardrail",
+      "lhs": "t_decide",
+      "op": "<=",
+      "rhs": "T_clk_half",
+      "note": "integration plus regeneration must resolve within the half clock; estimate, metastability is sim-owned"
+    }
+  ]
+}

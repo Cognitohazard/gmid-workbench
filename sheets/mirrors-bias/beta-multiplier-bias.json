@@ -1,0 +1,177 @@
+{
+  "title": "Beta-multiplier bias",
+  "description": "The constant-gm (beta-multiplier) self-biased reference. A top current mirror forces equal currents down two legs; the bottom devices are a diode-connected small device and a K-times-wider device with a source resistor R_bias. Because both carry the same current but the wide device runs at a lower current density, the wide device needs less gate-source voltage, and the difference is dropped across R_bias. Setting that up makes the reference's transconductance depend only on the resistor and the ratio, not on the current or the process: the square-law hand identity is gm = (2/R_bias)*(1 - 1/sqrt(K_bm)). Like a Widlar, the loop is a fixed point this sheet CHECKS rather than solves: you pick the current and resistor and a requirement tests that the gate-source difference equals I_bias*R_bias, tuning until it closes. The gm identity is offered as a guardrail, an estimate, because it comes from the square-law model while the lookup gm is the truth; the guardrail shows how far the classic formula is off at this inversion level. The circuit has a second, zero-current stable state, so a startup subcircuit is required in practice; it is a simulation-only concern and is not sized here. The resistor-side device's source sits I_bias*R_bias above ground (declared as vsb; the demo table has no vsb axis, so it only warns).",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "I_bias",
+      "value": 10e-6,
+      "min": 1e-6,
+      "max": 100e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "loop current in each leg; set by the resistor and ratio, so CHECK the fixed point rather than treat this as free"
+    },
+    {
+      "name": "K_bm",
+      "value": 4,
+      "min": 2,
+      "max": 16,
+      "unit": "1",
+      "role": "choice",
+      "note": "width ratio of the resistor-side device to the diode device; larger K raises gm for a given resistor"
+    },
+    {
+      "name": "R_bias",
+      "value": 5000,
+      "min": 100,
+      "max": 100000,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "the bias resistor; sets the reference transconductance"
+    },
+    {
+      "name": "VDD",
+      "value": 1.8,
+      "unit": "V",
+      "role": "spec",
+      "note": "supply"
+    },
+    {
+      "name": "V_dm2",
+      "value": 0.9,
+      "min": 0.05,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "drain DC level of the resistor-side device (set by the top mirror)"
+    },
+    {
+      "name": "L",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id_bm",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "diode-device inversion"
+    },
+    {
+      "name": "vgs_est",
+      "value": 0.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the diode-device vgs; retune until diode-bias-consistent is green"
+    }
+  ],
+  "uses": [
+    {
+      "name": "m1",
+      "doc": {
+        "title": "Diode device (small)",
+        "description": "The diode-connected side of the bottom pair, carrying the loop current. Its transconductance is what the constant-gm identity pins, and its vgs is the gate rail the wide device works below.",
+        "polarity": "n",
+        "params": [
+          { "name": "I1", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L1", "value": 1e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_1", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds1",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "diode connection: vds equals vgs"
+          }
+        ],
+        "bind": { "L": "L1", "id": "I1", "gm_id": "gm_id_1", "vds": "vds1" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_1",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "vgs", "W", "vdsat", "id"]
+      },
+      "params": {
+        "I1": "I_bias",
+        "L1": "L",
+        "gm_id_1": "gm_id_bm",
+        "vds1": "vgs_est"
+      }
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "W": "K_bm*m1__W",
+    "id": "I_bias",
+    "vds": "V_dm2 - I_bias*R_bias",
+    "vsb": "I_bias*R_bias"
+  },
+  "rows": [
+    {
+      "name": "gm_target",
+      "expr": "(2/R_bias)*(1 - 1/sqrt(K_bm))",
+      "unit": "S",
+      "note": "square-law constant-gm identity; an estimate the LUT gm is checked against"
+    },
+    {
+      "name": "delta_vgs",
+      "expr": "m1__vgs - vgs",
+      "unit": "V",
+      "note": "the actual gate-source step from the diode device to the resistor-side device"
+    },
+    {
+      "name": "vgs_drop",
+      "expr": "I_bias*R_bias",
+      "unit": "V",
+      "note": "the gate-source step the resistor must produce for the loop to close"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "the resistor-side operating point must stay within the data's weak-inversion ceiling"
+    },
+    {
+      "id": "self-bias-fixed-point",
+      "kind": "requirement",
+      "lhs": "delta_vgs",
+      "op": "==",
+      "rhs": "vgs_drop",
+      "tolPct": 3,
+      "note": "the constant-gm loop equation V_GS1 - V_GS2 = I_bias*R_bias, checked not solved; tune I_bias/R_bias until it closes"
+    },
+    {
+      "id": "gm-identity",
+      "kind": "guardrail",
+      "lhs": "m1__gm",
+      "op": "==",
+      "rhs": "gm_target",
+      "tolPct": 25,
+      "note": "the classic square-law gm = (2/R)(1 - 1/sqrt(K)); the LUT gm is the truth, so this shows how far the hand formula drifts at this inversion. Estimate-grade"
+    },
+    {
+      "id": "diode-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(m1__vgs - vgs_est)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the declared diode vds should equal the actual diode vgs; retune vgs_est if this trips"
+    }
+  ]
+}

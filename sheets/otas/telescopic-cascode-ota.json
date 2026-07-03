@@ -1,0 +1,398 @@
+{
+  "title": "Telescopic cascode OTA",
+  "description": "A single-branch telescopic cascode: an input pair, an input (NMOS) cascode, a load (PMOS) cascode, and a load mirror stacked between the rails, all carrying half the tail current, plus the tail source. Cascoding multiplies each side's output resistance by the cascode intrinsic gain, so Av = gm_in * Rout with Rout = par(NMOS side, PMOS side) and each side's Rout ~ av0_casc / gds of the device it cascodes. That is the topology's headline: the highest single-stage gain per unit current, bought with output-swing headroom — the four stacked vdsat plus the tail eat the rail. The five stacked devices place five internal nodes; each cascode vds is an estimate param with a stack-consistency guardrail (the drops must sum to the rail). The cascode-pole and settling behaviour is estimate-grade; sim owns sign-off.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
+    { "name": "Av_target", "value": 300, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
+    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 15e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "vos_target",
+      "value": 5e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "input offset budget, 1 sigma"
+    },
+    {
+      "name": "swing_target",
+      "value": 0.4,
+      "unit": "V",
+      "role": "spec",
+      "note": "required single-ended output swing (peak) about the output DC"
+    },
+    {
+      "name": "CM_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "nominal input CM at which the operating point is evaluated"
+    },
+    {
+      "name": "V_out_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level; the NMOS drops below it and the PMOS drops above it must each close the rail"
+    },
+    { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
+    { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
+    {
+      "name": "sign_p",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the PMOS-side tables: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    },
+    {
+      "name": "I_tail",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 14,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion: sets gm per current and the input-referred noise"
+    },
+    {
+      "name": "gm_id_casc",
+      "value": 10,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "cascode-device inversion: higher gm/ID lifts the cascode gain av0_casc but costs vdsat headroom"
+    },
+    {
+      "name": "gm_id_mir",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "load-mirror inversion: lower gm/ID adds less noise and offset"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_casc",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "L_mir",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vgs_est_in",
+      "value": 0.55,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the input-pair vgs, used to place the tail node; retune until input-bias-consistent is green"
+    },
+    {
+      "name": "vds_in_est",
+      "value": 0.2,
+      "min": 0.05,
+      "max": 0.6,
+      "unit": "V",
+      "role": "choice",
+      "note": "input-device vds (drain node above the tail source); a stack-consistency guardrail ties it to the rail"
+    },
+    {
+      "name": "vds_cn_est",
+      "value": 0.37,
+      "min": 0.05,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "note": "input-cascode vds (output node minus the input drain)"
+    },
+    {
+      "name": "vds_cp_est",
+      "value": 0.45,
+      "min": 0.05,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "note": "load-cascode vds magnitude (its source node minus the output)"
+    },
+    {
+      "name": "vds_mir_est",
+      "value": 0.45,
+      "min": 0.05,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "note": "load-mirror vds magnitude (VDD minus the load-cascode source node)"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input-pair device",
+        "description": "Half-circuit input device at half the tail current; its ro sets the NMOS-side cascoded output resistance.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 14, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.2, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_i": "L_in",
+        "gm_id_i": "gm_id_in",
+        "vds_i": "vds_in_est"
+      }
+    },
+    {
+      "name": "casc_n",
+      "doc": {
+        "title": "Input (NMOS) cascode",
+        "description": "Cascodes the input device; its intrinsic gain av0 multiplies the input ro to set the NMOS-side Rout.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vds_c", "value": 0.37, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_c",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["av0", "gds", "vdsat", "gm"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_c": "L_casc",
+        "gm_id_c": "gm_id_casc",
+        "vds_c": "vds_cn_est"
+      }
+    },
+    {
+      "name": "casc_p",
+      "doc": {
+        "title": "Load (PMOS) cascode",
+        "description": "Cascodes the load mirror; its intrinsic gain av0 multiplies the mirror ro to set the PMOS-side Rout.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vds_c", "value": 0.45, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_c",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["av0", "gds", "vdsat"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_c": "L_casc",
+        "gm_id_c": "gm_id_casc",
+        "vds_c": "sign_p*vds_cp_est"
+      }
+    },
+    {
+      "name": "mir",
+      "doc": {
+        "title": "Load mirror device",
+        "description": "One side of the PMOS load mirror at half the tail current; its ro (cascoded by casc_p) sets the PMOS-side output resistance.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_m", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vds_m", "value": 0.45, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "vds": "vds_m" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_m",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat", "W"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_m": "L_mir",
+        "gm_id_m": "gm_id_mir",
+        "vds_m": "sign_p*vds_mir_est"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "Carries the full bias current; its vdsat is the extra headroom below the input source node.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_t", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vds_t", "value": 0.35, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_t",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat"]
+      },
+      "params": {
+        "I_t": "I_tail",
+        "L_t": "L_casc",
+        "gm_id_t": "gm_id_casc",
+        "vds_t": "CM_dc - in__vgs"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "Rout_n",
+      "expr": "casc_n__av0/in__gds",
+      "unit": "ohm",
+      "note": "NMOS-side output resistance: input ro boosted by the input-cascode intrinsic gain"
+    },
+    {
+      "name": "Rout_p",
+      "expr": "casc_p__av0/mir__gds",
+      "unit": "ohm",
+      "note": "PMOS-side output resistance: mirror ro boosted by the load-cascode intrinsic gain"
+    },
+    {
+      "name": "Rout",
+      "expr": "par(Rout_n, Rout_p)",
+      "unit": "ohm",
+      "note": "the two cascoded sides in parallel"
+    },
+    {
+      "name": "Av",
+      "expr": "in__gm*Rout",
+      "unit": "V/V",
+      "note": "single-stage telescopic gain gm_in * Rout"
+    },
+    { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
+    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "vn_in",
+      "expr": "in__vnth_m*sqrt(1 + mir__gm/in__gm)",
+      "unit": "V/sqrt(Hz)",
+      "note": "input pair plus load-mirror density; the cascodes add little (they carry the same current at low gm relative to the pair)"
+    },
+    {
+      "name": "vos",
+      "expr": "sqrt(pelgrom_vos(avt, abeta, in__W, L_in, gm_id_in)^2 + (pelgrom_vos(avt, abeta, mir__W, L_mir, gm_id_mir)*mir__gm/in__gm)^2)",
+      "unit": "V",
+      "note": "input-pair offset plus the load mirror's offset referred by the gm ratio"
+    },
+    {
+      "name": "swing",
+      "expr": "VDD - (in__vdsat + casc_n__vdsat + casc_p__vdsat + mir__vdsat) - tail__vdsat",
+      "unit": "V",
+      "note": "rail minus the four stacked cascode vdsat minus the tail headroom: the total output swing budget"
+    }
+  ],
+  "rules": [
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    {
+      "id": "swing",
+      "kind": "requirement",
+      "lhs": "swing",
+      "op": ">=",
+      "rhs": "2*swing_target",
+      "note": "the stacked headroom must leave at least the peak-to-peak output swing"
+    },
+    {
+      "id": "nmos-stack-consistent",
+      "kind": "guardrail",
+      "lhs": "abs((CM_dc - in__vgs) + vds_in_est + vds_cn_est - V_out_dc)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "estimate: the NMOS-side node drops (tail node + input vds + input-cascode vds) must reach the output DC; retune the vds estimates"
+    },
+    {
+      "id": "pmos-stack-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(vds_cp_est + vds_mir_est - (VDD - V_out_dc))",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "estimate: the PMOS-side node drops (load-cascode vds + mirror vds) must reach VDD from the output DC"
+    },
+    {
+      "id": "input-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(in__vgs - vgs_est_in)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the tail-node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+    }
+  ]
+}

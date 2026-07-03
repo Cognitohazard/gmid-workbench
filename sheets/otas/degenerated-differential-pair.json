@@ -1,0 +1,201 @@
+{
+  "title": "Degenerated differential pair",
+  "description": "A source-degenerated differential pair: a resistor R_s in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is Gm = gm/(1 + gm*R_s); the degeneration factor n_deg = 1 + gm*R_s divides GBW and the input offset while the ~1-decade linear range extends to about V* + (I_tail/2)*R_s. The bind declares vsb = (I_tail/2)*R_s to record the source lift the degeneration introduces (inert on a table with no body-effect axis, a real slice on one that has it). Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
+    { "name": "Av_target", "value": 12, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 5e6, "unit": "Hz", "role": "spec" },
+    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "linrange_target",
+      "value": 0.25,
+      "unit": "V",
+      "role": "spec",
+      "note": "required single-ended linear input range (differential is roughly twice this)"
+    },
+    {
+      "name": "vn_target",
+      "value": 20e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget, including the degeneration resistor"
+    },
+    {
+      "name": "vos_target",
+      "value": 3e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "input offset budget, 1 sigma"
+    },
+    {
+      "name": "gds_load_est",
+      "value": 3e-6,
+      "unit": "S",
+      "role": "spec",
+      "note": "conductance loading each drain; R_L = 1/gds_load_est"
+    },
+    {
+      "name": "CM_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "nominal input CM at which the operating point is evaluated"
+    },
+    {
+      "name": "V_out_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "drain DC level; sets the input device vds"
+    },
+    { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
+    { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
+    {
+      "name": "I_tail",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice"
+    },
+    {
+      "name": "R_s",
+      "value": 5000,
+      "min": 0,
+      "max": 50000,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "per-side degeneration resistance; gm*R_s sets the linearization and offset improvement"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 14,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion; high gm/ID makes degeneration more effective (larger gm*R_s)"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "vgs_est_in",
+      "value": 0.55,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the input-pair vgs, used to place the input drain node; retune until input-bias-consistent is green"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input-pair device (degenerated)",
+        "description": "Half-circuit input device at half the tail current, with R_s in its source. vsb records the source lift the degeneration introduces.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 14, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.55, "unit": "V", "role": "spec" },
+          {
+            "name": "vsb_i",
+            "value": 0.025,
+            "unit": "V",
+            "role": "spec",
+            "note": "source-bulk lift from the degeneration resistor, (I_tail/2)*R_s"
+          }
+        ],
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_i": "L_in",
+        "gm_id_i": "gm_id_in",
+        "vds_i": "V_out_dc - CM_dc + vgs_est_in",
+        "vsb_i": "I_tail/2*R_s"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "n_deg",
+      "expr": "1 + in__gm*R_s",
+      "unit": "1",
+      "note": "degeneration factor; Gm, GBW, and vos all scale by 1/n_deg"
+    },
+    {
+      "name": "Gm_eff",
+      "expr": "in__gm/n_deg",
+      "unit": "S",
+      "note": "degenerated transconductance gm/(1 + gm*R_s)"
+    },
+    {
+      "name": "Av",
+      "expr": "Gm_eff/(in__gds + gds_load_est)",
+      "unit": "V/V",
+      "note": "conservative: neglects the degeneration boost of the device output resistance"
+    },
+    { "name": "GBW", "expr": "Gm_eff/(2*pi*CL)", "unit": "Hz" },
+    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "linrange",
+      "expr": "2/gm_id_in + (I_tail/2)*R_s",
+      "unit": "V",
+      "note": "single-ended linear range ~ V* + I*R_s (V* = 2/(gm/ID))"
+    },
+    {
+      "name": "vos_undeg",
+      "expr": "pelgrom_vos(avt, abeta, in__W, L_in, gm_id_in)",
+      "unit": "V",
+      "note": "the un-degenerated Pelgrom offset of the input pair"
+    },
+    {
+      "name": "vos",
+      "expr": "vos_undeg/n_deg",
+      "unit": "V",
+      "note": "degeneration divides the offset by n_deg (the gm-mismatch term is linearized away)"
+    },
+    {
+      "name": "vn_in",
+      "expr": "sqrt(in__vnth_m^2 + 4*k*T*R_s)",
+      "unit": "V/sqrt(Hz)",
+      "note": "device density plus the degeneration resistor's 4kT*R_s, input-referred (one side; estimate)"
+    }
+  ],
+  "rules": [
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+    {
+      "id": "linrange-spec",
+      "kind": "requirement",
+      "lhs": "linrange",
+      "op": ">=",
+      "rhs": "linrange_target",
+      "note": "degeneration must extend the linear range to the target"
+    },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    {
+      "id": "input-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(in__vgs - vgs_est_in)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the input drain node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+    }
+  ]
+}

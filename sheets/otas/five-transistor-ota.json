@@ -1,0 +1,290 @@
+{
+  "title": "5T OTA",
+  "description": "The five-transistor OTA sized by half-circuit: an input pair device at half the tail current, a mirror-load device (pick its child table to the opposite polarity; set ld_sign to -1 for a signed-PMOS table), and the tail source. Gain, bandwidth, slew, noise, offset, and the input common-mode range are all author math over the three children's operating points. The load child evaluates first so the input device's drain level (the mirror's diode vgs below the supply) is known; the tail reads the input device's vgs to find its own headroom.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
+    { "name": "Av_target", "value": 15, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
+    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 15e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "vos_target",
+      "value": 5e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "input offset budget, 1 sigma"
+    },
+    {
+      "name": "CM_lo",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range, low edge"
+    },
+    {
+      "name": "CM_hi",
+      "value": 1.4,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range, high edge"
+    },
+    {
+      "name": "CM_dc",
+      "value": 1.1,
+      "unit": "V",
+      "role": "spec",
+      "note": "nominal input CM at which the operating point is evaluated"
+    },
+    {
+      "name": "V_out_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level; sets the mirror output device's vds"
+    },
+    { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
+    { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
+    {
+      "name": "I_tail",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion: sets gm per current, noise, and the CM-low edge"
+    },
+    {
+      "name": "gm_id_ld",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "mirror-load inversion: lower gm/ID adds less noise and offset (both scale with the load's gm)"
+    },
+    {
+      "name": "gm_id_tail",
+      "value": 10,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "tail inversion: higher V* costs CM-low headroom"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    { "name": "L_ld", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_tail",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vgs_est_in",
+      "value": 0.57,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the input-pair vgs, used to place the tail node; retune until the input-bias-consistent guardrail is green"
+    },
+    {
+      "name": "ld_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    }
+  ],
+  "uses": [
+    {
+      "name": "ld",
+      "doc": {
+        "title": "Mirror-load device",
+        "description": "One side of the mirror load at half the tail current. Its vgs (the diode drop) sets the input device's drain level; its gds at the output DC level loads the gain.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_l", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_l", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_l",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "output-side vds, signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "L_l", "id": "I_half", "gm_id": "gm_id_l", "vds": "vds_l" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_l",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "W"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_l": "L_ld",
+        "gm_id_l": "gm_id_ld",
+        "vds_l": "ld_sign*(VDD - V_out_dc)"
+      }
+    },
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input-pair device",
+        "description": "Half-circuit input device at half the tail current. Its drain sits one diode drop below the supply; its source sits one vgs below the input CM.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "W", "id", "vnth_m"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_i": "L_in",
+        "gm_id_i": "gm_id_in",
+        "vds_i": "VDD - abs(ld__vgs) - CM_dc + vgs_est_in"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device carrying the full bias current; its saturation headroom sets the CM-low edge.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_t", "value": 10, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_t",
+            "value": 0.5,
+            "unit": "V",
+            "role": "spec",
+            "note": "the tail node: one input vgs below the input CM"
+          }
+        ],
+        "bind": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_t",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat"]
+      },
+      "params": {
+        "I_t": "I_tail",
+        "L_t": "L_tail",
+        "gm_id_t": "gm_id_tail",
+        "vds_t": "CM_dc - in__vgs"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "Av",
+      "expr": "in__gm/(in__gds + ld__gds)",
+      "unit": "V/V",
+      "note": "half-circuit differential gain into the two output conductances"
+    },
+    { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
+    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "vn_in",
+      "expr": "in__vnth_m*sqrt(1 + ld__gm/in__gm)",
+      "unit": "V/sqrt(Hz)",
+      "note": "input pair density plus the mirror's contribution, scaled by the gm ratio (one-side densities; the differential pair carries the same total)"
+    },
+    {
+      "name": "vos",
+      "expr": "sqrt(pelgrom_vos(avt, abeta, in__W, L_in, gm_id_in)^2 + (pelgrom_vos(avt, abeta, ld__W, L_ld, gm_id_ld)*ld__gm/in__gm)^2)",
+      "unit": "V",
+      "note": "input-pair offset plus the mirror pair's offset referred by the gm ratio"
+    },
+    {
+      "name": "cm_lo_edge",
+      "expr": "in__vgs + tail__vdsat",
+      "unit": "V",
+      "note": "lowest input CM that keeps the tail saturated"
+    },
+    {
+      "name": "cm_hi_edge",
+      "expr": "VDD - abs(ld__vgs) + in__vth",
+      "unit": "V",
+      "note": "highest input CM that keeps the input device saturated under the diode drop"
+    }
+  ],
+  "rules": [
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    {
+      "id": "icmr-low",
+      "kind": "invariant",
+      "lhs": "CM_lo",
+      "op": ">=",
+      "rhs": "cm_lo_edge",
+      "note": "the spec'd CM-low must sit above the tail-saturation edge"
+    },
+    {
+      "id": "icmr-high",
+      "kind": "invariant",
+      "lhs": "cm_hi_edge",
+      "op": ">=",
+      "rhs": "CM_hi",
+      "note": "the spec'd CM-high must sit below the input-saturation edge"
+    },
+    {
+      "id": "input-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(in__vgs - vgs_est_in)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the tail-node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+    }
+  ]
+}

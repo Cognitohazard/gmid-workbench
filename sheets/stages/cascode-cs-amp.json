@@ -1,0 +1,251 @@
+{
+  "title": "Cascode CS amp",
+  "description": "A telescopic (non-boosted) cascode common-source stage: a common-source input device with a cascode device stacked in series on top, driving a current-source load. The cascode raises the stage output resistance to about av0_casc/gds_in, so the gain is no longer limited by the input device's own output resistance but by whatever the load presents - here a plain current source, so the load's gds sets the ceiling. All three devices are composed children carrying the same branch current: the input and cascode in series (the parent cascode bind carries the input's drain current), and the current-source load in parallel at the output. Set load_sign to -1 for a signed-PMOS load table.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.3,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level; sets the cascode and load drain-source voltages"
+    },
+    {
+      "name": "V_x",
+      "value": 0.4,
+      "min": 0.1,
+      "max": 0.9,
+      "unit": "V",
+      "role": "choice",
+      "note": "cascode source (input drain) DC level: raise it for input-device headroom, lower it for cascode headroom"
+    },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
+    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 200,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "a cascode buys a large gain"
+    },
+    {
+      "name": "vn_target",
+      "value": 20e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "I_bias",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "branch current, shared by all three devices"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion: sets the stage gm, noise, and gain"
+    },
+    {
+      "name": "gm_id_casc",
+      "value": 10,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "cascode-device inversion: higher av0_casc boosts the output resistance"
+    },
+    {
+      "name": "gm_id_load",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "load inversion: a longer/lower-gm/ID load raises the load output resistance (and the gain)"
+    },
+    {
+      "name": "L",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "shared by the input and cascode devices"
+    },
+    {
+      "name": "L_load",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "load_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Common-source input device",
+        "description": "The input device at the branch current. Its drain sits at V_x, one cascode source below the cascode device; it exposes its transconductance, output conductance, drain current (carried up by the cascode), and channel-noise density.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.4, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_i", "id": "I_in", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "id", "vdsat", "vnth_m"]
+      },
+      "params": {
+        "I_in": "I_bias",
+        "L_i": "L",
+        "gm_id_i": "gm_id_in",
+        "vds_i": "V_x"
+      }
+    },
+    {
+      "name": "load",
+      "doc": {
+        "title": "Current-source load device",
+        "description": "One device biased as a current source at the branch current, exposing the output conductance that sets the cascode stage's gain ceiling, its transconductance (drain-noise scale), and its saturation headroom.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_load", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_l", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_l", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_l",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "L_l", "id": "I_load", "gm_id": "gm_id_l", "vds": "vds_l" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_l",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat"]
+      },
+      "params": {
+        "I_load": "I_bias",
+        "L_l": "L_load",
+        "gm_id_l": "gm_id_load",
+        "vds_l": "load_sign*(VDD - V_out)"
+      }
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "id": "in__id",
+    "gm_id": "gm_id_casc",
+    "vds": "V_out - V_x"
+  },
+  "rows": [
+    {
+      "name": "Rout_casc",
+      "expr": "(1/in__gds)*(1 + av0) + 1/gds",
+      "unit": "ohm",
+      "note": "cascode output resistance: the input device's ro boosted by (1 + cascode av0), in series with the cascode ro"
+    },
+    {
+      "name": "Rout",
+      "expr": "par(Rout_casc, 1/load__gds)",
+      "unit": "ohm",
+      "note": "the cascode output in parallel with the current-source load's output resistance - the load's gds now sets the ceiling"
+    },
+    {
+      "name": "Av",
+      "expr": "in__gm*Rout",
+      "unit": "V/V",
+      "note": "input transconductance into the full cascoded output resistance"
+    },
+    { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
+    {
+      "name": "vn_in",
+      "expr": "in__vnth_m*sqrt(1 + load__gm/in__gm)",
+      "unit": "V/sqrt(Hz)",
+      "note": "input device plus the load's contribution; the cascode device's own channel noise is degenerated by the input ro and neglected"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_casc",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "cascode gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "input-sat",
+      "kind": "invariant",
+      "lhs": "V_x",
+      "op": ">=",
+      "rhs": "in__vdsat",
+      "note": "input device saturated: its drain V_x sits above its saturation voltage"
+    },
+    {
+      "id": "cascode-sat",
+      "kind": "invariant",
+      "lhs": "V_out - V_x",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "cascode device saturated: the output minus the intermediate node clears its saturation voltage"
+    },
+    {
+      "id": "load-sat",
+      "kind": "invariant",
+      "lhs": "VDD - V_out",
+      "op": ">=",
+      "rhs": "load__vdsat",
+      "note": "load device saturated: its headroom is the supply minus the output level"
+    },
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "gbw-margin",
+      "kind": "guardrail",
+      "lhs": "GBW",
+      "op": ">=",
+      "rhs": "GBW_target",
+      "note": "input gm over the load capacitance"
+    }
+  ]
+}

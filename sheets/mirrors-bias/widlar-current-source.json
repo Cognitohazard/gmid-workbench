@@ -1,0 +1,185 @@
+{
+  "title": "Widlar current source",
+  "description": "A Widlar source generates a small, well-defined output current from a larger reference without a large resistor. The reference device is diode-connected at I_in; the output device shares the gate but has a source resistor R_s, so its gate-source voltage is lower than the reference's by exactly the IR drop it develops: V_GS_ref - V_GS_out = I_out*R_s. That single equation sets the output current. This sheet does not solve that loop, it CHECKS it: you pick the output current I_out (a choice) and the resistor R_s, the output device is bound at that current, and a requirement rule tests whether the resulting gate-source difference actually equals I_out*R_s. Tune I_out until it closes. That is the scope rule made visible, an explicit designer-named fixed point evaluated against the lookup tables rather than a nodal solve. Because the output runs at a lower current density than the reference, its vgs sits below the reference's, so the difference is positive only when I_out < I_in. The output device's source sits I_out*R_s above ground (declared as vsb; the demo table has no vsb axis, so it only warns).",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "I_in",
+      "value": 20e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "reference current into the diode device"
+    },
+    {
+      "name": "I_out",
+      "value": 5e-6,
+      "min": 1e-6,
+      "max": 20e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "target output current; tune it until the Widlar fixed point closes"
+    },
+    {
+      "name": "R_s",
+      "value": 10000,
+      "min": 100,
+      "max": 200000,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "output-device source resistor; sets the gate-source difference I_out*R_s"
+    },
+    {
+      "name": "M_ratio",
+      "value": 1,
+      "min": 1,
+      "max": 8,
+      "unit": "1",
+      "role": "choice",
+      "note": "output/reference width ratio (a unit-device multiple); usually 1"
+    },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.05,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "DC level of the node the source drives"
+    },
+    {
+      "name": "L",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id_r",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "reference-device inversion"
+    },
+    {
+      "name": "vgs_est",
+      "value": 0.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the reference diode vgs; retune until diode-bias-consistent is green"
+    },
+    {
+      "name": "fp_tol",
+      "value": 2,
+      "unit": "%",
+      "role": "spec",
+      "note": "how tightly the Widlar fixed point must close"
+    }
+  ],
+  "uses": [
+    {
+      "name": "ref",
+      "doc": {
+        "title": "Reference (diode) device",
+        "description": "The diode-connected reference at the full input current. Its gate-source voltage is the gate rail both devices share; the output device develops a lower vgs by the R_s drop. Exposes vgs and its width.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_r2", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_r",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "diode connection: vds equals vgs"
+          }
+        ],
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r2", "vds": "vds_r" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_r2",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+      },
+      "params": {
+        "I_ref": "I_in",
+        "L_r": "L",
+        "gm_id_r2": "gm_id_r",
+        "vds_r": "vgs_est"
+      }
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "W": "M_ratio*ref__W",
+    "id": "I_out",
+    "vds": "V_out - I_out*R_s",
+    "vsb": "I_out*R_s"
+  },
+  "rows": [
+    {
+      "name": "delta_vgs",
+      "expr": "ref__vgs - vgs",
+      "unit": "V",
+      "note": "the actual gate-source step from the reference to the output device"
+    },
+    {
+      "name": "vgs_drop",
+      "expr": "I_out*R_s",
+      "unit": "V",
+      "note": "the gate-source step the resistor must produce for the chosen output current"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "the output operating point must stay within the data's weak-inversion ceiling"
+    },
+    {
+      "id": "widlar-fixed-point",
+      "kind": "requirement",
+      "lhs": "delta_vgs",
+      "op": "==",
+      "rhs": "vgs_drop",
+      "tolPct": 2,
+      "note": "the defining Widlar equation V_GS_ref - V_GS_out = I_out*R_s, checked not solved; tune I_out until it closes"
+    },
+    {
+      "id": "compliance",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "vdsat + I_out*R_s",
+      "note": "the output node must clear the device saturation voltage plus the source-resistor drop"
+    },
+    {
+      "id": "widlar-steps-down",
+      "kind": "guardrail",
+      "lhs": "I_out",
+      "op": "<=",
+      "rhs": "I_in",
+      "note": "a Widlar source produces a fraction of the reference current; a positive gate-source step needs I_out < I_in"
+    },
+    {
+      "id": "diode-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(ref__vgs - vgs_est)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
+    }
+  ]
+}

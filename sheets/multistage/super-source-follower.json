@@ -1,0 +1,193 @@
+{
+  "title": "Super source follower",
+  "description": "A super source follower (SSF): a plain source follower whose output resistance is driven down by a local feedback device. The input follower sets the DC level shift (the output sits about one input Vgs below the input), and the feedback device senses the follower current and closes a local loop that lowers the output resistance by roughly the feedback device's intrinsic gain: Rout ~= 1/(gm_in * av0_fb), versus 1/gm_in for a plain follower. That makes it a compact low-impedance buffer. The feedback is a local loop; its own phase margin (whether that loop is stable) is a small-signal AC check the simulator owns, out of this sheet's scope — this sheet sizes the DC operating point and the low-frequency output resistance only. On the demo NMOS table both devices size against the same data.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "Rout_target",
+      "value": 200,
+      "unit": "ohm",
+      "role": "spec",
+      "note": "required buffer output resistance"
+    },
+    {
+      "name": "I_in",
+      "value": 50e-6,
+      "min": 5e-6,
+      "max": 500e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "current through the input follower device (held fixed by the bias source, which linearizes the buffer)"
+    },
+    {
+      "name": "I_fb",
+      "value": 50e-6,
+      "min": 5e-6,
+      "max": 500e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "feedback device current"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 10,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input follower inversion (sets gm_in)"
+    },
+    {
+      "name": "gm_id_fb",
+      "value": 10,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "feedback device inversion (sets its intrinsic gain, hence the loop gain)"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_fb",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "longer L_fb raises av0_fb and drives Rout down further"
+    },
+    {
+      "name": "vds_in",
+      "value": 0.6,
+      "min": 0.15,
+      "max": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "input-device drain-source"
+    },
+    {
+      "name": "vds_fb",
+      "value": 0.6,
+      "min": 0.15,
+      "max": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "feedback-device drain-source"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input follower device",
+        "description": "The source-follower input device carrying a fixed current; its gm sets the base output resistance and its vgs the DC level shift.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "vgs", "vdsat"]
+      },
+      "params": { "Ix": "I_in", "Lx": "L_in", "gx": "gm_id_in", "vx": "vds_in" }
+    },
+    {
+      "name": "fb",
+      "doc": {
+        "title": "Feedback device",
+        "description": "The local-feedback device that senses the follower current; its intrinsic gain av0 is the loop gain that lowers the output resistance.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "av0", "vdsat"]
+      },
+      "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" }
+    }
+  ],
+  "rows": [
+    {
+      "name": "gm_in",
+      "expr": "in__gm",
+      "unit": "S",
+      "note": "input follower transconductance (sets the plain-follower output resistance 1/gm_in)"
+    },
+    {
+      "name": "av0_fb",
+      "expr": "fb__av0",
+      "unit": "V/V",
+      "note": "feedback device intrinsic gain = the local loop gain"
+    },
+    {
+      "name": "Rout",
+      "expr": "1/(gm_in*av0_fb)",
+      "unit": "ohm",
+      "note": "SSF output resistance: the follower 1/gm_in reduced by the feedback loop gain av0_fb"
+    },
+    {
+      "name": "Rout_plain",
+      "expr": "1/gm_in",
+      "unit": "ohm",
+      "note": "the plain source-follower output resistance, for comparison"
+    },
+    {
+      "name": "level_shift",
+      "expr": "in__vgs",
+      "unit": "V",
+      "note": "output sits about one input Vgs below the input (source-follower DC level shift)"
+    }
+  ],
+  "rules": [
+    {
+      "id": "rout-spec",
+      "kind": "requirement",
+      "lhs": "Rout",
+      "op": "<=",
+      "rhs": "Rout_target",
+      "note": "the buffer output resistance meets the target"
+    },
+    {
+      "id": "in-sat",
+      "kind": "invariant",
+      "lhs": "vds_in",
+      "op": ">=",
+      "rhs": "in__vdsat",
+      "note": "input follower device stays saturated at its operating vds"
+    },
+    {
+      "id": "fb-sat",
+      "kind": "invariant",
+      "lhs": "vds_fb",
+      "op": ">=",
+      "rhs": "fb__vdsat",
+      "note": "feedback device stays saturated at its operating vds"
+    }
+  ]
+}

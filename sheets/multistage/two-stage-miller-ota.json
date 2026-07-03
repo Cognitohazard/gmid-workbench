@@ -1,0 +1,435 @@
+{
+  "title": "Two-stage Miller OTA",
+  "description": "The classic two-stage Miller operational transconductance amplifier: a differential input stage (input pair + current-mirror load) driving a common-source second stage, with a compensation capacitor Cc bridging the second stage (Miller pole-splitting). Cc is the compensation knob: it sets the dominant pole and hence the unity-gain bandwidth GBW = gm1/(2*pi*Cc). The feedforward path through Cc creates a right-half-plane zero z = gm2/Cc that erodes phase; the Rz = 1/gm2 nulling resistor removes it. The phase-margin and second-pole rows are ESTIMATE-grade small-signal approximations for sizing intuition — the simulator owns stability sign-off. Children evaluate in dependency order: the stage-1 mirror load first (its diode drop sets the stage-1 output DC), then the input device, then the stage-2 device and its load. On the demo NMOS table every device sizes against the same data, so the polarity-inverted loads keep their sign params at +1.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "CL",
+      "value": 5e-12,
+      "unit": "F",
+      "role": "spec",
+      "note": "output load capacitance"
+    },
+    { "name": "Av_target", "value": 100, "unit": "V/V", "role": "spec" },
+    { "name": "GBW_target", "value": 5e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "PM_target",
+      "value": 45,
+      "unit": "deg",
+      "role": "spec",
+      "note": "phase-margin target; the PM row is estimate-grade"
+    },
+    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "C1_est",
+      "value": 0.5e-12,
+      "unit": "F",
+      "role": "spec",
+      "note": "stage-1 output node cap (stage-2 gate + drain parasitics + wiring); refine from the stage-2 device cgg plus extraction"
+    },
+    {
+      "name": "CM_dc",
+      "value": 1.0,
+      "unit": "V",
+      "role": "spec",
+      "note": "nominal input common-mode at which the input device operating point is evaluated"
+    },
+    {
+      "name": "Cc",
+      "value": 3e-12,
+      "min": 0.5e-12,
+      "max": 20e-12,
+      "unit": "F",
+      "role": "choice",
+      "note": "Miller compensation cap: sets the dominant pole and GBW = gm1/(2*pi*Cc)"
+    },
+    {
+      "name": "I1",
+      "value": 20e-6,
+      "min": 4e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "stage-1 tail current"
+    },
+    {
+      "name": "I2",
+      "value": 60e-6,
+      "min": 4e-6,
+      "max": 400e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "stage-2 branch current"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion"
+    },
+    {
+      "name": "gm_id_ld1",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "stage-1 mirror-load inversion"
+    },
+    {
+      "name": "gm_id_s2",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "stage-2 device inversion"
+    },
+    {
+      "name": "gm_id_ld2",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "stage-2 load inversion"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_ld1",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    { "name": "L_s2", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_ld2",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "V1",
+      "value": 1.13,
+      "min": 0.6,
+      "max": 1.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "stage-1 output DC level; sits about one mirror diode drop below VDD (retune with the stage-1-bias-consistent guardrail)"
+    },
+    {
+      "name": "V_out2",
+      "value": 0.9,
+      "min": 0.6,
+      "max": 1.2,
+      "unit": "V",
+      "role": "choice",
+      "note": "stage-2 output DC level; sets both stage-2 devices' vds"
+    },
+    {
+      "name": "vgs_est_in",
+      "value": 0.567,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the input-pair vgs used to place its drain; retune until input-bias-consistent is green"
+    },
+    {
+      "name": "ld_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign of the load tables: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    },
+    {
+      "name": "out_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign of the stage-2 device table (PMOS common source): +1 for the N-style demo axis, -1 for a signed-PMOS axis"
+    }
+  ],
+  "uses": [
+    {
+      "name": "ld1",
+      "doc": {
+        "title": "Stage-1 mirror-load device",
+        "description": "One side of the stage-1 current-mirror load at half the tail current. Its diode drop sets the stage-1 output DC; its output conductance loads the first-stage gain.",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.67,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat"]
+      },
+      "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1", "vx": "ld_sign*(VDD - V1)" }
+    },
+    {
+      "name": "in",
+      "doc": {
+        "title": "Stage-1 input-pair device",
+        "description": "Half-circuit input device at half the tail current. Its drain sits at the stage-1 output DC (one mirror diode drop below VDD); its source sits one vgs below the input common mode.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.7, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
+      },
+      "params": { "Ix": "I1/2", "Lx": "L_in", "gx": "gm_id_in", "vx": "V1 - CM_dc + vgs_est_in" }
+    },
+    {
+      "name": "s2",
+      "doc": {
+        "title": "Stage-2 common-source device",
+        "description": "The second-stage gain device carrying the full stage-2 current at the output DC level. Its gm sets the RHP zero, the second pole, and the nulling resistor; its gate capacitance dominates the stage-1 output node cap.",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "cgg", "vdsat"]
+      },
+      "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" }
+    },
+    {
+      "name": "ld2",
+      "doc": {
+        "title": "Stage-2 current-source load",
+        "description": "The second-stage current-source load carrying the stage-2 current at the output DC level; its output conductance loads the second-stage gain.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gds", "vdsat"]
+      },
+      "params": { "Ix": "I2", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
+    }
+  ],
+  "rows": [
+    {
+      "name": "gm1",
+      "expr": "in__gm",
+      "unit": "S",
+      "note": "stage-1 (input pair) transconductance"
+    },
+    {
+      "name": "gm2",
+      "expr": "s2__gm",
+      "unit": "S",
+      "note": "stage-2 transconductance: sets the RHP zero, the second pole, and the nulling resistor"
+    },
+    {
+      "name": "GBW",
+      "expr": "gm1/(2*pi*Cc)",
+      "unit": "Hz",
+      "note": "Miller-compensated unity-gain bandwidth (input gm into the compensation cap)"
+    },
+    {
+      "name": "wc",
+      "expr": "gm1/Cc",
+      "unit": "rad/s",
+      "note": "angular unity-gain crossover (2*pi*GBW), the frequency the phase-margin estimate is read at"
+    },
+    {
+      "name": "z_rhp",
+      "expr": "gm2/Cc",
+      "unit": "rad/s",
+      "note": "right-half-plane zero from the feedforward path through Cc; erodes phase near crossover"
+    },
+    {
+      "name": "p2",
+      "expr": "gm2/(CL + C1_est)",
+      "unit": "rad/s",
+      "note": "non-dominant (output) pole ESTIMATE; C1_est is the stage-1 output-node cap — refine it from the stage-2 cgg plus extraction"
+    },
+    {
+      "name": "Rz",
+      "expr": "1/gm2",
+      "unit": "ohm",
+      "note": "nulling resistor: Rz = 1/gm2 moves the RHP zero to infinity, cancelling the feedforward path"
+    },
+    {
+      "name": "PM",
+      "expr": "90 - atan(wc/p2)*180/pi - atan(wc/z_rhp)*180/pi",
+      "unit": "deg",
+      "note": "ESTIMATE: crossover phase lag from the second pole plus the RHP zero (the nulling resistor removes the zero term). Two-pole-plus-zero approximation — the simulator owns stability sign-off"
+    },
+    {
+      "name": "SR",
+      "expr": "min(I1/Cc, I2/CL)",
+      "unit": "V/s",
+      "note": "the smaller slew limit: stage-1 tail charging Cc, or stage-2 current charging CL"
+    },
+    {
+      "name": "Av1",
+      "expr": "gm1/(in__gds + ld1__gds)",
+      "unit": "V/V",
+      "note": "stage-1 gain into the input-device and mirror-load output conductances"
+    },
+    {
+      "name": "Av2",
+      "expr": "gm2/(s2__gds + ld2__gds)",
+      "unit": "V/V",
+      "note": "stage-2 common-source gain into its own and the load conductances"
+    },
+    {
+      "name": "Av",
+      "expr": "Av1*Av2",
+      "unit": "V/V",
+      "note": "two-stage DC gain (product of the stage gains)"
+    },
+    {
+      "name": "cgg2",
+      "expr": "s2__cgg",
+      "unit": "F",
+      "note": "stage-2 gate capacitance — the dominant term in the stage-1 output cap C1_est; compare to refine the estimate"
+    }
+  ],
+  "rules": [
+    {
+      "id": "gain-spec",
+      "kind": "requirement",
+      "lhs": "Av",
+      "op": ">=",
+      "rhs": "Av_target",
+      "note": "two-stage DC gain meets the target"
+    },
+    {
+      "id": "sr-spec",
+      "kind": "requirement",
+      "lhs": "SR",
+      "op": ">=",
+      "rhs": "SR_target",
+      "note": "the worse of the two slew limits meets the target"
+    },
+    {
+      "id": "gbw-spec",
+      "kind": "guardrail",
+      "lhs": "GBW",
+      "op": ">=",
+      "rhs": "GBW_target",
+      "note": "the compensated bandwidth (gm1/(2*pi*Cc)) meets the target"
+    },
+    {
+      "id": "pm-spec",
+      "kind": "guardrail",
+      "lhs": "PM",
+      "op": ">=",
+      "rhs": "PM_target",
+      "note": "ESTIMATE-grade phase margin; the simulator owns the real stability sign-off"
+    },
+    {
+      "id": "zero-above-crossover",
+      "kind": "guardrail",
+      "lhs": "z_rhp",
+      "op": ">=",
+      "rhs": "wc",
+      "note": "the RHP zero must sit above crossover (equivalently gm2 >= gm1) or it collapses phase margin; the Rz = 1/gm2 nulling resistor removes it if this is tight"
+    },
+    {
+      "id": "stage2-sat",
+      "kind": "invariant",
+      "lhs": "VDD - V_out2",
+      "op": ">=",
+      "rhs": "s2__vdsat",
+      "note": "stage-2 device saturated at the output DC level"
+    },
+    {
+      "id": "load2-sat",
+      "kind": "invariant",
+      "lhs": "V_out2",
+      "op": ">=",
+      "rhs": "ld2__vdsat",
+      "note": "stage-2 load saturated at the output DC level"
+    },
+    {
+      "id": "stage1-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(V1 - (VDD - abs(ld1__vgs)))",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the stage-1 output DC should equal VDD minus the mirror-load diode drop; retune V1 if this trips"
+    },
+    {
+      "id": "input-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(in__vgs - vgs_est_in)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the input-device drain placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+    }
+  ]
+}

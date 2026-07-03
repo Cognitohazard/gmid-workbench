@@ -1,0 +1,194 @@
+{
+  "title": "Matched mirror bank (current-steering unit)",
+  "description": "A bank of identical unit current sources, the building block of a current-steering DAC or a binary/thermometer bias array. One diode-connected unit device sets the reference; the bank is N_legs copies of it, sized width-first as unit-device multiples (bank width = N_legs times the unit), so every element is a faithful replica and the full-scale current is N_legs times the unit current, give or take the channel-length-modulation gain error between the reference diode point and the shared output rail. Matching is what limits a current-steering converter's linearity: each unit element has a Pelgrom current spread, and across N_legs elements the worst-case accumulated error grows as the square root of N (a random-walk bound), which is the estimate this sheet reports and budgets. Compliance is a single saturation voltage, since the bank shares one output rail; a cascoded bank (see the cascode mirror) would trade headroom for a flatter output. The unit reference diode drop is estimated with a consistency guardrail.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "I_unit",
+      "value": 10e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "unit-element current"
+    },
+    {
+      "name": "N_legs",
+      "value": 8,
+      "min": 1,
+      "max": 64,
+      "unit": "1",
+      "role": "choice",
+      "note": "number of unit elements in the bank (unit-device multiple)"
+    },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.05,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "DC level of the shared output rail"
+    },
+    {
+      "name": "L",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "longer L lowers the gain error and adds matching area"
+    },
+    {
+      "name": "gm_id_m",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "unit-element inversion: lower gm/ID (higher V*) tightens matching but costs compliance headroom"
+    },
+    {
+      "name": "vgs_est",
+      "value": 0.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the unit reference diode vgs; retune until diode-bias-consistent is green"
+    },
+    {
+      "name": "avt",
+      "value": 5e-9,
+      "unit": "V*m",
+      "role": "spec",
+      "note": "Pelgrom A_VT from the PDK"
+    },
+    {
+      "name": "abeta",
+      "value": 1e-8,
+      "unit": "m",
+      "role": "spec",
+      "note": "Pelgrom A_beta from the PDK"
+    },
+    {
+      "name": "err_target",
+      "value": 0.05,
+      "unit": "1",
+      "role": "spec",
+      "note": "full-scale gain (lambda) error budget"
+    },
+    {
+      "name": "match_target",
+      "value": 0.02,
+      "unit": "1",
+      "role": "spec",
+      "note": "worst-case accumulated 1-sigma matching budget across the bank"
+    }
+  ],
+  "uses": [
+    {
+      "name": "unit",
+      "doc": {
+        "title": "Unit reference device (diode)",
+        "description": "The diode-connected unit element at the unit current. Every leg of the bank is a width replica of it, so its Pelgrom current spread is the per-leg matching, and its width sets the bank width.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_u", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_u", "value": 1e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_u", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_u",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "diode connection: vds equals vgs"
+          }
+        ],
+        "bind": { "L": "L_u", "id": "I_u", "gm_id": "gm_id_u", "vds": "vds_u" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_u",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+      },
+      "params": {
+        "I_u": "I_unit",
+        "L_u": "L",
+        "gm_id_u": "gm_id_m",
+        "vds_u": "vgs_est"
+      }
+    }
+  ],
+  "bind": { "L": "L", "W": "N_legs*unit__W", "gm_id": "gm_id_m", "vds": "V_out" },
+  "rows": [
+    {
+      "name": "I_fs",
+      "expr": "id",
+      "unit": "A",
+      "note": "full-scale bank current at the sized width"
+    },
+    { "name": "I_fs_target", "expr": "N_legs*I_unit", "unit": "A" },
+    {
+      "name": "gain_err",
+      "expr": "(I_fs - I_fs_target)/I_fs_target",
+      "unit": "1",
+      "note": "systematic full-scale gain error: the lambda mismatch between the reference diode point and the shared output rail"
+    },
+    {
+      "name": "sigma_leg",
+      "expr": "pelgrom_irel(avt, abeta, unit__W, L, gm_id_m)",
+      "unit": "1",
+      "note": "one unit element's 1-sigma current spread"
+    },
+    {
+      "name": "sigma_bank",
+      "expr": "sigma_leg*sqrt(N_legs)",
+      "unit": "1",
+      "note": "worst-case accumulated matching across N_legs unit elements (a square-root-of-N random-walk bound); estimate"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_m",
+      "op": "<=",
+      "rhs": "ceiling"
+    },
+    {
+      "id": "compliance",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "every unit element saturated at the shared output rail"
+    },
+    {
+      "id": "accumulated-matching",
+      "kind": "requirement",
+      "lhs": "sigma_bank",
+      "op": "<=",
+      "rhs": "match_target",
+      "note": "worst-case accumulated element spread must stay within the linearity budget"
+    },
+    {
+      "id": "gain-error",
+      "kind": "guardrail",
+      "lhs": "abs(gain_err)",
+      "op": "<=",
+      "rhs": "err_target",
+      "note": "the uncascoded bank's full-scale current drifts with the output rail; cascode it if this must be tighter"
+    },
+    {
+      "id": "diode-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(unit__vgs - vgs_est)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
+    }
+  ]
+}

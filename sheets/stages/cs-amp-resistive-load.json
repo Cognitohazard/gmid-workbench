@@ -1,0 +1,139 @@
+{
+  "title": "CS amp, resistive load",
+  "description": "Common-source stage with a physical resistor as the load. gm is fixed from the bandwidth spec (with an explicit over-design factor) and gm/ID is the efficiency knob; the load resistor R_load sets both the gain and the DC drop that eats output headroom. This is the classic gain-vs-headroom trade made explicit: a bigger R_load raises the gain but drops more of the supply, so the output DC level V_out = VDD - I*R_load sinks toward the device's saturation floor. V_out is an estimate used to bias the device; the headroom-consistent guardrail checks it against the actual drop, so retune V_out (or R_load) until it is green.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
+    { "name": "Av_target", "value": 15, "unit": "V/V", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 20e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "cdd_est",
+      "value": 0.2e-12,
+      "unit": "F",
+      "role": "spec",
+      "note": "output-node parasitic estimate (drain + wiring); refine from extraction"
+    },
+    {
+      "name": "gbw_margin",
+      "value": 0.25,
+      "min": 0,
+      "max": 1,
+      "unit": "1",
+      "role": "choice",
+      "note": "over-design factor on gm for parasitics and PVT"
+    },
+    {
+      "name": "L",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "gm_id",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion: high = efficient/slow, low = fast/thirsty"
+    },
+    {
+      "name": "R_load",
+      "value": 50e3,
+      "min": 1e3,
+      "max": 500e3,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "load resistor: higher R raises the gain but drops more of the supply (less headroom)"
+    },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.05,
+      "max": 1.6,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the output DC level, used as the device's vds; retune until the headroom-consistent guardrail is green"
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
+    "gm_id": "gm_id",
+    "vds": "V_out"
+  },
+  "rows": [
+    {
+      "name": "Av",
+      "expr": "gm*par(R_load, 1/gds)",
+      "unit": "V/V",
+      "note": "gm into the load resistor in parallel with the device output resistance"
+    },
+    {
+      "name": "V_drop",
+      "expr": "id*R_load",
+      "unit": "V",
+      "note": "DC drop across the load resistor"
+    },
+    {
+      "name": "V_out_actual",
+      "expr": "VDD - V_drop",
+      "unit": "V",
+      "note": "the output DC level the sized current actually produces"
+    },
+    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
+    {
+      "name": "vn_in",
+      "expr": "sqrt(vnth_m^2 + 4*k*T/(R_load*gm^2))",
+      "unit": "V/sqrt(Hz)",
+      "note": "device channel thermal density plus the load resistor's 4kT/R_load current noise referred to the input by 1/gm"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "headroom",
+      "kind": "invariant",
+      "lhs": "V_out_actual",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "device saturated at the DC output level the load drop leaves"
+    },
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "gbw-margin",
+      "kind": "guardrail",
+      "lhs": "GBW",
+      "op": ">=",
+      "rhs": "GBW_target",
+      "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
+    },
+    {
+      "id": "headroom-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(V_out_actual - V_out)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the biasing V_out estimate should match the actual VDD - I*R_load; retune V_out or R_load if this trips"
+    }
+  ]
+}

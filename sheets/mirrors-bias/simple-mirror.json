@@ -1,0 +1,181 @@
+{
+  "title": "Simple current mirror",
+  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its vds is its own vgs — declare the estimate and the consistency guardrail checks it), and the output device binds width-first at K times the reference width, evaluated at the served output node's vds. The systematic error is the lambda mismatch between the two operating points; the random error is the Pelgrom spread of the ratio.",
+  "polarity": "n",
+  "params": [
+    { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
+    {
+      "name": "K",
+      "value": 4,
+      "min": 1,
+      "max": 16,
+      "unit": "1",
+      "role": "choice",
+      "note": "mirror ratio W_out/W_ref (a unit-device multiple)"
+    },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.05,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "DC level of the node the mirror serves"
+    },
+    {
+      "name": "L",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "longer L: lower lambda (systematic) error and more matching area"
+    },
+    {
+      "name": "gm_id_m",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "mirror inversion: lower gm/ID (higher V*) tightens current matching but costs compliance headroom"
+    },
+    {
+      "name": "vgs_est",
+      "value": 0.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the diode vgs, used as the reference device's vds; retune until the diode-bias-consistent guardrail is green"
+    },
+    {
+      "name": "avt",
+      "value": 5e-9,
+      "unit": "V*m",
+      "role": "spec",
+      "note": "Pelgrom A_VT from the PDK"
+    },
+    {
+      "name": "abeta",
+      "value": 1e-8,
+      "unit": "m",
+      "role": "spec",
+      "note": "Pelgrom A_beta from the PDK"
+    },
+    {
+      "name": "err_target",
+      "value": 0.05,
+      "unit": "1",
+      "role": "spec",
+      "note": "systematic (lambda) error budget; cascode the mirror if this cannot close"
+    },
+    {
+      "name": "match_target",
+      "value": 0.05,
+      "unit": "1",
+      "role": "spec",
+      "note": "1-sigma random ratio-error budget"
+    }
+  ],
+  "uses": [
+    {
+      "name": "ref",
+      "doc": {
+        "title": "Reference (diode) device",
+        "description": "The diode-connected reference: binds at the input current, with vds declared equal to the (estimated) vgs. Exposes its width so the output side can size as a unit-device multiple.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_r",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "diode connection: vds equals vgs"
+          }
+        ],
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_r",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+      },
+      "params": {
+        "I_ref": "I_in",
+        "L_r": "L",
+        "gm_id_r": "gm_id_m",
+        "vds_r": "vgs_est"
+      }
+    }
+  ],
+  "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "V_out" },
+  "rows": [
+    { "name": "I_out", "expr": "id", "unit": "A" },
+    { "name": "I_target", "expr": "K*I_in", "unit": "A" },
+    {
+      "name": "sys_err",
+      "expr": "(I_out - I_target)/I_target",
+      "unit": "1",
+      "note": "lambda mismatch between the output vds and the diode point"
+    },
+    {
+      "name": "irel_ref",
+      "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)",
+      "unit": "1"
+    },
+    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
+    {
+      "name": "sigma_ratio",
+      "expr": "sqrt(irel_ref^2 + irel_out^2)",
+      "unit": "1",
+      "note": "random 1-sigma error of the K:1 ratio; the K-times-larger output device contributes 1/sqrt(K) of the reference spread"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_m",
+      "op": "<=",
+      "rhs": "ceiling"
+    },
+    {
+      "id": "compliance",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "output device saturated at the served node"
+    },
+    {
+      "id": "systematic-error",
+      "kind": "requirement",
+      "lhs": "abs(sys_err)",
+      "op": "<=",
+      "rhs": "err_target"
+    },
+    {
+      "id": "random-matching",
+      "kind": "requirement",
+      "lhs": "sigma_ratio",
+      "op": "<=",
+      "rhs": "match_target"
+    },
+    {
+      "id": "diode-bias-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(ref__vgs - vgs_est)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
+    }
+  ]
+}

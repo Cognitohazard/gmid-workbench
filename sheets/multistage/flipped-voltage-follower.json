@@ -1,0 +1,197 @@
+{
+  "title": "Flipped voltage follower",
+  "description": "The flipped voltage follower (FVF): a source follower whose bias current is held constant by a shunt feedback device, so the input device's gate-source voltage barely moves and the buffer is highly linear with very low output resistance. Because the current through the input device is fixed, its Vgs is constant and the output tracks the input with little level-shift variation — the reason the FVF is the workhorse buffer inside low-dropout regulators and switched-capacitor drivers. The feedback device closes a local loop that multiplies the follower's already-low output resistance down to Rout ~= gds_in/(gm_in*gm_fb). This sheet sizes the DC operating point and low-frequency output resistance; the local loop's stability is a small-signal AC check the simulator owns. On the demo NMOS table both devices size against the same data.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.3,
+      "max": 1.5,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level (also the input follower's source node)"
+    },
+    {
+      "name": "Rout_target",
+      "value": 100,
+      "unit": "ohm",
+      "role": "spec",
+      "note": "required buffer output resistance"
+    },
+    {
+      "name": "I_in",
+      "value": 50e-6,
+      "min": 5e-6,
+      "max": 500e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "fixed current through the input device — the feedback holds it constant, which is what linearizes the buffer"
+    },
+    {
+      "name": "I_fb",
+      "value": 50e-6,
+      "min": 5e-6,
+      "max": 500e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "feedback (shunt) device current"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 10,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input device inversion (sets gm_in)"
+    },
+    {
+      "name": "gm_id_fb",
+      "value": 10,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "feedback device inversion (sets gm_fb, hence the loop gain)"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    { "name": "L_fb", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "vds_in",
+      "value": 0.6,
+      "min": 0.15,
+      "max": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "input-device drain-source"
+    },
+    {
+      "name": "vds_fb",
+      "value": 0.6,
+      "min": 0.15,
+      "max": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "feedback-device drain-source"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input follower device",
+        "description": "The FVF input device carrying a fixed current; its gm and output conductance set the base output resistance, and its constant current keeps its Vgs (hence the level shift) nearly fixed.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat"]
+      },
+      "params": { "Ix": "I_in", "Lx": "L_in", "gx": "gm_id_in", "vx": "vds_in" }
+    },
+    {
+      "name": "fb",
+      "doc": {
+        "title": "Shunt feedback device",
+        "description": "The feedback device that regulates the input device's current; its gm sets the loop gain that drives the output resistance down.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "vdsat"]
+      },
+      "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" }
+    }
+  ],
+  "rows": [
+    { "name": "gm_in", "expr": "in__gm", "unit": "S", "note": "input device transconductance" },
+    {
+      "name": "gm_fb",
+      "expr": "fb__gm",
+      "unit": "S",
+      "note": "feedback device transconductance (the loop gain factor)"
+    },
+    {
+      "name": "Rout",
+      "expr": "in__gds/(gm_in*gm_fb)",
+      "unit": "ohm",
+      "note": "FVF output resistance: the follower output resistance divided down by the shunt-feedback loop gain gm_fb/gds_in"
+    },
+    {
+      "name": "Rout_plain",
+      "expr": "1/gm_in",
+      "unit": "ohm",
+      "note": "the plain source-follower output resistance, for comparison"
+    },
+    {
+      "name": "headroom",
+      "expr": "in__vdsat + fb__vdsat",
+      "unit": "V",
+      "note": "the stacked saturation voltage the FVF branch needs (input device over the feedback/current-source device)"
+    }
+  ],
+  "rules": [
+    {
+      "id": "rout-spec",
+      "kind": "requirement",
+      "lhs": "Rout",
+      "op": "<=",
+      "rhs": "Rout_target",
+      "note": "the buffer output resistance meets the target"
+    },
+    {
+      "id": "branch-headroom",
+      "kind": "invariant",
+      "lhs": "VDD",
+      "op": ">=",
+      "rhs": "headroom + V_out",
+      "note": "the supply must cover the output level plus the stacked saturation voltages of the FVF branch"
+    },
+    {
+      "id": "in-sat",
+      "kind": "invariant",
+      "lhs": "vds_in",
+      "op": ">=",
+      "rhs": "in__vdsat",
+      "note": "input device stays saturated at its operating vds"
+    },
+    {
+      "id": "fb-sat",
+      "kind": "invariant",
+      "lhs": "vds_fb",
+      "op": ">=",
+      "rhs": "fb__vdsat",
+      "note": "feedback device stays saturated at its operating vds"
+    }
+  ]
+}

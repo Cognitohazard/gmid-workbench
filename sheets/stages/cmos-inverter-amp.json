@@ -1,0 +1,212 @@
+{
+  "title": "CMOS inverter amplifier",
+  "description": "A CMOS inverter used as an analog amplifier: the input drives both an NMOS and a PMOS gate, and the two devices share one drain current stacked between the rails (current reuse). Because both transconductances act on the same input, the stage transconductance is the sum gm_tot = n_gm + p_gm, so the inverter gives roughly twice the gm of a single device at the same current - the reason it is the workhorse gain cell for low-voltage, power-efficient design. The gain is gm_tot/(n_gds + p_gds). Both devices are composed children biased at the same current; pick the PMOS child table to the p polarity and set p_sign to -1 for a signed-PMOS axis.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.3,
+      "max": 1.5,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level; sets both devices' drain-source voltages (ideally near mid-supply)"
+    },
+    { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
+    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 15e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "cdd_est",
+      "value": 0.2e-12,
+      "unit": "F",
+      "role": "spec",
+      "note": "output-node parasitic estimate (both drains + wiring); refine from extraction"
+    },
+    {
+      "name": "I_bias",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "the single current both devices carry (current reuse)"
+    },
+    {
+      "name": "gm_id_n",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "NMOS inversion"
+    },
+    {
+      "name": "gm_id_p",
+      "value": 10,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "PMOS inversion; match the two gm/ID for a balanced transfer and lowest offset"
+    },
+    {
+      "name": "L_n",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "L_p",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "p_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign convention of the PMOS table: +1 for an N-style axis, -1 for a signed-PMOS axis"
+    }
+  ],
+  "uses": [
+    {
+      "name": "n",
+      "doc": {
+        "title": "NMOS device",
+        "description": "The pull-down device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, current, and channel-noise density.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_d", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_d", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_d", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_d",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat", "id", "vnth_m"]
+      },
+      "params": {
+        "I_d": "I_bias",
+        "L_d": "L_n",
+        "gm_id_d": "gm_id_n",
+        "vds_d": "V_out"
+      }
+    },
+    {
+      "name": "p",
+      "doc": {
+        "title": "PMOS device",
+        "description": "The pull-up device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, and current.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_d", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_d", "value": 10, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vds_d",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "source-to-drain headroom, signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_d",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "I_d": "I_bias",
+        "L_d": "L_p",
+        "gm_id_d": "gm_id_p",
+        "vds_d": "p_sign*(VDD - V_out)"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "gm_tot",
+      "expr": "n__gm + p__gm",
+      "unit": "S",
+      "note": "current reuse: both devices' transconductances act on the same input and add"
+    },
+    {
+      "name": "gout",
+      "expr": "n__gds + p__gds",
+      "unit": "S",
+      "note": "both output conductances load the node"
+    },
+    {
+      "name": "Av",
+      "expr": "gm_tot/gout",
+      "unit": "V/V",
+      "note": "combined transconductance into the combined output conductance"
+    },
+    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    { "name": "GBW", "expr": "gm_tot/(2*pi*Cout)", "unit": "Hz" },
+    {
+      "name": "vn_in",
+      "expr": "n__vnth_m*sqrt(n__gm/gm_tot)",
+      "unit": "V/sqrt(Hz)",
+      "note": "both channel-noise currents (4kTgamma*gm each) sum and refer to the input by gm_tot, giving sqrt(4kTgamma/gm_tot)"
+    }
+  ],
+  "rules": [
+    {
+      "id": "n-sat",
+      "kind": "invariant",
+      "lhs": "V_out",
+      "op": ">=",
+      "rhs": "n__vdsat",
+      "note": "NMOS saturated at the output DC level"
+    },
+    {
+      "id": "p-sat",
+      "kind": "invariant",
+      "lhs": "VDD - V_out",
+      "op": ">=",
+      "rhs": "p__vdsat",
+      "note": "PMOS saturated: its headroom is the supply minus the output level"
+    },
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "gbw-margin",
+      "kind": "guardrail",
+      "lhs": "GBW",
+      "op": ">=",
+      "rhs": "GBW_target",
+      "note": "combined gm over the total output capacitance"
+    }
+  ]
+}

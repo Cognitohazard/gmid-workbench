@@ -1,0 +1,165 @@
+{
+  "title": "Sampling switch",
+  "description": "An NMOS sampling switch sized by its on-resistance. The device is bound width-first at a small drain-source voltage vds_test (deep triode), with W_sw the geometry knob and gm_id_on the inversion knob. In the on state the gate sits at VDD and the source near ground, so the switch runs at vgs = VDD; gm_id_on is retuned until the reported vgs equals that gate drive, checked by the gate-drive-consistent guardrail. From the sized device the sheet reports the on-resistance Ron = vds_test/id, the RC sampling bandwidth into the sample capacitor C_s, the sampled kT/C noise, and a worst-case charge-injection voltage step. The charge-injection figure is estimate-grade: it assumes half the inversion charge dumps onto C_s, which depends on switching speed and source impedance a lookup table cannot capture.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "VDD",
+      "value": 1.8,
+      "unit": "V",
+      "role": "spec",
+      "note": "gate drive in the on state"
+    },
+    { "name": "C_s", "value": 1e-12, "unit": "F", "role": "spec", "note": "sample capacitor" },
+    {
+      "name": "Ron_target",
+      "value": 2e3,
+      "unit": "ohm",
+      "role": "spec",
+      "note": "on-resistance budget"
+    },
+    {
+      "name": "BW_target",
+      "value": 100e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "sampling bandwidth budget"
+    },
+    {
+      "name": "vn_target",
+      "value": 100e-6,
+      "unit": "V",
+      "role": "spec",
+      "note": "sampled kT/C noise budget, RMS"
+    },
+    {
+      "name": "dv_inj_target",
+      "value": 5e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "charge-injection voltage-step budget (estimate-grade)"
+    },
+    {
+      "name": "W_sw",
+      "value": 10e-6,
+      "min": 1e-6,
+      "max": 200e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "switch width: wider lowers Ron but raises cgg (more charge injection and clock feedthrough)"
+    },
+    {
+      "name": "gm_id_on",
+      "value": 3.5,
+      "min": 2.5,
+      "max": 8,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "on-state inversion knob; retune until the reported vgs equals VDD (gate-drive-consistent guardrail)"
+    },
+    {
+      "name": "vds_test",
+      "value": 0.05,
+      "unit": "V",
+      "role": "spec",
+      "note": "small drain-source probe voltage for the triode on-resistance"
+    },
+    {
+      "name": "L",
+      "value": 0.18e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "minimum L for the lowest Ron and least channel charge"
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "W": "W_sw",
+    "gm_id": "gm_id_on",
+    "vds": "vds_test"
+  },
+  "rows": [
+    {
+      "name": "Ron",
+      "expr": "vds_test/id",
+      "unit": "ohm",
+      "note": "triode on-resistance, the small-signal probe voltage over the drain current"
+    },
+    {
+      "name": "BW",
+      "expr": "1/(2*pi*Ron*C_s)",
+      "unit": "Hz",
+      "note": "single-pole RC sampling bandwidth into C_s"
+    },
+    {
+      "name": "vn_kTC",
+      "expr": "sqrt(k*T/C_s)",
+      "unit": "V",
+      "note": "sampled kT/C noise, RMS; set by C_s alone, independent of the switch"
+    },
+    {
+      "name": "q_inj",
+      "expr": "cgg*(vgs - vth)/2",
+      "unit": "C",
+      "note": "estimate: half the inversion channel charge cgg*(vgs - vth) dumped by the switch"
+    },
+    {
+      "name": "dv_inj",
+      "expr": "q_inj/C_s",
+      "unit": "V",
+      "note": "estimate: the sampled voltage step from that charge; true value depends on switching speed and source impedance"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_on",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "ron-spec",
+      "kind": "requirement",
+      "lhs": "Ron",
+      "op": "<=",
+      "rhs": "Ron_target",
+      "note": "on-resistance must meet the budget"
+    },
+    {
+      "id": "bw-spec",
+      "kind": "requirement",
+      "lhs": "BW",
+      "op": ">=",
+      "rhs": "BW_target",
+      "note": "the RC settling bandwidth must clear the sampling rate"
+    },
+    {
+      "id": "noise-spec",
+      "kind": "requirement",
+      "lhs": "vn_kTC",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "sampled kT/C noise must meet the budget (raise C_s to lower it)"
+    },
+    {
+      "id": "gate-drive-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(vgs - VDD)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the on-state runs at vgs = VDD; retune gm_id_on until the reported vgs matches the gate drive"
+    },
+    {
+      "id": "charge-injection",
+      "kind": "guardrail",
+      "lhs": "dv_inj",
+      "op": "<=",
+      "rhs": "dv_inj_target",
+      "note": "estimate-grade charge-injection step; a narrower switch or dummy/bottom-plate sampling reduces it"
+    }
+  ]
+}

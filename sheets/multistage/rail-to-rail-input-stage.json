@@ -1,0 +1,228 @@
+{
+  "title": "Rail-to-rail input stage",
+  "description": "A complementary (concurrent) input stage: an NMOS differential pair and a PMOS differential pair in parallel, so their transconductances sum and the input common-mode range spans rail to rail. The NMOS pair conducts near the top rail, the PMOS pair near the bottom rail, and both conduct in the middle. That middle overlap is the well-known weakness: the total gm nearly doubles where both pairs are on, so the loop gain and bandwidth swing across the common-mode range. The rows expose gm in the three CM regions and the gm-variation ratio; constant-gm control (current switching that holds gm_n + gm_p constant) is the standard fix and is a simulation-level technique out of this sheet's scope. The ICMR rows show the overlap window. On the demo NMOS table both pairs size against the same data, so the PMOS sign param stays at +1.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "gm_ratio_target",
+      "value": 2.5,
+      "unit": "1",
+      "role": "spec",
+      "note": "acceptable gm_max/gm_min across the CM range without constant-gm control; true constant-gm control targets ~1.0 and is sim-level"
+    },
+    {
+      "name": "I_n",
+      "value": 20e-6,
+      "min": 4e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "NMOS-pair tail current"
+    },
+    {
+      "name": "I_p",
+      "value": 20e-6,
+      "min": 4e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "PMOS-pair tail current"
+    },
+    {
+      "name": "gm_id_n",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "NMOS-pair inversion"
+    },
+    {
+      "name": "gm_id_p",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "PMOS-pair inversion"
+    },
+    { "name": "L_n", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    { "name": "L_p", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "vds_n",
+      "value": 0.6,
+      "min": 0.15,
+      "max": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "NMOS input-device drain-source at the folding/summing node"
+    },
+    {
+      "name": "vds_p",
+      "value": 0.6,
+      "min": 0.15,
+      "max": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "PMOS input-device drain-source magnitude at the folding/summing node"
+    },
+    {
+      "name": "Vtail_n",
+      "value": 0.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "NMOS tail saturation headroom (sets the low edge of the NMOS-pair CM range)"
+    },
+    {
+      "name": "Vtail_p",
+      "value": 0.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "PMOS tail saturation headroom (sets the high edge of the PMOS-pair CM range)"
+    },
+    {
+      "name": "p_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign of the PMOS-pair table: +1 for the N-style demo axis, -1 for a signed-PMOS axis"
+    }
+  ],
+  "uses": [
+    {
+      "name": "n",
+      "doc": {
+        "title": "NMOS input pair device",
+        "description": "Half-circuit NMOS input device at half its tail current; conducts toward the top rail. Its vgs and the NMOS tail headroom set the low edge of its common-mode range.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "vgs", "vth", "vdsat"]
+      },
+      "params": { "Ix": "I_n/2", "Lx": "L_n", "gx": "gm_id_n", "vx": "vds_n" }
+    },
+    {
+      "name": "p",
+      "doc": {
+        "title": "PMOS input pair device",
+        "description": "Half-circuit PMOS input device at half its tail current; conducts toward the bottom rail. Its vgs and the PMOS tail headroom set the high edge of its common-mode range.",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "vgs", "vth", "vdsat"]
+      },
+      "params": { "Ix": "I_p/2", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*vds_p" }
+    }
+  ],
+  "rows": [
+    {
+      "name": "gm_n",
+      "expr": "n__gm",
+      "unit": "S",
+      "note": "N-only region (high common mode): only the NMOS pair conducts"
+    },
+    {
+      "name": "gm_p",
+      "expr": "p__gm",
+      "unit": "S",
+      "note": "P-only region (low common mode): only the PMOS pair conducts"
+    },
+    {
+      "name": "gm_mid",
+      "expr": "n__gm + p__gm",
+      "unit": "S",
+      "note": "both-on region (mid common mode): the two pairs' transconductances add — the total the stage delivers where the ranges overlap"
+    },
+    {
+      "name": "gm_max",
+      "expr": "max(gm_n, gm_p, gm_mid)",
+      "unit": "S",
+      "note": "largest gm over the CM range (the both-on total)"
+    },
+    {
+      "name": "gm_min",
+      "expr": "min(gm_n, gm_p)",
+      "unit": "S",
+      "note": "smallest gm over the CM range (whichever single pair is weaker)"
+    },
+    {
+      "name": "gm_ratio",
+      "expr": "gm_max/gm_min",
+      "unit": "1",
+      "note": "the gm variation across the common-mode range: ~2 for matched pairs, which constant-gm control drives toward 1"
+    },
+    {
+      "name": "cm_n_min",
+      "expr": "n__vgs + Vtail_n",
+      "unit": "V",
+      "note": "lowest common mode that keeps the NMOS pair (and its tail) active"
+    },
+    {
+      "name": "cm_p_max",
+      "expr": "VDD - abs(p__vgs) - Vtail_p",
+      "unit": "V",
+      "note": "highest common mode that keeps the PMOS pair (and its tail) active"
+    },
+    {
+      "name": "overlap",
+      "expr": "cm_p_max - cm_n_min",
+      "unit": "V",
+      "note": "width of the both-on window; positive means the NMOS and PMOS active ranges overlap for continuous rail-to-rail operation"
+    }
+  ],
+  "rules": [
+    {
+      "id": "no-dead-zone",
+      "kind": "invariant",
+      "lhs": "cm_p_max",
+      "op": ">=",
+      "rhs": "cm_n_min",
+      "note": "the NMOS and PMOS active common-mode ranges must overlap (no dead zone) for continuous rail-to-rail operation"
+    },
+    {
+      "id": "gm-flatness",
+      "kind": "guardrail",
+      "lhs": "gm_ratio",
+      "op": "<=",
+      "rhs": "gm_ratio_target",
+      "note": "the total transconductance swings by this ratio across the CM range; constant-gm control (current switching to hold gm_n + gm_p constant) is the standard fix and is a simulation-level technique out of scope here"
+    }
+  ]
+}

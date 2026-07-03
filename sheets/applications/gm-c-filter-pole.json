@@ -1,0 +1,193 @@
+{
+  "title": "Gm-C filter pole",
+  "description": "One transconductor-capacitor integrator pole, f_c = gm/(2*pi*C_int), sized from the cutoff spec. gm is pinned from f_c into the integrating cap with an over-design factor; gm/ID is the efficiency knob. The transconductor's V* is reported as a small-signal linear-range proxy, the integrated input noise (thermal floor plus a 1/f tail) is checked against a budget, and the resulting dynamic range is estimated. Assumes a single dominant pole and a simple differential transconductor; the true large-signal linearity depends on the Gm cell topology and is sim-owned. Feeds a downstream filter sheet that cascades these poles.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "f_c",
+      "value": 1e7,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "integrator cutoff frequency"
+    },
+    {
+      "name": "C_int",
+      "value": 2e-12,
+      "unit": "F",
+      "role": "spec",
+      "note": "integrating capacitor"
+    },
+    {
+      "name": "od_factor",
+      "value": 0.2,
+      "min": 0,
+      "max": 1,
+      "unit": "1",
+      "role": "choice",
+      "note": "over-design factor on gm for parasitic pole loading and PVT"
+    },
+    {
+      "name": "gm_id",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "transconductor inversion knob"
+    },
+    {
+      "name": "L",
+      "value": 5e-7,
+      "min": 1.8e-7,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vds",
+      "value": 0.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "transconductor drain bias, signed to the table axis"
+    },
+    {
+      "name": "vstar_floor",
+      "value": 0.1,
+      "unit": "V",
+      "role": "spec",
+      "note": "saturation-headroom floor"
+    },
+    {
+      "name": "fco_est",
+      "value": 5e4,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "flicker corner estimate; read fco from the table when it carries noise PSDs"
+    },
+    {
+      "name": "f_lo",
+      "value": 1,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "noise integration band, low edge"
+    },
+    {
+      "name": "f_hi",
+      "value": 1e7,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "noise integration band, high edge (typically the passband edge)"
+    },
+    {
+      "name": "vn_target",
+      "value": 5e-5,
+      "unit": "V",
+      "role": "spec",
+      "note": "integrated input-referred noise, RMS"
+    },
+    {
+      "name": "V_sig_pk",
+      "value": 0.3,
+      "unit": "V",
+      "role": "spec",
+      "note": "peak input signal amplitude for the dynamic-range estimate"
+    },
+    {
+      "name": "DR_target",
+      "value": 60,
+      "unit": "dB",
+      "role": "spec",
+      "note": "dynamic-range target"
+    },
+    {
+      "name": "ft_margin",
+      "value": 5,
+      "min": 2,
+      "max": 20,
+      "unit": "1",
+      "role": "spec",
+      "note": "how many times faster than f_c the transconductor must be"
+    }
+  ],
+  "bind": { "L": "L", "gm": "2*pi*f_c*C_int*(1 + od_factor)", "gm_id": "gm_id", "vds": "vds" },
+  "rows": [
+    {
+      "name": "V_lin",
+      "expr": "vstar",
+      "unit": "V",
+      "note": "V* as a small-signal linear-range proxy; true linearity is topology-dependent, estimate"
+    },
+    {
+      "name": "vn_dens",
+      "expr": "vnth_m",
+      "unit": "V/sqrt(Hz)",
+      "note": "input-referred thermal density (gamma-model)"
+    },
+    {
+      "name": "vn_int",
+      "expr": "noise_rms(vnth_m^2, fco_est, f_lo, f_hi)",
+      "unit": "V",
+      "note": "integrated input noise over the band: thermal floor plus a 1/f tail with corner fco_est"
+    },
+    {
+      "name": "V_sig_rms",
+      "expr": "V_sig_pk/sqrt(2)",
+      "unit": "V",
+      "note": "RMS of the peak sinusoid"
+    },
+    {
+      "name": "DR_dB",
+      "expr": "20*log10(V_sig_rms/vn_int)",
+      "unit": "dB",
+      "note": "dynamic range: max signal over integrated noise; estimate, sim confirms with distortion"
+    },
+    {
+      "name": "ft_dev",
+      "expr": "gm/(2*pi*cgg)",
+      "unit": "Hz",
+      "note": "transconductor transit frequency from its own gate cap"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "headroom",
+      "kind": "invariant",
+      "lhs": "vstar",
+      "op": ">=",
+      "rhs": "vstar_floor",
+      "note": "transconductor stays in saturation with headroom"
+    },
+    {
+      "id": "noise-spec",
+      "kind": "requirement",
+      "lhs": "vn_int",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "integrated input noise under budget"
+    },
+    {
+      "id": "dynamic-range",
+      "kind": "guardrail",
+      "lhs": "DR_dB",
+      "op": ">=",
+      "rhs": "DR_target",
+      "note": "estimate-grade: uses V* as the linearity proxy; distortion sign-off is sim-owned"
+    },
+    {
+      "id": "device-fast-enough",
+      "kind": "guardrail",
+      "lhs": "ft_dev",
+      "op": ">=",
+      "rhs": "ft_margin*f_c",
+      "note": "the transconductor's fT must clear the pole it sets with margin; estimate-grade"
+    }
+  ]
+}

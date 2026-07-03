@@ -1,0 +1,131 @@
+{
+  "title": "Source follower",
+  "description": "A source follower (common-drain buffer): the drain sits at VDD, the source drives the load, and the output tracks the input one gate-source drop below it. The voltage gain Av = gm/(gm + gds + 1/R_L) is just under unity and the output resistance is about 1/gm, so this stage buffers a high-impedance node into a resistive load R_L without voltage gain. The DC level shift is one vgs: V_out = V_in - vgs. vgs is not known before sizing, so vgs_est places the operating point and the level-shift-consistent guardrail checks it against the reported vgs; retune vgs_est until green. The body is assumed tied to the source (vsb = 0), so no body effect appears and gmb - which is not on every table - is deliberately omitted.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_in",
+      "value": 1.2,
+      "min": 0.6,
+      "max": 1.7,
+      "unit": "V",
+      "role": "spec",
+      "note": "input DC level; the output sits one vgs below it"
+    },
+    {
+      "name": "R_L",
+      "value": 100e3,
+      "unit": "ohm",
+      "role": "spec",
+      "note": "load resistance at the source; may be large (a light load approaches Av -> gm/(gm+gds))"
+    },
+    {
+      "name": "Av_target",
+      "value": 0.85,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "buffer gain target, below unity"
+    },
+    {
+      "name": "vn_target",
+      "value": 30e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "I_bias",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "bias current the follower carries"
+    },
+    {
+      "name": "gm_id",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "higher gm/ID raises gm (gain closer to 1, lower Rout) at the cost of headroom"
+    },
+    {
+      "name": "L",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vgs_est",
+      "value": 0.57,
+      "unit": "V",
+      "role": "choice",
+      "note": "estimate of the follower vgs, used to place the drain-source bias VDD - V_out; retune until the level-shift-consistent guardrail is green"
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "id": "I_bias",
+    "gm_id": "gm_id",
+    "vds": "VDD - V_in + vgs_est"
+  },
+  "rows": [
+    {
+      "name": "V_out",
+      "expr": "V_in - vgs",
+      "unit": "V",
+      "note": "the DC level shift: the output is one gate-source drop below the input"
+    },
+    {
+      "name": "Av",
+      "expr": "gm/(gm + gds + 1/R_L)",
+      "unit": "V/V",
+      "note": "follower gain, below unity; gmb is omitted (body tied to source)"
+    },
+    {
+      "name": "Rout",
+      "expr": "1/(gm + gds + 1/R_L)",
+      "unit": "ohm",
+      "note": "output resistance, about 1/gm for a light load"
+    },
+    {
+      "name": "vn_in",
+      "expr": "vnth_m",
+      "unit": "V/sqrt(Hz)",
+      "note": "input-referred channel thermal density; the near-unity gain passes it through with little change"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "headroom",
+      "kind": "invariant",
+      "lhs": "VDD - V_out",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "device saturated: the drain-to-source voltage is VDD minus the source (output) level"
+    },
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "level-shift-consistent",
+      "kind": "guardrail",
+      "lhs": "abs(vgs - vgs_est)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the biasing vgs_est should match the reported vgs; retune it if this trips"
+    }
+  ]
+}

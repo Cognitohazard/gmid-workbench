@@ -1,0 +1,125 @@
+{
+  "title": "Source-degenerated CS amp",
+  "description": "A common-source stage with a source-degeneration resistor R_s. The degeneration lowers the effective transconductance to Gm = gm/(1 + gm*R_s) and raises the device output resistance by the same factor, so into an ideal load the intrinsic gain is unchanged; the payoff is linearity, since the stage transconductance is set by the (linear) resistor rather than the (nonlinear) device gm. The cost is R_s's own 4kT*R_s thermal noise, added directly at the input. The device source sits I_bias*R_s above ground, so the bind declares vsb = I_bias*R_s (body grounded); on a table without a vsb axis this is advisory and the body effect gmb is omitted. Sweep R_s to trade gain and noise against linearity.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    {
+      "name": "V_out",
+      "value": 0.9,
+      "min": 0.2,
+      "max": 1.6,
+      "unit": "V",
+      "role": "spec",
+      "note": "drain DC level; the device vds is this minus the degenerated source level"
+    },
+    {
+      "name": "R_load",
+      "value": 100e3,
+      "unit": "ohm",
+      "role": "spec",
+      "note": "load resistance presented to the stage output"
+    },
+    { "name": "Av_target", "value": 8, "unit": "V/V", "role": "spec" },
+    {
+      "name": "vn_target",
+      "value": 30e-9,
+      "unit": "V/sqrt(Hz)",
+      "role": "spec",
+      "note": "input-referred thermal density budget"
+    },
+    {
+      "name": "I_bias",
+      "value": 20e-6,
+      "min": 2e-6,
+      "max": 200e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "branch current budget"
+    },
+    {
+      "name": "gm_id",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice"
+    },
+    {
+      "name": "L",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "R_s",
+      "value": 2e3,
+      "min": 100,
+      "max": 50e3,
+      "unit": "ohm",
+      "role": "choice",
+      "note": "degeneration resistor: larger R_s linearizes the stage (Gm -> 1/R_s) but lowers gain and adds 4kT*R_s noise"
+    }
+  ],
+  "bind": {
+    "L": "L",
+    "id": "I_bias",
+    "gm_id": "gm_id",
+    "vds": "V_out - I_bias*R_s",
+    "vsb": "I_bias*R_s"
+  },
+  "rows": [
+    {
+      "name": "Gm",
+      "expr": "gm/(1 + gm*R_s)",
+      "unit": "S",
+      "note": "degenerated transconductance; approaches 1/R_s (resistor-set, linear) for gm*R_s >> 1"
+    },
+    {
+      "name": "loop",
+      "expr": "1 + gm*R_s",
+      "unit": "1",
+      "note": "degeneration factor: how far gm is traded for linearity and raised output resistance"
+    },
+    {
+      "name": "Rout_dev",
+      "expr": "(1/gds)*loop + R_s",
+      "unit": "ohm",
+      "note": "degeneration boosts the device output resistance by the same factor Gm is lowered"
+    },
+    {
+      "name": "Av",
+      "expr": "Gm*par(R_load, Rout_dev)",
+      "unit": "V/V",
+      "note": "degenerated transconductance into the load; into an ideal load Av -> gm/gds (gain preserved, linearity gained)"
+    },
+    {
+      "name": "vn_in",
+      "expr": "sqrt(vnth_m^2 + 4*k*T*R_s)",
+      "unit": "V/sqrt(Hz)",
+      "note": "channel noise is unchanged input-referred; the degeneration resistor adds 4kT*R_s directly at the input"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "headroom",
+      "kind": "invariant",
+      "lhs": "V_out - I_bias*R_s",
+      "op": ">=",
+      "rhs": "vdsat",
+      "note": "device saturated: the drain-to-source voltage is the drain level minus the I*R_s source lift"
+    },
+    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" }
+  ]
+}

@@ -1,0 +1,187 @@
+{
+  "title": "SC settling to OTA spec",
+  "description": "The classic switched-capacitor settling flow (Murmann): it turns a settling-time and error budget into the open-loop OTA requirements a downstream amplifier sheet must meet, then sizes one input device so the flow ends in silicon. The dynamic settling error sets the number of time constants; the clock period (half of it available for settling) sets the maximum closed-loop time constant; from those come the required unity-gain frequency GBW_req, the required DC gain A_req (from the static error), and the required slew rate SR_req (from the large-signal step). GBW_req, A_req, and SR_req are surfaced as rows for a downstream OTA sheet to adopt as its GBW_target, Av_target, and SR_target. Assumes a single-pole closed loop and a feedback factor beta (typically Cf/(Cs+Cf)); the slew/linear-settling boundary and phase margin are sim-owned.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "T_s",
+      "value": 2e-8,
+      "unit": "s",
+      "role": "spec",
+      "note": "full clock period; only half is available for settling (the other half samples)"
+    },
+    {
+      "name": "eps_s",
+      "value": 1e-3,
+      "unit": "1",
+      "role": "spec",
+      "note": "static settling error: 1/(loop gain), sets the required DC gain"
+    },
+    {
+      "name": "eps_d",
+      "value": 1e-3,
+      "unit": "1",
+      "role": "spec",
+      "note": "dynamic settling error: the residue after linear settling, sets the number of time constants"
+    },
+    {
+      "name": "beta",
+      "value": 0.5,
+      "unit": "1",
+      "role": "spec",
+      "note": "feedback factor; typically Cf/(Cs+Cf) for an SC gain stage"
+    },
+    { "name": "Cs", "value": 2e-12, "unit": "F", "role": "spec", "note": "sampling cap" },
+    { "name": "Cf", "value": 5e-13, "unit": "F", "role": "spec", "note": "feedback cap" },
+    { "name": "CL", "value": 1e-12, "unit": "F", "role": "spec", "note": "explicit load cap" },
+    {
+      "name": "V_step",
+      "value": 0.5,
+      "unit": "V",
+      "role": "spec",
+      "note": "output large-signal step, sets the slew requirement"
+    },
+    {
+      "name": "t_slew_frac",
+      "value": 0.3,
+      "min": 0.05,
+      "max": 0.9,
+      "unit": "1",
+      "role": "choice",
+      "note": "fraction of the half-period allotted to slewing before linear settling begins"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion knob: high = efficient/slow, low = fast/thirsty"
+    },
+    {
+      "name": "L_in",
+      "value": 5e-7,
+      "min": 1.8e-7,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "vds_in",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "input device drain bias (the output DC level), signed to the table axis"
+    },
+    {
+      "name": "ft_margin",
+      "value": 5,
+      "min": 2,
+      "max": 20,
+      "unit": "1",
+      "role": "spec",
+      "note": "how many times faster than GBW_req the sized device must be"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "SC input device",
+        "description": "One input device sized so the OTA's open-loop unity-gain frequency equals GBW_req into the effective load. gm is pinned from the settling flow; gm/ID is the efficiency knob.",
+        "polarity": "n",
+        "params": [
+          { "name": "GBW_c", "value": 1e8, "unit": "Hz", "role": "spec" },
+          { "name": "CLeff_c", "value": 1.4e-12, "unit": "F", "role": "spec" },
+          { "name": "gm_id_c", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "L_c", "value": 5e-7, "unit": "m", "role": "choice" },
+          { "name": "vds_c", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "L_c", "gm": "2*pi*GBW_c*CLeff_c", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_c",
+            "op": "<=",
+            "rhs": "ceiling",
+            "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+          }
+        ],
+        "provide": ["gm", "gm_id", "vstar", "W", "cgg"]
+      },
+      "params": {
+        "GBW_c": "1/(2*pi*beta*(T_s/(2*log(1/eps_d))))",
+        "CLeff_c": "CL + par(Cs, Cf)",
+        "gm_id_c": "gm_id_in",
+        "L_c": "L_in",
+        "vds_c": "vds_in"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "name": "N_tau",
+      "expr": "log(1/eps_d)",
+      "unit": "1",
+      "note": "time constants of linear settling to the dynamic error eps_d"
+    },
+    {
+      "name": "tau_max",
+      "expr": "T_s/(2*N_tau)",
+      "unit": "s",
+      "note": "max closed-loop time constant: half the clock period divided by N_tau"
+    },
+    {
+      "name": "GBW_req",
+      "expr": "1/(2*pi*beta*tau_max)",
+      "unit": "Hz",
+      "note": "required open-loop unity-gain frequency; single-pole closed-loop tau = 1/(2*pi*beta*GBW)"
+    },
+    {
+      "name": "A_req",
+      "expr": "1/(beta*eps_s)",
+      "unit": "V/V",
+      "note": "required open-loop DC gain: loop gain beta*A_req = 1/eps_s"
+    },
+    {
+      "name": "CL_eff",
+      "expr": "CL + par(Cs, Cf)",
+      "unit": "F",
+      "note": "effective output load during amplification: CL plus the series Cs-Cf combination"
+    },
+    {
+      "name": "SR_req",
+      "expr": "V_step/(t_slew_frac*T_s/2)",
+      "unit": "V/s",
+      "note": "required slew rate: the output step completed within the slewing portion of the half-period; estimate, the slew/linear boundary is sim-owned"
+    },
+    {
+      "name": "dev_gm_id",
+      "expr": "in__gm_id",
+      "unit": "1/V",
+      "note": "sized input-device inversion"
+    },
+    { "name": "dev_vstar", "expr": "in__vstar", "unit": "V", "note": "sized input-device V*" },
+    { "name": "dev_W", "expr": "in__W", "unit": "m", "note": "sized input-device width" },
+    {
+      "name": "ft_in",
+      "expr": "in__gm/(2*pi*in__cgg)",
+      "unit": "Hz",
+      "note": "sized device transit frequency from its own gate cap"
+    }
+  ],
+  "rules": [
+    {
+      "id": "device-fast-enough",
+      "kind": "guardrail",
+      "lhs": "ft_in",
+      "op": ">=",
+      "rhs": "ft_margin*GBW_req",
+      "note": "the sized device's fT must clear GBW_req with margin; a real derived check (the pinned gm hid the gate cap), estimate-grade, sim signs off"
+    }
+  ],
+  "provide": ["GBW_req", "A_req", "SR_req", "CL_eff"]
+}

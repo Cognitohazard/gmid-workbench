@@ -1,0 +1,155 @@
+{
+  "title": "Track & hold budget",
+  "description": "A track-and-hold front end sized from its two hard limits: the kT/C sampled-noise floor sets the sampling capacitor, and the sampling switch sets the tracking bandwidth. The cap comes first (C_s >= kT/vn^2), then one NMOS switch is bound width-first at a small test vds so its on-resistance follows from the reported current; the switch is driven at the supply, so retune the gm/ID knob until the reported vgs equals VDD (the consistency guardrail checks it). Tracking settles as tau = Ron*C_s and must resolve to the sampling accuracy within the track phase. Charge injection is an estimate from the channel charge dumped onto C_s. Assumes a simple NMOS switch to ground; a bootstrapped or complementary switch and the real clock edge are sim-owned.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "vn_kTC_target",
+      "value": 7e-5,
+      "unit": "V",
+      "role": "spec",
+      "note": "sampled thermal-noise RMS budget; sets the kT/C floor on C_s"
+    },
+    {
+      "name": "C_s",
+      "value": 1e-12,
+      "min": 1e-13,
+      "max": 1e-11,
+      "unit": "F",
+      "role": "choice",
+      "note": "sampling capacitor; larger lowers kT/C noise but slows tracking"
+    },
+    {
+      "name": "VDD",
+      "value": 1.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "gate-drive rail for the switch"
+    },
+    {
+      "name": "vds_test",
+      "value": 0.05,
+      "unit": "V",
+      "role": "spec",
+      "note": "small drain bias for the on-resistance estimate (triode); signed to the table axis"
+    },
+    {
+      "name": "gm_id_on",
+      "value": 5,
+      "min": 3,
+      "max": 12,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "switch inversion knob; retune until reported vgs equals VDD (switch on hard)"
+    },
+    {
+      "name": "W_sw",
+      "value": 5e-6,
+      "min": 1e-6,
+      "max": 5e-5,
+      "unit": "m",
+      "role": "choice",
+      "note": "switch width; wider lowers Ron but injects more charge"
+    },
+    {
+      "name": "L",
+      "value": 1.8e-7,
+      "min": 1.8e-7,
+      "max": 1e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "minimum channel length for a fast switch"
+    },
+    {
+      "name": "eps_settle",
+      "value": 1e-3,
+      "unit": "1",
+      "role": "spec",
+      "note": "tracking settling accuracy; sets the number of time constants"
+    },
+    {
+      "name": "T_track",
+      "value": 5e-9,
+      "unit": "s",
+      "role": "spec",
+      "note": "time available in the track phase"
+    },
+    {
+      "name": "qinj_target",
+      "value": 5e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "charge-injection error budget on C_s"
+    }
+  ],
+  "bind": { "L": "L", "W": "W_sw", "gm_id": "gm_id_on", "vds": "vds_test" },
+  "rows": [
+    {
+      "name": "C_s_min",
+      "expr": "k*T/vn_kTC_target^2",
+      "unit": "F",
+      "note": "kT/C floor: the sampling cap that meets the sampled-noise budget"
+    },
+    {
+      "name": "Ron",
+      "expr": "vds_test/id",
+      "unit": "ohm",
+      "note": "on-resistance from the small-vds current; triode estimate, sim confirms the real bias"
+    },
+    { "name": "tau_track", "expr": "Ron*C_s", "unit": "s", "note": "tracking time constant" },
+    {
+      "name": "N_tau_req",
+      "expr": "log(1/eps_settle)",
+      "unit": "1",
+      "note": "time constants needed to settle to eps_settle"
+    },
+    {
+      "name": "dV_qinj",
+      "expr": "cgg*vstar/(2*C_s)",
+      "unit": "V",
+      "note": "charge-injection step: half the channel inversion charge (cgg*Vov, with Vov ~ V*) onto C_s; estimate, sim owns the clock edge"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_on",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "ktc-noise",
+      "kind": "requirement",
+      "lhs": "C_s",
+      "op": ">=",
+      "rhs": "C_s_min",
+      "note": "sampling cap meets the kT/C sampled-noise floor"
+    },
+    {
+      "id": "track-settling",
+      "kind": "requirement",
+      "lhs": "T_track",
+      "op": ">=",
+      "rhs": "N_tau_req*tau_track",
+      "note": "the RC of switch and cap must settle to eps_settle within the track phase"
+    },
+    {
+      "id": "switch-on",
+      "kind": "guardrail",
+      "lhs": "abs(vgs - VDD)",
+      "op": "<=",
+      "rhs": "0.05",
+      "note": "the switch is gate-driven at VDD; retune gm_id_on until the reported vgs matches"
+    },
+    {
+      "id": "charge-injection",
+      "kind": "guardrail",
+      "lhs": "dV_qinj",
+      "op": "<=",
+      "rhs": "qinj_target",
+      "note": "channel-charge dump onto C_s; estimate-grade, sim signs off with the real clock"
+    }
+  ]
+}

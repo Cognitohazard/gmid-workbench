@@ -1,0 +1,417 @@
+{
+  "title": "Fully differential telescopic OTA",
+  "description": "A fully differential telescopic-cascode OTA. Each side stacks a tail source, an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails; the cascodes boost the output resistance so a single stage reaches high gain. Av = gm_in * Rout, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's ro by its intrinsic gain (av0_cascn/gds_in); looking up, the PMOS cascode multiplies the load's ro (av0_cascp/gds_load). Those branch expressions are the standard cascode approximation (they drop second-order gmb and finite-cascode-gain terms). Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item I_cmfb added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Internal node levels are authored choice params with per-device saturation invariants. On the demo NMOS table every device sizes against the same data.",
+  "polarity": "n",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "Av_target", "value": 300, "unit": "V/V", "role": "spec" },
+    {
+      "name": "swing_target",
+      "value": 0.5,
+      "unit": "V",
+      "role": "spec",
+      "note": "required differential peak output swing"
+    },
+    {
+      "name": "v_margin",
+      "value": 0.3,
+      "unit": "V",
+      "role": "spec",
+      "note": "headroom beyond the four stacked cascode vdsat drops (tail saturation plus safety) folded into the swing estimate"
+    },
+    {
+      "name": "I_cmfb",
+      "value": 10e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "current the common-mode feedback network draws; the CMFB loop itself is out of scope (no loop solving here) — this is a supply-budget line item only"
+    },
+    {
+      "name": "I_tail",
+      "value": 40e-6,
+      "min": 8e-6,
+      "max": 400e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "total tail current (each side carries half)"
+    },
+    {
+      "name": "gm_id_in",
+      "value": 12,
+      "min": 6,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "input-pair inversion (sets gm_in and input noise)"
+    },
+    {
+      "name": "gm_id_cascn",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "NMOS cascode inversion"
+    },
+    {
+      "name": "gm_id_cascp",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "PMOS cascode inversion"
+    },
+    {
+      "name": "gm_id_load",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "PMOS load inversion"
+    },
+    {
+      "name": "gm_id_tail",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "tail source inversion"
+    },
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_cascn",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "L_cascp",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "L_load",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "L_tail",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice"
+    },
+    {
+      "name": "V_s",
+      "value": 0.32,
+      "min": 0.1,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "note": "tail node (input-pair source) DC level"
+    },
+    {
+      "name": "V_a",
+      "value": 0.55,
+      "min": 0.2,
+      "max": 1.0,
+      "unit": "V",
+      "role": "choice",
+      "note": "input-device drain / NMOS-cascode source node"
+    },
+    {
+      "name": "V_out",
+      "value": 0.95,
+      "min": 0.6,
+      "max": 1.2,
+      "unit": "V",
+      "role": "choice",
+      "note": "output common-mode DC level"
+    },
+    {
+      "name": "V_b",
+      "value": 1.3,
+      "min": 0.9,
+      "max": 1.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "PMOS-cascode source / load-drain node"
+    },
+    {
+      "name": "p_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign of the PMOS device tables: +1 N-style, -1 signed-PMOS"
+    }
+  ],
+  "uses": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input pair device",
+        "description": "Half-circuit input device at half the tail current; its gm sets the stage transconductance and its output conductance is the bottom of the down-looking cascode branch.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.23, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
+      },
+      "params": { "Ix": "I_tail/2", "Lx": "L_in", "gx": "gm_id_in", "vx": "V_a - V_s" }
+    },
+    {
+      "name": "cascn",
+      "doc": {
+        "title": "NMOS cascode device",
+        "description": "The NMOS cascode over the input device; its intrinsic gain multiplies the input device's output resistance (the down-looking branch of Rout).",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.4, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["av0", "gds", "vdsat"]
+      },
+      "params": { "Ix": "I_tail/2", "Lx": "L_cascn", "gx": "gm_id_cascn", "vx": "V_out - V_a" }
+    },
+    {
+      "name": "cascp",
+      "doc": {
+        "title": "PMOS cascode device",
+        "description": "The PMOS cascode under the load; its intrinsic gain multiplies the load's output resistance (the up-looking branch of Rout).",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.35,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["av0", "gds", "vdsat"]
+      },
+      "params": {
+        "Ix": "I_tail/2",
+        "Lx": "L_cascp",
+        "gx": "gm_id_cascp",
+        "vx": "p_sign*(V_b - V_out)"
+      }
+    },
+    {
+      "name": "load",
+      "doc": {
+        "title": "PMOS load device",
+        "description": "The PMOS load carrying the branch current; its output conductance is the top of the up-looking cascode branch.",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.5,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gds", "vdsat"]
+      },
+      "params": { "Ix": "I_tail/2", "Lx": "L_load", "gx": "gm_id_load", "vx": "p_sign*(VDD - V_b)" }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device carrying the full bias current; its saturation headroom sets the tail-node floor.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 40e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.32, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gds", "vdsat"]
+      },
+      "params": { "Ix": "I_tail", "Lx": "L_tail", "gx": "gm_id_tail", "vx": "V_s" }
+    }
+  ],
+  "rows": [
+    { "name": "gm_in", "expr": "in__gm", "unit": "S", "note": "input-pair transconductance" },
+    {
+      "name": "Rdown",
+      "expr": "cascn__av0/in__gds",
+      "unit": "ohm",
+      "note": "down-looking branch resistance: the input device ro boosted by the NMOS cascode intrinsic gain (cascode approximation)"
+    },
+    {
+      "name": "Rup",
+      "expr": "cascp__av0/load__gds",
+      "unit": "ohm",
+      "note": "up-looking branch resistance: the load ro boosted by the PMOS cascode intrinsic gain (cascode approximation)"
+    },
+    {
+      "name": "Rout",
+      "expr": "par(Rdown, Rup)",
+      "unit": "ohm",
+      "note": "single-side output resistance = the two cascode branches in parallel"
+    },
+    {
+      "name": "Av",
+      "expr": "gm_in*Rout",
+      "unit": "V/V",
+      "note": "telescopic single-stage gain gm_in * Rout"
+    },
+    {
+      "name": "swing_diff",
+      "expr": "2*(VDD - in__vdsat - cascn__vdsat - cascp__vdsat - load__vdsat - v_margin)",
+      "unit": "V",
+      "note": "differential output swing = twice the single-ended range left after the four stacked cascode vdsat drops and the tail/safety margin"
+    },
+    {
+      "name": "I_total",
+      "expr": "I_tail + I_cmfb",
+      "unit": "A",
+      "note": "total supply current including the CMFB network (the CMFB loop itself is out of scope)"
+    },
+    {
+      "name": "vn_in",
+      "expr": "in__vnth_m",
+      "unit": "V/sqrt(Hz)",
+      "note": "input-pair thermal noise density (the cascodes and loads add little when the input gm dominates)"
+    }
+  ],
+  "rules": [
+    {
+      "id": "gain-spec",
+      "kind": "requirement",
+      "lhs": "Av",
+      "op": ">=",
+      "rhs": "Av_target",
+      "note": "single-stage cascoded gain meets the target"
+    },
+    {
+      "id": "swing-spec",
+      "kind": "requirement",
+      "lhs": "swing_diff",
+      "op": ">=",
+      "rhs": "swing_target",
+      "note": "the differential output swing meets the target"
+    },
+    {
+      "id": "tail-sat",
+      "kind": "invariant",
+      "lhs": "V_s",
+      "op": ">=",
+      "rhs": "tail__vdsat",
+      "note": "tail source saturated at the tail-node level"
+    },
+    {
+      "id": "in-sat",
+      "kind": "invariant",
+      "lhs": "V_a - V_s",
+      "op": ">=",
+      "rhs": "in__vdsat",
+      "note": "input device saturated across its node drop"
+    },
+    {
+      "id": "cascn-sat",
+      "kind": "invariant",
+      "lhs": "V_out - V_a",
+      "op": ">=",
+      "rhs": "cascn__vdsat",
+      "note": "NMOS cascode saturated across its node drop"
+    },
+    {
+      "id": "cascp-sat",
+      "kind": "invariant",
+      "lhs": "V_b - V_out",
+      "op": ">=",
+      "rhs": "cascp__vdsat",
+      "note": "PMOS cascode saturated across its node drop"
+    },
+    {
+      "id": "load-sat",
+      "kind": "invariant",
+      "lhs": "VDD - V_b",
+      "op": ">=",
+      "rhs": "load__vdsat",
+      "note": "PMOS load saturated across its node drop"
+    }
+  ]
+}

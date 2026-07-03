@@ -1,0 +1,145 @@
+{
+  "title": "LDO (pass device + error amp)",
+  "description": "A low-dropout regulator sized around its pass device, with the error amplifier represented by its DC gain. The teaching point is the operating point: the dropout spec IS the pass device's vds, so the device is bound at the maximum load current with vds = V_dropout, and the dropout invariant just asks that it stays saturated there. The DC loop gain (A_ea*gm_pass*ro_pass) sets load regulation (dVout/dIload ~ 1/(A_ea*gm_pass)) and the low-frequency PSRR; both are estimates that sim signs off. Quiescent current is budgeted directly. Loop stability (phase margin, the output-pole/ESR-zero placement) is sim-only and not modeled here. Design the error amp itself with an OTA sheet to A_req = the loop-gain requirement.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "V_dropout",
+      "value": 0.2,
+      "unit": "V",
+      "role": "spec",
+      "note": "dropout voltage; this is the pass device's vds at max load, signed to the table axis"
+    },
+    {
+      "name": "I_load_max",
+      "value": 5e-3,
+      "unit": "A",
+      "role": "spec",
+      "note": "maximum load current the pass device carries"
+    },
+    {
+      "name": "gm_id_pass",
+      "value": 10,
+      "min": 5,
+      "max": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "pass-device inversion; higher gm/ID raises loop gain but costs dropout headroom"
+    },
+    {
+      "name": "L_pass",
+      "value": 5e-7,
+      "min": 1.8e-7,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "longer L raises pass-device ro and DC loop gain"
+    },
+    {
+      "name": "A_ea",
+      "value": 1000,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "error-amplifier DC gain; design it with an OTA sheet to the loop-gain requirement"
+    },
+    {
+      "name": "I_q_ea",
+      "value": 2e-5,
+      "min": 1e-6,
+      "max": 2e-4,
+      "unit": "A",
+      "role": "choice",
+      "note": "error-amplifier quiescent current"
+    },
+    {
+      "name": "I_q_budget",
+      "value": 5e-5,
+      "unit": "A",
+      "role": "spec",
+      "note": "total quiescent-current budget"
+    },
+    {
+      "name": "loadreg_target",
+      "value": 5e-2,
+      "unit": "ohm",
+      "role": "spec",
+      "note": "load-regulation budget dVout/dIload (output resistance seen by the load)"
+    },
+    {
+      "name": "A_loop_min",
+      "value": 1000,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "minimum DC loop gain for regulation accuracy"
+    }
+  ],
+  "bind": { "L": "L_pass", "id": "I_load_max", "gm_id": "gm_id_pass", "vds": "V_dropout" },
+  "rows": [
+    {
+      "name": "gm_pass",
+      "expr": "gm",
+      "unit": "S",
+      "note": "pass-device transconductance at max load"
+    },
+    {
+      "name": "A_loop",
+      "expr": "A_ea*gm/gds",
+      "unit": "V/V",
+      "note": "DC loop gain: error-amp gain times pass-device intrinsic gain (gm*ro)"
+    },
+    {
+      "name": "dVout_dI",
+      "expr": "1/(A_ea*gm_pass)",
+      "unit": "ohm",
+      "note": "load regulation: the closed-loop output resistance seen by the load; estimate, sim signs off"
+    },
+    {
+      "name": "PSRR_lf_dB",
+      "expr": "20*log10(A_loop)",
+      "unit": "dB",
+      "note": "low-frequency PSRR ~ the DC loop gain; estimate, sim signs off"
+    }
+  ],
+  "rules": [
+    {
+      "id": "feasible-inversion",
+      "kind": "invariant",
+      "lhs": "gm_id_pass",
+      "op": "<=",
+      "rhs": "ceiling",
+      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+    },
+    {
+      "id": "dropout",
+      "kind": "invariant",
+      "lhs": "vdsat",
+      "op": "<=",
+      "rhs": "V_dropout",
+      "note": "the pass device must stay saturated within the dropout voltage"
+    },
+    {
+      "id": "quiescent-budget",
+      "kind": "requirement",
+      "lhs": "I_q_ea",
+      "op": "<=",
+      "rhs": "I_q_budget",
+      "note": "error-amp quiescent current under the total budget"
+    },
+    {
+      "id": "load-regulation",
+      "kind": "guardrail",
+      "lhs": "dVout_dI",
+      "op": "<=",
+      "rhs": "loadreg_target",
+      "note": "estimate-grade; the true output impedance vs frequency and phase margin are sim-owned"
+    },
+    {
+      "id": "loop-gain",
+      "kind": "guardrail",
+      "lhs": "A_loop",
+      "op": ">=",
+      "rhs": "A_loop_min",
+      "note": "DC loop gain for regulation accuracy; estimate-grade"
+    }
+  ]
+}
