@@ -30,7 +30,9 @@ const N_SLOPE = 1.3; // subthreshold slope factor n (dimensionless)
 const COX = 0.01; // gate oxide capacitance per area [F/m^2]
 const VTH0 = 0.4; // nominal threshold [V]
 const ISPEC_REF = 1e-6; // specific-current scale [A] at the reference geometry W/L = 1
-const VA_PER_L = 5e6; // Early voltage slope: VA = VA_PER_L * L [V] (∝ L)
+// Early voltage slope: VA = VA_PER_L * L [V] (∝ L). Exported so golden tests derive
+// expected gds/gain from the one model constant instead of re-declaring the number.
+export const VA_PER_L = 5e6;
 // Flicker coefficient: input-referred 1/f PSD at 1 Hz is area-domain,
 // svfl = KFLICKER/(Cox·W·L) [V²/Hz], so the stored drain PSD is sfl = svfl·gm².
 // Tuned so the flicker corner fco = sfl/sth lands at a few tens of kHz on the
