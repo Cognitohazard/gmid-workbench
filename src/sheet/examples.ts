@@ -18,14 +18,32 @@ import type { SheetDoc } from './types';
  */
 const NMOS_GMID_SIZING: SheetDoc = {
   title: 'Single NMOS gm/ID sizing',
+  description:
+    'Sizes one NMOS for a bandwidth spec: gm is fixed from GBW into CL, gm/ID is the ' +
+    'efficiency knob, and ID/W fall out of the lookup. Change the spec params freely; ' +
+    'tune the choice params (gm/ID, L) and watch the headroom/noise trade.',
   polarity: 'n',
   params: [
-    { name: 'GBW_target', value: 10e6, unit: 'Hz' },
-    { name: 'CL', value: 2e-12, unit: 'F' },
-    { name: 'L', value: 0.5e-6, min: 0.18e-6, max: 2e-6, unit: 'm' },
-    { name: 'gm_id', value: 12, min: 6, max: 18, unit: '1/V' },
-    { name: 'vstar_floor', value: 0.2, unit: 'V' },
-    { name: 'vn_target', value: 20e-9, unit: 'V/sqrt(Hz)' },
+    { name: 'GBW_target', value: 10e6, unit: 'Hz', role: 'spec' },
+    { name: 'CL', value: 2e-12, unit: 'F', role: 'spec', note: 'load capacitance' },
+    { name: 'L', value: 0.5e-6, min: 0.18e-6, max: 2e-6, unit: 'm', role: 'choice' },
+    {
+      name: 'gm_id',
+      value: 12,
+      min: 6,
+      max: 18,
+      unit: '1/V',
+      role: 'choice',
+      note: 'inversion-level knob: high = efficient/slow, low = fast/thirsty',
+    },
+    {
+      name: 'vstar_floor',
+      value: 0.2,
+      unit: 'V',
+      role: 'spec',
+      note: 'saturation-headroom budget; default set so gm/ID = 12 lands just under it',
+    },
+    { name: 'vn_target', value: 20e-9, unit: 'V/sqrt(Hz)', role: 'spec' },
   ],
   // bind-any-2: gm from the spec, gm/ID the knob; ID is derived via gm = gm/ID · ID.
   bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' },
@@ -57,28 +75,60 @@ const NMOS_GMID_SIZING: SheetDoc = {
  */
 const NMOS_NOISE_MATCHING: SheetDoc = {
   title: 'NMOS noise & matching',
+  description:
+    'One device at a fixed current budget: raise gm/ID and the integrated input noise ' +
+    'falls (gm grows) while the saturation headroom shrinks — sweep gm/ID to see the ' +
+    'bounded feasible window. Pelgrom offset is set by the sized W·L area.',
   polarity: 'n',
   params: [
-    { name: 'I_bias', value: 10e-6, unit: 'A' }, // fixed current budget
-    { name: 'L', value: 0.5e-6, min: 0.18e-6, max: 2e-6, unit: 'm' },
-    { name: 'gm_id', value: 12, min: 6, max: 18, unit: '1/V' },
-    { name: 'f_lo', value: 1, unit: 'Hz' }, // integration band for total input noise
-    { name: 'f_hi', value: 1e6, unit: 'Hz' },
-    { name: 'avt', value: 5e-9, unit: 'V*m' }, // Pelgrom A_VT (≈ 5 mV·µm)
-    { name: 'abeta', value: 1e-8, unit: 'm' }, // Pelgrom A_β (≈ 1%·µm)
-    { name: 'vstar_floor', value: 0.12, unit: 'V' }, // saturation-headroom floor
-    { name: 'vn_target', value: 45e-6, unit: 'V' }, // integrated input-noise spec (RMS)
-    { name: 'vos_target', value: 15e-3, unit: 'V' }, // input offset spec (1σ)
+    { name: 'I_bias', value: 10e-6, unit: 'A', role: 'spec', note: 'fixed current budget' },
+    { name: 'L', value: 0.5e-6, min: 0.18e-6, max: 2e-6, unit: 'm', role: 'choice' },
+    { name: 'gm_id', value: 12, min: 6, max: 18, unit: '1/V', role: 'choice' },
+    { name: 'f_lo', value: 1, unit: 'Hz', role: 'spec', note: 'noise integration band, low edge' },
+    {
+      name: 'f_hi',
+      value: 1e6,
+      unit: 'Hz',
+      role: 'spec',
+      note: 'noise integration band, high edge',
+    },
+    {
+      name: 'avt',
+      value: 5e-9,
+      unit: 'V*m',
+      role: 'spec',
+      note: 'Pelgrom A_VT (~5 mV*um); from the PDK',
+    },
+    {
+      name: 'abeta',
+      value: 1e-8,
+      unit: 'm',
+      role: 'spec',
+      note: 'Pelgrom A_beta (~1%*um); from the PDK',
+    },
+    { name: 'vstar_floor', value: 0.12, unit: 'V', role: 'spec' },
+    {
+      name: 'vn_target',
+      value: 45e-6,
+      unit: 'V',
+      role: 'spec',
+      note: 'integrated input noise, RMS',
+    },
+    { name: 'vos_target', value: 15e-3, unit: 'V', role: 'spec', note: 'input offset, 1 sigma' },
   ],
   // bind-any-2: fix ID (budget) and gm/ID (knob); gm is derived via gm = gm/ID · ID.
   bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
   rows: [
-    // The stored noise PSDs are at the characterization width w0; refer them to the SIZED
-    // device by the width ratio (an input-referred PSD ∝ 1/W). fco is intensive (ratio cancels).
-    { name: 'svth_w', expr: 'svth*w0/W', unit: 'V^2/Hz' },
-    { name: 'svfl_w', expr: 'svfl*w0/W', unit: 'V^2/Hz' },
+    // The sizing reports every quantity at the SIZED width (svth/svfl included — the
+    // parallel-composition rescale is the sizer's job, not author math), so the stored
+    // input-referred PSDs are used directly. fco is intensive either way.
     // Integrated input-referred noise: thermal floor over the band + the 1/f tail (∫ 1/f = ln).
-    { name: 'vn_int', expr: 'sqrt(svth_w*(f_hi - f_lo) + svfl_w*log(f_hi/f_lo))', unit: 'V' },
+    {
+      name: 'vn_int',
+      expr: 'sqrt(svth*(f_hi - f_lo) + svfl*log(f_hi/f_lo))',
+      unit: 'V',
+      note: 'thermal floor over the band + 1/f tail; equals noise_rms(svth, fco, f_lo, f_hi)',
+    },
     { name: 'corner', expr: 'fco', unit: 'Hz' }, // flicker corner, for display
     // Pelgrom random mismatch, referred to the input. σ ∝ 1/√(W·L); the β-term refers through gm/ID.
     { name: 'sigma_vth', expr: 'avt/sqrt(W*L)', unit: 'V' },
@@ -126,15 +176,48 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
  */
 const NMOS_CASCODE: SheetDoc = {
   title: 'NMOS cascode (gain-boosted output)',
+  description:
+    'A composed sheet: a common-source input device (child block "cs") with a cascode ' +
+    'device stacked in series, carrying the child-provided current cs__id. Gain is the ' +
+    'product of the two intrinsic gains — author math over the child provides, no ' +
+    'circuit solving. Sweep gm/ID for the gain vs headroom window.',
   polarity: 'n',
   params: [
-    { name: 'I_bias', value: 20e-6, unit: 'A' },
-    { name: 'L', value: 0.5e-6, min: 0.18e-6, max: 2e-6, unit: 'm' },
-    { name: 'gm_id', value: 12, min: 6, max: 18, unit: '1/V' },
-    { name: 'CL', value: 2e-12, unit: 'F' },
-    { name: 'GBW_target', value: 10e6, unit: 'Hz' },
-    { name: 'Av_target', value: 600, unit: 'V/V' }, // cascode gain spec (≈ av0²)
-    { name: 'vstar_floor', value: 0.12, unit: 'V' }, // per-stage saturation-headroom floor
+    { name: 'I_bias', value: 20e-6, unit: 'A', role: 'spec', note: 'branch current budget' },
+    {
+      name: 'L',
+      value: 0.5e-6,
+      min: 0.18e-6,
+      max: 2e-6,
+      unit: 'm',
+      role: 'choice',
+      note: 'shared by both devices',
+    },
+    {
+      name: 'gm_id',
+      value: 12,
+      min: 6,
+      max: 18,
+      unit: '1/V',
+      role: 'choice',
+      note: 'shared efficiency knob',
+    },
+    { name: 'CL', value: 2e-12, unit: 'F', role: 'spec' },
+    { name: 'GBW_target', value: 10e6, unit: 'Hz', role: 'spec' },
+    {
+      name: 'Av_target',
+      value: 600,
+      unit: 'V/V',
+      role: 'spec',
+      note: 'roughly av0^2 must clear this',
+    },
+    {
+      name: 'vstar_floor',
+      value: 0.12,
+      unit: 'V',
+      role: 'spec',
+      note: 'per-stage saturation floor',
+    },
   ],
   uses: [
     {

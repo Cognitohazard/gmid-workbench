@@ -5,7 +5,8 @@
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { sizeDevice, integratedNoise, mismatch } from '../device';
-import { evaluateSheet, runSheet, validateSheet, sweepSheet } from './index';
+import { fixTable } from '../series';
+import { evaluateSheet, runSheet, validateSheet, sweepSheet, sweepSheet2 } from './index';
 import { EXAMPLES } from './examples';
 import type { SheetDoc } from './types';
 
@@ -233,9 +234,10 @@ describe('the noise & matching example', () => {
     const res = runSheet(ex, dev);
     expect(res.bind?.ok).toBe(true);
     const v = res.values;
-    // Integrated input noise == core integratedNoise on the W-referred thermal PSD (svth·w0/W)
-    // and the intensive flicker corner fco. (svth·fco == svfl, so the flicker term matches too.)
-    const expectedVn = integratedNoise((v.svth * v.w0) / v.W, v.fco, v.f_lo, v.f_hi);
+    // Integrated input noise == core integratedNoise on the thermal PSD — which the
+    // sizing already reports at the SIZED width — and the intensive flicker corner fco.
+    // (svth·fco == svfl, so the flicker term matches too.)
+    const expectedVn = integratedNoise(v.svth, v.fco, v.f_lo, v.f_hi);
     expect(v.vn_int / expectedVn).toBeCloseTo(1, 12);
     // Input offset == core Pelgrom mismatch().sigmaVos at the sized geometry.
     const m = mismatch(v.W, v.L, v.gm_id, { avth: v.avt, abeta: v.abeta });
@@ -247,8 +249,8 @@ describe('the noise & matching example', () => {
     // integral. Anchor it with a numerical quadrature of S(f) = svth_w + svfl_w/f over the band
     // (log-grid trapezoid — the 1/f tail spans decades), a genuinely separate computation path.
     const v = runSheet(ex, dev).values;
-    const svth_w = (v.svth * v.w0) / v.W;
-    const svfl_w = (v.svfl * v.w0) / v.W;
+    const svth_w = v.svth; // already reported at the sized width
+    const svfl_w = v.svfl;
     const N = 40000;
     const r = Math.log(v.f_hi / v.f_lo) / N;
     let integral = 0;
@@ -562,5 +564,380 @@ describe('table temperature in the sheet scope', () => {
     const doc: SheetDoc = { ...tDoc, params: [{ name: 'T', value: 42 }] };
     const hot = { ...dev, meta: { ...dev.meta, temp: 125 } };
     expect(evaluateSheet(doc, hot).values.tk).toBe(42);
+  });
+});
+
+describe('fail-closed hardening', () => {
+  it('a non-finite tolPct reads na (never pass) and the validator names it', () => {
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [
+        { name: 'a', value: 1000 },
+        { name: 'b', value: 1 },
+      ],
+      rows: [],
+      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: NaN }],
+    };
+    const res = evaluateSheet(doc);
+    expect(res.rules[0].status).toBe('na');
+    expect(res.feasible).toBe(false);
+    const pre = validateSheet(doc);
+    expect(pre.some((w) => w.rule === 'sheet-tol' && w.severity === 'error')).toBe(true);
+  });
+
+  it('snaps a floating-point-noise margin to zero: a pinned spec reads amber deterministically', () => {
+    // 0.1 + 0.2 overshoots 0.3 by ~5.5e-17 in doubles; without the snap this rule's
+    // verdict is a coin flip on the rounding direction of the two sides.
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [{ name: 'x', value: 0.3 }],
+      rows: [{ name: 'y', expr: '0.1 + 0.2' }],
+      rules: [{ id: 'pin', kind: 'requirement', lhs: 'x', op: '>=', rhs: 'y' }],
+    };
+    const res = evaluateSheet(doc);
+    expect(res.rules[0].margin).toBe(0);
+    expect(res.rules[0].status).toBe('amber');
+    expect(res.feasible).toBe(true);
+  });
+
+  it('a row that computes non-finite from resolved inputs is an error, even if only a guardrail reads it', () => {
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [{ name: 'x', value: -1 }],
+      rows: [{ name: 'bad', expr: 'sqrt(x)' }],
+      rules: [{ id: 'g', kind: 'guardrail', lhs: 'bad', op: '>=', rhs: '0' }],
+    };
+    const res = evaluateSheet(doc);
+    expect(res.warnings.some((w) => w.rule === 'sheet-nonfinite' && w.severity === 'error')).toBe(
+      true,
+    );
+    expect(res.feasible).toBe(false);
+  });
+
+  it('an unphysical bind (negative gm) fails closed instead of sizing a negative width', () => {
+    const doc = boundDoc({ bind: { L: 'L', gm: '0 - 1e-3', gm_id: 'gm_id' } });
+    const res = evaluateSheet(doc, dev);
+    expect(res.bind?.ok).toBe(false);
+    expect(res.values.W).toBeUndefined();
+    expect(res.feasible).toBe(false);
+  });
+
+  it('sweeping a param whose stored default is non-finite does not poison the sweep', () => {
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [{ name: 'k', value: NaN, min: 1, max: 2 }],
+      rows: [],
+      rules: [{ id: 'r', kind: 'requirement', lhs: 'k', op: '>=', rhs: '0.5' }],
+    };
+    const sw = sweepSheet(doc, 'k', undefined, 3);
+    expect(sw.x).toHaveLength(3);
+    expect(sw.feasible).toEqual([true, true, true]);
+  });
+});
+
+describe('bind bias declaration (vds/vsb)', () => {
+  // A demo table with a live vds axis — sizing must collapse it to a point first.
+  const dev3 = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
+
+  it('a declared vds slices the table at that point and is reported', () => {
+    const doc = boundDoc({
+      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+    });
+    const res = evaluateSheet(doc, dev3);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.bias).toEqual({ vds: 0.6 });
+    // equals sizing on a hand-sliced table
+    const ref = evaluateSheet(boundDoc(), fixTable(dev3, { vds: 0.6 }));
+    expect(res.bind?.W).toBeCloseTo(ref.bind?.W as number, 12);
+    expect(res.values.gds).toBeCloseTo(ref.values.gds, 15);
+  });
+
+  it('the declaration accepts an expression over params', () => {
+    const doc = boundDoc({
+      params: [...boundDoc().params, { name: 'vds_op', value: 0.6 }],
+      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'vds_op' },
+    });
+    const res = evaluateSheet(doc, dev3);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.bias).toEqual({ vds: 0.6 });
+  });
+
+  it('an undeclared live axis uses the caller fallback WITH an advisory warning', () => {
+    const res = evaluateSheet(boundDoc(), dev3, undefined, { fallbackBias: { vds: 0.6 } });
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.bias).toEqual({ vds: 0.6 });
+    expect(
+      res.warnings.some((w) => w.severity === 'warning' && /does not declare vds/.test(w.message)),
+    ).toBe(true);
+    const ref = evaluateSheet(boundDoc(), fixTable(dev3, { vds: 0.6 }));
+    expect(res.bind?.W).toBeCloseTo(ref.bind?.W as number, 12);
+  });
+
+  it('an undeclared live axis with NO fallback fails the bind with declare-the-bias guidance', () => {
+    const res = evaluateSheet(boundDoc(), dev3);
+    expect(res.bind?.ok).toBe(false);
+    expect(res.bind?.error).toMatch(/declare the operating point/);
+    expect(res.feasible).toBe(false);
+  });
+
+  it('a declaration the table cannot honor (no live axis) is advisory, not fatal', () => {
+    const doc = boundDoc({
+      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+    });
+    const res = evaluateSheet(doc, dev); // 2-D demo: no vds axis
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.bias).toBeUndefined();
+    expect(res.warnings.some((w) => /no live vds axis/.test(w.message))).toBe(true);
+  });
+
+  it('an out-of-hull declaration is clamped with a warning, mirroring the L policy', () => {
+    const doc = boundDoc({ bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' } });
+    const res = evaluateSheet(doc, dev3);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.warnings.some((w) => /outside the table's vds range/.test(w.message))).toBe(true);
+  });
+
+  it('the fallback threads through composition to children', () => {
+    const parent: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'cs', doc: boundDoc({ provide: ['id'] }) }],
+    };
+    const res = evaluateSheet(parent, dev3, undefined, { fallbackBias: { vds: 0.6 } });
+    expect(res.children?.[0].feasible).toBe(true);
+    expect(res.values.cs__id).toBeGreaterThan(0);
+  });
+});
+
+describe('composition semantics (ratified)', () => {
+  /** A minimal providing leaf: binds at a fixed current and exposes its outputs. */
+  const leaf = (I: string): SheetDoc => ({
+    title: 'leaf',
+    polarity: 'n',
+    params: [
+      { name: 'I_bias', value: 20e-6 },
+      { name: 'L', value: 0.5e-6 },
+      { name: 'gm_id', value: 12 },
+    ],
+    bind: { L: 'L', id: I, gm_id: 'gm_id' },
+    rows: [],
+    rules: [],
+    provide: ['id', 'gm', 'W'],
+  });
+
+  it('a LATER sibling may reference an EARLIER sibling provide (document order)', () => {
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [
+        { name: 'a', doc: leaf('I_bias') },
+        { name: 'b', doc: leaf('I_bias'), params: { I_bias: 'a__id / 2' } },
+      ],
+    };
+    const res = runSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.b__id).toBeCloseTo(res.values.a__id / 2, 12);
+    // the ratified direction produces no validator noise
+    expect(validateSheet(doc).some((w) => w.rule === 'sheet-use-param')).toBe(false);
+  });
+
+  it('a FORWARD sibling reference fails closed at eval and is named statically by the validator', () => {
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [
+        { name: 'b', doc: leaf('I_bias'), params: { I_bias: 'a__id / 2' } },
+        { name: 'a', doc: leaf('I_bias') },
+      ],
+    };
+    const res = runSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.children?.[0].feasible).toBe(false);
+    expect(
+      validateSheet(doc).some(
+        (w) => w.rule === 'sheet-use-param' && /document order/.test(w.message),
+      ),
+    ).toBe(true);
+  });
+
+  it('a child referencing the parent SIZED device fails closed (reverse coupling stays off)', () => {
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'gm_id', value: 12 },
+        { name: 'I_bias', value: 20e-6 },
+      ],
+      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      rows: [],
+      rules: [],
+      uses: [{ name: 'c', doc: leaf('I_bias'), params: { I_bias: 'W * 1e-3' } }],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.children?.[0].feasible).toBe(false); // W binds AFTER children — not in scope
+    expect(res.feasible).toBe(false);
+  });
+
+  it('duplicate use names are skipped fail-closed even via the unvalidated entrypoint', () => {
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [
+        { name: 'a', doc: leaf('I_bias') },
+        { name: 'a', doc: leaf('I_bias / 2') },
+      ],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.children?.[1].feasible).toBe(false);
+    // the first block's provides are intact, not overwritten by the duplicate
+    expect(res.values.a__id).toBeCloseTo(20e-6, 18);
+  });
+
+  it('re-exporting a grandchild provide is warning-free; a stray separator key still warns', () => {
+    const mid: SheetDoc = {
+      title: 'mid',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'g', doc: leaf('I_bias') }],
+      provide: ['g__id'],
+    };
+    const top: SheetDoc = {
+      title: 'top',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'm', doc: mid }],
+    };
+    expect(validateSheet(top).filter((w) => w.rule === 'sheet-provide')).toHaveLength(0);
+    const res = runSheet(top, dev);
+    expect(res.values.m__g__id).toBeCloseTo(20e-6, 18);
+    // a separator key that matches nothing injectable is still flagged
+    const bad: SheetDoc = { ...top, uses: [{ name: 'm', doc: { ...mid, provide: ['x__y'] } }] };
+    expect(validateSheet(bad).some((w) => w.rule === 'sheet-provide')).toBe(true);
+  });
+
+  it('a composed sweep traces descendant HARD rules with path-prefixed ids', () => {
+    const cascode = EXAMPLES.find((e) => e.title === 'NMOS cascode (gain-boosted output)')!;
+    const sw = sweepSheet(cascode, 'gm_id', dev, 5);
+    const ids = sw.rules.map((r) => r.id);
+    expect(ids).toContain('cs-headroom'); // top-level rule, untouched
+    expect(ids).toContain('cs.feasible-inversion'); // the child's own invariant, path-prefixed
+    const child = sw.rules.find((r) => r.id === 'cs.feasible-inversion')!;
+    expect(child.marginPct.filter((m) => m !== null).length).toBeGreaterThan(0);
+  });
+});
+
+describe('sweepSheet2 — the design-plane feasibility map', () => {
+  const ex = EXAMPLES.find((e) => e.title === 'NMOS noise & matching')!;
+
+  it('agrees pointwise with runSheet and names the binding hard rule per infeasible cell', () => {
+    const sw = sweepSheet2(ex, 'gm_id', 'L', dev, 5);
+    expect(sw.x).toHaveLength(5);
+    expect(sw.y).toHaveLength(5);
+    for (const [yi, xi] of [
+      [0, 0],
+      [2, 2],
+      [4, 4],
+      [0, 4],
+    ] as const) {
+      const at: SheetDoc = {
+        ...ex,
+        params: ex.params.map((p) =>
+          p.name === 'gm_id'
+            ? { ...p, value: sw.x[xi] }
+            : p.name === 'L'
+              ? { ...p, value: sw.y[yi] }
+              : p,
+        ),
+      };
+      const ref = runSheet(at, dev);
+      expect(sw.feasible[yi][xi]).toBe(ref.feasible);
+      if (!ref.feasible && sw.binding[yi][xi] !== null) {
+        // the named binding rule really is a failing hard rule at that point
+        const named = ref.rules.find((r) => r.id === sw.binding[yi][xi]);
+        expect(named?.status).toBe('fail');
+        expect(named?.kind).not.toBe('guardrail');
+      }
+    }
+    // the map is not degenerate: both regions exist on this example
+    const flat = sw.feasible.flat();
+    expect(flat.some((f) => f)).toBe(true);
+    expect(flat.some((f) => !f)).toBe(true);
+  });
+
+  it('returns an empty map for identical or unbounded params', () => {
+    expect(sweepSheet2(ex, 'gm_id', 'gm_id', dev, 5).x).toHaveLength(0);
+    expect(sweepSheet2(ex, 'gm_id', 'I_bias', dev, 5).x).toHaveLength(0); // I_bias has no min/max
+  });
+});
+
+describe('override and bias reporting fail closed (adversarial review regressions)', () => {
+  it('a misspelled child override key fails the composition closed, never the child default', () => {
+    const child: SheetDoc = {
+      title: 'leaf',
+      polarity: 'n',
+      params: [
+        { name: 'I_bias', value: 20e-6 },
+        { name: 'L', value: 0.5e-6 },
+        { name: 'gm_id', value: 12 },
+      ],
+      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      rows: [],
+      rules: [],
+      provide: ['id'],
+    };
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [{ name: 'I_tail', value: 40e-6 }],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'cs', doc: child, params: { I_bais: 'I_tail / 2' } }], // typo: I_bais
+    };
+    const res = runSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.children?.[0].feasible).toBe(false);
+    expect(res.values.cs__id).toBeUndefined(); // provides withheld, not the 20µA default
+    expect(
+      res.warnings.some(
+        (w) => w.rule === 'sheet-use-param' && w.severity === 'error' && /I_bais/.test(w.message),
+      ),
+    ).toBe(true);
+    // and the validator names it statically as an error too
+    expect(
+      validateSheet(doc).some((w) => w.rule === 'sheet-use-param' && w.severity === 'error'),
+    ).toBe(true);
+  });
+
+  it('an out-of-range bind bias reports the APPLIED clamped coordinate, not the request', () => {
+    const dev3 = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
+    const doc = boundDoc({
+      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
+    });
+    const res = evaluateSheet(doc, dev3);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.bias).toEqual({ vds: 1.2 }); // the slice actually used
+    expect(res.warnings.some((w) => /vds 5 is outside/.test(w.message))).toBe(true);
   });
 });

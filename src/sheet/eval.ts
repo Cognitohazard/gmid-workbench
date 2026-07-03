@@ -8,8 +8,9 @@ import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, metaScalars } from '../derive';
 import { scalarScope } from '../expr';
-import { sizeDevice, type SizeQuery } from '../device';
-import { MAX_USE_DEPTH, joinProvide, prefixUseWarning } from './types';
+import { BINDABLE, sizeDevice, type SizeQuery } from '../device';
+import { fixTable } from '../series';
+import { BIAS_AXES, MAX_USE_DEPTH, isHardRule, joinProvide, prefixUseWarning } from './types';
 import type {
   BindReport,
   RuleResult,
@@ -17,6 +18,7 @@ import type {
   SheetBind,
   SheetChildReport,
   SheetDoc,
+  SheetEvalOptions,
   SheetResult,
   SheetUse,
 } from './types';
@@ -30,6 +32,15 @@ export const AMBER_BAND = 0.05; // 5% of the bound
 
 /** Floor for the relative-margin denominator so a zero bound cannot divide by zero. */
 const TINY = 1e-300;
+
+/**
+ * Margins within this relative distance of zero snap to exactly 0. A spec that is pinned
+ * by its own bind (e.g. bind gm = 2π·GBW·CL, then rule GBW >= GBW_target) lands within
+ * floating-point rounding of the boundary, and without the snap the verdict is a coin
+ * flip between pass and fail on ±1e-16 noise. Snapped-to-zero margins read as a
+ * deterministic near-miss (amber) — the honest description of a pinned spec.
+ */
+export const MARGIN_SNAP_REL = 1e-12;
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -99,6 +110,104 @@ function evalScalar(
   return v;
 }
 
+/**
+ * Memoized single-axis slice. fixTable re-interpolates every quantity column, and a
+ * sweep re-slices the SAME table at the SAME constant bias for every sample — up to n²
+ * evaluations per render doing identical full-grid work. Keyed weakly by the source
+ * table (chained vds→vsb slices hit because a cached first slice returns the identical
+ * object). fixTable is pure, so a hit is referentially transparent. Bounded: sweeping a
+ * BIAS param mints one full-grid slice per sample, and an unbounded cache would hold
+ * tens of MB — clearing wholesale at the cap trades a rare recompute for a hard ceiling.
+ */
+const SLICE_CACHE = new WeakMap<DeviceTable, Map<string, DeviceTable>>();
+const SLICE_CACHE_CAP = 64;
+function fixAxisCached(t: DeviceTable, axis: string, v: number): DeviceTable {
+  let m = SLICE_CACHE.get(t);
+  if (!m) {
+    m = new Map();
+    SLICE_CACHE.set(t, m);
+  }
+  const key = `${axis}=${v}`;
+  const hit = m.get(key);
+  if (hit) return hit;
+  if (m.size >= SLICE_CACHE_CAP) m.clear();
+  const out = fixTable(t, { [axis]: v });
+  m.set(key, out);
+  return out;
+}
+
+/**
+ * Collapse the table's bias axes (vds/vsb) to the operating point before sizing: a value
+ * DECLARED in the bind wins; a live axis the bind does not declare falls back to the
+ * caller's bias with an advisory warning naming the assumed value (so a host-side slice
+ * is never invisible); with neither, the axis stays live and sizing fails with guidance.
+ * Returns the sliced table plus the applied coordinates for the BindReport.
+ */
+function applyBindBias(
+  b: SheetBind,
+  table: DeviceTable,
+  values: Record<string, number>,
+  scope: Scope,
+  warn: (w: QAWarning) => void,
+  fallbackBias: Record<string, number> | undefined,
+): { table: DeviceTable; bias: Record<string, number> } | { error: string } {
+  let t = table;
+  const bias: Record<string, number> = {};
+  for (const axis of BIAS_AXES) {
+    const live = t.grid.axes.find((a) => a.name === axis && a.values.length > 1);
+    // BIAS_AXES is namespace-derived (dynamic strings), while SheetBind's declared bias
+    // fields are static — index structurally rather than by the literal key union.
+    const declared = (b as unknown as Partial<Record<string, string>>)[axis];
+    if (declared !== undefined) {
+      const v = evalScalar(declared, values, scope, warn, `bind ${axis}`);
+      if (v === undefined || !Number.isFinite(v))
+        return { error: `bind ${axis} did not resolve to a finite number` };
+      if (!live) {
+        // The declaration is an assertion the table cannot honor (axis absent or already
+        // collapsed — possibly at a DIFFERENT point we cannot see). Advisory, not fatal.
+        warn({
+          rule: 'sheet-bind',
+          severity: 'warning',
+          message: `bind ${axis} = ${v} declared, but the table has no live ${axis} axis to slice — using the table as-is`,
+          location: 'bind',
+        });
+        continue;
+      }
+      const lo = live.values[0];
+      const hi = live.values[live.values.length - 1];
+      // sliceGrid clamps to the hull; apply the clamp HERE so the report and the slice
+      // agree — recording the requested value would show an operating point the sizing
+      // never used. The requested value survives in the warning only.
+      const applied = v < lo ? lo : v > hi ? hi : v;
+      if (applied !== v) {
+        warn({
+          rule: 'sheet-bind',
+          severity: 'warning',
+          message: `bind ${axis} ${v} is outside the table's ${axis} range [${lo}, ${hi}]; clamped to ${applied}`,
+          location: 'bind',
+        });
+      }
+      t = fixAxisCached(t, axis, applied);
+      bias[axis] = applied;
+    } else if (live) {
+      const fb = fallbackBias?.[axis];
+      if (fb !== undefined && Number.isFinite(fb)) {
+        warn({
+          rule: 'sheet-bind',
+          severity: 'warning',
+          message: `bind does not declare ${axis}; sizing at the caller's ${axis} = ${fb} — declare ${axis} in the bind to pin the operating point`,
+          location: 'bind',
+        });
+        t = fixAxisCached(t, axis, fb);
+        bias[axis] = fb;
+      }
+      // else: leave the axis live — sizeDevice raises its bracket error, which the
+      // caller decorates with declare-the-bias guidance. Never a silent slice.
+    }
+  }
+  return { table: t, bias };
+}
+
 /** Resolve the bind, call sizeDevice, and merge its operating point into `values`. */
 function runBind(
   b: SheetBind,
@@ -106,6 +215,7 @@ function runBind(
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
+  fallbackBias?: Record<string, number>,
 ): BindReport {
   // Every bind failure surfaces an error warning AND an ok:false report, so the feasibility
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design).
@@ -116,15 +226,18 @@ function runBind(
 
   if (!table) return fail('no device to size against');
 
-  const supplied = (['gm', 'gm_id', 'id'] as const).filter((k) => b[k] !== undefined);
+  const supplied = BINDABLE.filter((k) => b[k] !== undefined);
   if (supplied.length !== 2)
-    return fail(`bind needs exactly two of {gm, gm_id, id}, got ${supplied.length}`);
+    return fail(`bind needs exactly two of {${BINDABLE.join(', ')}}, got ${supplied.length}`);
 
   const L = evalScalar(b.L, values, scope, warn, 'bind L');
   if (L === undefined || !Number.isFinite(L))
     return fail('bind L did not resolve to a finite number');
 
-  const q: SizeQuery = { table, L };
+  const sliced = applyBindBias(b, table, values, scope, warn, fallbackBias);
+  if ('error' in sliced) return fail(sliced.error);
+
+  const q: SizeQuery = { table: sliced.table, L };
   for (const k of supplied) {
     const v = evalScalar(b[k] as string, values, scope, warn, `bind ${k}`);
     if (v === undefined || !Number.isFinite(v))
@@ -143,9 +256,16 @@ function runBind(
     for (const m of res.warnings) {
       warn({ rule: 'sheet-bind', severity: 'warning', message: m, location: 'bind' });
     }
-    return { ok: true, W: res.W, vgs: res.vgs, id: res.id };
+    const report: BindReport = { ok: true, W: res.W, vgs: res.vgs, id: res.id };
+    if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
+    return report;
   } catch (e) {
-    return fail(`sizing failed: ${msg(e)}`);
+    let m = msg(e);
+    // The lookup's "extra non-degenerate axis" error is accurate but not actionable in
+    // sheet vocabulary — point the author at the fix.
+    if (m.includes('non-degenerate axis'))
+      m += ' — declare the operating point in the bind (vds/vsb) to collapse the axis';
+    return fail(`sizing failed: ${m}`);
   }
 }
 
@@ -182,6 +302,20 @@ function evalRule(
     // like '>='/'<='. tolPct is relative to |rhs|, so it is inert when rhs is 0 (exact match only).
     margin = ((rule.tolPct ?? 0) / 100) * Math.abs(rhs) - Math.abs(lhs - rhs);
   }
+  // The operands are finite (guarded above) but the margin itself may not be — a
+  // non-finite tolPct poisons the '==' arithmetic, and NaN compares false against 0,
+  // which would read as a silent pass. A margin that did not compute is `na`, never pass.
+  if (!Number.isFinite(margin)) {
+    return {
+      ...base,
+      margin: NaN,
+      marginPct: NaN,
+      status: 'na',
+      detail: 'margin did not compute to a finite number (check tolPct)',
+    };
+  }
+  if (margin !== 0 && Math.abs(margin) <= MARGIN_SNAP_REL * Math.max(Math.abs(lhs), Math.abs(rhs)))
+    margin = 0; // see MARGIN_SNAP_REL — a bind-pinned spec must not coin-flip on FP noise
   const marginPct = margin / Math.max(Math.abs(rhs), TINY);
 
   let status: RuleStatus;
@@ -194,8 +328,12 @@ function evalRule(
 
 /**
  * Build a child doc with its param values overridden by expressions evaluated in the
- * PARENT scope (parent params + constants — children run before the parent's own bind,
- * so they do not see the parent's sized device; that reverse coupling is deferred).
+ * PARENT scope as built so far: parent params, constants, and the provides of EARLIER
+ * siblings (children evaluate in document order — the ratified idiom for a later block
+ * carrying a value an earlier block derived, e.g. binding a spec exactly on the input
+ * device and feeding the derived current to the branch blocks). Children run before
+ * the parent's own bind, so they never see the parent's sized device (that reverse
+ * coupling stays deferred), and a forward sibling reference fails closed as undeclared.
  *
  * Fail-closed: a declared override is the parent EXPLICITLY supplying a value, so one that
  * cannot resolve to a finite number must NOT silently fall back to the child's embedded
@@ -210,9 +348,24 @@ function applyUseParams(
   warn: (w: QAWarning) => void,
 ): { doc: SheetDoc; ok: boolean } {
   if (!use.params) return { doc: use.doc, ok: true };
+  const childParams = new Set(use.doc.params.map((p) => p.name));
   const overrides: Record<string, number> = {};
   let ok = true;
   for (const [k, expr] of Object.entries(use.params)) {
+    // An override key that names no child param is the same failure as an unresolvable
+    // one: the parent explicitly supplied a value (typo and all) that will NOT reach the
+    // child, so the child would size a different design than the author wired — and its
+    // embedded default could still read feasible. Fail closed, by name.
+    if (!childParams.has(k)) {
+      ok = false;
+      warn({
+        rule: 'sheet-use-param',
+        severity: 'error',
+        message: `use "${use.name}": override "${k}" does not match any child param (refusing to size the child on its embedded defaults)`,
+        location: use.name,
+      });
+      continue;
+    }
     const v = evalScalar(expr, parentValues, parentScope, warn, `use "${use.name}" param ${k}`);
     if (v === undefined || !Number.isFinite(v)) {
       ok = false;
@@ -251,21 +404,39 @@ function evalChildren(
   uses: SheetUse[],
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
+  opts: SheetEvalOptions | undefined,
   depth: number,
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
 ): SheetChildReport[] {
   const reports: SheetChildReport[] = [];
+  // Structural self-defense for direct evaluateSheet callers (runSheet validates, but
+  // this entrypoint is public): a duplicate or empty use name would silently overwrite
+  // the earlier sibling's provides — skip it, fail closed.
+  const seenNames = new Set<string>();
   for (const use of uses) {
-    if (depth >= MAX_USE_DEPTH) {
-      warn({
-        rule: 'sheet-use',
-        severity: 'error',
-        message: `use "${use.name}": composition nested deeper than ${MAX_USE_DEPTH}`,
-        location: use.name,
+    const dead = (message: string): void => {
+      warn({ rule: 'sheet-use', severity: 'error', message, location: use.name });
+      reports.push({
+        name: use.name,
+        title: use.doc.title,
+        feasible: false,
+        provides: {},
+        rules: [],
       });
-      reports.push({ name: use.name, title: use.doc.title, feasible: false, provides: {} });
+    };
+    if (!use.name.trim()) {
+      dead('a use has an empty name');
+      continue;
+    }
+    if (seenNames.has(use.name)) {
+      dead(`duplicate use name "${use.name}" — the block was skipped, not silently merged`);
+      continue;
+    }
+    seenNames.add(use.name);
+    if (depth >= MAX_USE_DEPTH) {
+      dead(`use "${use.name}": composition nested deeper than ${MAX_USE_DEPTH}`);
       continue;
     }
     // A child names its own device id (else it inherits the parent table). A named device that the
@@ -275,19 +446,13 @@ function evalChildren(
     if (use.device !== undefined) {
       childTable = resolveDevice?.(use.device);
       if (childTable === undefined) {
-        warn({
-          rule: 'sheet-use',
-          severity: 'error',
-          message: `use "${use.name}": device "${use.device}" did not resolve`,
-          location: use.name,
-        });
-        reports.push({ name: use.name, title: use.doc.title, feasible: false, provides: {} });
+        dead(`use "${use.name}": device "${use.device}" did not resolve`);
         continue;
       }
     }
 
     const { doc: childDoc, ok: paramsOk } = applyUseParams(use, values, scope, warn);
-    const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1);
+    const res = evaluateSheet(childDoc, childTable, resolveDevice, opts, depth + 1);
 
     // Roll up child warnings, attributed to the use site (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
@@ -311,6 +476,8 @@ function evalChildren(
       title: use.doc.title,
       feasible: paramsOk && res.feasible,
       provides,
+      rules: res.rules,
+      ...(res.children ? { children: res.children } : {}),
     });
   }
   return reports;
@@ -320,12 +487,14 @@ function evalChildren(
  * Evaluate a sheet against an optional device table. One pass, never throws: seed
  * params → (compose children) → size → author-order rows → signed-margin rules →
  * aggregate feasibility. A leaf (no `uses`) behaves exactly as before. `resolveDevice`
- * is only consulted by a child `use` that names its own device; `_depth` is internal.
+ * is only consulted by a child `use` that names its own device; `opts` threads the
+ * whole tree (children included); `_depth` is internal.
  */
 export function evaluateSheet(
   doc: SheetDoc,
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
+  opts?: SheetEvalOptions,
   _depth = 0,
 ): SheetResult {
   const warnings: QAWarning[] = [];
@@ -348,21 +517,29 @@ export function evaluateSheet(
   //    (name__key) in its own bind/rows/rules.
   const children =
     doc.uses && doc.uses.length > 0
-      ? evalChildren(doc.uses, table, resolveDevice, _depth, values, scope, warn)
+      ? evalChildren(doc.uses, table, resolveDevice, opts, _depth, values, scope, warn)
       : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when bound.
-  const bind = doc.bind ? runBind(doc.bind, table, values, scope, warn) : undefined;
+  const bind = doc.bind
+    ? runBind(doc.bind, table, values, scope, warn, opts?.fallbackBias)
+    : undefined;
 
-  // 4. Author rows, in document order; a row that cannot resolve is skipped, not fatal.
+  // 4. Author rows, in document order. A row that cannot RESOLVE (missing quantity,
+  //    parse error) is skipped with a plain warning — graceful degradation for optional
+  //    data. A row that resolves but computes NON-FINITE from finite inputs (sqrt of a
+  //    negative headroom, a division by zero) means the design math itself broke at this
+  //    point, so it is an error: feasibility must fail closed even when no hard rule
+  //    happens to reference the row (a guardrail-only figure of merit would otherwise
+  //    render a green verdict over a NaN).
   for (const row of doc.rows) {
     const r = evalScalar(row.expr, values, scope, warn, `row "${row.name}"`);
     if (r === undefined) continue;
     if (!Number.isFinite(r)) {
       warn({
         rule: 'sheet-nonfinite',
-        severity: 'warning',
-        message: `row "${row.name}" is not finite`,
+        severity: 'error',
+        message: `row "${row.name}" evaluated to a non-finite number from resolved inputs`,
         location: row.name,
       });
       continue;
@@ -376,9 +553,12 @@ export function evaluateSheet(
   // 6. Overall feasibility, fail-closed: a declared bind sized successfully, every HARD rule
   //    (invariant = physical floor, requirement = application spec) holds (pass or near-miss),
   //    EVERY child is feasible, and nothing errored. Guardrails are advisory and excluded.
-  const hard = rules.filter((r) => r.kind === 'invariant' || r.kind === 'requirement');
+  const hard = rules.filter((r) => isHardRule(r.kind));
   const feasible =
-    (!doc.bind || (bind?.ok ?? false)) &&
+    // A bound sheet needs the sizing to have succeeded AND the sizer's own verdict
+    // (gm/ID ≤ the data ceiling) to hold — today the sizer throws past the ceiling, so
+    // the flag is belt-and-suspenders, but it must never be silently ignored.
+    (!doc.bind || ((bind?.ok ?? false) && values.feasible !== 0)) &&
     hard.every((r) => r.status === 'pass' || r.status === 'amber') &&
     (children?.every((c) => c.feasible) ?? true) &&
     !warnings.some((w) => w.severity === 'error');

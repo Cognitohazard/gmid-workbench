@@ -6,14 +6,24 @@
 // construction. Pure data; zero DOM imports.
 
 import type { QAWarning } from '../types';
+import { BASE_QUANTITIES } from '../namespace';
 
-/** A named scalar design input. `min`/`max` bound the GUI slider only. */
+/**
+ * A named scalar design input. `min`/`max` bound the GUI slider only. `role`
+ * separates what the sheet is FOR from how it gets there — 'spec' params state the
+ * requirement (VDD, CL, GBW_target: an adopter changes these freely), 'choice'
+ * params are the author's implementation knobs (I_tail, gm_id, L: change these to
+ * re-balance the design). Untagged params render ungrouped, as before. `note` is a
+ * one-line derivation/intent annotation for the designer inheriting the sheet.
+ */
 export interface SheetVar {
   name: string;
   value: number;
   min?: number;
   max?: number;
   unit?: string;
+  role?: 'spec' | 'choice';
+  note?: string;
 }
 
 /**
@@ -25,24 +35,54 @@ export interface SheetRow {
   name: string;
   expr: string;
   unit?: string;
+  /** One-line derivation/intent annotation (where the formula comes from). */
+  note?: string;
 }
 
 /**
- * A bind-any-2 device declaration: EXACTLY two of {gm, gm_id, id} (each an expression
- * string, so e.g. gm = "2*pi*GBW*CL" works), plus the length L. Drives sizeDevice
- * against the panel's active device.
+ * A bind-any-2 device declaration: EXACTLY two of {gm, gm_id, id, W} (each an
+ * expression string, so e.g. gm = "2*pi*GBW*CL" works), plus the length L. Drives
+ * sizeDevice against the panel's active device.
+ *
+ * `vds`/`vsb` declare the device's OPERATING POINT on those axes (expression strings,
+ * signed — matching the table's axis convention, so a PMOS vds is negative). Sizing
+ * inverts gm/ID along vgs and needs every other axis collapsed to a point; declaring
+ * the point here makes the bias an authored, persisted, sweepable part of the design
+ * instead of a hidden host-side slice (a cascode's low-vds gds differs ~4–5× from the
+ * mid-supply value, so an undeclared bias silently overstates gain). An axis left
+ * undeclared falls back to the caller's bias (with an advisory warning) or errors.
  */
 export interface SheetBind {
   L: string;
   gm?: string;
   gm_id?: string;
   id?: string;
+  /** Width-first sizing (unit devices, mirror ratios, layout-constrained flows):
+   *  W may stand in as one of the two bound quantities. */
+  W?: string;
+  vds?: string;
+  vsb?: string;
 }
+
+/** The bias axes a bind may declare — every namespace sweep axis except the inversion
+ *  sweep (vgs) and the geometry axis (l). Derived from the axis flags so a table axis
+ *  added to the namespace is automatically collapsible by a bind/fallback, rather than
+ *  dying on the sizer's extra-axis error because a hand-copied list went stale. */
+export const BIAS_AXES: readonly string[] = BASE_QUANTITIES.filter(
+  (q) => q.axis && q.key !== 'vgs' && q.key !== 'l',
+).map((q) => q.key);
 
 // invariant = a hard physical floor (must hold or the design is unphysical); requirement = a
 // hard application spec (must hold or the design misses its purpose) — both gate feasibility.
 // guardrail = a soft advisory (a near-miss heads-up) that is shown but never blocks feasibility.
 export type RuleKind = 'invariant' | 'guardrail' | 'requirement';
+
+/** True for the kinds that GATE feasibility. The one home for "hardness" — the leaf
+ *  verdict, the sweep rule collection, and binding-rule attribution all consult this
+ *  whitelist, so a future advisory kind cannot be silently promoted to hard by a
+ *  `!== 'guardrail'` blacklist somewhere. */
+export const isHardRule = (kind: RuleKind): boolean =>
+  kind === 'invariant' || kind === 'requirement';
 export type RuleOp = '>=' | '<=' | '==';
 
 /** Runtime membership sets mirroring the RuleKind/RuleOp unions — one place to coerce untrusted
@@ -67,13 +107,20 @@ export interface SheetRule {
   rhs: string;
   tolPct?: number;
   justification?: string;
+  /** One-line physical meaning of the rule, for the designer inheriting the sheet. */
+  note?: string;
 }
 
 /**
  * A child block this sheet composes. The child is a full SheetDoc embedded inline
  * (self-contained — the whole tree persists as one document). `params` overrides the
- * child's param VALUES with expressions evaluated in the PARENT's param scope, so a
- * parent budget flows down (e.g. a shared length or current). `device` names the
+ * child's param VALUES with expressions evaluated in the PARENT's scope, so a parent
+ * budget flows down (e.g. a shared length or current). Children evaluate in DOCUMENT
+ * ORDER, and each override resolves against the parent scope as built so far: parent
+ * params, constants, and the provides of EARLIER siblings — so a later block can carry
+ * a value an earlier block derived (a cascode branch taking the input pair's bound
+ * current). A forward reference (or a reference to the parent's own sized device,
+ * which binds AFTER the children) fails closed as undeclared. `device` names the
  * device table the child sizes against (by id); absent ⇒ the child inherits the
  * parent's table.
  *
@@ -118,6 +165,9 @@ export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
  *  scalars. `provide` lists the names THIS sheet exposes to a parent (ignored at the top). */
 export interface SheetDoc {
   title: string;
+  /** A few sentences on what the sheet designs, its assumptions, and how to use it —
+   *  the block comment a designer inheriting the sheet reads first. */
+  description?: string;
   polarity: 'n' | 'p'; // a self-description label only; no contract enforced at leaf
   params: SheetVar[];
   bind?: SheetBind;
@@ -128,12 +178,17 @@ export interface SheetDoc {
 }
 
 /** A child block's evaluated summary, surfaced so the UI can show each child's title,
- *  feasibility, and the scalar values it exposed — without re-evaluating the tree. */
+ *  feasibility, and the scalar values it exposed — without re-evaluating the tree.
+ *  `rules` (and nested `children`) carry the child's own rule outcomes so a composed
+ *  report or sweep can show WHICH constraint below the top sheet binds — otherwise a
+ *  feasibility flip caused by a child rule has no visible cause at the top. */
 export interface SheetChildReport {
   name: string;
   title: string;
   feasible: boolean;
   provides: Record<string, number>;
+  rules: RuleResult[];
+  children?: SheetChildReport[];
 }
 
 export type RuleStatus = 'pass' | 'amber' | 'fail' | 'na';
@@ -167,7 +222,22 @@ export interface BindReport {
   W: number;
   vgs: number;
   id: number;
+  /** The operating-point coordinates the table was sliced at before sizing (per bias
+   *  axis, signed) — declared in the bind or assumed from the caller's fallback. Absent
+   *  when the table needed no reduction. Makes the sizing bias visible in reports. */
+  bias?: Record<string, number>;
   error?: string;
+}
+
+/** Options threaded through evaluateSheet/runSheet/sweepSheet. */
+export interface SheetEvalOptions {
+  /**
+   * Fallback operating point per bias axis (e.g. the UI's shared-bias sliders). Applied
+   * — with an advisory warning naming the assumed value — to any live bias axis the
+   * bind does not declare. A declared bind value always wins. Without a declaration or
+   * a fallback, a live extra axis fails the bind (never a silent slice).
+   */
+  fallbackBias?: Record<string, number>;
 }
 
 /**
@@ -192,7 +262,8 @@ export interface SheetResult {
  * One rule's relative margin traced across a parameter sweep, parallel to the sweep's `x`.
  * `null` where the rule was `na` (a side could not be computed at that point). The relative
  * (dimensionless) margin — not the raw SI margin — is what lets rules of different units share
- * one axis.
+ * one axis. In a composed sweep, descendant blocks' HARD rules ride along with path-prefixed
+ * ids (`cs.headroom`) so the constraint that binds is on the chart wherever it lives.
  */
 export interface SheetSweepRule {
   id: string;
@@ -212,4 +283,24 @@ export interface SheetSweep {
   x: number[];
   rules: SheetSweepRule[];
   feasible: boolean[];
+}
+
+/**
+ * A sheet evaluated across the 2-D grid of two parameters' [min,max] ranges — the design-plane
+ * view (gm_id × L is the classic) a 1-D cut cannot answer, e.g. "the minimum L that stays
+ * feasible across the whole gm_id range". `feasible[yi][xi]` maps the region; `binding[yi][xi]`
+ * names the WORST failing hard rule at each infeasible cell (tree-path id, so a child block's
+ * constraint is named as `cs.headroom`), or null where feasible / failed without a failing rule
+ * (e.g. a bind error). Empty (`x: []`) unless both params are distinct, finitely-bounded
+ * slider variables.
+ */
+export interface SheetSweep2 {
+  paramX: string;
+  paramY: string;
+  unitX: string;
+  unitY: string;
+  x: number[];
+  y: number[];
+  feasible: boolean[][];
+  binding: (string | null)[][];
 }

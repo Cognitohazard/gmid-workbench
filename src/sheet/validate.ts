@@ -5,6 +5,8 @@
 // evaluateSheet, which surfaces undeclared names against the live value set. DOM-free.
 
 import type { QAWarning } from '../types';
+import { compileExpr } from '../derive';
+import { BINDABLE } from '../device';
 import {
   MAX_USE_DEPTH,
   PROVIDE_SEP,
@@ -14,6 +16,16 @@ import {
   prefixUseWarning,
   type SheetDoc,
 } from './types';
+
+/** Free identifiers of an expression, or [] when it does not parse (eval names the
+ *  parse error at the failing site; the validator only needs the names). */
+function namesOf(expr: string): readonly string[] {
+  try {
+    return compileExpr(expr).names;
+  } catch {
+    return [];
+  }
+}
 
 /** Surface authoring problems as warnings; never throws, never mutates the doc. Structural
  *  and device-independent — identifier resolution against the live values is eval's job.
@@ -33,12 +45,12 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   }
 
   if (doc.bind) {
-    const n = (['gm', 'gm_id', 'id'] as const).filter((k) => doc.bind?.[k] !== undefined).length;
+    const n = BINDABLE.filter((k) => doc.bind?.[k] !== undefined).length;
     if (n !== 2) {
       out.push({
         rule: 'sheet-bind',
         severity: 'error',
-        message: `bind needs exactly two of {gm, gm_id, id}, got ${n}`,
+        message: `bind needs exactly two of {${BINDABLE.join(', ')}}, got ${n}`,
         location: 'bind',
       });
     }
@@ -66,6 +78,16 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         rule: 'sheet-tol',
         severity: 'warning',
         message: `equality rule "${r.id}" has no tolPct (will require an exact match)`,
+        location: r.id,
+      });
+    }
+    // A non-finite tolPct poisons the '==' margin arithmetic into NaN; eval degrades that
+    // to `na` (fail-closed), but the authoring mistake should be named at the source.
+    if (r.tolPct !== undefined && (!Number.isFinite(r.tolPct) || r.tolPct < 0)) {
+      out.push({
+        rule: 'sheet-tol',
+        severity: 'error',
+        message: `rule "${r.id}" tolPct must be a finite number >= 0, got ${r.tolPct}`,
         location: r.id,
       });
     }
@@ -101,6 +123,34 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       }
     }
 
+    // Children evaluate in document order, and a use's param overrides may reference the
+    // provides of EARLIER siblings only. A forward (or self) reference is statically
+    // detectable here: the joined name can never be in scope when the override resolves.
+    const providedBy = (idx: number): Set<string> => {
+      const s = new Set<string>();
+      const u = doc.uses![idx];
+      for (const key of u.doc.provide ?? []) s.add(joinProvide(u.name, key));
+      return s;
+    };
+    for (let i = 0; i < doc.uses.length; i++) {
+      const use = doc.uses[i];
+      if (!use.params) continue;
+      const later = new Set<string>();
+      for (let j = i; j < doc.uses.length; j++) for (const n of providedBy(j)) later.add(n);
+      for (const [k, expr] of Object.entries(use.params)) {
+        for (const n of namesOf(expr)) {
+          if (later.has(n)) {
+            out.push({
+              rule: 'sheet-use-param',
+              severity: 'warning',
+              message: `use "${use.name}" override "${k}" references "${n}", which is provided by this or a LATER sibling — children evaluate in document order, so it will not resolve`,
+              location: use.name,
+            });
+          }
+        }
+      }
+    }
+
     const seen = new Set<string>();
     for (const use of doc.uses) {
       const name = use.name?.trim();
@@ -130,12 +180,20 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
           });
         }
       }
+      // A provide key normally must not contain the separator — EXCEPT when it names a
+      // scalar the child itself received from ITS children (`grand__key`): re-exporting a
+      // grandchild value up the tree is the ratified idiom for surfacing a deep quantity,
+      // so only a separator-bearing key that matches nothing injectable is flagged.
+      const childInjected = new Set<string>();
+      for (const g of use.doc.uses ?? []) {
+        for (const k of g.doc.provide ?? []) childInjected.add(joinProvide(g.name, k));
+      }
       for (const key of use.doc.provide ?? []) {
-        if (key.includes(PROVIDE_SEP)) {
+        if (key.includes(PROVIDE_SEP) && !childInjected.has(key)) {
           out.push({
             rule: 'sheet-provide',
             severity: 'warning',
-            message: `provided name "${key}" in use "${use.name}" must not contain "${PROVIDE_SEP}"`,
+            message: `provided name "${key}" in use "${use.name}" must not contain "${PROVIDE_SEP}" (unless re-exporting a child's provide)`,
             location: use.name,
           });
         }
@@ -143,10 +201,12 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       if (use.params) {
         const childParams = new Set(use.doc.params.map((p) => p.name));
         for (const k of Object.keys(use.params)) {
+          // An error, not advice: the value the parent wired will never reach the child,
+          // which then sizes on its embedded default — eval fails this closed too.
           if (!childParams.has(k)) {
             out.push({
               rule: 'sheet-use-param',
-              severity: 'warning',
+              severity: 'error',
               message: `use "${use.name}" overrides "${k}", which is not a param of the child`,
               location: use.name,
             });
