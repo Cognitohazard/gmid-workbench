@@ -22,6 +22,7 @@ turns them into gm/ID design charts, operating-point lookups, and sized devices.
 - **Design sheets** — author variables, equations, and pass/fail constraints with
   margins; sweep a variable to chart every rule's margin and see where the design
   closes. Sheets compose: a child block can be sized against a different loaded device.
+  The authoring model is documented in [docs/sheet-format.md](docs/sheet-format.md).
 - **Noise and mismatch** — input-referred thermal noise (from stored PSDs when the
   table carries them, or a γ-model estimate), 1/f noise and the flicker corner,
   integrated RMS noise over a band, and a Pelgrom mismatch budget on the sized geometry.
@@ -108,6 +109,58 @@ PDK_ROOT=/path/to/pdks python3 tools/gen_gmid.py gf180  --out data/pdk
 It needs only Python, ngspice, and a fetched PDK. See
 [data/pdk/PROVENANCE.md](data/pdk/PROVENANCE.md) for the exact PDK builds, device
 list, and reproduction details.
+
+## Scripting the core
+
+The core (`@gmid/mostab-core`) is a pure library — you can import tables, size devices, and
+run design sheets from Node without the UI. It is TypeScript-first (the package entry is
+`src/index.ts`), so run these under a TypeScript-aware loader such as `tsx`, or build once
+with `npm run build` and import from `dist/`.
+
+```js
+import { importMostab, runSheet, sweepSheet } from '@gmid/mostab-core';
+import { readFileSync } from 'node:fs';
+
+const res = importMostab(readFileSync('nch_1v8__tt__27C.mostab.csv', 'utf8'));
+if (!res.ok) throw new Error(res.errors.map((e) => e.message).join('; '));
+
+// res.dataset.tables is DeviceTable[]; res.dataset.warnings holds the QA findings.
+const table = res.dataset.tables[0];
+
+const sheet = {
+  title: 'Single NMOS gm/ID sizing',
+  polarity: 'n',
+  params: [
+    { name: 'GBW_target', value: 10e6, unit: 'Hz', role: 'spec' },
+    { name: 'CL', value: 2e-12, unit: 'F', role: 'spec' },
+    { name: 'gm_id', value: 12, min: 6, max: 18, unit: '1/V', role: 'choice' },
+    { name: 'L', value: 0.5e-6, unit: 'm', role: 'choice' },
+  ],
+  bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.9' },
+  rows: [{ name: 'GBW', expr: 'gm/(2*pi*(cgg + CL))', unit: 'Hz' }],
+  rules: [{ id: 'inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
+};
+
+const out = runSheet(sheet, table);
+console.log(out.feasible, out.values.W, out.rules);
+
+// Trace the gm_id knob across its [min, max] to map the feasibility region.
+const sweep = sweepSheet(sheet, 'gm_id', table);
+```
+
+A composed sheet's child block names its device by a resolver key (`use.device`); pass a
+resolver — `(id) => DeviceTable | undefined` — as the third argument to map those keys to
+tables. The app keys tables by a content-stable uid, but in a script you choose the key, so
+long as each child's `device` matches:
+
+```js
+const byKey = new Map(res.dataset.tables.map((t) => [t.id.device, t]));
+runSheet(sheet, table, (id) => byKey.get(id), { fallbackBias: { vds: 0.9 } });
+```
+
+The `fallbackBias` option supplies an operating point for any live table axis a bind does not
+declare (with an advisory warning); a `vds`/`vsb` declared in the bind always wins. See
+[docs/sheet-format.md](docs/sheet-format.md) for the full design-sheet model.
 
 ## Dataset licensing
 
