@@ -51,8 +51,23 @@ export function defaultBias(axis: { name: string; values: ArrayLike<number> }): 
 // resistance, noise PSDs/densities) read better on a log axis; everything else (ratios, voltages,
 // capacitances that can go negative) defaults to linear. Right-clicking an axis overrides this.
 const LOG_QUANTITIES = new Set([
-  'id', 'id_w', 'ft', 'gm', 'gds', 'ro', 'ft_eff', 'av0_ft', 'gm_cgd',
-  'sth', 'sfl', 'svth', 'svth_m', 'svfl', 'vnth', 'vnth_m', 'vnfl',
+  'id',
+  'id_w',
+  'ft',
+  'gm',
+  'gds',
+  'ro',
+  'ft_eff',
+  'av0_ft',
+  'gm_cgd',
+  'sth',
+  'sfl',
+  'svth',
+  'svth_m',
+  'svfl',
+  'vnth',
+  'vnth_m',
+  'vnfl',
 ]);
 export type Scale = 'lin' | 'log';
 /** Preferred scale for an axis quantity when the panel hasn't pinned one. */
@@ -72,11 +87,15 @@ export function clampLegendCount(n: number): number {
  * need an [l × vgs] table, so the caller collapses these axes (via fixTable) before sizing. One
  * home for this policy, shared by the sizer and every design-sheet panel.
  */
-export function sizingBias(device: DeviceTable, sharedBias: Record<string, number>): Record<string, number> {
+export function sizingBias(
+  device: DeviceTable,
+  sharedBias: Record<string, number>,
+): Record<string, number> {
   const out: Record<string, number> = {};
   for (const a of device.grid.axes) {
     if (a.name === LENGTH_AXIS || a.name === SWEEP_AXIS) continue;
-    out[a.name] = a.name in sharedBias ? sharedBias[a.name] : a.values[Math.floor(a.values.length / 2)];
+    out[a.name] =
+      a.name in sharedBias ? sharedBias[a.name] : a.values[Math.floor(a.values.length / 2)];
   }
   return out;
 }
@@ -84,7 +103,10 @@ export function sizingBias(device: DeviceTable, sharedBias: Record<string, numbe
 /** Collapse a table's non-(l, vgs) axes to the shared bias point, yielding the [l × vgs] slice a
  *  sheet sizes on (lookupByGmId brackets gm/ID along vgs and cannot with extra live axes). The one
  *  home for the sizing reduction — the App sizer, sheet panels, and resolved child devices all use it. */
-export function reduceForSizing(device: DeviceTable, sharedBias: Record<string, number>): DeviceTable {
+export function reduceForSizing(
+  device: DeviceTable,
+  sharedBias: Record<string, number>,
+): DeviceTable {
   const fixed = sizingBias(device, sharedBias);
   return Object.keys(fixed).length ? fixTable(device, fixed) : device;
 }
@@ -114,8 +136,10 @@ export function tableUid(t: DeviceTable): string {
     }
   };
   mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${t.meta.W ?? ''}`);
-  for (const a of t.grid.axes) mix(`${a.name}:${a.values.length}:${a.values[0]}:${a.values[a.values.length - 1]}`);
-  for (const [k, col] of t.grid.quantities) mix(`${k}:${col.length}:${col[0]}:${col[col.length >> 1]}:${col[col.length - 1]}`);
+  for (const a of t.grid.axes)
+    mix(`${a.name}:${a.values.length}:${a.values[0]}:${a.values[a.values.length - 1]}`);
+  for (const [k, col] of t.grid.quantities)
+    mix(`${k}:${col.length}:${col[0]}:${col[col.length >> 1]}:${col[col.length - 1]}`);
   return `${deviceKey(t)}#${(h >>> 0).toString(36)}`;
 }
 
@@ -272,7 +296,8 @@ function sanitizeSheet(v: unknown): SheetDoc | undefined {
     const b = o.bind as Record<string, unknown>;
     if (typeof b.L === 'string') {
       const cand: SheetBind = { L: b.L };
-      for (const k of ['gm', 'gm_id', 'id'] as const) if (typeof b[k] === 'string') cand[k] = b[k] as string;
+      for (const k of ['gm', 'gm_id', 'id'] as const)
+        if (typeof b[k] === 'string') cand[k] = b[k] as string;
       const n = (['gm', 'gm_id', 'id'] as const).filter((k) => cand[k] !== undefined).length;
       if (n === 2) bind = cand;
     }
@@ -379,7 +404,8 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
   const str = (v: unknown, fallback: string) => (typeof v === 'string' && v ? v : fallback);
   const tabs: Tab[] = [];
   for (const t of o.tabs) {
-    if (!t || typeof t !== 'object' || !Array.isArray((t as Record<string, unknown>).panels)) continue;
+    if (!t || typeof t !== 'object' || !Array.isArray((t as Record<string, unknown>).panels))
+      continue;
     const tt = t as Record<string, unknown>;
     const panels: Panel[] = [];
     for (const p of tt.panels as unknown[]) {
@@ -391,7 +417,8 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       // A sheet panel always carries a valid doc so it can render; a corrupt one falls
       // back to the first vetted example rather than dropping the panel.
       const sheet = render === 'sheet' ? (sanitizeSheet(pp.sheet) ?? EXAMPLES[0]) : undefined;
-      const sheetSweep = render === 'sheet' && typeof pp.sheetSweep === 'string' ? pp.sheetSweep : undefined;
+      const sheetSweep =
+        render === 'sheet' && typeof pp.sheetSweep === 'string' ? pp.sheetSweep : undefined;
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,

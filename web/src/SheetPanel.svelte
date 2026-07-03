@@ -2,7 +2,6 @@
   // A leaf design-sheet panel: pick a vetted example, tune the design variables, and
   // watch the author equations and pass/fail constraints recompute with signed margins.
   // It holds no numerics — runSheet (core) does all evaluation and never throws.
-  import { untrack } from 'svelte';
   import {
     runSheet,
     sweepSheet,
@@ -15,7 +14,8 @@
     type SheetDoc,
     type RuleStatus,
   } from '@gmid/mostab-core';
-  import { ChartAdapter, type ChartData } from './chart';
+  import { type ChartData } from './chart';
+  import { chartHost } from './chartHost.svelte';
   import { CONTROL_HELP } from './help';
 
   let {
@@ -45,12 +45,18 @@
   const sweepable = $derived(
     cfg.params.filter(
       (p) =>
-        p.min !== undefined && p.max !== undefined && Number.isFinite(p.min) && Number.isFinite(p.max) && p.max > p.min,
+        p.min !== undefined &&
+        p.max !== undefined &&
+        Number.isFinite(p.min) &&
+        Number.isFinite(p.max) &&
+        p.max > p.min,
     ),
   );
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
   const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
-  const swept = $derived(active ? sweepSheet(cfg, active, device, SWEEP_POINTS, resolveDevice) : null);
+  const swept = $derived(
+    active ? sweepSheet(cfg, active, device, SWEEP_POINTS, resolveDevice) : null,
+  );
 
   // One line per rule, margin as a percentage; guardrails dashed (advisory, never gate). The
   // y = 0 gridline is the constraint boundary; PALETTE cycles the colours by default.
@@ -71,34 +77,22 @@
     if (idx.length === 0) return { none: true as const };
     const lo = idx[0];
     const hi = idx[idx.length - 1];
-    return { none: false as const, lo: swept.x[lo], hi: swept.x[hi], gap: idx.length !== hi - lo + 1 };
-  });
-
-  // The embedded uPlot chart, owned outside Svelte (mirrors Panel.svelte's lifecycle): rebuilt on
-  // entering/leaving sweep mode, refit in place on data edits, restyled on a theme/font change.
-  let el: HTMLDivElement | undefined = $state();
-  let chart: ChartAdapter | undefined;
-  let builtStyle = 0;
-  $effect(() => {
-    void active; // destroy when the sweep is turned off or the panel unmounts
-    return () => {
-      chart?.destroy();
-      chart = undefined;
+    return {
+      none: false as const,
+      lo: swept.x[lo],
+      hi: swept.x[hi],
+      gap: idx.length !== hi - lo + 1,
     };
   });
-  $effect(() => {
-    if (!active || !el || !chartData) return;
-    if (chart) chart.setData(chartData);
-    else {
-      chart = new ChartAdapter(el, chartData);
-      builtStyle = untrack(() => styleVersion);
-    }
-  });
-  $effect(() => {
-    if (chart && styleVersion !== builtStyle) {
-      chart.restyle();
-      builtStyle = styleVersion;
-    }
+
+  // The embedded uPlot chart, owned outside Svelte via the shared host: destroyed on
+  // leaving sweep mode, refit in place on data edits, restyled on a theme/font change.
+  let el: HTMLDivElement | undefined = $state();
+  chartHost({
+    el: () => el,
+    data: () => chartData,
+    active: () => active !== '',
+    styleVersion: () => styleVersion,
   });
 
   // Immutable edits: every change emits a fresh doc so the parent's Object.assign + persist
@@ -111,7 +105,8 @@
   function pickExample(e: Event): void {
     const sel = e.currentTarget as HTMLSelectElement;
     const i = Number(sel.value);
-    if (Number.isInteger(i) && i >= 0 && i < EXAMPLES.length) onChange(structuredClone(EXAMPLES[i]));
+    if (Number.isInteger(i) && i >= 0 && i < EXAMPLES.length)
+      onChange(structuredClone(EXAMPLES[i]));
     sel.value = '';
   }
   // Point a composed child at a specific loaded device (a table uid), or '' to inherit the parent.
@@ -140,7 +135,11 @@
     <strong>{cfg.title}</strong>
     {#if result.bind}
       {#if result.bind.ok}
-        <span class="bind">W={fmt(result.bind.W)}m · V<sub>GS</sub>={fmt(result.bind.vgs)}V · I<sub>D</sub>={fmt(result.bind.id)}A</span>
+        <span class="bind"
+          >W={fmt(result.bind.W)}m · V<sub>GS</sub>={fmt(result.bind.vgs)}V · I<sub>D</sub>={fmt(
+            result.bind.id,
+          )}A</span
+        >
       {:else}
         <span class="perr" title={result.bind.error}>sizing: {result.bind.error}</span>
       {/if}
@@ -148,7 +147,10 @@
     {#if sweepable.length}
       <label class="swsel" title={CONTROL_HELP.sheetSweep}>
         sweep
-        <select value={active} onchange={(e) => onSweep((e.currentTarget as HTMLSelectElement).value)}>
+        <select
+          value={active}
+          onchange={(e) => onSweep((e.currentTarget as HTMLSelectElement).value)}
+        >
           <option value="">off</option>
           {#each sweepable as p}<option value={p.name}>{p.name}</option>{/each}
         </select>
@@ -159,7 +161,9 @@
   <div class="svars">
     {#each cfg.params as p}
       <label class="svar">
-        <span class="vn">{p.name}{#if p.unit}<i>{p.unit}</i>{/if}</span>
+        <span class="vn"
+          >{p.name}{#if p.unit}<i>{p.unit}</i>{/if}</span
+        >
         <input
           class="num"
           type="number"
@@ -202,7 +206,11 @@
               {#each deviceOptions as o}<option value={o.uid}>{o.label}</option>{/each}
             </select>
           {/if}
-          <span class="prov">{#each Object.entries(c?.provides ?? {}) as [k, v]}<code>{joinProvide(u.name, k)}={fmt(v)}</code>{/each}</span>
+          <span class="prov"
+            >{#each Object.entries(c?.provides ?? {}) as [k, v]}<code
+                >{joinProvide(u.name, k)}={fmt(v)}</code
+              >{/each}</span
+          >
         </div>
       {/each}
     </div>
@@ -211,7 +219,10 @@
   {#if cfg.rows.length}
     <div class="srows">
       {#each cfg.rows as row}
-        <span class="srow"><b>{row.name}</b> = <code>{row.expr}</code> = {fmt(result.values[row.name])}{row.unit ?? ''}</span>
+        <span class="srow"
+          ><b>{row.name}</b> = <code>{row.expr}</code> = {fmt(result.values[row.name])}{row.unit ??
+            ''}</span
+        >
       {/each}
     </div>
   {/if}
@@ -231,14 +242,19 @@
   </table>
 
   {#if active && chartData}
-    <div class="scap">margin (%) vs <b>{active}</b>{#if swept?.unit} ({swept.unit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory)</div>
+    <div class="scap">
+      margin (%) vs <b>{active}</b>{#if swept?.unit}
+        ({swept.unit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory)
+    </div>
     <div class="pchart" bind:this={el}></div>
     {#if feasWindow}
       <p class="feas">
         {#if feasWindow.none}
           no feasible {active} in this range
         {:else}
-          feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(feasWindow.hi)}{swept?.unit ?? ''}{#if feasWindow.gap} (non-contiguous){/if}
+          feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(feasWindow.hi)}{swept?.unit ??
+            ''}{#if feasWindow.gap}
+            (non-contiguous){/if}
         {/if}
       </p>
     {/if}
@@ -402,15 +418,15 @@
   /* status colours read on both themes (system canvas backgrounds). */
   .st-pass .chip,
   .st-pass .rmar {
-    color: #3a9e5c;
+    color: var(--ok);
   }
   .st-amber .chip,
   .st-amber .rmar {
-    color: #d98e00;
+    color: var(--warn);
   }
   .st-fail .chip,
   .st-fail .rmar {
-    color: #d2596a;
+    color: var(--err);
   }
   .st-na {
     opacity: 0.55;
@@ -418,7 +434,7 @@
   .perr,
   .pwarn {
     margin: 0;
-    color: #d98e00;
+    color: var(--warn);
     font-family: ui-monospace, monospace;
     font-size: 0.78rem;
     overflow: hidden;

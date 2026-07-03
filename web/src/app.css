@@ -7,6 +7,11 @@
      rather than a clinical pure white. */
   --bg: light-dark(#f6f1e7, #181612);
   --fg: light-dark(#3a352c, #e9e5db);
+  /* Status colours (QA severities, sizing feasibility, sheet rule pass/fail): a green/red pair
+     picked to read on both the light and dark surfaces, plus the universal amber for warnings. */
+  --ok: #3a9e5c;
+  --warn: #d98e00;
+  --err: #d2596a;
   background-color: var(--bg);
   color: var(--fg);
   /* Font sizes are user-settable (settings.ts writes these vars + color-scheme on :root).

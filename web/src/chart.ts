@@ -34,7 +34,16 @@ export interface CursorInfo {
 
 // A muted, pastel-leaning qualitative palette: soft enough to sit on the creamy paper theme,
 // still saturated enough to stay distinguishable on both the light and dark backgrounds.
-export const PALETTE = ['#d2596a', '#5b9e6f', '#5277c4', '#d98a4a', '#9a6cb0', '#3fa0a8', '#b6953f', '#c56fa6'];
+export const PALETTE = [
+  '#d2596a',
+  '#5b9e6f',
+  '#5277c4',
+  '#d98a4a',
+  '#9a6cb0',
+  '#3fa0a8',
+  '#b6953f',
+  '#c56fa6',
+];
 
 export class ChartAdapter {
   private u: uPlot;
@@ -81,8 +90,13 @@ export class ChartAdapter {
     this.onCtx = (e: MouseEvent) => {
       if (!this.onAxisToggle) return;
       const r = this.u.over.getBoundingClientRect();
-      if (e.clientX < r.left) { e.preventDefault(); this.onAxisToggle('y'); }
-      else if (e.clientY > r.bottom) { e.preventDefault(); this.onAxisToggle('x'); }
+      if (e.clientX < r.left) {
+        e.preventDefault();
+        this.onAxisToggle('y');
+      } else if (e.clientY > r.bottom) {
+        e.preventDefault();
+        this.onAxisToggle('x');
+      }
     };
     el.addEventListener('contextmenu', this.onCtx);
     this.ro = new ResizeObserver((entries) => {
@@ -100,7 +114,8 @@ export class ChartAdapter {
   setData(data: ChartData): void {
     const next = data.lineColors ?? [];
     const nextDash = data.lineDash ?? [];
-    const sameColors = next.length === this.colors.length && next.every((c, i) => c === this.colors[i]);
+    const sameColors =
+      next.length === this.colors.length && next.every((c, i) => c === this.colors[i]);
     const sameDash = sameDashes(nextDash, this.dashes);
     const eff = effLog(data);
     const sameScale = eff.x === this.xLog && eff.y === this.yLog;
@@ -175,20 +190,24 @@ export class ChartAdapter {
       // infinite-loops on very small magnitudes (noise PSDs ~1e-24), throwing "Invalid array
       // length". Ours is bounded and correct across the full magnitude range.
       axes: [
-        { values: fmtTicks, ...(this.xLog ? { splits: logSplits } : {}), font: tickFont, size: Math.round(labelPx + 16), ...axis },
+        {
+          values: fmtTicks,
+          ...(this.xLog ? { splits: logSplits } : {}),
+          font: tickFont,
+          size: Math.round(labelPx + 16),
+          ...axis,
+        },
         { values: fmtTicks, ...(this.yLog ? { splits: logSplits } : {}), font: tickFont, ...axis },
       ],
       series: [
         {},
-        ...data.lineLabels.map(
-          (label, i): Series => ({
-            label,
-            stroke: this.colorAt(i),
-            dash: this.dashAt(i),
-            width: 1.5,
-            points: { show: false },
-          }),
-        ),
+        ...data.lineLabels.map((label, i): Series => ({
+          label,
+          stroke: this.colorAt(i),
+          dash: this.dashAt(i),
+          width: 1.5,
+          points: { show: false },
+        })),
       ],
       hooks: {
         setSeries: [

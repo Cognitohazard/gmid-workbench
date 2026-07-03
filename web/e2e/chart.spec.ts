@@ -11,7 +11,9 @@ async function setSlider(input: import('@playwright/test').Locator, value: strin
   }, value);
 }
 
-test('panels: canonical grid renders, every picker option computes, hover gives the operating point', async ({ page }) => {
+test('panels: canonical grid renders, every picker option computes, hover gives the operating point', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -68,7 +70,30 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
   expect(errors).toEqual([]);
 });
 
-test('importer: loads a mostab CSV, swaps the device, surfaces QA, seeds the sizer', async ({ page }) => {
+test('quantity picker: keyboard navigation', async ({ page }) => {
+  await page.goto('/');
+  await loadDemo(page);
+
+  const picker = page.locator('.grid .panel').first().locator('.qpick').first();
+  const trigger = picker.locator('.qtrigger');
+  const menu = picker.locator('.qmenu');
+
+  // Open the listbox: focus moves inside it (an option), not left on the trigger.
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await expect(trigger).not.toBeFocused();
+  expect(await page.evaluate(() => document.activeElement?.getAttribute('role'))).toBe('option');
+
+  // Escape closes the menu AND returns focus to the trigger.
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test('importer: loads a mostab CSV, swaps the device, surfaces QA, seeds the sizer', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -110,7 +135,9 @@ test('importer: loads a mostab CSV, swaps the device, surfaces QA, seeds the siz
   expect(errors).toEqual([]);
 });
 
-test('importer: a single-axis table (no L) renders one curve per panel, no error', async ({ page }) => {
+test('importer: a single-axis table (no L) renders one curve per panel, no error', async ({
+  page,
+}) => {
   await page.goto('/');
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
   await expect(page.locator('header .device')).toContainText('nch_singleL');
@@ -218,7 +245,9 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await expect(sizer.locator('.err')).toContainText('range');
 });
 
-test('dense family: colorbar by default, switchable to a sampled subset, persisted', async ({ page }) => {
+test('dense family: colorbar by default, switchable to a sampled subset, persisted', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -269,7 +298,9 @@ test('near-constant X (gm/ID swept over L) draws with a non-fatal warning', asyn
   await expect(p0.locator('canvas')).toBeVisible(); // non-fatal — the chart still draws
 });
 
-test('a panel that does not fan L exposes an L bias slider (no silent first-L bias)', async ({ page }) => {
+test('a panel that does not fan L exposes an L bias slider (no silent first-L bias)', async ({
+  page,
+}) => {
   await page.goto('/');
   await loadDemo(page);
   // Overview: every panel fans L → only the vds slider is shown (L would be inert).
@@ -283,7 +314,9 @@ test('a panel that does not fan L exposes an L bias slider (no silent first-L bi
   await expect(page.locator('header .slider').last()).toContainText('vds');
 });
 
-test('column toggle: charts shrink back and do not overlap (2 → 1 → 2 columns)', async ({ page }) => {
+test('column toggle: charts shrink back and do not overlap (2 → 1 → 2 columns)', async ({
+  page,
+}) => {
   await page.goto('/');
   await loadDemo(page);
   await expect(page.locator('.grid canvas')).toHaveCount(5);
@@ -307,7 +340,9 @@ test('column toggle: charts shrink back and do not overlap (2 → 1 → 2 column
     .toBe(true);
 });
 
-test('overlay: a second loaded device draws alongside the active one, dashed and labelled', async ({ page }) => {
+test('overlay: a second loaded device draws alongside the active one, dashed and labelled', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -413,7 +448,9 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   expect(errors).toEqual([]);
 });
 
-test('settings: a forced theme overrides the OS scheme, keeping text and background in sync', async ({ page }) => {
+test('settings: a forced theme overrides the OS scheme, keeping text and background in sync', async ({
+  page,
+}) => {
   // Simulate an OS in dark mode — the regression was forced-light showing white-on-white here
   // (the page background followed the forced scheme but the text colour did not).
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -437,7 +474,12 @@ test('settings: a forced theme overrides the OS scheme, keeping text and backgro
     page.evaluate(() => {
       const c = document.querySelector('.grid .panel canvas') as HTMLCanvasElement;
       const ctx = c.getContext('2d')!;
-      const band = ctx.getImageData(0, Math.floor(c.height * 0.9), c.width, Math.max(1, Math.floor(c.height * 0.1)));
+      const band = ctx.getImageData(
+        0,
+        Math.floor(c.height * 0.9),
+        c.width,
+        Math.max(1, Math.floor(c.height * 0.1)),
+      );
       let dark = 0;
       let light = 0;
       for (let i = 0; i < band.data.length; i += 4) {
@@ -464,7 +506,9 @@ test('settings: a forced theme overrides the OS scheme, keeping text and backgro
   await expect.poll(async () => (await ticks()).light).toBeGreaterThan(0);
 });
 
-test('settings: theme toggle and font sliders apply, rebuild the chart, and persist', async ({ page }) => {
+test('settings: theme toggle and font sliders apply, rebuild the chart, and persist', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -515,7 +559,9 @@ test('settings: theme toggle and font sliders apply, rebuild the chart, and pers
   expect(errors).toEqual([]);
 });
 
-test('axis scale: titles toggle linear⇄log, defaults apply, derived equation renders', async ({ page }) => {
+test('axis scale: titles toggle linear⇄log, defaults apply, derived equation renders', async ({
+  page,
+}) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
 

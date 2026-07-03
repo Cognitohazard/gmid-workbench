@@ -19,18 +19,16 @@
   let { device, sharedBias }: { device: DeviceTable; sharedBias: Record<string, number> } =
     $props();
 
-
   // ── Sizing panel (the "design" workflow): bind any two of {gm, gm/ID, ID} at a
   // chosen L → width, vgs, fT, and feasibility against the gm/ID ceiling.
-  let sizeL = $state(NaN);
   let inGmId = $state('');
   let inId = $state('');
   let inGm = $state('');
 
   const lAxis = $derived(device.grid.axes.find((a) => a.name === LENGTH_AXIS));
-  $effect(() => {
-    sizeL = lAxis ? lAxis.values[0] : NaN; // reset to the first L on a device swap
-  });
+  // Writable derived: user picks an L freely, but a device swap (new lAxis) re-derives
+  // it back to the table's first characterized length.
+  let sizeL = $derived(lAxis ? lAxis.values[0] : NaN);
 
   // Bias for sizing: every axis except l/vgs, fixed at the dashboard's shared-bias slider value
   // (so you size at the operating point you're viewing), else a mid node. Shown in the panel so
@@ -94,11 +92,23 @@
   });
 
   const mism = $derived.by(() => {
-    if (!sizing.result) return null;
-    const avth = Number(inAvth) / AVT_UI_PER_SI; // mV·µm → V·m
-    const abeta = Number(inAbeta) / ABETA_UI_PER_SI; // %·µm → ·m
-    if (!(avth >= 0) || !(abeta >= 0)) return null; // NaN/negative → hide
-    return mismatch(sizing.result.W, sizeL, sizing.result.gm_id, { avth, abeta });
+    const r = sizing.result;
+    if (!r) return null;
+    // Parse like every sibling field (engineering notation); undefined = not provided → hide.
+    const avthUi = parseNum(inAvth);
+    const abetaUi = parseNum(inAbeta);
+    if (avthUi === undefined || abetaUi === undefined) return null;
+    // The core owns the preconditions (positive geometry/bias, non-negative coefficients)
+    // and throws on violation — e.g. a degenerate bind sizing W to 0, or a negative A
+    // typed in. Catch → hide the budget, same style as the sizing derived above.
+    try {
+      return mismatch(r.W, sizeL, r.gm_id, {
+        avth: avthUi / AVT_UI_PER_SI, // mV·µm → V·m
+        abeta: abetaUi / ABETA_UI_PER_SI, // %·µm → ·m
+      });
+    } catch {
+      return null;
+    }
   });
 
   // Input-referred thermal-noise density (at the sized gm) and the total integrated
@@ -106,20 +116,33 @@
   // invalid band; the whole object is null until a geometry is sized.
   const noise = $derived.by(() => {
     if (!sizing.result) return null;
-    const density = thermalNoise(sizing.result.gm, sizing.result.quantities.gamma);
+    const density = thermalNoise(
+      sizing.result.gm,
+      sizing.result.quantities.gamma,
+      sizingTable.meta.temp,
+    );
+    // The core owns the band/PSD preconditions (0 < fLo < fHi, fc ≥ 0, sth ≥ 0 — the
+    // last is violable via a bad table gamma column, which QA warns about but never
+    // blocks) and throws on violation. Catch → density-only readout, same style as
+    // the sizing derived above; empty inputs skip the call without an exception.
     const fc = parseNum(inFco);
     const fLo = parseNum(inFlo);
     const fHi = parseNum(inFhi);
-    if (fc === undefined || fLo === undefined || fHi === undefined || !(fLo > 0) || !(fHi > fLo) || !(fc >= 0)) {
+    if (fc === undefined || fLo === undefined || fHi === undefined) {
       return { density, rms: null };
     }
-    return { density, rms: integratedNoise(density ** 2, fc, fLo, fHi) };
+    try {
+      return { density, rms: integratedNoise(density ** 2, fc, fLo, fHi) };
+    } catch {
+      return { density, rms: null };
+    }
   });
 </script>
 
 <aside class="sizer">
   <h2>size <small>bind any two</small> <Help text={CONTROL_HELP.bind} /></h2>
-  <label>L
+  <label
+    >L
     <select bind:value={sizeL}>
       {#each lAxis?.values ?? [] as L}<option value={L}>{formatEng(L)}m</option>{/each}
     </select>
@@ -146,13 +169,20 @@
   {#if sizing.result}
     {@const r = sizing.result}
     <dl class="sz">
-      <dt>W</dt><dd>{formatEng(r.W)}m</dd>
-      <dt>vgs</dt><dd>{formatEng(r.vgs)}V</dd>
-      <dt>gm/ID</dt><dd>{formatEng(r.gm_id)}</dd>
-      <dt>ID</dt><dd>{formatEng(r.id)}A</dd>
-      <dt>gm</dt><dd>{formatEng(r.gm)}S</dd>
-      <dt>fT</dt><dd>{formatEng(r.quantities.ft)}Hz</dd>
-      <dt>gm/gds</dt><dd>{formatEng(r.quantities.gm_gds)}</dd>
+      <dt>W</dt>
+      <dd>{formatEng(r.W)}m</dd>
+      <dt>vgs</dt>
+      <dd>{formatEng(r.vgs)}V</dd>
+      <dt>gm/ID</dt>
+      <dd>{formatEng(r.gm_id)}</dd>
+      <dt>ID</dt>
+      <dd>{formatEng(r.id)}A</dd>
+      <dt>gm</dt>
+      <dd>{formatEng(r.gm)}S</dd>
+      <dt>fT</dt>
+      <dd>{formatEng(r.quantities.ft)}Hz</dd>
+      <dt>gm/gds</dt>
+      <dd>{formatEng(r.quantities.gm_gds)}</dd>
     </dl>
     <p class="feas {r.feasible ? 'ok' : 'bad'}">
       {r.feasible ? '✓ feasible' : '✗ infeasible'} · ceiling {formatEng(r.ceiling)}
@@ -168,8 +198,22 @@
        sized. The 1/f corner is width-independent; the band sets the integration. -->
   <h3>noise <Help text={CONTROL_HELP.noise} /></h3>
   <p class="match-note">1/f corner · band, Hz{noiseFromMeta ? ' · corner from device' : ''}</p>
-  <label><span>f<sub>co</sub> <Help text={CONTROL_HELP.fco} /></span> <input bind:value={inFco} placeholder="Hz · e.g. 1meg" spellcheck="false" /></label>
-  <label><span>band <Help text={CONTROL_HELP.band} /></span> <span class="band"><input bind:value={inFlo} spellcheck="false" />–<input bind:value={inFhi} spellcheck="false" /></span></label>
+  <!-- Help renders a <button> (a labelable element), so each label needs an explicit
+       `for` — otherwise the button, being first, would steal the label's control. -->
+  <label for="sz-fco"
+    ><span>f<sub>co</sub> <Help text={CONTROL_HELP.fco} /></span>
+    <input id="sz-fco" bind:value={inFco} placeholder="Hz · e.g. 1meg" spellcheck="false" /></label
+  >
+  <label for="sz-flo"
+    ><span>band <Help text={CONTROL_HELP.band} /></span>
+    <span class="band"
+      ><input id="sz-flo" aria-label="band low, Hz" bind:value={inFlo} spellcheck="false" />–<input
+        aria-label="band high, Hz"
+        bind:value={inFhi}
+        spellcheck="false"
+      /></span
+    ></label
+  >
   {#if noise}
     <!-- γ-model thermal noise uses the SIZED gm (noise ∝ 1/√gm). The table's stored
          `sth`/`sfl` PSDs are at the characterization width and are shown in Explore. -->
@@ -177,20 +221,30 @@
       <dt>v<sub>n,th</sub> <small>γ-model</small></dt>
       <dd>{formatEng(noise.density)}V/√Hz</dd>
       {#if noise.rms !== null}
-        <dt>v<sub>n,rms</sub> <small>band</small></dt><dd>{formatEng(noise.rms)}V</dd>
+        <dt>v<sub>n,rms</sub> <small>band</small></dt>
+        <dd>{formatEng(noise.rms)}V</dd>
       {/if}
     </dl>
   {/if}
 
   <h3>matching <Help text={CONTROL_HELP.matching} /></h3>
   <p class="match-note">A in mV·µm / %·µm{matchFromMeta ? ' · from device' : ''}</p>
-  <label><span>A<sub>Vth</sub> <Help text={CONTROL_HELP.avth} /></span> <input bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label>
-  <label><span>A<sub>β</sub> <Help text={CONTROL_HELP.abeta} /></span> <input bind:value={inAbeta} placeholder="%·µm" spellcheck="false" /></label>
+  <label for="sz-avth"
+    ><span>A<sub>Vth</sub> <Help text={CONTROL_HELP.avth} /></span>
+    <input id="sz-avth" bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label
+  >
+  <label for="sz-abeta"
+    ><span>A<sub>β</sub> <Help text={CONTROL_HELP.abeta} /></span>
+    <input id="sz-abeta" bind:value={inAbeta} placeholder="%·µm" spellcheck="false" /></label
+  >
   {#if mism}
     <dl class="budget">
-      <dt>σ(V<sub>th</sub>)</dt><dd>{formatEng(mism.sigmaVth)}V</dd>
-      <dt>σ(V<sub>os</sub>) pair</dt><dd>{formatEng(mism.sigmaVos)}V</dd>
-      <dt>σ(I)/I</dt><dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
+      <dt>σ(V<sub>th</sub>)</dt>
+      <dd>{formatEng(mism.sigmaVth)}V</dd>
+      <dt>σ(V<sub>os</sub>) pair</dt>
+      <dd>{formatEng(mism.sigmaVos)}V</dd>
+      <dt>σ(I)/I</dt>
+      <dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
     </dl>
   {/if}
 </aside>
@@ -269,10 +323,10 @@
     font-family: ui-monospace, monospace;
   }
   .feas.ok {
-    color: #3cb44b;
+    color: var(--ok);
   }
   .feas.bad {
-    color: #e6194b;
+    color: var(--err);
   }
   .bias,
   .match-note {
@@ -286,14 +340,14 @@
     padding: 0.25rem 0.5rem 0.25rem 1.4rem;
     list-style: disc;
     font-size: 0.88em;
-    color: #d98e00;
-    border-left: 2px solid color-mix(in srgb, #d98e00 60%, transparent);
+    color: var(--warn);
+    border-left: 2px solid color-mix(in srgb, var(--warn) 60%, transparent);
   }
   .warns li {
     margin: 0.05rem 0;
   }
   .sizer .err {
-    color: #e6194b;
+    color: var(--err);
     font-family: ui-monospace, monospace;
   }
   .sizer .hint,

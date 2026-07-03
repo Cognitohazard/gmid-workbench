@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
   import {
     overlayCurvesXY,
     familyUnionCount,
@@ -13,14 +12,21 @@
     type OverlayCurvesXY,
     type OverlayLine,
   } from '@gmid/mostab-core';
-  import { ChartAdapter, PALETTE, type ChartData, type CursorInfo } from './chart';
+  import { PALETTE, type ChartData, type CursorInfo } from './chart';
+  import { chartHost } from './chartHost.svelte';
   import { viridis, viridisGradient, LARGE_FAMILY } from './colormap';
   import { axisUnit, qLabel } from './labels';
   import { QUANTITY_HELP, CONTROL_HELP } from './help';
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
   import QuantityPicker from './QuantityPicker.svelte';
-  import { clampLegendCount, defaultScale, reduceForSizing, type Panel, type Scale } from './dashboard';
+  import {
+    clampLegendCount,
+    defaultScale,
+    reduceForSizing,
+    type Panel,
+    type Scale,
+  } from './dashboard';
 
   let {
     device,
@@ -63,12 +69,24 @@
     onChange(which === 'y' ? { yExpr: v } : { xExpr: v });
   function onPickAxis(which: 'x' | 'y', v: string): void {
     if (v === '__custom__') {
+      focusCustom = which; // the picker unmounts under the keyboard user; move focus on
       setCustom(which, true); // reveal the text field, keep the current expression to edit
       return;
     }
     setCustom(which, false);
     setExpr(which, v);
   }
+  // Focus (and select) the custom-expression input only when the user JUST picked
+  // "ƒx custom…" — the same branch also mounts on a restored layout, which must not
+  // steal focus at load.
+  let focusCustom: 'x' | 'y' | null = $state(null);
+  const focusIfPending = (node: HTMLInputElement, which: 'x' | 'y') => {
+    if (focusCustom === which) {
+      focusCustom = null;
+      node.focus();
+      node.select();
+    }
+  };
   // Return to the dropdown: leave custom mode, snapping a non-option expression back to a
   // known quantity so the select has something to show (the typed expression is abandoned).
   function backToList(which: 'x' | 'y'): void {
@@ -80,7 +98,9 @@
   // Axis scale: the panel's pinned choice, else the quantity's default (log for decade-spanning
   // FOMs). Toggling flips it; the chart reads these through display.data and rebuilds.
   const scaleOf = (which: 'x' | 'y'): Scale =>
-    which === 'x' ? (cfg.xScale ?? defaultScale(cfg.xExpr)) : (cfg.yScale ?? defaultScale(cfg.yExpr));
+    which === 'x'
+      ? (cfg.xScale ?? defaultScale(cfg.xExpr))
+      : (cfg.yScale ?? defaultScale(cfg.yExpr));
   const xLog = $derived(scaleOf('x') === 'log');
   const yLog = $derived(scaleOf('y') === 'log');
   const toggleScale = (which: 'x' | 'y'): void => {
@@ -97,7 +117,12 @@
   const overlaid = $derived(overlays.length > 0);
   // Dash by device: the primary (table 0) is always solid; overlays cycle dash-only patterns so
   // no overlay can ever render solid and be mistaken for the active device (even at table 4, 8…).
-  const OVERLAY_DASHES: number[][] = [[6, 3], [2, 3], [6, 3, 2, 3], [1, 2]];
+  const OVERLAY_DASHES: number[][] = [
+    [6, 3],
+    [2, 3],
+    [6, 3, 2, 3],
+    [1, 2],
+  ];
   const dashFor = (tableIndex: number): number[] | null =>
     tableIndex === 0 ? null : OVERLAY_DASHES[(tableIndex - 1) % OVERLAY_DASHES.length];
 
@@ -111,7 +136,9 @@
   // A sheet sizes at an [l × vgs] point (lookupByGmId brackets gm/ID along vgs), so collapse every
   // other axis (vds, vsb, …) at the shared bias first (shared reduceForSizing policy) — else the
   // inverse lookup can't bracket.
-  const sheetDevice = $derived(cfg.render === 'sheet' ? reduceForSizing(device, sharedBias) : device);
+  const sheetDevice = $derived(
+    cfg.render === 'sheet' ? reduceForSizing(device, sharedBias) : device,
+  );
 
   // Per-child device resolution for composed sheets: a child `use.device` is a table uid; resolve
   // it to that loaded table, reduced for sizing exactly like the active device. uids are unique
@@ -119,6 +146,7 @@
   // undefined ⇒ the child fails closed. Memoized per (sheetDevices, sharedBias) so a feasibility
   // sweep reduces each distinct child device once, not once per sample.
   const resolveDevice: DeviceResolver = $derived.by(() => {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive memo cache, rebuilt per recompute
     const cache = new Map<string, DeviceTable | undefined>();
     return (uid: string) => {
       if (!cache.has(uid)) {
@@ -131,7 +159,9 @@
   // Picker options: one per distinct uid (a re-imported identical table collapses to one), with a
   // disambiguating suffix when two DIFFERENT devices share a display label.
   const deviceOptions = $derived.by(() => {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, rebuilt per recompute
     const seenUid = new Set<string>();
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, rebuilt per recompute
     const labelSeen = new Map<string, number>();
     const out: { uid: string; label: string }[] = [];
     for (const d of sheetDevices) {
@@ -152,7 +182,8 @@
   const built = $derived.by(() => {
     // A sheet panel draws no curves: skip the build entirely so its '' axes never reach
     // overlayCurvesXY (which would otherwise report a degenerate-axis error).
-    if (cfg.render === 'sheet') return { ov: null as OverlayCurvesXY | null, err: null as string | null, gated: 0 };
+    if (cfg.render === 'sheet')
+      return { ov: null as OverlayCurvesXY | null, err: null as string | null, gated: 0 };
     try {
       // Gate a dense overlay from the cheap count up front, so we never build curves we'd discard.
       const famCount = overlaid ? familyUnionCount([device, ...overlays], cfg.family) : 0;
@@ -197,7 +228,8 @@
 
     const drawnMeta = keep.map((k) => ov.meta[k]);
     const colourOf = (m: OverlayLine, pos: number): string => {
-      if (mode === 'colorbar') return viridis(nFam <= 1 ? 0.5 : (m.famValue - famMin) / (famMax - famMin || 1));
+      if (mode === 'colorbar')
+        return viridis(nFam <= 1 ? 0.5 : (m.famValue - famMin) / (famMax - famMin || 1));
       if (mode === 'sample') return PALETTE[pos % PALETTE.length]; // single device, sequential
       // discrete: colour by family-value index so the same value matches across devices
       const fi = Number.isFinite(m.famValue) ? (famIndex.get(m.famValue) ?? pos) : pos;
@@ -205,7 +237,10 @@
     };
     const labelOf = (m: OverlayLine): string => {
       const dev = tablesAll[m.tableIndex] ?? device;
-      const fam = ov.famName !== '' && Number.isFinite(m.famValue) ? `${ov.famName}=${formatEng(m.famValue)}${famUnit}` : '';
+      const fam =
+        ov.famName !== '' && Number.isFinite(m.famValue)
+          ? `${ov.famName}=${formatEng(m.famValue)}${famUnit}`
+          : '';
       if (!overlaid) return fam || dev.id.device;
       return fam ? `${dev.id.device} ${fam}` : dev.id.device;
     };
@@ -228,7 +263,6 @@
   );
 
   let el = $state<HTMLDivElement>();
-  let chart: ChartAdapter | undefined;
   let cursor = $state<CursorInfo | null>(null);
 
   // Full operating point under the cursor: recover the sweep coordinate (vgs) behind the
@@ -257,53 +291,34 @@
     const v = invertX(dev, cfg.xExpr, c.x, sweep, fixed);
     if (v == null) return null;
     try {
-      const q = lookup(dev, { [sweep]: v, ...fixed }, OP_FIELDS.map((f) => f[1]));
-      return { label: seriesKey[c.focusedLine]?.label ?? '', color: d.lineColors[c.focusedLine] ?? '', q };
+      const q = lookup(
+        dev,
+        { [sweep]: v, ...fixed },
+        OP_FIELDS.map((f) => f[1]),
+      );
+      return {
+        label: seriesKey[c.focusedLine]?.label ?? '',
+        color: d.lineColors[c.focusedLine] ?? '',
+        q,
+      };
     } catch {
       return null;
     }
   });
 
-  // Destroy the chart only when this panel stops showing one (chart → table) or unmounts.
-  // Data/axis changes are handled by setData below — including a line-count or colour change,
-  // which ChartAdapter rebuilds internally — so a bad expression leaves the last good chart up.
-  $effect(() => {
-    cfg.render;
-    return () => {
-      chart?.destroy();
-      chart = undefined;
-    };
-  });
-  // Create when data first arrives, else refit in place. A null build (bad expr / degenerate)
-  // leaves the chart untouched.
-  let builtStyle = -1; // the styleVersion the live chart was last built / restyled at
-  $effect(() => {
-    if (cfg.render !== 'chart' || !el || !display?.data) return;
-    if (chart) chart.setData(display.data);
-    else {
-      chart = new ChartAdapter(
-        el,
-        display.data,
-        (info) => (cursor = info),
-        (axis) => toggleScale(axis),
-        (eff) => (effScale = eff),
-      );
-      builtStyle = untrack(() => styleVersion); // a fresh build already reflects the current style
-    }
-  });
-  // Rebuild the chart only when the theme or tick-font setting changed since it was last built —
-  // the chart reads its colour and tick font from CSS only at construction. The version guard
-  // skips redundantly rebuilding a chart just created at this style (e.g. every panel on first
-  // load, where styleVersion bumps to 1 around chart creation).
-  $effect(() => {
-    if (chart && styleVersion !== builtStyle) {
-      chart.restyle();
-      builtStyle = styleVersion;
-    }
+  // Chart lifecycle (destroy / create-or-refit / restyle) — the shared host owns the
+  // ChartAdapter; a null display (bad expr / degenerate) leaves the last good chart up.
+  chartHost({
+    el: () => el,
+    data: () => display?.data,
+    active: () => cfg.render === 'chart',
+    styleVersion: () => styleVersion,
+    onCursor: (info) => (cursor = info),
+    onAxisToggle: (axis) => toggleScale(axis),
+    onScale: (eff) => (effScale = eff),
   });
 
-  const fmt = (v: number | null | undefined) =>
-    v == null || Number.isNaN(v) ? '—' : formatEng(v);
+  const fmt = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? '—' : formatEng(v));
   // Parse the "always include" field: comma-separated family values (engineering notation).
   const parseIncludes = (s: string): number[] =>
     s
@@ -326,13 +341,22 @@
 <!-- A clickable axis title that doubles as the linear⇄log toggle. `eff` is the scale the chart
      actually drew (a log request downgrades to linear on non-positive data); `requested` only
      drives the explanatory tail so the toggle never looks broken. -->
-{#snippet axisTitle(which: 'x' | 'y', prefix: string, expr: string, requested: boolean, eff: boolean)}
+{#snippet axisTitle(
+  which: 'x' | 'y',
+  prefix: string,
+  expr: string,
+  requested: boolean,
+  eff: boolean,
+)}
   <button
     type="button"
     class="axlabel"
     onclick={() => toggleScale(which)}
-    title="{prefix} scale: {eff ? 'log' : 'linear'}{requested && !eff ? ' (log needs positive data)' : ''} — click or right-click the axis to toggle"
-  >{@html qLabel(expr)}{#if eff}<span class="logtag"> log</span>{/if}</button>
+    title="{prefix} scale: {eff ? 'log' : 'linear'}{requested && !eff
+      ? ' (log needs positive data)'
+      : ''} — click or right-click the axis to toggle"
+    >{@html qLabel(expr)}{#if eff}<span class="logtag"> log</span>{/if}</button
+  >
 {/snippet}
 
 <!-- One axis control: a dropdown of computable quantities + a "ƒx custom…" entry that
@@ -346,13 +370,19 @@
       class="ex"
       list="exprs"
       value={expr}
+      use:focusIfPending={which}
       onchange={(e) => setExpr(which, (e.currentTarget as HTMLInputElement).value)}
       spellcheck="false"
       title={`${label}: ${CONTROL_HELP.custom}`}
     />
     <button class="rm tiny" onclick={() => backToList(which)} title="back to the list">↩</button>
   {:else}
-    <QuantityPicker value={expr} {options} title="{label} quantity" onPick={(v) => onPickAxis(which, v)} />
+    <QuantityPicker
+      value={expr}
+      {options}
+      title="{label} quantity"
+      onPick={(v) => onPickAxis(which, v)}
+    />
   {/if}
   {#if QUANTITY_HELP[expr]}<Help text={QUANTITY_HELP[expr]} />{/if}
 {/snippet}
@@ -360,76 +390,93 @@
 <div class="panel">
   <div class="ptools">
     {#if cfg.render === 'sheet'}
-    <span class="axl">design sheet</span>
-    <span class="grow"></span>
-    <button class="rm" onclick={onRemove} title="remove panel">×</button>
+      <span class="axl">design sheet</span>
+      <span class="grow"></span>
+      <button class="rm" onclick={onRemove} title="remove panel">×</button>
     {:else}
-    {@render axis('y', 'Y')}
-    {@render axis('x', 'X')}
-    <select
-      class="fam"
-      value={cfg.family}
-      onchange={(e) => onChange({ family: (e.currentTarget as HTMLSelectElement).value })}
-      title="family axis"
-    >
-      <option value="">(none)</option>
-      {#each families as f}<option value={f}>{f}</option>{/each}
-    </select>
-    <Help text={CONTROL_HELP.family} />
-    <!-- Legend control for a dense family — lives in the toolbar (not its own row) so it
+      {@render axis('y', 'Y')}
+      {@render axis('x', 'X')}
+      <select
+        class="fam"
+        value={cfg.family}
+        onchange={(e) => onChange({ family: (e.currentTarget as HTMLSelectElement).value })}
+        title="family axis"
+      >
+        <option value="">(none)</option>
+        {#each families as f}<option value={f}>{f}</option>{/each}
+      </select>
+      <Help text={CONTROL_HELP.family} />
+      <!-- Legend control for a dense family — lives in the toolbar (not its own row) so it
          never steals height from the plot. Only shown when the family has too many values
          for a per-curve legend; default colorbar, toggle to a sampled subset (N + includes). -->
-    {#if built.ov && built.ov.famName !== '' && built.ov.famValues.length > LARGE_FAMILY}
-      {@const lg = cfg.legend ?? { mode: 'colorbar' as const, count: 8, include: [] }}
-      <span class="plegend">
-        <button
-          class="rm"
-          onclick={() => onChange({ legend: { ...lg, mode: lg.mode === 'sample' ? 'colorbar' : 'sample' } })}
-          title="many curves: a colour scale + colorbar, or a sampled subset with a legend"
-        >{lg.mode === 'sample' ? 'sample' : 'colorbar'}</button>
-        {#if lg.mode === 'sample'}
-          <label
-            >N
-            <input
-              class="num"
-              type="number"
-              min="2"
-              max="32"
-              value={lg.count}
-              onchange={(e) =>
-                onChange({ legend: { ...lg, count: clampLegendCount(+(e.currentTarget as HTMLInputElement).value) } })}
-            /></label
+      {#if built.ov && built.ov.famName !== '' && built.ov.famValues.length > LARGE_FAMILY}
+        {@const lg = cfg.legend ?? { mode: 'colorbar' as const, count: 8, include: [] }}
+        <span class="plegend">
+          <button
+            class="rm"
+            onclick={() =>
+              onChange({ legend: { ...lg, mode: lg.mode === 'sample' ? 'colorbar' : 'sample' } })}
+            title="many curves: a colour scale + colorbar, or a sampled subset with a legend"
+            >{lg.mode === 'sample' ? 'sample' : 'colorbar'}</button
           >
-          <input
-            class="inc"
-            placeholder="include e.g. 0.5, 0.7"
-            title="family values to always show"
-            value={lg.include.map((v) => formatEng(v)).join(', ')}
-            onchange={(e) =>
-              onChange({ legend: { ...lg, include: parseIncludes((e.currentTarget as HTMLInputElement).value) } })}
-          />
-          <span class="of">{built.ov.famValues.length} total</span>
-        {/if}
-      </span>
-    {/if}
-    <span class="grow"></span>
-    <button
-      class="rm"
-      onclick={() => onChange({ render: cfg.render === 'chart' ? 'table' : 'chart' })}
-      title="switch chart / table"
-    >{cfg.render === 'chart' ? 'table' : 'chart'}</button>
-    <button class="rm" onclick={onRemove} title="remove panel">×</button>
+          {#if lg.mode === 'sample'}
+            <label
+              >N
+              <input
+                class="num"
+                type="number"
+                min="2"
+                max="32"
+                value={lg.count}
+                onchange={(e) =>
+                  onChange({
+                    legend: {
+                      ...lg,
+                      count: clampLegendCount(+(e.currentTarget as HTMLInputElement).value),
+                    },
+                  })}
+              /></label
+            >
+            <input
+              class="inc"
+              placeholder="include e.g. 0.5, 0.7"
+              title="family values to always show"
+              value={lg.include.map((v) => formatEng(v)).join(', ')}
+              onchange={(e) =>
+                onChange({
+                  legend: {
+                    ...lg,
+                    include: parseIncludes((e.currentTarget as HTMLInputElement).value),
+                  },
+                })}
+            />
+            <span class="of">{built.ov.famValues.length} total</span>
+          {/if}
+        </span>
+      {/if}
+      <span class="grow"></span>
+      <button
+        class="rm"
+        onclick={() => onChange({ render: cfg.render === 'chart' ? 'table' : 'chart' })}
+        title="switch chart / table">{cfg.render === 'chart' ? 'table' : 'chart'}</button
+      >
+      <button class="rm" onclick={onRemove} title="remove panel">×</button>
     {/if}
   </div>
 
   {#if built.err}<p class="perr" title={built.err}>{built.err}</p>{/if}
   {#if built.ov?.warning}<p class="pwarn" title={built.ov.warning}>⚠ {built.ov.warning}</p>{/if}
-  {#if built.gated}<p class="pwarn">⚠ overlay hidden — {built.gated} family values exceed {LARGE_FAMILY}; showing the active device only</p>{/if}
+  {#if built.gated}<p class="pwarn">
+      ⚠ overlay hidden — {built.gated} family values exceed {LARGE_FAMILY}; showing the active
+      device only
+    </p>{/if}
   <!-- Per-table failures (e.g. one overlay degenerate) — only while others still draw; a fully
        undrawable panel reports through .perr above. -->
   {#if display}
     {#each built.ov?.notes ?? [] as note, t}
-      {#if note}<p class="pwarn" title={note}>⚠ {tablesAll[t]?.id.device ?? `table ${t}`}: {note}</p>{/if}
+      {#if note}<p class="pwarn" title={note}>
+          ⚠ {tablesAll[t]?.id.device ?? `table ${t}`}: {note}
+        </p>{/if}
     {/each}
   {/if}
 
@@ -548,7 +595,7 @@
   .perr,
   .pwarn {
     margin: 0.15rem 0 0;
-    color: #d98e00;
+    color: var(--warn);
     font-family: ui-monospace, monospace;
     font-size: 0.78rem;
     overflow: hidden;

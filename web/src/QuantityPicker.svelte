@@ -18,47 +18,116 @@
 
   let open = $state(false);
   let root = $state<HTMLElement>();
+  let trigger = $state<HTMLButtonElement>();
+  let menu = $state<HTMLUListElement>();
   const cur = $derived(options.find((o) => o.value === value));
 
   function pick(v: string): void {
     open = false;
     onPick(v);
+    trigger?.focus(); // return focus to the trigger after a pick (keyboard or mouse)
   }
-  // While open, dismiss on an outside click or Escape (capture phase so it beats the toggle).
+  // While open, dismiss on an outside pointerdown — the one interaction that genuinely
+  // needs a window listener (capture phase so it beats the trigger's own toggle).
+  // Keyboard handling lives on the component itself (onKey below), where bubbling
+  // already scopes it to the picker; focusout (on the root) closes on Tab-out.
   $effect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
       if (root && !root.contains(e.target as Node)) open = false;
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') open = false;
-    };
     window.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('keydown', onKey);
-    };
+    return () => window.removeEventListener('pointerdown', onDown, true);
+  });
+  // Keyboard model while open: Escape closes (returning focus to the trigger); the
+  // arrows and Home/End rove focus through the option buttons, wrapping. Attached to
+  // the trigger and the listbox — focus is always on one of them while open.
+  function onKey(e: KeyboardEvent): void {
+    if (!open) return;
+    if (e.key === 'Escape') {
+      open = false;
+      trigger?.focus();
+      return;
+    }
+    if (!menu || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const items = [...menu.querySelectorAll<HTMLButtonElement>('button')];
+    if (items.length === 0) return;
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      e.key === 'Home'
+        ? 0
+        : e.key === 'End'
+          ? items.length - 1
+          : e.key === 'ArrowDown'
+            ? i < 0
+              ? 0
+              : (i + 1) % items.length
+            : i <= 0
+              ? items.length - 1
+              : i - 1;
+    items[next].focus();
+  }
+  // On open, move focus into the listbox — the selected option, or the first — so the arrow keys
+  // have a starting point and the listbox is announced.
+  $effect(() => {
+    if (!open || !menu) return;
+    const sel = menu.querySelector<HTMLButtonElement>('.qopt.sel');
+    (sel ?? menu.querySelector<HTMLButtonElement>('button'))?.focus();
   });
 </script>
 
-<span class="qpick" bind:this={root} data-value={value}>
-  <button type="button" class="qtrigger" {title} aria-expanded={open} onclick={() => (open = !open)}>
+<span
+  class="qpick"
+  bind:this={root}
+  data-value={value}
+  onfocusout={(e) => {
+    // Close when focus leaves the picker (e.g. Tab out), per the listbox pattern —
+    // a stale-open menu would otherwise keep capturing arrow keys.
+    if (root && !root.contains(e.relatedTarget as Node)) open = false;
+  }}
+>
+  <button
+    type="button"
+    class="qtrigger"
+    {title}
+    aria-haspopup="listbox"
+    aria-expanded={open}
+    bind:this={trigger}
+    onclick={() => (open = !open)}
+    onkeydown={onKey}
+  >
     <span class="qsym">{@html cur ? qLabel(cur.value) : value}</span>
     <span class="qcar" aria-hidden="true">▾</span>
   </button>
   {#if open}
-    <ul class="qmenu">
+    <ul class="qmenu" role="listbox" bind:this={menu} onkeydown={onKey}>
       {#each options as o}
-        <li>
-          <button type="button" class="qopt" data-value={o.value} class:sel={o.value === value} onclick={() => pick(o.value)}>
+        <!-- role=presentation: the exposed a11y tree must be listbox → option, without
+             listitem wrappers in between. -->
+        <li role="presentation">
+          <button
+            type="button"
+            class="qopt"
+            role="option"
+            aria-selected={o.value === value}
+            data-value={o.value}
+            class:sel={o.value === value}
+            onclick={() => pick(o.value)}
+          >
             <span class="qsym">{@html qLabel(o.value)}</span>
             {#if o.formula}<span class="qeq">= {@html qFormula(o.formula)}</span>{/if}
           </button>
         </li>
       {/each}
-      <li>
-        <button type="button" class="qopt qcustom" onclick={() => pick('__custom__')}>ƒx custom…</button>
+      <li role="presentation">
+        <button
+          type="button"
+          class="qopt qcustom"
+          role="option"
+          aria-selected={false}
+          onclick={() => pick('__custom__')}>ƒx custom…</button
+        >
       </li>
     </ul>
   {/if}
@@ -124,6 +193,11 @@
   }
   .qopt:hover {
     background: color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .qopt:focus-visible {
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    outline: 1px solid color-mix(in srgb, currentColor 55%, transparent);
+    outline-offset: -1px;
   }
   .qopt.sel {
     background: color-mix(in srgb, currentColor 16%, transparent);

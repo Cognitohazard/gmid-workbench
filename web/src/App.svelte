@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import {
     plottableQuantities,
     importMostab,
@@ -28,7 +28,6 @@
     tableUid,
     defaultBias,
     TEMPLATES,
-    SWEEP_AXIS,
     LENGTH_AXIS,
     GM_ID,
     type Dashboard,
@@ -51,7 +50,9 @@
   let overlayIdx = $state<number[]>([]);
   const active = $derived(devices[activeIdx]);
   const device = $derived(active?.table);
-  const overlays = $derived(overlayIdx.map((i) => devices[i]?.table).filter((d): d is DeviceTable => !!d));
+  const overlays = $derived(
+    overlayIdx.map((i) => devices[i]?.table).filter((d): d is DeviceTable => !!d),
+  );
   const warnings = $derived(active?.warnings ?? []);
   // Loaded devices for the per-child device picker in composed sheets: a unique stable uid (the
   // resolver/persistence key), a human label, and the raw table (reduced to an [l × vgs] sizing
@@ -79,12 +80,18 @@
   // duplicate them. Reseeding the preset once on upgrade is cleaner than half-migrating.
   const DASH_KEY = 'gmid.dash.v2';
   const loadDashboard = (dev: DeviceTable): Dashboard =>
-    loadJSON(DASH_KEY, (raw) => sanitizeDashboard(raw, dev), () => presetDashboard(dev));
+    loadJSON(
+      DASH_KEY,
+      (raw) => sanitizeDashboard(raw, dev),
+      () => presetDashboard(dev),
+    );
   // Null until the first device loads — the dashboard can only be seeded/validated against a
   // device (sanitizeDashboard/presetDashboard both need one). The saved layout in localStorage is
   // restored at that point, so a customized dashboard still survives a reload.
   let dashboard = $state<Dashboard | null>(null);
-  const activeTab = $derived(dashboard ? (dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]) : undefined);
+  const activeTab = $derived(
+    dashboard ? (dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]) : undefined,
+  );
   // Persist the layout (not the device — that re-seeds on load) so a customized dashboard
   // survives a reload. Best-effort. Never clobber the saved layout with the empty-boot null.
   $effect(() => {
@@ -121,6 +128,9 @@
     const sweep = dashboard.sweep;
     return device.grid.axes.filter((a) => a.name !== sweep && a.values.length > 1);
   });
+  // The per-axis slider bind:value={sharedBias[a.name]} needs $state's deep proxy; a
+  // writable $derived yields a plain object whose per-key mutations are not reactive.
+  // eslint-disable-next-line svelte/prefer-writable-derived
   let sharedBias = $state<Record<string, number>>({});
   $effect(() => {
     sharedBias = Object.fromEntries(biasAxes.map((a) => [a.name, defaultBias(a)]));
@@ -137,10 +147,18 @@
   // including derived ones the width scalar unlocks (id/w).
   const exprOptions = $derived.by(() => {
     if (!device || !dashboard) return [];
-    const pq = plottableQuantities(device.grid, dashboard.sweep, Object.keys(metaScalars(device.meta)));
+    const pq = plottableQuantities(
+      device.grid,
+      dashboard.sweep,
+      Object.keys(metaScalars(device.meta)),
+    );
     return [
       ...pq.base.map((k) => ({ value: k, label: `${k} [${baseUnit.get(k)}]` })),
-      ...pq.derived.map((k) => ({ value: k, label: `${k} = ${derivedExpr.get(k)}`, formula: derivedExpr.get(k) })),
+      ...pq.derived.map((k) => ({
+        value: k,
+        label: `${k} = ${derivedExpr.get(k)}`,
+        formula: derivedExpr.get(k),
+      })),
     ];
   });
   const defaultFamily = $derived(multiAxes.includes(LENGTH_AXIS) ? LENGTH_AXIS : '');
@@ -195,20 +213,68 @@
   }
   function addTab(): void {
     if (!dashboard) return;
-    dashboard.tabs.push({ id: crypto.randomUUID(), name: `Tab ${dashboard.tabs.length + 1}`, cols: 2, panels: [] });
+    dashboard.tabs.push({
+      id: crypto.randomUUID(),
+      name: `Tab ${dashboard.tabs.length + 1}`,
+      cols: 2,
+      panels: [],
+    });
     dashboard.activeTab = dashboard.tabs.length - 1;
   }
   function removeTab(i: number): void {
     if (!dashboard || dashboard.tabs.length <= 1) return;
     dashboard.tabs.splice(i, 1);
-    if (dashboard.activeTab >= dashboard.tabs.length) dashboard.activeTab = dashboard.tabs.length - 1;
+    if (dashboard.activeTab >= dashboard.tabs.length)
+      dashboard.activeTab = dashboard.tabs.length - 1;
   }
-  function renameTab(i: number): void {
-    if (!dashboard) return;
-    const name = prompt('Tab name', dashboard.tabs[i].name);
-    if (name != null && name.trim() !== '') dashboard.tabs[i].name = name.trim();
+  // Inline tab rename: `renaming` is the index whose label is currently an edit box (-1 = none).
+  // Started by double-click or F2, committed (trimmed, non-empty) on Enter/blur, cancelled on
+  // Escape. The blur guard (renaming !== i) stops Enter/Escape from committing twice as the input
+  // unmounts.
+  let renaming = $state(-1);
+  let tabsNav = $state<HTMLElement>();
+  function endRename(i: number, value: string): void {
+    if (dashboard) {
+      const name = value.trim();
+      if (name !== '') dashboard.tabs[i].name = name;
+    }
+    renaming = -1;
   }
-  const setCols = (d: number) => activeTab && (activeTab.cols = Math.min(4, Math.max(1, activeTab.cols + d)));
+  function onRenameKey(e: KeyboardEvent, i: number): void {
+    if (e.key !== 'Enter' && e.key !== 'Escape') return;
+    e.preventDefault();
+    if (e.key === 'Enter') endRename(i, (e.currentTarget as HTMLInputElement).value);
+    else renaming = -1; // cancel; the blur guard then skips committing
+    // Commit/cancel unmounts the edit box; put focus back on the tab button that
+    // replaces it, else the keyboard user lands on <body> (inactive tabs are
+    // tabindex=-1). Only these keyboard paths refocus — a blur means focus
+    // deliberately went elsewhere.
+    void tick().then(() => focusTab(i));
+  }
+  const focusSelect = (node: HTMLInputElement): void => {
+    node.focus();
+    node.select();
+  };
+  // Tablist keyboard model: the arrows move the active tab (focus follows), F2 renames it. Only
+  // the tab buttons drive this — the add/columns/template controls sharing the strip are reached
+  // with Tab as usual.
+  function focusTab(i: number): void {
+    tabsNav?.querySelectorAll<HTMLElement>('[role="tab"]')[i]?.focus();
+  }
+  function onTabsKey(e: KeyboardEvent): void {
+    if (!dashboard || (e.target as HTMLElement).getAttribute('role') !== 'tab') return;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const n = dashboard.tabs.length;
+      dashboard.activeTab = (dashboard.activeTab + (e.key === 'ArrowRight' ? 1 : -1) + n) % n;
+      focusTab(dashboard.activeTab);
+    } else if (e.key === 'F2') {
+      e.preventDefault();
+      renaming = dashboard.activeTab;
+    }
+  }
+  const setCols = (d: number) =>
+    activeTab && (activeTab.cols = Math.min(4, Math.max(1, activeTab.cols + d)));
 
   // Monotonic token so a slow earlier file read can't clobber a newer load
   // (last-selected wins, not last-resolved).
@@ -229,7 +295,10 @@
     // Append every table in the dataset (a multi-corner export brings TT/SS/FF in at once),
     // make the first newly-loaded one active, and reset the overlay selection.
     const first = devices.length;
-    devices = [...devices, ...result.dataset.tables.map((t) => ({ table: t, warnings: validate(t) }))];
+    devices = [
+      ...devices,
+      ...result.dataset.tables.map((t) => ({ table: t, warnings: validate(t) })),
+    ];
     select(first);
   }
 
@@ -272,7 +341,6 @@
   // owns only the open/close toggle and renders it (against the active device + bias)
   // while open.
   let sizerOpen = $state(false);
-
 </script>
 
 <header>
@@ -283,7 +351,8 @@
     {/each}
   </datalist>
   {#if dashboard}
-    <label class="axis">sweep
+    <label class="axis"
+      >sweep
       <select bind:value={dashboard.sweep}>
         {#each multiAxes as ax}<option value={ax}>{ax}</option>{/each}
       </select>
@@ -314,27 +383,51 @@
       onchange={(e) => loadFiles((e.currentTarget as HTMLInputElement).files)}
     />
   </label>
-  {#if device}<button class="btn size" class:on={sizerOpen} onclick={() => (sizerOpen = !sizerOpen)} title={CONTROL_HELP.size}>size</button>{/if}
+  {#if device}<button
+      class="btn size"
+      class:on={sizerOpen}
+      onclick={() => (sizerOpen = !sizerOpen)}
+      title={CONTROL_HELP.size}>size</button
+    >{/if}
   <details class="prefs">
     <summary class="btn" title="appearance: theme and font sizes">⚙</summary>
     <div class="prefs-pop">
-      <label class="prow">theme
+      <label class="prow"
+        >theme
         <select bind:value={settings.theme}>
           <option value="auto">auto</option>
           <option value="light">light</option>
           <option value="dark">dark</option>
         </select>
       </label>
-      <label class="prow">UI font
-        <input type="range" min={FONT_RANGE.min} max={FONT_RANGE.max} bind:value={settings.fontUi} />
+      <label class="prow"
+        >UI font
+        <input
+          type="range"
+          min={FONT_RANGE.min}
+          max={FONT_RANGE.max}
+          bind:value={settings.fontUi}
+        />
         <span class="pval">{settings.fontUi}px</span>
       </label>
-      <label class="prow">axis titles
-        <input type="range" min={FONT_RANGE.min} max={FONT_RANGE.max} bind:value={settings.fontAxisTitle} />
+      <label class="prow"
+        >axis titles
+        <input
+          type="range"
+          min={FONT_RANGE.min}
+          max={FONT_RANGE.max}
+          bind:value={settings.fontAxisTitle}
+        />
         <span class="pval">{settings.fontAxisTitle}px</span>
       </label>
-      <label class="prow">axis labels
-        <input type="range" min={FONT_RANGE.min} max={FONT_RANGE.max} bind:value={settings.fontAxisLabel} />
+      <label class="prow"
+        >axis labels
+        <input
+          type="range"
+          min={FONT_RANGE.min}
+          max={FONT_RANGE.max}
+          bind:value={settings.fontAxisLabel}
+        />
         <span class="pval">{settings.fontAxisLabel}px</span>
       </label>
     </div>
@@ -346,7 +439,9 @@
 {:else if warnings.length}
   <div class="qa">
     <strong>QA</strong>
-    {#each warnings as w}<span class="w {w.severity}" title={w.location ?? ''}>{w.rule}: {w.message}</span>{/each}
+    {#each warnings as w}<span class="w {w.severity}" title={w.location ?? ''}
+        >{w.rule}: {w.message}</span
+      >{/each}
   </div>
 {/if}
 
@@ -360,8 +455,8 @@
           class="dname"
           class:active={i === activeIdx}
           onclick={() => select(i)}
-          title={CONTROL_HELP.active}
-        >{deviceKey(d.table)}</button>
+          title={CONTROL_HELP.active}>{deviceKey(d.table)}</button
+        >
         <label class="dov" title={CONTROL_HELP.overlay}>
           <input
             type="checkbox"
@@ -370,23 +465,50 @@
             onchange={() => toggleOverlay(i)}
           />overlay
         </label>
-        <button class="drm" onclick={() => removeDevice(i)} title="remove from registry" aria-label="remove device">×</button>
+        <button
+          class="drm"
+          onclick={() => removeDevice(i)}
+          title="remove from registry"
+          aria-label="remove device">×</button
+        >
       </span>
     {/each}
   </nav>
 {/if}
 
-  {#if dashboard && activeTab}
+{#if dashboard && activeTab}
   {@const d = dashboard}
-  <nav class="tabs">
+  <div
+    class="tabs"
+    role="tablist"
+    aria-label="dashboard tabs"
+    tabindex={-1}
+    bind:this={tabsNav}
+    onkeydown={onTabsKey}
+  >
     {#each d.tabs as tab, i}
-      <button
-        class="tab"
-        class:on={i === d.activeTab}
-        onclick={() => (d.activeTab = i)}
-        ondblclick={() => renameTab(i)}
-        title="double-click to rename"
-      >{tab.name}</button>
+      {#if renaming === i}
+        <input
+          class="tab tabedit"
+          value={tab.name}
+          onkeydown={(e) => onRenameKey(e, i)}
+          onblur={(e) => {
+            if (renaming === i) endRename(i, (e.currentTarget as HTMLInputElement).value);
+          }}
+          use:focusSelect
+        />
+      {:else}
+        <button
+          class="tab"
+          class:on={i === d.activeTab}
+          role="tab"
+          aria-selected={i === d.activeTab}
+          tabindex={i === d.activeTab ? 0 : -1}
+          onclick={() => (d.activeTab = i)}
+          ondblclick={() => (renaming = i)}
+          title="double-click or F2 to rename">{tab.name}</button
+        >
+      {/if}
     {/each}
     <button class="tab add" onclick={addTab} title="add tab">+</button>
     <span class="grow"></span>
@@ -404,8 +526,8 @@
     {#if d.tabs.length > 1}
       <button class="btn" onclick={() => removeTab(d.activeTab)}>remove tab</button>
     {/if}
-  </nav>
-  {/if}
+  </div>
+{/if}
 
 <div
   class="main"
@@ -451,8 +573,14 @@
   {:else}
     <div class="welcome">
       <h2>No device loaded</h2>
-      <p>Import a mostab <code>.csv</code> to begin — use <strong>Load .csv</strong> above, or drop a file here.</p>
-      <p class="hint">Generate open-PDK tables with <code>tools/gen_gmid.py</code> (see <code>data/pdk/PROVENANCE.md</code>).</p>
+      <p>
+        Import a mostab <code>.csv</code> to begin — use <strong>Load .csv</strong> above, or drop a file
+        here.
+      </p>
+      <p class="hint">
+        Generate open-PDK tables with <code>tools/gen_gmid.py</code> (see
+        <code>data/pdk/PROVENANCE.md</code>).
+      </p>
     </div>
   {/if}
   {#if dragging}<div class="drophint">drop a mostab .csv</div>{/if}
@@ -523,7 +651,7 @@
     font-size: 0.92em;
   }
   .qa.error {
-    color: #e6194b;
+    color: var(--err);
   }
   .qa .w::before {
     content: '';
@@ -536,10 +664,10 @@
     vertical-align: middle;
   }
   .qa .w.error {
-    color: #e6194b;
+    color: var(--err);
   }
   .qa .w.warning {
-    color: #d98e00;
+    color: var(--warn);
   }
   .qa .w.info {
     opacity: 0.6;
@@ -657,6 +785,21 @@
     background: color-mix(in srgb, currentColor 15%, transparent);
     font-weight: 600;
   }
+  .tab:focus-visible {
+    outline: 1px solid color-mix(in srgb, currentColor 55%, transparent);
+    outline-offset: 1px;
+  }
+  /* The inline rename box replaces the tab button in place; match its metrics so the strip
+     does not reflow while editing. */
+  .tabedit {
+    font: inherit;
+    color: inherit;
+    background: var(--bg);
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: 4px 4px 0 0;
+    padding: 0.1rem 0.6rem;
+    width: 7rem;
+  }
   .cols {
     display: inline-flex;
     align-items: center;
@@ -731,7 +874,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font: 600 1rem system-ui, sans-serif;
+    font:
+      600 1rem system-ui,
+      sans-serif;
     background: color-mix(in srgb, Canvas 70%, transparent);
     pointer-events: none;
   }
