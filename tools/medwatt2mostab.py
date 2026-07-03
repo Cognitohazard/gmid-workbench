@@ -151,6 +151,7 @@ def convert_entry(table: dict, name: str, entry: dict, *, polarity=None):
                     rows.append(row)
 
     meta = {
+        "mostab": "0.1",
         "device": name,
         "corner": "tt",
         "simulator": _oneline(table.get("simulator")),

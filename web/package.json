@@ -1,7 +1,9 @@
 {
   "name": "gmid-web",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "gm/ID Workbench web UI: Svelte 5 + uPlot front end over @gmid/mostab-core; builds a hosted static site and a single self-contained offline HTML file.",
+  "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "vite",

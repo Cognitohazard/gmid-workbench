@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    name: Core (test + typecheck + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      # Lint covers web/src too (the flat config parses .svelte); the web job
+      # focuses on svelte-check, e2e, and the offline build.
+      - run: npm run lint
+      - run: npm run format:check
+
+  web:
+    name: Web (check + e2e + offline build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      # The web package consumes the core via file:.. — install root deps first.
+      - run: npm ci
+      - run: npm ci
+        working-directory: web
+      - run: npm run check
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      # Playwright starts the Vite dev server itself (see web/playwright.config.ts).
+      - run: npm run test:e2e
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gmid-offline
+          path: web/dist/index.html
+          if-no-files-found: error
