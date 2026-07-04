@@ -17,9 +17,14 @@
   /* Font sizes are user-settable (settings.ts writes these vars + color-scheme on :root).
      Declared here with the defaults so the first paint is correct before the app's settings
      effect runs (no flash of tiny text). */
-  --font-ui: 15px;
+  --font-ui: 16px;
   --font-axis-title: 14px;
   --font-axis-label: 13px;
+  /* Content-text multiplier, independent of the UI-zoom above. --font-ui (root size) scales the
+     whole interface — spacing, controls, charts — via rem; --text-scale multiplies ONLY the panel
+     text on top of it (each content font-size is calc(Xrem * var(--text-scale))). Using rem inside
+     the calc keeps it absolute, so the multiplier never compounds down nested elements. */
+  --text-scale: 1;
   font-family: system-ui, sans-serif;
   font-size: var(--font-ui);
   line-height: 1.45;

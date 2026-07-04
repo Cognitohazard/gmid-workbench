@@ -17,7 +17,14 @@
   import Sizer from './Sizer.svelte';
   import Help from './Help.svelte';
   import { CONTROL_HELP } from './help';
-  import { loadSettings, saveSettings, applySettings, FONT_RANGE, type Settings } from './settings';
+  import {
+    loadSettings,
+    saveSettings,
+    applySettings,
+    FONT_RANGE,
+    TEXT_SCALE_RANGE,
+    type Settings,
+  } from './settings';
   import { loadJSON, saveJSON } from './storage';
   import {
     presetDashboard,
@@ -101,6 +108,12 @@
   // Appearance settings (theme + font sizes). Applied to the document root and persisted on
   // every change. The whole UI and the canvas chart follow (both read system colours + vars).
   let settings = $state<Settings>(loadSettings());
+  // Live readout while dragging the UI-zoom slider. The zoom (root font-size) drives EVERY rem
+  // in the layout — including the header this popover hangs off — so applying it mid-drag would
+  // move the slider under the pointer (a moving target). We commit it only on release (onchange);
+  // oninput just updates this display, so the drag stays still and the zoom snaps in on release.
+  // (Text size needs no such dance: it touches only panel text, never this chrome.)
+  let uiZoomDrag = $state(settings.fontUi);
   // `styleVersion` signals each Panel to chart.restyle() (the chart re-reads its themed colour
   // and tick font from CSS only at construction). It is bumped INSIDE the apply effect, AFTER
   // applySettings has committed color-scheme to the DOM — so the restyle reads the just-applied
@@ -400,15 +413,28 @@
           <option value="dark">dark</option>
         </select>
       </label>
-      <label class="prow"
-        >UI font
+      <label class="prow" title="zoom the whole interface — layout, controls, and charts together"
+        >UI zoom
         <input
           type="range"
           min={FONT_RANGE.min}
           max={FONT_RANGE.max}
-          bind:value={settings.fontUi}
+          value={settings.fontUi}
+          oninput={(e) => (uiZoomDrag = +e.currentTarget.value)}
+          onchange={(e) => (settings.fontUi = +e.currentTarget.value)}
         />
-        <span class="pval">{settings.fontUi}px</span>
+        <span class="pval">{uiZoomDrag}px</span>
+      </label>
+      <label class="prow" title="panel text size, independent of the UI zoom (charts unaffected)"
+        >Text size
+        <input
+          type="range"
+          min={TEXT_SCALE_RANGE.min}
+          max={TEXT_SCALE_RANGE.max}
+          step="0.05"
+          bind:value={settings.textScale}
+        />
+        <span class="pval">{Math.round(settings.textScale * 100)}%</span>
       </label>
       <label class="prow"
         >axis titles
@@ -588,11 +614,14 @@
 
 <style>
   header {
+    position: relative; /* anchors the appearance panel (⚙), pinned top-right below */
     display: flex;
     align-items: baseline;
     gap: 1rem;
     flex-wrap: wrap;
-    padding: 0.5rem 0.75rem;
+    /* right padding reserves the corner the absolutely-positioned ⚙ occupies, so wrapping
+       toolbar items never slide under it. */
+    padding: 0.5rem 3rem 0.5rem 0.75rem;
     border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   }
   h1 {
@@ -676,8 +705,13 @@
     background: color-mix(in srgb, currentColor 15%, transparent);
   }
   /* Appearance popover: a native <details> disclosure so there's no popover/positioning JS. */
+  /* Pinned to the header's top-right corner (out of the wrapping flex flow) so the ⚙ never
+     wraps onto a second line at the left — which would make its right-anchored popover open
+     off the left edge of the screen. Fixed here, the panel always opens down-and-left, on-screen. */
   .prefs {
-    position: relative;
+    position: absolute;
+    top: 0.5rem;
+    right: 0.75rem;
   }
   .prefs summary {
     list-style: none;
@@ -685,16 +719,20 @@
   .prefs summary::-webkit-details-marker {
     display: none;
   }
+  /* Fixed-size island: sized in px, not rem, so the appearance panel does NOT zoom with the
+     UI-scale control it hosts. Otherwise raising the scale would grow this popover (and its
+     sliders) without bound — the settings that set the zoom must stay put while you use them. */
   .prefs-pop {
     position: absolute;
     right: 0;
-    top: calc(100% + 0.35rem);
+    top: calc(100% + 5px);
     z-index: 20;
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
-    min-width: 14rem;
-    padding: 0.6rem 0.7rem;
+    gap: 8px;
+    width: 240px;
+    padding: 10px 12px;
+    font-size: 13px;
     border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
     border-radius: 6px;
     background: var(--bg);
@@ -704,15 +742,15 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
+    gap: 8px;
   }
   .prow input[type='range'] {
     flex: 1 1 auto;
-    min-width: 5rem;
+    min-width: 90px;
   }
   .pval {
     font-family: ui-monospace, monospace;
-    min-width: 2.8rem;
+    min-width: 42px;
     text-align: right;
   }
   .main {

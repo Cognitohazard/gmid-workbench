@@ -5,9 +5,13 @@ const SCREENS = 'e2e/__screens__';
 
 // Drive a range <input> reliably (Playwright's fill() is flaky on type=range).
 async function setSlider(input: import('@playwright/test').Locator, value: string) {
+  // Fire input (live drag) AND change (release): controls that commit only on release — e.g.
+  // the UI-scale slider, which applies its zoom on pointer-up to avoid a moving-target drag —
+  // ignore input alone.
   await input.evaluate((el, v) => {
     (el as HTMLInputElement).value = v as string;
     el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
   }, value);
 }
 
@@ -528,8 +532,9 @@ test('settings: theme toggle and font sliders apply, rebuild the chart, and pers
     .toBe('dark');
   await expect(page.locator('.grid canvas').first()).toBeVisible();
 
-  // Bumping the UI font updates the --font-ui custom property.
-  await setSlider(page.locator('.prow', { hasText: 'UI font' }).locator('input'), '20');
+  // UI zoom (the root size) and text size (a content-only multiplier) are independent knobs:
+  // bumping each updates its own custom property. UI zoom commits on release; both stay applied.
+  await setSlider(page.locator('.prow', { hasText: 'UI zoom' }).locator('input'), '20');
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -537,6 +542,14 @@ test('settings: theme toggle and font sliders apply, rebuild the chart, and pers
       ),
     )
     .toBe('20px');
+  await setSlider(page.locator('.prow', { hasText: 'Text size' }).locator('input'), '1.4');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--text-scale').trim(),
+      ),
+    )
+    .toBe('1.4');
 
   // Bumping the tick (axis-label) font goes through the chart-rebuild path without error.
   await setSlider(page.locator('.prow', { hasText: 'axis labels' }).locator('input'), '18');
@@ -557,6 +570,26 @@ test('settings: theme toggle and font sliders apply, rebuild the chart, and pers
     .toBe('20px');
 
   expect(errors).toEqual([]);
+});
+
+test('settings: the appearance panel opens on-screen even when the toolbar wraps', async ({
+  page,
+}) => {
+  // A narrow viewport forces the header to wrap onto several lines — the case where the ⚙
+  // used to slide to the left and its right-anchored popover opened off the left edge.
+  await page.setViewportSize({ width: 480, height: 820 });
+  await page.goto('/');
+  await loadDemo(page);
+
+  await page.locator('.prefs summary').click();
+  const pop = page.locator('.prefs-pop');
+  await expect(pop).toBeVisible();
+
+  const box = await pop.boundingBox();
+  const vw = page.viewportSize()!.width;
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0); // not clipped off the left
+  expect(box!.x + box!.width).toBeLessThanOrEqual(vw + 1); // nor off the right
 });
 
 test('axis scale: titles toggle linear⇄log, defaults apply, derived equation renders', async ({

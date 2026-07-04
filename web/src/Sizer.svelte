@@ -261,7 +261,7 @@
     gap: 0.45rem;
   }
   .sizer h2 {
-    font-size: 0.95rem;
+    font-size: calc(0.95rem * var(--text-scale));
     margin: 0;
   }
   .sizer h2 small {
@@ -269,7 +269,7 @@
     font-weight: 400;
   }
   .sizer h3 {
-    font-size: 0.85rem;
+    font-size: calc(0.85rem * var(--text-scale));
     margin: 0.5rem 0 0;
     padding-top: 0.5rem;
     border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);

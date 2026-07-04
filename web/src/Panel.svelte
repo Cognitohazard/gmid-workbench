@@ -548,7 +548,7 @@
     align-items: center;
     gap: 0.3rem;
     font-family: ui-monospace, monospace;
-    font-size: 0.8rem;
+    font-size: calc(0.8rem * var(--text-scale));
   }
   .ptools .grow {
     flex: 1 1 auto;
@@ -584,7 +584,7 @@
     margin: 0.15rem 0 0;
     color: var(--warn);
     font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -596,7 +596,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    font-size: 0.75rem;
+    font-size: calc(0.75rem * var(--text-scale));
     opacity: 0.9;
   }
   .plegend label {
@@ -644,7 +644,7 @@
     gap: 0.2rem;
     width: 2.6rem;
     padding-left: 0.2rem;
-    font-size: 0.68rem;
+    font-size: calc(0.68rem * var(--text-scale));
     opacity: 0.85;
   }
   .cstrip {
@@ -706,7 +706,7 @@
   .ptable table {
     border-collapse: collapse;
     font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     width: 100%;
   }
   .ptable th,
@@ -734,7 +734,7 @@
     gap: 0.15rem 0.7rem;
     align-items: center;
     font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     opacity: 0.85;
     padding-top: 0.2rem;
   }
