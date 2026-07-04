@@ -337,9 +337,11 @@ it is not a pinned tautology):
       "note": "inversion-level knob: high = efficient/slow, low = fast/thirsty" },
     { "name": "vstar_floor", "value": 0.2, "unit": "V", "role": "spec",
       "note": "saturation-headroom budget" },
-    { "name": "vn_target", "value": 20e-9, "unit": "V/sqrt(Hz)", "role": "spec" }
+    { "name": "vn_target", "value": 20e-9, "unit": "V/sqrt(Hz)", "role": "spec" },
+    { "name": "V_ds", "value": 0.6, "unit": "V", "role": "spec",
+      "note": "drain bias the sizing slices at; body-grounded, so vsb = 0" }
   ],
-  "bind": { "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id" },
+  "bind": { "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id", "vds": "V_ds", "vsb": "0" },
   "rows": [
     { "name": "Cout", "expr": "cgg + CL", "unit": "F" },
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
@@ -356,7 +358,10 @@ it is not a pinned tautology):
 ```
 
 Reading it: `gm` is pinned from the spec and `gm/ID` chosen, so the bind sizes the device and
-surfaces `vstar`, `cgg`, `ceiling`, and the γ-model noise density `vnth_m`. The two invariants
+surfaces `vstar`, `cgg`, `ceiling`, and the γ-model noise density `vnth_m`. The bind also pins
+the operating point with `vds` (from `V_ds`) and `vsb` (0, body-grounded), so on a table with
+live `vds`/`vsb` axes the sizing slices at a stated point instead of borrowing the caller's
+bias. The two invariants
 enforce a physical `gm/ID` ceiling and a saturation-headroom floor. The requirement holds the
 input noise under target. The guardrail compares the *actual* GBW — which includes the sized
 `cgg` loading — against the target, so it reports how much the gate capacitance eats the

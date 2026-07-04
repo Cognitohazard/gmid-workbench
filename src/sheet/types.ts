@@ -186,6 +186,10 @@ export interface SheetChildReport {
   name: string;
   title: string;
   feasible: boolean;
+  /** The child's own sized operating point (W, VGS, ID, bias) or its bind error — so a
+   *  composed view can show each block's sizing, not just the scalars it exposes upward.
+   *  Absent for a child that has no bind or died before sizing. */
+  bind?: BindReport;
   provides: Record<string, number>;
   rules: RuleResult[];
   children?: SheetChildReport[];
@@ -223,21 +227,14 @@ export interface BindReport {
   vgs: number;
   id: number;
   /** The operating-point coordinates the table was sliced at before sizing (per bias
-   *  axis, signed) — declared in the bind or assumed from the caller's fallback. Absent
-   *  when the table needed no reduction. Makes the sizing bias visible in reports. */
+   *  axis, signed) — declared in the bind, or defaulted for body bias. Absent when the
+   *  table needed no reduction. Makes the sizing bias visible in reports. */
   bias?: Record<string, number>;
+  /** Bias axes this block must declare: the table has them live and there is no safe
+   *  default (i.e. `vds`, which varies per device — `vsb` defaults to 0, body-grounded).
+   *  Present only on a failed bind, so the UI can offer an in-place operating-point fix. */
+  needs?: string[];
   error?: string;
-}
-
-/** Options threaded through evaluateSheet/runSheet/sweepSheet. */
-export interface SheetEvalOptions {
-  /**
-   * Fallback operating point per bias axis (e.g. the UI's shared-bias sliders). Applied
-   * — with an advisory warning naming the assumed value — to any live bias axis the
-   * bind does not declare. A declared bind value always wins. Without a declaration or
-   * a fallback, a live extra axis fails the bind (never a silent slice).
-   */
-  fallbackBias?: Record<string, number>;
 }
 
 /**

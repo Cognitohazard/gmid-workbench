@@ -102,6 +102,15 @@ export interface BaseQuantity {
    * sized width, so author math over gds/cgg reads the SIZED device.
    */
   readonly perWidth?: boolean;
+  /**
+   * For a bias sweep axis only: the operating point a sizer may assume when a design sheet's
+   * bind leaves this axis undeclared — e.g. vsb = 0 (source at body, the body-grounded case
+   * almost every device sits in). An axis without one (vds, set by the circuit node) has no
+   * honest default and must be pinned explicitly. The default applies only when the table
+   * actually characterizes that point; otherwise sizing fails closed rather than silently
+   * sliding to the nearest slice.
+   */
+  readonly defaultBias?: number;
 }
 
 /** Definition of a derived quantity as an expression over the base namespace. */

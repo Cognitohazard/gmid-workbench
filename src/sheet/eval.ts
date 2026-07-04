@@ -7,6 +7,7 @@
 import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, metaScalars } from '../derive';
+import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { scalarScope } from '../expr';
 import { BINDABLE, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
@@ -18,7 +19,6 @@ import type {
   SheetBind,
   SheetChildReport,
   SheetDoc,
-  SheetEvalOptions,
   SheetResult,
   SheetUse,
 } from './types';
@@ -149,10 +149,18 @@ function applyBindBias(
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
-  fallbackBias: Record<string, number> | undefined,
-): { table: DeviceTable; bias: Record<string, number> } | { error: string } {
+): { table: DeviceTable; bias: Record<string, number> } | { error: string; needs?: string[] } {
   let t = table;
   const bias: Record<string, number> = {};
+  const needs: string[] = [];
+  const slice = (axis: string, live: { values: ArrayLike<number> }, v: number): number => {
+    const lo = live.values[0];
+    const hi = live.values[live.values.length - 1];
+    const applied = v < lo ? lo : v > hi ? hi : v;
+    t = fixAxisCached(t, axis, applied);
+    bias[axis] = applied;
+    return applied;
+  };
   for (const axis of BIAS_AXES) {
     const live = t.grid.axes.find((a) => a.name === axis && a.values.length > 1);
     // BIAS_AXES is namespace-derived (dynamic strings), while SheetBind's declared bias
@@ -173,37 +181,38 @@ function applyBindBias(
         });
         continue;
       }
-      const lo = live.values[0];
-      const hi = live.values[live.values.length - 1];
       // sliceGrid clamps to the hull; apply the clamp HERE so the report and the slice
       // agree — recording the requested value would show an operating point the sizing
       // never used. The requested value survives in the warning only.
-      const applied = v < lo ? lo : v > hi ? hi : v;
+      const applied = slice(axis, live, v);
       if (applied !== v) {
         warn({
           rule: 'sheet-bind',
           severity: 'warning',
-          message: `bind ${axis} ${v} is outside the table's ${axis} range [${lo}, ${hi}]; clamped to ${applied}`,
+          message: `bind ${axis} ${v} is outside the table's ${axis} range [${live.values[0]}, ${live.values[live.values.length - 1]}]; clamped to ${applied}`,
           location: 'bind',
         });
       }
-      t = fixAxisCached(t, axis, applied);
-      bias[axis] = applied;
     } else if (live) {
-      const fb = fallbackBias?.[axis];
-      if (fb !== undefined && Number.isFinite(fb)) {
-        warn({
-          rule: 'sheet-bind',
-          severity: 'warning',
-          message: `bind does not declare ${axis}; sizing at the caller's ${axis} = ${fb} — declare ${axis} in the bind to pin the operating point`,
-          location: 'bind',
-        });
-        t = fixAxisCached(t, axis, fb);
-        bias[axis] = fb;
-      }
-      // else: leave the axis live — sizeDevice raises its bracket error, which the
-      // caller decorates with declare-the-bias guidance. Never a silent slice.
+      // Undeclared, but the table has this axis live. An axis the namespace gives a safe default
+      // (vsb = 0, body-grounded) takes it — but ONLY when the table characterizes that point: if
+      // the default is outside the swept range, it is not honest (slice would silently clamp to the
+      // nearest slice), so fail closed like vds and make the author pin a real value.
+      const def = AXIS_DEFAULT_BIAS.get(axis);
+      const lo = live.values[0];
+      const hi = live.values[live.values.length - 1];
+      if (def !== undefined && lo <= def && def <= hi) slice(axis, live, def);
+      else needs.push(axis);
     }
+  }
+  if (needs.length) {
+    const list = needs.join(', ');
+    return {
+      error: `declare the operating point (${list}) in the bind — the table has ${
+        needs.length > 1 ? 'those axes' : 'that axis'
+      } and sizing must pin ${needs.length > 1 ? 'them' : 'it'} to a value`,
+      needs,
+    };
   }
   return { table: t, bias };
 }
@@ -215,13 +224,12 @@ function runBind(
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
-  fallbackBias?: Record<string, number>,
 ): BindReport {
   // Every bind failure surfaces an error warning AND an ok:false report, so the feasibility
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design).
-  const fail = (error: string): BindReport => {
+  const fail = (error: string, needs?: string[]): BindReport => {
     warn({ rule: 'sheet-bind', severity: 'error', message: error, location: 'bind' });
-    return { ok: false, W: NaN, vgs: NaN, id: NaN, error };
+    return { ok: false, W: NaN, vgs: NaN, id: NaN, error, ...(needs?.length ? { needs } : {}) };
   };
 
   if (!table) return fail('no device to size against');
@@ -234,8 +242,8 @@ function runBind(
   if (L === undefined || !Number.isFinite(L))
     return fail('bind L did not resolve to a finite number');
 
-  const sliced = applyBindBias(b, table, values, scope, warn, fallbackBias);
-  if ('error' in sliced) return fail(sliced.error);
+  const sliced = applyBindBias(b, table, values, scope, warn);
+  if ('error' in sliced) return fail(sliced.error, sliced.needs);
 
   const q: SizeQuery = { table: sliced.table, L };
   for (const k of supplied) {
@@ -404,7 +412,6 @@ function evalChildren(
   uses: SheetUse[],
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
-  opts: SheetEvalOptions | undefined,
   depth: number,
   values: Record<string, number>,
   scope: Scope,
@@ -452,7 +459,7 @@ function evalChildren(
     }
 
     const { doc: childDoc, ok: paramsOk } = applyUseParams(use, values, scope, warn);
-    const res = evaluateSheet(childDoc, childTable, resolveDevice, opts, depth + 1);
+    const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1);
 
     // Roll up child warnings, attributed to the use site (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
@@ -475,6 +482,7 @@ function evalChildren(
       name: use.name,
       title: use.doc.title,
       feasible: paramsOk && res.feasible,
+      ...(res.bind ? { bind: res.bind } : {}),
       provides,
       rules: res.rules,
       ...(res.children ? { children: res.children } : {}),
@@ -494,7 +502,6 @@ export function evaluateSheet(
   doc: SheetDoc,
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
-  opts?: SheetEvalOptions,
   _depth = 0,
 ): SheetResult {
   const warnings: QAWarning[] = [];
@@ -517,13 +524,11 @@ export function evaluateSheet(
   //    (name__key) in its own bind/rows/rules.
   const children =
     doc.uses && doc.uses.length > 0
-      ? evalChildren(doc.uses, table, resolveDevice, opts, _depth, values, scope, warn)
+      ? evalChildren(doc.uses, table, resolveDevice, _depth, values, scope, warn)
       : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when bound.
-  const bind = doc.bind
-    ? runBind(doc.bind, table, values, scope, warn, opts?.fallbackBias)
-    : undefined;
+  const bind = doc.bind ? runBind(doc.bind, table, values, scope, warn) : undefined;
 
   // 4. Author rows, in document order. A row that cannot RESOLVE (missing quantity,
   //    parse error) is skipped with a plain warning — graceful degradation for optional

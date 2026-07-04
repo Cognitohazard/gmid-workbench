@@ -9,7 +9,7 @@ export const BASE_QUANTITIES: readonly BaseQuantity[] = [
   { key: 'vgs', unit: 'V', required: true, axis: true },
   { key: 'l', unit: 'm', required: false, axis: true },
   { key: 'vds', unit: 'V', required: false, axis: true },
-  { key: 'vsb', unit: 'V', required: false, axis: true },
+  { key: 'vsb', unit: 'V', required: false, axis: true, defaultBias: 0 }, // body-grounded default
   // required operating-point quantities
   { key: 'id', unit: 'A', required: true, perWidth: true },
   { key: 'gm', unit: 'S', required: true, perWidth: true },
@@ -37,6 +37,15 @@ export const BASE_KEYS: ReadonlySet<string> = new Set(BASE_QUANTITIES.map((q) =>
 /** Base keys that scale with device width (see BaseQuantity.perWidth). */
 export const PER_WIDTH_KEYS: ReadonlySet<string> = new Set(
   BASE_QUANTITIES.filter((q) => q.perWidth).map((q) => q.key),
+);
+
+/** Bias axes that carry a safe default operating point (see BaseQuantity.defaultBias),
+ *  keyed by axis name — the one place an undeclared bias axis is allowed to size. */
+export const AXIS_DEFAULT_BIAS: ReadonlyMap<string, number> = new Map(
+  BASE_QUANTITIES.filter((q) => q.axis && q.defaultBias !== undefined).map((q) => [
+    q.key,
+    q.defaultBias as number,
+  ]),
 );
 
 /** Keys a usable table must carry (vgs, id, gm) — every chart/lookup needs them. */

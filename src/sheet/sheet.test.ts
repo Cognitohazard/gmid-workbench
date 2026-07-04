@@ -666,21 +666,41 @@ describe('bind bias declaration (vds/vsb)', () => {
     expect(res.bind?.bias).toEqual({ vds: 0.6 });
   });
 
-  it('an undeclared live axis uses the caller fallback WITH an advisory warning', () => {
-    const res = evaluateSheet(boundDoc(), dev3, undefined, { fallbackBias: { vds: 0.6 } });
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias).toEqual({ vds: 0.6 });
-    expect(
-      res.warnings.some((w) => w.severity === 'warning' && /does not declare vds/.test(w.message)),
-    ).toBe(true);
-    const ref = evaluateSheet(boundDoc(), fixTable(dev3, { vds: 0.6 }));
-    expect(res.bind?.W).toBeCloseTo(ref.bind?.W as number, 12);
-  });
-
-  it('an undeclared live axis with NO fallback fails the bind with declare-the-bias guidance', () => {
-    const res = evaluateSheet(boundDoc(), dev3);
+  it('an undeclared live vds fails closed and flags the axis for the in-place fixer', () => {
+    const res = evaluateSheet(boundDoc(), dev3); // dev3 has a live vds axis, none declared
     expect(res.bind?.ok).toBe(false);
     expect(res.bind?.error).toMatch(/declare the operating point/);
+    expect(res.bind?.needs).toEqual(['vds']);
+    expect(res.feasible).toBe(false);
+  });
+
+  it('an undeclared body bias (vsb) defaults to 0 — the body-grounded case sizes cleanly', () => {
+    // A table with BOTH a vds and a vsb axis; declare only vds and let vsb default.
+    const dev4 = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.3 },
+      vsb: { min: 0, max: 0.6, step: 0.2 },
+    });
+    const doc = boundDoc({
+      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+    });
+    const res = evaluateSheet(doc, dev4);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.bias).toEqual({ vds: 0.6, vsb: 0 });
+    expect(res.bind?.needs).toBeUndefined();
+  });
+
+  it('an undeclared vsb fails closed (not a silent clamp) when the table never characterizes 0', () => {
+    // A back-biased-only table: the vsb sweep starts above 0, so "body-grounded" is unavailable.
+    const dev4 = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.3 },
+      vsb: { min: 0.2, max: 0.6, step: 0.2 },
+    });
+    const doc = boundDoc({
+      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+    });
+    const res = evaluateSheet(doc, dev4);
+    expect(res.bind?.ok).toBe(false);
+    expect(res.bind?.needs).toEqual(['vsb']);
     expect(res.feasible).toBe(false);
   });
 
@@ -701,17 +721,41 @@ describe('bind bias declaration (vds/vsb)', () => {
     expect(res.warnings.some((w) => /outside the table's vds range/.test(w.message))).toBe(true);
   });
 
-  it('the fallback threads through composition to children', () => {
+  it('a child fails closed on its own undeclared bias — the parent never lends it one', () => {
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
       params: [],
       rows: [],
       rules: [],
-      uses: [{ name: 'cs', doc: boundDoc({ provide: ['id'] }) }],
+      uses: [{ name: 'cs', doc: boundDoc({ provide: ['id'] }) }], // child binds without vds
     };
-    const res = evaluateSheet(parent, dev3, undefined, { fallbackBias: { vds: 0.6 } });
+    const res = evaluateSheet(parent, dev3);
+    expect(res.children?.[0].feasible).toBe(false);
+    expect(res.children?.[0].bind?.needs).toEqual(['vds']);
+    expect(res.feasible).toBe(false);
+  });
+
+  it('a child that declares its own vds sizes cleanly through composition', () => {
+    const parent: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [
+        {
+          name: 'cs',
+          doc: boundDoc({
+            bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+            provide: ['id'],
+          }),
+        },
+      ],
+    };
+    const res = evaluateSheet(parent, dev3);
     expect(res.children?.[0].feasible).toBe(true);
+    expect(res.children?.[0].bind?.bias).toEqual({ vds: 0.6 });
     expect(res.values.cs__id).toBeGreaterThan(0);
   });
 });

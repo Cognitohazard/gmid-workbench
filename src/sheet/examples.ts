@@ -44,9 +44,17 @@ const NMOS_GMID_SIZING: SheetDoc = {
       note: 'saturation-headroom budget; default set so gm/ID = 12 lands just under it',
     },
     { name: 'vn_target', value: 20e-9, unit: 'V/sqrt(Hz)', role: 'spec' },
+    {
+      name: 'V_ds',
+      value: 0.6,
+      unit: 'V',
+      role: 'spec',
+      note: 'drain bias the sizing slices at; body-grounded, so vsb = 0',
+    },
   ],
   // bind-any-2: gm from the spec, gm/ID the knob; ID is derived via gm = gm/ID · ID.
-  bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' },
+  // The operating point is pinned here so sizing never silently borrows the panel's bias.
+  bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
   rows: [
     { name: 'Cout', expr: 'cgg + CL', unit: 'F' },
     { name: 'GBW', expr: 'gm/(2*pi*Cout)', unit: 'Hz' },
@@ -115,9 +123,16 @@ const NMOS_NOISE_MATCHING: SheetDoc = {
       note: 'integrated input noise, RMS',
     },
     { name: 'vos_target', value: 15e-3, unit: 'V', role: 'spec', note: 'input offset, 1 sigma' },
+    {
+      name: 'V_ds',
+      value: 0.6,
+      unit: 'V',
+      role: 'spec',
+      note: 'drain bias the sizing slices at; body-grounded, so vsb = 0',
+    },
   ],
   // bind-any-2: fix ID (budget) and gm/ID (knob); gm is derived via gm = gm/ID · ID.
-  bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+  bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
   rows: [
     // The sizing reports every quantity at the SIZED width (svth/svfl included — the
     // parallel-composition rescale is the sizer's job, not author math), so the stored
@@ -157,8 +172,10 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
     { name: 'L', value: 0.5e-6, unit: 'm' },
     { name: 'gm_id', value: 12, unit: '1/V' },
     { name: 'I_bias', value: 20e-6, unit: 'A' },
+    { name: 'V_ds', value: 0.3, unit: 'V', note: 'the input device sits low in the stack' },
   ],
-  bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+  // vds pinned to the (low) input-device drain; body-grounded ⇒ vsb = 0.
+  bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
   rows: [],
   rules: [{ id: 'feasible-inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
   provide: ['gm', 'av0', 'vstar', 'id'],
@@ -218,6 +235,13 @@ const NMOS_CASCODE: SheetDoc = {
       role: 'spec',
       note: 'per-stage saturation floor',
     },
+    {
+      name: 'V_ds_casc',
+      value: 0.9,
+      unit: 'V',
+      role: 'spec',
+      note: 'cascode-device drain bias (higher than the input); body-grounded, so vsb = 0',
+    },
   ],
   uses: [
     {
@@ -228,8 +252,9 @@ const NMOS_CASCODE: SheetDoc = {
     },
   ],
   // The cascode device sits in series with the input device, so it carries the same drain
-  // current cs__id (a child-provided scalar referenced right here in the parent's bind).
-  bind: { L: 'L', id: 'cs__id', gm_id: 'gm_id' },
+  // current cs__id (a child-provided scalar referenced right here in the parent's bind). Its
+  // own drain sits higher in the stack; body-grounded ⇒ vsb = 0.
+  bind: { L: 'L', id: 'cs__id', gm_id: 'gm_id', vds: 'V_ds_casc', vsb: '0' },
   rows: [
     // Cascode gain ≈ product of the two stages' intrinsic gains (av0 is width-independent).
     { name: 'Av', expr: 'av0 * cs__av0', unit: 'V/V' },

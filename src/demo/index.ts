@@ -17,6 +17,13 @@ export interface DemoOptions {
    * channel-length-modulation id(vds) dependence; omitted ⇒ a 2-D [l, vgs] table.
    */
   vds?: { min: number; max: number; step: number };
+  /**
+   * Optional source-body sweep [V]. When given, adds a `vsb` axis with a body-effect
+   * threshold shift (higher vsb ⇒ higher Vth), matching a real 4-D PDK table's
+   * [l, vds, vsb, vgs] shape. At vsb = 0 (body-grounded) the slice is identical to the
+   * no-vsb table, so it composes with the other options without perturbing them.
+   */
+  vsb?: { min: number; max: number; step: number };
   /** Characterization width [m]. Default 10 µm. */
   W?: number;
 }
@@ -29,6 +36,7 @@ const DEFAULT_W = 10e-6;
 const N_SLOPE = 1.3; // subthreshold slope factor n (dimensionless)
 const COX = 0.01; // gate oxide capacitance per area [F/m^2]
 const VTH0 = 0.4; // nominal threshold [V]
+const BODY_FACTOR = 0.2; // body-effect Vth slope [V/V]: Vth rises BODY_FACTOR·vsb (0 at vsb=0)
 const ISPEC_REF = 1e-6; // specific-current scale [A] at the reference geometry W/L = 1
 // Early voltage slope: VA = VA_PER_L * L [V] (∝ L). Exported so golden tests derive
 // expected gds/gain from the one model constant instead of re-declaring the number.
@@ -112,10 +120,12 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
   const lVals = Float64Array.from(lengths).sort();
   const vgsVals = sweepValues(vgsSpec);
   const vdsVals = opts.vds ? sweepValues(opts.vds) : undefined;
+  const vsbVals = opts.vsb ? sweepValues(opts.vsb) : undefined;
   const nL = lVals.length;
   const nVgs = vgsVals.length;
   const nVds = vdsVals ? vdsVals.length : 1;
-  const size = nL * nVds * nVgs; // == nL*nVgs when there is no vds axis
+  const nVsb = vsbVals ? vsbVals.length : 1;
+  const size = nL * nVds * nVsb * nVgs; // collapses to nL*nVgs when neither axis is present
 
   const id = new Float64Array(size);
   const gm = new Float64Array(size);
@@ -141,28 +151,36 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
     const ispec = ISPEC_REF * (W / L); // specific current ∝ W/L
     const VA = VA_PER_L * L; // Early voltage ∝ L
     const cggL = W * L * COX; // gate cap ∝ W·L·Cox
+    // Channel-length-modulation multiplier per vds point: id (and gm) rise ~linearly with
+    // vds about saturation. Depends only on (L, vds), so compute it once per L rather than
+    // per (vsb, vgs) cell. null ⇒ no vds axis ⇒ factor 1.
+    const factors = vdsVals ? Array.from(vdsVals, (vd) => 1 + vd / VA) : null;
 
-    for (let vi = 0; vi < nVgs; vi++) {
-      const vov = vgsVals[vi] - vthL;
-      const { idSat, gmSat, gdsSat } = satPoint(vov, ispec, VA);
-      // Rough saturation voltage: a thermal floor plus the positive overdrive.
-      const vdsatVal = 2 * UT + Math.max(vov, 0);
+    for (let si = 0; si < nVsb; si++) {
+      // Body effect: source-body reverse bias raises the threshold (0 at vsb = 0, the
+      // body-grounded case), so a vsb axis fans Vth up and id down at fixed vgs.
+      const vthEff = vthL + (vsbVals ? BODY_FACTOR * vsbVals[si] : 0);
 
-      for (let di = 0; di < nVds; di++) {
-        // Channel-length modulation: id (and gm) rise ~linearly with vds about
-        // saturation; factor is 1 when there is no vds axis. gds = ∂id/∂vds = idSat/VA.
-        const factor = vdsVals ? 1 + vdsVals[di] / VA : 1;
-        const flat = (li * nVds + di) * nVgs + vi;
-        const gmv = gmSat * factor;
-        id[flat] = idSat * factor;
-        gm[flat] = gmv;
-        gds[flat] = gdsSat;
-        cgg[flat] = cggL;
-        vth[flat] = vthL;
-        vdsat[flat] = vdsatVal;
-        gamma[flat] = GAMMA_DEFAULT;
-        sth[flat] = kT4 * GAMMA_DEFAULT * gmv; // 4kTγ·gm
-        sfl[flat] = (KFLICKER * gmv * gmv) / cggL; // area-domain: svfl = sfl/gm² = KFLICKER/(W·L·Cox)
+      for (let vi = 0; vi < nVgs; vi++) {
+        const vov = vgsVals[vi] - vthEff;
+        const { idSat, gmSat, gdsSat } = satPoint(vov, ispec, VA);
+        // Rough saturation voltage: a thermal floor plus the positive overdrive.
+        const vdsatVal = 2 * UT + Math.max(vov, 0);
+
+        for (let di = 0; di < nVds; di++) {
+          const factor = factors ? factors[di] : 1; // gds = ∂id/∂vds = idSat/VA (below)
+          const flat = ((li * nVds + di) * nVsb + si) * nVgs + vi;
+          const gmv = gmSat * factor;
+          id[flat] = idSat * factor;
+          gm[flat] = gmv;
+          gds[flat] = gdsSat;
+          cgg[flat] = cggL;
+          vth[flat] = vthEff;
+          vdsat[flat] = vdsatVal;
+          gamma[flat] = GAMMA_DEFAULT;
+          sth[flat] = kT4 * GAMMA_DEFAULT * gmv; // 4kTγ·gm
+          sfl[flat] = (KFLICKER * gmv * gmv) / cggL; // area-domain: svfl = sfl/gm² = KFLICKER/(W·L·Cox)
+        }
       }
     }
   }
@@ -170,6 +188,7 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
   const axes: Axis[] = [
     { name: 'l', values: lVals },
     ...(vdsVals ? [{ name: 'vds', values: vdsVals }] : []),
+    ...(vsbVals ? [{ name: 'vsb', values: vsbVals }] : []),
     { name: 'vgs', values: vgsVals },
   ];
 

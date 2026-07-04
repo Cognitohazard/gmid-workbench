@@ -8,7 +8,6 @@ import type {
   RuleResult,
   SheetChildReport,
   SheetDoc,
-  SheetEvalOptions,
   SheetResult,
   SheetSweep,
   SheetSweep2,
@@ -31,10 +30,9 @@ export function runSheet(
   doc: SheetDoc,
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
-  opts?: SheetEvalOptions,
 ): SheetResult {
   const pre = validateSheet(doc);
-  const res = evaluateSheet(doc, table, resolveDevice, opts);
+  const res = evaluateSheet(doc, table, resolveDevice);
   const blocked = pre.some((w) => w.severity === 'error');
   return { ...res, feasible: res.feasible && !blocked, warnings: [...pre, ...res.warnings] };
 }
@@ -109,7 +107,6 @@ export function sweepSheet(
   table?: DeviceTable,
   n = SWEEP_POINTS,
   resolveDevice?: DeviceResolver,
-  opts?: SheetEvalOptions,
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -132,7 +129,7 @@ export function sweepSheet(
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
     x.push(t);
-    const res = evaluateSheet(withParams(doc, { [param]: t }), table, resolveDevice, opts);
+    const res = evaluateSheet(withParams(doc, { [param]: t }), table, resolveDevice);
     feasible.push(!blocked && res.feasible);
     const byPath = new Map<string, RuleResult>();
     indexTreeResults(res.rules, res.children, '', byPath);
@@ -164,7 +161,6 @@ export function sweepSheet2(
   table?: DeviceTable,
   n = SWEEP2_POINTS,
   resolveDevice?: DeviceResolver,
-  opts?: SheetEvalOptions,
 ): SheetSweep2 {
   const px = doc.params.find((p) => p.name === paramX);
   const py = doc.params.find((p) => p.name === paramY);
@@ -194,7 +190,7 @@ export function sweepSheet2(
     const frow: boolean[] = [];
     const brow: (string | null)[] = [];
     for (let xi = 0; xi < pts; xi++) {
-      const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice, opts);
+      const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice);
       frow.push(!blocked && res.feasible);
       // Name the binding constraint: the failing HARD rule with the worst relative
       // margin anywhere in the tree. null when feasible, or when infeasibility came
