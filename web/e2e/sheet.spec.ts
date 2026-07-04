@@ -25,6 +25,12 @@ test('design sheet: add, evaluate to a mix of pass/fail, recompute on edit, pers
   await expect(sp.locator('.bind')).toContainText('W=');
   await expect(sp.locator('.perr')).toHaveCount(0);
 
+  // Fields render engineering notation (2e-12 → "2p", 0.5e-6 → "500n"), and the description
+  // carries inline math ($C_L$, $I_D/W$…) typeset with subscripts rather than raw prose.
+  await expect(sp.locator('.svar[data-param="CL"] .num')).toHaveValue('2p');
+  await expect(sp.locator('.svar[data-param="L"] .num')).toHaveValue('500n');
+  await expect(sp.locator('.sdesc sub').first()).toBeVisible();
+
   // Constraints evaluate to a MIX: feasibility/noise pass; headroom fails at the default
   // gm/ID = 12 (V* ≈ 167 mV < the 200 mV floor) — the gm/ID trade made visible.
   await expect(sp.locator('.srules tr.st-pass').first()).toBeVisible();
@@ -34,7 +40,7 @@ test('design sheet: add, evaluate to a mix of pass/fail, recompute on edit, pers
   await page.screenshot({ path: `${SCREENS}/sheet.png`, fullPage: true });
 
   // Lower the efficiency knob (more headroom): gm/ID = 8 → V* ≈ 250 mV ≥ floor → headroom passes.
-  const gmId = sp.locator('.svar', { hasText: 'gm_id' }).locator('.num');
+  const gmId = sp.locator('.svar[data-param="gm_id"]').locator('.num');
   await gmId.fill('8');
   await gmId.blur();
   await expect(headroom).toHaveClass(/st-pass/);
@@ -45,8 +51,14 @@ test('design sheet: add, evaluate to a mix of pass/fail, recompute on edit, pers
   await loadDemo(page);
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('.sheet')).toBeVisible();
-  await expect(sp2.locator('.svar', { hasText: 'gm_id' }).locator('.num')).toHaveValue('8');
+  await expect(sp2.locator('.svar[data-param="gm_id"]').locator('.num')).toHaveValue('8');
   await expect(sp2.locator('.srules tr', { hasText: 'headroom' })).toHaveClass(/st-pass/);
+
+  // An engineering-suffixed entry parses back to SI and normalizes on commit ("1u" → 1e-6 → "1u").
+  const lNum = sp2.locator('.svar[data-param="L"]').locator('.num');
+  await lNum.fill('1u');
+  await lNum.blur();
+  await expect(lNum).toHaveValue('1u');
 
   expect(errors).toEqual([]);
 });
@@ -209,10 +221,10 @@ test('design sheet: a composed cascode shows its child block and composes feasib
   await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
 
   // The embedded common-source child renders in the children summary and is feasible,
-  // and the scalars it exposes (cs__av0, …) are shown.
+  // and the scalars it exposes (cs__av0 → typeset A_{v0,cs}, …) are shown.
   await expect(sp.locator('.suse')).toHaveCount(1);
   await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
-  await expect(sp.locator('.suse .prov')).toContainText('cs__av0');
+  await expect(sp.locator('.suse .prov')).toContainText('Av0,cs');
   // The parent's composed gain rule evaluates over the child's provided scalars.
   await expect(sp.locator('.srules tr', { hasText: 'gain-spec' })).toBeVisible();
 
@@ -340,7 +352,7 @@ test('design sheet: a failing guardrail reads as advisory, distinct from a hard 
   // Lower the efficiency knob so every HARD rule passes → the design is feasible-labeled, yet the
   // guardrail still fails (cgg loads GBW below target) and still reads advisory — a red guardrail
   // over a feasible design must not look like the design failed.
-  const gmId = sp.locator('.svar', { hasText: 'gm_id' }).locator('.num');
+  const gmId = sp.locator('.svar[data-param="gm_id"]').locator('.num');
   await gmId.fill('8');
   await gmId.blur();
   await expect(sp.locator('.feasb')).toHaveClass(/ok/);
@@ -420,10 +432,10 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await expect(sp.locator('.suse', { hasText: 'load' })).toBeVisible();
   await expect(sp.locator('.feasb')).toHaveText('feasible');
 
-  // Each block owns its operating point: a per-block bias control names the vds axis. The
-  // curated sheet drives vds from a param, so the block links to it read-only rather than
-  // borrowing the (now retired) shared dashboard slider.
-  await expect(sp.locator('.shead .sbiasctl .bx').first()).toContainText('vds');
+  // Each block owns its operating point: a per-block bias control shows the vds axis, typeset
+  // (V_DS). The curated sheet drives vds from a param, so the block links to it read-only rather
+  // than borrowing the (now retired) shared dashboard slider.
+  await expect(sp.locator('.shead .sbiasctl .bx sub').first()).toHaveText('DS'); // V_DS
   await expect(sp.locator('.shead .sbiasctl .bx.ro').first()).toBeVisible();
 
   // Equations render (not raw source) and the author notes are shown in place, so a
@@ -433,6 +445,11 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await expect(sp.locator('.srows .snote').first()).toBeVisible();
   // A rule's physical-meaning note sits under its rendered comparison.
   await expect(sp.locator('.srules .snote').first()).toBeVisible();
+
+  // Authored names typeset instead of showing raw underscores: a composed provide renders the
+  // quantity with the block as a subscript (load__gm → g_{m,load}), and rule operators prettify.
+  await expect(sp.locator('.suse .prov code sub').first()).not.toHaveCount(0);
+  await expect(sp.locator('.srules')).toContainText('≥');
 
   // The picker previews feasibility inline: every option is marked ✓ or ✗ before loading.
   const options = sp.locator('.shead select.rm option:not([value=""])');

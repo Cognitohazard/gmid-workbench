@@ -1,4 +1,4 @@
-import { BASE_QUANTITIES } from '@gmid/mostab-core';
+import { BASE_QUANTITIES, PROVIDE_SEP } from '@gmid/mostab-core';
 
 // Pretty quantity labels with subscripts, for DISPLAY only (axis labels, table headers)
 // — rendered via Svelte's {@html}. Editor inputs keep the raw keys (you can't type a
@@ -51,22 +51,86 @@ const SUBSCRIPTED: Readonly<Record<string, string>> = {
 const escapeHtml = (s: string): string =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
 
-/** Safe HTML label for an expression: a subscripted form when known, else escaped text. */
+// Fold a qualifier into an already-rendered label's subscript — `g<sub>m</sub>` + "in" →
+// `g<sub>m,in</sub>` — or add a subscript when the label has none (`V*` → `V*<sub>in</sub>`).
+function withQualifier(html: string, qual: string): string {
+  if (!qual) return html;
+  const q = escapeHtml(qual);
+  const i = html.lastIndexOf('</sub>');
+  return i >= 0 ? `${html.slice(0, i)},${q}${html.slice(i)}` : `${html}<sub>${q}</sub>`;
+}
+
+/**
+ * Safe HTML label for an identifier: the exact SUBSCRIPTED form when known, else a best-effort
+ * typeset of an authored name — `child__key` renders the quantity with the block as a subscript
+ * qualifier (`in__gm` → g_{m,in}), and a trailing `_suffix` becomes a subscript (`Av_target` →
+ * Av_target, `V_x` → V_x). Splitting at the LAST underscore keeps a known compound head intact
+ * (`gm_id_casc` keeps g_m/I_D). Always escaped, so {@html} stays safe for arbitrary names.
+ */
 export function qLabel(expr: string): string {
-  return SUBSCRIPTED[expr] ?? escapeHtml(expr);
+  const known = SUBSCRIPTED[expr];
+  if (known) return known;
+  const sep = expr.indexOf(PROVIDE_SEP);
+  if (sep >= 0) {
+    return withQualifier(qLabel(expr.slice(sep + PROVIDE_SEP.length)), expr.slice(0, sep));
+  }
+  const us = expr.lastIndexOf('_');
+  if (us > 0 && us < expr.length - 1) {
+    return withQualifier(qLabel(expr.slice(0, us)), expr.slice(us + 1));
+  }
+  return escapeHtml(expr);
 }
 
 /**
  * Render a formula string with subscripted identifiers and prettified operators (e.g.
- * `gm/(2*pi*cgg)` → `g_m/(2·π·C_gg)`), for showing a derived quantity's definition next to the
- * axis picker. Each identifier run is mapped through SUBSCRIPTED (else escaped); every other run
- * is escaped, with `*`→`·`. Always safe for {@html} — no token reaches output unescaped.
+ * `gm/(2*pi*cgg)` → `g_m/(2·π·C_gg)`), for showing a derived quantity's definition or an author
+ * rule. Each identifier run is mapped through qLabel; every other run is escaped, with `*`→`·`
+ * and `<=`/`>=`→`≤`/`≥`. Always safe for {@html} — no token reaches output unescaped.
  */
 export function qFormula(expr: string): string {
   return expr.replace(/[A-Za-z_][A-Za-z0-9_]*|[^A-Za-z_]+/g, (tok) => {
     if (/^[A-Za-z_]/.test(tok)) return tok === 'pi' ? 'π' : qLabel(tok);
-    return escapeHtml(tok).replace(/\*/g, '·');
+    return escapeHtml(tok).replace(/\*/g, '·').replace(/&lt;=/g, '≤').replace(/&gt;=/g, '≥');
   });
+}
+
+// A small LaTeX-ish symbol table for inline math in author prose — enough for analog-design
+// notation (Greek, comparisons, ·, √) without pulling in a math engine that would bloat the
+// self-contained offline build. Keyed by the command name (without the backslash).
+const TEX_SYMBOLS: Readonly<Record<string, string>> = {
+  cdot: '·', times: '×', div: '÷', pm: '±', mp: '∓', ast: '∗',
+  leq: '≤', geq: '≥', ll: '≪', gg: '≫', neq: '≠', approx: '≈', sim: '∼', propto: '∝', equiv: '≡',
+  parallel: '∥', infty: '∞', partial: '∂', sqrt: '√', to: '→', rightarrow: '→', ldots: '…',
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', zeta: 'ζ', eta: 'η', theta: 'θ',
+  kappa: 'κ', lambda: 'λ', mu: 'µ', nu: 'ν', xi: 'ξ', rho: 'ρ', sigma: 'σ', tau: 'τ', phi: 'φ',
+  chi: 'χ', psi: 'ψ', omega: 'ω', pi: 'π', Delta: 'Δ', Omega: 'Ω', Phi: 'Φ', Sigma: 'Σ',
+}; // prettier-ignore
+
+// Render one inline-math run (the text between $…$) as a LaTeX subset: \frac{a}{b} → a/b,
+// \sqrt{x} → √(x), \cmd → its symbol, _{…}/^{…} and _x/^x → sub/superscripts, * → ·. Escaped
+// FIRST, so only our own <sub>/<sup> tags reach the output — always safe for {@html}.
+function renderMath(tex: string): string {
+  return escapeHtml(tex)
+    .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '$1/$2')
+    .replace(/\\sqrt\{([^{}]*)\}/g, '√($1)')
+    .replace(/\\([A-Za-z]+)/g, (_m, c: string) => TEX_SYMBOLS[c] ?? c)
+    .replace(/_\{([^{}]*)\}/g, '<sub>$1</sub>')
+    .replace(/\^\{([^{}]*)\}/g, '<sup>$1</sup>')
+    .replace(/_([A-Za-z0-9])/g, '<sub>$1</sub>')
+    .replace(/\^([A-Za-z0-9*])/g, '<sup>$1</sup>')
+    .replace(/\*/g, '·');
+}
+
+/**
+ * Render author prose that may carry inline math delimited by `$…$` (a deliberate LaTeX subset —
+ * see renderMath; no math engine, to keep the offline build lean). Text outside the delimiters is
+ * escaped, so ordinary prose (and an unpaired `$`) passes through unchanged and {@html}-safe.
+ */
+export function mathText(s: string): string {
+  return s
+    .split(/(\$[^$]*\$)/)
+    .map((seg, i) => (i % 2 === 1 ? renderMath(seg.slice(1, -1)) : escapeHtml(seg)))
+    .join('');
 }
 
 /** Canonical base-quantity key → SI unit (e.g. 'vgs' → 'V'); for axis and bias readouts. */

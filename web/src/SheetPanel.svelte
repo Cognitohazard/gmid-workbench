@@ -8,6 +8,7 @@
     sweepSheet2,
     sweepable as isSweepable,
     formatEng,
+    parseEng,
     joinProvide,
     BIAS_AXES,
     SWEEP_POINTS,
@@ -26,7 +27,7 @@
   } from '@gmid/mostab-core';
   import { type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
-  import { axisUnit, qFormula } from './labels';
+  import { axisUnit, qFormula, qLabel, mathText } from './labels';
   import { CONTROL_HELP } from './help';
   import { SHEET_MENU } from './library';
 
@@ -139,6 +140,28 @@
   function setParam(name: string, value: number): void {
     if (!Number.isFinite(value)) return;
     onChange({ ...cfg, params: cfg.params.map((p) => (p.name === name ? { ...p, value } : p)) });
+  }
+  // Commit an engineering-notation field ("20u", "1.8", "2p") on change: parse, normalize the
+  // display to the canonical suffix, and set. A malformed entry restores the last good value so
+  // a typo never writes NaN. Empty is allowed only when `clearable` (bias axes), clearing via null.
+  function commitEng(
+    el: HTMLInputElement,
+    current: number | undefined,
+    set: (v: number | null) => void,
+    clearable = false,
+  ): void {
+    const raw = el.value.trim();
+    if (raw === '' && clearable) {
+      set(null);
+      return;
+    }
+    try {
+      const v = parseEng(raw);
+      el.value = formatEng(v);
+      set(v);
+    } catch {
+      el.value = current === undefined ? '' : formatEng(current);
+    }
   }
   function pickSheet(e: Event): void {
     const sel = e.currentTarget as HTMLSelectElement;
@@ -308,15 +331,17 @@
 </script>
 
 {#snippet paramRow(p: SheetVar)}
-  <label class="svar" title={p.note}>
+  <label class="svar" title={p.note} data-param={p.name}>
     <span class="vn"
-      >{p.name}{#if p.unit}<i>{p.unit}</i>{/if}</span
+      >{@html qLabel(p.name)}{#if p.unit}<i>{p.unit}</i>{/if}</span
     >
     <input
       class="num"
-      type="number"
-      value={p.value}
-      onchange={(e) => setParam(p.name, +(e.currentTarget as HTMLInputElement).value)}
+      type="text"
+      inputmode="text"
+      spellcheck="false"
+      value={formatEng(p.value)}
+      onchange={(e) => commitEng(e.currentTarget, p.value, (v) => v != null && setParam(p.name, v))}
     />
     {#if p.min !== undefined && p.max !== undefined}
       <input
@@ -348,21 +373,22 @@
             class:need
             title={need ? CONTROL_HELP.bindNeeds : CONTROL_HELP.bindBias}
           >
-            <span>{ax}</span>
+            <span>{@html qLabel(ax)}</span>
             <input
               class="num"
-              type="number"
-              step="0.05"
+              type="text"
+              inputmode="text"
+              spellcheck="false"
               placeholder={need ? 'set' : ''}
-              value={decl ?? report?.bias?.[ax] ?? ''}
-              onchange={(e) => {
-                const raw = (e.currentTarget as HTMLInputElement).value;
-                setBias(path, ax, raw === '' ? null : +raw);
-              }}
+              value={decl !== undefined ? formatEng(+decl) : (report?.bias?.[ax] ?? '')}
+              onchange={(e) =>
+                commitEng(e.currentTarget, report?.bias?.[ax], (v) => setBias(path, ax, v), true)}
             /><i>V</i>
           </label>
         {:else}
-          <span class="bx ro" title={CONTROL_HELP.bindBias}>{ax}=<code>{decl}</code></span>
+          <span class="bx ro" title={CONTROL_HELP.bindBias}
+            >{@html qLabel(ax)}=<code>{@html qFormula(decl ?? '')}</code></span
+          >
         {/if}
       {/each}
     </div>
@@ -406,7 +432,8 @@
     {@render biasCtl(use?.doc.bind, c?.bind, path)}
     {#if c && Object.keys(c.provides).length}
       <div class="prov" title={CONTROL_HELP.provide}>
-        {#each Object.entries(c.provides) as [k, v]}<code>{joinProvide(c.name, k)}={fmt(v)}</code
+        {#each Object.entries(c.provides) as [k, v]}<code
+            >{@html qFormula(joinProvide(c.name, k))}={fmt(v)}</code
           >{/each}
       </div>
     {/if}
@@ -483,7 +510,7 @@
   </div>
 
   {#if cfg.description}
-    <p class="sdesc">{cfg.description}</p>
+    <p class="sdesc">{@html mathText(cfg.description)}</p>
   {/if}
 
   {#if hasRoles}
@@ -528,10 +555,10 @@
       {#each cfg.rows as row}
         <div class="srow">
           <span class="seq"
-            ><b>{row.name}</b> = {@html qFormula(row.expr)} =
+            ><b>{@html qLabel(row.name)}</b> = {@html qFormula(row.expr)} =
             <span class="sval">{fmt(result.values[row.name])}{row.unit ?? ''}</span></span
           >
-          {#if row.note}<span class="snote">{row.note}</span>{/if}
+          {#if row.note}<span class="snote">{@html mathText(row.note)}</span>{/if}
         </div>
       {/each}
     </div>
@@ -556,7 +583,9 @@
           >
           <td class="rtext">
             <span class="req">{@html qFormula(r.text)}</span>
-            {#if ruleNote.get(r.id)}<span class="snote">{ruleNote.get(r.id)}</span>{/if}
+            {#if ruleNote.get(r.id)}<span class="snote"
+                >{@html mathText(ruleNote.get(r.id) ?? '')}</span
+              >{/if}
             {#if r.detail}<span class="snote sdetail">{r.detail}</span>{/if}
           </td>
           <td class="rnum">{fmt(r.lhsValue)} / {fmt(r.rhsValue)}</td>
@@ -622,7 +651,7 @@
     flex-direction: column;
     gap: 0.4rem;
     margin-top: 0.3rem;
-    font-size: 0.82rem;
+    font-size: calc(0.82rem * var(--text-scale));
   }
   .shead {
     display: flex;
@@ -637,7 +666,7 @@
   /* Overall feasibility badge: the design's headline verdict, so a red advisory guardrail below
      it is never mistaken for the whole design failing. */
   .feasb {
-    font-size: 0.66rem;
+    font-size: calc(0.66rem * var(--text-scale));
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.03em;
@@ -653,21 +682,20 @@
   }
   .sbias {
     font-family: ui-monospace, monospace;
-    font-size: 0.76rem;
+    font-size: calc(0.76rem * var(--text-scale));
     opacity: 0.68;
   }
   .sdesc {
     margin: 0;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     opacity: 0.72;
-    max-width: 72ch;
   }
   .swsel {
     margin-left: auto;
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     opacity: 0.85;
   }
   /* The 2-D map's × param select — same look as .swsel but no auto-margin (it trails the first). */
@@ -675,7 +703,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     opacity: 0.85;
   }
   /* spec/choice param grouping (only when the doc tags roles). */
@@ -685,7 +713,7 @@
     gap: 0.15rem;
   }
   .glabel {
-    font-size: 0.66rem;
+    font-size: calc(0.66rem * var(--text-scale));
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -707,7 +735,7 @@
     transform: rotate(180deg);
     justify-self: center;
     align-self: center;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
     opacity: 0.7;
     white-space: nowrap;
   }
@@ -724,12 +752,12 @@
     grid-column: 2;
     grid-row: 2;
     text-align: center;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
     opacity: 0.7;
     white-space: nowrap;
   }
   .scap {
-    font-size: 0.76rem;
+    font-size: calc(0.76rem * var(--text-scale));
     opacity: 0.7;
   }
   .pchart {
@@ -739,7 +767,7 @@
   .feas {
     margin: 0;
     font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     opacity: 0.85;
   }
   .svars {
@@ -781,13 +809,20 @@
     gap: 0.3rem;
     margin: 0.2rem 0;
   }
+  /* Equation on the left, its author note filling the space to the RIGHT (wrapping onto its
+     own line only when the row is too narrow) — so a short "name = formula = value" no longer
+     leaves the block half-empty. */
   .srow {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 1rem;
+    row-gap: 0.05rem;
   }
   .seq {
+    flex: 0 1 auto;
     font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     opacity: 0.9;
   }
   .seq .sval {
@@ -795,10 +830,14 @@
   }
   /* Author comment explaining an equation or rule — the "why", not the math. */
   .snote {
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
     opacity: 0.6;
     white-space: normal;
     margin-top: 0.05rem;
+  }
+  .srow .snote {
+    flex: 1 1 14rem;
+    margin-top: 0;
   }
   .sdetail {
     font-style: italic;
@@ -807,7 +846,7 @@
     border-collapse: collapse;
     width: 100%;
     font-family: ui-monospace, monospace;
-    font-size: 0.8rem;
+    font-size: calc(0.8rem * var(--text-scale));
   }
   .srules td {
     padding: 0.12rem 0.4rem;
@@ -823,7 +862,7 @@
     opacity: 0.5;
     font-style: normal;
     margin-left: 0.4rem;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
   }
   /* composed blocks: each `use` is a self-contained card (sizing, provides, failing rules),
      children nest as indented cards so the composition tree reads as modules within modules. */
@@ -841,7 +880,7 @@
     border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
     border-left-width: 3px;
     border-radius: 4px;
-    font-size: 0.8rem;
+    font-size: calc(0.8rem * var(--text-scale));
   }
   /* the left rail tints to the block's verdict — green closes, red doesn't */
   .suse.st-pass {
@@ -859,17 +898,17 @@
   .suseh i {
     opacity: 0.55;
     font-style: normal;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
   }
   .suseh .dsel {
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
     max-width: 12rem;
     margin-left: auto;
   }
   /* the block's own sized operating point — the module's "output pins" made concrete */
   .susebind {
     font-family: ui-monospace, monospace;
-    font-size: 0.74rem;
+    font-size: calc(0.74rem * var(--text-scale));
     opacity: 0.85;
   }
   .susebind .sbias {
@@ -883,7 +922,7 @@
     align-items: center;
     gap: 0.15rem 0.5rem;
     font-family: ui-monospace, monospace;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
   }
   .bx {
     display: inline-flex;
@@ -932,7 +971,7 @@
     flex-wrap: wrap;
     gap: 0.1rem 0.6rem;
     font-family: ui-monospace, monospace;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--text-scale));
     color: var(--err);
     opacity: 0.9;
   }
@@ -978,7 +1017,7 @@
     margin: 0;
     color: var(--warn);
     font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--text-scale));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

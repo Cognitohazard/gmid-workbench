@@ -19,7 +19,7 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | Field | Type | Meaning |
 |-|-|-|
 | `title` | string | Display name of the sheet. |
-| `description` | string, optional | A few sentences on what the sheet designs, its assumptions, and how to use it — the note a designer inheriting the sheet reads first. |
+| `description` | string, optional | A few sentences on what the sheet designs, its assumptions, and how to use it — the note a designer inheriting the sheet reads first. Supports inline math in `$…$` (see [Inline math](#inline-math-in-prose)), e.g. `$g_m/I_D$`. |
 | `polarity` | `"n"` \| `"p"` | A self-description label only; no contract is enforced at a leaf. |
 | `params` | array | Named scalar design inputs (see [Parameters](#parameters)). |
 | `bind` | object, optional | The bind-any-2 device declaration (see [The bind](#the-bind)). Omit for a sheet that only does author math. |
@@ -44,7 +44,7 @@ Each entry in `params` is a named scalar input:
 | `min`, `max` | number, optional | Bound the GUI slider **and** make the parameter sweepable. |
 | `unit` | string, optional | Display unit. |
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
-| `note` | string, optional | A one-line intent/derivation annotation for the next designer. |
+| `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
 
 The `role` separates *what the sheet is for* from *how it gets there*:
 
@@ -57,8 +57,25 @@ An untagged parameter renders ungrouped. Roles are organizational only — they 
 evaluation.
 
 A parameter with a finite `min`/`max` (where `max > min`) is what a sweep can walk; without
-them, the parameter is a fixed scalar. Units are SI throughout: enter `2e-12` farads, not
-`2 pF`.
+them, the parameter is a fixed scalar. Stored `value`s are SI throughout — the JSON holds
+`2e-12` farads. In the GUI, numeric fields **display and accept engineering notation**
+(`2p`, `500n`, `20u`, `1meg`, `1.8`), parsed with the SPICE/SI suffix convention
+(`m` = milli, `meg` = mega, `u` = micro; case-insensitive) and normalized on entry, so a field
+showing `2p` writes `2e-12` back to the JSON. A malformed entry is rejected and the field
+restores its last value.
+
+## Inline math in prose
+
+`description` and every `note` render inline math delimited by `$…$` — a deliberate LaTeX
+*subset* (no math engine, to keep the offline single-file build lean). Inside the delimiters:
+`_x`/`_{…}` subscript, `^x`/`^{…}` superscript, `*` → ·, `\frac{a}{b}` → a/b, `\sqrt{x}` → √(x),
+and backslash commands for Greek and comparisons (`\gamma`, `\geq`, `\leq`, `\approx`, `\cdot`,
+`\parallel`, …). Prefer `_`, `^`, `*` (no backslash needed); **in JSON a backslash must be
+doubled** (`$\\gamma$`, `$\\geq$`). Text outside `$…$` is plain prose. Example:
+
+```json
+"description": "Raises the output resistance to about $A_{v0,casc}/g_{ds,in}$, so the load's $g_{ds}$ sets the ceiling."
+```
 
 ## The bind
 
@@ -327,7 +344,7 @@ it is not a pinned tautology):
 ```json
 {
   "title": "Single NMOS gm/ID sizing",
-  "description": "Sizes one NMOS for a bandwidth spec: gm is fixed from GBW into CL, gm/ID is the efficiency knob, and ID/W fall out of the lookup. Change the spec params freely; tune the choice params and watch the headroom/noise trade.",
+  "description": "Sizes one NMOS for a bandwidth spec: $g_m$ is fixed from GBW into $C_L$, $g_m/I_D$ is the efficiency knob, and $I_D/W$ falls out of the lookup. Change the spec params freely; tune the choice params and watch the headroom/noise trade.",
   "polarity": "n",
   "params": [
     { "name": "GBW_target", "value": 10000000, "unit": "Hz", "role": "spec" },

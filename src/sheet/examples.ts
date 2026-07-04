@@ -19,9 +19,9 @@ import type { SheetDoc } from './types';
 const NMOS_GMID_SIZING: SheetDoc = {
   title: 'Single NMOS gm/ID sizing',
   description:
-    'Sizes one NMOS for a bandwidth spec: gm is fixed from GBW into CL, gm/ID is the ' +
-    'efficiency knob, and ID/W fall out of the lookup. Change the spec params freely; ' +
-    'tune the choice params (gm/ID, L) and watch the headroom/noise trade.',
+    'Sizes one NMOS for a bandwidth spec: $g_m$ is fixed from GBW into $C_L$, $g_m/I_D$ is ' +
+    'the efficiency knob, and $I_D/W$ falls out of the lookup. Change the spec params freely; ' +
+    'tune the choice params ($g_m/I_D$, $L$) and watch the headroom/noise trade.',
   polarity: 'n',
   params: [
     { name: 'GBW_target', value: 10e6, unit: 'Hz', role: 'spec' },
@@ -84,9 +84,9 @@ const NMOS_GMID_SIZING: SheetDoc = {
 const NMOS_NOISE_MATCHING: SheetDoc = {
   title: 'NMOS noise & matching',
   description:
-    'One device at a fixed current budget: raise gm/ID and the integrated input noise ' +
-    'falls (gm grows) while the saturation headroom shrinks — sweep gm/ID to see the ' +
-    'bounded feasible window. Pelgrom offset is set by the sized W·L area.',
+    'One device at a fixed current budget: raise $g_m/I_D$ and the integrated input noise ' +
+    'falls ($g_m$ grows) while the saturation headroom shrinks — sweep $g_m/I_D$ to see the ' +
+    'bounded feasible window. Pelgrom offset is set by the sized $W*L$ area.',
   polarity: 'n',
   params: [
     { name: 'I_bias', value: 10e-6, unit: 'A', role: 'spec', note: 'fixed current budget' },
@@ -195,9 +195,9 @@ const NMOS_CASCODE: SheetDoc = {
   title: 'NMOS cascode (gain-boosted output)',
   description:
     'A composed sheet: a common-source input device (child block "cs") with a cascode ' +
-    'device stacked in series, carrying the child-provided current cs__id. Gain is the ' +
+    'device stacked in series, carrying the child-provided current $I_{D,cs}$. Gain is the ' +
     'product of the two intrinsic gains — author math over the child provides, no ' +
-    'circuit solving. Sweep gm/ID for the gain vs headroom window.',
+    'circuit solving. Sweep $g_m/I_D$ for the gain vs headroom window.',
   polarity: 'n',
   params: [
     { name: 'I_bias', value: 20e-6, unit: 'A', role: 'spec', note: 'branch current budget' },
