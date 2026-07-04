@@ -20,7 +20,7 @@
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
   import QuantityPicker from './QuantityPicker.svelte';
-  import { clampLegendCount, defaultScale, sizingBias, type Panel, type Scale } from './dashboard';
+  import { clampLegendCount, defaultScale, type Panel, type Scale } from './dashboard';
 
   let {
     device,
@@ -127,11 +127,11 @@
     Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== cfg.family)),
   );
 
-  // Sheets receive the UNREDUCED table: a bind that declares its vds/vsb slices the table
-  // itself (the authored operating point wins), and any live bias axis a bind does NOT
-  // declare is collapsed core-side at this fallback — with an advisory warning naming the
-  // assumed value, so the panel's slider bias is never an invisible sizing assumption.
-  const sheetBias = $derived(cfg.render === 'sheet' ? sizingBias(device, sharedBias) : {});
+  // Sheets receive the UNREDUCED table and own their operating point per block: each bind
+  // declares its vds/vsb (or the panel's per-block bias control writes one), and body bias
+  // defaults to 0. The dashboard's shared-bias sliders drive only the device-cockpit charts,
+  // never a sheet's sizing — a stack's devices sit at different vds, so one shared value can't
+  // speak for all of them.
 
   // Per-child device resolution for composed sheets: a child `use.device` is a table uid; resolve
   // it to that loaded table (unreduced — the child's own bind/fallback picks the bias point).
@@ -472,7 +472,6 @@
         cfg={cfg.sheet}
         sweep={cfg.sheetSweep ?? ''}
         sweep2={cfg.sheetSweep2 ?? ''}
-        fallbackBias={sheetBias}
         {resolveDevice}
         {deviceOptions}
         {styleVersion}

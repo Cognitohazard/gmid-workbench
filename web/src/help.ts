@@ -72,7 +72,9 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   provide:
     'Names this block exposes to a parent sheet. The parent reads each as child__name and writes its own math over it — scalar composition, no circuit solving.',
   bindBias:
-    'The operating point (vds/vsb, signed) the device is sized at. gds shifts ~4–5× across vds; declare it, or an undeclared axis falls back to the shared bias with a warning.',
+    'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device pins its own; body bias (vsb) defaults to 0. Edit to override; clear to revert.',
+  bindNeeds:
+    'This block must pin its drain bias (vds) but hasn’t — the table has a vds axis and there is no safe default, so sizing fails closed. Set a value here to size it in place.',
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',

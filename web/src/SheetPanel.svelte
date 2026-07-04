@@ -9,20 +9,24 @@
     sweepable as isSweepable,
     formatEng,
     joinProvide,
+    BIAS_AXES,
     SWEEP_POINTS,
     SWEEP2_POINTS,
     type DeviceTable,
     type DeviceResolver,
     type SheetDoc,
+    type SheetBind,
     type SheetVar,
+    type SheetUse,
     type SheetSweep2,
     type SheetChildReport,
+    type BindReport,
     type RuleResult,
     type RuleStatus,
   } from '@gmid/mostab-core';
   import { type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
-  import { axisUnit } from './labels';
+  import { axisUnit, qFormula } from './labels';
   import { CONTROL_HELP } from './help';
   import { SHEET_MENU } from './library';
 
@@ -31,7 +35,6 @@
     cfg,
     sweep = '',
     sweep2 = '',
-    fallbackBias = {},
     resolveDevice = undefined,
     deviceOptions = [],
     styleVersion = 0,
@@ -44,8 +47,6 @@
     sweep?: string;
     /** The second (×) sweep param: with `sweep` set too, the panel draws a 2-D feasibility map. */
     sweep2?: string;
-    /** Panel bias for live axes the bind leaves undeclared (core warns per assumption). */
-    fallbackBias?: Record<string, number>;
     resolveDevice?: DeviceResolver;
     deviceOptions?: { uid: string; label: string }[];
     styleVersion?: number;
@@ -54,7 +55,16 @@
     onSweep2: (s: string) => void;
   } = $props();
 
-  const result = $derived(runSheet(cfg, device, resolveDevice, { fallbackBias }));
+  const result = $derived(runSheet(cfg, device, resolveDevice));
+
+  // Feasibility preview for the picker: evaluate every menu sheet against the active device
+  // so the dropdown flags which topologies already close before one is loaded. runSheet is
+  // pure and never throws; the whole menu re-evaluates only when the device or bias changes.
+  // ponytail: O(menu) evals per device change (each sub-ms); fine at library scale, revisit
+  // with a shared eval cache if the menu grows into the hundreds.
+  const menuFeasible = $derived(
+    SHEET_MENU.map((g) => g.sheets.map((s) => runSheet(s, device, resolveDevice).feasible)),
+  );
 
   // ── Feasibility sweep: vary one slider parameter across its range and chart every rule's
   // relative margin. Only finitely-bounded params can be swept (the sweep walks [min,max]).
@@ -62,7 +72,7 @@
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
   const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
   const swept = $derived(
-    active ? sweepSheet(cfg, active, device, SWEEP_POINTS, resolveDevice, { fallbackBias }) : null,
+    active ? sweepSheet(cfg, active, device, SWEEP_POINTS, resolveDevice) : null,
   );
 
   // ── 2-D feasibility map: a second (×) param turns the 1-D margin chart into a design-plane
@@ -73,9 +83,7 @@
   );
   const twoD = $derived(active2 !== ''); // active2 is only ever set while `active` is
   const swept2 = $derived(
-    twoD
-      ? sweepSheet2(cfg, active, active2, device, SWEEP2_POINTS, resolveDevice, { fallbackBias })
-      : null,
+    twoD ? sweepSheet2(cfg, active, active2, device, SWEEP2_POINTS, resolveDevice) : null,
   );
   // The distinct hard-rule ids (tree-path) that bound the infeasible region — the caption's "what
   // limits it", so the plane is never a wall of red with no named cause.
@@ -149,6 +157,41 @@
     onChange({ ...cfg, uses });
   }
 
+  // ── Per-block operating point. A sheet sizes one device per bind at its OWN vds/vsb; a
+  // shared dashboard slider can't speak for a stack whose devices sit at different drains.
+  // So each block owns its bias here: vds must be pinned (no default), vsb defaults to 0.
+  // A block's live bias axes come from its OWN sized report — the axes it sliced (bias) plus any
+  // it must still pin (needs). Reading them off the report, not the panel device, keeps the control
+  // correct when a composed child sizes against a different loaded table than its parent. BIAS_AXES
+  // (the core's namespace-derived canonical list) fixes the display order.
+  const biasAxesFor = (r: BindReport | undefined): string[] =>
+    BIAS_AXES.filter((a) => (r?.bias != null && a in r.bias) || (r?.needs?.includes(a) ?? false));
+  // The authored declaration string for a bias axis (SheetBind's vds/vsb are optional strings).
+  const biasField = (bind: SheetBind | undefined, axis: string): string | undefined =>
+    (bind as unknown as Record<string, string | undefined> | undefined)?.[axis];
+  // Editable here only when absent or a plain number: an expression (a param reference) stays
+  // param-controlled, so writing a literal would silently sever the knob. Those show read-only.
+  const isLiteral = (s: string | undefined): boolean => s === undefined || Number.isFinite(+s);
+  // Write (or clear, on empty) a bias literal into the bind at `path` — []=top sheet, [i]=child i,
+  // [i,j]=grandchild — and emit a fresh doc down the same immutable onChange path as setParam.
+  function setBias(path: number[], axis: string, value: number | null): void {
+    const edit = (doc: SheetDoc, depth: number): SheetDoc => {
+      if (depth === path.length) {
+        if (!doc.bind) return doc;
+        const bind = { ...doc.bind } as SheetBind & Record<string, string | undefined>;
+        if (value == null || !Number.isFinite(value)) delete bind[axis];
+        else bind[axis] = String(value);
+        return { ...doc, bind };
+      }
+      const i = path[depth];
+      const uses = (doc.uses ?? []).map((u, j) =>
+        j === i ? { ...u, doc: edit(u.doc, depth + 1) } : u,
+      );
+      return { ...doc, uses };
+    };
+    onChange(edit(cfg, 0));
+  }
+
   const fmt = (v: number | undefined): string =>
     v == null || !Number.isFinite(v) ? '—' : formatEng(v);
   const pct = (v: number): string =>
@@ -168,15 +211,15 @@
     return parts.join(' — ');
   }
 
-  // The operating point the sizing sliced at (declared in the bind, or assumed from the panel
-  // bias) — shown so the bias behind the sized width is never an invisible assumption.
-  const biasText = $derived.by(() => {
-    const b = result.bind?.bias;
-    if (!b) return '';
-    return Object.entries(b)
-      .map(([k, v]) => `${k} ${formatEng(v)}${axisUnit(k)}`)
-      .join(', ');
-  });
+  // The operating point a bind sliced at (declared, or assumed from the panel bias), formatted
+  // "vds 0.9V, vsb 0V" — shown so the bias behind a sized width is never an invisible assumption.
+  const biasStr = (b: Record<string, number> | undefined): string =>
+    b
+      ? Object.entries(b)
+          .map(([k, v]) => `${k} ${formatEng(v)}${axisUnit(k)}`)
+          .join(', ')
+      : '';
+  const biasText = $derived(biasStr(result.bind?.bias));
 
   // An infeasible child's failing HARD rules (advisory guardrails excluded) — so the cause of a
   // red child block is on screen, not just its ✗.
@@ -289,13 +332,108 @@
   </label>
 {/snippet}
 
+<!-- Per-block operating point: one editable field per live bias axis, writing into THIS block's
+     bind at `path`. A field the bind must pin (vds, no default) but hasn't reads "needs"; body
+     bias (vsb) pre-fills its default 0. A param-driven declaration shows read-only (edit the param). -->
+{#snippet biasCtl(bind: SheetBind | undefined, report: BindReport | undefined, path: number[])}
+  {@const axes = biasAxesFor(report)}
+  {#if bind && axes.length}
+    <div class="sbiasctl">
+      {#each axes as ax}
+        {@const decl = biasField(bind, ax)}
+        {@const need = report?.needs?.includes(ax) ?? false}
+        {#if isLiteral(decl)}
+          <label
+            class="bx"
+            class:need
+            title={need ? CONTROL_HELP.bindNeeds : CONTROL_HELP.bindBias}
+          >
+            <span>{ax}</span>
+            <input
+              class="num"
+              type="number"
+              step="0.05"
+              placeholder={need ? 'set' : ''}
+              value={decl ?? report?.bias?.[ax] ?? ''}
+              onchange={(e) => {
+                const raw = (e.currentTarget as HTMLInputElement).value;
+                setBias(path, ax, raw === '' ? null : +raw);
+              }}
+            /><i>V</i>
+          </label>
+        {:else}
+          <span class="bx ro" title={CONTROL_HELP.bindBias}>{ax}=<code>{decl}</code></span>
+        {/if}
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
+<!-- One composed block as a self-contained card: its sizing, the operating point it's pinned at,
+     the scalars it hands up, its failing constraints, and — recursively — its own children, so the
+     composition tree reads as nested modules. `use` is this card's authored block (its `doc.bind`
+     is what the bias control edits); `path` is its index path from the top sheet. -->
+{#snippet childCard(c: SheetChildReport | undefined, use: SheetUse | undefined, path: number[])}
+  <div class="suse st-{c?.feasible ? 'pass' : 'fail'}">
+    <div class="suseh">
+      <span class="chip">{c?.feasible ? '✓' : '✗'}</span>
+      <b>{c?.name ?? use?.name}</b><i>{c?.title ?? use?.doc.title}</i>
+      {#if path.length === 1 && use && (deviceOptions.length > 1 || use.device)}
+        <select
+          class="dsel"
+          title={CONTROL_HELP.useDevice}
+          value={use.device ?? ''}
+          onchange={(e) => setUseDevice(path[0], (e.currentTarget as HTMLSelectElement).value)}
+        >
+          <option value="">↳ active device</option>
+          {#if use.device && !deviceOptions.some((o) => o.uid === use.device)}
+            <option value={use.device}>{use.device} (not loaded)</option>
+          {/if}
+          {#each deviceOptions as o}<option value={o.uid}>{o.label}</option>{/each}
+        </select>
+      {/if}
+    </div>
+    {#if c?.bind?.ok}
+      <div class="susebind">
+        W={fmt(c.bind.W)}m · V<sub>GS</sub>={fmt(c.bind.vgs)}V · I<sub>D</sub>={fmt(c.bind.id)}A
+        {#if c.bind.bias}<span class="sbias" title={CONTROL_HELP.bindBias}
+            >@ {biasStr(c.bind.bias)}</span
+          >{/if}
+      </div>
+    {:else if c?.bind}
+      <div class="perr" title={c.bind.error}>sizing: {c.bind.error}</div>
+    {/if}
+    {@render biasCtl(use?.doc.bind, c?.bind, path)}
+    {#if c && Object.keys(c.provides).length}
+      <div class="prov" title={CONTROL_HELP.provide}>
+        {#each Object.entries(c.provides) as [k, v]}<code>{joinProvide(c.name, k)}={fmt(v)}</code
+          >{/each}
+      </div>
+    {/if}
+    {#if childFails(c).length}
+      <div class="cfails">
+        {#each childFails(c) as r}<span class="cfail" title={ruleTitle(r)}
+            >✗ {r.id} {pct(r.marginPct)}</span
+          >{/each}
+      </div>
+    {/if}
+    {#if c?.children?.length}
+      <div class="skids">
+        {#each c.children as gc, k}{@render childCard(gc, use?.doc.uses?.[k], [...path, k])}{/each}
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
 <div class="sheet">
   <div class="shead">
     <select class="rm" onchange={pickSheet} title={CONTROL_HELP.sheet}>
       <option value="" selected>sheet…</option>
       {#each SHEET_MENU as g, gi}
         <optgroup label={g.label}>
-          {#each g.sheets as s, si}<option value={`${gi}:${si}`}>{s.title}</option>{/each}
+          {#each g.sheets as s, si}<option value={`${gi}:${si}`}
+              >{menuFeasible[gi][si] ? '✓' : '✗'} {s.title}</option
+            >{/each}
         </optgroup>
       {/each}
     </select>
@@ -316,6 +454,7 @@
       {:else}
         <span class="perr" title={result.bind.error}>sizing: {result.bind.error}</span>
       {/if}
+      {@render biasCtl(cfg.bind, result.bind, [])}
     {/if}
     {#if sweepable.length}
       <label class="swsel" title={CONTROL_HELP.sheetSweep}>
@@ -377,38 +516,9 @@
 
   {#if cfg.uses?.length}
     <div class="suses">
+      <span class="glabel" title={CONTROL_HELP.provide}>composed blocks</span>
       {#each cfg.uses as u, i}
-        {@const c = result.children?.[i]}
-        <div class="suse st-{c?.feasible ? 'pass' : 'fail'}" title={u.doc.title}>
-          <span class="chip">{c?.feasible ? '✓' : '✗'}</span>
-          <b>{u.name}</b><i>{u.doc.title}</i>
-          {#if deviceOptions.length > 1 || u.device}
-            <select
-              class="dsel"
-              title={CONTROL_HELP.useDevice}
-              value={u.device ?? ''}
-              onchange={(e) => setUseDevice(i, (e.currentTarget as HTMLSelectElement).value)}
-            >
-              <option value="">↳ active device</option>
-              {#if u.device && !deviceOptions.some((o) => o.uid === u.device)}
-                <option value={u.device}>{u.device} (not loaded)</option>
-              {/if}
-              {#each deviceOptions as o}<option value={o.uid}>{o.label}</option>{/each}
-            </select>
-          {/if}
-          <span class="prov" title={CONTROL_HELP.provide}
-            >{#each Object.entries(c?.provides ?? {}) as [k, v]}<code
-                >{joinProvide(u.name, k)}={fmt(v)}</code
-              >{/each}</span
-          >
-        </div>
-        {#if childFails(c).length}
-          <div class="cfails">
-            {#each childFails(c) as r}<span class="cfail" title={ruleTitle(r)}
-                >✗ {r.id} {pct(r.marginPct)}</span
-              >{/each}
-          </div>
-        {/if}
+        {@render childCard(result.children?.[i], u, [i])}
       {/each}
     </div>
   {/if}
@@ -416,10 +526,13 @@
   {#if cfg.rows.length}
     <div class="srows">
       {#each cfg.rows as row}
-        <span class="srow"
-          ><b>{row.name}</b> = <code>{row.expr}</code> = {fmt(result.values[row.name])}{row.unit ??
-            ''}</span
-        >
+        <div class="srow">
+          <span class="seq"
+            ><b>{row.name}</b> = {@html qFormula(row.expr)} =
+            <span class="sval">{fmt(result.values[row.name])}{row.unit ?? ''}</span></span
+          >
+          {#if row.note}<span class="snote">{row.note}</span>{/if}
+        </div>
       {/each}
     </div>
   {/if}
@@ -441,7 +554,11 @@
               >{r.kind === 'guardrail' ? 'guardrail · advisory' : r.kind}</i
             ></td
           >
-          <td class="rtext"><code>{r.text}</code></td>
+          <td class="rtext">
+            <span class="req">{@html qFormula(r.text)}</span>
+            {#if ruleNote.get(r.id)}<span class="snote">{ruleNote.get(r.id)}</span>{/if}
+            {#if r.detail}<span class="snote sdetail">{r.detail}</span>{/if}
+          </td>
           <td class="rnum">{fmt(r.lhsValue)} / {fmt(r.rhsValue)}</td>
           <td class="rmar">{r.status === 'na' ? '—' : pct(r.marginPct)}</td>
         </tr>
@@ -656,16 +773,35 @@
     width: 100%;
     min-width: 0;
   }
+  /* Intermediate/output equations: one block per row — the rendered formula and its value,
+     with the author's derivation note beneath so the sheet explains itself in place. */
   .srows {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.15rem 1rem;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0.2rem 0;
+  }
+  .srow {
+    display: flex;
+    flex-direction: column;
+  }
+  .seq {
     font-family: ui-monospace, monospace;
     font-size: 0.78rem;
-    opacity: 0.8;
+    opacity: 0.9;
   }
-  .srows code {
+  .seq .sval {
     opacity: 0.75;
+  }
+  /* Author comment explaining an equation or rule — the "why", not the math. */
+  .snote {
+    font-size: 0.72rem;
+    opacity: 0.6;
+    white-space: normal;
+    margin-top: 0.05rem;
+  }
+  .sdetail {
+    font-style: italic;
   }
   .srules {
     border-collapse: collapse;
@@ -689,44 +825,112 @@
     margin-left: 0.4rem;
     font-size: 0.72rem;
   }
-  /* composed-child summary: one row per `use`, its feasibility chip + exposed scalars */
+  /* composed blocks: each `use` is a self-contained card (sizing, provides, failing rules),
+     children nest as indented cards so the composition tree reads as modules within modules. */
   .suses {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 0.35rem;
     margin: 0.2rem 0;
   }
   .suse {
     display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    border-left-width: 3px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+  }
+  /* the left rail tints to the block's verdict — green closes, red doesn't */
+  .suse.st-pass {
+    border-left-color: var(--ok);
+  }
+  .suse.st-fail {
+    border-left-color: var(--err);
+  }
+  .suseh {
+    display: flex;
     align-items: baseline;
     gap: 0.3rem;
-    font-size: 0.8rem;
-    white-space: nowrap;
-    overflow: hidden;
+    flex-wrap: wrap;
   }
-  .suse i {
-    opacity: 0.5;
+  .suseh i {
+    opacity: 0.55;
     font-style: normal;
     font-size: 0.72rem;
   }
-  .suse .dsel {
+  .suseh .dsel {
     font-size: 0.72rem;
     max-width: 12rem;
+    margin-left: auto;
   }
-  .suse .prov {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .suse .prov code {
+  /* the block's own sized operating point — the module's "output pins" made concrete */
+  .susebind {
+    font-family: ui-monospace, monospace;
+    font-size: 0.74rem;
     opacity: 0.85;
-    margin-left: 0.5rem;
   }
-  /* An infeasible child's failing hard rules — one compact line under its summary row. */
+  .susebind .sbias {
+    opacity: 0.7;
+    margin-left: 0.3rem;
+  }
+  /* per-block operating-point editor: one compact field per live bias axis (vds/vsb). */
+  .sbiasctl {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.15rem 0.5rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.72rem;
+  }
+  .bx {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    opacity: 0.85;
+  }
+  .bx .num {
+    width: 4rem;
+  }
+  .bx i {
+    opacity: 0.5;
+    font-style: normal;
+  }
+  .bx.ro code {
+    opacity: 0.75;
+  }
+  /* a bias the bind MUST pin but hasn't — the fail-closed remedy, flagged for the eye. */
+  .bx.need {
+    color: var(--err);
+    opacity: 1;
+  }
+  .bx.need .num {
+    border-color: var(--err);
+  }
+  .prov {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.1rem 0.6rem;
+  }
+  .prov code {
+    opacity: 0.85;
+  }
+  /* nested children: indent + a rail so the hierarchy is visible at a glance */
+  .skids {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.15rem;
+    padding-left: 0.5rem;
+    border-left: 1px dashed color-mix(in srgb, currentColor 20%, transparent);
+  }
+  /* An infeasible child's failing hard rules — one compact line inside its card. */
   .cfails {
     display: flex;
     flex-wrap: wrap;
     gap: 0.1rem 0.6rem;
-    margin: 0 0 0.15rem 1.5rem;
     font-family: ui-monospace, monospace;
     font-size: 0.72rem;
     color: var(--err);
@@ -736,8 +940,12 @@
     width: 99%;
     white-space: normal;
   }
-  .rtext code {
+  .rtext .req {
     opacity: 0.85;
+  }
+  /* the note shares the rules cell but must not inherit its baseline nowrap siblings */
+  .rtext .snote {
+    display: block;
   }
   .rnum,
   .rmar {

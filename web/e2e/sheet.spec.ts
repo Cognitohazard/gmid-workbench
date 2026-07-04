@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loadDemo } from './helpers';
+import { loadDemo, pickSheet } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -165,7 +165,7 @@ test('design sheet: switching the example replaces the doc; a removed sheet is g
   const sp = page.locator('.grid .panel').last();
 
   // The example picker offers the vetted sheets and (re)loads one without typing.
-  await sp.locator('.shead select.rm').selectOption({ label: 'Single NMOS gm/ID sizing' });
+  await pickSheet(sp, 'Single NMOS gm/ID sizing');
   await expect(sp.locator('.srules tr')).not.toHaveCount(0);
   await expect(sp.locator('.shead select.rm')).toHaveValue(''); // snaps back to the placeholder
 
@@ -182,7 +182,7 @@ test('design sheet: the noise & matching example evaluates and sweeps to a feasi
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
-  await sp.locator('.shead select.rm').selectOption({ label: 'NMOS noise & matching' });
+  await pickSheet(sp, 'NMOS noise & matching');
   // The integrated-noise and Pelgrom-offset constraints are present.
   await expect(sp.locator('.srules tr', { hasText: 'noise-spec' })).toBeVisible();
   await expect(sp.locator('.srules tr', { hasText: 'offset-spec' })).toBeVisible();
@@ -206,9 +206,7 @@ test('design sheet: a composed cascode shows its child block and composes feasib
   const sp = page.locator('.grid .panel').last();
 
   // Switch to the composed (parent → child) cascode example.
-  await sp
-    .locator('.shead select.rm')
-    .selectOption({ label: 'NMOS cascode (gain-boosted output)' });
+  await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
 
   // The embedded common-source child renders in the children summary and is feasible,
   // and the scalars it exposes (cs__av0, …) are shown.
@@ -255,17 +253,15 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   // device is loaded.
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
-  await sp
-    .locator('.shead select.rm')
-    .selectOption({ label: 'NMOS cascode (gain-boosted output)' });
+  await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
   const child = sp.locator('.suse', { hasText: 'cs' });
   await expect(child.locator('.dsel')).toBeVisible();
 
   // The child inherits the active (demo) device; point it at the imported device → a different
-  // table ⇒ a different sized result.
-  const before = (await child.locator('.prov').innerText()).trim();
+  // table re-sizes the child block (here the small fixture can't size it, so the card changes).
+  const before = (await child.textContent())?.trim();
   await child.locator('.dsel').selectOption({ index: 2 }); // the imported nch_lvt
-  await expect(child.locator('.prov')).not.toHaveText(before);
+  await expect.poll(async () => (await child.textContent())?.trim()).not.toBe(before);
 
   // The choice persists. After reload re-load ONLY the demo, so the still-set device (nch_lvt) no
   // longer resolves and the child fails closed with a clear message — proving the key was stored.
@@ -302,9 +298,7 @@ test('design sheet: two loaded devices sharing a label are each individually sel
 
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
-  await sp
-    .locator('.shead select.rm')
-    .selectOption({ label: 'NMOS cascode (gain-boosted output)' });
+  await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
   const dsel = sp.locator('.suse', { hasText: 'cs' }).locator('.dsel');
 
   // The two same-label devices appear as DISTINCT options (one disambiguated with a suffix) —
@@ -416,18 +410,36 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   const sp = page.locator('.grid .panel').last();
 
   // The picker groups examples and the curated library; load a Stages topology by title.
-  await sp.locator('.shead select.rm').selectOption({ label: 'CS amp, current-source load' });
+  await pickSheet(sp, 'CS amp, current-source load');
   await expect(sp.locator('.shead')).toContainText('CS amp, current-source load');
 
   // It binds on the demo device, reports the declared operating point, evaluates its
   // composed load child, and closes at defaults (the core golden pins the same numbers).
   await expect(sp.locator('.bind')).toContainText('W=');
-  await expect(sp.locator('.sbias')).toContainText('vds');
+  await expect(sp.locator('.shead .sbias')).toContainText('vds');
   await expect(sp.locator('.suse', { hasText: 'load' })).toBeVisible();
   await expect(sp.locator('.feasb')).toHaveText('feasible');
 
+  // Each block owns its operating point: a per-block bias control names the vds axis. The
+  // curated sheet drives vds from a param, so the block links to it read-only rather than
+  // borrowing the (now retired) shared dashboard slider.
+  await expect(sp.locator('.shead .sbiasctl .bx').first()).toContainText('vds');
+  await expect(sp.locator('.shead .sbiasctl .bx.ro').first()).toBeVisible();
+
+  // Equations render (not raw source) and the author notes are shown in place, so a
+  // designer can read what each row computes and why without opening the JSON.
+  const gainRow = sp.locator('.srow', { hasText: 'Av' }).first();
+  await expect(gainRow.locator('.seq sub')).not.toHaveCount(0); // subscripted g_m/g_ds, not "gm"
+  await expect(sp.locator('.srows .snote').first()).toBeVisible();
+  // A rule's physical-meaning note sits under its rendered comparison.
+  await expect(sp.locator('.srules .snote').first()).toBeVisible();
+
+  // The picker previews feasibility inline: every option is marked ✓ or ✗ before loading.
+  const options = sp.locator('.shead select.rm option:not([value=""])');
+  await expect(options.first()).toHaveText(/^[✓✗] /);
+
   // A composed multi-child library sheet (no parent bind) loads from another group.
-  await sp.locator('.shead select.rm').selectOption({ label: '5T OTA' });
+  await pickSheet(sp, '5T OTA');
   await expect(sp.locator('.shead')).toContainText('5T OTA');
   await expect(sp.locator('.suse')).toHaveCount(3);
   await expect(sp.locator('.srules tr').first()).toBeVisible();
