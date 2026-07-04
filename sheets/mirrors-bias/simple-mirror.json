@@ -1,6 +1,6 @@
 {
   "title": "Simple current mirror",
-  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its vds is its own vgs — declare the estimate and the consistency guardrail checks it), and the output device binds width-first at K times the reference width, evaluated at the served output node's vds. The systematic error is the lambda mismatch between the two operating points; the random error is the Pelgrom spread of the ratio.",
+  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its $V_{DS}$ is its own $V_{GS}$ — declare the estimate and the consistency guardrail checks it), and the output device binds width-first at K times the reference width, evaluated at the served output node's $V_{DS}$. The systematic error is the $\\lambda$ mismatch between the two operating points; the random error is the Pelgrom spread of the ratio.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },

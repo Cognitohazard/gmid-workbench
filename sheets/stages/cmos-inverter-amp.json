@@ -1,6 +1,6 @@
 {
   "title": "CMOS inverter amplifier",
-  "description": "A CMOS inverter used as an analog amplifier: the input drives both an NMOS and a PMOS gate, and the two devices share one drain current stacked between the rails (current reuse). Because both transconductances act on the same input, the stage transconductance is the sum gm_tot = n_gm + p_gm, so the inverter gives roughly twice the gm of a single device at the same current - the reason it is the workhorse gain cell for low-voltage, power-efficient design. The gain is gm_tot/(n_gds + p_gds). Both devices are composed children biased at the same current; pick the PMOS child table to the p polarity and set p_sign to -1 for a signed-PMOS axis.",
+  "description": "A CMOS inverter used as an analog amplifier: the input drives both an NMOS and a PMOS gate, and the two devices share one drain current stacked between the rails (current reuse). Because both transconductances act on the same input, the stage transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$, so the inverter gives roughly twice the $g_m$ of a single device at the same current - the reason it is the workhorse gain cell for low-voltage, power-efficient design. The gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$. Both devices are composed children biased at the same current; pick the PMOS child table to the p polarity and set p_sign to -1 for a signed-PMOS axis.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },

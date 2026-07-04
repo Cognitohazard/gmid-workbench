@@ -1,6 +1,6 @@
 {
   "title": "Gm-C filter pole",
-  "description": "One transconductor-capacitor integrator pole, f_c = gm/(2*pi*C_int), sized from the cutoff spec. gm is pinned from f_c into the integrating cap with an over-design factor; gm/ID is the efficiency knob. The transconductor's V* is reported as a small-signal linear-range proxy, the integrated input noise (thermal floor plus a 1/f tail) is checked against a budget, and the resulting dynamic range is estimated. Assumes a single dominant pole and a simple differential transconductor; the true large-signal linearity depends on the Gm cell topology and is sim-owned. Feeds a downstream filter sheet that cascades these poles.",
+  "description": "One transconductor-capacitor integrator pole, $f_c = g_m/(2*\\pi*C_{int})$, sized from the cutoff spec. $g_m$ is pinned from $f_c$ into the integrating cap with an over-design factor; $g_m/I_D$ is the efficiency knob. The transconductor's $V^*$ is reported as a small-signal linear-range proxy, the integrated input noise (thermal floor plus a $1/f$ tail) is checked against a budget, and the resulting dynamic range is estimated. Assumes a single dominant pole and a simple differential transconductor; the true large-signal linearity depends on the Gm cell topology and is sim-owned. Feeds a downstream filter sheet that cascades these poles.",
   "polarity": "n",
   "params": [
     {

@@ -1,6 +1,6 @@
 {
   "title": "Preamp + latch comparator",
-  "description": "A preamplifier in front of a dynamic latch, sized to trade gain against delay. One resistively-loaded gain stage sets the preamp gain A_pre = gm*(R_L || ro); that gain divides the latch's standalone offset when it is referred to the input, so the total input offset is the preamp's own Pelgrom offset in quadrature with the referred latch offset. The teaching point is the tension: raising A_pre suppresses the latch offset but the preamp's output pole tau_pre = Rout*C_p grows with the same Rout, so gain costs recovery delay. Both trade rows are shown. The latch's standalone offset and the output-node cap are estimates; the dynamic latch is sim-verified.",
+  "description": "A preamplifier in front of a dynamic latch, sized to trade gain against delay. One resistively-loaded gain stage sets the preamp gain $A_{pre} = g_m*(R_L \\parallel r_o)$; that gain divides the latch's standalone offset when it is referred to the input, so the total input offset is the preamp's own Pelgrom offset in quadrature with the referred latch offset. The teaching point is the tension: raising $A_{pre}$ suppresses the latch offset but the preamp's output pole $\\tau_{pre} = R_{out}*C_p$ grows with the same $R_{out}$, so gain costs recovery delay. Both trade rows are shown. The latch's standalone offset and the output-node cap are estimates; the dynamic latch is sim-verified.",
   "polarity": "n",
   "params": [
     {

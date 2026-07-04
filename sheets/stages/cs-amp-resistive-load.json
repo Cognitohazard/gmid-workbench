@@ -1,6 +1,6 @@
 {
   "title": "CS amp, resistive load",
-  "description": "Common-source stage with a physical resistor as the load. gm is fixed from the bandwidth spec (with an explicit over-design factor) and gm/ID is the efficiency knob; the load resistor R_load sets both the gain and the DC drop that eats output headroom. This is the classic gain-vs-headroom trade made explicit: a bigger R_load raises the gain but drops more of the supply, so the output DC level V_out = VDD - I*R_load sinks toward the device's saturation floor. V_out is an estimate used to bias the device; the headroom-consistent guardrail checks it against the actual drop, so retune V_out (or R_load) until it is green.",
+  "description": "Common-source stage with a physical resistor as the load. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor) and $g_m/I_D$ is the efficiency knob; the load resistor $R_{load}$ sets both the gain and the DC drop that eats output headroom. This is the classic gain-vs-headroom trade made explicit: a bigger $R_{load}$ raises the gain but drops more of the supply, so the output DC level $V_{out}$ = VDD - $I*R_{load}$ sinks toward the device's saturation floor. $V_{out}$ is an estimate used to bias the device; the headroom-consistent guardrail checks it against the actual drop, so retune $V_{out}$ (or $R_{load}$) until it is green.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },

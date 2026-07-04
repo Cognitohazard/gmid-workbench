@@ -1,6 +1,6 @@
 {
   "title": "CS amp, current-source load",
-  "description": "Common-source stage with a current-source load: the canonical gm/ID first sheet. gm is fixed from the bandwidth spec (with an explicit over-design factor), gm/ID is the efficiency knob, and the load device is a composed child so its output conductance and noise enter the gain and noise budgets honestly. Pick the load child's device table to the opposite polarity (set load_sign to -1 for a signed-PMOS table).",
+  "description": "Common-source stage with a current-source load: the canonical $g_m/I_D$ first sheet. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor), $g_m/I_D$ is the efficiency knob, and the load device is a composed child so its output conductance and noise enter the gain and noise budgets honestly. Pick the load child's device table to the opposite polarity (set load_sign to -1 for a signed-PMOS table).",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },

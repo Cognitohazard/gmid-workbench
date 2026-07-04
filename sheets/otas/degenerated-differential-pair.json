@@ -1,6 +1,6 @@
 {
   "title": "Degenerated differential pair",
-  "description": "A source-degenerated differential pair: a resistor R_s in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is Gm = gm/(1 + gm*R_s); the degeneration factor n_deg = 1 + gm*R_s divides GBW and the input offset while the ~1-decade linear range extends to about V* + (I_tail/2)*R_s. The bind declares vsb = (I_tail/2)*R_s to record the source lift the degeneration introduces (inert on a table with no body-effect axis, a real slice on one that has it). Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
+  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + g_m*R_s)$; the degeneration factor $n_{deg} = 1 + g_m*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The bind declares $V_{SB} = (I_{tail}/2)*R_s$ to record the source lift the degeneration introduces (inert on a table with no body-effect axis, a real slice on one that has it). Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },

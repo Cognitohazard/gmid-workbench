@@ -1,6 +1,6 @@
 {
   "title": "5T OTA",
-  "description": "The five-transistor OTA sized by half-circuit: an input pair device at half the tail current, a mirror-load device (pick its child table to the opposite polarity; set ld_sign to -1 for a signed-PMOS table), and the tail source. Gain, bandwidth, slew, noise, offset, and the input common-mode range are all author math over the three children's operating points. The load child evaluates first so the input device's drain level (the mirror's diode vgs below the supply) is known; the tail reads the input device's vgs to find its own headroom.",
+  "description": "The five-transistor OTA sized by half-circuit: an input pair device at half the tail current, a mirror-load device (pick its child table to the opposite polarity; set ld_sign to -1 for a signed-PMOS table), and the tail source. Gain, bandwidth, slew, noise, offset, and the input common-mode range are all author math over the three children's operating points. The load child evaluates first so the input device's drain level (the mirror's diode $V_{GS}$ below the supply) is known; the tail reads the input device's $V_{GS}$ to find its own headroom.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },

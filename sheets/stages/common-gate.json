@@ -1,6 +1,6 @@
 {
   "title": "Common gate",
-  "description": "A common-gate stage: the input drives the source, the gate is AC-grounded, and the output is taken at the drain. It presents a low input resistance Rin = 1/gm (a current-mode input, so it is the classic input matching / current-buffer stage) and a non-inverting voltage gain Av = gm*par(R_load, 1/gds) equal in magnitude to a common source. Its current transfer from source to drain is essentially unity, so it passes an input current to the load with a low input impedance. The device source sits at the input DC level V_in, so the bind declares vsb = V_in (body grounded); on a table without a vsb axis this is advisory and the body effect gmb is omitted from Rin.",
+  "description": "A common-gate stage: the input drives the source, the gate is AC-grounded, and the output is taken at the drain. It presents a low input resistance $R_{in} = 1/g_m$ (a current-mode input, so it is the classic input matching / current-buffer stage) and a non-inverting voltage gain $A_v = g_m*par(R_{load}, 1/g_{ds})$ equal in magnitude to a common source. Its current transfer from source to drain is essentially unity, so it passes an input current to the load with a low input impedance. The device source sits at the input DC level $V_{in}$, so the bind declares $V_{SB} = V_{in}$ (body grounded); on a table without a $V_{SB}$ axis this is advisory and the body effect $g_{mb}$ is omitted from $R_{in}$.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
