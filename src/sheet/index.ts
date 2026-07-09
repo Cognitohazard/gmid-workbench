@@ -2,7 +2,7 @@
 // it validates then evaluates, attaching the validation warnings — mirroring the
 // importMostab discipline so a caller cannot skip validation.
 
-import type { DeviceTable } from '../types';
+import type { DeviceTable, QAWarning } from '../types';
 import { isHardRule } from './types';
 import type {
   RuleResult,
@@ -15,24 +15,37 @@ import type {
 } from './types';
 import { validateSheet } from './validate';
 import { evaluateSheet, type DeviceResolver } from './eval';
+import { resolveSheetRefs, type SheetRefIndex } from './resolve';
 
 export * from './types';
 export * from './eval';
 export * from './validate';
+export * from './resolve';
 export * from './examples';
+
+/** Materialize refs when an index is supplied; otherwise pass the doc through. The
+ *  resolver's failures are error warnings, so they ride the same fail-closed channel
+ *  as validation errors in every entrypoint below. */
+function resolved(doc: SheetDoc, refs?: SheetRefIndex): { doc: SheetDoc; warnings: QAWarning[] } {
+  return refs ? resolveSheetRefs(doc, refs) : { doc, warnings: [] };
+}
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a child block's
  *  structural error) also forces the feasibility verdict false, so a structurally broken
  *  sheet is never reported feasible. `validateSheet` and `evaluateSheet` both recurse into
- *  composed children, so the whole tree is covered. */
+ *  composed children, so the whole tree is covered. `refs` materializes by-reference
+ *  children first (see resolveSheetRefs) — resolution failures block feasibility the
+ *  same way validation errors do. */
 export function runSheet(
   doc: SheetDoc,
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
+  refs?: SheetRefIndex,
 ): SheetResult {
-  const pre = validateSheet(doc);
-  const res = evaluateSheet(doc, table, resolveDevice);
+  const r = resolved(doc, refs);
+  const pre = [...r.warnings, ...validateSheet(r.doc)];
+  const res = evaluateSheet(r.doc, table, resolveDevice);
   const blocked = pre.some((w) => w.severity === 'error');
   return { ...res, feasible: res.feasible && !blocked, warnings: [...pre, ...res.warnings] };
 }
@@ -79,7 +92,11 @@ function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepRule[])
     if (prefix === '' || isHardRule(r.kind))
       into.push({ id: prefix + r.id, kind: r.kind, marginPct: [] });
   }
-  for (const u of doc.uses ?? []) collectTreeRules(u.doc, `${prefix}${u.name}.`, into);
+  // A docless (unresolved-ref) use has no visible rules; the sweep is all-infeasible
+  // there anyway via eval's fail-closed guard.
+  for (const u of doc.uses ?? []) {
+    if (u.doc) collectTreeRules(u.doc, `${prefix}${u.name}.`, into);
+  }
 }
 
 /** Index one evaluation's rule outcomes by the same path scheme collectTreeRules uses. */
@@ -107,6 +124,7 @@ export function sweepSheet(
   table?: DeviceTable,
   n = SWEEP_POINTS,
   resolveDevice?: DeviceResolver,
+  refs?: SheetRefIndex,
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -114,22 +132,25 @@ export function sweepSheet(
   }
 
   const pts = Math.max(2, Math.min(401, Math.floor(n)));
+  // Resolve refs ONCE — the tree is constant across the sweep, only param values move —
+  // so ref'd children's hard rules ride the sweep like embedded ones.
+  const r = resolved(doc, refs);
   // Validate the doc AS SWEPT: the swept param's stored default is overridden at every
   // sample, so validating it (e.g. a NaN default with a finite [min,max]) would force
   // every sample infeasible for a value no sample ever uses. Any finite stand-in works
   // structurally; min is one.
-  const blocked = validateSheet(withParams(doc, { [param]: v.min })).some(
-    (w) => w.severity === 'error',
-  );
+  const blocked =
+    r.warnings.some((w) => w.severity === 'error') ||
+    validateSheet(withParams(r.doc, { [param]: v.min })).some((w) => w.severity === 'error');
   const rules: SheetSweepRule[] = [];
-  collectTreeRules(doc, '', rules);
+  collectTreeRules(r.doc, '', rules);
   const x: number[] = [];
   const feasible: boolean[] = [];
 
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
     x.push(t);
-    const res = evaluateSheet(withParams(doc, { [param]: t }), table, resolveDevice);
+    const res = evaluateSheet(withParams(r.doc, { [param]: t }), table, resolveDevice);
     feasible.push(!blocked && res.feasible);
     const byPath = new Map<string, RuleResult>();
     indexTreeResults(res.rules, res.children, '', byPath);
@@ -161,6 +182,7 @@ export function sweepSheet2(
   table?: DeviceTable,
   n = SWEEP2_POINTS,
   resolveDevice?: DeviceResolver,
+  refs?: SheetRefIndex,
 ): SheetSweep2 {
   const px = doc.params.find((p) => p.name === paramX);
   const py = doc.params.find((p) => p.name === paramY);
@@ -177,9 +199,12 @@ export function sweepSheet2(
   if (paramX === paramY || !sweepable(px) || !sweepable(py)) return empty;
 
   const pts = Math.max(2, Math.min(101, Math.floor(n)));
+  const r = resolved(doc, refs); // once — constant tree, only the two params move
   const overrideTwo = (vx: number, vy: number): SheetDoc =>
-    withParams(doc, { [paramX]: vx, [paramY]: vy });
-  const blocked = validateSheet(overrideTwo(px.min, py.min)).some((w) => w.severity === 'error');
+    withParams(r.doc, { [paramX]: vx, [paramY]: vy });
+  const blocked =
+    r.warnings.some((w) => w.severity === 'error') ||
+    validateSheet(overrideTwo(px.min, py.min)).some((w) => w.severity === 'error');
 
   const x = Array.from({ length: pts }, (_, i) => px.min + ((px.max - px.min) * i) / (pts - 1));
   const y = Array.from({ length: pts }, (_, i) => py.min + ((py.max - py.min) * i) / (pts - 1));

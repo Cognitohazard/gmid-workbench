@@ -19,7 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, sheet as libSheet } from './library.fixtures';
+import { table, relErr, VA_PER_L, sheet as libSheet, REFS } from './library.fixtures';
 
 const par = (a: number, b: number): number => 1 / (1 / a + 1 / b);
 
@@ -35,7 +35,7 @@ const VGS_GMID8_L05 = 0.668042;
 const VGS_GMID10_L05 = 0.610063;
 
 describe('tier4 goldens: Two-stage Miller OTA', () => {
-  const res = runSheet(sheet('two-stage-miller-ota'), table);
+  const res = runSheet(sheet('two-stage-miller-ota'), table, undefined, REFS);
   // Defaults: I1 20 µA, I2 60 µA, Cc 3 pF, CL 5 pF, C1_est 0.5 pF, gm/ID in 12, s2 12,
   // ld2 8, all L 0.5 µm, V_out2 0.9 V.
   const gm1 = 12 * (20e-6 / 2);
@@ -66,7 +66,7 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
 });
 
 describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
-  const res = runSheet(sheet('two-stage-cascode-comp-ota'), table);
+  const res = runSheet(sheet('two-stage-cascode-comp-ota'), table, undefined, REFS);
   const gm1 = 12 * (20e-6 / 2);
   const gm2 = 12 * 60e-6;
   const Cc = 3e-12;

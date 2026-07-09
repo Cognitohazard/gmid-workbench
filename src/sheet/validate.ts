@@ -98,9 +98,12 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     // Collision guard: a child exposes scalars into the parent scope as `name__key`. If a
     // parent param or row is named identically, the child injection silently overwrites it
     // (or the row shadows the injection) — surface it rather than resolve it by overwrite.
+    // A ref-only use's provides are unknown until resolution, so these structural
+    // checks cover embedded children only — run validation on the RESOLVED doc (as
+    // runSheet does when given a ref index) for full coverage.
     const injected = new Set<string>();
     for (const use of doc.uses) {
-      for (const key of use.doc.provide ?? []) injected.add(joinProvide(use.name, key));
+      for (const key of use.doc?.provide ?? []) injected.add(joinProvide(use.name, key));
     }
     for (const p of doc.params) {
       if (injected.has(p.name)) {
@@ -129,7 +132,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     const providedBy = (idx: number): Set<string> => {
       const s = new Set<string>();
       const u = doc.uses![idx];
-      for (const key of u.doc.provide ?? []) s.add(joinProvide(u.name, key));
+      for (const key of u.doc?.provide ?? []) s.add(joinProvide(u.name, key));
       return s;
     };
     for (let i = 0; i < doc.uses.length; i++) {
@@ -153,6 +156,24 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
 
     const seen = new Set<string>();
     for (const use of doc.uses) {
+      // Exactly one content source: an embedded doc, or a non-blank ref to resolve. A
+      // use with neither can never evaluate; a blank ref can never match a library id.
+      if (!use.doc && use.ref === undefined) {
+        out.push({
+          rule: 'sheet-use',
+          severity: 'error',
+          message: `use "${use.name}" has neither an embedded doc nor a ref`,
+          location: use.name,
+        });
+      }
+      if (use.ref !== undefined && !use.ref.trim()) {
+        out.push({
+          rule: 'sheet-ref',
+          severity: 'error',
+          message: `use "${use.name}" has an empty ref`,
+          location: use.name,
+        });
+      }
       const name = use.name?.trim();
       if (!name) {
         out.push({
@@ -185,10 +206,10 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       // grandchild value up the tree is the ratified idiom for surfacing a deep quantity,
       // so only a separator-bearing key that matches nothing injectable is flagged.
       const childInjected = new Set<string>();
-      for (const g of use.doc.uses ?? []) {
-        for (const k of g.doc.provide ?? []) childInjected.add(joinProvide(g.name, k));
+      for (const g of use.doc?.uses ?? []) {
+        for (const k of g.doc?.provide ?? []) childInjected.add(joinProvide(g.name, k));
       }
-      for (const key of use.doc.provide ?? []) {
+      for (const key of use.doc?.provide ?? []) {
         if (key.includes(PROVIDE_SEP) && !childInjected.has(key)) {
           out.push({
             rule: 'sheet-provide',
@@ -198,7 +219,10 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
           });
         }
       }
-      if (use.params) {
+      // Override keys can only be checked against a KNOWN child param list — for a
+      // ref-only use that list arrives at resolution, and revalidating the resolved
+      // doc (runSheet's path) performs this same check with the doc filled in.
+      if (use.params && use.doc) {
         const childParams = new Set(use.doc.params.map((p) => p.name));
         for (const k of Object.keys(use.params)) {
           // An error, not advice: the value the parent wired will never reach the child,
@@ -222,7 +246,11 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         });
         continue;
       }
-      for (const w of validateSheet(use.doc, _depth + 1)) out.push(prefixUseWarning(use.name, w));
+      if (use.doc) {
+        for (const w of validateSheet(use.doc, _depth + 1)) {
+          out.push(prefixUseWarning(use.name, w));
+        }
+      }
     }
   }
 

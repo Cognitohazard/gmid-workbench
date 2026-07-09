@@ -351,12 +351,13 @@ function evalRule(
  */
 function applyUseParams(
   use: SheetUse,
+  childDoc: SheetDoc,
   parentValues: Record<string, number>,
   parentScope: Scope,
   warn: (w: QAWarning) => void,
 ): { doc: SheetDoc; ok: boolean } {
-  if (!use.params) return { doc: use.doc, ok: true };
-  const childParams = new Set(use.doc.params.map((p) => p.name));
+  if (!use.params) return { doc: childDoc, ok: true };
+  const childParams = new Set(childDoc.params.map((p) => p.name));
   const overrides: Record<string, number> = {};
   let ok = true;
   for (const [k, expr] of Object.entries(use.params)) {
@@ -389,8 +390,8 @@ function applyUseParams(
   }
   return {
     doc: {
-      ...use.doc,
-      params: use.doc.params.map((p) =>
+      ...childDoc,
+      params: childDoc.params.map((p) =>
         Object.prototype.hasOwnProperty.call(overrides, p.name)
           ? { ...p, value: overrides[p.name] }
           : p,
@@ -427,7 +428,7 @@ function evalChildren(
       warn({ rule: 'sheet-use', severity: 'error', message, location: use.name });
       reports.push({
         name: use.name,
-        title: use.doc.title,
+        title: use.doc?.title ?? use.ref ?? '',
         feasible: false,
         provides: {},
         rules: [],
@@ -435,6 +436,17 @@ function evalChildren(
     };
     if (!use.name.trim()) {
       dead('a use has an empty name');
+      continue;
+    }
+    // A ref that reached evaluation unmaterialized (the caller skipped resolveSheetRefs,
+    // or resolution failed and already named why) must never size on nothing.
+    const srcDoc = use.doc;
+    if (!srcDoc) {
+      dead(
+        use.ref !== undefined
+          ? `use "${use.name}": unresolved reference "${use.ref}" — resolve against a sheet library before evaluation`
+          : `use "${use.name}" has neither an embedded doc nor a ref`,
+      );
       continue;
     }
     if (seenNames.has(use.name)) {
@@ -458,7 +470,7 @@ function evalChildren(
       }
     }
 
-    const { doc: childDoc, ok: paramsOk } = applyUseParams(use, values, scope, warn);
+    const { doc: childDoc, ok: paramsOk } = applyUseParams(use, srcDoc, values, scope, warn);
     const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1);
 
     // Roll up child warnings, attributed to the use site (so a child error fails the
@@ -470,7 +482,7 @@ function evalChildren(
     // input, so its outputs are meaningless: withhold them so dependent parent math goes `na`.
     const provides: Record<string, number> = {};
     if (paramsOk) {
-      for (const key of use.doc.provide ?? []) {
+      for (const key of srcDoc.provide ?? []) {
         const v = res.values[key];
         if (v !== undefined && Number.isFinite(v)) {
           provides[key] = v;
@@ -480,7 +492,7 @@ function evalChildren(
     }
     reports.push({
       name: use.name,
-      title: use.doc.title,
+      title: srcDoc.title,
       feasible: paramsOk && res.feasible,
       ...(res.bind ? { bind: res.bind } : {}),
       provides,

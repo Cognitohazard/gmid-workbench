@@ -19,8 +19,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { runSheet, validateSheet } from './index';
+import { resolveSheetRefs } from './resolve';
 import { isHardRule, type SheetChildReport, type SheetResult } from './types';
-import { loadLibrary, sheet, table, relErr, vnthM, VA_PER_L } from './library.fixtures';
+import { loadLibrary, sheet, table, relErr, vnthM, VA_PER_L, REFS } from './library.fixtures';
 
 const LIBRARY = loadLibrary();
 
@@ -45,13 +46,15 @@ describe('sheet library: generic contract', () => {
 
   for (const { file, doc } of LIBRARY) {
     describe(file, () => {
-      it('validates clean', () => {
-        const errs = validateSheet(doc).filter((w) => w.severity === 'error');
+      it('resolves refs and validates clean', () => {
+        const r = resolveSheetRefs(doc, REFS);
+        expect(r.warnings).toEqual([]);
+        const errs = validateSheet(r.doc).filter((w) => w.severity === 'error');
         expect(errs).toEqual([]);
       });
 
       it('evaluates on the demo device: bind ok, no errors, no hard-rule na', () => {
-        const res = runSheet(doc, table);
+        const res = runSheet(doc, table, undefined, REFS);
         expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
         if (doc.bind) {
           expect(res.bind?.ok, res.bind?.error).toBe(true);

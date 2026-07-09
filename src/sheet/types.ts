@@ -112,17 +112,22 @@ export interface SheetRule {
 }
 
 /**
- * A child block this sheet composes. The child is a full SheetDoc embedded inline
- * (self-contained — the whole tree persists as one document). `params` overrides the
- * child's param VALUES with expressions evaluated in the PARENT's scope, so a parent
- * budget flows down (e.g. a shared length or current). Children evaluate in DOCUMENT
- * ORDER, and each override resolves against the parent scope as built so far: parent
- * params, constants, and the provides of EARLIER siblings — so a later block can carry
- * a value an earlier block derived (a cascode branch taking the input pair's bound
- * current). A forward reference (or a reference to the parent's own sized device,
- * which binds AFTER the children) fails closed as undeclared. `device` names the
- * device table the child sizes against (by id); absent ⇒ the child inherits the
- * parent's table.
+ * A child block this sheet composes. The child is either a full SheetDoc embedded
+ * inline (`doc`) or a reference to a library sheet (`ref` — a `folder/name` id, or the
+ * bare name while it is unique; see resolve.ts). A ref is materialized into `doc` by
+ * `resolveSheetRefs` BEFORE validation/evaluation, so those layers see an embedded
+ * tree; a use that reaches evaluation docless fails closed. A use carrying both is an
+ * already-resolved snapshot (`ref` is provenance; `doc` is authoritative). `params`
+ * overrides the child's param VALUES with expressions evaluated in the PARENT's scope,
+ * so a parent budget flows down (e.g. a shared length or current) — this is also the
+ * customization channel for a ref'd child, whose internals belong to the library
+ * sheet. Children evaluate in DOCUMENT ORDER, and each override resolves against the
+ * parent scope as built so far: parent params, constants, and the provides of EARLIER
+ * siblings — so a later block can carry a value an earlier block derived (a cascode
+ * branch taking the input pair's bound current). A forward reference (or a reference
+ * to the parent's own sized device, which binds AFTER the children) fails closed as
+ * undeclared. `device` names the device table the child sizes against (by id); absent
+ * ⇒ the child inherits the parent's table.
  *
  * The child exposes its `provide`d names to the parent as flat scalars `name__key`
  * (the engine has no member access, so the join is a `__` separator — neither the use
@@ -132,7 +137,8 @@ export interface SheetRule {
  */
 export interface SheetUse {
   name: string;
-  doc: SheetDoc;
+  doc?: SheetDoc;
+  ref?: string;
   device?: string;
   params?: Record<string, string>;
 }
