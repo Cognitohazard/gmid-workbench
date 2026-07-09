@@ -286,14 +286,15 @@ sized width you can scale it yourself with `w0/W` (or `W/w0`).
 
 ## Composition
 
-A sheet composes children through `uses`. Each child is a full sheet embedded inline (the whole
-tree persists as one document), and it exposes named scalars to the parent through its
-`provide` list.
+A sheet composes children through `uses`. Each child is either a full sheet embedded inline
+(`doc`) or a **reference** to a library sheet (`ref` — see [References](#references)), and it
+exposes named scalars to the parent through its `provide` list.
 
 | Field | Type | Meaning |
 |-|-|-|
 | `name` | string | The child's handle in the parent (used in the join, below). Must not contain `__`. |
 | `doc` | object | The embedded child sheet. |
+| `ref` | string | A library-sheet id to include by reference (resolved before evaluation). A use needs `doc` or `ref`; carrying **both** is a pinned snapshot — the embedded copy wins and the ref remains as provenance. |
 | `device` | string, optional | The device the child sizes against (a resolver key); absent ⇒ the child inherits the parent's table. |
 | `params` | object, optional | Overrides of the child's param values, each an expression evaluated in the **parent** scope. |
 
@@ -319,6 +320,34 @@ that does not resolve to a finite number is an error (it does not fall back to t
 default — that would size a different design than authored). A child that errors or reads
 infeasible drags the parent's feasibility down, and its warnings roll up attributed to the use
 site. Composition is depth-capped at 8.
+
+### References
+
+Instead of embedding a child, a use may point at a sheet in the **library** — the curated
+sheets bundled with the app plus any sheet you have imported (a `.json` loaded through the
+same control as a CSV table; imported sheets persist across reloads and appear in the picker
+under *Your sheets*):
+
+```json
+{ "name": "ld2", "ref": "multistage/stage2-current-source-load",
+  "params": { "Ix": "I2", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" } }
+```
+
+A sheet's id is its bare filename (no `.json`). That is unambiguous exactly as long as the
+name is unique across the library — on a collision, qualify it with its folder
+(`multistage/stage2-current-source-load`; imported sheets live under `user/`). Sheets meant to
+be shared should use the qualified form, which stays valid no matter what is loaded next to
+them. Resolution is **fail-closed**: a ref that matches nothing, a bare name that has become
+ambiguous, or a circular reference is an error naming the problem, and the block reads
+infeasible — never a silent guess.
+
+References resolve **live**, before every evaluation: edit the library sheet and every design
+referencing it re-sizes accordingly. The parent's `params` overrides are the customization
+channel — a referenced block's internals belong to the library sheet, so the app shows them
+read-only (the *detach* control swaps the reference for an embedded copy when you need local
+edits). Two export shapes cover sharing: *as-authored* keeps refs (ship it alongside the
+sheets it names), and *flattened* inlines every reference — a self-contained document, frozen
+against later library edits, for a signed-off design.
 
 ## Sweeps
 

@@ -21,8 +21,10 @@ turns them into gm/ID design charts, operating-point lookups, and sized devices.
   third, the width, `VGS`, `fT`, gain, and feasibility are solved from the table.
 - **Design sheets** — author variables, equations, and pass/fail constraints with
   margins; sweep a variable to chart every rule's margin and see where the design
-  closes. Sheets compose: a child block can be sized against a different loaded device.
-  The authoring model is documented in [docs/sheet-format.md](docs/sheet-format.md).
+  closes. Sheets compose: a child block can be sized against a different loaded device,
+  embedded inline or included **by reference** from the sheet library (with a flatten
+  export for a frozen, self-contained copy). The authoring model is documented in
+  [docs/sheet-format.md](docs/sheet-format.md).
 - **Noise and mismatch** — input-referred thermal noise (from stored PSDs when the
   table carries them, or a γ-model estimate), 1/f noise and the flicker corner,
   integrated RMS noise over a band, and a Pelgrom mismatch budget on the sized geometry.
@@ -151,16 +153,17 @@ const sweep = sweepSheet(sheet, 'gm_id', table);
 A composed sheet's child block names its device by a resolver key (`use.device`); pass a
 resolver — `(id) => DeviceTable | undefined` — as the third argument to map those keys to
 tables. The app keys tables by a content-stable uid, but in a script you choose the key, so
-long as each child's `device` matches:
+long as each child's `device` matches. A child included **by reference** (`use.ref`) needs a
+sheet library to resolve against — build an index and pass it fourth; `flattenSheetDoc`
+inlines every reference into a self-contained document:
 
 ```js
 const byKey = new Map(res.dataset.tables.map((t) => [t.id.device, t]));
-runSheet(sheet, table, (id) => byKey.get(id), { fallbackBias: { vds: 0.9 } });
+const refs = buildSheetRefIndex([{ path: 'blocks/cs-load', doc: loadSheet }]);
+runSheet(sheet, table, (id) => byKey.get(id), refs);
 ```
 
-The `fallbackBias` option supplies an operating point for any live table axis a bind does not
-declare (with an advisory warning); a `vds`/`vsb` declared in the bind always wins. See
-[docs/sheet-format.md](docs/sheet-format.md) for the full design-sheet model.
+See [docs/sheet-format.md](docs/sheet-format.md) for the full design-sheet model.
 
 ## Dataset licensing
 
