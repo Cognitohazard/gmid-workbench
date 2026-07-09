@@ -7,6 +7,8 @@
     sweepSheet,
     sweepSheet2,
     sweepable as isSweepable,
+    resolveSheetRefs,
+    flattenSheetDoc,
     formatEng,
     parseEng,
     joinProvide,
@@ -29,7 +31,7 @@
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText } from './labels';
   import { CONTROL_HELP } from './help';
-  import { SHEET_MENU } from './library';
+  import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
 
   let {
     device,
@@ -56,15 +58,23 @@
     onSweep2: (s: string) => void;
   } = $props();
 
-  const result = $derived(runSheet(cfg, device, resolveDevice));
+  // The live sheet library (curated ∪ user-imported) and its by-reference index.
+  const menu = $derived(sheetMenu());
+  const refs = $derived(sheetRefIndex());
+
+  // Materialize by-reference children ONCE per edit: eval, both sweeps, and the child
+  // cards all read the resolved tree, while every edit keeps targeting the raw cfg (so
+  // a ref stays a ref in the persisted doc — that is what makes it live).
+  const rr = $derived(resolveSheetRefs(cfg, refs));
+  const result = $derived(runSheet(rr.doc, device, resolveDevice));
 
   // Feasibility preview for the picker: evaluate every menu sheet against the active device
   // so the dropdown flags which topologies already close before one is loaded. runSheet is
   // pure and never throws; the whole menu re-evaluates only when the device or bias changes.
-  // ponytail: O(menu) evals per device change (each sub-ms); fine at library scale, revisit
-  // with a shared eval cache if the menu grows into the hundreds.
+  // Deliberately simple: O(menu) evals per device change (each sub-ms) — fine at library
+  // scale; revisit with a shared eval cache if the menu grows into the hundreds.
   const menuFeasible = $derived(
-    SHEET_MENU.map((g) => g.sheets.map((s) => runSheet(s, device, resolveDevice).feasible)),
+    menu.map((g) => g.sheets.map((s) => runSheet(s, device, resolveDevice, refs).feasible)),
   );
 
   // ── Feasibility sweep: vary one slider parameter across its range and chart every rule's
@@ -73,7 +83,7 @@
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
   const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
   const swept = $derived(
-    active ? sweepSheet(cfg, active, device, SWEEP_POINTS, resolveDevice) : null,
+    active ? sweepSheet(rr.doc, active, device, SWEEP_POINTS, resolveDevice) : null,
   );
 
   // ── 2-D feasibility map: a second (×) param turns the 1-D margin chart into a design-plane
@@ -84,7 +94,7 @@
   );
   const twoD = $derived(active2 !== ''); // active2 is only ever set while `active` is
   const swept2 = $derived(
-    twoD ? sweepSheet2(cfg, active, active2, device, SWEEP2_POINTS, resolveDevice) : null,
+    twoD ? sweepSheet2(rr.doc, active, active2, device, SWEEP2_POINTS, resolveDevice) : null,
   );
   // The distinct hard-rule ids (tree-path) that bound the infeasible region — the caption's "what
   // limits it", so the plane is never a wall of red with no named cause.
@@ -135,8 +145,8 @@
   });
 
   // Immutable edits: every change emits a fresh doc so the parent's Object.assign + persist
-  // path (identical to every other panel) carries it. structuredClone on sheet-switch so a
-  // panel never aliases the shared menu literals.
+  // path (identical to every other panel) carries it. Sheet-switch deep-copies so a panel
+  // never aliases the shared menu literals.
   function setParam(name: string, value: number): void {
     if (!Number.isFinite(value)) return;
     onChange({ ...cfg, params: cfg.params.map((p) => (p.name === name ? { ...p, value } : p)) });
@@ -163,12 +173,16 @@
       el.value = current === undefined ? '' : formatEng(current);
     }
   }
+  // JSON clone, not structuredClone: sheet docs are plain JSON, and a "Your sheets"
+  // entry is a $state proxy structuredClone cannot handle.
+  const cloneDoc = (d: SheetDoc): SheetDoc => JSON.parse(JSON.stringify(d)) as SheetDoc;
+
   function pickSheet(e: Event): void {
     const sel = e.currentTarget as HTMLSelectElement;
     const [gi, si] = sel.value.split(':').map(Number);
     sel.value = '';
-    const src = SHEET_MENU[gi]?.sheets[si];
-    if (src) onChange(structuredClone(src) as SheetDoc);
+    const src = menu[gi]?.sheets[si];
+    if (src) onChange(cloneDoc(src));
   }
   // Point a composed child at a specific loaded device (a table uid), or '' to inherit the parent.
   function setUseDevice(i: number, uid: string): void {
@@ -207,12 +221,81 @@
         return { ...doc, bind };
       }
       const i = path[depth];
+      // A docless (by-reference) use has nothing local to write into — the control is
+      // not rendered for those, so this is just the fail-safe.
       const uses = (doc.uses ?? []).map((u, j) =>
-        j === i ? { ...u, doc: edit(u.doc, depth + 1) } : u,
+        j === i && u.doc ? { ...u, doc: edit(u.doc, depth + 1) } : u,
       );
       return { ...doc, uses };
     };
     onChange(edit(cfg, 0));
+  }
+
+  // Copy-on-write escape hatch: swap the by-reference use at `path` for an embedded
+  // copy of the library sheet's AUTHORED doc — not the resolved subtree, so the
+  // detached block's own nested refs stay live and a nested pinned snapshot stays
+  // pinned, by construction. Local and editable from then on. cloneDoc: the index
+  // holds library objects that must never alias into the panel's cfg.
+  function detachRef(path: number[]): void {
+    const ref = cfgUseAt(path)?.ref;
+    const hit = ref !== undefined ? refs.get(ref) : undefined;
+    if (!hit || !('doc' in hit)) return; // unresolved — the button is not rendered here
+    const inline = cloneDoc(hit.doc);
+    const edit = (doc: SheetDoc, depth: number): SheetDoc => ({
+      ...doc,
+      uses: (doc.uses ?? []).map((c, j) => {
+        if (j !== path[depth]) return c;
+        if (depth === path.length - 1) {
+          const { ref: _drop, ...rest } = c;
+          return { ...rest, doc: inline };
+        }
+        return c.doc ? { ...c, doc: edit(c.doc, depth + 1) } : c;
+      }),
+    });
+    onChange(edit(cfg, 0));
+  }
+
+  // Any by-reference use anywhere in the authored tree? Gates the flatten button.
+  const docHasRefs = (d: SheetDoc): boolean =>
+    (d.uses ?? []).some((u) => u.ref !== undefined || (u.doc ? docHasRefs(u.doc) : false));
+  const hasRefs = $derived(docHasRefs(cfg));
+
+  // The AUTHORED use at `path` (childCard renders the resolved tree, which cannot tell
+  // a live materialized ref from a hand-authored pinned ref+doc snapshot — only the raw
+  // cfg can). Undefined once the path crosses into a referenced sheet's interior.
+  function cfgUseAt(path: number[]): SheetUse | undefined {
+    let u: SheetUse | undefined;
+    let d: SheetDoc | undefined = cfg;
+    for (const i of path) {
+      u = d?.uses?.[i];
+      d = u?.doc;
+    }
+    return u;
+  }
+
+  // A resolution error means flatten cannot inline every ref — the "self-contained"
+  // promise would be silently broken, so the flat export is blocked (the same errors
+  // are already on screen in the warning list).
+  const flatBlocked = $derived(rr.warnings.some((w) => w.severity === 'error'));
+
+  // Download the sheet as a JSON file: as-authored (refs stay refs — the shareable
+  // source), or flattened through the library index (every ref inlined — the frozen,
+  // self-contained deliverable).
+  function exportSheet(flat: boolean): void {
+    if (flat && flatBlocked) return; // fail-safe; the button is disabled in this state
+    const doc = flat ? flattenSheetDoc(cfg, refs).doc : cfg;
+    const name =
+      cfg.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'sheet';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(
+      new Blob([JSON.stringify(doc, null, 2) + '\n'], { type: 'application/json' }),
+    );
+    a.download = `${name}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   const fmt = (v: number | undefined): string =>
@@ -397,13 +480,44 @@
 
 <!-- One composed block as a self-contained card: its sizing, the operating point it's pinned at,
      the scalars it hands up, its failing constraints, and — recursively — its own children, so the
-     composition tree reads as nested modules. `use` is this card's authored block (its `doc.bind`
-     is what the bias control edits); `path` is its index path from the top sheet. -->
-{#snippet childCard(c: SheetChildReport | undefined, use: SheetUse | undefined, path: number[])}
+     composition tree reads as nested modules. `use` is this card's block from the RESOLVED tree
+     (a by-reference child carries its materialized doc plus the ref as provenance); `path` is its
+     index path from the top sheet; `inRef` marks a card living INSIDE a referenced sheet, whose
+     internals belong to the library sheet and are read-only here. -->
+{#snippet childCard(
+  c: SheetChildReport | undefined,
+  use: SheetUse | undefined,
+  path: number[],
+  inRef: boolean = false,
+)}
+  <!-- An authored ref+doc pair is a PINNED snapshot: the embedded copy wins (core rule),
+       so the block is local and editable — only its badge differs. A ref WITHOUT a local
+       doc is live: its internals belong to the library sheet and render read-only. -->
+  {@const authored = inRef ? undefined : cfgUseAt(path)}
+  {@const pinned = authored?.ref !== undefined && authored?.doc !== undefined}
+  {@const isRef = inRef || (use?.ref !== undefined && !pinned)}
   <div class="suse st-{c?.feasible ? 'pass' : 'fail'}">
     <div class="suseh">
       <span class="chip">{c?.feasible ? '✓' : '✗'}</span>
-      <b>{c?.name ?? use?.name}</b><i>{c?.title ?? use?.doc.title}</i>
+      <b>{c?.name ?? use?.name}</b><i>{c?.title ?? use?.doc?.title}</i>
+      {#if use?.ref}
+        {#if pinned}
+          <span
+            class="refb pinned"
+            title="pinned snapshot of {use.ref} — the embedded copy wins and no longer tracks the library sheet; internals are local and editable"
+            >⤷ {use.ref} · pinned</span
+          >
+        {:else}
+          <span class="refb" title={CONTROL_HELP.refBlock}>⤷ {use.ref}</span>
+          <!-- Only a MATERIALIZED ref can detach (an unresolved one has nothing to copy —
+               rendering the button would be a dead control). -->
+          {#if !inRef && use.doc}
+            <button class="detach" title={CONTROL_HELP.detachRef} onclick={() => detachRef(path)}
+              >detach</button
+            >
+          {/if}
+        {/if}
+      {/if}
       {#if path.length === 1 && use && (deviceOptions.length > 1 || use.device)}
         <select
           class="dsel"
@@ -429,7 +543,10 @@
     {:else if c?.bind}
       <div class="perr" title={c.bind.error}>sizing: {c.bind.error}</div>
     {/if}
-    {@render biasCtl(use?.doc.bind, c?.bind, path)}
+    <!-- A referenced block's bind belongs to the library sheet — no in-place bias editor
+         (the applied operating point still shows in the sizing line; params remain the
+         customization channel, and detach makes the internals local). -->
+    {#if !isRef}{@render biasCtl(use?.doc?.bind, c?.bind, path)}{/if}
     {#if c && Object.keys(c.provides).length}
       <div class="prov" title={CONTROL_HELP.provide}>
         {#each Object.entries(c.provides) as [k, v]}<code
@@ -446,7 +563,12 @@
     {/if}
     {#if c?.children?.length}
       <div class="skids">
-        {#each c.children as gc, k}{@render childCard(gc, use?.doc.uses?.[k], [...path, k])}{/each}
+        {#each c.children as gc, k}{@render childCard(
+            gc,
+            use?.doc?.uses?.[k],
+            [...path, k],
+            isRef,
+          )}{/each}
       </div>
     {/if}
   </div>
@@ -456,7 +578,7 @@
   <div class="shead">
     <select class="rm" onchange={pickSheet} title={CONTROL_HELP.sheet}>
       <option value="" selected>sheet…</option>
-      {#each SHEET_MENU as g, gi}
+      {#each menu as g, gi}
         <optgroup label={g.label}>
           {#each g.sheets as s, si}<option value={`${gi}:${si}`}
               >{menuFeasible[gi][si] ? '✓' : '✗'} {s.title}</option
@@ -507,6 +629,18 @@
         </select>
       </label>
     {/if}
+    <span class="sexp">
+      <button title={CONTROL_HELP.exportSheet} onclick={() => exportSheet(false)}>⤓ json</button>
+      {#if hasRefs}
+        <button
+          disabled={flatBlocked}
+          title={flatBlocked
+            ? 'a reference did not resolve (see warnings) — a flattened export could not be self-contained'
+            : CONTROL_HELP.exportFlat}
+          onclick={() => exportSheet(true)}>⤓ flat</button
+        >
+      {/if}
+    </span>
   </div>
 
   {#if cfg.description}
@@ -544,8 +678,8 @@
   {#if cfg.uses?.length}
     <div class="suses">
       <span class="glabel" title={CONTROL_HELP.provide}>composed blocks</span>
-      {#each cfg.uses as u, i}
-        {@render childCard(result.children?.[i], u, [i])}
+      {#each cfg.uses as _u, i}
+        {@render childCard(result.children?.[i], rr.doc.uses?.[i], [i], false)}
       {/each}
     </div>
   {/if}
@@ -637,7 +771,9 @@
     {/if}
   {/if}
 
-  {#each result.warnings.filter((w) => w.severity !== 'info') as w}
+  <!-- Resolution failures (missing/ambiguous/cyclic refs) lead — they explain why a
+       referenced block below reads infeasible. -->
+  {#each [...rr.warnings, ...result.warnings].filter((w) => w.severity !== 'info') as w}
     <p class="pwarn" title={w.message}>⚠ {w.message}</p>
   {/each}
 </div>
@@ -904,6 +1040,50 @@
     font-size: calc(0.72rem * var(--text-scale));
     max-width: 12rem;
     margin-left: auto;
+  }
+  /* by-reference badge: the block's library id, pill-shaped so it reads as provenance */
+  .refb {
+    font-family: ui-monospace, monospace;
+    font-size: calc(0.68rem * var(--text-scale));
+    opacity: 0.7;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 999px;
+    padding: 0 0.35rem;
+    white-space: nowrap;
+  }
+  /* a pinned snapshot is local content — dashed rim to read as "was a ref, now frozen" */
+  .refb.pinned {
+    border-style: dashed;
+    opacity: 0.55;
+  }
+  .detach,
+  .sexp button {
+    font: inherit;
+    font-size: calc(0.68rem * var(--text-scale));
+    font-family: ui-monospace, monospace;
+    cursor: pointer;
+    background: none;
+    color: inherit;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 3px;
+    padding: 0 0.3rem;
+    opacity: 0.7;
+  }
+  .detach:hover,
+  .sexp button:hover {
+    opacity: 1;
+  }
+  .sexp button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .sexp {
+    display: inline-flex;
+    gap: 0.25rem;
+  }
+  .sexp button {
+    font-size: calc(0.72rem * var(--text-scale));
+    padding: 0.05rem 0.4rem;
   }
   /* the block's own sized operating point — the module's "output pins" made concrete */
   .susebind {

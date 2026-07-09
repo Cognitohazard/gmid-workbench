@@ -239,13 +239,14 @@ function sanitizeLegend(v: unknown): LegendConfig | undefined {
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
 /**
- * Coerce an untrusted saved leaf design-sheet (e.g. from localStorage) into a valid
- * SheetDoc, dropping malformed entries but keeping every author expression verbatim —
- * an unresolvable one surfaces as a per-rule 'na' chip at evaluation, never a silent
- * drop. A bind is kept only when well-formed (L + exactly two of {gm,gm_id,id}); else
- * it is dropped and its rules go 'na'. Returns undefined only when `v` is not an object.
+ * Coerce an untrusted saved leaf design-sheet (from localStorage, or a user's imported
+ * sheet JSON) into a valid SheetDoc, dropping malformed entries but keeping every
+ * author expression verbatim — an unresolvable one surfaces as a per-rule 'na' chip at
+ * evaluation, never a silent drop. A bind is kept only when well-formed (L + exactly
+ * two of {gm,gm_id,id}); else it is dropped and its rules go 'na'. Returns undefined
+ * only when `v` is not an object.
  */
-function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
+export function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
   if (!v || typeof v !== 'object') return undefined;
   // Depth backstop: the evaluator/validator error out past MAX_USE_DEPTH, but they can
   // only do so if loading the doc didn't blow the stack first. One level beyond the cap
@@ -319,15 +320,24 @@ function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
   // Composition: each child is a full SheetDoc recursively sanitized; the param-override map,
   // the provide list, and the per-child `device` (a table uid the resolver matches against the
   // loaded devices) are kept verbatim so a composed sheet round-trips intact. A persisted device
-  // that is not currently loaded simply reads infeasible until re-loaded.
+  // that is not currently loaded simply reads infeasible until re-loaded. A by-reference child
+  // (`ref` without an embedded doc) is kept as the reference — resolution happens at evaluation,
+  // and a ref that no longer resolves reads infeasible rather than being dropped.
   const uses: SheetUse[] = Array.isArray(o.uses)
     ? o.uses.flatMap((u) => {
         if (!u || typeof u !== 'object') return [];
         const uu = u as Record<string, unknown>;
         if (typeof uu.name !== 'string' || !uu.name) return [];
         const childDoc = sanitizeSheet(uu.doc, depth + 1);
-        if (!childDoc) return [];
-        const use: SheetUse = { name: uu.name, doc: childDoc };
+        // Any string ref is kept VERBATIM — including an empty one. An empty ref is an
+        // authoring error the validator names ("empty ref", blocking feasibility);
+        // coercing it away here would silently delete the authored block and let the
+        // sheet read feasible where the core reads it infeasible.
+        const ref = typeof uu.ref === 'string' ? uu.ref : undefined;
+        if (!childDoc && ref === undefined) return [];
+        const use: SheetUse = { name: uu.name };
+        if (childDoc) use.doc = childDoc;
+        if (ref !== undefined) use.ref = ref;
         if (typeof uu.device === 'string') use.device = uu.device;
         if (uu.params && typeof uu.params === 'object' && !Array.isArray(uu.params)) {
           const ov: Record<string, string> = {};

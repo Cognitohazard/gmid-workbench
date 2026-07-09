@@ -5,11 +5,18 @@
 
 /** Read + sanitize a stored value, or the fallback. `parse` coerces the untrusted parsed JSON
  *  and may return null to reject it; corrupt/unavailable storage also yields the fallback.
- *  `fallback` is a thunk so it isn't computed when a valid stored value is present. */
-export function loadJSON<T>(key: string, parse: (raw: unknown) => T | null, fallback: () => T): T {
+ *  `fallback` is a thunk so it isn't computed when a valid stored value is present. `maxLen`
+ *  bounds the RAW text and treats an oversized blob as corrupt — the one guard that runs
+ *  before JSON.parse, so a poisoned key cannot hang every subsequent load. */
+export function loadJSON<T>(
+  key: string,
+  parse: (raw: unknown) => T | null,
+  fallback: () => T,
+  maxLen?: number,
+): T {
   try {
     const raw = localStorage.getItem(key);
-    if (raw != null) {
+    if (raw != null && (maxLen === undefined || raw.length <= maxLen)) {
       const v = parse(JSON.parse(raw));
       if (v != null) return v;
     }

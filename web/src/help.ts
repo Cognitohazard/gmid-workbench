@@ -71,6 +71,16 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'na = a side could not be computed (an undeclared name or a non-finite value). Never a silent pass: a hard rule reading na fails the design closed.',
   provide:
     'Names this block exposes to a parent sheet. The parent reads each as child__name and writes its own math over it — scalar composition, no circuit solving.',
+  refBlock:
+    'This block is included by reference from the sheet library — its internals live on the referenced sheet and track its edits (unless the document also embeds a pinned copy, which then wins). Param overrides still apply; detach to make a local editable copy.',
+  detachRef:
+    'Replace the reference with an embedded copy of the resolved sheet. Locally editable from then on, but edits to the library sheet no longer flow in.',
+  exportSheet:
+    'Download this sheet as JSON, exactly as authored — references stay references (share it alongside the sheets it refers to).',
+  exportFlat:
+    'Download a flattened copy: every referenced block inlined. Self-contained and frozen — later edits to the library sheets it referenced no longer change it.',
+  userSheets:
+    'Sheets you imported (.json). They join the picker and the reference library: a sheet can name one as user/<name> (or its bare name) in a `ref`. Kept across reloads.',
   bindBias:
     'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device pins its own; body bias (vsb) defaults to 0. Edit to override; clear to revert.',
   bindNeeds:

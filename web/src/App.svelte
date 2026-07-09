@@ -26,6 +26,7 @@
     type Settings,
   } from './settings';
   import { loadJSON, saveJSON } from './storage';
+  import { importSheetJSON, removeUserSheet, userSheets } from './sheetlib.svelte';
   import {
     presetDashboard,
     sanitizeDashboard,
@@ -293,11 +294,19 @@
   // (last-selected wins, not last-resolved).
   let importSeq = 0;
 
-  // Import a mostab CSV (file picker or drag-drop) and swap it in as the device.
+  // Import a file (picker or drag-drop): a .json is a design sheet for the library
+  // (sanitized + persisted by sheetlib); anything else is a mostab CSV device table.
   async function loadFiles(files: FileList | null | undefined): Promise<void> {
     const file = files?.[0];
     if (!file) return;
     const seq = ++importSeq;
+    if (/\.json$/i.test(file.name)) {
+      const text = await file.text();
+      if (seq !== importSeq) return;
+      const err = importSheetJSON(file.name, text);
+      importError = err ? `${file.name}: ${err}` : null;
+      return;
+    }
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (seq !== importSeq) return; // superseded by a newer load
     const result = importMostab(bytes, { filename: file.name });
@@ -388,11 +397,11 @@
   {/if}
   <span class="grow"></span>
   {#if device}<span class="device" title="active device">{deviceKey(device)}</span>{/if}
-  <label class="load">
-    Load .csv
+  <label class="load" title="load a mostab .csv characterization table, or a design-sheet .json">
+    Load .csv / .json
     <input
       type="file"
-      accept=".csv,.txt,text/csv"
+      accept=".csv,.txt,text/csv,.json,application/json"
       onchange={(e) => loadFiles((e.currentTarget as HTMLInputElement).files)}
     />
   </label>
@@ -502,6 +511,24 @@
   </nav>
 {/if}
 
+{#if userSheets().length}
+  <nav class="devices usheets" aria-label="imported sheets">
+    <span class="dlabel">sheets</span>
+    <Help text={CONTROL_HELP.userSheets} />
+    {#each userSheets() as s (s.name)}
+      <span class="dev">
+        <span class="dname" title={s.doc.title}>{s.name}</span>
+        <button
+          class="drm"
+          onclick={() => removeUserSheet(s.name)}
+          title="remove from the sheet library (designs referencing it read infeasible)"
+          aria-label="remove sheet">×</button
+        >
+      </span>
+    {/each}
+  </nav>
+{/if}
+
 {#if dashboard && activeTab}
   {@const d = dashboard}
   <div
@@ -559,7 +586,7 @@
   class="main"
   class:dragging
   role="region"
-  aria-label="drop a mostab CSV here to load"
+  aria-label="drop a mostab CSV or a sheet JSON here to load"
   ondragover={(e) => {
     e.preventDefault();
     dragging = true;
@@ -609,7 +636,7 @@
       </p>
     </div>
   {/if}
-  {#if dragging}<div class="drophint">drop a mostab .csv</div>{/if}
+  {#if dragging}<div class="drophint">drop a mostab .csv or a sheet .json</div>{/if}
 </div>
 
 <style>
@@ -905,6 +932,10 @@
   }
   .drm:hover {
     opacity: 1;
+  }
+  /* imported-sheet chips reuse the device-chip look; the name is a label, not a button */
+  .usheets .dname {
+    cursor: default;
   }
   .drophint {
     position: absolute;

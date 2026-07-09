@@ -4,7 +4,7 @@
 // (src/sheet/library.test.ts) — trusted the same way the EXAMPLES literal is, so no
 // sanitize pass here.
 
-import { EXAMPLES, type SheetDoc } from '@gmid/mostab-core';
+import { EXAMPLES, type SheetDoc, type SheetRefEntry } from '@gmid/mostab-core';
 
 export interface SheetLibraryGroup {
   label: string;
@@ -24,6 +24,16 @@ const modules = import.meta.glob('../../sheets/*/*.json', {
   eager: true,
   import: 'default',
 }) as Record<string, SheetDoc>;
+
+/** Curated sheets with their library ids (`group/name`, extension dropped) — the static
+ *  half of the by-reference index; user-loaded sheets add the dynamic half (sheetlib).
+ *  The shipped examples are deliberately NOT addressable — they are demos, not blocks. */
+export const CURATED_ENTRIES: readonly SheetRefEntry[] = Object.entries(modules).map(
+  ([path, doc]) => ({
+    path: path.slice(path.indexOf('/sheets/') + '/sheets/'.length).replace(/\.json$/, ''),
+    doc,
+  }),
+);
 
 // One uniform menu for the sheet picker: the shipped examples are just the first
 // group, so the panel needs a single render loop and a single group:index decode.

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { loadDemo, pickSheet } from './helpers';
 
@@ -460,6 +461,133 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await expect(sp.locator('.shead')).toContainText('5T OTA');
   await expect(sp.locator('.suse')).toHaveCount(3);
   await expect(sp.locator('.srules tr').first()).toBeVisible();
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a by-reference child resolves live, flattens to a frozen export, detaches to a local copy', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // The Miller OTA's stage-2 load is included BY REFERENCE from the curated library:
+  // the child card resolves, sizes, and wears the library id as a provenance badge.
+  await pickSheet(sp, 'Two-stage Miller OTA');
+  await expect(sp.locator('.shead')).toContainText('Two-stage Miller OTA');
+  const ld2 = sp.locator('.suse', { hasText: 'ld2' });
+  await expect(ld2.locator('.refb')).toContainText('multistage/stage2-current-source-load');
+  await expect(ld2.locator('.susebind')).toContainText('W=');
+  await expect(sp.locator('.pwarn', { hasText: 'ref' })).toHaveCount(0);
+  await page.screenshot({ path: `${SCREENS}/sheet-ref.png`, fullPage: true });
+
+  // Flatten export: the download inlines the referenced block — no `ref` keys survive,
+  // the child doc is embedded, and the file is named after the sheet.
+  const dlPromise = page.waitForEvent('download');
+  await sp.locator('.sexp button', { hasText: 'flat' }).click();
+  const dl = await dlPromise;
+  expect(dl.suggestedFilename()).toBe('two-stage-miller-ota.json');
+  const flatText = readFileSync((await dl.path()) as string, 'utf8');
+  expect(flatText).not.toContain('"ref"');
+  expect(flatText).toContain('Stage-2 current-source load');
+
+  // Detach: the reference becomes an embedded local copy — badge gone, sizing intact,
+  // and the block's operating point is now shown by the local bias control (read-only
+  // here: the block drives vds from a param). Survives a reload via the sanitizer.
+  await ld2.locator('.detach').click();
+  await expect(ld2.locator('.refb')).toHaveCount(0);
+  await expect(ld2.locator('.susebind')).toContainText('W=');
+  await expect(ld2.locator('.sbiasctl .bx.ro')).toBeVisible();
+  await page.reload();
+  await loadDemo(page);
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('.suse', { hasText: 'ld2' }).locator('.refb')).toHaveCount(0);
+  await expect(sp2.locator('.suse', { hasText: 'ld2' }).locator('.susebind')).toContainText('W=');
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: imported sheets join the library — pickable, referenceable, removable, persistent', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // Import two sheets through the same load control as a CSV: a bind-less block, and a
+  // top sheet that includes it BY REFERENCE (user sheets resolve like curated ones).
+  const asFile = (name: string, doc: object) => ({
+    name,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(doc)),
+  });
+  const input = page.locator('.load input[type=file]');
+  await input.setInputFiles(
+    asFile('my-block.json', {
+      title: 'My block',
+      polarity: 'n',
+      params: [{ name: 'x', value: 2 }],
+      rows: [{ name: 'y', expr: '2*x' }],
+      rules: [],
+      provide: ['y'],
+    }),
+  );
+  await expect(page.locator('.usheets .dev', { hasText: 'my-block' })).toBeVisible();
+
+  // An absurdly large "sheet" is refused before parse/persist (a real sheet is a few
+  // KB) — otherwise it would be saved to localStorage and re-hang every future load.
+  await input.setInputFiles({
+    name: 'huge.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(`{"title":"x","pad":"${'x'.repeat(2_100_000)}"}`),
+  });
+  await expect(page.locator('.qa.error')).toContainText('refusing to import');
+  await expect(page.locator('.usheets .dev', { hasText: 'huge' })).toHaveCount(0);
+
+  await input.setInputFiles(
+    asFile('my-top.json', {
+      title: 'My top',
+      polarity: 'n',
+      params: [{ name: 'x_top', value: 3 }],
+      rows: [{ name: 'z', expr: 'b__y + 1' }],
+      rules: [{ id: 'z-min', kind: 'requirement', lhs: 'z', op: '>=', rhs: '1' }],
+      uses: [{ name: 'b', ref: 'my-block', params: { x: 'x_top' } }],
+    }),
+  );
+
+  // Both appear in the picker's "Your sheets" group; the top sheet resolves its user ref:
+  // the child card carries the badge, the provide flows (y = 2·3 = 6 → z = 7), feasible.
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'My top');
+  await expect(sp.locator('.shead')).toContainText('My top');
+  await expect(sp.locator('.suse .refb')).toContainText('my-block');
+  await expect(sp.locator('.suse .prov')).toContainText('6');
+  await expect(sp.locator('.srow', { hasText: 'z' })).toContainText('7');
+  await expect(sp.locator('.feasb')).toHaveText('feasible');
+
+  // Imported sheets persist across a reload (the runtime stand-in for the sheets/ folder).
+  await page.reload();
+  await loadDemo(page);
+  await expect(page.locator('.usheets .dev', { hasText: 'my-top' })).toBeVisible();
+  const sp3 = page.locator('.grid .panel').last();
+  await expect(sp3.locator('.suse .refb')).toContainText('my-block');
+  await expect(sp3.locator('.feasb')).toHaveText('feasible');
+
+  // Removing the referenced sheet fails closed: the design reads infeasible with an
+  // error naming the missing ref — never a silent fallback.
+  await page.locator('.usheets .dev', { hasText: 'my-block' }).locator('.drm').click();
+  await expect(sp3.locator('.feasb')).toHaveText('infeasible');
+  await expect(sp3.locator('.pwarn', { hasText: 'my-block' }).first()).toBeVisible();
 
   expect(errors).toEqual([]);
 });
