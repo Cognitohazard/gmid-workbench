@@ -252,29 +252,7 @@
     },
     {
       "name": "ld2",
-      "doc": {
-        "title": "Stage-2 current-source load",
-        "description": "The second-stage current-source load carrying the stage-2 current at the output DC level; its output conductance loads the second-stage gain.",
-        "polarity": "n",
-        "params": [
-          { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.9, "unit": "V", "role": "spec" }
-        ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
-          {
-            "id": "feasible-inversion",
-            "kind": "invariant",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provide": ["gds", "vdsat"]
-      },
+      "ref": "multistage/stage2-current-source-load",
       "params": { "Ix": "I2", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
     }
   ],
