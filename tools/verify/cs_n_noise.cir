@@ -1,0 +1,11 @@
+* single-device noise: nfet_01v8 W=5.7 L=0.5 at OTA bias (ID=17.93u, vds~0.33) noiseless-R load
+.param mc_mm_switch=0
+.param mc_pr_switch=0
+.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+VDD vdd 0 2.123
+R1 vdd d 100k noisy=0
+XM1 d g 0 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
+VG g 0 dc 0.7656 ac 1
+.save all @m.xm1.msky130_fd_pr__nfet_01v8[gm] @m.xm1.msky130_fd_pr__nfet_01v8[id]
+.noise v(d) VG dec 20 1k 100meg
+.end

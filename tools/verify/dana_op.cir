@@ -1,0 +1,11 @@
+* verify Dana CS device: sky130 nfet_01v8 tt 27C  W=25.77u L=0.5u  VGS=0.7184 VDS=0.9
+.param mc_mm_switch=0
+.param mc_pr_switch=0
+.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+vb b 0 0
+XM1 d g 0 b sky130_fd_pr__nfet_01v8 L=0.5 W=25.77 nf=1
+vd d 0 0.9
+vg g 0 0.7184
+.save @m.xm1.msky130_fd_pr__nfet_01v8[id] @m.xm1.msky130_fd_pr__nfet_01v8[gm] @m.xm1.msky130_fd_pr__nfet_01v8[gds] @m.xm1.msky130_fd_pr__nfet_01v8[cgg] @m.xm1.msky130_fd_pr__nfet_01v8[vdsat]
+.op
+.end

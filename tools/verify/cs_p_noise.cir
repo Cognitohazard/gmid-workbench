@@ -1,0 +1,11 @@
+* single-device noise: pfet_01v8 W=9.26 L=1 at OTA mirror bias (ID=17.93u, vgs=vds=-1.2385)
+.param mc_mm_switch=0
+.param mc_pr_switch=0
+.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+VDD vdd 0 3.032
+R1 d 0 100k noisy=0
+XM1 d g vdd vdd sky130_fd_pr__pfet_01v8 L=1 W=9.26 nf=1
+VG g 0 dc 1.7935 ac 1
+.save all @m.xm1.msky130_fd_pr__pfet_01v8[gm] @m.xm1.msky130_fd_pr__pfet_01v8[id]
+.noise v(d) VG dec 20 1k 100meg
+.end

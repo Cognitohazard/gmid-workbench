@@ -1,0 +1,16 @@
+* Marco 5T OTA: nfet pair W=5.7/L=0.5 gm/ID~14, pfet mirror W=9.26/L=1 gm/ID~8, ideal tail 35.86u (sheet formula has no tail term), VDD 1.8, CL 2p
+.param mc_mm_switch=0
+.param mc_pr_switch=0
+.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+VDD vdd 0 1.8
+VIP inp 0 dc 1.0 ac 1
+VIN inn 0 dc 1.0
+XM1 n1 inp tail 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
+XM2 out inn tail 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
+XM3 n1 n1 vdd vdd sky130_fd_pr__pfet_01v8 L=1 W=9.26 nf=1
+XM4 out n1 vdd vdd sky130_fd_pr__pfet_01v8 L=1 W=9.26 nf=1
+IT tail 0 35.86u
+CL out 0 2p
+.save all @m.xm1.msky130_fd_pr__nfet_01v8[gm] @m.xm1.msky130_fd_pr__nfet_01v8[id] @m.xm1.msky130_fd_pr__nfet_01v8[gds] @m.xm3.msky130_fd_pr__pfet_01v8[gm] @m.xm3.msky130_fd_pr__pfet_01v8[id] @m.xm4.msky130_fd_pr__pfet_01v8[gds]
+.op
+.end
