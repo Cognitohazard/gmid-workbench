@@ -50,6 +50,17 @@ describe('importMostab', () => {
     if (!noVgs.ok) expect(noVgs.errors[0].message).toContain('vgs');
   });
 
+  it('a grid failure does not mask a missing required column (both reported)', () => {
+    // No gm column AND a truncated grid (3 rows over a 2x2 l/vgs grid).
+    const r = importMostab('L,VGS,ID\n30e-9,0.3,1e-6\n30e-9,0.5,2e-6\n60e-9,0.3,1e-6\n');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.errors.map((e) => e.kind)).toContain('incomplete-grid');
+      expect(r.errors.map((e) => e.kind)).toContain('missing-required');
+      expect(r.errors.find((e) => e.kind === 'missing-required')?.message).toContain('gm');
+    }
+  });
+
   it('accepts a table that lacks an OPTIONAL axis (single-L: vgs/id/gm, no l)', () => {
     const r = importMostab('VGS,ID,GM\n0.3,1e-6,1e-5\n0.5,2e-6,2e-5\n');
     expect(r.ok).toBe(true); // l is optional; the family chart handles its absence

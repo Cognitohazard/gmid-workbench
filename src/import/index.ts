@@ -9,9 +9,22 @@
 // Pure, deterministic, zero DOM imports.
 
 import type { ImportError, ImportHints, ImportResult } from '../types';
-import { parseMostabCsv } from '../parse';
+import { mostabHeaderKeys, parseMostabCsv } from '../parse';
 import { REQUIRED_KEYS } from '../namespace';
 import { canonicalizeTable, validate } from '../qa';
+
+/** The missing-required errors for a set of canonical column keys (empty if none). */
+function missingRequired(keys: readonly string[], location?: string): ImportError[] {
+  const missing = REQUIRED_KEYS.filter((k) => !keys.includes(k));
+  if (!missing.length) return [];
+  return [
+    {
+      kind: 'missing-required',
+      message: `missing required column(s): ${missing.join(', ')}`,
+      location,
+    },
+  ];
+}
 
 /**
  * Import mostab CSV text/bytes into a Dataset: parse, canonicalize every table,
@@ -22,24 +35,23 @@ import { canonicalizeTable, validate } from '../qa';
  */
 export function importMostab(input: string | Uint8Array, hints?: ImportHints): ImportResult {
   const parsed = parseMostabCsv(input, hints);
-  if (!parsed.ok) return parsed;
+  if (!parsed.ok) {
+    // A parse failure (e.g. an incomplete grid) must not mask an independent
+    // header defect: re-scan just the header and report a missing required
+    // column alongside, so the user sees every defect the file actually has.
+    const keys = mostabHeaderKeys(input);
+    const alsoMissing = keys.length ? missingRequired(keys) : [];
+    return alsoMissing.length ? { ok: false, errors: [...parsed.errors, ...alsoMissing] } : parsed;
+  }
   // canonicalizeTable folds the value columns to magnitudes only when the source
   // declared a signed polarity (meta.polarity.signedInput, set by the parser from
   // `# polarity: p`); otherwise it is a no-op and the QA pass below FLAGS a signed
   // PMOS dump rather than silently folding an undeclared one.
   const tables = parsed.dataset.tables.map(canonicalizeTable);
 
-  const errors: ImportError[] = [];
-  for (const t of tables) {
-    const missing = REQUIRED_KEYS.filter((k) => !t.grid.quantities.has(k));
-    if (missing.length) {
-      errors.push({
-        kind: 'missing-required',
-        message: `missing required column(s): ${missing.join(', ')}`,
-        location: t.id.device,
-      });
-    }
-  }
+  const errors: ImportError[] = tables.flatMap((t) =>
+    missingRequired([...t.grid.quantities.keys()], t.id.device),
+  );
   if (errors.length) return { ok: false, errors };
 
   const warnings = tables.flatMap((t) => validate(t));

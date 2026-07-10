@@ -189,6 +189,20 @@ function fail(...errors: ImportError[]): ImportResult {
  * - Axis columns among {l, vgs, vds, vsb} define a complete rectangular grid; every
  *   non-axis quantity is assembled row-major into a Float64Array.
  */
+/**
+ * Canonical column keys of the header row alone (empty if no header is found).
+ * Lets a caller report header-level defects (e.g. a missing required column)
+ * even when full parsing fails earlier for an independent reason, so one defect
+ * never masks another.
+ */
+export function mostabHeaderKeys(text: string | Uint8Array): string[] {
+  const header = stripBom(toText(text))
+    .split(/\r\n|\r|\n/)
+    .find((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+  if (header === undefined) return [];
+  return header.split(detectDelimiter(header)).map((c) => canonicalizeHeader(c).key);
+}
+
 export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): ImportResult {
   const meta: ParsedMeta = {};
   const decoded = stripBom(toText(text));
