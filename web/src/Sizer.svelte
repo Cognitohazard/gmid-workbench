@@ -13,6 +13,7 @@
   import { CONTROL_HELP } from './help';
   import { axisUnit } from './labels';
   import { sizingBias, reduceForSizing, LENGTH_AXIS } from './dashboard';
+  import { sizeMark } from './sizemark.svelte';
 
   // The sizer reads only the active device and the dashboard's shared bias; everything
   // below (geometry, noise, matching) is a pure function of those two. The open/close
@@ -138,6 +139,51 @@
       return { density, rms: null };
     }
   });
+  // Publish the sized gm/ID so every gm/ID-axis chart can mark the bound point;
+  // cleared when the solution goes away or the sizer closes (unmount teardown).
+  $effect(() => {
+    sizeMark.gmId = sizing.result?.gm_id ?? null;
+    return () => {
+      sizeMark.gmId = null;
+    };
+  });
+
+  // Numeric bias entry: a parseable value commits into the SHARED bias, so the
+  // dashboard sliders and every chart follow; anything else restores the field.
+  function setBiasField(axis: string, el: HTMLInputElement): void {
+    const v = parseNum(el.value);
+    if (v !== undefined && Number.isFinite(v)) sharedBias[axis] = v;
+    else el.value = formatEng(sharedBias[axis] ?? 0);
+  }
+
+  // One-click handoff of the sized numbers (engineering notation, one name per line —
+  // pastes cleanly into a notebook, a spreadsheet, or a design review chat).
+  let copied = $state(false);
+  function copyReport(): void {
+    const r = sizing.result;
+    if (!r) return;
+    const line = (k: string, v: string) => `${k}\t${v}`;
+    const rows = [
+      line('device', `${device.id.device} ${device.id.corner} ${device.id.temp}C`),
+      line('L', `${formatEng(sizeL)}m`),
+      ...Object.entries(sizingFixed).map(([k, v]) => line(k, `${formatEng(v)}${axisUnit(k)}`)),
+      line('W', `${formatEng(r.W)}m`),
+      line('vgs', `${formatEng(r.vgs)}V`),
+      line('gm/ID', formatEng(r.gm_id)),
+      line('ID', `${formatEng(r.id)}A`),
+      line('gm', `${formatEng(r.gm)}S`),
+      line('fT', `${formatEng(r.quantities.ft)}Hz`),
+      line('gm/gds', formatEng(r.quantities.gm_gds)),
+      ...(noise?.density != null ? [line('vn_th', `${formatEng(noise.density)}V/rtHz`)] : []),
+      ...(noise?.rms != null ? [line('vn_rms', `${formatEng(noise.rms)}V`)] : []),
+      ...(mism ? [line('sigma_Vth', `${formatEng(mism.sigmaVth)}V`)] : []),
+      ...(mism ? [line('sigma_Vos', `${formatEng(mism.sigmaVos)}V`)] : []),
+    ];
+    void navigator.clipboard?.writeText(rows.join('\n')).then(() => {
+      copied = true;
+      setTimeout(() => (copied = false), 1200);
+    });
+  }
 </script>
 
 <aside class="sizer">
@@ -161,9 +207,17 @@
 
   {#if Object.keys(sizingFixed).length}
     <p class="bias">
-      bias · {Object.entries(sizingFixed)
-        .map(([k, v]) => `${k}=${formatSI(v)}${axisUnit(k)}`)
-        .join(' · ')}
+      bias
+      {#each Object.entries(sizingFixed) as [k, v] (k)}
+        <label class="bax"
+          >{k}
+          <input
+            value={formatEng(v)}
+            spellcheck="false"
+            onchange={(e) => setBiasField(k, e.currentTarget as HTMLInputElement)}
+          />{axisUnit(k)}</label
+        >
+      {/each}
     </p>
   {/if}
 
@@ -191,6 +245,9 @@
     </dl>
     <p class="feas {r.feasible ? 'ok' : 'bad'}">
       {r.feasible ? '✓ feasible' : '✗ infeasible'} · ceiling {formatSI(r.ceiling)}
+      <button class="copy" onclick={copyReport} title="copy the sized numbers as name/value lines"
+        >{copied ? 'copied ✓' : 'copy'}</button
+      >
     </p>
   {:else if sizing.err}
     <p class="err">{sizing.err}</p>
@@ -326,6 +383,30 @@
   .feas {
     margin: 0.2rem 0 0;
     font-family: ui-monospace, monospace;
+  }
+  .bax input {
+    width: 4.5rem;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 1px solid #8884;
+    border-radius: 3px;
+    padding: 0 0.25rem;
+    margin: 0 0.15rem;
+  }
+  .copy {
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85em;
+    color: inherit;
+    background: none;
+    border: 1px solid #8884;
+    border-radius: 3px;
+    padding: 0 0.4rem;
+    margin-left: 0.5rem;
+  }
+  .copy:hover {
+    opacity: 0.8;
   }
   .feas.ok {
     color: var(--ok);

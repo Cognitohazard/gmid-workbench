@@ -71,6 +71,8 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'na = a side could not be computed (an undeclared name or a non-finite value). Never a silent pass: a hard rule reading na fails the design closed.',
   provide:
     'Names this block exposes to a parent sheet. The parent reads each as child__name and writes its own math over it — scalar composition, no circuit solving.',
+  copyResults:
+    'Copy every computed value of this sheet (and its children, child__-prefixed) as name/value text — the numbers, where the ⤓ json export is the recipe.',
   refBlock:
     'This block is included by reference from the sheet library — its internals live on the referenced sheet and track its edits (unless the document also embeds a pinned copy, which then wins). Param overrides still apply; detach to make a local editable copy.',
   detachRef:

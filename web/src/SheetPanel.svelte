@@ -282,6 +282,20 @@
   // Download the sheet as a JSON file: as-authored (refs stay refs — the shareable
   // source), or flattened through the library index (every ref inlined — the frozen,
   // self-contained deliverable).
+  // One-click handoff of the EVALUATED numbers (name/value lines, engineering
+  // notation): every computed row plus each child's, already child__-prefixed —
+  // the recipe exports as JSON, the answers copy as text.
+  let copied = $state(false);
+  function copyResults(): void {
+    const rows = Object.entries(result.values)
+      .filter(([, v]) => typeof v === 'number' && Number.isFinite(v))
+      .map(([k, v]) => `${k}\t${formatEng(v as number)}`);
+    void navigator.clipboard?.writeText([`# ${cfg.title}`, ...rows].join('\n')).then(() => {
+      copied = true;
+      setTimeout(() => (copied = false), 1200);
+    });
+  }
+
   function exportSheet(flat: boolean): void {
     if (flat && flatBlocked) return; // fail-safe; the button is disabled in this state
     const doc = flat ? flattenSheetDoc(cfg, refs).doc : cfg;
@@ -632,6 +646,9 @@
       </label>
     {/if}
     <span class="sexp">
+      <button title={CONTROL_HELP.copyResults} onclick={copyResults}
+        >{copied ? 'copied ✓' : 'copy results'}</button
+      >
       <button title={CONTROL_HELP.exportSheet} onclick={() => exportSheet(false)}>⤓ json</button>
       {#if hasRefs}
         <button

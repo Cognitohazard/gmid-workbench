@@ -214,11 +214,15 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await expect(sizer.locator('.sz')).toContainText('W'); // solved a width
   await expect(sizer.locator('.feas.ok')).toBeVisible(); // 15 < ceiling → feasible
 
-  // The sizing bias is surfaced and tracks the dashboard's shared vds slider (not a hidden
-  // midpoint): move vds to 1.2 V and the panel reflects it.
-  await expect(sizer.locator('.bias')).toContainText('vds=');
+  // The sizing bias is surfaced as an editable field that tracks the dashboard's shared
+  // vds slider (not a hidden midpoint): move vds to 1.2 V and the field reflects it.
+  await expect(sizer.locator('.bias')).toContainText('vds');
   await setSlider(page.locator('header .slider input').first(), '1.2');
-  await expect(sizer.locator('.bias')).toContainText('vds=1.2');
+  await expect(sizer.locator('.bax input').first()).toHaveValue('1.2');
+  // And a typed value commits BACK to the shared bias — the slider label follows.
+  await sizer.locator('.bax input').first().fill('900m');
+  await sizer.locator('.bax input').first().dispatchEvent('change');
+  await expect(page.locator('header .slider .val').first()).toHaveText('900mV');
   // Matching & noise budget: the sized geometry yields a Pelgrom offset, and the
   // thermal-noise density (γ-model) sits in its own line.
   await expect(sizer).toContainText('matching');

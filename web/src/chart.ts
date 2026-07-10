@@ -21,6 +21,8 @@ export interface ChartData {
   /** Log-scale the X / Y axis (uPlot `distr: 3`); absent/false ⇒ linear. */
   xLog?: boolean;
   yLog?: boolean;
+  /** Vertical reference marks (e.g. the sized gm/ID); drawn as dashed rules with a label. */
+  marks?: readonly { x: number; label?: string }[];
 }
 
 export interface CursorInfo {
@@ -51,6 +53,7 @@ export class ChartAdapter {
   private focusedSeries: number | null = null;
   private colors: string[] = [];
   private dashes: (number[] | null)[] = [];
+  private marks: readonly { x: number; label?: string }[] = [];
   private xLog = false;
   private yLog = false;
   private lastData: ChartData;
@@ -78,6 +81,7 @@ export class ChartAdapter {
   ) {
     this.colors = data.lineColors ?? [];
     this.dashes = data.lineDash ?? [];
+    this.marks = data.marks ?? [];
     const eff = effLog(data);
     this.xLog = eff.x;
     this.yLog = eff.y;
@@ -121,6 +125,7 @@ export class ChartAdapter {
     const sameScale = eff.x === this.xLog && eff.y === this.yLog;
     this.colors = next;
     this.dashes = nextDash;
+    this.marks = data.marks ?? [];
     this.xLog = eff.x;
     this.yLog = eff.y;
     this.lastData = data;
@@ -217,9 +222,39 @@ export class ChartAdapter {
           },
         ],
         setCursor: [(self: uPlot) => this.emitCursor(self)],
+        // The reference marks re-draw on every paint (they live on the canvas, so a
+        // zoom/refit repositions them for free). The draw hook reads `this.marks`
+        // live — updating marks needs no rebuild, just a redraw.
+        draw: [(self: uPlot) => this.drawMarks(self)],
       },
     };
     return new uPlot(opts, aligned(data), this.el);
+  }
+
+  /** Dashed vertical rules with a small label, e.g. "sized" at the bound gm/ID. */
+  private drawMarks(self: uPlot): void {
+    if (!this.marks.length) return;
+    const { ctx } = self;
+    const scale = self.scales.x;
+    const fg = getComputedStyle(this.el).color || '#888';
+    ctx.save();
+    ctx.strokeStyle = fg;
+    ctx.fillStyle = fg;
+    ctx.globalAlpha = 0.55;
+    ctx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]);
+    ctx.lineWidth = devicePixelRatio;
+    ctx.font = `${11 * devicePixelRatio}px system-ui, sans-serif`;
+    for (const m of this.marks) {
+      if (scale.min == null || scale.max == null || m.x < scale.min || m.x > scale.max) continue;
+      const x = self.valToPos(m.x, 'x', true);
+      const top = self.bbox.top;
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, top + self.bbox.height);
+      ctx.stroke();
+      if (m.label) ctx.fillText(m.label, x + 4 * devicePixelRatio, top + 12 * devicePixelRatio);
+    }
+    ctx.restore();
   }
 
   private emitCursor(self: uPlot): void {
