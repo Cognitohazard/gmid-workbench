@@ -120,28 +120,49 @@ export function deviceKey(t: DeviceTable): string {
 
 /**
  * A content-stable, collision-resistant unique id for a loaded table: the display label plus a
- * short FNV-1a hash of the table's identity, geometry, and per-column sentinels. This is the
- * resolver / persisted `use.device` key (the label is only for display). Two imports of the SAME
- * file get the same uid (so a persisted child→device binding survives a re-import); two DIFFERENT
- * tables that happen to share a label get DISTINCT uids (so each is individually selectable and
- * the resolver targets the right one — fixing the non-unique-label ambiguity). Hash collisions
- * between genuinely different tables are negligible and would only degrade to a first-match, never
- * a crash.
+ * short FNV-1a hash of the table's identity, geometry, and the FULL contents of every axis and
+ * quantity column (sampling would let two regenerated tables that differ only in the interior
+ * collide — and dedupe would then silently swap one for the other). This is the resolver /
+ * persisted `use.device` key (the label is only for display). Two imports of the SAME file get
+ * the same uid (so a persisted child→device binding survives a re-import); two DIFFERENT tables
+ * that happen to share a label get DISTINCT uids (so each is individually selectable and the
+ * resolver targets the right one — fixing the non-unique-label ambiguity). Tables are immutable
+ * after import, so the hash is memoized per table object.
  */
+const uidMemo = new WeakMap<DeviceTable, string>();
 export function tableUid(t: DeviceTable): string {
+  const hit = uidMemo.get(t);
+  if (hit !== undefined) return hit;
   let h = 0x811c9dc5;
-  const mix = (s: string): void => {
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
-    }
+  const step = (x: number): void => {
+    h ^= x;
+    h = Math.imul(h, 0x01000193);
   };
-  mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${t.meta.W ?? ''}`);
-  for (const a of t.grid.axes)
-    mix(`${a.name}:${a.values.length}:${a.values[0]}:${a.values[a.values.length - 1]}`);
-  for (const [k, col] of t.grid.quantities)
-    mix(`${k}:${col.length}:${col[0]}:${col[col.length >> 1]}:${col[col.length - 1]}`);
-  return `${deviceKey(t)}#${(h >>> 0).toString(36)}`;
+  const mix = (s: string): void => {
+    for (let i = 0; i < s.length; i++) step(s.charCodeAt(i));
+  };
+  const mixData = (a: Float64Array): void => {
+    // byteLength is a multiple of 8, so a u32 view covers every byte; one step per
+    // 32-bit word instead of per byte keeps the megabyte-scale hash cheap at boot.
+    const w = new Uint32Array(a.buffer, a.byteOffset, a.byteLength >>> 2);
+    for (let i = 0; i < w.length; i++) step(w[i]);
+  };
+  // ALL metadata participates: two tables with identical grids but different scalar
+  // metadata (W, AVT, ABETA, fco, polarity, …) size and budget differently, so they
+  // must not dedupe into one uid. Property order is stable for parsed and
+  // structured-clone-restored tables, so the JSON text is deterministic here.
+  mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${JSON.stringify(t.meta)}`);
+  for (const a of t.grid.axes) {
+    mix(`${a.name}:${a.values.length}`);
+    mixData(a.values);
+  }
+  for (const [k, col] of t.grid.quantities) {
+    mix(`${k}:${col.length}`);
+    mixData(col);
+  }
+  const uid = `${deviceKey(t)}#${(h >>> 0).toString(36)}`;
+  uidMemo.set(t, uid);
+  return uid;
 }
 
 /**
