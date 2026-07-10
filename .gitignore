@@ -38,3 +38,6 @@ web/e2e/fixtures/demo.mostab.csv
 
 # ngspice init (ngbehavior=hsa so sectioned .lib works)
 .spiceinit
+
+# CodeGraphContext indexing sidecar (local dev tool, like ltspice-mcp above)
+.cgcignore
