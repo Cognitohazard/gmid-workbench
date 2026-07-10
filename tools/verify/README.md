@@ -5,11 +5,12 @@ Small ngspice decks that close the loop between the shipped sky130 gm/ID tables
 derived from. Run them after touching the lookup/sizing math or regenerating data:
 
     cd tools/verify
-    PDK=$PDK_ROOT/sky130A/libs.tech/ngspice   # decks reference this path inline
     ngspice -b dana_op.cir
 
-The decks `.include` the volare-installed sky130A corner files; edit the include
-path at the top of each deck if your PDK lives elsewhere.
+Each deck hardcodes an `.include` of the sky130A tt corner file from a volare
+install (`~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice`) — ngspice does
+not expand environment variables, so point the `.include` line at the top of
+each deck at your own PDK before running.
 
 ## Decks
 
