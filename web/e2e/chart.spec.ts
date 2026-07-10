@@ -281,10 +281,10 @@ test('dense family: colorbar by default, switchable to a sampled subset, persist
   await expect(pg.locator('.pfoot')).toContainText('vds=300mV');
   await expect(pg.locator('.pfoot')).toContainText('vds=1.2V');
 
-  // The legend config persists across a reload (the device isn't persisted, so re-load the demo;
-  // the saved layout — sampled legend, N=5 — then restores).
+  // The legend config persists across a reload: the device restores from local storage
+  // and the saved layout — sampled legend, N=5 — restores against it.
   await page.reload();
-  await loadDemo(page);
+  await expect(page.locator('header .device')).toContainText('nmos_demo');
   const pg2 = page.locator('.grid .panel').nth(2);
   await expect(pg2.locator('.plegend')).toContainText('sample');
   await expect(pg2.locator('.pfoot .sw')).toHaveCount(5);
@@ -437,10 +437,10 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   await expect(page.locator('.grid canvas')).toHaveCount(4);
   await page.screenshot({ path: `${SCREENS}/dashboard.png`, fullPage: true });
 
-  // Persistence: the customized LAYOUT survives a reload (the device does not — it's never
-  // persisted — so re-load the demo, after which the saved layout restores: p0 = table).
+  // Persistence: the customized LAYOUT survives a reload — the device restores from
+  // local storage and the saved layout restores against it: p0 = table.
   await page.reload();
-  await loadDemo(page);
+  await expect(page.locator('header .device')).toContainText('nmos_demo');
   await expect(page.locator('.grid .panel').first().locator('table')).toBeVisible();
 
   // A corrupt saved layout falls back to the canonical preset rather than crashing.
@@ -651,4 +651,27 @@ test('axis scale: a log request on non-positive data renders linear and drops th
   await expect(p0.locator('canvas')).toBeVisible();
 
   expect(errors).toEqual([]);
+});
+
+test('persistence: loaded devices survive a reload and can be forgotten', async ({ page }) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+
+  // Reload: both tables come back from local storage, no re-import needed.
+  await page.reload();
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+  await expect(page.locator('header .device')).toContainText('nch_lvt'); // the active device is restored too
+
+  // Re-importing an already-loaded table refreshes it instead of duplicating a chip.
+  await loadDemo(page);
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+
+  // clear all → back to the empty boot state, and a reload stays empty.
+  await page.locator('.devices .dclear').click();
+  await expect(page.locator('.welcome')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.welcome')).toBeVisible();
+  await expect(page.locator('.devices')).toHaveCount(0);
 });

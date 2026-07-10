@@ -194,6 +194,11 @@ client-only: after the page loads, it makes no network requests and collects no
 telemetry. Your tables never leave the browser. The single-file offline build exists
 precisely so the tool can run on air-gapped machines.
 
+Loaded tables are kept locally in the browser (IndexedDB) so a reload restores your
+bench. What is retained is always visible in the devices strip; the × on a chip
+deletes that table's stored copy and **clear all** wipes everything. On a shared
+machine, clear before you walk away.
+
 ## License
 
 The application and library code are licensed under the [GNU General Public License v3.0](LICENSE).

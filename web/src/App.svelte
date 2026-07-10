@@ -42,6 +42,7 @@
     type Dashboard,
     type PanelTemplate,
   } from './dashboard';
+  import { clearTables, deleteTable, loadTables, putTable } from './devstore';
 
   // The device-level core is the single source of truth. Devices are loaded at runtime by
   // importing a mostab file; the app boots EMPTY (no built-in data) and shows a load prompt
@@ -50,9 +51,11 @@
   // (NMOS vs PMOS, corner vs corner). `device` is the active/primary one — it drives the
   // dashboard, the expression pickers, the bias sliders, and the sizer. It is `undefined` only in
   // the empty boot state, which the template gates behind a load prompt. The overlay set is
-  // chart-only and in-memory (device data is NDA-sensitive, never persisted). QA warnings live
-  // WITH their table so the displayed QA always matches the active device and can never go stale
-  // when the active device changes or a device is removed.
+  // chart-only and in-memory. Loaded tables persist LOCALLY in IndexedDB (client-only — nothing
+  // ever leaves the machine) so a reload restores the bench; the devices strip is the visible
+  // registry of what is retained, with per-device remove and clear-all as the deletion controls.
+  // QA warnings live WITH their table so the displayed QA always matches the active device and
+  // can never go stale when the active device changes or a device is removed.
   type Loaded = { table: DeviceTable; warnings: readonly QAWarning[] };
   let devices = $state<Loaded[]>([]);
   let activeIdx = $state(0);
@@ -69,6 +72,53 @@
   const sheetDevices = $derived(
     devices.map((d) => ({ uid: tableUid(d.table), label: deviceKey(d.table), table: d.table })),
   );
+  // The registry sidecar: load order + active index, so a reload restores the bench
+  // exactly (IndexedDB getAll returns key order, which is not load order).
+  const REG_KEY = 'gmid.devreg';
+  $effect(() => {
+    if (devices.length) {
+      saveJSON(REG_KEY, { order: devices.map((d) => tableUid(d.table)), active: activeIdx });
+    }
+  });
+  // Restore locally persisted tables once at boot. An import that lands first wins:
+  // imports persist themselves, so skipping the restore can never lose data.
+  void loadTables().then((stored) => {
+    if (devices.length) return;
+    const reg = loadJSON(
+      REG_KEY,
+      (r) => (r && typeof r === 'object' ? (r as { order?: unknown; active?: unknown }) : null),
+      () => null,
+    );
+    // The registry (synchronous localStorage) is authoritative for WHAT the bench
+    // holds and in which order; IndexedDB only carries the bulk data. A stored table
+    // the registry does not list is a leftover (e.g. a clear whose IndexedDB
+    // transaction was aborted by an immediate reload) — deleted, never restored.
+    const order = Array.isArray(reg?.order) ? (reg.order as unknown[]) : [];
+    const pos = new Map(order.map((u, i) => [u, i]));
+    const restored: Loaded[] = [];
+    for (const dt of stored) {
+      try {
+        // Trust nothing: a corrupt/stale record is skipped, not rendered.
+        if (dt?.id?.device && dt.grid?.quantities instanceof Map) {
+          if (!pos.has(tableUid(dt))) {
+            void deleteTable(tableUid(dt));
+            continue;
+          }
+          restored.push({ table: dt, warnings: validate(dt) });
+        }
+      } catch {
+        // a table that no longer validates is dropped silently
+      }
+    }
+    restored.sort(
+      (a, b) => (pos.get(tableUid(a.table)) as number) - (pos.get(tableUid(b.table)) as number),
+    );
+    if (restored.length && devices.length === 0) {
+      devices = restored;
+      const ai = typeof reg?.active === 'number' ? Math.trunc(reg.active) : 0;
+      select(Math.min(Math.max(ai, 0), restored.length - 1));
+    }
+  });
   let importError = $state<string | null>(null);
   let dragging = $state(false);
 
@@ -323,14 +373,22 @@
       importError = result.errors.map((e) => `${e.kind}: ${e.message}`).join(' · ');
       return;
     }
-    // Append every table in the dataset (a multi-corner export brings TT/SS/FF in at once),
-    // make the first newly-loaded one active, and reset the overlay selection.
-    const first = devices.length;
-    devices = [
-      ...devices,
-      ...result.dataset.tables.map((t) => ({ table: t, warnings: validate(t) })),
-    ];
+    // Take in every table in the dataset (a multi-corner export brings TT/SS/FF in at
+    // once). A table already loaded under the same identity is REPLACED IN PLACE (a
+    // re-import refreshes it without moving its chip); the rest append in file order.
+    // The first table of the import becomes active, and the overlay selection resets.
+    const incoming = result.dataset.tables.map((t) => ({ table: t, warnings: validate(t) }));
+    const fresh = new Map(incoming.map((d) => [tableUid(d.table), d]));
+    const next = devices.map((d) => {
+      const r = fresh.get(tableUid(d.table));
+      if (r) fresh.delete(tableUid(d.table));
+      return r ?? d;
+    });
+    next.push(...fresh.values());
+    const first = next.indexOf(incoming[0]);
+    devices = next;
     select(first);
+    for (const d of incoming) void putTable(tableUid(d.table), d.table);
   }
 
   // Make device `i` active (overlays cleared). The user's authored panels and tabs are preserved
@@ -349,11 +407,25 @@
   // Drop a loaded device from the registry; never remove the last or the active one.
   function removeDevice(i: number): void {
     if (devices.length <= 1 || i === activeIdx) return;
+    void deleteTable(tableUid(devices[i].table));
     devices = devices.filter((_, k) => k !== i);
     // Shift every index past the removed slot down one to track the shrunk list.
     const shift = (k: number) => (k > i ? k - 1 : k);
     activeIdx = shift(activeIdx);
     overlayIdx = overlayIdx.filter((k) => k !== i).map(shift);
+  }
+
+  // Forget everything: every loaded device, its overlays, and the locally stored copies.
+  // The dashboard layout (localStorage) survives — it holds no characterization data.
+  function clearAll(): void {
+    void clearTables();
+    saveJSON(REG_KEY, { order: [], active: 0 });
+    devices = [];
+    activeIdx = 0;
+    overlayIdx = [];
+    dashboard = null;
+    sizerOpen = false;
+    importError = null;
   }
 
   // Toggle device `i` into/out of the overlay set (the active device can't overlay itself).
@@ -541,6 +613,11 @@
         >
       </span>
     {/each}
+    <button
+      class="dclear"
+      onclick={clearAll}
+      title="remove every loaded device and delete the locally stored copies">clear all</button
+    >
   </nav>
 {/if}
 
@@ -986,6 +1063,21 @@
   }
   .dov input:disabled {
     opacity: 0.3;
+  }
+  .dclear {
+    cursor: pointer;
+    font: inherit;
+    font-size: calc(0.72rem * var(--text-scale, 1));
+    color: inherit;
+    background: none;
+    border: 1px solid #8884;
+    border-radius: 999px;
+    padding: 0 0.5rem;
+    opacity: 0.6;
+    margin-left: 0.4rem;
+  }
+  .dclear:hover {
+    opacity: 1;
   }
   .drm {
     cursor: pointer;

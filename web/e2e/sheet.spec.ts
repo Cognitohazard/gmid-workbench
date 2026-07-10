@@ -276,16 +276,20 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   await child.locator('.dsel').selectOption({ index: 2 }); // the imported nch_lvt
   await expect.poll(async () => (await child.textContent())?.trim()).not.toBe(before);
 
-  // The choice persists. After reload re-load ONLY the demo, so the still-set device (nch_lvt) no
-  // longer resolves and the child fails closed with a clear message — proving the key was stored.
+  // Both the choice AND the device survive a reload (tables restore from local storage),
+  // so the child keeps sizing against the picked table.
   await page.reload();
-  await loadDemo(page);
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
   const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toHaveValue(/nch_lvt/);
+  await expect(sp2.locator('.pwarn', { hasText: 'nch_lvt' })).toHaveCount(0);
+
+  // Removing the chosen device leaves the choice set-but-absent: the child fails closed
+  // with a clear message, and the picker surfaces the missing key rather than silently
+  // falling back to the active device.
+  await page.locator('.devices .dev', { hasText: 'nch_lvt' }).locator('.drm').click();
   await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
-  // The persisted device key (nch_lvt) is what fails to resolve — proving the choice was stored.
   await expect(sp2.locator('.pwarn', { hasText: 'nch_lvt' })).toContainText('did not resolve');
-  // The picker honestly surfaces the still-set-but-absent device (not a false "active device")
-  // and stays available so it can be cleared in place even with one device loaded.
   await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toContainText(
     'not loaded',
   );
