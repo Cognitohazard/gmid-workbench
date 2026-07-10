@@ -42,7 +42,7 @@
     type Dashboard,
     type PanelTemplate,
   } from './dashboard';
-  import { clearTables, deleteTable, loadTables, putTable } from './devstore';
+  import { clearTables, deleteTable, loadTables, putTable, saneTable } from './devstore';
 
   // The device-level core is the single source of truth. Devices are loaded at runtime by
   // importing a mostab file; the app boots EMPTY (no built-in data) and shows a load prompt
@@ -80,42 +80,79 @@
       saveJSON(REG_KEY, { order: devices.map((d) => tableUid(d.table)), active: activeIdx });
     }
   });
-  // Restore locally persisted tables once at boot. An import that lands first wins:
-  // imports persist themselves, so skipping the restore can never lose data.
+  // Restore locally persisted tables once at boot, MERGING with anything imported
+  // while the IndexedDB read was in flight — neither side may be discarded (an early
+  // import used to win outright, and the registry effect would then erase the whole
+  // persisted bench on the next reload).
+  //
+  // The registry (synchronous localStorage) says WHAT the bench holds and in which
+  // order; IndexedDB only carries the bulk data. It is read HERE, synchronously at
+  // boot, and NOT inside the async restore: an import that lands while the IndexedDB
+  // read is in flight rewrites the registry (the effect above), and deletion
+  // decisions made against that rewrite would erase the whole prior bench. Script
+  // init runs before the UI exists, so nothing can have touched the registry yet.
+  // It is authoritative ONLY when it is present and parses as a list of uids: a
+  // stored table it does not list is then a leftover (e.g. a clear whose IndexedDB
+  // transaction was aborted by an immediate reload) and is deleted. A MISSING or
+  // unreadable or malformed registry (blocked localStorage, selectively cleared or
+  // corrupted site data) must not read as an intentionally empty bench — then
+  // everything sound is restored and nothing is deleted.
+  const bootReg = loadJSON(
+    REG_KEY,
+    (r) => {
+      if (!r || typeof r !== 'object') return null;
+      const order = (r as { order?: unknown }).order;
+      if (!Array.isArray(order) || order.some((u) => typeof u !== 'string')) return null;
+      return r as { order: string[]; active?: unknown };
+    },
+    () => null,
+  );
   void loadTables().then((stored) => {
-    if (devices.length) return;
-    const reg = loadJSON(
-      REG_KEY,
-      (r) => (r && typeof r === 'object' ? (r as { order?: unknown; active?: unknown }) : null),
-      () => null,
-    );
-    // The registry (synchronous localStorage) is authoritative for WHAT the bench
-    // holds and in which order; IndexedDB only carries the bulk data. A stored table
-    // the registry does not list is a leftover (e.g. a clear whose IndexedDB
-    // transaction was aborted by an immediate reload) — deleted, never restored.
-    const order = Array.isArray(reg?.order) ? (reg.order as unknown[]) : [];
-    const pos = new Map(order.map((u, i) => [u, i]));
-    const restored: Loaded[] = [];
-    for (const dt of stored) {
+    const pos = new Map(bootReg?.order.map((u, i) => [u, i]) ?? []);
+    // Imports that raced ahead keep their position, stay active, and are never
+    // treated as unlisted leftovers; restored tables append behind them, ordered by
+    // the STORED key's registry slot (a recomputed uid may not match what the
+    // registry recorded; without a registry every rank ties and order is kept).
+    const have = new Set(devices.map((d) => tableUid(d.table)));
+    const restored: { item: Loaded; rank: number }[] = [];
+    for (const { key, table: dt } of stored) {
       try {
         // Trust nothing: a corrupt/stale record is skipped, not rendered.
-        if (dt?.id?.device && dt.grid?.quantities instanceof Map) {
-          if (!pos.has(tableUid(dt))) {
-            void deleteTable(tableUid(dt));
-            continue;
-          }
-          restored.push({ table: dt, warnings: validate(dt) });
+        if (!saneTable(dt)) continue;
+        const uid = tableUid(dt);
+        if (have.has(uid)) {
+          // A fresh import superseded this record; drop a stale-keyed copy.
+          if (key !== uid) void deleteTable(key);
+          continue;
         }
+        // The registry recorded the key the table was STORED under; match and delete
+        // by that key, never only by the recomputed uid — when the uid algorithm
+        // changes, matching on the recomputation would silently drop the whole bench
+        // and deleting by it would strand every record under its old key.
+        if (bootReg && !pos.has(key) && !pos.has(uid)) {
+          void deleteTable(key);
+          continue;
+        }
+        if (key !== uid) {
+          // Self-migration: the uid algorithm changed since this was stored — re-key
+          // the record; the registry effect below then records the new uids.
+          void putTable(uid, dt);
+          void deleteTable(key);
+        }
+        restored.push({
+          item: { table: dt, warnings: validate(dt) },
+          rank: pos.get(key) ?? pos.get(uid) ?? Number.MAX_SAFE_INTEGER,
+        });
       } catch {
         // a table that no longer validates is dropped silently
       }
     }
-    restored.sort(
-      (a, b) => (pos.get(tableUid(a.table)) as number) - (pos.get(tableUid(b.table)) as number),
-    );
-    if (restored.length && devices.length === 0) {
-      devices = restored;
-      const ai = typeof reg?.active === 'number' ? Math.trunc(reg.active) : 0;
+    if (!restored.length) return;
+    restored.sort((a, b) => a.rank - b.rank);
+    const wasEmpty = devices.length === 0;
+    devices = [...devices, ...restored.map((r) => r.item)];
+    if (wasEmpty) {
+      const ai = bootReg && typeof bootReg.active === 'number' ? Math.trunc(bootReg.active) : 0;
       select(Math.min(Math.max(ai, 0), restored.length - 1));
     }
   });
@@ -378,6 +415,7 @@
     // re-import refreshes it without moving its chip); the rest append in file order.
     // The first table of the import becomes active, and the overlay selection resets.
     const incoming = result.dataset.tables.map((t) => ({ table: t, warnings: validate(t) }));
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, discarded on return
     const fresh = new Map(incoming.map((d) => [tableUid(d.table), d]));
     const next = devices.map((d) => {
       const r = fresh.get(tableUid(d.table));

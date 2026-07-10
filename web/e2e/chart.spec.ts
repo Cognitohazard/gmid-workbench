@@ -672,6 +672,18 @@ test('persistence: loaded devices survive a reload and can be forgotten', async 
   await loadDemo(page);
   await expect(page.locator('.devices .dev')).toHaveCount(2);
 
+  // Losing the registry sidecar (blocked/cleared localStorage) must NOT read as an
+  // intentionally empty bench: the stored tables still restore, nothing is deleted.
+  await page.evaluate(() => localStorage.removeItem('gmid.devreg'));
+  await page.reload();
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+
+  // A structurally corrupt registry (a list of non-uids) is equally non-authoritative:
+  // it must not be trusted to delete stored tables.
+  await page.evaluate(() => localStorage.setItem('gmid.devreg', '{"order":[null]}'));
+  await page.reload();
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+
   // clear all → back to the empty boot state, and a reload stays empty.
   await page.locator('.devices .dclear').click();
   await expect(page.locator('.welcome')).toBeVisible();
