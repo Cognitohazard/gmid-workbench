@@ -21,7 +21,8 @@
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
   import QuantityPicker from './QuantityPicker.svelte';
-  import { clampLegendCount, defaultScale, type Panel, type Scale } from './dashboard';
+  import { clampLegendCount, defaultScale, GM_ID, type Panel, type Scale } from './dashboard';
+  import { sizeMark } from './sizemark.svelte';
 
   let {
     device,
@@ -221,6 +222,22 @@
       const fi = Number.isFinite(m.famValue) ? (famIndex.get(m.famValue) ?? pos) : pos;
       return PALETTE[fi % PALETTE.length];
     };
+    // Tag each table by the parts of (device, corner, temp) that VARY across the drawn
+    // set: overlaying four corners of one device tags curves "tt"/"ss"/"ff", not four
+    // copies of the same device name.
+    const ids = tablesAll.map((tb) => tb.id);
+    const vary = {
+      device: new Set(ids.map((i) => i.device)).size > 1,
+      corner: new Set(ids.map((i) => i.corner)).size > 1,
+      temp: new Set(ids.map((i) => i.temp)).size > 1,
+    };
+    const tagOf = (i: (typeof ids)[number]): string => {
+      const parts: string[] = [];
+      if (vary.device) parts.push(i.device);
+      if (vary.corner && i.corner) parts.push(i.corner);
+      if (vary.temp) parts.push(`${i.temp}°C`);
+      return parts.length ? parts.join(' ') : i.device;
+    };
     const labelOf = (m: OverlayLine): string => {
       const dev = tablesAll[m.tableIndex] ?? device;
       const fam =
@@ -228,7 +245,8 @@
           ? `${ov.famName}=${formatSI(m.famValue)}${famUnit}`
           : '';
       if (!overlaid) return fam || dev.id.device;
-      return fam ? `${dev.id.device} ${fam}` : dev.id.device;
+      const tag = tagOf(dev.id);
+      return fam ? `${tag} ${fam}` : tag;
     };
 
     const lineColors = drawnMeta.map((m, p) => colourOf(m, p));
@@ -240,6 +258,10 @@
       lineDash: drawnMeta.map((m) => dashFor(m.tableIndex)),
       xLog,
       yLog,
+      // The sized operating point, marked on every gm/ID-axis chart while the sizer
+      // holds a solution — the tradeoff curves and the bound point stay one picture.
+      marks:
+        cfg.xExpr === GM_ID && sizeMark.gmId != null ? [{ x: sizeMark.gmId, label: 'sized' }] : [],
     };
     return { mode, data, lineColors, drawnMeta, famName: ov.famName, famUnit, famMin, famMax };
   });
