@@ -150,11 +150,32 @@
 
   // Numeric bias entry: a parseable value commits into the SHARED bias, so the
   // dashboard sliders and every chart follow; anything else restores the field.
+  // The commit is CLAMPED to the table's swept range — the grid slice would clamp
+  // silently anyway, and the readout must never claim an operating point the table
+  // cannot represent (type 2 V on a 1.8 V table and every number would be the
+  // 1.8 V answer labeled "2 V").
   function setBiasField(axis: string, el: HTMLInputElement): void {
     const v = parseNum(el.value);
-    if (v !== undefined && Number.isFinite(v)) sharedBias[axis] = v;
-    else el.value = formatEng(sharedBias[axis] ?? 0);
+    const ax = device.grid.axes.find((a) => a.name === axis);
+    if (v !== undefined && Number.isFinite(v) && ax) {
+      const c = Math.min(Math.max(v, ax.values[0]), ax.values[ax.values.length - 1]);
+      sharedBias[axis] = c;
+      el.value = formatEng(c);
+    } else el.value = formatEng(sharedBias[axis] ?? 0);
   }
+
+  // Finger realization of the sized W (the width-scaling caveat: realize table-derived
+  // widths as fingers of the characterization width). The count is ROUNDED, so the
+  // realized width can differ materially from the sized W at small counts — it is
+  // always shown, and copied, with its deviation.
+  const fingers = $derived.by(() => {
+    const r = sizing.result;
+    const wc = device.meta.W;
+    if (!r || wc === undefined || r.W / wc < 1.5) return null;
+    const nf = Math.round(r.W / wc);
+    const pct = ((nf * wc) / r.W - 1) * 100;
+    return { nf, wc, W: nf * wc, pctText: `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` };
+  });
 
   // One-click handoff of the sized numbers (engineering notation, one name per line —
   // pastes cleanly into a notebook, a spreadsheet, or a design review chat).
@@ -168,6 +189,14 @@
       line('L', `${formatEng(sizeL)}m`),
       ...Object.entries(sizingFixed).map(([k, v]) => line(k, `${formatEng(v)}${axisUnit(k)}`)),
       line('W', `${formatEng(r.W)}m`),
+      ...(fingers
+        ? [
+            line(
+              'fingers',
+              `${fingers.nf} x ${formatEng(fingers.wc)}m = ${formatEng(fingers.W)}m (${fingers.pctText} vs sized W)`,
+            ),
+          ]
+        : []),
       line('vgs', `${formatEng(r.vgs)}V`),
       line('gm/ID', formatEng(r.gm_id)),
       line('ID', `${formatEng(r.id)}A`),
@@ -226,9 +255,9 @@
     <dl class="sz">
       <dt>W</dt>
       <dd>{formatSI(r.W)}m</dd>
-      {#if device.meta.W !== undefined && r.W / device.meta.W >= 1.5}
+      {#if fingers}
         <dt>as fingers <Help text={CONTROL_HELP.fingers} /></dt>
-        <dd>{Math.round(r.W / device.meta.W)} × {formatSI(device.meta.W)}m</dd>
+        <dd>{fingers.nf} × {formatSI(fingers.wc)}m = {formatSI(fingers.W)}m ({fingers.pctText})</dd>
       {/if}
       <dt>vgs</dt>
       <dd>{formatSI(r.vgs)}V</dd>

@@ -223,6 +223,12 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await sizer.locator('.bax input').first().fill('900m');
   await sizer.locator('.bax input').first().dispatchEvent('change');
   await expect(page.locator('header .slider .val').first()).toHaveText('900mV');
+  // An out-of-range value is CLAMPED to the table's swept range at commit — the
+  // readout must never claim an operating point the table cannot represent.
+  await sizer.locator('.bax input').first().fill('5');
+  await sizer.locator('.bax input').first().dispatchEvent('change');
+  await expect(sizer.locator('.bax input').first()).toHaveValue('1.2');
+  await expect(page.locator('header .slider .val').first()).toHaveText('1.2V');
   // Matching & noise budget: the sized geometry yields a Pelgrom offset, and the
   // thermal-noise density (γ-model) sits in its own line.
   await expect(sizer).toContainText('matching');
