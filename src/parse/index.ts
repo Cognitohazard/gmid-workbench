@@ -196,10 +196,33 @@ function fail(...errors: ImportError[]): ImportResult {
  * never masks another.
  */
 export function mostabHeaderKeys(text: string | Uint8Array): string[] {
-  const header = stripBom(toText(text))
-    .split(/\r\n|\r|\n/)
-    .find((l) => l.trim() !== '' && !l.trim().startsWith('#'));
-  if (header === undefined) return [];
+  // The header sits at the top of the file, after the metadata block — so decode a
+  // bounded prefix of a binary input and scan it line-by-line, never materializing
+  // every data row of a large export. Only when the prefix holds no complete data
+  // line (a pathological metadata block) does this fall back to the full decode.
+  const PREFIX_BYTES = 256 * 1024;
+  if (typeof text !== 'string' && text.length > PREFIX_BYTES) {
+    const head = stripBom(new TextDecoder().decode(text.subarray(0, PREFIX_BYTES)));
+    // Only complete lines: the cut may tear a line (or a UTF-8 sequence) at the end.
+    const complete = head.slice(0, Math.max(head.lastIndexOf('\n'), head.lastIndexOf('\r')) + 1);
+    const header = firstDataLine(complete);
+    if (header !== undefined) return headerKeys(header);
+  }
+  const header = firstDataLine(stripBom(toText(text)));
+  return header === undefined ? [] : headerKeys(header);
+}
+
+/** First non-empty, non-comment line, scanned lazily (no whole-input split). */
+function firstDataLine(s: string): string | undefined {
+  const lines = /[^\r\n]+/g;
+  for (let m = lines.exec(s); m !== null; m = lines.exec(s)) {
+    const t = m[0].trim();
+    if (t !== '' && !t.startsWith('#')) return m[0];
+  }
+  return undefined;
+}
+
+function headerKeys(header: string): string[] {
   return header.split(detectDelimiter(header)).map((c) => canonicalizeHeader(c).key);
 }
 

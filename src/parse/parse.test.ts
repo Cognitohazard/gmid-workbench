@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMostabCsv } from './index';
+import { mostabHeaderKeys, parseMostabCsv } from './index';
 import type { Dataset } from '../types';
 
 // 2 lengths x 3 vgs = 6 rows. Columns: L, VGS, ID, GM, GDS, CGG, plus an unknown
@@ -263,5 +263,29 @@ L,VGS,ID,GM
     const nan = parseMostabCsv('L,VGS,ID,GM\n1e-8,0.3,1e-6,1e-5\n1e-8,0.5,2e-6,abc\n');
     expect(nan.ok).toBe(false);
     if (!nan.ok) expect(nan.errors[0].kind).toBe('bad-cell');
+  });
+});
+
+describe('mostabHeaderKeys', () => {
+  const enc = new TextEncoder();
+
+  it('reads the header of a large binary input from the bounded prefix', () => {
+    const body = '# device: nch\nL,VGS,ID,GM\n' + '1e-8,0.3,1e-6,1e-5\n'.repeat(40_000);
+    const bytes = enc.encode(body);
+    expect(bytes.length).toBeGreaterThan(256 * 1024);
+    expect(mostabHeaderKeys(bytes)).toEqual(['l', 'vgs', 'id', 'gm']);
+  });
+
+  it('falls back to a full decode when the prefix is all metadata', () => {
+    const body = '# note: x\n'.repeat(30_000) + 'L,VGS,ID,GM\n1e-8,0.3,1e-6,1e-5\n';
+    const bytes = enc.encode(body);
+    expect(bytes.length).toBeGreaterThan(256 * 1024);
+    expect(mostabHeaderKeys(bytes)).toEqual(['l', 'vgs', 'id', 'gm']);
+  });
+
+  it('handles CR-only line endings and empty input', () => {
+    expect(mostabHeaderKeys('# meta: 1\rVGS,ID,GM\r1,2,3\r')).toEqual(['vgs', 'id', 'gm']);
+    expect(mostabHeaderKeys('')).toEqual([]);
+    expect(mostabHeaderKeys('# only comments\n')).toEqual([]);
   });
 });
