@@ -246,7 +246,7 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  * two of {gm,gm_id,id}); else it is dropped and its rules go 'na'. Returns undefined
  * only when `v` is not an object.
  */
-export function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
+export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc | undefined {
   if (!v || typeof v !== 'object') return undefined;
   // Depth backstop: the evaluator/validator error out past MAX_USE_DEPTH, but they can
   // only do so if loading the doc didn't blow the stack first. One level beyond the cap
@@ -255,40 +255,68 @@ export function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
   if (depth > MAX_USE_DEPTH + 1) return undefined;
   const o = v as Record<string, unknown>;
   const str = (x: unknown, fallback: string) => (typeof x === 'string' && x ? x : fallback);
+  // `lost` records the path of every authored piece this pass DROPS. Restore paths
+  // tolerate drops (our own persisted data, best rescued); the import path passes a
+  // collector and fails closed — a sheet whose mistyped rule was dropped would
+  // otherwise validate cleanly and read feasible without that requirement.
+  const drop = (path: string): [] => {
+    lost?.push(path);
+    return [];
+  };
+  // A field that is PRESENT but of the wrong shape is a drop too — a mistyped role,
+  // bound, tolerance, or device binding silently vanishing is exactly the fail-open
+  // hole the collector exists to close.
+  const dropField = (bad: boolean, path: string): void => {
+    if (bad) lost?.push(path);
+  };
+  for (const k of ['params', 'rows', 'rules', 'uses', 'provide'] as const)
+    if (o[k] !== undefined && !Array.isArray(o[k])) lost?.push(k);
+  dropField(o.title !== undefined && !(typeof o.title === 'string' && o.title), 'title');
+  dropField(o.description !== undefined && typeof o.description !== 'string', 'description');
+  dropField(o.polarity !== undefined && o.polarity !== 'n' && o.polarity !== 'p', 'polarity');
 
   const params: SheetVar[] = Array.isArray(o.params)
-    ? o.params.flatMap((p) => {
-        if (!p || typeof p !== 'object') return [];
+    ? o.params.flatMap((p, i) => {
+        if (!p || typeof p !== 'object') return drop(`params[${i}]`);
         const pp = p as Record<string, unknown>;
-        if (typeof pp.name !== 'string' || !finite(pp.value)) return [];
+        if (typeof pp.name !== 'string' || !finite(pp.value)) return drop(`params[${i}]`);
         const out: SheetVar = { name: pp.name, value: pp.value };
         if (finite(pp.min)) out.min = pp.min;
+        else dropField(pp.min !== undefined, `params[${i}].min`);
         if (finite(pp.max)) out.max = pp.max;
+        else dropField(pp.max !== undefined, `params[${i}].max`);
         if (typeof pp.unit === 'string') out.unit = pp.unit;
+        else dropField(pp.unit !== undefined, `params[${i}].unit`);
         if (pp.role === 'spec' || pp.role === 'choice') out.role = pp.role;
+        else dropField(pp.role !== undefined, `params[${i}].role`);
         if (typeof pp.note === 'string') out.note = pp.note;
+        else dropField(pp.note !== undefined, `params[${i}].note`);
         return [out];
       })
     : [];
 
   const rows: SheetRow[] = Array.isArray(o.rows)
-    ? o.rows.flatMap((r) => {
-        if (!r || typeof r !== 'object') return [];
+    ? o.rows.flatMap((r, i) => {
+        if (!r || typeof r !== 'object') return drop(`rows[${i}]`);
         const rr = r as Record<string, unknown>;
-        if (typeof rr.name !== 'string' || typeof rr.expr !== 'string') return [];
+        if (typeof rr.name !== 'string' || typeof rr.expr !== 'string') return drop(`rows[${i}]`);
         const out: SheetRow = { name: rr.name, expr: rr.expr };
         if (typeof rr.unit === 'string') out.unit = rr.unit;
+        else dropField(rr.unit !== undefined, `rows[${i}].unit`);
         if (typeof rr.note === 'string') out.note = rr.note;
+        else dropField(rr.note !== undefined, `rows[${i}].note`);
         return [out];
       })
     : [];
 
   const rules: SheetRule[] = Array.isArray(o.rules)
-    ? o.rules.flatMap((r) => {
-        if (!r || typeof r !== 'object') return [];
+    ? o.rules.flatMap((r, i) => {
+        if (!r || typeof r !== 'object') return drop(`rules[${i}]`);
         const rr = r as Record<string, unknown>;
-        if (typeof rr.lhs !== 'string' || typeof rr.rhs !== 'string') return [];
-        if (!RULE_OPS.has(rr.op as string) || !RULE_KINDS.has(rr.kind as string)) return [];
+        if (typeof rr.lhs !== 'string' || typeof rr.rhs !== 'string') return drop(`rules[${i}]`);
+        if (!RULE_OPS.has(rr.op as string) || !RULE_KINDS.has(rr.kind as string))
+          return drop(`rules[${i}]`);
+        dropField(rr.id !== undefined && !(typeof rr.id === 'string' && rr.id), `rules[${i}].id`);
         const out: SheetRule = {
           id: str(rr.id, uid()),
           kind: rr.kind as RuleKind,
@@ -297,8 +325,11 @@ export function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
           rhs: rr.rhs,
         };
         if (finite(rr.tolPct)) out.tolPct = rr.tolPct;
+        else dropField(rr.tolPct !== undefined, `rules[${i}].tolPct`);
         if (typeof rr.justification === 'string') out.justification = rr.justification;
+        else dropField(rr.justification !== undefined, `rules[${i}].justification`);
         if (typeof rr.note === 'string') out.note = rr.note;
+        else dropField(rr.note !== undefined, `rules[${i}].note`);
         return [out];
       })
     : [];
@@ -313,9 +344,11 @@ export function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
       const cand: SheetBind = { L: b.L };
       for (const k of ['gm', 'gm_id', 'id', 'W', 'vds', 'vsb'] as const)
         if (typeof b[k] === 'string') cand[k] = b[k] as string;
+        else dropField(b[k] !== undefined, `bind.${k}`);
       bind = cand;
     }
   }
+  if (o.bind !== undefined && !bind) lost?.push('bind');
 
   // Composition: each child is a full SheetDoc recursively sanitized; the param-override map,
   // the provide list, and the per-child `device` (a table uid the resolver matches against the
@@ -324,34 +357,45 @@ export function sanitizeSheet(v: unknown, depth = 0): SheetDoc | undefined {
   // (`ref` without an embedded doc) is kept as the reference — resolution happens at evaluation,
   // and a ref that no longer resolves reads infeasible rather than being dropped.
   const uses: SheetUse[] = Array.isArray(o.uses)
-    ? o.uses.flatMap((u) => {
-        if (!u || typeof u !== 'object') return [];
+    ? o.uses.flatMap((u, i) => {
+        if (!u || typeof u !== 'object') return drop(`uses[${i}]`);
         const uu = u as Record<string, unknown>;
-        if (typeof uu.name !== 'string' || !uu.name) return [];
-        const childDoc = sanitizeSheet(uu.doc, depth + 1);
+        if (typeof uu.name !== 'string' || !uu.name) return drop(`uses[${i}]`);
+        const childLost: string[] = [];
+        const childDoc = sanitizeSheet(uu.doc, depth + 1, childLost);
+        if (uu.doc !== undefined && !childDoc) lost?.push(`uses[${i}].doc`);
+        else if (childLost.length) lost?.push(...childLost.map((p) => `uses[${i}].doc.${p}`));
         // Any string ref is kept VERBATIM — including an empty one. An empty ref is an
         // authoring error the validator names ("empty ref", blocking feasibility);
         // coercing it away here would silently delete the authored block and let the
         // sheet read feasible where the core reads it infeasible.
         const ref = typeof uu.ref === 'string' ? uu.ref : undefined;
-        if (!childDoc && ref === undefined) return [];
+        dropField(uu.ref !== undefined && ref === undefined, `uses[${i}].ref`);
+        if (!childDoc && ref === undefined) return uu.doc !== undefined ? [] : drop(`uses[${i}]`);
         const use: SheetUse = { name: uu.name };
         if (childDoc) use.doc = childDoc;
         if (ref !== undefined) use.ref = ref;
+        // A malformed device binding must be REPORTED, not silently inherited from
+        // the parent — the sheet would evaluate against the wrong table.
         if (typeof uu.device === 'string') use.device = uu.device;
+        else dropField(uu.device !== undefined, `uses[${i}].device`);
         if (uu.params && typeof uu.params === 'object' && !Array.isArray(uu.params)) {
           const ov: Record<string, string> = {};
           for (const [k, val] of Object.entries(uu.params as Record<string, unknown>)) {
             if (typeof val === 'string') ov[k] = val;
+            else lost?.push(`uses[${i}].params.${k}`);
           }
           if (Object.keys(ov).length) use.params = ov;
-        }
+        } else if (uu.params !== undefined) lost?.push(`uses[${i}].params`);
         return [use];
       })
     : [];
 
   const provide: string[] = Array.isArray(o.provide)
-    ? o.provide.filter((x): x is string => typeof x === 'string')
+    ? o.provide.flatMap((x, i) => {
+        if (typeof x === 'string') return [x];
+        return drop(`provide[${i}]`);
+      })
     : [];
 
   return {

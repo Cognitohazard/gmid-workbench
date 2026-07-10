@@ -557,6 +557,37 @@ test('design sheet: imported sheets join the library — pickable, referenceable
   await expect(page.locator('.qa.error')).toContainText('refusing to import');
   await expect(page.locator('.usheets .dev', { hasText: 'huge' })).toHaveCount(0);
 
+  // A sheet whose rule is malformed (mistyped op) is REJECTED, not imported with the
+  // rule silently dropped — a dropped rule would read feasible without the requirement.
+  await input.setInputFiles(
+    asFile('bad-rule.json', {
+      title: 'Bad rule',
+      polarity: 'n',
+      params: [{ name: 'x', value: 2 }],
+      rows: [{ name: 'y', expr: '2*x' }],
+      rules: [{ id: 'y-max', kind: 'requirement', lhs: 'y', op: '=<', rhs: '10' }],
+    }),
+  );
+  await expect(page.locator('.qa.error')).toContainText('malformed sheet content at rules[0]');
+  await expect(page.locator('.usheets .dev', { hasText: 'bad-rule' })).toHaveCount(0);
+
+  // Same for a malformed FIELD inside a kept entry: a non-string device binding
+  // would silently inherit the parent's table — reject, do not repair.
+  await input.setInputFiles(
+    asFile('bad-device.json', {
+      title: 'Bad device',
+      polarity: 'n',
+      params: [{ name: 'x', value: 2 }],
+      rows: [{ name: 'y', expr: '2*x' }],
+      rules: [],
+      uses: [{ name: 'b', ref: 'my-block', device: 7 }],
+    }),
+  );
+  await expect(page.locator('.qa.error')).toContainText(
+    'malformed sheet content at uses[0].device',
+  );
+  await expect(page.locator('.usheets .dev', { hasText: 'bad-device' })).toHaveCount(0);
+
   await input.setInputFiles(
     asFile('my-top.json', {
       title: 'My top',

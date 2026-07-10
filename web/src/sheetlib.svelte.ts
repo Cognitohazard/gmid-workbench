@@ -76,8 +76,16 @@ export function importSheetJSON(filename: string, text: string): string | null {
   } catch (e) {
     return `not valid JSON (${e instanceof Error ? e.message : String(e)})`;
   }
-  const doc = sanitizeSheet(parsed);
+  const lost: string[] = [];
+  const doc = sanitizeSheet(parsed, 0, lost);
   if (!doc) return 'not a sheet document';
+  // Sanitization DROPS malformed pieces — tolerable when rescuing our own persisted
+  // state, but at the import door a dropped rule would let the sheet validate cleanly
+  // and read feasible WITHOUT that requirement. Fail closed instead.
+  if (lost.length) {
+    const more = lost.length > 1 ? ` (+${lost.length - 1} more)` : '';
+    return `malformed sheet content at ${lost[0]}${more} — fix the JSON; nothing was imported`;
+  }
   // Shape sanitization says "it is a sheet"; core validation says "it is a COHERENT
   // sheet" (parseable expressions, resolvable names, sane binds). Fail closed on
   // errors at the door — a broken sheet in the library would otherwise resolve into
