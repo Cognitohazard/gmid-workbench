@@ -172,6 +172,10 @@
     <dl class="sz">
       <dt>W</dt>
       <dd>{formatSI(r.W)}m</dd>
+      {#if device.meta.W !== undefined && r.W / device.meta.W >= 1.5}
+        <dt>as fingers <Help text={CONTROL_HELP.fingers} /></dt>
+        <dd>{Math.round(r.W / device.meta.W)} × {formatSI(device.meta.W)}m</dd>
+      {/if}
       <dt>vgs</dt>
       <dd>{formatSI(r.vgs)}V</dd>
       <dt>gm/ID</dt>

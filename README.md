@@ -112,6 +112,20 @@ It needs only Python, ngspice, and a fetched PDK. See
 [data/pdk/PROVENANCE.md](data/pdk/PROVENANCE.md) for the exact PDK builds, device
 list, and reproduction details.
 
+### Model limits worth knowing
+
+A table is characterized at **one width** (`# W:` in the metadata), and sizing scales
+it per-µm. Width effects — model bins, narrow-width V<sub>th</sub> shifts — are not
+captured, and they are not small: on sky130, a single-finger device 25× the
+characterization width conducts up to 1.9× more per µm in moderate inversion.
+Realized as **fingers of the characterization width** the table tracks simulation to
+a fraction of a percent, so treat a sized W as "N fingers of W<sub>char</sub>" (the
+sizer suggests the finger count). Cross-check decks and measured numbers live in
+[tools/verify/](tools/verify/README.md). The γ-model noise density assumes γ = 2/3
+and thermal noise only; real devices run hotter (sky130's measured γ is ≈ 1) and
+flicker can dominate far past the audio band — treat table-derived noise as a floor,
+not a budget.
+
 ## Scripting the core
 
 The core (`@gmid/mostab-core`) is a pure library — you can import tables, size devices, and

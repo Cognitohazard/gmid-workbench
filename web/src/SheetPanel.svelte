@@ -519,7 +519,8 @@
           {/if}
         {/if}
       {/if}
-      {#if path.length === 1 && use && (deviceOptions.length > 1 || use.device)}
+      {#if path.length === 1 && use && (deviceOptions.length > 0 || use.device)}
+        <span class="dsl" title={CONTROL_HELP.useDevice}>device</span>
         <select
           class="dsel"
           title={CONTROL_HELP.useDevice}
@@ -1037,10 +1038,14 @@
     font-style: normal;
     font-size: calc(0.72rem * var(--text-scale));
   }
+  .suseh .dsl {
+    margin-left: auto;
+    font-size: calc(0.68rem * var(--text-scale));
+    opacity: 0.6;
+  }
   .suseh .dsel {
     font-size: calc(0.72rem * var(--text-scale));
     max-width: 12rem;
-    margin-left: auto;
   }
   /* by-reference badge: the block's library id, pill-shaped so it reads as provenance */
   .refb {

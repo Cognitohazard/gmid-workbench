@@ -14,7 +14,7 @@ export const QUANTITY_HELP: Readonly<Record<string, string>> = {
   av0: 'Intrinsic gain A_v0 = gm/g_ds (V/V) — same as gm/g_ds.',
   ro: 'Output resistance r_o = 1/g_ds (Ω).',
   vstar:
-    'V* = 2·I_D/gm = 2/(gm/ID) (V) — an overdrive-like efficiency metric. Small V* = efficient.',
+    'V* = 2·I_D/gm = 2/(gm/ID) (V) — an overdrive-like efficiency metric. Small V* = efficient. L-independent, so family curves coincide — one visible curve is correct, not a plot fault.',
   ft_eff: '(gm/ID)·f_T (Hz/V) — a combined efficiency-and-speed figure of merit.',
   av0_ft: 'Gain·f_T (Hz) — a combined gain-and-bandwidth figure of merit.',
   gm_cgd: 'gm/C_gd (rad/s).',
@@ -55,13 +55,13 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Make this the active device: it drives the dashboard, the pickers, the bias sliders, and the sizer.',
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
   sheet:
-    'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device.',
+    'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device. ✓/✗ marks whether the sheet closes (all hard rules pass) on the active device at its defaults.',
   sheetSweep:
     'Sweep one variable across its range and chart every rule’s margin — the feasibility region where the design closes.',
   sheetSweep2:
     'Add a second variable to sweep the design plane: a feasibility heatmap (green = the design closes, red = a hard rule fails) instead of the 1-D margin chart.',
   useDevice:
-    'Size this child block against a specific loaded device (e.g. an LVT/SVT flavor or the PMOS table); “active device” inherits the parent’s.',
+    'Size this child block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load); “active device” inherits the parent’s.',
   // design-sheet vocabulary (rule kinds, statuses, composition, bias, param roles)
   ruleKind:
     'invariant = a hard physical floor; requirement = a hard application spec — both must hold for a feasible design. guardrail = advisory only: shown, never blocks.',
@@ -95,6 +95,8 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   fco: 'Flicker (1/f) noise corner frequency f_co (Hz).',
   band: 'Integration band [f_lo, f_hi] (Hz) for the total RMS input-referred noise.',
   matching: 'Pelgrom mismatch budget on the sized geometry: σ(V_th), pair offset, and σ(I)/I.',
+  fingers:
+    'The table is characterized at ONE width; sizing scales it per-µm, and width effects (model bins, narrow-width V_th shifts) are NOT captured — a single wide finger can be off by tens of percent in moderate inversion. Realize the result as this many fingers of the characterization width, which tracks the table.',
   avth: 'Pelgrom V_th matching coefficient A_Vth (mV·µm): σ(V_th) ≈ A_Vth/√(W·L). The default is a generic placeholder — replace it with your PDK\u2019s measured value.',
   abeta: 'Pelgrom current-factor matching coefficient A_β (%·µm).',
 };

@@ -591,3 +591,27 @@ test('design sheet: imported sheets join the library — pickable, referenceable
 
   expect(errors).toEqual([]);
 });
+
+test('discoverability: device bar counts from the first import, child picker labeled, provenance popover', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  // The devices bar shows from the FIRST import, with a count — a second import
+  // must read as "accumulates", not "replaces".
+  await expect(page.locator('.devices .dlabel')).toHaveText('devices (1)');
+
+  // A composed sheet's child offers its labeled device picker even with one device loaded.
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
+  const child = sp.locator('.suse', { hasText: 'cs' });
+  await expect(child.locator('.dsl').first()).toHaveText('device');
+  await expect(child.locator('.dsel').first()).toBeVisible();
+
+  // The active-device label opens a provenance readout with the table's identity.
+  await page.locator('header .device summary').click();
+  await expect(page.locator('header .device .prov')).toBeVisible();
+  await expect(page.locator('header .device .prov')).toContainText('device');
+  await expect(page.locator('header .device .prov')).toContainText('nmos_demo');
+});

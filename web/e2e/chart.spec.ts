@@ -353,8 +353,9 @@ test('overlay: a second loaded device draws alongside the active one, dashed and
 
   await page.goto('/');
   await loadDemo(page);
-  // Only the demo is loaded → no device strip.
-  await expect(page.locator('.devices')).toHaveCount(0);
+  // The device strip shows from the first load, with a running count.
+  await expect(page.locator('.devices .dev')).toHaveCount(1);
+  await expect(page.locator('.devices .dlabel')).toHaveText('devices (1)');
 
   // Import a real device; it ACCUMULATES (the demo stays) and the strip appears with both.
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
@@ -382,9 +383,9 @@ test('overlay: a second loaded device draws alongside the active one, dashed and
   await expect(p0.locator('canvas')).toBeVisible();
   await page.screenshot({ path: `${SCREENS}/overlay.png`, fullPage: true });
 
-  // Removing the overlaid device drops its curves and collapses the strip.
+  // Removing the overlaid device drops its curves; the strip stays with the one left.
   await page.locator('.devices .dev').first().locator('.drm').click();
-  await expect(page.locator('.devices')).toHaveCount(0);
+  await expect(page.locator('.devices .dev')).toHaveCount(1);
   await expect(p0.locator('.pfoot')).not.toContainText('nmos_demo');
 
   expect(errors).toEqual([]);

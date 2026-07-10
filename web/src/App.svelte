@@ -5,6 +5,7 @@
     importMostab,
     metaScalars,
     formatEng,
+    formatSI,
     validate,
     EXAMPLES,
     DERIVED_QUANTITIES,
@@ -404,7 +405,31 @@
     {/each}
   {/if}
   <span class="grow"></span>
-  {#if device}<span class="device" title="active device">{deviceKey(device)}</span>{/if}
+  {#if device}
+    <details class="device">
+      <summary title="active device — open for the table's provenance">{deviceKey(device)}</summary>
+      <dl class="prov">
+        <dt>device</dt>
+        <dd>{device.id.device}</dd>
+        <dt>corner</dt>
+        <dd>{device.id.corner}</dd>
+        <dt>temp</dt>
+        <dd>{device.id.temp}°C</dd>
+        {#if device.meta.W !== undefined}<dt>char. W</dt>
+          <dd>{formatSI(device.meta.W)}m</dd>{/if}
+        {#if device.meta.simulator}<dt>simulator</dt>
+          <dd>{device.meta.simulator}</dd>{/if}
+        {#if device.meta.date}<dt>date</dt>
+          <dd>{device.meta.date}</dd>{/if}
+        {#if device.meta.polarity}<dt>polarity</dt>
+          <dd>{device.meta.polarity}</dd>{/if}
+        {#each Object.entries(device.meta.extra ?? {}) as [k, v]}
+          <dt>{k}</dt>
+          <dd>{v}</dd>
+        {/each}
+      </dl>
+    </details>
+  {/if}
   <label class="load" title="load a mostab .csv characterization table, or a design-sheet .json">
     Load .csv / .json
     <input
@@ -488,9 +513,9 @@
   </div>
 {/if}
 
-{#if devices.length > 1}
+{#if devices.length > 0}
   <nav class="devices" aria-label="loaded devices">
-    <span class="dlabel">devices</span>
+    <span class="dlabel">devices ({devices.length})</span>
     <Help text={CONTROL_HELP.overlay} />
     {#each devices as d, i}
       <span class="dev" class:active={i === activeIdx}>
@@ -639,8 +664,8 @@
         here.
       </p>
       <p class="hint">
-        Generate open-PDK tables with <code>tools/gen_gmid.py</code> (see
-        <code>data/pdk/PROVENANCE.md</code>).
+        The app ships with no built-in data. Load your team's characterization tables, or generate
+        open-PDK ones (sky130, gf180mcu) with the repository's generator script.
       </p>
     </div>
   {/if}
@@ -688,8 +713,41 @@
     flex: 1 1 auto;
   }
   .device {
+    position: relative;
     font-family: ui-monospace, monospace;
+  }
+  .device summary {
+    cursor: pointer;
+    list-style: none;
     opacity: 0.75;
+  }
+  .device[open] summary {
+    opacity: 1;
+  }
+  .device .prov {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 0.15rem 0.7rem;
+    margin: 0.3rem 0 0;
+    padding: 0.5rem 0.7rem;
+    background: var(--bg, canvas);
+    border: 1px solid #8884;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px #0004;
+    white-space: nowrap;
+  }
+  .device .prov dt {
+    opacity: 0.6;
+  }
+  .device .prov dd {
+    margin: 0;
+    max-width: 24rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .load,
   .btn {
