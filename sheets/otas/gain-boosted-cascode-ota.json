@@ -275,7 +275,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "W"]
+        "provide": ["gm", "gds", "vdsat", "W", "vnth_m"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -352,9 +352,9 @@
     },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(2*(1 + mir__gm/in__gm))",
+      "expr": "sqrt(2*(in__vnth_m^2 + mir__vnth_m^2*(mir__gm/in__gm)^2))",
       "unit": "V/sqrt(Hz)",
-      "note": "input pair plus load-mirror density; the boosters sit outside the main signal path and add little"
+      "note": "input pair plus the load mirror's own density referred by gm_mir/gm_in; the boosters sit outside the main signal path and add little"
     },
     {
       "name": "vos",

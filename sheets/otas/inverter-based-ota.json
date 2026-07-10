@@ -124,7 +124,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "W"]
+        "provide": ["gm", "gds", "vdsat", "W", "vnth_m"]
       },
       "params": {
         "I_d": "I_bias",
@@ -157,9 +157,9 @@
     { "name": "SR", "expr": "I_bias/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "sqrt(4*k*T*(2/3)/gm_tot)",
+      "expr": "sqrt(n__vnth_m^2*(n__gm/gm_tot)^2 + p__vnth_m^2*(p__gm/gm_tot)^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "input-referred thermal density at the composite gm_tot; ~sqrt(2) below a single device at the same current"
+      "note": "each device's own drain-noise density summed in current and referred by gm_tot; ~sqrt(2) below a single device at the same current"
     },
     {
       "name": "vos",

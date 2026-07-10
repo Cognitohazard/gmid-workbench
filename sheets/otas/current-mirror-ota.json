@@ -160,7 +160,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W", "vnth_m"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -257,9 +257,9 @@
     { "name": "SR", "expr": "K_m*I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(2*(1 + mload__gm/in__gm))",
+      "expr": "sqrt(2*(in__vnth_m^2 + mload__vnth_m^2*(mload__gm/in__gm)^2))",
       "unit": "V/sqrt(Hz)",
-      "note": "input pair plus the input mirror-load density at the actual input gm"
+      "note": "input pair plus the mirror load's own density referred by gm_mload/gm_in"
     },
     {
       "name": "vn_gbw",

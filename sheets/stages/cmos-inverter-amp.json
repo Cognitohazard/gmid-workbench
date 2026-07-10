@@ -143,7 +143,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "id"]
+        "provide": ["gm", "gds", "vdsat", "id", "vnth_m"]
       },
       "params": {
         "I_d": "I_bias",
@@ -176,9 +176,9 @@
     { "name": "GBW", "expr": "gm_tot/(2*pi*Cout)", "unit": "Hz" },
     {
       "name": "vn_in",
-      "expr": "n__vnth_m*sqrt(n__gm/gm_tot)",
+      "expr": "sqrt(n__vnth_m^2*(n__gm/gm_tot)^2 + p__vnth_m^2*(p__gm/gm_tot)^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "both channel-noise currents (4kTgamma*gm each) sum and refer to the input by gm_tot, giving sqrt(4kTgamma/gm_tot)"
+      "note": "both channel-noise currents (each device's own vnth_m*gm) sum and refer to the input by gm_tot"
     }
   ],
   "rules": [

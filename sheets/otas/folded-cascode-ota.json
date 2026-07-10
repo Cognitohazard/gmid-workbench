@@ -227,7 +227,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat"]
+        "provide": ["gm", "gds", "vdsat", "vnth_m"]
       },
       "params": {
         "I_b": "I_branch",
@@ -323,7 +323,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "W"]
+        "provide": ["gm", "gds", "vdsat", "W", "vnth_m"]
       },
       "params": {
         "I_f": "I_branch - in__id",
@@ -368,9 +368,9 @@
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(2*(1 + (pcs__gm + nmir__gm)/in__gm))",
+      "expr": "sqrt(2*(in__vnth_m^2 + pcs__vnth_m^2*(pcs__gm/in__gm)^2 + nmir__vnth_m^2*(nmir__gm/in__gm)^2))",
       "unit": "V/sqrt(Hz)",
-      "note": "input pair plus the top and bottom current-source pairs; the folding sources are the price of the fold"
+      "note": "input pair plus the top and bottom current-source pairs, each at its own density; the folding sources are the price of the fold"
     },
     {
       "name": "vos",

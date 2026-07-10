@@ -142,7 +142,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -233,9 +233,9 @@
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(2*(1 + ld__gm/in__gm))",
+      "expr": "sqrt(2*(in__vnth_m^2 + ld__vnth_m^2*(ld__gm/in__gm)^2))",
       "unit": "V/sqrt(Hz)",
-      "note": "both pair devices and both mirror devices contribute: 2*(1 + gm_ld/gm_in) times the per-device density (simulation-verified two-sided total)"
+      "note": "both pair devices and both mirror devices contribute, each at its own density: 2*(vn_pair^2 + vn_ld^2*(gm_ld/gm_in)^2) (simulation-verified two-sided total)"
     },
     {
       "name": "vos",

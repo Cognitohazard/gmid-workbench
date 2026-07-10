@@ -115,7 +115,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "id"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "id", "vnth_m"]
       },
       "params": {
         "I_load": "2*pi*GBW_target*CL*(1 + gbw_margin)/gm_id",
@@ -148,9 +148,9 @@
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
     {
       "name": "vn_in",
-      "expr": "vnth_m*sqrt(1 + load__gm/gm)",
+      "expr": "sqrt(vnth_m^2 + load__vnth_m^2*(load__gm/gm)^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "the diode load's 4kTgamma*gm drain noise referred to the input by 1/gm_in"
+      "note": "the diode load's own drain noise (vnth_m_load*gm_load) referred to the input by 1/gm_in"
     }
   ],
   "rules": [
