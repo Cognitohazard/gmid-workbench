@@ -5,6 +5,7 @@
     thermalNoise,
     integratedNoise,
     formatEng,
+    formatSI,
     parseEng,
     type DeviceTable,
   } from '@gmid/mostab-core';
@@ -71,7 +72,7 @@
   // One factor each way: UI = SI × K (display), SI = UI ÷ K (binding) — reciprocal.
   const AVT_UI_PER_SI = 1e9; // V·m → mV·µm
   const ABETA_UI_PER_SI = 1e8; // ·m → %·µm (1% = 0.01)
-  let inAvth = $state('4'); // mV·µm
+  let inAvth = $state('5'); // mV·µm — generic placeholder, matches the library sheets' default
   let inAbeta = $state('1'); // %·µm
   // Noise band + 1/f corner (Hz, engineering notation). Corner seeds from meta.FCO.
   let inFco = $state('1meg'); // flicker 1/f corner
@@ -86,7 +87,7 @@
   const toUi = (si: number, k: number) => String(+(si * k).toPrecision(6));
   $effect(() => {
     const m = device.meta;
-    inAvth = m.AVT !== undefined ? toUi(m.AVT, AVT_UI_PER_SI) : '4';
+    inAvth = m.AVT !== undefined ? toUi(m.AVT, AVT_UI_PER_SI) : '5';
     inAbeta = m.ABETA !== undefined ? toUi(m.ABETA, ABETA_UI_PER_SI) : '1';
     inFco = m.FCO !== undefined ? formatEng(m.FCO) : '1meg';
   });
@@ -144,7 +145,7 @@
   <label
     >L
     <select bind:value={sizeL}>
-      {#each lAxis?.values ?? [] as L}<option value={L}>{formatEng(L)}m</option>{/each}
+      {#each lAxis?.values ?? [] as L}<option value={L}>{formatSI(L)}m</option>{/each}
     </select>
   </label>
   <!-- Off-table-range L clamps and other engineering caveats from the core surface here,
@@ -161,7 +162,7 @@
   {#if Object.keys(sizingFixed).length}
     <p class="bias">
       bias · {Object.entries(sizingFixed)
-        .map(([k, v]) => `${k}=${formatEng(v)}${axisUnit(k)}`)
+        .map(([k, v]) => `${k}=${formatSI(v)}${axisUnit(k)}`)
         .join(' · ')}
     </p>
   {/if}
@@ -170,22 +171,22 @@
     {@const r = sizing.result}
     <dl class="sz">
       <dt>W</dt>
-      <dd>{formatEng(r.W)}m</dd>
+      <dd>{formatSI(r.W)}m</dd>
       <dt>vgs</dt>
-      <dd>{formatEng(r.vgs)}V</dd>
+      <dd>{formatSI(r.vgs)}V</dd>
       <dt>gm/ID</dt>
-      <dd>{formatEng(r.gm_id)}</dd>
+      <dd>{formatSI(r.gm_id)}</dd>
       <dt>ID</dt>
-      <dd>{formatEng(r.id)}A</dd>
+      <dd>{formatSI(r.id)}A</dd>
       <dt>gm</dt>
-      <dd>{formatEng(r.gm)}S</dd>
+      <dd>{formatSI(r.gm)}S</dd>
       <dt>fT</dt>
-      <dd>{formatEng(r.quantities.ft)}Hz</dd>
+      <dd>{formatSI(r.quantities.ft)}Hz</dd>
       <dt>gm/gds</dt>
-      <dd>{formatEng(r.quantities.gm_gds)}</dd>
+      <dd>{formatSI(r.quantities.gm_gds)}</dd>
     </dl>
     <p class="feas {r.feasible ? 'ok' : 'bad'}">
-      {r.feasible ? '✓ feasible' : '✗ infeasible'} · ceiling {formatEng(r.ceiling)}
+      {r.feasible ? '✓ feasible' : '✗ infeasible'} · ceiling {formatSI(r.ceiling)}
     </p>
   {:else if sizing.err}
     <p class="err">{sizing.err}</p>
@@ -219,10 +220,10 @@
          `sth`/`sfl` PSDs are at the characterization width and are shown in Explore. -->
     <dl class="noise">
       <dt>v<sub>n,th</sub> <small>γ-model</small></dt>
-      <dd>{formatEng(noise.density)}V/√Hz</dd>
+      <dd>{formatSI(noise.density)}V/√Hz</dd>
       {#if noise.rms !== null}
         <dt>v<sub>n,rms</sub> <small>band</small></dt>
-        <dd>{formatEng(noise.rms)}V</dd>
+        <dd>{formatSI(noise.rms)}V</dd>
       {/if}
     </dl>
   {/if}
@@ -240,9 +241,9 @@
   {#if mism}
     <dl class="budget">
       <dt>σ(V<sub>th</sub>)</dt>
-      <dd>{formatEng(mism.sigmaVth)}V</dd>
+      <dd>{formatSI(mism.sigmaVth)}V</dd>
       <dt>σ(V<sub>os</sub>) pair</dt>
-      <dd>{formatEng(mism.sigmaVos)}V</dd>
+      <dd>{formatSI(mism.sigmaVos)}V</dd>
       <dt>σ(I)/I</dt>
       <dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
     </dl>

@@ -5,7 +5,12 @@
 // the sheets/ folder the browser cannot read). Ids live under an implicit `user/`
 // folder, so a bare name that collides with a curated sheet stays disambiguable.
 
-import { buildSheetRefIndex, type SheetDoc, type SheetRefIndex } from '@gmid/mostab-core';
+import {
+  buildSheetRefIndex,
+  validateSheet,
+  type SheetDoc,
+  type SheetRefIndex,
+} from '@gmid/mostab-core';
 import { CURATED_ENTRIES, SHEET_MENU, type SheetLibraryGroup } from './library';
 import { sanitizeSheet } from './dashboard';
 import { loadJSON, saveJSON } from './storage';
@@ -40,7 +45,8 @@ function parseUserSheets(raw: unknown): UserSheet[] {
     const o = e as Record<string, unknown>;
     if (typeof o.name !== 'string' || !validSheetName(o.name)) continue;
     const doc = sanitizeSheet(o.doc);
-    if (doc) byName.set(o.name, { name: o.name, doc });
+    if (doc && !validateSheet(doc).some((w) => w.severity === 'error'))
+      byName.set(o.name, { name: o.name, doc });
   }
   return [...byName.values()];
 }
@@ -72,6 +78,15 @@ export function importSheetJSON(filename: string, text: string): string | null {
   }
   const doc = sanitizeSheet(parsed);
   if (!doc) return 'not a sheet document';
+  // Shape sanitization says "it is a sheet"; core validation says "it is a COHERENT
+  // sheet" (parseable expressions, resolvable names, sane binds). Fail closed on
+  // errors at the door — a broken sheet in the library would otherwise resolve into
+  // every document that references it.
+  const bad = validateSheet(doc).filter((w) => w.severity === 'error');
+  if (bad.length) {
+    const more = bad.length > 1 ? ` (+${bad.length - 1} more)` : '';
+    return `invalid sheet: ${bad[0].message}${more}`;
+  }
   const name = filename.replace(/\.json$/i, '').trim();
   if (!validSheetName(name)) {
     return name ? 'the sheet id must not contain "/"' : 'the filename gives the sheet an empty id';

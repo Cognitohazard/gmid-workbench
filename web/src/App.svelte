@@ -149,6 +149,14 @@
   $effect(() => {
     sharedBias = Object.fromEntries(biasAxes.map((a) => [a.name, defaultBias(a)]));
   });
+  // A slider step on a 1/2/5 decade grid: the thumb then lands on values the label
+  // renders exactly (a free range/100 step gives 18 mV positions that read as rounded).
+  const niceStep = (lo: number, hi: number): number => {
+    const raw = (hi - lo) / 150;
+    const p = 10 ** Math.floor(Math.log10(raw));
+    const m = raw / p;
+    return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p;
+  };
   // Sliders shown = bias axes that at least one panel in the ACTIVE tab actually pins (does
   // not fan into its family). An axis every visible panel fans is inert here, so it's
   // hidden — but its value is still held, and a panel that DOES pin it (single-curve, or a
@@ -387,7 +395,7 @@
           type="range"
           min={a.values[0]}
           max={a.values[a.values.length - 1]}
-          step={(a.values[a.values.length - 1] - a.values[0]) / 100}
+          step={niceStep(a.values[0], a.values[a.values.length - 1])}
           bind:value={sharedBias[a.name]}
         />
         <span class="val">{formatEng(sharedBias[a.name])}{axisUnit(a.name)}</span>

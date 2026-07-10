@@ -95,6 +95,6 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   fco: 'Flicker (1/f) noise corner frequency f_co (Hz).',
   band: 'Integration band [f_lo, f_hi] (Hz) for the total RMS input-referred noise.',
   matching: 'Pelgrom mismatch budget on the sized geometry: σ(V_th), pair offset, and σ(I)/I.',
-  avth: 'Pelgrom V_th matching coefficient A_Vth (mV·µm): σ(V_th) ≈ A_Vth/√(W·L).',
+  avth: 'Pelgrom V_th matching coefficient A_Vth (mV·µm): σ(V_th) ≈ A_Vth/√(W·L). The default is a generic placeholder — replace it with your PDK\u2019s measured value.',
   abeta: 'Pelgrom current-factor matching coefficient A_β (%·µm).',
 };

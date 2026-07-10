@@ -34,7 +34,7 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
 
   // Each panel owns its L color key (uPlot's own legend is off): demo nMOS has 4 lengths.
   await expect(p0.locator('.pfoot')).toContainText('l=180nm');
-  await expect(p0.locator('.pfoot')).toContainText('l=2um');
+  await expect(p0.locator('.pfoot')).toContainText('l=2µm');
 
   // Help icons explain the selected quantities in place via a native title tooltip.
   await expect(p0.locator('.help').first()).toHaveAttribute('title', /.+/);

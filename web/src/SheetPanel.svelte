@@ -10,6 +10,7 @@
     resolveSheetRefs,
     flattenSheetDoc,
     formatEng,
+    formatSI,
     parseEng,
     joinProvide,
     BIAS_AXES,
@@ -299,7 +300,7 @@
   }
 
   const fmt = (v: number | undefined): string =>
-    v == null || !Number.isFinite(v) ? '—' : formatEng(v);
+    v == null || !Number.isFinite(v) ? '—' : formatSI(v);
   const pct = (v: number): string =>
     Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(0)}%` : '—';
   const CHIP: Record<RuleStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
@@ -322,7 +323,7 @@
   const biasStr = (b: Record<string, number> | undefined): string =>
     b
       ? Object.entries(b)
-          .map(([k, v]) => `${k} ${formatEng(v)}${axisUnit(k)}`)
+          .map(([k, v]) => `${k} ${formatSI(v)}${axisUnit(k)}`)
           .join(', ')
       : '';
   const biasText = $derived(biasStr(result.bind?.bias));

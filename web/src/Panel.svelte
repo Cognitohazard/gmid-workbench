@@ -6,6 +6,7 @@
     lookup,
     subsample,
     formatEng,
+    formatSI,
     parseEng,
     type DeviceTable,
     type DeviceResolver,
@@ -224,7 +225,7 @@
       const dev = tablesAll[m.tableIndex] ?? device;
       const fam =
         ov.famName !== '' && Number.isFinite(m.famValue)
-          ? `${ov.famName}=${formatEng(m.famValue)}${famUnit}`
+          ? `${ov.famName}=${formatSI(m.famValue)}${famUnit}`
           : '';
       if (!overlaid) return fam || dev.id.device;
       return fam ? `${dev.id.device} ${fam}` : dev.id.device;
@@ -303,7 +304,7 @@
     onScale: (eff) => (effScale = eff),
   });
 
-  const fmt = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? '—' : formatEng(v));
+  const fmt = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? '—' : formatSI(v));
   // Parse the "always include" field: comma-separated family values (engineering notation).
   const parseIncludes = (s: string): number[] =>
     s
@@ -488,9 +489,9 @@
       <div class="pchart" bind:this={el}></div>
       {#if display && display.mode === 'colorbar'}
         <div class="cbar" aria-hidden="true">
-          <span class="ct">{formatEng(display.famMax)}{display.famUnit}</span>
+          <span class="ct">{formatSI(display.famMax)}{display.famUnit}</span>
           <div class="cstrip" style:background={cbarGradient}></div>
-          <span class="ct">{formatEng(display.famMin)}{display.famUnit}</span>
+          <span class="ct">{formatSI(display.famMin)}{display.famUnit}</span>
           <div class="clabel">{@html qLabel(display.famName)}</div>
         </div>
       {/if}
