@@ -339,7 +339,7 @@
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(1 + mir__gm/in__gm)",
+      "expr": "in__vnth_m*sqrt(2*(1 + mir__gm/in__gm))",
       "unit": "V/sqrt(Hz)",
       "note": "input pair plus load-mirror density; the cascodes add little (they carry the same current at low gm relative to the pair)"
     },

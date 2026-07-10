@@ -368,7 +368,7 @@
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(1 + (pcs__gm + nmir__gm)/in__gm)",
+      "expr": "in__vnth_m*sqrt(2*(1 + (pcs__gm + nmir__gm)/in__gm))",
       "unit": "V/sqrt(Hz)",
       "note": "input pair plus the top and bottom current-source pairs; the folding sources are the price of the fold"
     },

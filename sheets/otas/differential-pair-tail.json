@@ -191,9 +191,9 @@
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m",
+      "expr": "sqrt(2)*in__vnth_m",
       "unit": "V/sqrt(Hz)",
-      "note": "input-pair thermal density; add the load's own contribution per the terminating device"
+      "note": "input-referred thermal density of the pair (both devices, hence the sqrt(2)); add the load's own contribution per the terminating device"
     },
     {
       "name": "vos",

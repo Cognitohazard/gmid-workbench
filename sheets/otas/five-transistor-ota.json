@@ -233,9 +233,9 @@
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(1 + ld__gm/in__gm)",
+      "expr": "in__vnth_m*sqrt(2*(1 + ld__gm/in__gm))",
       "unit": "V/sqrt(Hz)",
-      "note": "input pair density plus the mirror's contribution, scaled by the gm ratio (one-side densities; the differential pair carries the same total)"
+      "note": "both pair devices and both mirror devices contribute: 2*(1 + gm_ld/gm_in) times the per-device density (simulation-verified two-sided total)"
     },
     {
       "name": "vos",

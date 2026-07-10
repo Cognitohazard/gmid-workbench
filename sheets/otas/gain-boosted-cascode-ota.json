@@ -352,7 +352,7 @@
     },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(1 + mir__gm/in__gm)",
+      "expr": "in__vnth_m*sqrt(2*(1 + mir__gm/in__gm))",
       "unit": "V/sqrt(Hz)",
       "note": "input pair plus load-mirror density; the boosters sit outside the main signal path and add little"
     },

@@ -257,13 +257,13 @@
     { "name": "SR", "expr": "K_m*I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m*sqrt(1 + mload__gm/in__gm)",
+      "expr": "in__vnth_m*sqrt(2*(1 + mload__gm/in__gm))",
       "unit": "V/sqrt(Hz)",
       "note": "input pair plus the input mirror-load density at the actual input gm"
     },
     {
       "name": "vn_gbw",
-      "expr": "sqrt(4*k*T*(2/3)/(2*pi*CL*GBW_target/K_m))",
+      "expr": "sqrt(2*4*k*T*(2/3)/(2*pi*CL*GBW_target/K_m))",
       "unit": "V/sqrt(Hz)",
       "note": "estimate: input density if the pair were sized to just meet GBW_target at this K_m — grows as sqrt(K_m), the current-mirror OTA's noise-for-bandwidth trade"
     },

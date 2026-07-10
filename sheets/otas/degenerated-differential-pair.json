@@ -170,9 +170,9 @@
     },
     {
       "name": "vn_in",
-      "expr": "sqrt(in__vnth_m^2 + 4*k*T*R_s)",
+      "expr": "sqrt(2*(in__vnth_m^2 + 4*k*T*R_s))",
       "unit": "V/sqrt(Hz)",
-      "note": "device density plus the degeneration resistor's 4kT*R_s, input-referred (one side; estimate)"
+      "note": "device density plus the degeneration resistor's 4kT*R_s, both sides of the pair (estimate)"
     }
   ],
   "rules": [

@@ -351,9 +351,9 @@
     },
     {
       "name": "vn_in",
-      "expr": "in__vnth_m",
+      "expr": "sqrt(2)*in__vnth_m",
       "unit": "V/sqrt(Hz)",
-      "note": "input-pair thermal noise density (the cascodes and loads add little when the input gm dominates)"
+      "note": "input-pair thermal noise density, both devices (the cascodes and loads add little when the input gm dominates)"
     }
   ],
   "rules": [

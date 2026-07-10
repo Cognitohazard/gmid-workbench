@@ -144,8 +144,8 @@ describe('exemplar goldens: 5T OTA', () => {
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
   });
 
-  it('input noise is the pair density scaled by the mirror gm ratio', () => {
-    const vn = vnthM(120e-6) * Math.sqrt(1 + 8 / 12);
+  it('input noise counts both pair and both mirror devices (two-sided)', () => {
+    const vn = vnthM(120e-6) * Math.sqrt(2 * (1 + 8 / 12));
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
   });
 
