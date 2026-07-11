@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     overlayCurvesXY,
+    mirrorPinned,
     familyUnionCount,
     invertX,
     lookup,
@@ -294,7 +295,10 @@
     const m = d.drawnMeta[c.focusedLine];
     if (!m) return null;
     const dev = tablesAll[m.tableIndex] ?? device;
-    const fixed: Record<string, number> = { ...pinned };
+    // The SAME sign adaptation the curves were built with — otherwise the hover
+    // numbers for a signed-polarity overlay come from a different (clamped) bias
+    // than the drawn curve.
+    const fixed: Record<string, number> = mirrorPinned(dev, pinned);
     if (d.famName !== '' && Number.isFinite(m.famValue)) fixed[d.famName] = m.famValue;
     const v = invertX(dev, cfg.xExpr, c.x, sweep, fixed);
     if (v == null) return null;

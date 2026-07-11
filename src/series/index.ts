@@ -264,6 +264,30 @@ export interface OverlayCurvesXY {
 }
 
 /**
+ * Adapt a pinned-bias record to a table's own axis sign convention: a value outside
+ * an axis's range whose NEGATION lies inside is mirrored (an NMOS bench bias of
+ * vds = +0.9 reads as −0.9 on a signed-PMOS table). Values inside the range — and
+ * values out of range in BOTH signs — pass through unchanged. Every consumer that
+ * evaluates a table alongside foreign-polarity siblings (curve building, cursor
+ * readouts) must use the SAME adaptation, or the hover numbers come from a
+ * different bias than the drawn curve.
+ */
+export function mirrorPinned(
+  table: DeviceTable,
+  fixed: Record<string, number>,
+): Record<string, number> {
+  const out: Record<string, number> = { ...fixed };
+  for (const [k, v] of Object.entries(fixed)) {
+    const ax = table.grid.axes.find((a) => a.name === k);
+    if (!ax) continue;
+    const lo = ax.values[0];
+    const hi = ax.values[ax.values.length - 1];
+    if ((v < lo || v > hi) && -v >= lo && -v <= hi) out[k] = -v;
+  }
+  return out;
+}
+
+/**
  * Overlay `tables` on one X lattice. A single table is the fast path: it returns
  * `familyCurvesXY`'s own `x`/`lines` unchanged (no second resample) so the lone-device
  * result is identical to plotting it directly. With several tables, each is resolved
@@ -274,6 +298,7 @@ export interface OverlayCurvesXY {
  * rather than erroring, so a device without that axis still overlays. Family values are
  * unioned across tables, so an identical L in two devices maps to the same colour.
  */
+
 export function overlayCurvesXY(
   tables: readonly DeviceTable[],
   xExpr: string,
@@ -307,6 +332,21 @@ export function overlayCurvesXY(
     };
   }
 
+  // Cross-polarity overlays: a pinned bias expressed on the active device's axes
+  // (vds = 0.9) lies outside a signed-PMOS table's axis range ([-1.8, 0]) and would
+  // clamp to 0 — device off, gm/ID = 0/0, whole table dropped as degenerate. The
+  // only physical reading of "compare these devices at this bias" is equal |bias|,
+  // so an out-of-range pin whose NEGATION lies inside the table's axis is mirrored
+  // for that table (mirrorPinned). Anything else passes through (and clamps as
+  // before), and every mirror is surfaced in `warning` — adapted, never silent.
+  const mirrored: string[] = [];
+  const fixedFor = (tbl: DeviceTable): Record<string, number> => {
+    const out = mirrorPinned(tbl, fixed);
+    for (const k of Object.keys(fixed))
+      if (out[k] !== fixed[k]) mirrored.push(`${tbl.id.device}: ${k} = ${out[k]}`);
+    return out;
+  };
+
   // Resolve each table independently; isolate per-table failures into notes[t].
   const notes: (string | null)[] = [];
   const survivors: { idx: number; fc: FamilyCurvesXY }[] = [];
@@ -316,7 +356,7 @@ export function overlayCurvesXY(
     const famForTable =
       family !== null && tbl.grid.axes.some((a) => a.name === family) ? family : null;
     try {
-      const fc = familyCurvesXY(tbl, xExpr, yExpr, sweepName, famForTable, fixed, lattice);
+      const fc = familyCurvesXY(tbl, xExpr, yExpr, sweepName, famForTable, fixedFor(tbl), lattice);
       if (fc.degenerate) notes.push(fc.reason);
       else {
         notes.push(null);
@@ -329,7 +369,12 @@ export function overlayCurvesXY(
 
   const xLabel = survivors[0]?.fc.xLabel ?? xExpr;
   const famName = survivors.find((s) => s.fc.famName !== '')?.fc.famName ?? '';
-  const warning = survivors[0]?.fc.warning ?? '';
+  const warning = [
+    survivors[0]?.fc.warning ?? '',
+    mirrored.length ? `signed axes — bias mirrored for ${mirrored.join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   if (survivors.length === 0) return empty(xExpr, xLabel, sweepName, famName, notes);
 
   // Union lattice spanning every survivor's range; M = the densest survivor (never downsample).

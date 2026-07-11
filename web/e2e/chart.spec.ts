@@ -401,6 +401,31 @@ test('overlay: a second loaded device draws alongside the active one, dashed and
   expect(errors).toEqual([]);
 });
 
+test('overlay: NMOS vs signed-PMOS compares on shared gm/ID axes (bias mirrored, not dropped)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/pmos-demo.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+
+  // Make the NMOS demo active (positive bias axes), then overlay the signed PMOS.
+  // Its vds axis is [-1.2, -0.3]; the bench bias (+vds) used to make every PMOS
+  // curve NaN and silently drop the device from the chart.
+  await page.locator('.devices .dev').first().locator('.dname').click();
+  await page.locator('.devices .dev').nth(1).locator('input[type=checkbox]').check();
+  const p0 = page.locator('.grid .panel').first();
+  await expect(p0.locator('.pfoot')).toContainText('pmos_demo'); // curves actually drew
+  await expect(p0.locator('.pwarn', { hasText: 'mirrored' }).first()).toBeVisible(); // adaptation surfaced
+  await expect(p0.locator('canvas')).toBeVisible();
+
+  expect(errors).toEqual([]);
+});
+
 test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));

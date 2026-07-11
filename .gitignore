@@ -33,8 +33,9 @@ data/pdk/**/*.mostab.csv
 # Local release staging (packaged dataset tarball + checksum + notes, ready to upload)
 release/
 
-# e2e demo fixture (regenerated from the EKV oracle by web/e2e/global-setup.ts)
+# e2e demo fixtures (regenerated from the EKV oracle by web/e2e/global-setup.ts)
 web/e2e/fixtures/demo.mostab.csv
+web/e2e/fixtures/pmos-demo.mostab.csv
 
 # ngspice init (ngbehavior=hsa so sectioned .lib works)
 .spiceinit

@@ -4,7 +4,7 @@
 
 import type { Axis, DeviceTable } from '../types';
 import { UT, PHYS, GAMMA_DEFAULT } from '../constants';
-import { makeGrid } from '../grid';
+import { makeGrid, strides } from '../grid';
 
 /** Options for the synthetic generator; every field has a physical default. */
 export interface DemoOptions {
@@ -215,5 +215,53 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
       simulator: 'demo-ekv',
       polarity: { device: 'n', signedInput: false },
     },
+  };
+}
+
+/**
+ * The demo device recast as a signed-convention PMOS table: the voltage axes
+ * (vgs, vds) are negated — values reversed so every axis stays ascending — and every
+ * value column is re-ordered to match. Value columns stay magnitudes, per the import
+ * convention (PMOS value columns are canonicalized to magnitudes; swept axis columns
+ * stay signed). This is the cross-polarity oracle for overlay/lookup tests and the
+ * signed e2e fixture.
+ */
+export function signedMirrorDemo(dev: DeviceTable): DeviceTable {
+  const flip = new Set(['vgs', 'vds']);
+  const shape = dev.grid.shape;
+  const axes: Axis[] = dev.grid.axes.map((a) =>
+    flip.has(a.name)
+      ? { name: a.name, values: new Float64Array([...a.values].map((v) => -v).reverse()) }
+      : a,
+  );
+  // One permutation shared by every column: a flipped dimension reads its source
+  // index back-to-front (row-major strides, same convention as grid/).
+  const st = strides(shape);
+  const flipDim = dev.grid.axes.map((a) => flip.has(a.name));
+  const size = shape.reduce((a, b) => a * b, 1);
+  const srcOf = new Int32Array(size);
+  for (let flat = 0; flat < size; flat++) {
+    let rem = flat;
+    let src = 0;
+    for (let d = 0; d < shape.length; d++) {
+      const i = Math.floor(rem / st[d]);
+      rem -= i * st[d];
+      src += (flipDim[d] ? shape[d] - 1 - i : i) * st[d];
+    }
+    srcOf[flat] = src;
+  }
+  // Only the VALUE columns need remapping — makeGrid re-materializes the axis
+  // columns from the flipped axes itself, and validates every column length.
+  const quantities = new Map<string, Float64Array>();
+  for (const [k, col] of dev.grid.quantities) {
+    if (dev.grid.axes.some((a) => a.name === k)) continue;
+    const out = new Float64Array(col.length);
+    for (let flat = 0; flat < col.length; flat++) out[flat] = col[srcOf[flat]];
+    quantities.set(k, out);
+  }
+  return {
+    id: { ...dev.id, device: 'pmos_demo' },
+    grid: makeGrid(axes, quantities),
+    meta: { ...dev.meta, polarity: { device: 'p', signedInput: true } },
   };
 }

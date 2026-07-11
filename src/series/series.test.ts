@@ -3,13 +3,14 @@ import {
   familyCurves,
   familyCurvesXY,
   overlayCurvesXY,
+  mirrorPinned,
   familyUnionCount,
   invertX,
   subsample,
   plottableQuantities,
   fixTable,
 } from './index';
-import { generateDemoDevice } from '../demo';
+import { generateDemoDevice, signedMirrorDemo } from '../demo';
 import { lookup } from '../lookup';
 import { UT } from '../constants';
 
@@ -335,5 +336,43 @@ describe('overlayCurvesXY (several devices on one shared X lattice)', () => {
     expect(ov.lines).toEqual([]);
     expect(ov.notes).toHaveLength(2);
     expect(ov.notes.every((n) => typeof n === 'string')).toBe(true);
+  });
+});
+
+describe('overlayCurvesXY across polarity (signed PMOS axes)', () => {
+  const n = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
+  const p = signedMirrorDemo(n);
+
+  it('mirrors an out-of-range pinned bias onto the signed table instead of dropping it', () => {
+    // The NMOS bench bias (vds = +0.9) lies outside the PMOS table's [-1.2, -0.3] axis;
+    // before the fix the PMOS table went degenerate (gm/ID = 0/0 at the vds = 0 clamp).
+    const ov = overlayCurvesXY([n, p], 'gm/id', 'id', 'vgs', 'l', { vds: 0.9 });
+    expect(ov.notes).toEqual([null, null]);
+    expect(ov.meta.some((m) => m.tableIndex === 1)).toBe(true);
+    expect(ov.warning).toContain('mirrored');
+    expect(ov.warning).toContain('pmos_demo');
+  });
+
+  it('the mirrored pin evaluates the same physics as pinning the signed table directly', () => {
+    const direct = familyCurvesXY(p, 'gm/id', 'id', 'vgs', 'l', { vds: -0.9 });
+    expect(direct.degenerate).toBe(false);
+    const ov = overlayCurvesXY([n, p], 'gm/id', 'id', 'vgs', 'l', { vds: 0.9 }, 64);
+    // The PMOS overlay lines must span the same gm/ID range the direct evaluation spans.
+    const pLines = ov.meta
+      .map((m, i) => ({ m, line: ov.lines[i] }))
+      .filter((e) => e.m.tableIndex === 1);
+    expect(pLines.length).toBe(direct.lines.length);
+  });
+
+  it('mirrorPinned adapts the hover path exactly like the drawn curves', () => {
+    expect(mirrorPinned(p, { vds: 0.9 }).vds).toBe(-0.9);
+    expect(mirrorPinned(n, { vds: 0.9 }).vds).toBe(0.9); // in range — untouched
+    expect(mirrorPinned(p, { vds: 9 }).vds).toBe(9); // out of range both ways — untouched
+  });
+
+  it('does not touch in-range pins on same-polarity overlays', () => {
+    const ov = overlayCurvesXY([n, n], 'gm/id', 'id', 'vgs', 'l', { vds: 0.9 });
+    expect(ov.warning).not.toContain('mirrored');
+    expect(ov.notes).toEqual([null, null]);
   });
 });
