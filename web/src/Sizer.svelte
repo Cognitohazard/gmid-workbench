@@ -16,6 +16,7 @@
   import { sizeMark } from './sizemark.svelte';
   import { untrack } from 'svelte';
   import { loadJSON, saveJSON, SIZER_KEY } from './storage';
+  import { copyText } from './export';
 
   // The sizer reads only the active device and the dashboard's shared bias; everything
   // below (geometry, noise, matching) is a pure function of those two. The open/close
@@ -239,10 +240,7 @@
       ...(mism ? [line('sigma_Vth', `${formatEng(mism.sigmaVth)}V`)] : []),
       ...(mism ? [line('sigma_Vos', `${formatEng(mism.sigmaVos)}V`)] : []),
     ];
-    void navigator.clipboard?.writeText(rows.join('\n')).then(() => {
-      copied = true;
-      setTimeout(() => (copied = false), 1200);
-    });
+    copyText(rows.join('\n'), (on) => (copied = on));
   }
 </script>
 

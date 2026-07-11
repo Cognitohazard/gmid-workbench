@@ -16,6 +16,7 @@
   } from '@gmid/mostab-core';
   import { PALETTE, type ChartData, type CursorInfo } from './chart';
   import { chartHost } from './chartHost.svelte';
+  import { copyText, download } from './export';
   import { viridis, viridisGradient, LARGE_FAMILY } from './colormap';
   import { axisUnit, qLabel } from './labels';
   import { QUANTITY_HELP, CONTROL_HELP } from './help';
@@ -330,6 +331,27 @@
     onScale: (eff) => (effScale = eff),
   });
 
+  // Get the numbers OUT: the plotted curves as TSV (x plus one column per curve,
+  // legend labels as headers) and the rendered canvas as a PNG download. Both act on
+  // exactly what is on screen — the resampled lattice, overlays, subsampling and all;
+  // the table view stays the home of exact grid values.
+  let csvCopied = $state(false);
+  function copyCSV(): void {
+    const d = display?.data;
+    if (!d) return;
+    const esc = (s: string) => s.replace(/\t/g, ' ');
+    const rows = [[esc(cfg.xExpr || 'x'), ...d.lineLabels.map(esc)].join('\t')];
+    for (let i = 0; i < d.x.length; i++)
+      rows.push([d.x[i], ...d.lines.map((ln) => ln[i] ?? '')].join('\t'));
+    copyText(rows.join('\n'), (on) => (csvCopied = on));
+  }
+  function savePNG(): void {
+    const canvas = el?.querySelector('canvas');
+    if (!canvas) return;
+    const name = `${cfg.yExpr || 'chart'}-vs-${cfg.xExpr || 'x'}.png`.replace(/[\\/\s]+/g, '_');
+    download(name, canvas.toDataURL('image/png'));
+  }
+
   const fmt = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? '—' : formatSI(v));
   // Parse the "always include" field: comma-separated family values (engineering notation).
   const parseIncludes = (s: string): number[] =>
@@ -467,6 +489,17 @@
         </span>
       {/if}
       <span class="grow"></span>
+      {#if cfg.render === 'chart' && display}
+        <button
+          class="rm csv"
+          onclick={copyCSV}
+          title="copy the plotted curves — x plus one column per curve, paste-ready"
+          >{csvCopied ? 'copied ✓' : 'csv'}</button
+        >
+        <button class="rm png" onclick={savePNG} title="download this chart as a PNG image"
+          >png</button
+        >
+      {/if}
       <button
         class="rm"
         onclick={() => onChange({ render: cfg.render === 'chart' ? 'table' : 'chart' })}

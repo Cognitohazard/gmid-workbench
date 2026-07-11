@@ -34,6 +34,7 @@
   import { axisUnit, qFormula, qLabel, mathText } from './labels';
   import { CONTROL_HELP } from './help';
   import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
+  import { copyText, download } from './export';
 
   let {
     device,
@@ -344,10 +345,7 @@
     const rows = Object.entries(result.values)
       .filter(([, v]) => typeof v === 'number' && Number.isFinite(v))
       .map(([k, v]) => `${k}\t${formatEng(v as number)}`);
-    void navigator.clipboard?.writeText([`# ${cfg.title}`, ...rows].join('\n')).then(() => {
-      copied = true;
-      setTimeout(() => (copied = false), 1200);
-    });
+    copyText([`# ${cfg.title}`, ...rows].join('\n'), (on) => (copied = on));
   }
 
   function exportSheet(flat: boolean): void {
@@ -358,13 +356,10 @@
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '') || 'sheet';
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(
+    const href = URL.createObjectURL(
       new Blob([JSON.stringify(doc, null, 2) + '\n'], { type: 'application/json' }),
     );
-    a.download = `${name}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    download(`${name}.json`, href, true);
   }
 
   const fmt = (v: number | undefined): string =>

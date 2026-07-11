@@ -271,6 +271,30 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await expect(page.locator('aside.sizer').getByPlaceholder('A · e.g. 100u')).toHaveValue('100u');
 });
 
+test('export: csv copies the plotted curves, png downloads the chart image', async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/');
+  await loadDemo(page);
+  const p0 = page.locator('.grid .panel').first();
+
+  // csv → clipboard: a header row (x + one label per curve) and numeric rows.
+  await p0.locator('button.csv').click();
+  await expect(p0.locator('button.csv')).toHaveText('copied ✓');
+  const tsv = await page.evaluate(() => navigator.clipboard.readText());
+  const lines = tsv.split('\n');
+  expect(lines[0]).toContain('gm_id');
+  expect(lines[0].split('\t').length).toBeGreaterThan(2); // x + several curves
+  expect(lines.length).toBeGreaterThan(10);
+  expect(Number.isFinite(parseFloat(lines[1].split('\t')[0]))).toBe(true);
+
+  // png → a real download with a chart-derived filename.
+  const [dl] = await Promise.all([page.waitForEvent('download'), p0.locator('button.png').click()]);
+  expect(dl.suggestedFilename()).toMatch(/\.png$/);
+});
+
 test('dense family: colorbar by default, switchable to a sampled subset, persisted', async ({
   page,
 }) => {
