@@ -443,6 +443,15 @@
   }
 
   // Drop a loaded device from the registry; never remove the last or the active one.
+  // Native <details> popovers (provenance, appearance) ignore Escape; close and hand
+  // focus back to the summary so the key behaves like every other dismissable panel.
+  function closeOnEscape(e: KeyboardEvent): void {
+    if (e.key !== 'Escape') return;
+    const d = e.currentTarget as HTMLDetailsElement;
+    d.open = false;
+    (d.querySelector('summary') as HTMLElement | null)?.focus();
+  }
+
   function removeDevice(i: number): void {
     if (devices.length <= 1 || i === activeIdx) return;
     void deleteTable(tableUid(devices[i].table));
@@ -516,7 +525,9 @@
   {/if}
   <span class="grow"></span>
   {#if device}
-    <details class="device">
+    <!-- Escape-to-dismiss is a keyboard ENHANCEMENT on a natively interactive disclosure -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <details class="device" onkeydown={closeOnEscape}>
       <summary title="active device — open for the table's provenance">{deviceKey(device)}</summary>
       <dl class="prov">
         <dt>device</dt>
@@ -554,7 +565,9 @@
       onclick={() => (sizerOpen = !sizerOpen)}
       title={CONTROL_HELP.size}>size</button
     >{/if}
-  <details class="prefs">
+  <!-- Escape-to-dismiss is a keyboard ENHANCEMENT on a natively interactive disclosure -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <details class="prefs" onkeydown={closeOnEscape}>
     <summary class="btn" title="appearance: theme and font sizes">⚙</summary>
     <div class="prefs-pop">
       <label class="prow"
