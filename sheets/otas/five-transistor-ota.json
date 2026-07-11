@@ -227,7 +227,7 @@
       "name": "Av",
       "expr": "in__gm/(in__gds + ld__gds)",
       "unit": "V/V",
-      "note": "half-circuit differential gain into the two output conductances"
+      "note": "half-circuit differential gain into the two output conductances, with both drains one diode |vgs_ld| below VDD (the balanced DC point). If CM_dc leaves the input device barely saturated its table gds soars and Av collapses — the input-sat-margin guardrail flags it; the closed-loop output level in application is sim's to confirm"
     },
     { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
@@ -285,6 +285,15 @@
       "op": "<=",
       "rhs": "0.05",
       "note": "the tail-node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+    },
+    {
+      "id": "input-sat-margin",
+      "kind": "guardrail",
+      "lhs": "VDD - abs(ld__vgs) - CM_dc + vgs_est_in - in__vdsat",
+      "op": ">=",
+      "rhs": "0.1",
+      "justification": "the input pair's vds at the balanced point must clear vdsat with margin: near the edge the table gds is huge and the Av row reads pessimistically low",
+      "note": "trips when CM_dc pushes the input device toward triode — lower CM_dc or spend less diode drop (lower gm_id_ld)"
     }
   ]
 }
