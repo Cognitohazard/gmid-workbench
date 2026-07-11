@@ -229,6 +229,11 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await sizer.locator('.bax input').first().dispatchEvent('change');
   await expect(sizer.locator('.bax input').first()).toHaveValue('1.2');
   await expect(page.locator('header .slider .val').first()).toHaveText('1.2V');
+  // ...and the clamp is SAID, not just snapped; an in-range commit clears the note.
+  await expect(sizer.locator('.bnote')).toContainText('clamped to 1.2');
+  await sizer.locator('.bax input').first().fill('800m');
+  await sizer.locator('.bax input').first().dispatchEvent('change');
+  await expect(sizer.locator('.bnote')).toHaveCount(0);
   // Matching & noise budget: the sized geometry yields a Pelgrom offset, and the
   // thermal-noise density (γ-model) sits in its own line.
   await expect(sizer).toContainText('matching');
@@ -257,6 +262,13 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   // An out-of-range gm/ID (above the achievable ceiling) reports a clear error.
   await sizer.getByPlaceholder('S/A').fill('60');
   await expect(sizer.locator('.err')).toContainText('range');
+
+  // The entered problem survives a reload with the bench: reopening the sizer brings
+  // back the typed bind pair, not a blank panel to refill.
+  await page.reload();
+  await page.locator('header button.size').click();
+  await expect(page.locator('aside.sizer').getByPlaceholder('S/A')).toHaveValue('60');
+  await expect(page.locator('aside.sizer').getByPlaceholder('A · e.g. 100u')).toHaveValue('100u');
 });
 
 test('dense family: colorbar by default, switchable to a sampled subset, persisted', async ({

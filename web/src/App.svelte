@@ -26,7 +26,7 @@
     TEXT_SCALE_RANGE,
     type Settings,
   } from './settings';
-  import { loadJSON, saveJSON } from './storage';
+  import { loadJSON, removeJSON, saveJSON, SIZER_KEY } from './storage';
   import { importSheetJSON, removeUserSheet, userSheets } from './sheetlib.svelte';
   import {
     presetDashboard,
@@ -467,6 +467,9 @@
   function clearAll(): void {
     void clearTables();
     saveJSON(REG_KEY, { order: [], active: 0 });
+    // The sizer's persisted problem is design data too: "forget everything" must
+    // leave no retained record the UI can no longer show or delete.
+    removeJSON(SIZER_KEY);
     devices = [];
     activeIdx = 0;
     overlayIdx = [];

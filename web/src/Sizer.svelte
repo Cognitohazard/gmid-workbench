@@ -14,6 +14,8 @@
   import { axisUnit } from './labels';
   import { sizingBias, reduceForSizing, LENGTH_AXIS } from './dashboard';
   import { sizeMark } from './sizemark.svelte';
+  import { untrack } from 'svelte';
+  import { loadJSON, saveJSON, SIZER_KEY } from './storage';
 
   // The sizer reads only the active device and the dashboard's shared bias; everything
   // below (geometry, noise, matching) is a pure function of those two. The open/close
@@ -21,16 +23,31 @@
   let { device, sharedBias }: { device: DeviceTable; sharedBias: Record<string, number> } =
     $props();
 
+  // The entered sizing problem survives close/reopen and a reload alongside the bench
+  // — losing three typed numbers to a refresh was a top usability friction. Inputs are
+  // stored verbatim as the user's text (no numbers, no interpretation).
+  const saved = loadJSON(
+    SIZER_KEY,
+    (r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : null),
+    () => null,
+  );
+  const sv = (k: string, fallback: string): string =>
+    typeof saved?.[k] === 'string' ? (saved[k] as string) : fallback;
+
   // ── Sizing panel (the "design" workflow): bind any two of {gm, gm/ID, ID} at a
   // chosen L → width, vgs, fT, and feasibility against the gm/ID ceiling.
-  let inGmId = $state('');
-  let inId = $state('');
-  let inGm = $state('');
+  let inGmId = $state(sv('gmId', ''));
+  let inId = $state(sv('id', ''));
+  let inGm = $state(sv('gm', ''));
 
   const lAxis = $derived(device.grid.axes.find((a) => a.name === LENGTH_AXIS));
   // Writable derived: user picks an L freely, but a device swap (new lAxis) re-derives
   // it back to the table's first characterized length.
   let sizeL = $derived(lAxis ? lAxis.values[0] : NaN);
+  // Restore the chosen L only while it is still a node of this table's L axis
+  // (a one-time init read, hence untrack — a device swap later re-derives sizeL).
+  const savedL = saved?.L;
+  if (typeof savedL === 'number' && untrack(() => lAxis)?.values.includes(savedL)) sizeL = savedL;
 
   // Bias for sizing: every axis except l/vgs, fixed at the dashboard's shared-bias slider value
   // (so you size at the operating point you're viewing), else a mid node. Shown in the panel so
@@ -77,8 +94,15 @@
   let inAbeta = $state('1'); // %·µm
   // Noise band + 1/f corner (Hz, engineering notation). Corner seeds from meta.FCO.
   let inFco = $state('1meg'); // flicker 1/f corner
-  let inFlo = $state('1'); // integration band low
-  let inFhi = $state('1g'); // integration band high
+  let inFlo = $state(sv('flo', '1')); // integration band low
+  let inFhi = $state(sv('fhi', '1g')); // integration band high
+
+  // Persist the entered problem whenever a field changes. Only the USER-owned fields:
+  // A_Vth/A_beta/f_co re-seed from the device metadata on every swap (the effect
+  // below), so persisting them would just be overwritten.
+  $effect(() => {
+    saveJSON(SIZER_KEY, { gmId: inGmId, id: inId, gm: inGm, flo: inFlo, fhi: inFhi, L: sizeL });
+  });
 
   // Seed the coefficients from the imported device's metadata when it carries them
   // (meta.AVT [V·m], meta.ABETA [·m], meta.FCO [Hz]) instead of silently using generic
@@ -154,11 +178,18 @@
   // silently anyway, and the readout must never claim an operating point the table
   // cannot represent (type 2 V on a 1.8 V table and every number would be the
   // 1.8 V answer labeled "2 V").
+  let biasNote = $state<string | null>(null);
   function setBiasField(axis: string, el: HTMLInputElement): void {
     const v = parseNum(el.value);
     const ax = device.grid.axes.find((a) => a.name === axis);
     if (v !== undefined && Number.isFinite(v) && ax) {
       const c = Math.min(Math.max(v, ax.values[0]), ax.values[ax.values.length - 1]);
+      // A clamp must be SAID, not just snapped — the field changing under the cursor
+      // is easy to miss, and every readout below now answers at the clamped point.
+      biasNote =
+        c !== v
+          ? `${axis} = ${formatEng(v)}${axisUnit(axis)} is outside the table — clamped to ${formatEng(c)}${axisUnit(axis)}`
+          : null;
       sharedBias[axis] = c;
       el.value = formatEng(c);
     } else el.value = formatEng(sharedBias[axis] ?? 0);
@@ -248,6 +279,9 @@
         >
       {/each}
     </p>
+    {#if biasNote}
+      <ul class="warns bnote"><li>{biasNote}</li></ul>
+    {/if}
   {/if}
 
   {#if sizing.result}

@@ -34,3 +34,16 @@ export function saveJSON(key: string, value: unknown): void {
     // quota / unavailable — ignore
   }
 }
+
+/** Delete a stored key (best-effort, like saveJSON). */
+export function removeJSON(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // unavailable — ignore
+  }
+}
+
+/** The sizer's persisted problem (bound pair, band, chosen L) — defined here so the
+ *  bench-wide "clear all" can wipe it without importing the component. */
+export const SIZER_KEY = 'gmid.sizer';
