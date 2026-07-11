@@ -13,6 +13,7 @@
     formatSI,
     parseEng,
     joinProvide,
+    PROVIDE_SEP,
     BIAS_AXES,
     SWEEP_POINTS,
     SWEEP2_POINTS,
@@ -62,6 +63,59 @@
   // The live sheet library (curated ∪ user-imported) and its by-reference index.
   const menu = $derived(sheetMenu());
   const refs = $derived(sheetRefIndex());
+
+  // One unresolved or mis-parameterized child makes every parent expression that
+  // reads its provides "not defined" — a ~20-line wall for one root cause. Collapse
+  // the fan-out to one line per child prefix; every other warning passes through.
+  const shownWarnings = $derived.by(() => {
+    const ws = [...rr.warnings, ...result.warnings].filter((w) => w.severity !== 'info');
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive grouping scratch, discarded on return
+    const byChild = new Map<string, { count: number; first: string }>();
+    const rest: string[] = [];
+    for (const w of ws) {
+      // The core reports the undefined name structurally; a child-provide symbol
+      // (`ld__gm`) groups under its child prefix.
+      const sep = w.rule === 'sheet-undeclared' && w.symbol ? w.symbol.indexOf(PROVIDE_SEP) : -1;
+      if (sep > 0) {
+        const child = (w.symbol as string).slice(0, sep);
+        const e = byChild.get(child) ?? { count: 0, first: w.message };
+        e.count++;
+        byChild.set(child, e);
+      } else rest.push(w.message);
+    }
+    const collapsed = [...byChild].map(([child, e]) =>
+      e.count > 1
+        ? `block "${child}" resolves nothing yet — ${e.count} dependent expressions read n/a (assign its device and check its params)`
+        : e.first,
+    );
+    return [...rest, ...collapsed];
+  });
+
+  // Onboarding guard: a child bound to a signed-PMOS table while its companion
+  // `<child>_sign` param still reads +1 is the most common dead-on-arrival state for
+  // the mirror-load sheets — every dependent row goes n/a at once. Name the root
+  // cause as a hint; never auto-flip (sign params are author math, not app state).
+  const signHints = $derived.by(() => {
+    const out: string[] = [];
+    for (const u of rr.doc.uses ?? []) {
+      if (!u.device || !resolveDevice) continue;
+      const t = resolveDevice(u.device);
+      if (!t) continue;
+      // The parser's RECORDED polarity is authoritative and never overridden; the
+      // axis shape is only a fallback for tables that declared none — and then only
+      // when the WHOLE sweep is non-positive, since a valid NMOS may legitimately
+      // sweep from a negative subthreshold vgs up through positive values.
+      const vgs = t.grid.axes.find((a) => a.name === 'vgs');
+      const signedAxis = !!vgs && vgs.values[vgs.values.length - 1] <= 0;
+      if (!signedAxis || t.meta.polarity?.device === 'n') continue;
+      const sp = rr.doc.params.find((p) => p.name === `${u.name}_sign`);
+      if (sp && sp.value === 1)
+        out.push(
+          `"${u.name}" is bound to a signed-PMOS table but ${sp.name} = 1 — set ${sp.name} = -1`,
+        );
+    }
+    return out;
+  });
 
   // Materialize by-reference children ONCE per edit: eval, both sweeps, and the child
   // cards all read the resolved tree, while every edit keeps targeting the raw cfg (so
@@ -791,9 +845,11 @@
   {/if}
 
   <!-- Resolution failures (missing/ambiguous/cyclic refs) lead — they explain why a
-       referenced block below reads infeasible. -->
-  {#each [...rr.warnings, ...result.warnings].filter((w) => w.severity !== 'info') as w}
-    <p class="pwarn" title={w.message}>⚠ {w.message}</p>
+       referenced block below reads infeasible. One dead child makes EVERY dependent
+       row "not defined"; that fan-out is collapsed to a single line per child so the
+       root cause isn't buried under its own consequences. -->
+  {#each [...signHints, ...shownWarnings] as w}
+    <p class="pwarn" title={w}>⚠ {w}</p>
   {/each}
 </div>
 
@@ -1218,6 +1274,9 @@
   .perr,
   .pwarn {
     margin: 0;
+    /* .sheet is a height-constrained flex column: without this a warning at the
+       bottom is squashed to zero height (invisible) instead of scrolling. */
+    flex-shrink: 0;
     color: var(--warn);
     font-family: ui-monospace, monospace;
     font-size: calc(0.78rem * var(--text-scale));

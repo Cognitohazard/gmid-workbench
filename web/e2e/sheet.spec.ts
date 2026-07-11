@@ -517,6 +517,30 @@ test('design sheet: a by-reference child resolves live, flattens to a frozen exp
   expect(errors).toEqual([]);
 });
 
+test('composed sheet: a signed-PMOS child with its sign param still +1 gets a root-cause hint', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/pmos-demo.mostab.csv');
+  await page.locator('.devices .dev').first().locator('.dname').click(); // NMOS active
+
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'CS amp, diode-connected load');
+
+  // Bind the load child to the signed PMOS table: load_sign still reads +1, so the
+  // panel names the ONE root cause instead of a wall of derived n/a warnings.
+  await sp.locator('.suse', { hasText: 'load' }).locator('.dsel').selectOption({ index: 2 });
+  await expect(sp.locator('.pwarn', { hasText: 'set load_sign = -1' })).toBeVisible();
+
+  // Fixing the param clears the hint.
+  const sign = sp.locator('.svar[data-param="load_sign"] .num');
+  await sign.fill('-1');
+  await sign.blur();
+  await expect(sp.locator('.pwarn', { hasText: 'set load_sign = -1' })).toHaveCount(0);
+});
+
 test('design sheet: imported sheets join the library — pickable, referenceable, removable, persistent', async ({
   page,
 }) => {

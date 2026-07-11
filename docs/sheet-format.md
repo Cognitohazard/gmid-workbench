@@ -349,6 +349,18 @@ edits). Two export shapes cover sharing: *as-authored* keeps refs (ship it along
 sheets it names), and *flattened* inlines every reference — a self-contained document, frozen
 against later library edits, for a signed-off design.
 
+### Signed-table sign parameters
+
+A child that may bind against a **signed-convention PMOS table** (negative vgs/vds axes)
+conventionally takes a companion parameter named **`<child>_sign`** (e.g. `ld_sign` for a
+child named `ld`): `+1` for an N-style axis, `-1` for a signed-PMOS axis, used by the
+child's `vds` override expression. The name is a convention, not an enforced contract —
+but the app's sheet panel recognizes exactly this `<child>_sign` pattern and hints when
+the bound table's recorded polarity (or a fully non-positive vgs axis) says the sign is
+still wrong. A few library sheets instead share one global sign param (e.g. `p_sign`)
+across several same-polarity children; those get no per-child hint, so prefer the
+per-child form when authoring.
+
 ## Sweeps
 
 Two views trace a sheet across parameter ranges (both need finitely-bounded slider params):

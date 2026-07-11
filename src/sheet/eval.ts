@@ -80,6 +80,7 @@ function evalScalar(
         severity: 'warning',
         message: `${where}: "${n}" is not defined`,
         location: where,
+        symbol: n,
       });
       return undefined;
     }

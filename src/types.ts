@@ -69,6 +69,10 @@ export interface QAWarning {
   readonly severity: Severity;
   readonly message: string;
   readonly location?: string; // human-readable: file, row, or quantity
+  /** The offending symbol name when the warning is about one (e.g. the undefined
+   *  name in "sheet-undeclared") — structured, so a UI can group related warnings
+   *  without parsing message text. */
+  readonly symbol?: string;
 }
 
 export interface ImportError {
