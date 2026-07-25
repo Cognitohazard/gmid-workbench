@@ -7,7 +7,7 @@
 import type { Axis, DeviceTable, Grid, Polarity, QAWarning, TableMeta } from '../types';
 import { PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
-import { BASE_QUANTITIES } from '../namespace';
+import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 
 // --- physical thresholds -----------------------------------------------------
 
@@ -416,6 +416,24 @@ export function validate(table: DeviceTable): QAWarning[] {
           location: `gm @ ${fmtL(lValue)}`,
         });
       }
+    });
+  }
+
+  // --- a stored column that shadows a standard derived quantity ---
+  // Unknown columns pass through on import (the strict-superset rule), so an export can
+  // carry its own `ft`/`gm_gds`/`gm_id` alongside the raw quantities they are computed
+  // from. Nothing here repairs that — but the two are read by different code: expression
+  // scopes prefer the stored column, while the operating-point path re-derives from the
+  // definition, so a chart and a sizing can disagree without either being wrong. Naming
+  // the column is the only way the difference is ever visible.
+  for (const def of DERIVED_QUANTITIES) {
+    if (!q.has(def.key)) continue;
+    out.push({
+      rule: 'derived-shadow',
+      severity: 'warning',
+      symbol: def.key,
+      message: `the table stores a "${def.key}" column, which shadows the quantity computed from ${def.expr} — charts read the stored column while sizing re-derives it, so the two disagree if this column was made a different way; drop or rename it to remove the ambiguity`,
+      location: def.key,
     });
   }
 

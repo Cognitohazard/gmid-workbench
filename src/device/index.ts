@@ -1,11 +1,12 @@
-// bind-any-2 device sizing. Given any two of {gm, gm/ID, ID, W} plus a channel
-// length L, recover the rest via gm = (gm/ID)·ID and the width/current-density
-// relation, placing the operating point on the table by inverse lookup (of gm/ID,
-// or of a gm/id column at the density target when W is bound). The gm/ID ceiling
-// at the L-slice gates feasibility. Pure, deterministic, zero DOM imports.
+// bind-any-2 device sizing. Given any two of {gm, gm/ID, ID, W, fT, gm/gds, A_v0, V*}
+// plus a channel length L, recover the rest via gm = (gm/ID)·ID and the
+// width/current-density relation, placing the operating point on the table by inverse
+// lookup (of a width-invariant selector such as gm/ID or fT, or of a gm/id column at
+// the density target when W is bound). The gm/ID ceiling at the L-slice gates
+// feasibility. Pure, deterministic, zero DOM imports.
 
-import type { DeviceTable } from '../types';
-import { lookupByGmId, lookupByColumn } from '../lookup';
+import { type DeviceTable, LookupRangeError } from '../types';
+import { lookupByGmId, lookupByQuantity } from '../lookup';
 import { sliceGrid } from '../grid';
 import { scalarScope, registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
@@ -13,12 +14,18 @@ import { compileExpr, metaScalars, DERIVED_COMPILED } from '../derive';
 import { DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
 
 /**
- * A sizing query: a table and length L, plus EXACTLY two of {gm, gm_id, id, W}.
- * Without W, the third electrical quantity is derived from gm = gm_id * id and W
- * falls out of the current density. WITH W (width-first flows: unit devices, mirror
- * ratios, layout-constrained sizing), the operating point comes from inverting the
- * matching characterization-width curve — gm/ID directly, or the gm/id column at
- * the density target (gm·w0/W or id·w0/W) — and the remaining quantities follow.
+ * A sizing query: a table and length L, plus EXACTLY two bound quantities.
+ *
+ * The two split into different jobs. An OPERATING-POINT SELECTOR (gm_id, ft, gm_gds,
+ * av0, vstar) is a width-invariant ratio, so it pins vgs on the L-slice by itself and
+ * says nothing about size; an EXTENSIVE quantity (gm, id, W) sets the scale. A legal
+ * bind is therefore one selector plus one extensive quantity — or two extensive ones,
+ * which pin the point between them (gm + id fixes gm/ID; W + gm or W + id fixes a
+ * current/transconductance density). Two selectors over-determine vgs and are refused.
+ *
+ * Binding a selector other than gm/ID is what lets a designer state the spec they
+ * actually have — "fT ≥ 5 GHz", "intrinsic gain ≥ 40 dB" — instead of hand-iterating
+ * gm/ID until the reported fT lands.
  */
 export interface SizeQuery {
   table: DeviceTable;
@@ -27,6 +34,10 @@ export interface SizeQuery {
   gm_id?: number;
   id?: number;
   W?: number;
+  ft?: number;
+  gm_gds?: number;
+  av0?: number;
+  vstar?: number;
 }
 
 /** A solved operating point with the sized width and feasibility against the slice ceiling. */
@@ -56,24 +67,62 @@ export interface SizeResult {
   warnings: string[];
 }
 
+/**
+ * Operating-point selectors: quantities that pin vgs on the L-slice by themselves.
+ *
+ * Every one is a ratio of two per-width base quantities (gm/id, gm/(2π·cgg), gm/gds,
+ * 2·id/gm), hence width-INVARIANT — which is exactly why it carries no size information and
+ * must be paired with an extensive quantity. A per-width key here would silently size wrong,
+ * so a property test asserts the invariance of every member.
+ *
+ * That invariance is NECESSARY BUT NOT SUFFICIENT — this is a curated list, not everything
+ * that qualifies. `gm_cgd`, `cgd_cgg`, `gmb_gm`, `ft_eff`, `av0_ft` and `id_w` are all
+ * width-invariant ratios and all deliberately absent. A member must also be monotonic in vgs
+ * on real data (or the inversion fails closed, which is a poor headline feature) and be a
+ * quantity designers actually state as a spec. Add one only when all three hold.
+ */
+export const OP_SELECTORS = ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar'] as const;
+
+/** Extensive quantities: these set the device's SCALE once the operating point is fixed. */
+export const EXTENSIVE = ['gm', 'id', 'W'] as const;
+
 /** The bind-any-2 quantity set — the one home for the list, shared by the sizer's own
  *  arity check and the sheet bind's eval/validate sites (same set, same error text). */
-export const BINDABLE = ['gm', 'gm_id', 'id', 'W'] as const;
+export const BINDABLE = [...OP_SELECTORS, ...EXTENSIVE] as const;
 
 /**
- * Check the query supplies EXACTLY two of {gm, gm_id, id, W}, each finite and
- * strictly positive. A NaN must fail here, by name, not surface downstream as a
- * misleading out-of-range lookup error; and the tables hold magnitudes (PMOS is
- * canonicalized on import), so a negative or zero bind — e.g. an author expression
- * like gm/(1+gm·Rs) driven past its pole — is always a mistake, never a convention.
+ * The bind rule, in one place: EXACTLY two bound quantities, at most one of them an
+ * operating-point selector. Returns null for a legal bind, else the problem in the
+ * words every caller reports (sizeDevice throws it; the sheet's eval and validate
+ * surface it as a sheet-bind error), so the three can never describe it differently.
+ */
+export function bindProblem(supplied: readonly (typeof BINDABLE)[number][]): string | null {
+  if (supplied.length !== 2) {
+    return `require EXACTLY two of {${BINDABLE.join(', ')}}; got ${supplied.length}`;
+  }
+  const selectors = supplied.filter((k) => (OP_SELECTORS as readonly string[]).includes(k));
+  if (selectors.length > 1) {
+    return (
+      `${selectors.join(' and ')} both set the operating point; ` +
+      `supply one of them plus one of {${EXTENSIVE.join(', ')}}`
+    );
+  }
+  return null;
+}
+
+/**
+ * Check the query supplies a legal bind, each value finite and strictly positive. A
+ * NaN must fail here, by name, not surface downstream as a misleading out-of-range
+ * lookup error; and the tables hold magnitudes (PMOS is canonicalized on import), so
+ * a negative or zero bind — e.g. an author expression like gm/(1+gm·Rs) driven past
+ * its pole — is always a mistake, never a convention.
  */
 function checkBindPair(q: SizeQuery): void {
   const supplied = BINDABLE.filter((k) => q[k] !== undefined);
-  if (supplied.length !== 2) {
-    throw new Error(
-      `sizeDevice: require EXACTLY two of {gm, gm_id, id, W}; got ${supplied.length} ` +
-        `(gm=${q.gm}, gm_id=${q.gm_id}, id=${q.id}, W=${q.W})`,
-    );
+  const problem = bindProblem(supplied);
+  if (problem) {
+    const shown = supplied.map((k) => `${k}=${q[k]}`).join(', ');
+    throw new Error(`sizeDevice: ${problem}${shown ? ` (${shown})` : ''}`);
   }
   for (const k of supplied) {
     const v = q[k] as number;
@@ -83,6 +132,26 @@ function checkBindPair(q: SizeQuery): void {
     if (!(v > 0)) {
       throw new Error(`sizeDevice: ${k} must be > 0, got ${v} — unphysical bind`);
     }
+  }
+}
+
+/**
+ * Invert a characterization-width column at a density target, reporting an out-of-reach
+ * failure in the quantity the CALLER bound. The value handed to the lookup is q·w0/W, an
+ * internal rescaling — surfacing it would tell a designer whose 1 nA request failed that
+ * "gm 1e-11 is out of range", a number they never typed.
+ */
+function atDensity(
+  table: DeviceTable,
+  key: 'gm' | 'id',
+  bound: number,
+  scale: number,
+  L: number,
+): Record<string, number> {
+  try {
+    return lookupByQuantity(table, key, bound * scale, L);
+  } catch (e) {
+    throw e instanceof LookupRangeError ? e.rescaled(scale) : e;
   }
 }
 
@@ -108,16 +177,16 @@ function gmIdCeiling(table: DeviceTable, L: number): number {
 }
 
 /**
- * Size a device by binding any two of {gm, gm/ID, ID, W} at a chosen length L.
+ * Size a device by binding any two of {gm, gm/ID, ID, W, fT, gm/gds, A_v0, V*} at a
+ * chosen length L (see SizeQuery for which pairs are legal).
  *
- * Without W, the two electrical quantities fix the third (gm = gm/ID · ID), the
- * (gm/ID, L) coordinate is inverted to a vgs via the table, and the width is sized
- * from the current density: W = id / (id_char/w0). WITH W (width-first flows —
- * unit devices, mirror ratios, layout-constrained sizing), the operating point
- * comes from inverting gm/ID directly (W+gm_id) or the matching characterization
- * column at the density target gm·w0/W / id·w0/W (W+gm, W+id), and the remaining
- * electrical quantities follow from the point. Feasibility is gm/ID <= the slice
- * ceiling in every case.
+ * A bound SELECTOR is inverted on the L-slice to a vgs — gm/ID, or a spec-level
+ * quantity like fT or intrinsic gain — and the paired extensive quantity then scales
+ * the device: width from the current density W = id / (id_char/w0), or current from
+ * the density at a given W. Two extensive quantities instead pin the point between
+ * them: gm + ID fixes gm/ID, while W + gm / W + ID invert the matching
+ * characterization column at the density target gm·w0/W / id·w0/W. Feasibility is
+ * gm/ID <= the slice ceiling in every case.
  */
 export function sizeDevice(q: SizeQuery): SizeResult {
   checkBindPair(q);
@@ -152,40 +221,42 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   let id: number;
   let W: number;
   let point: Record<string, number>;
-  if (q.W === undefined) {
-    if (q.gm !== undefined && q.id !== undefined) {
-      gm = q.gm;
-      id = q.id;
-      gm_id = gm / id;
-    } else if (q.gm_id !== undefined && q.id !== undefined) {
-      gm_id = q.gm_id;
-      id = q.id;
-      gm = gm_id * id;
-    } else {
-      gm = q.gm as number;
-      gm_id = q.gm_id as number;
-      id = gm / gm_id;
-    }
-    point = lookupByGmId(q.table, gm_id, L);
-    W = (id / point.id) * Wchar; // = id / (id_char/w0), the current-density sizing
-  } else {
-    W = q.W;
-    if (q.gm_id !== undefined) {
-      gm_id = q.gm_id;
-      point = lookupByGmId(q.table, gm_id, L);
+  const selector = OP_SELECTORS.find((k) => q[k] !== undefined);
+  if (selector !== undefined) {
+    // One selector pins the operating point; the single extensive quantity scales it. Each
+    // selector inverts its OWN curve — including V*, which could be rewritten as the gm/ID
+    // it names but must not be: the failure and the reported operating point would then
+    // come back in a quantity the caller never bound.
+    point = lookupByQuantity(q.table, selector, q[selector] as number, L);
+    // A bound gm/ID is honoured exactly: interpolating gm and id separately does not
+    // preserve their ratio, so reading it back off the point would return a hair off what
+    // the designer asked for — and a gm to match. Every other selector has no such closed
+    // form; there the solved point IS the answer, to interpolation accuracy.
+    gm_id = selector === 'gm_id' ? (q.gm_id as number) : point.gm / point.id;
+    if (q.W !== undefined) {
+      W = q.W;
       id = (point.id / Wchar) * W;
-      gm = gm_id * id;
-    } else if (q.id !== undefined) {
-      id = q.id;
-      point = lookupByColumn(q.table, 'id', (id * Wchar) / W, L);
-      gm_id = point.gm / point.id;
-      gm = gm_id * id;
     } else {
-      gm = q.gm as number;
-      point = lookupByColumn(q.table, 'gm', (gm * Wchar) / W, L);
-      gm_id = point.gm / point.id;
-      id = gm / gm_id;
+      id = q.id ?? (q.gm as number) / gm_id;
+      W = (id / point.id) * Wchar; // = id / (id_char/w0), the current-density sizing
     }
+    gm = q.gm ?? gm_id * id;
+  } else if (q.W === undefined) {
+    // gm + id: the pair fixes gm/ID between them, which places the point.
+    gm = q.gm as number;
+    id = q.id as number;
+    gm_id = gm / id;
+    point = lookupByGmId(q.table, gm_id, L);
+    W = (id / point.id) * Wchar;
+  } else {
+    // W + gm or W + id: invert whichever characterization column was bound, at its
+    // density target. The two differ only in that column.
+    W = q.W;
+    const key = q.id !== undefined ? 'id' : 'gm';
+    point = atDensity(q.table, key, q[key] as number, Wchar / W, L);
+    gm_id = point.gm / point.id;
+    id = q.id ?? (q.gm as number) / gm_id;
+    gm = q.gm ?? gm_id * id;
   }
   // Plausibility gate on the DERIVED quantities (checkBindPair covered the supplied
   // pair): a sign-inconsistent pair, or a degenerate operating point (vanishing
@@ -233,12 +304,51 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     if (!Object.prototype.hasOwnProperty.call(point, key)) continue; // not computable on this table
     quantities[key] = compiled.eval(scaledScope) as number;
   }
-  // The bound targets and sizing outputs win over anything reconstructed above; id_w is
-  // the (width-invariant) current density; `w0` records the characterization width so a
-  // consumer can refer an unknown pass-through column (not rescaled) by hand.
-  Object.assign(quantities, { id_w, gm, gm_id, id, W, w0: Wchar });
+  // Bound targets and sizing outputs win over anything reconstructed above; id_w is the
+  // (width-invariant) current density; `w0` records the characterization width so a consumer
+  // can refer an unknown pass-through column (not rescaled) by hand.
+  //
+  // That includes a bound SELECTOR, which is recovered by inverting a curve sampled at the
+  // vgs nodes while the point re-evaluates it from separately interpolated bases — for a
+  // ratio the two differ by ~0.1% between nodes, well inside the data's own resolution but
+  // far outside the rule engine's pinned-spec tolerance. Without it, the most natural thing
+  // an author writes — bind a gain spec, then require that gain — fails against its own bind.
+  Object.assign(quantities, {
+    id_w,
+    gm,
+    gm_id,
+    id,
+    W,
+    w0: Wchar,
+    ...(selector !== undefined ? { [selector]: q[selector] as number } : {}),
+  });
 
   return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities, warnings };
+}
+
+/**
+ * The characterized lengths at which this bind actually sizes — the answer to the question a
+ * failed spec-first bind raises: "out of reach at this L, so where does it work?" That is how
+ * the methodology picks L in the first place.
+ *
+ * It re-runs the WHOLE sizing at each length, not just the inversion, so it cannot advise a
+ * length that then fails: a slice can invert cleanly and still be rejected downstream — one
+ * id==0 sample leaves fT monotone while sending gm/ID to infinity, which the plausibility
+ * gate refuses. Lengths come back in axis order; empty when none work or there is no L axis.
+ */
+export function sizeableLengths(q: SizeQuery): number[] {
+  const lAxis = q.table.grid.axes.find((a) => a.name === 'l');
+  if (!lAxis) return [];
+  const out: number[] = [];
+  for (const L of lAxis.values) {
+    try {
+      sizeDevice({ ...q, L });
+      out.push(L);
+    } catch {
+      // not sizeable at this length — precisely the question being asked
+    }
+  }
+  return out;
 }
 
 // The input-referred thermal-noise density √(4kTγ/gm), compiled ONCE from its single

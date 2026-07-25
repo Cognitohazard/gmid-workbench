@@ -7,6 +7,7 @@
 
 import type { QAWarning } from '../types';
 import { BASE_QUANTITIES } from '../namespace';
+import { BINDABLE } from '../device';
 
 /**
  * A named scalar design input. `min`/`max` bound the GUI slider only. `role`
@@ -40,8 +41,9 @@ export interface SheetRow {
 }
 
 /**
- * A bind-any-2 device declaration: EXACTLY two of {gm, gm_id, id, W} (each an
- * expression string, so e.g. gm = "2*pi*GBW*CL" works), plus the length L. Drives
+ * A bind-any-2 device declaration: EXACTLY two bound quantities (each an expression
+ * string, so e.g. gm = "2*pi*GBW*CL" works), plus the length L. At most one of them may
+ * set the operating point — see BINDABLE / OP_SELECTORS in device/ for the rule. Drives
  * sizeDevice against the panel's active device.
  *
  * `vds`/`vsb` declare the device's OPERATING POINT on those axes (expression strings,
@@ -60,6 +62,14 @@ export interface SheetBind {
   /** Width-first sizing (unit devices, mirror ratios, layout-constrained flows):
    *  W may stand in as one of the two bound quantities. */
   W?: string;
+  /** Spec-first sizing: these pin the operating point exactly as gm_id does (each is
+   *  width-invariant), so an author can bind the requirement they actually have — a
+   *  transit frequency or an intrinsic gain — instead of solving for the gm/ID that
+   *  meets it. Exactly one operating-point quantity may be bound. */
+  ft?: string;
+  gm_gds?: string;
+  av0?: string;
+  vstar?: string;
   vds?: string;
   vsb?: string;
 }
@@ -71,6 +81,12 @@ export interface SheetBind {
 export const BIAS_AXES: readonly string[] = BASE_QUANTITIES.filter(
   (q) => q.axis && q.key !== 'vgs' && q.key !== 'l',
 ).map((q) => q.key);
+
+/** Every key a `bind` may carry besides `L` — the bindable quantities plus the bias axes it
+ *  may pin. Stated once beside the interface it describes, so a document sanitizer can check
+ *  a parsed bind against the real shape instead of a copy that goes stale when BINDABLE
+ *  grows (which is exactly how a legal fT bind once got deleted on every reload). */
+export const BIND_KEYS: ReadonlySet<string> = new Set<string>([...BINDABLE, ...BIAS_AXES]);
 
 // invariant = a hard physical floor (must hold or the design is unphysical); requirement = a
 // hard application spec (must hold or the design misses its purpose) — both gate feasibility.

@@ -1,15 +1,15 @@
 // Forward + inverse operating-point lookup. Interpolates a device table's base
 // grid at a point in axis-space, then evaluates derived quantities from the
 // interpolated base scalars (dogfooding the expression engine). The inverse path
-// recovers vgs from a target gm/ID along a fixed-L slice. Pure, deterministic,
-// zero DOM imports.
+// recovers vgs from a target value of any stored or derived quantity (gm/ID, fT,
+// intrinsic gain, …) along a fixed-L slice. Pure, deterministic, zero DOM imports.
 
-import type { DeviceTable, Grid } from '../types';
+import { type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
 import { BASE_KEYS } from '../namespace';
 import { CONSTANTS } from '../constants';
 import { interpolate, sliceGrid, orient, interp1 } from '../grid';
 import { scalarScope } from '../expr';
-import { DERIVED_COMPILED, metaScalars } from '../derive';
+import { DERIVED_COMPILED, metaScalars, evalColumn } from '../derive';
 
 // The Map is authoritative (shared with derive); a module-level entries array keeps
 // the per-lookup default-keys walk allocation-free.
@@ -24,14 +24,22 @@ function baseKeysPresent(grid: Grid): string[] {
   return out;
 }
 
-/** True if every free name of a derived def is an available base scalar or constant. */
-function computable(names: readonly string[], base: Record<string, number>): boolean {
+/**
+ * The first free name of a derived definition that `has` cannot resolve, or undefined when
+ * the whole definition is computable. One home for "can this table compute that quantity",
+ * shared by the forward path (which uses it to filter the default key set) and the inverse
+ * path (which uses the name to say WHICH column is missing). Constants always resolve.
+ */
+function missingInput(
+  names: readonly string[],
+  has: (name: string) => boolean,
+): string | undefined {
   for (const n of names) {
-    if (Object.prototype.hasOwnProperty.call(base, n)) continue;
+    if (has(n)) continue;
     if (Object.prototype.hasOwnProperty.call(CONSTANTS, n)) continue;
-    return false;
+    return n;
   }
-  return true;
+  return undefined;
 }
 
 /**
@@ -83,9 +91,12 @@ export function lookup(
   const requested = keys ?? [
     ...basePresent,
     ...axisKeys,
-    ...DERIVED_ENTRIES.filter(([, compiled]) => computable(compiled.names, baseScalars)).map(
-      ([key]) => key,
-    ),
+    ...DERIVED_ENTRIES.filter(
+      ([, compiled]) =>
+        missingInput(compiled.names, (n) =>
+          Object.prototype.hasOwnProperty.call(baseScalars, n),
+        ) === undefined,
+    ).map(([key]) => key),
   ];
 
   const scope = scalarScope(baseScalars);
@@ -114,32 +125,23 @@ export function lookup(
 }
 
 /**
- * Inverse lookup by gm/ID along the fixed-length-`L` slice: gm/ID is monotonic in
- * vgs, so build the gm/ID-vs-vgs curve from the slice columns, bracket `gmId`, and
- * linearly interpolate to recover vgs; then forward-lookup at {l: L, vgs}.
+ * Inverse lookup by ANY quantity along the fixed-length-`L` slice: build that
+ * quantity's curve over vgs from the slice, bracket `target`, linearly interpolate to
+ * recover vgs, then forward-lookup at {l: L, vgs}.
  *
- * Fails closed: throws if the slice carries no invertible gm/ID data (e.g. every
- * id==0), if gm/ID is non-monotonic in vgs (an ambiguous fold), or if `gmId` lies
- * outside the slice's [min, max] gm/ID range.
+ * `key` may be a stored column (gm, id, …) or a standard derived quantity (gm_id, ft,
+ * gm_gds, vstar, …) — the latter always evaluated from its single namespace definition.
+ * Note that an expression SCOPE resolves a same-named stored column first, so a table that
+ * ships its own `ft` column plots one curve and inverts another; qa/validate flags that
+ * collision by name rather than either side silently winning.
+ *
+ * Fails closed: throws if the table cannot compute `key` at all, if the slice carries
+ * no invertible data (e.g. every id==0), if the curve is non-monotonic in vgs (an
+ * ambiguous fold), or if `target` lies outside the slice's [min, max] range.
  */
-export function lookupByGmId(
+export function lookupByQuantity(
   table: DeviceTable,
-  gmId: number,
-  L: number,
-  keys?: string[],
-): Record<string, number> {
-  return lookup(table, { l: L, vgs: invertOnSlice(table, L, 'gm/id', gmId) }, keys);
-}
-
-/**
- * Inverse lookup by a raw column value (gm or id, at the characterization width)
- * along the fixed-L slice — both are monotonic in vgs on healthy data. This is the
- * kernel behind width-first sizing: a target density gm/W or id/W maps to a
- * characterization-column target via the width ratio, which this inverts to vgs.
- */
-export function lookupByColumn(
-  table: DeviceTable,
-  key: 'gm' | 'id',
+  key: string,
   target: number,
   L: number,
   keys?: string[],
@@ -147,18 +149,60 @@ export function lookupByColumn(
   return lookup(table, { l: L, vgs: invertOnSlice(table, L, key, target) }, keys);
 }
 
-/**
- * Shared inversion kernel: build the requested curve ('gm/id' ratio, or a raw gm/id
- * column) over vgs on the L-slice and invert it to a vgs coordinate. Fails closed on
- * any uninvertible slice (missing columns, extra live axes, non-monotonic data,
- * out-of-range target) rather than fabricating an operating point.
- */
-function invertOnSlice(
+/** Inverse lookup by gm/ID — the canonical design axis, and the most common call. */
+export function lookupByGmId(
   table: DeviceTable,
+  gmId: number,
   L: number,
-  what: 'gm/id' | 'gm' | 'id',
-  target: number,
-): number {
+  keys?: string[],
+): Record<string, number> {
+  return lookupByQuantity(table, 'gm_id', gmId, L, keys);
+}
+
+/**
+ * The `key` curve over a slice.
+ *
+ * A key with a namespace definition is EVALUATED from that definition — it is never read
+ * from a same-named stored column, even though unknown import columns do pass through under
+ * such names. The forward half of sizing surfaces only base columns and re-derives the rest
+ * (see `lookup` and sizeDevice's re-evaluation at the sized width), so inverting a stored
+ * `ft` or `gm_id` column would place the operating point on a curve nothing downstream
+ * agrees with: the sizer would silently return a device whose reported fT is not the fT it
+ * was asked for. Stored columns serve the base keys (gm, id) that have no definition.
+ *
+ * Fails closed naming the missing input when this table cannot compute `key` at all —
+ * "size by fT" on a table with no cgg column is a data limit, not a bad bind, and must
+ * say so rather than surface as an out-of-range or non-monotonic complaint.
+ */
+function sliceColumn(table: DeviceTable, slice: Grid, key: string): Float64Array {
+  const def = DERIVED_COMPILED.get(key);
+  if (!def) {
+    const stored = slice.quantities.get(key);
+    if (stored) return stored;
+    throw new Error(
+      `inverse lookup: "${key}" is neither a present base column nor a known derived quantity`,
+    );
+  }
+  const scalars = metaScalars(table.meta);
+  const missing = missingInput(
+    def.names,
+    (n) => slice.quantities.has(n) || Object.prototype.hasOwnProperty.call(scalars, n),
+  );
+  if (missing !== undefined) {
+    throw new Error(
+      `inverse lookup: cannot invert "${key}" on this table — it carries no "${missing}" column`,
+    );
+  }
+  return evalColumn(slice, def, scalars);
+}
+
+/**
+ * Shared inversion kernel: build the `key` curve over vgs on the L-slice and invert it
+ * to a vgs coordinate. Fails closed on any uninvertible slice (uncomputable quantity,
+ * missing columns, extra live axes, non-monotonic data, out-of-range target) rather
+ * than fabricating an operating point.
+ */
+function invertOnSlice(table: DeviceTable, L: number, key: string, target: number): number {
   const grid = table.grid;
   if (!grid.axes.some((a) => a.name === 'l')) {
     throw new Error('inverse lookup: table has no "l" axis to slice');
@@ -171,29 +215,20 @@ function invertOnSlice(
     throw new Error('inverse lookup: slice has no "vgs" axis');
   }
   const vgs = vgsAxis.values;
-  const gm = slice.quantities.get('gm');
-  const id = slice.quantities.get('id');
-  if (!gm || !id) {
-    throw new Error('inverse lookup: slice is missing gm and/or id columns');
-  }
 
   // The vgs axis must be the only non-degenerate remaining axis for the 1-D curve
   // to be well defined (vds/vsb would otherwise break monotonic bracketing).
   for (const a of slice.axes) {
     if (a.name !== 'vgs' && a.values.length > 1) {
       throw new Error(
-        `inverse lookup: cannot bracket ${what} with extra non-degenerate axis "${a.name}"`,
+        `inverse lookup: cannot bracket ${key} with extra non-degenerate axis "${a.name}"`,
       );
     }
   }
 
-  const n = vgs.length;
-  // The curve over the vgs lattice, holding any trailing degenerate axes at index 0.
-  const curve = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const flat = vgsAxisFlat(slice, i);
-    curve[i] = what === 'gm/id' ? gm[flat] / id[flat] : what === 'gm' ? gm[flat] : id[flat];
-  }
+  // Every other axis is degenerate (the guard above), so the column IS the curve over the
+  // vgs lattice — one value per node, in order.
+  const curve = sliceColumn(table, slice, key);
 
   // Invert curve → vgs with the SAME monotone bracket-and-interpolate kernel the
   // cursor (series.invertX) uses, so endpoint/ULP handling is identical. orient
@@ -203,39 +238,23 @@ function invertOnSlice(
   // The sizer is a guardrail: fail closed on any uninvertible slice rather than let
   // orient's fail-soft NaN bounds / arbitrary-branch sort fabricate an operating point.
   if (o.nx.length === 0) {
-    throw new Error(
-      `inverse lookup: no invertible ${what} data on the L=${L} slice (e.g. every sample has id==0)`,
+    throw new LookupError(
+      `inverse lookup: no invertible ${key} data on the L=${L} slice (e.g. every sample has id==0)`,
     );
   }
   if (!o.mono) {
-    throw new Error(
-      `inverse lookup: ${what} is not monotonic in vgs on the L=${L} slice; cannot invert ${what} ${target} unambiguously`,
+    throw new LookupError(
+      `inverse lookup: ${key} is not monotonic in vgs on the L=${L} slice; cannot invert ${key} ${target} unambiguously`,
     );
   }
   if (target < o.xmin || target > o.xmax) {
-    throw new Error(
-      `inverse lookup: ${what} ${target} out of range [${o.xmin}, ${o.xmax}] for L=${L}`,
-    );
+    throw new LookupRangeError(key, target, o.xmin, o.xmax, L);
   }
   const vgsAt = interp1(o.nx, o.ny, target);
   if (!Number.isFinite(vgsAt)) {
-    throw new Error(
-      `inverse lookup: could not invert ${what} ${target} to a finite vgs on the L=${L} slice`,
+    throw new LookupError(
+      `inverse lookup: could not invert ${key} ${target} to a finite vgs on the L=${L} slice`,
     );
   }
   return vgsAt;
-}
-
-/**
- * Flat index of the i-th vgs node in a slice grid, holding every other (degenerate)
- * axis at index 0. Mirrors the row-major layout of makeGrid.
- */
-function vgsAxisFlat(slice: Grid, vgsIdx: number): number {
-  let flat = 0;
-  for (let d = 0; d < slice.axes.length; d++) {
-    const len = slice.axes[d].values.length;
-    const idx = slice.axes[d].name === 'vgs' ? vgsIdx : 0;
-    flat = flat * len + idx;
-  }
-  return flat;
 }

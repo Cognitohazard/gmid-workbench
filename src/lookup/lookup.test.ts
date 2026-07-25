@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { lookup, lookupByGmId } from './index';
+import { lookup, lookupByGmId, lookupByQuantity } from './index';
 import { invertX } from '../series';
 import { makeGrid } from '../grid';
-import type { Axis, DeviceTable } from '../types';
-import { generateDemoDevice } from '../demo';
+import { type Axis, type DeviceTable, LookupError } from '../types';
+import { generateDemoDevice, withoutColumns } from '../demo';
 import { importMostab } from '../import';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 
@@ -24,14 +24,6 @@ function makeFixedLTable(L: number, vgs: number[], gm: number[], id: number[]): 
     grid: makeGrid(axes, quantities),
     meta: { polarity: { device: 'n', signedInput: false } },
   };
-}
-
-/** A copy of `table` with the named quantity columns removed (for testing the
- *  measured-noise-absent path now that the demo carries sth/sfl/gamma). */
-function stripCols(table: DeviceTable, keys: string[]): DeviceTable {
-  const q = new Map(table.grid.quantities);
-  for (const k of keys) q.delete(k);
-  return { ...table, grid: { ...table.grid, quantities: q } };
 }
 
 /** Read the stored column value at the (li, vi) lattice node of a 2-D (l,vgs) grid. */
@@ -188,7 +180,7 @@ describe('lookupByGmId (inverse)', () => {
 
     // The MEASURED keys need stored PSDs: a device WITHOUT them reports no measured
     // thermal (sth) or flicker (sfl) noise — no model masquerades as data.
-    const bare = stripCols(table, ['sth', 'sfl', 'gamma']);
+    const bare = withoutColumns(table, ['sth', 'sfl', 'gamma']);
     const w2 = lookup(bare, { l: L, vgs: 0.45 });
     expect(w2.vnth).toBeUndefined();
     expect(w2.svth).toBeUndefined();
@@ -250,6 +242,11 @@ describe('lookupByGmId (inverse)', () => {
     const table = makeFixedLTable(L, vgs, gm, id);
 
     expect(() => lookupByGmId(table, 2, L)).toThrow(/monoton/);
+    // A fold is a per-LENGTH failure, not a structural one: it is typed so a caller can
+    // offer the lengths that do invert (gm/gds folds near threshold on real data), where a
+    // missing column — no length would help — stays a plain Error.
+    expect(() => lookupByGmId(table, 2, L)).toThrow(LookupError);
+    expect(() => lookupByQuantity(table, 'ft', 1e9, L)).not.toThrow(LookupError);
   });
 });
 

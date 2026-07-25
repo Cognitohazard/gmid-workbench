@@ -1,9 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { sizeDevice, mismatch, thermalNoise, integratedNoise } from './index';
+import { LookupRangeError } from '../types';
+import {
+  sizeDevice,
+  sizeableLengths,
+  OP_SELECTORS,
+  mismatch,
+  thermalNoise,
+  integratedNoise,
+} from './index';
 import { lookup } from '../lookup';
 import { makeGrid } from '../grid';
 import type { DeviceTable } from '../types';
-import { generateDemoDevice } from '../demo';
+import { generateDemoDevice, signedMirrorDemo, withoutColumns } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 import { compileExpr } from '../derive';
 import { ExprError } from '../types';
@@ -400,5 +408,182 @@ describe('author-callable oracles (registered expression functions)', () => {
   it('a violated precondition surfaces as an engine error (na chip), not a crash', () => {
     const scope = { resolve: () => undefined };
     expect(() => compileExpr('noise_rms(0-1e-16, 1e4, 1, 1e6)').eval(scope)).toThrow(ExprError);
+  });
+});
+
+describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
+  const table = generateDemoDevice();
+  const L = table.grid.axes[0].values[1]; // 0.5 µm
+
+  it('round-trips fT: re-binding the fT a gm/ID sizing produced recovers that same device', () => {
+    const pt = knownPoint(table, L, 0.6);
+    const byGmId = sizeDevice({ table, L, gm_id: pt.gm_id, id: pt.id });
+    const byFt = sizeDevice({ table, L, ft: byGmId.quantities.ft, id: pt.id });
+
+    expect(byFt.vgs).toBeCloseTo(byGmId.vgs, 6);
+    expect(byFt.gm_id).toBeCloseTo(byGmId.gm_id, 6);
+    expect(byFt.W / byGmId.W).toBeCloseTo(1, 9);
+    // And the device that comes back actually meets the spec it was sized to.
+    expect(byFt.quantities.ft / byGmId.quantities.ft).toBeCloseTo(1, 9);
+  });
+
+  it('binds intrinsic gain, landing on the requested gm/gds', () => {
+    const target = lookup(table, { l: L, vgs: 0.55 }).gm_gds;
+    const res = sizeDevice({ table, L, gm_gds: target, id: 2e-5 });
+
+    expect(res.quantities.gm_gds / target).toBeCloseTo(1, 6);
+    expect(res.id).toBeCloseTo(2e-5, 12);
+    expect(res.W).toBeGreaterThan(0);
+    // av0 is the same namespace expression, so it must select the same point.
+    const byAv0 = sizeDevice({ table, L, av0: target, id: 2e-5 });
+    expect(byAv0.vgs).toBeCloseTo(res.vgs, 12);
+  });
+
+  it('a selector carries no size: fT + W and fT + ID agree on the operating point', () => {
+    const ft = lookup(table, { l: L, vgs: 0.6 }).ft;
+    const byId = sizeDevice({ table, L, ft, id: 2e-5 });
+    const byW = sizeDevice({ table, L, ft, W: byId.W });
+
+    expect(byW.vgs).toBeCloseTo(byId.vgs, 12);
+    expect(byW.gm_id).toBeCloseTo(byId.gm_id, 12);
+    expect(byW.id / byId.id).toBeCloseTo(1, 9);
+  });
+
+  it('binds V* exactly equivalently to the matching gm/ID', () => {
+    const pt = knownPoint(table, L, 0.6);
+    const byVstar = sizeDevice({ table, L, vstar: 2 / pt.gm_id, id: pt.id });
+    const byGmId = sizeDevice({ table, L, gm_id: pt.gm_id, id: pt.id });
+
+    expect(byVstar.gm_id).toBeCloseTo(byGmId.gm_id, 12);
+    expect(byVstar.W / byGmId.W).toBeCloseTo(1, 6);
+  });
+
+  it('refuses two operating-point selectors, naming the two supplied and the remedy', () => {
+    const overDetermined = (): unknown => sizeDevice({ table, L, ft: 1e9, gm_id: 15 });
+    expect(overDetermined).toThrow(/both set the operating point/);
+    expect(overDetermined).toThrow(/gm_id and ft/);
+    expect(overDetermined).not.toThrow(/vstar/); // the two supplied, not the whole list
+    expect(overDetermined).toThrow(/\{gm, id, W\}/); // remedy is a SIZE quantity, never a selector
+    expect(() => sizeDevice({ table, L, gm_gds: 40, vstar: 0.2 })).toThrow(
+      /both set the operating point/,
+    );
+  });
+
+  it('names the column the table lacks rather than failing as an out-of-range bind', () => {
+    expect(() =>
+      sizeDevice({ table: withoutColumns(table, ['cgg']), L, ft: 1e9, id: 2e-5 }),
+    ).toThrow(/carries no "cgg"/);
+    expect(() =>
+      sizeDevice({ table: withoutColumns(table, ['gds']), L, gm_gds: 40, id: 2e-5 }),
+    ).toThrow(/carries no "gds"/);
+  });
+
+  it('reports an unreachable spec as out of range, with the lengths that do reach it', () => {
+    // Far past any fT the demo can deliver at any length.
+    const absurd = 1e15;
+    expect(() => sizeDevice({ table, L, ft: absurd, id: 2e-5 })).toThrow(/out of range/);
+    expect(sizeableLengths({ table, L, ft: absurd, id: 2e-5 })).toEqual([]);
+  });
+
+  it('every operating-point selector is width-invariant — the property the bind rule rests on', () => {
+    // If a per-width quantity were ever added to OP_SELECTORS it would pin the operating
+    // point differently at every size, and the bind would silently size wrong. Scaling the
+    // current 7x must scale the width 7x and leave every selector untouched.
+    const pt = knownPoint(table, L, 0.6);
+    const small = sizeDevice({ table, L, gm_id: pt.gm_id, id: pt.id });
+    const big = sizeDevice({ table, L, gm_id: pt.gm_id, id: pt.id * 7 });
+
+    expect(big.W / small.W).toBeCloseTo(7, 6);
+    for (const key of OP_SELECTORS) {
+      expect(big.quantities[key] / small.quantities[key]).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('a stored column never shadows a derived target — the namespace definition wins', () => {
+    // An export may carry its own `ft` column under a different convention (here a
+    // cgs-flavoured one, 30% off). Inverting THAT curve would place the operating point
+    // where nothing else in the result agrees: the sizer would report an fT it was not
+    // asked for, silently. Everything downstream re-derives ft from gm and cgg, so the
+    // inverse must too.
+    const quantities = new Map(table.grid.quantities);
+    const cgg = quantities.get('cgg') as Float64Array;
+    const gmCol = quantities.get('gm') as Float64Array;
+    const bogus = new Float64Array(gmCol.length);
+    for (let i = 0; i < bogus.length; i++) bogus[i] = gmCol[i] / (2 * Math.PI * 0.7 * cgg[i]);
+    quantities.set('ft', bogus);
+    const shadowed: DeviceTable = { ...table, grid: makeGrid([...table.grid.axes], quantities) };
+
+    const target = lookup(table, { l: L, vgs: 0.6 }).ft;
+    const res = sizeDevice({ table: shadowed, L, ft: target, id: 2e-5 });
+
+    expect(res.quantities.ft / target).toBeCloseTo(1, 9);
+    expect(res.vgs).toBeCloseTo(sizeDevice({ table, L, ft: target, id: 2e-5 }).vgs, 12);
+  });
+
+  it('carries the achievable range as data, in the quantity that was bound', () => {
+    // The UI restates this range instead of parsing the message, so min/max must be the
+    // right way round and in the caller's units — a swap would print the range backwards.
+    const target = 1e15;
+    let caught: unknown;
+    try {
+      sizeDevice({ table, L, ft: target, id: 2e-5 });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(LookupRangeError);
+    const e = caught as LookupRangeError;
+    expect(e.key).toBe('ft');
+    expect(e.target).toBe(target);
+    expect(e.L).toBe(L);
+    expect(e.min).toBeLessThan(e.max);
+    // The top of the range is the fT at the top of the vgs sweep on this slice.
+    const vgsAxis = table.grid.axes.find((a) => a.name === 'vgs') as { values: Float64Array };
+    const vgsTop = vgsAxis.values[vgsAxis.values.length - 1];
+    expect(e.max / lookup(table, { l: L, vgs: vgsTop }).ft).toBeCloseTo(1, 9);
+
+    // A width-first bind reports the gm the caller asked for, NOT the internal density
+    // target (gm·w0/W) the lookup actually inverted.
+    const w0 = table.meta.W as number;
+    let wide: unknown;
+    try {
+      sizeDevice({ table, L, W: 1e3 * w0, gm: 1e-12 });
+    } catch (err) {
+      wide = err;
+    }
+    expect(wide).toBeInstanceOf(LookupRangeError);
+    expect((wide as LookupRangeError).key).toBe('gm');
+    expect((wide as LookupRangeError).target).toBe(1e-12);
+  });
+
+  it('sizes a signed PMOS table identically — magnitudes bind, the axis stays signed', () => {
+    // Value columns are canonicalized to magnitudes on import while the swept vgs axis stays
+    // negative, so a spec-first bind must give the same geometry as the NMOS twin and return
+    // the signed operating point rather than a mirrored magnitude.
+    const p = signedMirrorDemo(table);
+    const ft = lookup(table, { l: L, vgs: 0.6 }).ft;
+    const n = sizeDevice({ table, L, ft, id: 2e-5 });
+    const res = sizeDevice({ table: p, L, ft, id: 2e-5 });
+
+    expect(res.W / n.W).toBeCloseTo(1, 9);
+    expect(res.gm_id).toBeCloseTo(n.gm_id, 9);
+    expect(res.vgs).toBeCloseTo(-n.vgs, 9);
+    expect(res.quantities.ft / ft).toBeCloseTo(1, 9);
+  });
+
+  it('sizeableLengths agrees exactly with where sizing succeeds', () => {
+    // A target the short devices reach and the long ones cannot: fT falls with L.
+    const lAxis = table.grid.axes[0].values;
+    const target = lookup(table, { l: lAxis[0], vgs: 0.7 }).ft;
+    const reachable = sizeableLengths({ table, L, ft: target, id: 2e-5 });
+
+    expect(reachable.length).toBeGreaterThan(0);
+    expect(reachable.length).toBeLessThan(lAxis.length); // a real subset, not "everything"
+    // Axis order, so the UI can list lengths shortest-first without re-sorting.
+    expect([...reachable]).toEqual([...reachable].sort((a, b) => a - b));
+    for (const len of lAxis) {
+      const sized = (): unknown => sizeDevice({ table, L: len, ft: target, id: 2e-5 });
+      if (reachable.includes(len)) expect(sized).not.toThrow();
+      else expect(sized).toThrow();
+    }
   });
 });

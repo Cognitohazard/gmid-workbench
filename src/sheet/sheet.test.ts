@@ -3,14 +3,18 @@
 // degrades to warnings / 'na' chips instead of throwing.
 
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice } from '../demo';
+import { generateDemoDevice, withoutColumns } from '../demo';
 import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { fixTable } from '../series';
+import { lookup } from '../lookup';
 import { evaluateSheet, runSheet, validateSheet, sweepSheet, sweepSheet2 } from './index';
 import { EXAMPLES } from './examples';
 import type { SheetDoc } from './types';
 
 const dev = generateDemoDevice();
+
+/** gm/gds on the 0.5 µm slice at a chosen vgs — used to pick a bind target off-node. */
+const lookupAt = (vgs: number): number => lookup(dev, { l: 0.5e-6, vgs }).gm_gds;
 
 /** A minimal bound sheet at a known in-range operating point (gm/ID = 12, L = 0.5 µm). */
 function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
@@ -30,6 +34,89 @@ function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
     ...overrides,
   };
 }
+
+describe('evaluateSheet — spec-first binds', () => {
+  it('binds fT through a sheet, matching sizeDevice exactly', () => {
+    // The claim that a sheet can state a speed spec directly, not just gm/ID.
+    const ft = 2e9;
+    const ref = sizeDevice({ table: dev, L: 0.5e-6, ft, id: 20e-6 });
+    const doc = boundDoc({
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'ft_target', value: ft },
+        { name: 'Ib', value: 20e-6 },
+      ],
+      bind: { L: 'L', ft: 'ft_target', id: 'Ib' },
+      rows: [{ name: 'speed', expr: 'ft' }],
+    });
+    const res = evaluateSheet(doc, dev);
+
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.W).toBeCloseTo(ref.W, 12);
+    expect(res.bind?.vgs).toBeCloseTo(ref.vgs, 12);
+    // The sized device meets the spec the sheet asked for.
+    expect(res.values.speed / ft).toBeCloseTo(1, 9);
+  });
+
+  it('refuses two operating-point quantities in a sheet, in validate AND in eval', () => {
+    // bindProblem is the single home of the rule; both sheet paths must report it, in the
+    // same words, or an author gets contradictory advice from the two.
+    const doc = boundDoc({
+      params: [{ name: 'L', value: 0.5e-6 }],
+      bind: { L: 'L', ft: '2e9', gm_id: '12' },
+    });
+
+    const problems = validateSheet(doc);
+    const invalid = problems.find((p) => p.rule === 'sheet-bind');
+    expect(invalid?.message).toMatch(/both set the operating point/);
+    // Named: exactly the two supplied, not the whole selector list.
+    expect(invalid?.message).toContain('gm_id and ft');
+    expect(invalid?.message).not.toContain('vstar');
+    // The remedy points at the size quantities, never at another selector.
+    expect(invalid?.message).toContain('{gm, id, W}');
+
+    const res = evaluateSheet(doc, dev);
+    expect(res.bind?.ok).toBe(false);
+    expect(res.bind?.error).toBe(invalid?.message);
+    expect(res.feasible).toBe(false);
+  });
+
+  it('a rule restating a bound spec reads as pinned, not as a failure against its own bind', () => {
+    // A selector is recovered by inverting a node-sampled curve while the point re-derives it
+    // from interpolated bases; between nodes those differ by ~0.1%, enough to drive a
+    // requirement on the very quantity the bind pinned to a hard fail. Binding a gain and
+    // then requiring that gain is the most natural thing an author writes, so it must not.
+    const vgs = dev.grid.axes.find((a) => a.name === 'vgs') as { values: Float64Array };
+    const midway = (vgs.values[40] + vgs.values[41]) / 2; // deliberately between nodes
+    const target = lookupAt(midway);
+    const doc = boundDoc({
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'Av', value: target },
+        { name: 'Ib', value: 2e-5 },
+      ],
+      bind: { L: 'L', gm_gds: 'Av', id: 'Ib' },
+      rules: [{ id: 'gain', kind: 'requirement', lhs: 'gm_gds', op: '>=', rhs: 'Av' }],
+    });
+    const res = evaluateSheet(doc, dev);
+
+    expect(res.rules[0].status).toBe('amber'); // pinned by its own bind, not failed
+    expect(res.feasible).toBe(true);
+  });
+
+  it('names the missing column when a sheet binds a quantity the table cannot compute', () => {
+    const noCgg = withoutColumns(dev, ['cgg']);
+    const doc = boundDoc({
+      params: [{ name: 'L', value: 0.5e-6 }],
+      bind: { L: 'L', ft: '2e9', id: '20e-6' },
+    });
+    const res = evaluateSheet(doc, noCgg);
+
+    expect(res.bind?.ok).toBe(false);
+    expect(res.bind?.error).toMatch(/carries no "cgg" column/);
+    expect(res.feasible).toBe(false);
+  });
+});
 
 describe('evaluateSheet — sizing reuse', () => {
   it('reproduces sizeDevice W and vgs for the same bind (no re-inversion)', () => {

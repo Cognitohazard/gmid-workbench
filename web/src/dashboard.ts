@@ -8,6 +8,7 @@ import {
   fixTable,
   EXAMPLES,
   MAX_USE_DEPTH,
+  BIND_KEYS,
   RULE_KINDS,
   RULE_OPS,
   type DeviceTable,
@@ -355,17 +356,26 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  // A bind with the wrong {gm, gm_id, id} arity is kept, NOT dropped: validateSheet
-  // raises a visible "exactly two" error the author can fix, whereas dropping it here
-  // would silently turn a mis-authored sized sheet into an unsized one.
+  // A bind with the wrong arity is kept, NOT dropped: validateSheet raises a visible
+  // "exactly two" error the author can fix, whereas dropping it here would silently turn a
+  // mis-authored sized sheet into an unsized one.
   let bind: SheetBind | undefined;
   if (o.bind && typeof o.bind === 'object') {
     const b = o.bind as Record<string, unknown>;
     if (typeof b.L === 'string') {
       const cand: SheetBind = { L: b.L };
-      for (const k of ['gm', 'gm_id', 'id', 'W', 'vds', 'vsb'] as const)
-        if (typeof b[k] === 'string') cand[k] = b[k] as string;
-        else dropField(b[k] !== undefined, `bind.${k}`);
+      // Walk what the document actually carries, checking each key against the core's own
+      // lists rather than a copy of them: a hand-maintained whitelist here silently deleted
+      // every bind quantity added to BINDABLE, which round-tripped a legal two-quantity bind
+      // into a one-quantity "needs exactly two" error on the next reload. Anything
+      // unrecognized or non-string is RECORDED as dropped, so an import fails closed on it
+      // instead of quietly rewriting the design.
+      for (const k of Object.keys(b)) {
+        if (k === 'L') continue;
+        if (BIND_KEYS.has(k) && typeof b[k] === 'string')
+          cand[k as keyof SheetBind] = b[k] as string;
+        else dropField(true, `bind.${k}`);
+      }
       bind = cand;
     }
   }

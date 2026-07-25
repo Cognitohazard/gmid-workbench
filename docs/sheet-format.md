@@ -79,9 +79,9 @@ doubled** (`$\\gamma$`, `$\\geq$`). Text outside `$…$` is plain prose. Example
 
 ## The bind
 
-The optional `bind` sizes one device by fixing **exactly two of `{gm, gm_id, id, W}`** at a
-chosen length `L`, and inverting the lookup table for the rest. Every field is an
-**expression string**, so a bound quantity can be computed from the params:
+The optional `bind` sizes one device by fixing **exactly two** bound quantities at a chosen
+length `L`, and inverting the lookup table for the rest. Every field is an **expression
+string**, so a bound quantity can be computed from the params:
 
 ```json
 { "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id" }
@@ -89,17 +89,36 @@ chosen length `L`, and inverting the lookup table for the rest. Every field is a
 
 Here `gm` is fixed from the bandwidth spec and `gm/ID` is the design knob; the drain current
 follows from `gm = (gm/ID)·ID`, and the width, `VGS`, and every derived figure of merit fall
-out of the table. Any two of the four may be bound:
+out of the table.
 
-- `gm` + `gm_id`, `gm` + `id`, `gm_id` + `id` — the classic electrical binds; the width is
-  sized from the current density.
-- `W` + one of `{gm, gm_id, id}` — width-first flows (unit devices, mirror ratios,
-  layout-constrained sizing); the operating point comes from inverting the matching
-  characterization-width curve.
+The bindable quantities do two different jobs:
 
-Binding fewer or more than two is an authoring error and is flagged. Expression strings
-accept engineering-notation literals and the full expression language (see
-[The expression language](#the-expression-language)).
+| group | quantities | what it fixes |
+|-|-|-|
+| operating point | `gm_id`, `ft`, `gm_gds`, `av0`, `vstar` | where on the curve the device sits |
+| size | `gm`, `id`, `W` | how big it is |
+
+An **operating-point** quantity is a ratio of two per-width quantities, so it is
+width-invariant: any one of them pins `VGS` on the `L` slice by itself and says nothing about
+size. Binding `ft` or `gm_gds` is how a sheet states the spec it actually has — a transit
+frequency, an intrinsic gain — instead of solving by hand for the `gm/ID` that meets it. A
+**size** quantity then scales that point into a real device.
+
+So a legal bind is:
+
+- one operating-point quantity + one size quantity — e.g. `ft` + `id`, or the classic
+  `gm_id` + `id`; the width is sized from the current density.
+- two size quantities, which pin the operating point between them: `gm` + `id` fixes
+  `gm/ID`, while `W` + `gm` or `W` + `id` inverts the matching characterization-width curve
+  at a transconductance or current density (width-first flows: unit devices, mirror ratios,
+  layout-constrained sizing).
+
+Two operating-point quantities is an error: they over-determine `VGS` and generally
+disagree. Binding fewer or more than two quantities is likewise an authoring error and is
+flagged. A target the table cannot reach at that `L` fails closed with the achievable range,
+and a target the table cannot compute at all (`ft` on a table with no `cgg` column) says
+which column is missing. Expression strings accept engineering-notation literals and the
+full expression language (see [The expression language](#the-expression-language)).
 
 Once sized, the operating point is merged into the namespace as flat scalars: `gm`, `gm_id`,
 `id`, `W`, `vgs`, `vstar`, `cgg`, the intrinsic gain `av0`, the γ-model noise density
@@ -242,6 +261,14 @@ sides are algebraically identical and land within floating-point rounding of the
 without the snap, the verdict would coin-flip between pass and fail on ±1e-16 noise. The snap
 makes it a deterministic `amber`: the honest description of a spec that is pinned by
 construction rather than genuinely met with margin.
+
+A bound **operating-point** quantity (`gm_id`, `ft`, `gm_gds`, `av0`, `vstar`) reads back as
+exactly the value you asked for, so a rule restating it behaves the same way. Be aware of what
+that number means: the operating point is recovered by inverting a curve sampled at the `VGS`
+grid nodes, while the rest of the point is interpolated from the raw columns and re-derived.
+Between nodes those two routes differ — by around 0.1% for a ratio on a 10 mV grid — so the
+sized device sits that far from the target, well inside the data's own resolution but not at
+it exactly. If that margin matters for your design, characterize on a finer `VGS` step.
 
 The lesson is to **test a derived quantity, not the pinned input.** Binding `gm` from a target
 GBW and then checking `GBW >= GBW_target` is a tautology that always reads amber. Instead,

@@ -6,7 +6,7 @@
 
 import type { QAWarning } from '../types';
 import { compileExpr } from '../derive';
-import { BINDABLE } from '../device';
+import { BINDABLE, bindProblem } from '../device';
 import {
   MAX_USE_DEPTH,
   PROVIDE_SEP,
@@ -45,12 +45,12 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   }
 
   if (doc.bind) {
-    const n = BINDABLE.filter((k) => doc.bind?.[k] !== undefined).length;
-    if (n !== 2) {
+    const problem = bindProblem(BINDABLE.filter((k) => doc.bind?.[k] !== undefined));
+    if (problem) {
       out.push({
         rule: 'sheet-bind',
         severity: 'error',
-        message: `bind needs exactly two of {${BINDABLE.join(', ')}}, got ${n}`,
+        message: `bind ${problem}`,
         location: 'bind',
       });
     }

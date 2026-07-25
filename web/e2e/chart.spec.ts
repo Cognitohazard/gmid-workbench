@@ -259,9 +259,10 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await sizer.getByPlaceholder('mV·µm').fill('4'); // restore
   await page.screenshot({ path: `${SCREENS}/size-panel.png` });
 
-  // An out-of-range gm/ID (above the achievable ceiling) reports a clear error.
+  // An out-of-reach gm/ID (above the achievable ceiling) reports a clear error, in
+  // engineering notation and naming what the length CAN reach.
   await sizer.getByPlaceholder('S/A').fill('60');
-  await expect(sizer.locator('.err')).toContainText('range');
+  await expect(sizer.locator('.err')).toContainText('out of reach');
 
   // The entered problem survives a reload with the bench: reopening the sizer brings
   // back the typed bind pair, not a blank panel to refill.
@@ -269,6 +270,44 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await page.locator('header button.size').click();
   await expect(page.locator('aside.sizer').getByPlaceholder('S/A')).toHaveValue('60');
   await expect(page.locator('aside.sizer').getByPlaceholder('A · e.g. 100u')).toHaveValue('100u');
+});
+
+test('size: a spec-first bind — fT sets the operating point, and an unreachable one names the lengths that do', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.locator('header button.size').click();
+  const sizer = page.locator('aside.sizer');
+  const lSelect = sizer.locator('select').first();
+
+  // The demo's fT reaches ~171 GHz at L = 180 nm but only ~1.3 GHz at L = 2 µm, so 30 GHz
+  // is a target the shortest device meets and the longest cannot — the case where "which L?"
+  // is the actual design question.
+  await lSelect.selectOption({ label: '2µm' });
+  await sizer.getByPlaceholder('Hz · e.g. 5g').fill('30g');
+  await sizer.getByPlaceholder('A · e.g. 100u').fill('100u');
+
+  await expect(sizer.locator('.err')).toContainText('out of reach');
+  // The achievable range is restated in engineering notation, not raw floats.
+  await expect(sizer.locator('.err')).toContainText('it reaches');
+  await expect(sizer.locator('.err')).not.toContainText('e+');
+  // Exactly the lengths that work — a filter that dropped nothing would list all four.
+  await expect(sizer.locator('.hint')).toHaveText('works at L = 180nm');
+
+  // Take that advice and the same spec sizes: fT is bound, so gm/ID and the width follow —
+  // and the device that comes back actually meets the 30 GHz it was sized to.
+  await lSelect.selectOption({ label: '180nm' });
+  await expect(sizer.locator('.err')).toHaveCount(0);
+  await expect(sizer.locator('.feas.ok')).toBeVisible();
+  const ftOut = sizer.locator('.sz dt', { hasText: /^fT$/ }).locator('+ dd');
+  await expect(ftOut).toHaveText('30GHz');
+
+  // Two operating-point targets and no size: they over-determine vgs and say so by name,
+  // rather than silently letting one win.
+  await sizer.getByPlaceholder('A · e.g. 100u').fill('');
+  await sizer.getByPlaceholder('S/A').fill('15');
+  await expect(sizer.locator('.err')).toContainText('both set the operating point');
 });
 
 test('export: csv copies the plotted curves, png downloads the chart image', async ({

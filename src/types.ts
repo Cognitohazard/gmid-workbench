@@ -147,3 +147,47 @@ export interface ExprEngine {
 export class ExprError extends Error {
   override name = 'ExprError';
 }
+
+/**
+ * An inverse lookup that failed for THIS length in particular — the target is outside the
+ * slice's reach, or the curve is too folded there to invert unambiguously. Another
+ * characterized length may well work, so a caller can offer that as the next step. Structural
+ * failures (a missing column, no vgs axis) are plain Errors: no length would help.
+ */
+export class LookupError extends Error {
+  override name = 'LookupError';
+}
+
+/**
+ * A per-length failure whose cause is reach. Carries the achievable range as data so a caller
+ * can answer the design question this raises — "out of reach here, so at which length IS it
+ * reachable?" — and re-render the numbers in its own units, without parsing the message text.
+ */
+export class LookupRangeError extends LookupError {
+  override name = 'LookupRangeError';
+  constructor(
+    readonly key: string,
+    readonly target: number,
+    readonly min: number,
+    readonly max: number,
+    readonly L: number,
+  ) {
+    super(`inverse lookup: ${key} ${target} out of range [${min}, ${max}] for L=${L}`);
+  }
+
+  /**
+   * The same failure expressed in a quantity `scale` times smaller — for a caller that
+   * inverted an internally rescaled target (a per-width density) and must report the number
+   * its own caller actually asked for. Rebuilt through the constructor, so there is one
+   * wording for both.
+   */
+  rescaled(scale: number): LookupRangeError {
+    return new LookupRangeError(
+      this.key,
+      this.target / scale,
+      this.min / scale,
+      this.max / scale,
+      this.L,
+    );
+  }
+}

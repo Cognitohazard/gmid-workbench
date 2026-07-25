@@ -1,6 +1,9 @@
 <script lang="ts">
   import {
     sizeDevice,
+    sizeableLengths,
+    LookupError,
+    LookupRangeError,
     mismatch,
     thermalNoise,
     integratedNoise,
@@ -25,7 +28,7 @@
     $props();
 
   // The entered sizing problem survives close/reopen and a reload alongside the bench
-  // — losing three typed numbers to a refresh was a top usability friction. Inputs are
+  // — losing the typed numbers to a refresh was a top usability friction. Inputs are
   // stored verbatim as the user's text (no numbers, no interpretation).
   const saved = loadJSON(
     SIZER_KEY,
@@ -35,11 +38,23 @@
   const sv = (k: string, fallback: string): string =>
     typeof saved?.[k] === 'string' ? (saved[k] as string) : fallback;
 
-  // ── Sizing panel (the "design" workflow): bind any two of {gm, gm/ID, ID} at a
-  // chosen L → width, vgs, fT, and feasibility against the gm/ID ceiling.
-  let inGmId = $state(sv('gmId', ''));
-  let inId = $state(sv('id', ''));
-  let inGm = $state(sv('gm', ''));
+  // ── Sizing panel (the "design" workflow): bind any two of {gm/ID, fT, gm/gds} ×
+  // {ID, gm, W} at a chosen L → width, vgs, fT, and feasibility against the gm/ID
+  // ceiling. The first group are operating-point selectors (width-invariant: each pins
+  // vgs by itself), the second sets the scale — so a spec that arrives as "fT ≥ 5 GHz"
+  // or "gain ≥ 40 dB" is entered directly instead of hand-iterating gm/ID toward it.
+  // Keyed by the CORE bind key, so the entered text, the persisted blob, and the query
+  // handed to sizeDevice all speak the same names — one list to extend, not three. This is
+  // a deliberate SUBSET of the core's BINDABLE: av0 is the same expression as gm/gds, and
+  // V* is a hand conversion from gm/ID, so neither earns a seventh box. Sheets can still
+  // bind them.
+  const BIND_FIELDS = ['gm_id', 'ft', 'gm_gds', 'id', 'gm', 'W'] as const;
+  const bind: Record<string, string> = $state(
+    // 'gmId' is the pre-rename name of this field; read it once so upgrading does not
+    // silently blank a problem the user had entered (the persisting effect below fires
+    // on mount and would overwrite it before they could notice).
+    Object.fromEntries(BIND_FIELDS.map((k) => [k, sv(k, k === 'gm_id' ? sv('gmId', '') : '')])),
+  );
 
   const lAxis = $derived(device.grid.axes.find((a) => a.name === LENGTH_AXIS));
   // Writable derived: user picks an L freely, but a device swap (new lAxis) re-derives
@@ -69,20 +84,39 @@
 
   const sizing = $derived.by(() => {
     if (!lAxis) return { hint: 'this table has no L axis to size against' };
-    const supplied: { gm_id?: number; id?: number; gm?: number } = {};
-    const gmId = parseNum(inGmId);
-    const id = parseNum(inId);
-    const gm = parseNum(inGm);
-    if (gmId !== undefined) supplied.gm_id = gmId;
-    if (id !== undefined) supplied.id = id;
-    if (gm !== undefined) supplied.gm = gm;
-    if (Object.keys(supplied).length !== 2) {
-      return { hint: 'enter exactly two of gm/ID, ID, gm' };
+    const supplied: Record<string, number> = {};
+    for (const k of BIND_FIELDS) {
+      const v = parseNum(bind[k]);
+      if (v !== undefined) supplied[k] = v;
     }
+    if (Object.keys(supplied).length !== 2) {
+      return {
+        hint: 'enter exactly two — an operating point (gm/ID, fT, gm/gds) and a size (ID, gm, W)',
+      };
+    }
+    const query = { table: sizingTable, L: sizeL, ...supplied };
     try {
-      return { result: sizeDevice({ table: sizingTable, L: sizeL, ...supplied }) };
+      return { result: sizeDevice(query) };
     } catch (e) {
-      return { err: (e as Error).message };
+      // Every per-length failure raises the same design question — then at which length
+      // DOES this bind work? — whether the target was out of the slice's reach or the curve
+      // too folded to invert there (gm/gds commonly folds near threshold). Answering it is
+      // how L gets picked, and the answer re-runs the whole sizing, so it never names a
+      // length that would fail in turn.
+      if (!(e instanceof LookupError)) return { err: (e as Error).message };
+      const ls = sizeableLengths(query);
+      return {
+        // Out of reach carries its achievable range as data — restate it in engineering
+        // notation rather than the raw floats the core message spells out. Every bind
+        // reports in the quantity that was bound, so this reads back what the user typed.
+        err:
+          e instanceof LookupRangeError
+            ? `${e.key} ${formatSI(e.target)} is out of reach at this L — it reaches ${formatSI(e.min)} … ${formatSI(e.max)} here`
+            : e.message,
+        fix: ls.length
+          ? `works at L = ${ls.map((l) => `${formatSI(l)}m`).join(', ')}`
+          : 'no characterized length on this device supports it',
+      };
     }
   });
 
@@ -102,7 +136,7 @@
   // A_Vth/A_beta/f_co re-seed from the device metadata on every swap (the effect
   // below), so persisting them would just be overwritten.
   $effect(() => {
-    saveJSON(SIZER_KEY, { gmId: inGmId, id: inId, gm: inGm, flo: inFlo, fhi: inFhi, L: sizeL });
+    saveJSON(SIZER_KEY, { ...bind, flo: inFlo, fhi: inFhi, L: sizeL });
   });
 
   // Seed the coefficients from the imported device's metadata when it carries them
@@ -259,9 +293,21 @@
       {#each sizing.result.warnings as w}<li>{w}</li>{/each}
     </ul>
   {/if}
-  <label>gm/ID <input bind:value={inGmId} placeholder="S/A" spellcheck="false" /></label>
-  <label>ID <input bind:value={inId} placeholder="A · e.g. 100u" spellcheck="false" /></label>
-  <label>gm <input bind:value={inGm} placeholder="S" spellcheck="false" /></label>
+  <!-- The two groups are the bind rule made visible: one row from each is the usual
+       design, and either group's own pair works too (gm + ID fixes gm/ID between them). -->
+  <p class="grp">operating point <Help text={CONTROL_HELP.bindPoint} /></p>
+  <label>gm/ID <input bind:value={bind.gm_id} placeholder="S/A" spellcheck="false" /></label>
+  <!-- The label text is one <span>: .sizer label is a space-between flex row, so a bare
+       `f<sub>T</sub>` would spread the subscript away from the f. -->
+  <label
+    ><span>f<sub>T</sub></span>
+    <input bind:value={bind.ft} placeholder="Hz · e.g. 5g" spellcheck="false" /></label
+  >
+  <label>gm/gds <input bind:value={bind.gm_gds} placeholder="V/V" spellcheck="false" /></label>
+  <p class="grp">size <Help text={CONTROL_HELP.bindSize} /></p>
+  <label>ID <input bind:value={bind.id} placeholder="A · e.g. 100u" spellcheck="false" /></label>
+  <label>gm <input bind:value={bind.gm} placeholder="S" spellcheck="false" /></label>
+  <label>W <input bind:value={bind.W} placeholder="m · e.g. 10u" spellcheck="false" /></label>
 
   {#if Object.keys(sizingFixed).length}
     <p class="bias">
@@ -312,6 +358,9 @@
     </p>
   {:else if sizing.err}
     <p class="err">{sizing.err}</p>
+    {#if sizing.fix}
+      <p class="hint">{sizing.fix}</p>
+    {/if}
   {:else}
     <p class="hint">{sizing.hint}</p>
   {/if}
@@ -402,6 +451,17 @@
     justify-content: space-between;
     align-items: baseline;
     gap: 0.5rem;
+  }
+  /* Caption over each bind group — the six fields only make sense as "one from each". */
+  .sizer .grp {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin: 0.5rem 0 0;
+    font-size: 0.85em;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+    opacity: 0.6;
   }
   .sizer input,
   .sizer select {

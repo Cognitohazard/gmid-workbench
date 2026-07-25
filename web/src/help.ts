@@ -90,8 +90,12 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
-  size: 'Sizing: bind any two of {gm/ID, I_D, gm} at a chosen L → width, V_GS, f_T, gain, and feasibility.',
-  bind: 'Enter exactly two of gm/ID, I_D, gm; the third and the geometry are solved at this L.',
+  size: 'Sizing: bind an operating point (gm/ID, f_T, or gm/g_ds) and a size (I_D, gm, or W) at a chosen L → width, V_GS, the remaining figures of merit, and feasibility.',
+  bind: 'Enter exactly two of gm/ID, f_T, gm/g_ds, I_D, gm, W; everything else — including the geometry — is solved at this L.',
+  bindPoint:
+    'Where on the curve the device sits. Each of these is width-independent, so any ONE of them pins the operating point (and the other two follow) without saying how big the device is. Enter the spec you actually have: f_T for a speed target, gm/g_ds for a gain target, gm/ID to work the efficiency axis directly. If the target is out of reach at this L, the lengths that do reach it are listed.',
+  bindSize:
+    'How big the device is. Pick ONE to scale the operating point above into a real device — or two of these on their own, which pins the operating point between them (gm and I_D fix gm/ID; W with either fixes a current or transconductance density).',
   noise:
     'Input-referred noise at the sized gm: thermal density (γ-model) and the total RMS over the band.',
   fco: 'Flicker (1/f) noise corner frequency f_co (Hz).',

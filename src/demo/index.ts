@@ -265,3 +265,15 @@ export function signedMirrorDemo(dev: DeviceTable): DeviceTable {
     meta: { ...dev.meta, polarity: { device: 'p', signedInput: true } },
   };
 }
+
+/**
+ * A copy of `table` without the named quantity columns — for exercising the paths that must
+ * degrade when a table simply does not carry something (measured noise, cgg, gds). Lives here
+ * beside signedMirrorDemo because it is fixture shaping, not numerics; the grid is otherwise
+ * untouched, so axes and shape still agree.
+ */
+export function withoutColumns(table: DeviceTable, keys: readonly string[]): DeviceTable {
+  const quantities = new Map(table.grid.quantities);
+  for (const k of keys) quantities.delete(k);
+  return { ...table, grid: { ...table.grid, quantities } };
+}

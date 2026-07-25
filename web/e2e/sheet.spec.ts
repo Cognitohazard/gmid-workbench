@@ -541,6 +541,53 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
   await expect(sp.locator('.pwarn', { hasText: 'set load_sign = -1' })).toHaveCount(0);
 });
 
+test('design sheet: an imported fT bind survives import and reload (not silently stripped)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // A sheet that states a speed spec directly. Every save/restore path runs the document
+  // through the same sanitizer, so a bind quantity it does not recognise is deleted — which
+  // turns this legal two-quantity bind into "needs exactly two" on the next reload.
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'speed-spec.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Speed spec',
+        polarity: 'n',
+        params: [
+          { name: 'L', value: 5e-7 },
+          { name: 'ft_target', value: 2e9 },
+          { name: 'Ib', value: 2e-5 },
+        ],
+        bind: { L: 'L', ft: 'ft_target', id: 'Ib', vds: '0.9' },
+        rows: [{ name: 'speed', expr: 'ft' }],
+        rules: [],
+      }),
+    ),
+  });
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Speed spec');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet).toContainText('speed');
+  await expect(sheet).not.toContainText('exactly two');
+
+  // And again after a reload, which restores the sheet from persisted state.
+  await page.reload();
+  const after = page.locator('.sheet').first();
+  await expect(after).toContainText('speed');
+  await expect(after).not.toContainText('exactly two');
+
+  expect(errors).toEqual([]);
+});
+
 test('design sheet: imported sheets join the library — pickable, referenceable, removable, persistent', async ({
   page,
 }) => {

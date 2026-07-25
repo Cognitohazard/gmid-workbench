@@ -17,8 +17,12 @@ turns them into gm/ID design charts, operating-point lookups, and sized devices.
   over the table quantities and physical constants.
 - **Forward and inverse lookup** — read any quantity at an operating point, or invert
   (e.g. gm/ID → `VGS`) on the interpolated grid.
-- **Bind-any-2 sizing** — enter any two of {gm/ID, `ID`, `gm`} at a chosen `L`; the
-  third, the width, `VGS`, `fT`, gain, and feasibility are solved from the table.
+- **Bind-any-2 sizing** — enter any two of {gm/ID, `fT`, gm/g<sub>ds</sub>} × {`ID`,
+  `gm`, `W`} at a chosen `L`; everything else — the width, `VGS`, the remaining
+  figures of merit, and feasibility — is solved from the table. Binding `fT` or
+  intrinsic gain means stating the spec you actually have ("good to 5 GHz", "40 dB")
+  instead of hand-iterating gm/ID toward it; a target out of reach at that length
+  reports the lengths that do reach it.
 - **Design sheets** — author variables, equations, and pass/fail constraints with
   margins; sweep a variable to chart every rule's margin and see where the design
   closes. Sheets compose: a child block can be sized against a different loaded device,

@@ -9,7 +9,7 @@ import { CONSTANTS } from '../constants';
 import { compileExpr, metaScalars } from '../derive';
 import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { scalarScope } from '../expr';
-import { BINDABLE, sizeDevice, type SizeQuery } from '../device';
+import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
 import { BIAS_AXES, MAX_USE_DEPTH, isHardRule, joinProvide, prefixUseWarning } from './types';
 import type {
@@ -236,8 +236,8 @@ function runBind(
   if (!table) return fail('no device to size against');
 
   const supplied = BINDABLE.filter((k) => b[k] !== undefined);
-  if (supplied.length !== 2)
-    return fail(`bind needs exactly two of {${BINDABLE.join(', ')}}, got ${supplied.length}`);
+  const problem = bindProblem(supplied);
+  if (problem) return fail(`bind ${problem}`);
 
   const L = evalScalar(b.L, values, scope, warn, 'bind L');
   if (L === undefined || !Number.isFinite(L))
