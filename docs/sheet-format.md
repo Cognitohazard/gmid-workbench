@@ -146,11 +146,24 @@ point, so an undeclared or wrong bias can silently overstate intrinsic gain by o
 13 dB. Declaring `vds`/`vsb` in the bind makes the operating point an authored, persisted,
 sweepable part of the design rather than a hidden host-side slice.
 
-If the table has a live axis the bind does not declare, evaluation falls back to the caller's
-operating point (the shared bias the app provides) **and raises an advisory warning naming
-the assumed value** — never a silent slice. With neither a declaration nor a fallback, the
-sizing fails with guidance to declare the axis. A declared value always wins, and a declared
-value outside the table's range is clamped to the nearest edge with a warning.
+If the table has a live axis the bind does not declare, the axis takes its **namespace default**
+when the table characterizes that point — `vsb = 0`, source at bulk — and the coordinate is
+reported as **assumed**, shown with a `?` beside it in the sizing line. `vds` has no honest
+default (it is set by the circuit node, not the device), so an undeclared live `vds` fails the
+sizing with guidance to declare it. A declared value always wins, and a declared value outside
+the table's range is clamped to the nearest edge with a warning.
+
+**Declare `vsb` whenever the source does not sit at the bulk.** The default is correct for a
+common-source device or a rail-referenced mirror, and wrong for every differential pair, cascode
+and source follower — where the source floats and body bias is a real, often large, effect. A 5T
+OTA's input pair measured **80 mV** of threshold shift against the body-grounded assumption. The
+engine cannot tell the cases apart, because a sheet describes devices and not nodes; it reports
+what it assumed and leaves the judgement to you. That is deliberately *not* a warning: about
+nine in ten of the library's binds leave `vsb` undeclared and are right to, and a warning at that
+hit rate teaches authors to ignore the channel.
+
+A device whose `vsb` depends on its own `VGS` — an input pair standing on a tail node — is a bias
+loop, so declare it through a tearing variable (see [Closing a bias loop](#closing-a-bias-loop-solvefor)).
 
 ## Rows
 
@@ -433,8 +446,8 @@ Every failure mode is closed, never silent:
 |-|-|
 | the named target does not resolve to a finite number | infeasible, `sheet-solve` error naming the estimate |
 | the gap to the target grows for several passes running | infeasible, `sheet-solve` error reporting the loop as diverging |
-| the loop neither converges nor clearly diverges | infeasible, `sheet-solve` error after the backstop iteration cap |
-| nested loops exhaust the tree-wide pass budget | infeasible, `sheet-solve` error pointing at the nesting |
+| the loop runs out of passes while still closing | infeasible, `sheet-solve` error reporting how far the disagreement fell — the loop is stable, just too weakly damped to finish |
+| the loop runs out of passes without a trend either way | infeasible, `sheet-solve` error asking whether each `solveFor` names the right value |
 | a param solves for itself | validation error (it is a fixed point trivially, and hides the loop) |
 | more than four params carry `solveFor` | validation error — see the scope note below |
 
@@ -480,8 +493,9 @@ Every sample is solved **independently**, from the authored starting guess; a sa
 seeded from its neighbour's answer. That optimisation is tempting and wrong: contraction does not
 imply a unique fixed point, so a carried seed makes the sweep hysteretic, and a cell could then
 report a different verdict than the same parameters evaluated on their own. The honest version
-costs real time — roughly 10 ms per sample for a three-child sheet on a real PDK table, so several
-seconds for a 21×21 map, run synchronously.
+costs real time — about 25 ms per sample for a three-child sheet that solves a loop and declares
+both bias axes on a real PDK table, so roughly 11 s for a 21×21 map, run synchronously. Each
+declared bias axis adds a slice per pass, so most of that is the cost of not assuming.
 
 ## Sweeps
 

@@ -225,6 +225,36 @@ describe('evaluateSheet — rules', () => {
   });
 });
 
+describe('evaluateSheet — an assumed bias coordinate is reported, not invented', () => {
+  // A table that actually sweeps body bias, so leaving vsb undeclared is a real choice.
+  const bodySwept = generateDemoDevice({ vsb: { min: 0, max: 0.6, step: 0.2 } });
+
+  it('marks a bias axis the bind left undeclared', () => {
+    // vsb = 0 is right for a device whose source sits at its bulk and wrong for a differential
+    // pair, cascode or source follower. The engine cannot tell which — a sheet describes no
+    // nodes — so the coordinate it filled in must be distinguishable from one the author wrote.
+    const res = evaluateSheet(boundDoc(), bodySwept);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind?.bias?.vsb).toBe(0);
+    expect(res.bind?.assumed).toContain('vsb');
+  });
+
+  it('does not mark a bias axis the bind declares', () => {
+    const doc = boundDoc();
+    const res = evaluateSheet({ ...doc, bind: { ...doc.bind!, vsb: '0.2' } }, bodySwept);
+    expect(res.bind?.bias?.vsb).toBeCloseTo(0.2, 12);
+    expect(res.bind?.assumed ?? []).not.toContain('vsb');
+  });
+
+  it('sizes a body-biased device differently — which is why the assumption has to be visible', () => {
+    const doc = boundDoc();
+    const at = (vsb: string): number =>
+      evaluateSheet({ ...doc, bind: { ...doc.bind!, vsb } }, bodySwept).bind?.vgs ?? NaN;
+    // Same gm/ID, same L: body bias moves the gate drive it takes to get there.
+    expect(Math.abs(at('0.6') - at('0'))).toBeGreaterThan(1e-3);
+  });
+});
+
 describe('evaluateSheet — bias-loop closure (solveFor)', () => {
   // A loop shaped like a real one: an estimate standing in for a value only the evaluated
   // sheet knows, perturbing the operating point WEAKLY. The demo table has no live bias axes,
@@ -415,7 +445,9 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       dev,
     );
     expect(res.feasible).toBe(false);
-    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(/did not settle/);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+      /neither converging nor clearly diverging/,
+    );
   });
 
   it('reports the disagreement, not a value compared with itself', () => {
@@ -434,6 +466,107 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     const [, a, b] = /osc → flip: (\S+) vs (\S+)/.exec(m) ?? [];
     expect(a).toBeDefined();
     expect(Number(a)).not.toBe(Number(b));
+  });
+
+  it('converges a loop whose error rotates while it contracts', () => {
+    // Two coupled unknowns — a tail node and a mirror drain are exactly that pair — give the
+    // iteration complex eigenvalues, so the error SPIRALS in: one component's gap grows for
+    // several passes running while the error as a whole shrinks. Judging each estimate
+    // separately and OR-ing the growths declares this convergent loop divergent.
+    const t = 0.9;
+    const r = 0.9; // spectral radius < 1, so it genuinely converges
+    const c = (Math.cos(t) * r).toFixed(12);
+    const s = (Math.sin(t) * r).toFixed(12);
+    const res = evaluateSheet(
+      {
+        title: 'rotating',
+        polarity: 'n',
+        params: [
+          { name: 'x', value: 3, solveFor: 'fx' },
+          { name: 'y', value: -2, solveFor: 'fy' },
+        ],
+        rows: [
+          { name: 'fx', expr: `${c}*x - ${s}*y + 1` },
+          { name: 'fy', expr: `${s}*x + ${c}*y + 1` },
+        ],
+        rules: [],
+      },
+      dev,
+    );
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toHaveLength(0);
+    expect(res.feasible).toBe(true);
+    // The map's true fixed point, reached independently.
+    let x = 0;
+    let y = 0;
+    const C = Math.cos(t) * r;
+    const S = Math.sin(t) * r;
+    for (let i = 0; i < 500; i++) [x, y] = [C * x - S * y + 1, S * x + C * y + 1];
+    expect(res.values.x).toBeCloseTo(x, 6);
+    expect(res.values.y).toBeCloseTo(y, 6);
+  });
+
+  /** Fixed point 1, contracting at exactly |f'| = k per pass. */
+  const geometric = (k: number): SheetDoc => ({
+    title: `contract ${k}`,
+    polarity: 'n',
+    params: [{ name: 'x', value: 5, solveFor: 'fx' }],
+    rows: [{ name: 'fx', expr: `${k}*x + ${1 - k}` }],
+    rules: [],
+    provide: ['fx'],
+  });
+
+  it('converges a weak contraction that needs many passes', () => {
+    // |f'| = 0.95 reaches the tolerance only after ~256 passes. Any cap chosen as the
+    // divergence test rejects it and blames the author for an unstable loop.
+    const res = evaluateSheet(geometric(0.95), dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(1, 5);
+  });
+
+  it('says a loop is converging slowly rather than blaming the author', () => {
+    // Too weak to finish, but the gap shrank on every pass — reporting it as unstable, or as
+    // "neither converging nor diverging", would be false. The engine holds the evidence.
+    const res = evaluateSheet(geometric(0.999), dev);
+    expect(res.feasible).toBe(false);
+    const m = res.warnings.find((w) => w.rule === 'sheet-solve')?.message ?? '';
+    expect(m).toMatch(/IS converging/);
+    expect(m).not.toMatch(/diverging/);
+  });
+
+  it('does not let sibling loops starve each other', () => {
+    // Feasibility must not depend on document order. With one flat budget for the tree, eight
+    // siblings that each converge alone saw the last few fail for want of passes.
+    const res = evaluateSheet(
+      {
+        title: 'eight',
+        polarity: 'n',
+        params: [],
+        rows: [],
+        rules: [],
+        uses: Array.from({ length: 8 }, (_, i) => ({ name: `c${i}`, doc: geometric(0.9) })),
+      },
+      dev,
+    );
+    expect(res.children?.every((c) => c.feasible)).toBe(true);
+    expect(res.feasible).toBe(true);
+  });
+
+  it('warns when a parent overrides a param the child solves for', () => {
+    // The override only seeds the iteration; the fixed point decides. Silently demoting an
+    // explicit wiring to a hint is the surprise the unmatched-key error already guards against.
+    const res = evaluateSheet(
+      {
+        title: 'wired',
+        polarity: 'n',
+        params: [],
+        rows: [],
+        rules: [],
+        uses: [{ name: 'c', doc: geometric(0.5), params: { x: '42' } }],
+      },
+      dev,
+    );
+    expect(res.warnings.some((w) => /only seeds the iteration/.test(w.message))).toBe(true);
+    expect(res.values.c__fx).toBeCloseTo(1, 6); // solved, not 42
   });
 
   it('refuses more tearing variables than the scope rule allows', () => {

@@ -69,8 +69,9 @@ export interface SheetRow {
  * inverts gm/ID along vgs and needs every other axis collapsed to a point; declaring
  * the point here makes the bias an authored, persisted, sweepable part of the design
  * instead of a hidden host-side slice (a cascode's low-vds gds differs ~4–5× from the
- * mid-supply value, so an undeclared bias silently overstates gain). An axis left
- * undeclared falls back to the caller's bias (with an advisory warning) or errors.
+ * mid-supply value, so an undeclared bias silently overstates gain). An axis left undeclared
+ * takes its namespace default and is reported as ASSUMED (see BindReport.assumed), or — for
+ * vds, which has no honest default — fails the sizing.
  */
 export interface SheetBind {
   L: string;
@@ -94,7 +95,8 @@ export interface SheetBind {
 
 /** The bias axes a bind may declare — every namespace sweep axis except the inversion
  *  sweep (vgs) and the geometry axis (l). Derived from the axis flags so a table axis
- *  added to the namespace is automatically collapsible by a bind/fallback, rather than
+ *  added to the namespace is automatically collapsible by a bind or its namespace default,
+ *  rather than
  *  dying on the sizer's extra-axis error because a hand-copied list went stale. */
 export const BIAS_AXES: readonly string[] = BASE_QUANTITIES.filter(
   (q) => q.axis && q.key !== 'vgs' && q.key !== 'l',
@@ -287,6 +289,11 @@ export interface BindReport {
    *  default (i.e. `vds`, which varies per device — `vsb` defaults to 0, body-grounded).
    *  Present only on a failed bind, so the UI can offer an in-place operating-point fix. */
   needs?: string[];
+  /** Bias axes whose coordinate the engine ASSUMED (the namespace default) because the bind
+   *  left them undeclared — an authored operating point and a filled-in one must be tellable
+   *  apart. Reported rather than warned, so the UI can mark it in place; see
+   *  docs/sheet-format.md for when the default is wrong and why this is not a warning. */
+  assumed?: string[];
   error?: string;
 }
 

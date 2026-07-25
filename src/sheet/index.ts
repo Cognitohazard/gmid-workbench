@@ -178,11 +178,11 @@ export const SWEEP2_POINTS = 21;
  * Cost is n² full-tree evaluations (sub-millisecond each on real tables). A sheet that closes
  * a bias loop costs several times that: every sample converges its own fixed point AND lands
  * on a bias the slice cache has not seen, since a solved estimate genuinely differs per sample.
- * Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~10 ms/cell
- * solved, i.e. several seconds for the default 21x21 — and this runs synchronously, so a
- * caller driving it from a UI should expect to block for that long. The unsolved figure is the
- * cheaper one only because a frozen estimate re-slices at the same handful of biases; the
- * honest computation is the slower one.
+ * Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~25 ms/cell once
+ * it solves a loop AND declares both bias axes, i.e. ~11 s for the default 21x21 — and this runs
+ * synchronously, so a caller driving it from a UI should expect to block for that long. Each
+ * declared axis costs another slice per pass, so the cheaper figure is cheaper only because a
+ * frozen estimate re-slices at the same handful of biases; the honest computation is the slower.
  *
  * Each sample is solved INDEPENDENTLY, from the doc's authored starting guess. Seeding a sample
  * from its neighbour's converged estimate is the obvious optimisation and is deliberately not

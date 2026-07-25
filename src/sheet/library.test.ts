@@ -134,10 +134,12 @@ describe('exemplar goldens: 5T OTA', () => {
   });
 
   it('gain matches the demo model with the two output conductances', () => {
-    // in device: vds = VDD − vgs_ld − CM_dc + vgs_est_in with the demo's diode vgs at
-    // gm/ID 8, L 0.5 µm ≈ 0.6686 V (vth 0.4266 + EKV overdrive 0.242).
+    // The input device is biased at the OUTPUT node — it is the device whose gds sets the
+    // gain — so vds = V_out_dc − (CM_dc − vgs_in), with vgs_in solved to a fixed point rather
+    // than read from a stale estimate. Take the converged point from the result; the model
+    // check (gds/id = 1/(VA + vds) in the demo device) is what this test owns.
     const va = VA_PER_L * 0.5e-6;
-    const vdsIn = 1.8 - 0.6686 - 1.1 + 0.57;
+    const vdsIn = 0.9 - (1.1 - res.values.in__vgs);
     const gdsIn = 10e-6 / (va + vdsIn);
     const gdsLd = 10e-6 / (va + 0.9);
     const av = 120e-6 / (gdsIn + gdsLd);

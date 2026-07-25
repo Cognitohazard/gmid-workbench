@@ -139,10 +139,11 @@ function fixAxisCached(t: DeviceTable, axis: string, v: number): DeviceTable {
 
 /**
  * Collapse the table's bias axes (vds/vsb) to the operating point before sizing: a value
- * DECLARED in the bind wins; a live axis the bind does not declare falls back to the
- * caller's bias with an advisory warning naming the assumed value (so a host-side slice
- * is never invisible); with neither, the axis stays live and sizing fails with guidance.
- * Returns the sliced table plus the applied coordinates for the BindReport.
+ * DECLARED in the bind wins; a live axis the bind does not declare takes the namespace
+ * default when the table characterizes that point, and is reported as ASSUMED so the
+ * coordinate is never silently invented; with neither, the axis stays live and sizing fails
+ * with guidance. Returns the sliced table, the applied coordinates, and which of them were
+ * assumed rather than authored — all three reach the BindReport.
  */
 function applyBindBias(
   b: SheetBind,
@@ -150,10 +151,13 @@ function applyBindBias(
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
-): { table: DeviceTable; bias: Record<string, number> } | { error: string; needs?: string[] } {
+):
+  | { table: DeviceTable; bias: Record<string, number>; assumed: string[] }
+  | { error: string; needs?: string[] } {
   let t = table;
   const bias: Record<string, number> = {};
   const needs: string[] = [];
+  const assumed: string[] = [];
   const slice = (axis: string, live: { values: ArrayLike<number> }, v: number): number => {
     const lo = live.values[0];
     const hi = live.values[live.values.length - 1];
@@ -202,8 +206,11 @@ function applyBindBias(
       const def = AXIS_DEFAULT_BIAS.get(axis);
       const lo = live.values[0];
       const hi = live.values[live.values.length - 1];
-      if (def !== undefined && lo <= def && def <= hi) slice(axis, live, def);
-      else needs.push(axis);
+      if (def !== undefined && lo <= def && def <= hi) {
+        slice(axis, live, def);
+        // Assumed, not authored — reported rather than warned; see BindReport.assumed.
+        assumed.push(axis);
+      } else needs.push(axis);
     }
   }
   if (needs.length) {
@@ -215,7 +222,7 @@ function applyBindBias(
       needs,
     };
   }
-  return { table: t, bias };
+  return { table: t, bias, assumed };
 }
 
 /** Resolve the bind, call sizeDevice, and merge its operating point into `values`. */
@@ -267,6 +274,7 @@ function runBind(
     }
     const report: BindReport = { ok: true, W: res.W, vgs: res.vgs, id: res.id };
     if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
+    if (sliced.assumed.length) report.assumed = sliced.assumed;
     return report;
   } catch (e) {
     let m = msg(e);
@@ -358,7 +366,7 @@ function applyUseParams(
   warn: (w: QAWarning) => void,
 ): { doc: SheetDoc; ok: boolean } {
   if (!use.params) return { doc: childDoc, ok: true };
-  const childParams = new Set(childDoc.params.map((p) => p.name));
+  const childParams = new Map(childDoc.params.map((p) => [p.name, p]));
   const overrides: Record<string, number> = {};
   let ok = true;
   for (const [k, expr] of Object.entries(use.params)) {
@@ -366,7 +374,8 @@ function applyUseParams(
     // one: the parent explicitly supplied a value (typo and all) that will NOT reach the
     // child, so the child would size a different design than the author wired — and its
     // embedded default could still read feasible. Fail closed, by name.
-    if (!childParams.has(k)) {
+    const child = childParams.get(k);
+    if (child === undefined) {
       ok = false;
       warn({
         rule: 'sheet-use-param',
@@ -375,6 +384,18 @@ function applyUseParams(
         location: use.name,
       });
       continue;
+    }
+    // Overriding a param the CHILD solves for only moves its starting guess — the fixed point
+    // decides the value, so the number the parent wired is not the one the child uses. Say so:
+    // silently demoting an explicit wiring to a hint is the same class of surprise the
+    // unmatched-key error above exists to prevent, and this one is easy to write by accident.
+    if (torn(child)) {
+      warn({
+        rule: 'sheet-use-param',
+        severity: 'warning',
+        message: `use "${use.name}": override "${k}" sets a param the child solves for, so it only seeds the iteration — the converged value wins`,
+        location: use.name,
+      });
     }
     const v = evalScalar(expr, parentValues, parentScope, warn, `use "${use.name}" param ${k}`);
     if (v === undefined || !Number.isFinite(v)) {
@@ -602,29 +623,37 @@ export const SOLVE_TOL_REL = 1e-7;
 // estimate converging to exactly zero is degenerate anyway.
 
 /**
- * Backstop iteration cap. NOT the divergence test — a fixed cap alone cannot tell a divergent
- * loop from a slowly convergent one, and picking it too low rejects loops that were converging
- * fine (at this tolerance a cap of 40 would reject everything with f' >= 0.67, then blame the
- * author for an unstable loop). Divergence is detected by a growing residual instead; this
- * only bounds the pathological case where the residual neither shrinks nor grows.
+ * Passes one tearing loop may take. Any finite cap rejects a contraction slow enough to need
+ * more (here |f'| above ~1 - ln(SOLVE_TOL_REL)/PASSES, about 0.97), so the cap cannot be the
+ * divergence test — a loop stopped here may have been converging the whole time, and the
+ * message says so rather than blaming the author. Real bias loops sit far from that edge; the
+ * library's 5T input-bias loop measures |f'| well under 0.2.
+ *
+ * It doubles as the per-loop share of the tree-wide budget below, which is simply this times
+ * the number of loops — so one loop cannot spend another's allowance.
  */
-const SOLVE_MAX_ITER = 200;
+const SOLVE_PASSES_PER_LOOP = 500;
 
-/** Consecutive residual increases that count as divergence rather than a transient wobble. */
+/** Consecutive increases of the error measure that count as divergence, not a transient wobble. */
 const SOLVE_DIVERGING = 4;
 
-/**
- * Total evaluation passes allowed across a whole composed tree, shared by every fixed point in
- * it. Nested tearing variables are inherently multiplicative — a parent iteration re-evaluates
- * its children, each of which re-converges its own loop — so a per-sheet cap alone permits
- * cap^depth work, which at MAX_USE_DEPTH is unbounded in practice. One shared budget makes the
- * whole tree's cost linear in this number no matter how the loops nest.
- */
-const SOLVE_TOTAL_PASSES = 1000;
-
-/** The shared pass budget threaded through a composed evaluation. */
+/** The pass budget shared across one composed evaluation. */
 interface SolveBudget {
   left: number;
+}
+
+/**
+ * How many sheets in this tree tear a loop. The shared budget scales with it, so that nesting —
+ * which multiplies passes, since a parent iteration re-converges each child — still runs into a
+ * ceiling, while BREADTH costs only linearly. A flat budget made feasibility non-compositional:
+ * eight sibling loops that each pass alone would see the last few fail for want of budget, with
+ * blame landing by document order.
+ */
+function tornSheets(doc: SheetDoc, depth = 0): number {
+  if (depth >= MAX_USE_DEPTH) return 0;
+  let n = doc.params.some(torn) ? 1 : 0;
+  for (const u of doc.uses ?? []) if (u.doc) n += tornSheets(u.doc, depth + 1);
+  return n;
 }
 
 /** The evaluation, marked infeasible and carrying one more error warning. */
@@ -646,8 +675,8 @@ function solveFailed(res: SheetResult, message: string): SheetResult {
  * iterated to a fixed point: each estimate is replaced by the value the sheet resolved for
  * it, until every one agrees with what it names. This is plain substitution, which converges
  * exactly when the loop contracts (|f'| < 1) — true of the bias loops the library actually
- * writes, where an estimated node voltage perturbs a drain bias only weakly (measured ~0.01
- * for the input-bias loop of a 5T OTA).
+ * writes, where an estimated node voltage perturbs a drain bias only weakly (well under 0.2 for
+ * the library's 5T input-bias loop).
  *
  * The upgrade path for a loop that does NOT contract is a secant/Wegstein step over the handful
  * of unknowns. Note that UNDER-relaxation cannot substitute for it: x + λ·(f(x) − x) has an
@@ -667,7 +696,7 @@ export function evaluateSheet(
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
   _depth = 0,
-  budget: SolveBudget = { left: SOLVE_TOTAL_PASSES },
+  budget: SolveBudget = { left: SOLVE_PASSES_PER_LOOP * tornSheets(doc) },
 ): SheetResult {
   const unknowns = doc.params.filter(torn);
   if (unknowns.length === 0) return evaluateOnce(doc, table, resolveDevice, _depth, budget);
@@ -682,14 +711,22 @@ export function evaluateSheet(
   const target = (p: { solveFor: string }): number => res.values[p.solveFor];
 
   let res = evaluateOnce(doc, table, resolveDevice, _depth, budget, est);
-  // Divergence is judged on each estimate's own ABSOLUTE gap against its own previous gap.
-  // A normalised residual cannot see it: geometric divergence scales numerator and
-  // denominator together, so the relative gap sits at a constant while the values run away.
-  const prevGap: Record<string, number> = {};
+  // Divergence is judged on ONE error measure for the whole loop, not on each estimate
+  // separately. Judging per-estimate and OR-ing the growths false-fires whenever the error
+  // rotates — with two coupled unknowns (a tail node and a mirror drain are exactly that pair)
+  // one component grows for several passes while the error as a whole shrinks. Each gap is
+  // divided by a scale FIXED on the first pass, which keeps the measure dimensionless across
+  // unlike units while staying absolute, so a geometric run-away still grows it (a
+  // per-pass-relative measure would sit at a constant while the values ran away).
+  const unit: Record<string, number> = {};
+  let err = Infinity;
+  let first = Infinity;
   let growing = 0;
-  for (let iter = 0; iter < SOLVE_MAX_ITER; iter++) {
+  let passes = 0;
+  while (passes < SOLVE_PASSES_PER_LOOP && budget.left > 0) {
+    passes++;
     let done = true;
-    let grew = false;
+    let sq = 0;
     for (const p of unknowns) {
       const to = target(p);
       if (to === undefined || !Number.isFinite(to)) {
@@ -702,29 +739,25 @@ export function evaluateSheet(
       const gap = Math.abs(est[p.name] - to);
       // Relative, per SOLVE_TOL_REL — the gap is already in hand, so no separate helper.
       if (gap > SOLVE_TOL_REL * Math.max(Math.abs(est[p.name]), Math.abs(to))) done = false;
-      if (gap > (prevGap[p.name] ?? Infinity)) grew = true;
-      prevGap[p.name] = gap;
+      unit[p.name] ??= Math.max(Math.abs(est[p.name]), Math.abs(to), TINY);
+      sq += (gap / unit[p.name]) ** 2;
     }
     // `res` was evaluated AT `est` as it stood, so once every estimate agrees with what the
     // sheet resolved for it, this result already IS the converged one.
     if (done) return res;
-    // A gap that keeps growing means substitution is walking away from the fixed point; say so
-    // after a few passes rather than burning the whole cap to reach the same verdict.
-    growing = grew ? growing + 1 : 0;
+
+    const prev = err;
+    err = Math.sqrt(sq);
+    if (passes === 1) first = err;
+    // An error that keeps growing means substitution is walking away from the fixed point; say
+    // so after a few passes rather than burning the whole allowance to reach the same verdict.
+    growing = err > prev ? growing + 1 : 0;
     if (growing >= SOLVE_DIVERGING) {
       return solveFailed(
         res,
-        `bias loop is diverging — the estimate moves further from its target each pass ` +
+        `bias loop is diverging — the estimates move further from their targets each pass ` +
           `(${report()}). Reparametrize so the loop disappears, or tear it at a quantity the ` +
           `rest of the design depends on more weakly`,
-      );
-    }
-    if (budget.left <= 0) {
-      return solveFailed(
-        res,
-        `bias-loop solving ran out of its ${SOLVE_TOTAL_PASSES}-pass budget for this design ` +
-          `(${report()}) — nested tearing variables multiply, so flatten the loops or tear ` +
-          `fewer of them`,
       );
     }
     // Commit the iterate only after every check above has had the pre-update values.
@@ -732,10 +765,18 @@ export function evaluateSheet(
     res = evaluateOnce(doc, table, resolveDevice, _depth, budget, est);
   }
 
+  // Out of passes. Distinguish "still closing, just slowly" from "stuck": a loop whose error
+  // shrank the whole way was converging, and telling its author to check for instability would
+  // be false. Substitution converges at |f'| per pass, so a weak contraction can genuinely need
+  // more passes than any cap allows.
   return solveFailed(
     res,
-    `bias loop did not settle in ${SOLVE_MAX_ITER} iterations (${report()}) — it is neither ` +
-      `converging nor clearly diverging, so check that each solveFor names the value its ` +
-      `estimate really stands in for`,
+    `bias loop did not reach tolerance in ${passes} passes (${report()}) — ` +
+      (err < first
+        ? `the disagreement fell ${first.toExponential(2)} → ${err.toExponential(2)}, so it IS ` +
+          `converging, just too weakly damped to close here; tear it at a quantity the design ` +
+          `depends on more weakly`
+        : `it is neither converging nor clearly diverging; check that each solveFor names the ` +
+          `value its estimate really stands in for`),
   );
 }

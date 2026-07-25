@@ -1,6 +1,6 @@
 {
   "title": "5T OTA",
-  "description": "The five-transistor OTA sized by half-circuit: an input pair device at half the tail current, a mirror-load device (pick its child table to the opposite polarity; set ld_sign to -1 for a signed-PMOS table), and the tail source. Gain, bandwidth, slew, noise, offset, and the input common-mode range are all author math over the three children's operating points. The load child evaluates first so the input device's drain level (the mirror's diode $V_{GS}$ below the supply) is known; the tail reads the input device's $V_{GS}$ to find its own headroom.",
+  "description": "The five-transistor OTA sized by half-circuit: an input pair device at half the tail current, a mirror-load device (pick its child table to the opposite polarity; set ld_sign to -1 for a signed-PMOS table), and the tail source. Gain, bandwidth, slew, noise, offset, and the input common-mode range are all author math over the three children's operating points. The load child evaluates first so the input device's drain level (the mirror's diode $V_{GS}$ below the supply) is known; the tail reads the input device's $V_{GS}$ to find its own headroom. The pair's own $V_{GS}$ places the tail node, which sets both its drain bias and its body bias.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -50,6 +50,7 @@
       "role": "spec",
       "note": "output DC level; sets the mirror output device's vds"
     },
+    { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
     {
@@ -143,7 +144,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -156,15 +157,22 @@
       "name": "in",
       "doc": {
         "title": "Input-pair device",
-        "description": "Half-circuit input device at half the tail current. Its drain sits one diode drop below the supply; its source sits one vgs below the input CM.",
+        "description": "Half-circuit input device at half the tail current, sized at the OUTPUT-side drain: the two pair devices share a gate drive and a source but not a drain, and it is the output-side one whose $g_{ds}$ loads the gain. Its source sits one $V_{GS}$ below the input CM, which is also its body bias.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
-          { "name": "vds_i", "value": 0.6, "unit": "V", "role": "spec" }
+          { "name": "vds_i", "value": 0.6, "unit": "V", "role": "spec" },
+          {
+            "name": "vsb_i",
+            "value": 0.4,
+            "unit": "V",
+            "role": "spec",
+            "note": "tail-node lift: the source sits at $CM_{dc} - V_{GS}$, not at the bulk"
+          }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
         "rows": [],
         "rules": [
           {
@@ -181,7 +189,8 @@
         "I_half": "I_tail/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
-        "vds_i": "VDD - abs(ld__vgs) - CM_dc + vgs_est_in"
+        "vds_i": "V_out_dc - (CM_dc - vgs_est_in)",
+        "vsb_i": "CM_dc - vgs_est_in"
       }
     },
     {
@@ -228,9 +237,26 @@
       "name": "Av",
       "expr": "in__gm/(in__gds + ld__gds)",
       "unit": "V/V",
-      "note": "half-circuit differential gain into the two output conductances, with both drains one diode |vgs_ld| below VDD (the balanced DC point). If CM_dc leaves the input device barely saturated its table gds soars and Av collapses — the input-sat-margin guardrail flags it; the closed-loop output level in application is sim's to confirm"
+      "note": "half-circuit differential gain into the two output conductances, both read at the OUTPUT node $V_{out,dc}$ — the drain that actually loads the gain. If either pair drain is left barely saturated its table gds soars and Av collapses; the input-sat-margin guardrail flags that. The closed-loop output level in application is sim's to confirm"
     },
-    { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
+    {
+      "name": "GBW",
+      "expr": "in__gm/(2*pi*CL)",
+      "unit": "Hz",
+      "note": "dominant-pole gain-bandwidth into the load"
+    },
+    {
+      "name": "f_pole",
+      "expr": "ld__gm/(2*pi*(2*ld__cgg))",
+      "unit": "Hz",
+      "note": "estimate: the mirror-node pole, the load's $g_m$ over both mirror gates' $C_{GG}$; the 5T's second pole"
+    },
+    {
+      "name": "PM",
+      "expr": "90 - (atan(GBW/f_pole) - atan(GBW/(2*f_pole)))*180/pi",
+      "unit": "deg",
+      "note": "estimate: phase margin left after the mirror node. That node is a pole-ZERO DOUBLET, not a lone pole — only half the signal takes the mirror path, putting a zero at twice the pole — so it costs far less phase than $f_{pole}$ alone suggests"
+    },
     { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
     {
       "name": "vn_in",
@@ -260,6 +286,14 @@
   "rules": [
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    {
+      "id": "pm-spec",
+      "kind": "guardrail",
+      "lhs": "PM",
+      "op": ">=",
+      "rhs": "PM_target",
+      "note": "estimate: margin left at crossover once the mirror doublet is paid for; advisory, since an open-loop OTA needs none of it and sim owns the real stability"
+    },
     { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
@@ -290,10 +324,10 @@
     {
       "id": "input-sat-margin",
       "kind": "guardrail",
-      "lhs": "VDD - abs(ld__vgs) - CM_dc + vgs_est_in - in__vdsat",
+      "lhs": "min(VDD - abs(ld__vgs), V_out_dc) - (CM_dc - vgs_est_in) - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
-      "justification": "the input pair's vds at the balanced point must clear vdsat with margin: near the edge the table gds is huge and the Av row reads pessimistically low",
+      "justification": "the pair's two drains sit at different levels — one a diode drop below the supply, the other at the output — and which is lower depends on V_out_dc, so this watches whichever it is. Near the saturation edge the table gds is huge and the Av row reads pessimistically low",
       "note": "trips when CM_dc pushes the input device toward triode — lower CM_dc or spend less diode drop (lower gm_id_ld)"
     }
   ]

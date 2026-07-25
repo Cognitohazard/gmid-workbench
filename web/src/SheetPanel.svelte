@@ -382,15 +382,18 @@
     return parts.join(' — ');
   }
 
-  // The operating point a bind sliced at (declared, or assumed from the panel bias), formatted
-  // "vds 0.9V, vsb 0V" — shown so the bias behind a sized width is never an invisible assumption.
-  const biasStr = (b: Record<string, number> | undefined): string =>
+  // The operating point a bind sliced at — declared, or filled from the namespace default —
+  // formatted "vds 0.9V, vsb 0V", so the bias behind a sized width is never invisible. A "?"
+  // marks a coordinate the engine assumed rather than the author stating it (see bindAssumed).
+  const biasStr = (b: Record<string, number> | undefined, assumed?: string[]): string =>
     b
       ? Object.entries(b)
-          .map(([k, v]) => `${k} ${formatSI(v)}${axisUnit(k)}`)
+          .map(([k, v]) => `${k} ${formatSI(v)}${axisUnit(k)}${assumed?.includes(k) ? '?' : ''}`)
           .join(', ')
       : '';
-  const biasText = $derived(biasStr(result.bind?.bias));
+  const biasText = $derived(biasStr(result.bind?.bias, result.bind?.assumed));
+  const biasHelp = (assumed: string[] | undefined): string =>
+    CONTROL_HELP.bindBias + (assumed?.length ? `\n\n${CONTROL_HELP.bindAssumed}` : '');
 
   // An infeasible child's failing HARD rules (advisory guardrails excluded) — so the cause of a
   // red child block is on screen, not just its ✗.
@@ -609,8 +612,8 @@
     {#if c?.bind?.ok}
       <div class="susebind">
         W={fmt(c.bind.W)}m · V<sub>GS</sub>={fmt(c.bind.vgs)}V · I<sub>D</sub>={fmt(c.bind.id)}A
-        {#if c.bind.bias}<span class="sbias" title={CONTROL_HELP.bindBias}
-            >@ {biasStr(c.bind.bias)}</span
+        {#if c.bind.bias}<span class="sbias" title={biasHelp(c.bind.assumed)}
+            >@ {biasStr(c.bind.bias, c.bind.assumed)}</span
           >{/if}
       </div>
     {:else if c?.bind}
@@ -671,7 +674,7 @@
           )}A</span
         >
         {#if biasText}
-          <span class="sbias" title={CONTROL_HELP.bindBias}>@ {biasText}</span>
+          <span class="sbias" title={biasHelp(result.bind?.assumed)}>@ {biasText}</span>
         {/if}
       {:else}
         <span class="perr" title={result.bind.error}>sizing: {result.bind.error}</span>

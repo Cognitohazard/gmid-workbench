@@ -85,6 +85,8 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Sheets you imported (.json). They join the picker and the reference library: a sheet can name one as user/<name> (or its bare name) in a `ref`. Kept across reloads.',
   bindBias:
     'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device pins its own; body bias (vsb) defaults to 0. Edit to override; clear to revert.',
+  bindAssumed:
+    'A coordinate marked ? was not declared by this block — the engine filled it in. That is right for a common-source device or a rail-referenced mirror, and wrong for a differential pair, cascode or source follower, where the source floats above the bulk. Declare vsb in the bind if this device is one of those.',
   bindNeeds:
     'This block must pin its drain bias (vds) but hasn’t — the table has a vds axis and there is no safe default, so sizing fails closed. Set a value here to size it in place.',
   solvedParam:
