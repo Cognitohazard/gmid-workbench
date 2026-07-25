@@ -55,12 +55,15 @@ export const SWEEP_POINTS = 41;
 
 /** True when a param is a finitely-bounded slider variable (sweepable). The ONE
  *  definition of sweepability — both sweep engines and the UI's param pickers consult
- *  it, so they can never disagree about which params can be swept. */
+ *  it, so they can never disagree about which params can be swept. A param carrying
+ *  `solveFor` is a tearing variable the engine solves for, not a knob anyone may set,
+ *  so it is excluded however its bounds are written. */
 export function sweepable(
-  v: { min?: number; max?: number } | undefined,
+  v: { min?: number; max?: number; solveFor?: string } | undefined,
 ): v is { min: number; max: number } {
   return (
     !!v &&
+    !v.solveFor &&
     v.min !== undefined &&
     v.max !== undefined &&
     Number.isFinite(v.min) &&
@@ -172,8 +175,22 @@ export const SWEEP2_POINTS = 21;
  * feasibility map a 1-D cut cannot answer ("does any L hold the phase margin across the
  * whole gm_id range?"). Each infeasible cell also names the WORST failing hard rule —
  * walking the composition tree, so a child block's constraint is attributed by path.
- * Cost is n² full-tree evaluations (sub-millisecond each on real tables). Structural
- * validation runs once, with both swept params overridden. Pure; never throws.
+ * Cost is n² full-tree evaluations (sub-millisecond each on real tables). A sheet that closes
+ * a bias loop costs several times that: every sample converges its own fixed point AND lands
+ * on a bias the slice cache has not seen, since a solved estimate genuinely differs per sample.
+ * Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~10 ms/cell
+ * solved, i.e. several seconds for the default 21x21 — and this runs synchronously, so a
+ * caller driving it from a UI should expect to block for that long. The unsolved figure is the
+ * cheaper one only because a frozen estimate re-slices at the same handful of biases; the
+ * honest computation is the slower one.
+ *
+ * Each sample is solved INDEPENDENTLY, from the doc's authored starting guess. Seeding a sample
+ * from its neighbour's converged estimate is the obvious optimisation and is deliberately not
+ * done: contraction does not imply a unique fixed point, so a carried seed makes the map
+ * hysteretic — a swept cell can then report a different verdict than the same parameters
+ * evaluated standalone, which is a worse defect than the time it saves.
+ *
+ * Structural validation runs once, with both swept params overridden. Pure; never throws.
  */
 export function sweepSheet2(
   doc: SheetDoc,

@@ -102,7 +102,8 @@
       "value": 0.57,
       "unit": "V",
       "role": "choice",
-      "note": "estimate of the input-pair vgs, used to place the tail node; retune until the input-bias-consistent guardrail is green"
+      "solveFor": "in__vgs",
+      "note": "stands in for the input-pair $V_{GS}$ so the tail node can be placed before the pair is sized; solved to a fixed point, so this value is only a starting guess"
     },
     {
       "name": "ld_sign",
@@ -284,7 +285,7 @@
       "lhs": "abs(in__vgs - vgs_est_in)",
       "op": "<=",
       "rhs": "0.05",
-      "note": "the tail-node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+      "note": "asserts the tail-node placement agrees with the sized in__vgs; the solver closes this loop, so a trip means the fixed point did not hold"
     },
     {
       "id": "input-sat-margin",

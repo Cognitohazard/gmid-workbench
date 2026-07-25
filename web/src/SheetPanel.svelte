@@ -7,6 +7,7 @@
     sweepSheet,
     sweepSheet2,
     sweepable as isSweepable,
+    torn,
     resolveSheetRefs,
     flattenSheetDoc,
     formatEng,
@@ -482,15 +483,22 @@
     <span class="vn"
       >{@html qLabel(p.name)}{#if p.unit}<i>{p.unit}</i>{/if}</span
     >
+    <!-- A tearing variable is solved, not set: show what it converged to (the authored value is
+         only a starting guess) and refuse edits, rather than offering a knob the next
+         evaluation discards. -->
     <input
       class="num"
+      class:solved={torn(p)}
       type="text"
       inputmode="text"
       spellcheck="false"
-      value={formatEng(p.value)}
+      readonly={torn(p)}
+      tabindex={torn(p) ? -1 : undefined}
+      title={torn(p) ? CONTROL_HELP.solvedParam : undefined}
+      value={formatEng(torn(p) ? (result.values[p.name] ?? p.value) : p.value)}
       onchange={(e) => commitEng(e.currentTarget, p.value, (v) => v != null && setParam(p.name, v))}
     />
-    {#if p.min !== undefined && p.max !== undefined}
+    {#if isSweepable(p)}
       <input
         class="sld"
         type="range"
@@ -1002,6 +1010,12 @@
     width: 5rem;
     font: inherit;
     font-family: ui-monospace, monospace;
+  }
+  /* A solved tearing variable reads as a reported value, not a field you can type into. */
+  .num.solved {
+    border-style: dashed;
+    opacity: 0.75;
+    cursor: default;
   }
   .sld {
     width: 100%;

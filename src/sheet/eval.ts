@@ -11,7 +11,7 @@ import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
-import { BIAS_AXES, MAX_USE_DEPTH, isHardRule, joinProvide, prefixUseWarning } from './types';
+import { BIAS_AXES, MAX_USE_DEPTH, isHardRule, joinProvide, prefixUseWarning, torn } from './types';
 import type {
   BindReport,
   RuleResult,
@@ -418,6 +418,7 @@ function evalChildren(
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
+  budget: SolveBudget,
 ): SheetChildReport[] {
   const reports: SheetChildReport[] = [];
   // Structural self-defense for direct evaluateSheet callers (runSheet validates, but
@@ -472,7 +473,7 @@ function evalChildren(
     }
 
     const { doc: childDoc, ok: paramsOk } = applyUseParams(use, srcDoc, values, scope, warn);
-    const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1);
+    const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1, budget);
 
     // Roll up child warnings, attributed to the use site (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
@@ -505,18 +506,18 @@ function evalChildren(
 }
 
 /**
- * Evaluate a sheet against an optional device table. One pass, never throws: seed
- * params → (compose children) → size → author-order rows → signed-margin rules →
- * aggregate feasibility. A leaf (no `uses`) behaves exactly as before. `resolveDevice`
- * is only consulted by a child `use` that names its own device; `opts` threads the
- * whole tree (children included); `_depth` is internal.
+ * One evaluation pass. `solved` overrides the seeded value of a tearing-variable param
+ * (see SheetVar.solveFor); everything else behaves as if the doc had those values.
  */
-export function evaluateSheet(
+function evaluateOnce(
   doc: SheetDoc,
-  table?: DeviceTable,
-  resolveDevice?: DeviceResolver,
-  _depth = 0,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+  _depth: number,
+  budget: SolveBudget,
+  solved?: Record<string, number>,
 ): SheetResult {
+  budget.left--;
   const warnings: QAWarning[] = [];
   const warn = (w: QAWarning): void => void warnings.push(w);
   const values: Record<string, number> = {};
@@ -527,9 +528,11 @@ export function evaluateSheet(
   //    before params, so a same-named param deliberately wins.
   if (table) Object.assign(values, metaScalars(table.meta));
 
-  // 1. Seed top-level scalar params (a parent supplies a child's via use.params).
+  // 1. Seed top-level scalar params (a parent supplies a child's via use.params). A param
+  //    being solved for takes the current iterate in place of its authored starting guess.
   for (const p of doc.params) {
-    if (Number.isFinite(p.value)) values[p.name] = p.value;
+    const v = solved?.[p.name] ?? p.value;
+    if (Number.isFinite(v)) values[p.name] = v;
   }
   const scope = scalarScope(values); // closes over the mutated `values`
 
@@ -537,7 +540,7 @@ export function evaluateSheet(
   //    (name__key) in its own bind/rows/rules.
   const children =
     doc.uses && doc.uses.length > 0
-      ? evalChildren(doc.uses, table, resolveDevice, _depth, values, scope, warn)
+      ? evalChildren(doc.uses, table, resolveDevice, _depth, values, scope, warn, budget)
       : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when bound.
@@ -582,4 +585,157 @@ export function evaluateSheet(
     !warnings.some((w) => w.severity === 'error');
 
   return { values, bind, rules, feasible, warnings, ...(children ? { children } : {}) };
+}
+
+/**
+ * Convergence tolerance for a tearing variable, relative. Five orders below the ~0.1% the
+ * sizer itself resolves an operating point to between grid nodes, so it is far finer than the
+ * data can justify while still being cheap to reach.
+ */
+export const SOLVE_TOL_REL = 1e-7;
+// Applied purely RELATIVELY, deliberately with no absolute floor. The core is SI throughout, so
+// a tearing variable is as likely to be a capacitance (~1e-15 F) as a voltage; any fixed
+// absolute floor is met instantly at the small end and would report a wildly wrong estimate as
+// converged, which is precisely the failure this whole mechanism exists to prevent. The cost is
+// that an estimate whose fixed point is exactly zero only settles once two iterates are
+// bit-identical, so it runs to the cap and fails closed — the safe direction, and a bias
+// estimate converging to exactly zero is degenerate anyway.
+
+/**
+ * Backstop iteration cap. NOT the divergence test — a fixed cap alone cannot tell a divergent
+ * loop from a slowly convergent one, and picking it too low rejects loops that were converging
+ * fine (at this tolerance a cap of 40 would reject everything with f' >= 0.67, then blame the
+ * author for an unstable loop). Divergence is detected by a growing residual instead; this
+ * only bounds the pathological case where the residual neither shrinks nor grows.
+ */
+const SOLVE_MAX_ITER = 200;
+
+/** Consecutive residual increases that count as divergence rather than a transient wobble. */
+const SOLVE_DIVERGING = 4;
+
+/**
+ * Total evaluation passes allowed across a whole composed tree, shared by every fixed point in
+ * it. Nested tearing variables are inherently multiplicative — a parent iteration re-evaluates
+ * its children, each of which re-converges its own loop — so a per-sheet cap alone permits
+ * cap^depth work, which at MAX_USE_DEPTH is unbounded in practice. One shared budget makes the
+ * whole tree's cost linear in this number no matter how the loops nest.
+ */
+const SOLVE_TOTAL_PASSES = 1000;
+
+/** The shared pass budget threaded through a composed evaluation. */
+interface SolveBudget {
+  left: number;
+}
+
+/** The evaluation, marked infeasible and carrying one more error warning. */
+function solveFailed(res: SheetResult, message: string): SheetResult {
+  return {
+    ...res,
+    feasible: false,
+    warnings: [...res.warnings, { rule: 'sheet-solve', severity: 'error', message }],
+  };
+}
+
+/**
+ * Evaluate a sheet against an optional device table. Never throws: seed params → (compose
+ * children) → size → author-order rows → signed-margin rules → aggregate feasibility.
+ * `resolveDevice` is only consulted by a child `use` that names its own device; `_depth` is
+ * internal.
+ *
+ * When the sheet declares tearing variables (params carrying `solveFor`), the pass above is
+ * iterated to a fixed point: each estimate is replaced by the value the sheet resolved for
+ * it, until every one agrees with what it names. This is plain substitution, which converges
+ * exactly when the loop contracts (|f'| < 1) — true of the bias loops the library actually
+ * writes, where an estimated node voltage perturbs a drain bias only weakly (measured ~0.01
+ * for the input-bias loop of a 5T OTA).
+ *
+ * The upgrade path for a loop that does NOT contract is a secant/Wegstein step over the handful
+ * of unknowns. Note that UNDER-relaxation cannot substitute for it: x + λ·(f(x) − x) has an
+ * effective derivative of 1 + λ·(f' − 1), which stays above 1 for every λ in (0, 1] once
+ * f' > 1 — rescuing a divergent loop needs the negative λ = 1/(1 − f') that a secant step
+ * derives. Left out deliberately: failing closed on a divergent loop tells the author their
+ * tearing choice is unstable, which is information, whereas silently solving it is not.
+ *
+ * Failure is closed at every end — an estimate naming something that does not resolve to a
+ * finite number, a residual that keeps growing, a loop that never settles, and an exhausted
+ * tree-wide pass budget each return an infeasible result carrying the reason. Never a design
+ * sized against a stale estimate. `evalChildren` recurses through here, so a child closes its
+ * own loops, and `budget` is shared across the whole tree so nesting cannot go exponential.
+ */
+export function evaluateSheet(
+  doc: SheetDoc,
+  table?: DeviceTable,
+  resolveDevice?: DeviceResolver,
+  _depth = 0,
+  budget: SolveBudget = { left: SOLVE_TOTAL_PASSES },
+): SheetResult {
+  const unknowns = doc.params.filter(torn);
+  if (unknowns.length === 0) return evaluateOnce(doc, table, resolveDevice, _depth, budget);
+
+  const est: Record<string, number> = {};
+  for (const p of unknowns) est[p.name] = p.value;
+
+  /** Each estimate against what the sheet last resolved for it — read BEFORE the update, so a
+   *  failure message shows the disagreement rather than a value compared with itself. */
+  const report = (): string =>
+    unknowns.map((p) => `${p.name} → ${p.solveFor}: ${est[p.name]} vs ${target(p)}`).join('; ');
+  const target = (p: { solveFor: string }): number => res.values[p.solveFor];
+
+  let res = evaluateOnce(doc, table, resolveDevice, _depth, budget, est);
+  // Divergence is judged on each estimate's own ABSOLUTE gap against its own previous gap.
+  // A normalised residual cannot see it: geometric divergence scales numerator and
+  // denominator together, so the relative gap sits at a constant while the values run away.
+  const prevGap: Record<string, number> = {};
+  let growing = 0;
+  for (let iter = 0; iter < SOLVE_MAX_ITER; iter++) {
+    let done = true;
+    let grew = false;
+    for (const p of unknowns) {
+      const to = target(p);
+      if (to === undefined || !Number.isFinite(to)) {
+        return solveFailed(
+          res,
+          `param "${p.name}" solves for "${p.solveFor}", which did not resolve to a finite ` +
+            `number — the estimate cannot be closed, so the design is unsized`,
+        );
+      }
+      const gap = Math.abs(est[p.name] - to);
+      // Relative, per SOLVE_TOL_REL — the gap is already in hand, so no separate helper.
+      if (gap > SOLVE_TOL_REL * Math.max(Math.abs(est[p.name]), Math.abs(to))) done = false;
+      if (gap > (prevGap[p.name] ?? Infinity)) grew = true;
+      prevGap[p.name] = gap;
+    }
+    // `res` was evaluated AT `est` as it stood, so once every estimate agrees with what the
+    // sheet resolved for it, this result already IS the converged one.
+    if (done) return res;
+    // A gap that keeps growing means substitution is walking away from the fixed point; say so
+    // after a few passes rather than burning the whole cap to reach the same verdict.
+    growing = grew ? growing + 1 : 0;
+    if (growing >= SOLVE_DIVERGING) {
+      return solveFailed(
+        res,
+        `bias loop is diverging — the estimate moves further from its target each pass ` +
+          `(${report()}). Reparametrize so the loop disappears, or tear it at a quantity the ` +
+          `rest of the design depends on more weakly`,
+      );
+    }
+    if (budget.left <= 0) {
+      return solveFailed(
+        res,
+        `bias-loop solving ran out of its ${SOLVE_TOTAL_PASSES}-pass budget for this design ` +
+          `(${report()}) — nested tearing variables multiply, so flatten the loops or tear ` +
+          `fewer of them`,
+      );
+    }
+    // Commit the iterate only after every check above has had the pre-update values.
+    for (const p of unknowns) est[p.name] = target(p);
+    res = evaluateOnce(doc, table, resolveDevice, _depth, budget, est);
+  }
+
+  return solveFailed(
+    res,
+    `bias loop did not settle in ${SOLVE_MAX_ITER} iterations (${report()}) — it is neither ` +
+      `converging nor clearly diverging, so check that each solveFor names the value its ` +
+      `estimate really stands in for`,
+  );
 }

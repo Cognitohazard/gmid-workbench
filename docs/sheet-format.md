@@ -45,6 +45,7 @@ Each entry in `params` is a named scalar input:
 | `unit` | string, optional | Display unit. |
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
+| `solveFor` | string, optional | Makes this parameter a tearing variable and names the value it must agree with, closing a bias loop (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
 
 The `role` separates *what the sheet is for* from *how it gets there*:
 
@@ -387,6 +388,100 @@ the bound table's recorded polarity (or a fully non-positive vgs axis) says the 
 still wrong. A few library sheets instead share one global sign param (e.g. `p_sign`)
 across several same-polarity children; those get no per-child hint, so prefer the
 per-child form when authoring.
+
+## Closing a bias loop (`solveFor`)
+
+Children evaluate in document order and may only read *earlier* siblings, so the composition is
+acyclic by construction. Real circuits are not. In a 5T OTA the input pair's drain sits a mirror
+`VGS` below the supply, while the pair's own `VGS` sets the tail node it stands on — a cycle the
+document order cannot express.
+
+The author cuts the cycle with a **tearing variable**: an estimate parameter standing in for a
+value only the evaluated sheet knows. `solveFor` names what the estimate is an estimate *of*, and
+evaluation then iterates the sheet to a fixed point:
+
+```json
+{ "name": "vgs_est_in", "value": 0.7, "unit": "V", "role": "choice",
+  "solveFor": "in__vgs",
+  "note": "stands in for the input-pair vgs so the tail node can be placed before the pair is sized" }
+```
+
+The target is any name resolvable in this sheet's namespace once its body has run — usually a
+child's provided scalar (`in__vgs`), but a row or the sheet's own sized operating point works
+too. `value` is only the starting guess: where the loop contracts to a single fixed point, every
+guess lands on the same answer. A guess still matters when it decides *which* fixed point you
+reach (contraction is local, so a loop can have more than one) or whether the iteration gets
+there at all, so keep it near the value you expect. Because the parameter is solved rather than
+set, the GUI shows it read-only, reporting what it converged to rather than what was authored.
+
+**Without `solveFor` the estimate is whatever the author last typed**, and nothing forces it to
+agree with the design. That is not a small error: the library's own 5T OTA shipped with a default
+that placed the input pair's drain 6 mV above its `vdsat`, so the sheet evaluated `gds` on a
+device in triode and reported a gain of **1.8 against a target of 15**. Solved, the same sheet
+reports 28.0. Prefer `solveFor` over a hand-tuned estimate in every new sheet.
+
+### What it does and does not guarantee
+
+Iteration is plain substitution: replace each estimate with the value the sheet resolved for it,
+repeat until every one agrees. That converges when the loop **contracts** — when a small change in
+the estimate produces a smaller change in what it names. Real bias loops do: an estimated node
+voltage perturbs a drain bias, which moves the sized `VGS` only slightly.
+
+Every failure mode is closed, never silent:
+
+| situation | result |
+|-|-|
+| the named target does not resolve to a finite number | infeasible, `sheet-solve` error naming the estimate |
+| the gap to the target grows for several passes running | infeasible, `sheet-solve` error reporting the loop as diverging |
+| the loop neither converges nor clearly diverges | infeasible, `sheet-solve` error after the backstop iteration cap |
+| nested loops exhaust the tree-wide pass budget | infeasible, `sheet-solve` error pointing at the nesting |
+| a param solves for itself | validation error (it is a fixed point trivially, and hides the loop) |
+| more than four params carry `solveFor` | validation error — see the scope note below |
+
+Convergence is judged **relative** (to about 1e-7), deliberately with no absolute floor: the core
+is SI throughout, so a tearing variable is as likely to be a capacitance near `1e-15` as a voltage
+near 1, and any fixed absolute floor would be satisfied instantly at the small end and report a
+wildly wrong estimate as converged.
+
+A loop that does not converge is telling you the tearing choice is unstable, not that the circuit
+is. Two fixes usually apply, in this order:
+
+1. **Reparametrize so the loop disappears.** Many are artifacts of which variable was declared
+   independent. Taking the tail node voltage as an input makes the input device's `vds` explicit
+   and turns the input common-mode range into an output the rules check — same physics, no loop.
+2. **Cut the cycle somewhere else**, at a quantity the rest of the design depends on more weakly.
+
+Note that *under*-relaxation (`x + λ·(f(x) − x)` with `0 < λ ≤ 1`) cannot rescue a divergent loop:
+its effective slope is `1 + λ·(f' − 1)`, still above 1 whenever `f' > 1`. Only a secant/Wegstein
+step, which derives a negative `λ = 1/(1 − f')`, would — and that is deliberately not implemented,
+because a divergent loop is worth reporting rather than solving around.
+
+### Scope: a few named loops, not a circuit solver
+
+At most **four** params per sheet may carry `solveFor`. The architecture permits "small, explicit,
+designer-named fixed points" and forbids a nodal solver; tearing many unknowns at once stops being
+the former and becomes relaxation over a node set. The limit makes that boundary checkable rather
+than aspirational. Nested loops also share one evaluation budget for the whole composed tree,
+since a parent's iteration re-converges each child's loop and the cost would otherwise multiply
+with depth.
+
+### Consequences for rules and sweeps
+
+A `*-consistent` guardrail comparing an estimate against its target becomes an **assertion** — it
+should now always pass, and a trip means the fixed point did not hold. Keeping it is cheap
+confirmation; it is no longer something to retune by hand.
+
+A solved parameter is **not sweepable**: it is no longer a free variable, so the sweep pickers and
+both sweep engines exclude it however its `min`/`max` are written. Sweeping other params still
+works, and each sample closes its own loop — which is what makes a composed sweep quantitatively
+trustworthy, since one slider value cannot be correct across a whole plane.
+
+Every sample is solved **independently**, from the authored starting guess; a sample is never
+seeded from its neighbour's answer. That optimisation is tempting and wrong: contraction does not
+imply a unique fixed point, so a carried seed makes the sweep hysteretic, and a cell could then
+report a different verdict than the same parameters evaluated on their own. The honest version
+costs real time — roughly 10 ms per sample for a three-child sheet on a real PDK table, so several
+seconds for a 21×21 map, run synchronously.
 
 ## Sweeps
 

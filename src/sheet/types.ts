@@ -25,6 +25,24 @@ export interface SheetVar {
   unit?: string;
   role?: 'spec' | 'choice';
   note?: string;
+  /**
+   * Marks this param as a TEARING VARIABLE and names the value it must agree with, closing
+   * a bias loop the composition DAG cannot express. Children evaluate in document order and
+   * can only read earlier siblings, so a real circuit's cyclic bias (the input pair's drain
+   * sits below the mirror's VGS, while the pair's own VGS sets the tail node it stands on)
+   * has to be cut somewhere; the author cuts it with an estimate, and this field says what
+   * the estimate is an estimate OF. Evaluation then iterates the sheet to a fixed point
+   * instead of leaving a human to retune the slider until a guardrail goes green.
+   *
+   * The target is any name resolvable in THIS sheet's namespace once its body has run —
+   * typically a child's provided scalar (`in__vgs`), but a row or the sheet's own sized
+   * operating point works too. `value` is only the starting guess. A target that does not
+   * resolve, or an iteration that does not settle, fails closed rather than reporting a
+   * design sized against a stale estimate.
+   *
+   * A solved param is no longer a free variable, so it is not sweepable.
+   */
+  solveFor?: string;
 }
 
 /**
@@ -163,6 +181,19 @@ export interface SheetUse {
  *  authored tree (embedded docs form a finite tree, so this is a sanity cap, not a
  *  cycle guard). Shared by the evaluator and the validator. */
 export const MAX_USE_DEPTH = 8;
+
+/** Maximum tearing variables (params carrying `solveFor`) one sheet may declare. The scope rule
+ *  permits "small, explicit, designer-named fixed points" and forbids a nodal solver; tearing
+ *  many unknowns at once crosses that line into relaxation over a node set. Shared by the
+ *  validator and the format docs so the limit is stated once. */
+export const MAX_TORN_PARAMS = 4;
+
+/** A param the engine solves for rather than the author setting — the ONE definition of
+ *  "torn", mirroring how `sweepable` owns the notion of a free slider variable. A type guard,
+ *  so a caller that narrows gets `solveFor` as a plain string instead of casting it. */
+export function torn(p: SheetVar): p is SheetVar & { solveFor: string } {
+  return typeof p.solveFor === 'string' && p.solveFor !== '';
+}
 
 /** The separator joining a child use-name to a provided key. The engine has no member
  *  access (`child.key` cannot parse), so a child's scalars surface in the parent scope as

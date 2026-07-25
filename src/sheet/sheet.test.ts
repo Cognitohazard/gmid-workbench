@@ -7,7 +7,16 @@ import { generateDemoDevice, withoutColumns } from '../demo';
 import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { fixTable } from '../series';
 import { lookup } from '../lookup';
-import { evaluateSheet, runSheet, validateSheet, sweepSheet, sweepSheet2 } from './index';
+import {
+  evaluateSheet,
+  runSheet,
+  validateSheet,
+  sweepSheet,
+  sweepSheet2,
+  sweepable,
+  MAX_TORN_PARAMS,
+  SOLVE_TOL_REL,
+} from './index';
 import { EXAMPLES } from './examples';
 import type { SheetDoc } from './types';
 
@@ -213,6 +222,242 @@ describe('evaluateSheet — rules', () => {
       rules: [{ id: 'div0', kind: 'guardrail', lhs: '1/z', op: '<=', rhs: 'lim' }], // 1/0 = Inf
     });
     expect(evaluateSheet(doc, dev).rules[0].status).toBe('na');
+  });
+});
+
+describe('evaluateSheet — bias-loop closure (solveFor)', () => {
+  // A loop shaped like a real one: an estimate standing in for a value only the evaluated
+  // sheet knows, perturbing the operating point WEAKLY. The demo table has no live bias axes,
+  // so the loop runs through a row rather than a bias declaration — `gm/ID` is nudged by the
+  // estimate, and the estimate solves for the vstar that results.
+  //
+  // The weak coefficient is what makes it converge, and that is the honest shape: measured
+  // |f'| here is ~0.12, against ~0.01 for the input-bias loop of a real 5T OTA. Coupling the
+  // estimate tightly instead (`gm_id: '2/vstar_est'`, i.e. x -> vstar(2/x)) gives f' = 1.10 and
+  // legitimately does not converge — covered by the divergence test below.
+  function loopDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
+    return {
+      title: 'loop',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'id', value: 10e-6 },
+        { name: 'vstar_est', value: 0.3, solveFor: 'vstar_actual' },
+      ],
+      bind: { L: 'L', id: 'id', gm_id: '8 + 5*vstar_est' },
+      rows: [{ name: 'vstar_actual', expr: 'vstar' }],
+      rules: [],
+      ...overrides,
+    };
+  }
+
+  it('iterates the estimate until it agrees with what it names', () => {
+    const res = evaluateSheet(loopDoc(), dev);
+    expect(res.feasible).toBe(true);
+    // The converged estimate must equal the value it solves for — that IS the contract, held
+    // to the engine's own tolerance rather than an arbitrary decimal count.
+    expect(Math.abs(res.values.vstar_est - res.values.vstar_actual)).toBeLessThanOrEqual(
+      SOLVE_TOL_REL * Math.abs(res.values.vstar_actual),
+    );
+    // ...and the sheet must actually have moved off its authored starting guess, or the test
+    // would pass just as well without any solving.
+    expect(Math.abs(res.values.vstar_est - 0.3)).toBeGreaterThan(1e-2);
+    expect(res.warnings.filter((w) => w.severity === 'error')).toHaveLength(0);
+  });
+
+  it('lands on the same point the sized device reports, not the authored guess', () => {
+    const res = evaluateSheet(loopDoc(), dev);
+    // Independently re-size at the converged estimate: the engine's answer must be the true
+    // fixed point of the map, not merely a value that stopped changing.
+    const point = sizeDevice({
+      table: dev,
+      L: 0.5e-6,
+      id: 10e-6,
+      gm_id: 8 + 5 * res.values.vstar_est,
+    });
+    expect(point.quantities.vstar).toBeCloseTo(res.values.vstar_est, 6);
+  });
+
+  it('is unaffected by the authored starting guess', () => {
+    const from = (v: number): number =>
+      evaluateSheet(
+        loopDoc({
+          params: [
+            { name: 'L', value: 0.5e-6 },
+            { name: 'id', value: 10e-6 },
+            { name: 'vstar_est', value: v, solveFor: 'vstar_actual' },
+          ],
+        }),
+        dev,
+      ).values.vstar_est;
+    expect(from(0.15)).toBeCloseTo(from(0.45), 6);
+  });
+
+  it('fails closed when the estimate names something that never resolves', () => {
+    const res = evaluateSheet(
+      loopDoc({
+        params: [
+          { name: 'L', value: 0.5e-6 },
+          { name: 'id', value: 10e-6 },
+          { name: 'vstar_est', value: 0.2, solveFor: 'no_such_value' },
+        ],
+      }),
+      dev,
+    );
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => w.rule === 'sheet-solve' && w.severity === 'error')).toBe(true);
+  });
+
+  it('fails closed on a loop that cannot converge', () => {
+    // An estimate that solves for its own negation has no attracting fixed point away from 0,
+    // and the sheet must say so rather than return whichever iterate it stopped on.
+    const res = evaluateSheet(
+      loopDoc({
+        params: [
+          { name: 'L', value: 0.5e-6 },
+          { name: 'id', value: 10e-6 },
+          { name: 'osc', value: 1, solveFor: 'flip' },
+        ],
+        bind: undefined,
+        rows: [{ name: 'flip', expr: '-2*osc' }],
+      }),
+      dev,
+    );
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(true);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(/diverging/);
+  });
+
+  it('refuses a param that solves for itself', () => {
+    const w = validateSheet(
+      loopDoc({
+        params: [{ name: 'x', value: 1, solveFor: 'x' }],
+        bind: undefined,
+        rows: [],
+      }),
+    );
+    expect(w.some((v) => v.rule === 'sheet-param' && /solves for itself/.test(v.message))).toBe(
+      true,
+    );
+  });
+
+  it('closes a loop inside a composed child', () => {
+    // evalChildren recurses through evaluateSheet, so a child's own tearing variable must be
+    // solved without the parent knowing anything about it.
+    const parent: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'c', doc: { ...loopDoc(), provide: ['vstar_actual'] } }],
+    };
+    const res = evaluateSheet(parent, dev);
+    const child = res.children?.[0];
+    expect(child?.feasible).toBe(true);
+    expect(res.values.c__vstar_actual).toBeCloseTo(
+      evaluateSheet(loopDoc(), dev).values.vstar_est,
+      6,
+    );
+  });
+
+  it('converges a capacitance-scale estimate, not just a volt-scale one', () => {
+    // The core is SI throughout, so a tearing variable is as likely to be ~1e-15 F as ~1 V.
+    // Any ABSOLUTE convergence floor is met on the first comparison at that scale and would
+    // report a wildly wrong estimate as converged — the exact failure solveFor exists to stop.
+    // Fixed point of c = 2e-15 - 0.5*c is 4/3e-15; the authored guess is far from it.
+    const doc: SheetDoc = {
+      title: 'tiny',
+      polarity: 'n',
+      params: [{ name: 'c_est', value: 0.5e-15, solveFor: 'c_actual' }],
+      rows: [{ name: 'c_actual', expr: '2e-15 - 0.5*c_est' }],
+      rules: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.c_est).toBeCloseTo((4 / 3) * 1e-15, 21);
+  });
+
+  it('bounds nested fixed points with one budget for the whole tree', () => {
+    // A parent iteration re-evaluates its children, each re-converging its own loop, so nested
+    // tearing variables multiply. Without a shared budget the cost is cap^depth; with one, a
+    // pathological nest fails closed instead of hanging.
+    const leaf = (): SheetDoc => ({
+      title: 'leaf',
+      polarity: 'n',
+      // |f'| = 0.995: converges in principle, far too slowly to finish inside the budget.
+      params: [{ name: 'x', value: 1, solveFor: 'y' }],
+      rows: [{ name: 'y', expr: '1 + 0.995*x' }],
+      rules: [],
+      provide: ['y'],
+    });
+    let doc = leaf();
+    for (let i = 0; i < 4; i++) {
+      doc = { ...leaf(), uses: [{ name: `c${i}`, doc }] };
+    }
+    const t0 = performance.now();
+    const res = evaluateSheet(doc, dev);
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(true);
+  });
+
+  it('fails closed on a loop that neither converges nor diverges', () => {
+    // A period-2 oscillation: the gap never shrinks, so it never settles, and never grows, so
+    // the divergence test correctly stays quiet. Only the backstop iteration cap ends it —
+    // this is the exit that exists for exactly this shape.
+    const res = evaluateSheet(
+      loopDoc({
+        params: [{ name: 'flip', value: 1, solveFor: 'negated' }],
+        bind: undefined,
+        rows: [{ name: 'negated', expr: '-flip' }],
+      }),
+      dev,
+    );
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(/did not settle/);
+  });
+
+  it('reports the disagreement, not a value compared with itself', () => {
+    // The failure message is the only handle an author has on a loop that will not close, so it
+    // must show the estimate AND what the sheet resolved for it — which means reading both
+    // before the iterate is committed.
+    const res = evaluateSheet(
+      loopDoc({
+        params: [{ name: 'osc', value: 1, solveFor: 'flip' }],
+        bind: undefined,
+        rows: [{ name: 'flip', expr: '-2*osc' }],
+      }),
+      dev,
+    );
+    const m = res.warnings.find((w) => w.rule === 'sheet-solve')?.message ?? '';
+    const [, a, b] = /osc → flip: (\S+) vs (\S+)/.exec(m) ?? [];
+    expect(a).toBeDefined();
+    expect(Number(a)).not.toBe(Number(b));
+  });
+
+  it('refuses more tearing variables than the scope rule allows', () => {
+    const doc: SheetDoc = {
+      title: 'too many',
+      polarity: 'n',
+      params: Array.from({ length: MAX_TORN_PARAMS + 1 }, (_, i) => ({
+        name: `e${i}`,
+        value: 1,
+        solveFor: `t${i}`,
+      })),
+      rows: [],
+      rules: [],
+    };
+    const w = validateSheet(doc);
+    expect(w.some((v) => v.severity === 'error' && /not a circuit solver/.test(v.message))).toBe(
+      true,
+    );
+  });
+
+  it('excludes a solved param from the sweepable set', () => {
+    // It is no longer a free variable, so no sweep may drive it — whatever bounds it carries.
+    expect(sweepable({ min: 0.1, max: 0.3 })).toBe(true);
+    expect(sweepable({ min: 0.1, max: 0.3, solveFor: 'vstar_actual' })).toBe(false);
   });
 });
 

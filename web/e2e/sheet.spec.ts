@@ -588,6 +588,55 @@ test('design sheet: an imported fT bind survives import and reload (not silently
   expect(errors).toEqual([]);
 });
 
+test('design sheet: an imported solveFor survives import and reload (not silently stripped)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // `vstar_est` is a tearing variable: it drives gm/ID, and solves for the vstar that results.
+  // Its authored value of 0.3 deliberately FAILS the invariant; the fixed point (~0.22) passes
+  // it. So the rule chip reports whether the loop was actually closed — and if the sanitizer
+  // drops solveFor on the way in or out of storage, the sheet silently reverts to the stale
+  // estimate and this rule fails.
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'solved-loop.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Solved bias loop',
+        polarity: 'n',
+        params: [
+          { name: 'L', value: 5e-7 },
+          { name: 'Ib', value: 1e-5 },
+          { name: 'vstar_est', value: 0.3, solveFor: 'vstar_actual' },
+        ],
+        bind: { L: 'L', id: 'Ib', gm_id: '8 + 5*vstar_est', vds: '0.9' },
+        rows: [{ name: 'vstar_actual', expr: 'vstar' }],
+        rules: [{ id: 'loop-closed', kind: 'invariant', lhs: 'vstar_est', op: '<=', rhs: '0.25' }],
+      }),
+    ),
+  });
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Solved bias loop');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
+
+  // And again after a reload, which restores the sheet from persisted state.
+  await page.reload();
+  const after = page.locator('.sheet').first();
+  await expect(after.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(after.locator('.srules tr.st-fail')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
 test('design sheet: imported sheets join the library — pickable, referenceable, removable, persistent', async ({
   page,
 }) => {

@@ -8,7 +8,9 @@ import type { QAWarning } from '../types';
 import { compileExpr } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
 import {
+  MAX_TORN_PARAMS,
   MAX_USE_DEPTH,
+  torn,
   PROVIDE_SEP,
   RULE_KINDS,
   RULE_OPS,
@@ -42,6 +44,34 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         location: p.name,
       });
     }
+    // A tearing variable that solves for itself is a fixed point trivially, and hides the
+    // loop it was meant to close. Only the self-reference is checkable here — whether the
+    // target resolves at all depends on the live value set, which is eval's job.
+    if (p.solveFor === p.name) {
+      out.push({
+        rule: 'sheet-param',
+        severity: 'error',
+        message: `param "${p.name}" solves for itself — name the value it is an estimate of`,
+        location: p.name,
+      });
+    }
+  }
+
+  // The architecture allows "small, explicit, designer-named fixed points" and no nodal solver.
+  // A sheet tearing many unknowns at once stops being that and becomes relaxation over a node
+  // set, so the word "small" is enforced here rather than left as an aspiration.
+  const unknowns = doc.params.filter(torn);
+  if (unknowns.length > MAX_TORN_PARAMS) {
+    out.push({
+      rule: 'sheet-param',
+      severity: 'error',
+      message:
+        `${unknowns.length} params carry solveFor (${unknowns.map((p) => p.name).join(', ')}); ` +
+        `at most ` +
+        `${MAX_TORN_PARAMS} are allowed — a sheet solves a few named bias loops, it is not a ` +
+        `circuit solver over a node set`,
+      location: 'params',
+    });
   }
 
   if (doc.bind) {

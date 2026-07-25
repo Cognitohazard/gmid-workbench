@@ -87,6 +87,8 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device pins its own; body bias (vsb) defaults to 0. Edit to override; clear to revert.',
   bindNeeds:
     'This block must pin its drain bias (vds) but hasn’t — the table has a vds axis and there is no safe default, so sizing fails closed. Set a value here to size it in place.',
+  solvedParam:
+    'Solved, not set. This estimate stands in for a value only the evaluated sheet knows, closing a bias loop the block order cannot express: it is iterated until the two agree. The stored number is just a starting guess, so the field is read-only and the parameter cannot be swept.',
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',

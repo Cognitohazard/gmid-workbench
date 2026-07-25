@@ -313,6 +313,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         else dropField(pp.role !== undefined, `params[${i}].role`);
         if (typeof pp.note === 'string') out.note = pp.note;
         else dropField(pp.note !== undefined, `params[${i}].note`);
+        // Load-bearing, not cosmetic: dropping solveFor silently reverts a solved bias loop to
+        // a hand-tuned estimate, which is exactly the wrong answer the field exists to prevent.
+        if (typeof pp.solveFor === 'string' && pp.solveFor !== '') out.solveFor = pp.solveFor;
+        else dropField(pp.solveFor !== undefined, `params[${i}].solveFor`);
         return [out];
       })
     : [];
