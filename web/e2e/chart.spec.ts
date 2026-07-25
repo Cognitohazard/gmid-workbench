@@ -36,8 +36,30 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
   await expect(p0.locator('.pfoot')).toContainText('l=180nm');
   await expect(p0.locator('.pfoot')).toContainText('l=2µm');
 
-  // Help icons explain the selected quantities in place via a native title tooltip.
-  await expect(p0.locator('.help').first()).toHaveAttribute('title', /.+/);
+  // Help icons explain the selected quantities in place via a native title tooltip, and pin
+  // that text open on click so it can be read (and copied) while working the control.
+  const help = p0.locator('.help').first();
+  await expect(help).toHaveAttribute('title', /.+/);
+  const tip = await help.getAttribute('title');
+  await help.click();
+  const bubble = page.locator('.bubble:popover-open');
+  await expect(bubble).toHaveText(tip!);
+  // The tooltip stands down while the bubble is up, so the two never stack.
+  await expect(help).not.toHaveAttribute('title', /.+/);
+  // Placed against its trigger and inside the viewport — not left at the top-layer origin.
+  const hb = (await help.boundingBox())!;
+  const bb = (await bubble.boundingBox())!;
+  expect(bb.y).toBeGreaterThan(hb.y);
+  expect(bb.x).toBeGreaterThanOrEqual(0);
+  expect(bb.x + bb.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  // Dismissal: a click outside closes it, and so does Escape.
+  await page.mouse.click(5, 5);
+  await expect(bubble).toHaveCount(0);
+  await help.click();
+  await expect(bubble).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(bubble).toHaveCount(0);
+  await expect(help).toHaveAttribute('title', /.+/);
 
   // Every quantity the picker dropdown offers is computable on this device — selecting it as
   // a panel's Y must NOT raise the per-panel error (the picker reflects what the grid resolves).
