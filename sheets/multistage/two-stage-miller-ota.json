@@ -1,6 +1,6 @@
 {
   "title": "Two-stage Miller OTA",
-  "description": "The classic two-stage Miller operational transconductance amplifier: a differential input stage (input pair + current-mirror load) driving a common-source second stage, with a compensation capacitor $C_c$ bridging the second stage (Miller pole-splitting). $C_c$ is the compensation knob: it sets the dominant pole and hence the unity-gain bandwidth GBW = $g_{m1}/(2*\\pi*C_c)$. The feedforward path through $C_c$ creates a right-half-plane zero $z = g_{m2}/C_c$ that erodes phase; the $R_z = 1/g_{m2}$ nulling resistor removes it. The phase-margin and second-pole rows are ESTIMATE-grade small-signal approximations for sizing intuition — the simulator owns stability sign-off. Children evaluate in dependency order: the stage-1 mirror load first (its diode drop sets the stage-1 output DC), then the input device, then the stage-2 device and its load. On the demo NMOS table every device sizes against the same data, so the polarity-inverted loads keep their sign params at +1.",
+  "description": "The classic two-stage Miller operational transconductance amplifier: a differential input stage (input pair + current-mirror load) driving a common-source second stage, with a compensation capacitor $C_c$ bridging the second stage (Miller pole-splitting). $C_c$ is the compensation knob: it sets the dominant pole and hence the unity-gain bandwidth GBW = $g_{m1}/(2*\\pi*C_c)$. The feedforward path through $C_c$ creates a right-half-plane zero $z = g_{m2}/C_c$ that erodes phase; the $R_z = 1/g_{m2}$ nulling resistor removes it. The phase-margin and second-pole rows are ESTIMATE-grade small-signal approximations for sizing intuition — the simulator owns stability sign-off. Children evaluate in dependency order: the stage-1 mirror load first (diode-bound — at DC balance the mirror's output side sits at exactly the diode drop, which is also the zero-systematic-offset condition, so the stage-1 output DC is $VDD - |V_{GS,ld1}|$ by construction rather than a number to retune), then the input device, then the stage-2 device and its load. Entered from the COMMON MODE like the 5T: the input pair's tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, fixing the pair's body bias and drain-source voltage outright. On the demo NMOS table every device sizes against the same data, so the stage-2 sign param stays at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -31,9 +31,21 @@
     {
       "name": "CM_dc",
       "value": 1.0,
+      "min": 0.7,
+      "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "nominal input common-mode at which the input device operating point is evaluated"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis"
+    },
+    {
+      "name": "V_tail",
+      "value": 0.4,
+      "min": 0.1,
+      "max": 0.5,
+      "unit": "V",
+      "role": "choice",
+      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke. Both bracket ends must leave the pair drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail, the pin will say so, and raising gm_id_ld1 (a smaller diode drop) is the knob that reopens it"
     },
     {
       "name": "Cc",
@@ -117,15 +129,6 @@
       "role": "choice"
     },
     {
-      "name": "V1",
-      "value": 1.13,
-      "min": 0.6,
-      "max": 1.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "stage-1 output DC level; sits about one mirror diode drop below VDD (retune with the stage-1-bias-consistent guardrail)"
-    },
-    {
       "name": "V_out2",
       "value": 0.9,
       "min": 0.6,
@@ -133,20 +136,6 @@
       "unit": "V",
       "role": "choice",
       "note": "stage-2 output DC level; sets both stage-2 devices' vds"
-    },
-    {
-      "name": "vgs_est_in",
-      "value": 0.567,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the input-pair vgs used to place its drain; retune until input-bias-consistent is green"
-    },
-    {
-      "name": "ld_sign",
-      "value": 1,
-      "unit": "1",
-      "role": "spec",
-      "note": "vds sign of the load tables: +1 for an N-style axis, -1 for a signed-PMOS axis"
     },
     {
       "name": "out_sign",
@@ -161,21 +150,14 @@
       "name": "ld1",
       "doc": {
         "title": "Stage-1 mirror-load device",
-        "description": "One side of the stage-1 current-mirror load at half the tail current. Its diode drop sets the stage-1 output DC; its output conductance loads the first-stage gain.",
+        "description": "One side of the stage-1 current-mirror load at half the tail current, DIODE-bound: at DC balance the mirror's output side sits at the same drain voltage as its diode side (the zero-systematic-offset condition), so the vds = vgs diagonal is the honest operating point for both. Its drop sets the stage-1 output DC; its output conductance loads the first-stage gain.",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vx",
-            "value": 0.67,
-            "unit": "V",
-            "role": "spec",
-            "note": "signed to this table's axis convention"
-          }
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "diode": true },
         "rows": [],
         "rules": [
           {
@@ -188,21 +170,22 @@
         ],
         "provide": ["gm", "gds", "vgs", "vdsat"]
       },
-      "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1", "vx": "ld_sign*(VDD - V1)" }
+      "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1" }
     },
     {
       "name": "in",
       "doc": {
         "title": "Stage-1 input-pair device",
-        "description": "Half-circuit input device at half the tail current. Its drain sits at the stage-1 output DC (one mirror diode drop below VDD); its source sits one vgs below the input common mode.",
+        "description": "Half-circuit input device at half the tail current. Its source sits at the tail node — that is its body bias — and its drain one mirror diode drop below VDD, so its drain-source voltage is what is left between the two.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.7, "unit": "V", "role": "spec" }
+          { "name": "vx", "value": 0.7, "unit": "V", "role": "spec" },
+          { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
         "rows": [],
         "rules": [
           {
@@ -215,7 +198,13 @@
         ],
         "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
       },
-      "params": { "Ix": "I1/2", "Lx": "L_in", "gx": "gm_id_in", "vx": "V1 - CM_dc + vgs_est_in" }
+      "params": {
+        "Ix": "I1/2",
+        "Lx": "L_in",
+        "gx": "gm_id_in",
+        "vx": "VDD - abs(ld1__vgs) - V_tail",
+        "vsbx": "V_tail"
+      }
     },
     {
       "name": "s2",
@@ -246,7 +235,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "cgg", "vdsat"]
+        "provide": ["gm", "gds", "cgg", "vgs", "vdsat"]
       },
       "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" }
     },
@@ -257,6 +246,18 @@
     }
   ],
   "rows": [
+    {
+      "name": "CM_in",
+      "expr": "V_tail + in__vgs",
+      "unit": "V",
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+    },
+    {
+      "name": "V1",
+      "expr": "VDD - abs(ld1__vgs)",
+      "unit": "V",
+      "note": "stage-1 output DC — the mirror diode drop below the supply, by construction rather than retuned: at balance the mirror's output side sits exactly there (also the zero-systematic-offset condition)"
+    },
     {
       "name": "gm1",
       "expr": "in__gm",
@@ -394,20 +395,20 @@
       "note": "stage-2 load saturated at the output DC level"
     },
     {
-      "id": "stage1-bias-consistent",
+      "id": "input-sat-margin",
       "kind": "guardrail",
-      "lhs": "abs(V1 - (VDD - abs(ld1__vgs)))",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the stage-1 output DC should equal VDD minus the mirror-load diode drop; retune V1 if this trips"
+      "lhs": "V1 - V_tail - in__vdsat",
+      "op": ">=",
+      "rhs": "0.1",
+      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the mirror diode drop — lower gm/ID on the mirror spends less of it"
     },
     {
-      "id": "input-bias-consistent",
+      "id": "systematic-offset",
       "kind": "guardrail",
-      "lhs": "abs(in__vgs - vgs_est_in)",
+      "lhs": "abs(abs(s2__vgs) - abs(ld1__vgs))",
       "op": "<=",
       "rhs": "0.05",
-      "note": "the input-device drain placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+      "note": "the stage-2 gate sits at V1 = VDD - |vgs_ld1|, so stage 2 carries its intended current only when its own |vgs| at (I2, gm_id_s2) matches the mirror diode drop — the classic W/L-ratio condition. Retune gm_id_s2 or I2 until these agree, or the second stage sits at a different current than the sheet assumes"
     }
   ]
 }

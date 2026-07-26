@@ -405,33 +405,40 @@ per-child form when authoring.
 ## Closing a bias loop (`solveFor`)
 
 Children evaluate in document order and may only read *earlier* siblings, so the composition is
-acyclic by construction. Real circuits are not. In a 5T OTA the input pair's drain sits a mirror
-`VGS` below the supply, while the pair's own `VGS` sets the tail node it stands on — a cycle the
-document order cannot express.
+acyclic by construction. Real circuits are not — but before reaching for the solver, check
+whether the loop is real. Most in this library were **parameterization artifacts**: the 5T OTA's
+famous cycle (the pair's `VGS` sets the tail node it stands on) vanishes entirely when the tail
+node is the declared variable, and a spec like the common mode enters through a `pin` instead.
+Every sheet in the library now closes its bias that way; none tears a node-voltage loop anymore.
 
-The author cuts the cycle with a **tearing variable**: an estimate parameter standing in for a
-value only the evaluated sheet knows. `solveFor` names what the estimate is an estimate *of*, and
-evaluation then iterates the sheet to a fixed point:
+`solveFor` remains for the loops that survive reparameterization: a quantity defined in terms of
+the device's *own* answer. The library's live example is the wide-swing mirror's node — a real
+wide-swing bias generator parks the mirror node at the mirror device's own `vdsat` plus a margin,
+and that `vdsat` is only known once the device is sized at that very node:
 
 ```json
-{ "name": "vgs_est_in", "value": 0.7, "unit": "V", "role": "choice",
-  "solveFor": "in__vgs",
-  "note": "stands in for the input-pair vgs so the tail node can be placed before the pair is sized" }
+{ "name": "vds_lo", "value": 0.3, "unit": "V", "role": "choice",
+  "solveFor": "wideswing_node",
+  "note": "the wide-swing mirror node, iterated to the mirror's own vdsat + node_margin" }
 ```
 
-The target is any name resolvable in this sheet's namespace once its body has run — usually a
-child's provided scalar (`in__vgs`), but a row or the sheet's own sized operating point works
-too. `value` is only the starting guess: where the loop contracts to a single fixed point, every
-guess lands on the same answer. A guess still matters when it decides *which* fixed point you
-reach (contraction is local, so a loop can have more than one) or whether the iteration gets
-there at all, so keep it near the value you expect. Because the parameter is solved rather than
-set, the GUI shows it read-only, reporting what it converged to rather than what was authored.
+The target is any name resolvable in this sheet's namespace once its body has run — a row (as
+here, `wideswing_node = ref__vdsat + node_margin`), a child's provided scalar, or the sheet's own
+sized operating point. `value` is only the starting guess: where the loop contracts to a single
+fixed point, every guess lands on the same answer. A guess still matters when it decides *which*
+fixed point you reach (contraction is local, so a loop can have more than one) or whether the
+iteration gets there at all, so keep it near the value you expect. Because the parameter is
+solved rather than set, the GUI shows it read-only, reporting what it converged to rather than
+what was authored — and there is no companion guardrail to retune, because there is no estimate
+left to drift.
 
 **Without `solveFor` the estimate is whatever the author last typed**, and nothing forces it to
-agree with the design. That is not a small error: the library's own 5T OTA shipped with a default
-that placed the input pair's drain 6 mV above its `vdsat`, so the sheet evaluated `gds` on a
-device in triode and reported a gain of **1.8 against a target of 15**. Solved, the same sheet
-reports 28.0. Prefer `solveFor` over a hand-tuned estimate in every new sheet.
+agree with the design. That is not a small error: an early revision of the library's 5T OTA
+shipped with a default that placed the input pair's drain 6 mV above its `vdsat`, so the sheet
+evaluated `gds` on a device in triode and reported a gain of **1.8 against a target of 15**. In a
+new sheet, prefer (in this order): a node parameterization that never creates the loop, a `pin`
+when a spec must drive an internal node, and `solveFor` only for a genuinely self-referential
+quantity.
 
 ### What it does and does not guarantee
 

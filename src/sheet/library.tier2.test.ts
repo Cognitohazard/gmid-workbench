@@ -52,7 +52,12 @@ describe('tier-2 goldens: cascode current mirror', () => {
 
 describe('tier-2 goldens: wide-swing cascode mirror', () => {
   const res = runSheet(sheet('wide-swing-cascode-mirror.json'), table);
-  // Defaults: K = 4, gm/ID 8, L = 1 µm, both mirror devices at the wide-swing node vds = 0.3 V.
+  // Defaults: K = 4, gm/ID 8, L = 1 µm; the wide-swing node is SOLVED to the mirror
+  // device's own vdsat plus the 50 mV node_margin, not typed.
+
+  it('solves the node to the saturation knee plus the stated margin', () => {
+    expect(res.values.vds_lo).toBeCloseTo(res.values.ref__vdsat + 0.05, 3);
+  });
 
   it('sizes the output device at exactly K times the reference width', () => {
     expect(res.bind?.ok).toBe(true);

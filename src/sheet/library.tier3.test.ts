@@ -27,7 +27,8 @@ const L = 0.5e-6; // every default sheet sizes at 0.5 µm
 
 describe('tier-3 goldens: differential pair + tail', () => {
   const res = runSheet(sheet('differential-pair-tail.json'), table);
-  // Defaults: I_tail 20 µA, gm/ID 12, L 0.5 µm, V_out 0.9, CM 0.9, vgs_est 0.57.
+  // Defaults: I_tail 20 µA, gm/ID 12, L 0.5 µm, V_out 0.9, CM_dc 1.05 (placed so the tail
+  // stays honestly saturated on a 1.8 V process); the tail node is pinned to CM_dc.
   const gmIn = 10e-6 * 12; // (I_tail/2)·gm_id, both supplied to the bind
 
   it('slew and GBW follow exactly from the tail current and input gm', () => {
@@ -35,18 +36,24 @@ describe('tier-3 goldens: differential pair + tail', () => {
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
   });
 
+  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+    expect(res.values.CM_in).toBeCloseTo(1.05, 5);
+  });
+
   it('gain is the input gm into the device gds plus the load conductance', () => {
-    // vds_in = V_out_dc − CM_dc + vgs_est_in = 0.57; gds_load_est = 3 µS.
-    const av = gmIn / (gdsOf(10e-6, L, 0.57) + 3e-6);
+    // vds_in = V_out_dc − V_tail, with the tail node read from the converged result —
+    // the model check (gds/id = 1/(VA + vds) in the demo device) is what this test owns.
+    const av = gmIn / (gdsOf(10e-6, L, 0.9 - res.values.V_tail) + 3e-6);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
   });
 });
 
 describe('tier-3 goldens: degenerated differential pair', () => {
   const res = runSheet(sheet('degenerated-differential-pair.json'), table);
-  // Defaults: I_tail 20 µA, gm/ID 14, R_s 5 kΩ, L 0.5 µm.
+  // Defaults: I_tail 20 µA, gm/ID 14, R_s 12 kΩ (sized so the shipped linear-range target
+  // is actually met: V* + I·R_s = 0.143 + 0.12), L 0.5 µm.
   const gmIn = 10e-6 * 14;
-  const nDeg = 1 + gmIn * 5000;
+  const nDeg = 1 + gmIn * 12000;
 
   it('the degeneration factor divides gm and GBW exactly', () => {
     expect(relErr(res.values.n_deg, nDeg)).toBeLessThan(1e-9);
@@ -62,8 +69,9 @@ describe('tier-3 goldens: degenerated differential pair', () => {
 
 describe('tier-3 goldens: telescopic cascode OTA', () => {
   const res = runSheet(sheet('telescopic-cascode-ota.json'), table);
-  // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8, all L 0.5 µm; cascode vds
-  // estimates 0.2 (in), 0.37 (casc_n), 0.45 (casc_p), 0.45 (mir).
+  // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8, all L 0.5 µm; the stack is
+  // parameterized by its NODES — V_a 0.55, V_b 1.35, V_out 0.9, the tail node pinned so
+  // CM_in lands on CM_dc 0.95 — and every device vds is a subtraction between them.
   const gmIn = 10e-6 * 14;
 
   it('slew and GBW follow exactly from the tail current and input gm', () => {
@@ -71,9 +79,15 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
   });
 
+  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+    expect(res.values.CM_in).toBeCloseTo(0.95, 5);
+  });
+
   it('gain is gm_in times the parallel cascoded output resistance', () => {
-    const Rn = av0Of(10, L, 0.37) / gdsOf(10e-6, L, 0.2);
-    const Rp = av0Of(10, L, 0.45) / gdsOf(10e-6, L, 0.45);
+    // Node subtractions, with the solved tail node read from the result: the input device
+    // sits at vds = V_a − V_tail, its cascode at V_out − V_a; the PMOS side at the V_b splits.
+    const Rn = av0Of(10, L, 0.9 - 0.55) / gdsOf(10e-6, L, 0.55 - res.values.V_tail);
+    const Rp = av0Of(10, L, 1.35 - 0.9) / gdsOf(10e-6, L, 1.8 - 1.35);
     const Rout = 1 / (1 / Rn + 1 / Rp);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
   });
@@ -81,7 +95,9 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
 
 describe('tier-3 goldens: folded cascode OTA', () => {
   const res = runSheet(sheet('folded-cascode-ota.json'), table);
-  // Defaults: I_tail 20 µA, I_branch 30 µA, gm/ID in 14 / casc 10 / cs 8, all L 0.5 µm.
+  // Defaults: I_tail 20 µA, I_branch 30 µA, gm/ID in 14 / casc 10 / cs 8, all L 0.5 µm;
+  // node-parameterized — V_fold 1.4, V_c 0.3, V_out 0.9, the tail node pinned so CM_in
+  // lands on CM_dc 1.05 — and every device vds is a subtraction between adjacent nodes.
   const gmIn = 10e-6 * 14;
   const iFold = 30e-6 - 10e-6; // I_branch − I_tail/2, read from the input device
 
@@ -90,9 +106,13 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
   });
 
+  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+    expect(res.values.CM_in).toBeCloseTo(1.05, 5);
+  });
+
   it('gain is gm_in times the parallel folded-cascode output resistance', () => {
-    const Rp = av0Of(10, L, 0.4) / gdsOf(30e-6, L, 0.4); // pcasc av0 / pcs gds (@I_branch)
-    const Rn = av0Of(10, L, 0.5) / gdsOf(iFold, L, 0.25); // ncasc av0 / nmir gds (@I_fold)
+    const Rp = av0Of(10, L, 1.4 - 0.9) / gdsOf(30e-6, L, 1.8 - 1.4); // pcasc av0 / pcs gds
+    const Rn = av0Of(10, L, 0.9 - 0.3) / gdsOf(iFold, L, 0.3); // ncasc av0 / nmir gds
     const Rout = 1 / (1 / Rp + 1 / Rn);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
   });
@@ -168,18 +188,23 @@ describe('tier-3 goldens: symmetrical OTA', () => {
 
 describe('tier-3 goldens: gain-boosted cascode OTA', () => {
   const res = runSheet(sheet('gain-boosted-cascode-ota.json'), table);
-  // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8 / boost 12, all L 0.5 µm;
-  // vds estimates 0.2 (in), 0.35 (casc_n), 0.4 (casc_p), 0.5 (mir), 0.6 (boost).
+  // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8 / boost 12, all L 0.5 µm; the
+  // stack is node-parameterized — V_a 0.55, V_b 1.3, V_out 0.9, the tail node pinned so
+  // CM_in lands on CM_dc 0.9 — and every device vds is a subtraction between nodes.
   const gmIn = 10e-6 * 14;
 
   it('GBW follows from the input gm (boosting lifts gain, not bandwidth)', () => {
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
   });
 
+  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+    expect(res.values.CM_in).toBeCloseTo(0.9, 5);
+  });
+
   it('gain is the cascode gain multiplied again by the booster gain on each side', () => {
     const boost = av0Of(12, L, 0.6);
-    const Rn = (boost * av0Of(10, L, 0.35)) / gdsOf(10e-6, L, 0.2);
-    const Rp = (boost * av0Of(10, L, 0.4)) / gdsOf(10e-6, L, 0.5);
+    const Rn = (boost * av0Of(10, L, 0.9 - 0.55)) / gdsOf(10e-6, L, 0.55 - res.values.V_tail);
+    const Rp = (boost * av0Of(10, L, 1.3 - 0.9)) / gdsOf(10e-6, L, 1.8 - 1.3);
     const Rout = 1 / (1 / Rn + 1 / Rp);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
   });

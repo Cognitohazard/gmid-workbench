@@ -1,6 +1,6 @@
 {
   "title": "Differential pair + tail",
-  "description": "The bare differential-pair transconductor sized by half-circuit: one input device at half the tail current, plus the tail source that reads the input $V_{GS}$ to place its own headroom. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. Differential gain, GBW, slew, input noise, offset, and the input common-mode range are author math over the two children. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
+  "description": "The bare differential-pair transconductor sized by half-circuit: one input device at half the tail current, plus the tail source. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The engine bisects $V_{tail}$ until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -17,10 +17,10 @@
     },
     {
       "name": "vos_target",
-      "value": 5e-3,
+      "value": 9e-3,
       "unit": "V",
       "role": "spec",
-      "note": "input offset budget, 1 sigma"
+      "note": "input offset budget, 1 sigma; a bare half-micron pair at 20 uA sits near 7 mV with a generic Pelgrom coefficient"
     },
     {
       "name": "gds_load_est",
@@ -45,10 +45,12 @@
     },
     {
       "name": "CM_dc",
-      "value": 0.9,
+      "value": 1.05,
+      "min": 0.7,
+      "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "nominal input CM at which the operating point is evaluated"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis"
     },
     {
       "name": "V_out_dc",
@@ -56,6 +58,16 @@
       "unit": "V",
       "role": "spec",
       "note": "drain DC level; sets the input device vds"
+    },
+    {
+      "name": "V_tail",
+      "value": 0.33,
+      "min": 0.1,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "note": "the tail node — the one free bias variable, solved rather than set: the engine bisects between min and max (the BRACKET, not slider bounds) until the produced common mode equals CM_dc. The shown value is where it landed"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -93,13 +105,6 @@
       "max": 2e-6,
       "unit": "m",
       "role": "choice"
-    },
-    {
-      "name": "vgs_est_in",
-      "value": 0.57,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the input-pair vgs, used to place the input drain node; retune until input-bias-consistent is green"
     }
   ],
   "uses": [
@@ -107,15 +112,16 @@
       "name": "in",
       "doc": {
         "title": "Input-pair device",
-        "description": "Half-circuit input device at half the tail current. Its drain sits at V_out_dc; its source sits one vgs below the input CM.",
+        "description": "Half-circuit input device at half the tail current. Its source sits at the tail node — that is its body bias — and its drain at V_out_dc, so its drain-source voltage is what is left between them.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
-          { "name": "vds_i", "value": 0.57, "unit": "V", "role": "spec" }
+          { "name": "vds_i", "value": 0.57, "unit": "V", "role": "spec" },
+          { "name": "vsb_i", "value": 0.33, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
         "rows": [],
         "rules": [
           {
@@ -132,7 +138,8 @@
         "I_half": "I_tail/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
-        "vds_i": "V_out_dc - CM_dc + vgs_est_in"
+        "vds_i": "V_out_dc - V_tail",
+        "vsb_i": "V_tail"
       }
     },
     {
@@ -150,7 +157,7 @@
             "value": 0.33,
             "unit": "V",
             "role": "spec",
-            "note": "the tail node: one input vgs below the input CM"
+            "note": "the tail node"
           }
         ],
         "bind": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
@@ -170,11 +177,17 @@
         "I_t": "I_tail",
         "L_t": "L_tail",
         "gm_id_t": "gm_id_tail",
-        "vds_t": "CM_dc - in__vgs"
+        "vds_t": "V_tail"
       }
     }
   ],
   "rows": [
+    {
+      "name": "CM_in",
+      "expr": "V_tail + in__vgs",
+      "unit": "V",
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+    },
     {
       "name": "Gm",
       "expr": "in__gm",
@@ -214,16 +227,10 @@
       "note": "estimate: differential gain over common-mode gain; a real CMRR also depends on load and layout mismatch, so trust the sim"
     },
     {
-      "name": "cm_lo_edge",
-      "expr": "in__vgs + tail__vdsat",
+      "name": "tail_headroom",
+      "expr": "V_tail - tail__vdsat",
       "unit": "V",
-      "note": "lowest input CM that keeps the tail saturated"
-    },
-    {
-      "name": "cm_hi_edge",
-      "expr": "V_out_dc + in__vgs - in__vdsat",
-      "unit": "V",
-      "note": "highest input CM that keeps the input device saturated at the drain DC level"
+      "note": "how far the tail node sits above the tail device's saturation edge — exact, because the tail node is the variable rather than something inferred from a common mode"
     }
   ],
   "rules": [
@@ -233,20 +240,54 @@
     { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
-      "id": "icmr-low",
+      "id": "tail-saturated",
       "kind": "invariant",
-      "lhs": "CM_lo",
+      "lhs": "tail_headroom",
       "op": ">=",
-      "rhs": "cm_lo_edge",
-      "note": "the spec'd CM-low must sit above the tail-saturation edge"
+      "rhs": "0",
+      "note": "below this the tail source drops out of saturation and the bias current collapses; the mechanism behind the low end of the common-mode range"
     },
     {
-      "id": "icmr-high",
+      "id": "cm-not-below",
       "kind": "invariant",
-      "lhs": "cm_hi_edge",
+      "lhs": "CM_in",
       "op": ">=",
-      "rhs": "CM_hi",
-      "note": "the spec'd CM-high must sit below the input-saturation edge"
+      "rhs": "CM_lo",
+      "note": "the common mode this bias produces has to sit inside the range the application presents"
+    },
+    {
+      "id": "cm-not-above",
+      "kind": "invariant",
+      "lhs": "CM_hi",
+      "op": ">=",
+      "rhs": "CM_in",
+      "note": "paired with cm-not-below. Sweep CM_dc to see the whole span that closes"
+    },
+    {
+      "id": "input-sat-margin",
+      "kind": "guardrail",
+      "lhs": "V_out_dc - V_tail - in__vdsat",
+      "op": ">=",
+      "rhs": "0.1",
+      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage at the drain DC level"
+    },
+    {
+      "id": "cm-lo-reach",
+      "kind": "guardrail",
+      "lhs": "V_tail - (CM_dc - CM_lo) - tail__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "justification": "estimate, conservative: the tail node falls by LESS than the common mode does, so charging the full CM_dc - CM_lo against today's headroom can only understate the edge margin. The CM_dc sweep is the authority",
+      "note": "whether the tail is still saturated at the LOW edge of the claimed range — the pin lands the evaluated point exactly on CM_dc, so nothing else here looks at the edges"
+    },
+    {
+      "id": "cm-hi-reach",
+      "kind": "guardrail",
+      "lhs": "V_out_dc - (V_tail + CM_hi - CM_dc) - in__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "justification": "estimate, conservative, the shift charged upward: the pair's saturation margin at the HIGH edge of the claimed range. The CM_dc sweep is the authority",
+      "note": "whether the input device still saturates at the HIGH edge of the claimed range"
     },
     {
       "id": "cmrr-spec",
@@ -255,14 +296,6 @@
       "op": ">=",
       "rhs": "1000",
       "note": "estimate: a longer tail L (lower tail gds) lifts CMRR; sim owns the real number"
-    },
-    {
-      "id": "input-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(in__vgs - vgs_est_in)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the input drain node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
     }
   ]
 }

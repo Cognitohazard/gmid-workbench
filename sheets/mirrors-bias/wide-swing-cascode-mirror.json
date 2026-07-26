@@ -62,11 +62,17 @@
     {
       "name": "vds_lo",
       "value": 0.3,
-      "min": 0.05,
-      "max": 0.8,
       "unit": "V",
       "role": "choice",
-      "note": "the wide-swing mirror node: one saturation voltage above ground, shared by both mirror devices. Retune until wideswing-node-consistent is green (it should equal vdsat_mirror)"
+      "solveFor": "wideswing_node",
+      "note": "the wide-swing mirror node. Solved, not retuned — the engine iterates it to the mirror device's own reported vdsat plus node_margin (the bias a real wide-swing generator is designed to produce), so the stored value is only a starting guess"
+    },
+    {
+      "name": "node_margin",
+      "value": 0.05,
+      "unit": "V",
+      "role": "spec",
+      "note": "how far above the mirror devices' saturation knee the wide-swing bias parks the node — the customary 50-100 mV that keeps the mirror out of triode across corners"
     },
     {
       "name": "avt",
@@ -152,9 +158,16 @@
             "unit": "V",
             "role": "spec",
             "note": "a representative cascode vds (its vgs and vdsat are the values used, and both are drain-voltage independent here)"
+          },
+          {
+            "name": "vsb_cc",
+            "value": 0.3,
+            "unit": "V",
+            "role": "spec",
+            "note": "the source stands on the wide-swing mirror node, not the bulk"
           }
         ],
-        "bind": { "L": "L_cc", "id": "I_c", "gm_id": "gm_id_cc", "vds": "vds_cc" },
+        "bind": { "L": "L_cc", "id": "I_c", "gm_id": "gm_id_cc", "vds": "vds_cc", "vsb": "vsb_cc" },
         "rows": [],
         "rules": [
           {
@@ -171,12 +184,19 @@
         "I_c": "I_in",
         "L_cc": "L_c",
         "gm_id_cc": "gm_id_c",
-        "vds_cc": "V_out - vds_lo"
+        "vds_cc": "V_out - vds_lo",
+        "vsb_cc": "vds_lo"
       }
     }
   ],
   "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "vds_lo" },
   "rows": [
+    {
+      "name": "wideswing_node",
+      "expr": "ref__vdsat + node_margin",
+      "unit": "V",
+      "note": "where the wide-swing bias parks the mirror node: the saturation knee plus the design margin. vds_lo is solved to this"
+    },
     { "name": "I_out", "expr": "id", "unit": "A" },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
     {
@@ -237,14 +257,6 @@
       "lhs": "sigma_ratio",
       "op": "<=",
       "rhs": "match_target"
-    },
-    {
-      "id": "wideswing-node-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(vds_lo - ref__vdsat)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the mirror node should sit at exactly one saturation voltage; retune vds_lo to the reported vdsat_mirror if this trips"
     }
   ]
 }

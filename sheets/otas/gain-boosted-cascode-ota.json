@@ -1,6 +1,6 @@
 {
   "title": "Gain-boosted cascode OTA",
-  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes.",
+  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -10,17 +10,54 @@
     { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
     {
       "name": "vn_target",
-      "value": 15e-9,
+      "value": 18e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget"
+      "note": "input-referred thermal density budget; the gamma-model total lands near 16 nV/rtHz at the default currents, so this leaves real headroom"
     },
     {
       "name": "CM_dc",
       "value": 0.9,
+      "min": 0.6,
+      "max": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "nominal input CM at which the operating point is evaluated"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. The slider stops where the stack does: with V_a holding the pair's drain low, the tail node cannot climb past the bracket and the topology genuinely cannot take a higher CM — the telescopic's known input-range ceiling"
+    },
+    {
+      "name": "V_out_dc",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level; the NMOS nodes climb to it and the PMOS nodes descend to it"
+    },
+    {
+      "name": "V_tail",
+      "value": 0.35,
+      "min": 0.1,
+      "max": 0.45,
+      "unit": "V",
+      "role": "choice",
+      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "note": "the tail node — the pair's source. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. The max must stay far enough below V_a for the pair to size at the top end — the input-sat guardrail owns saturation; the bracket only has to keep both ends on the table"
+    },
+    {
+      "name": "V_a",
+      "value": 0.55,
+      "min": 0.2,
+      "max": 1.0,
+      "unit": "V",
+      "role": "choice",
+      "note": "the NMOS-side internal node: input drain and NMOS-cascode source. The input vds is V_a - V_tail and the cascode's is V_out_dc - V_a, by construction"
+    },
+    {
+      "name": "V_b",
+      "value": 1.3,
+      "min": 0.8,
+      "max": 1.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -103,49 +140,6 @@
     },
     { "name": "L_bo", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     {
-      "name": "vgs_est_in",
-      "value": 0.55,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the input-pair vgs, used to place the tail node; retune until input-bias-consistent is green"
-    },
-    {
-      "name": "vds_in_est",
-      "value": 0.2,
-      "min": 0.05,
-      "max": 0.6,
-      "unit": "V",
-      "role": "choice",
-      "note": "input-device vds (drain node above the tail source)"
-    },
-    {
-      "name": "vds_cn_est",
-      "value": 0.35,
-      "min": 0.05,
-      "max": 0.8,
-      "unit": "V",
-      "role": "choice",
-      "note": "NMOS-cascode vds (output node minus the input drain)"
-    },
-    {
-      "name": "vds_cp_est",
-      "value": 0.4,
-      "min": 0.05,
-      "max": 0.8,
-      "unit": "V",
-      "role": "choice",
-      "note": "PMOS-cascode vds magnitude (its source node minus the output)"
-    },
-    {
-      "name": "vds_mir_est",
-      "value": 0.5,
-      "min": 0.05,
-      "max": 0.8,
-      "unit": "V",
-      "role": "choice",
-      "note": "load-mirror vds magnitude (VDD minus the PMOS-cascode source node)"
-    },
-    {
       "name": "vds_bo",
       "value": 0.6,
       "min": 0.1,
@@ -166,9 +160,10 @@
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_i", "value": 14, "unit": "1/V", "role": "choice" },
-          { "name": "vds_i", "value": 0.2, "unit": "V", "role": "spec" }
+          { "name": "vds_i", "value": 0.2, "unit": "V", "role": "spec" },
+          { "name": "vsb_i", "value": 0.35, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
         "rows": [],
         "rules": [
           {
@@ -185,7 +180,8 @@
         "I_half": "I_tail/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
-        "vds_i": "vds_in_est"
+        "vds_i": "V_a - V_tail",
+        "vsb_i": "V_tail"
       }
     },
     {
@@ -198,9 +194,10 @@
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_c", "value": 0.35, "unit": "V", "role": "spec" }
+          { "name": "vds_c", "value": 0.35, "unit": "V", "role": "spec" },
+          { "name": "vsb_c", "value": 0.55, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
         "rows": [],
         "rules": [
           {
@@ -217,7 +214,8 @@
         "I_half": "I_tail/2",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
-        "vds_c": "vds_cn_est"
+        "vds_c": "V_out_dc - V_a",
+        "vsb_c": "V_a"
       }
     },
     {
@@ -230,9 +228,10 @@
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_c", "value": 0.4, "unit": "V", "role": "spec" }
+          { "name": "vds_c", "value": 0.4, "unit": "V", "role": "spec" },
+          { "name": "vsb_c", "value": 0.5, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
         "rows": [],
         "rules": [
           {
@@ -249,7 +248,8 @@
         "I_half": "I_tail/2",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
-        "vds_c": "sign_p*vds_cp_est"
+        "vds_c": "sign_p*(V_b - V_out_dc)",
+        "vsb_c": "VDD - V_b"
       }
     },
     {
@@ -281,7 +281,7 @@
         "I_half": "I_tail/2",
         "L_m": "L_mir",
         "gm_id_m": "gm_id_mir",
-        "vds_m": "sign_p*vds_mir_est"
+        "vds_m": "sign_p*(VDD - V_b)"
       }
     },
     {
@@ -318,6 +318,12 @@
     }
   ],
   "rows": [
+    {
+      "name": "CM_in",
+      "expr": "V_tail + in__vgs",
+      "unit": "V",
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+    },
     {
       "name": "Rout_n",
       "expr": "boost__av0*casc_n__av0/in__gds",
@@ -377,12 +383,36 @@
       "note": "estimate: the booster must be faster than the main loop or its doublet slows settling; sim owns the real settling"
     },
     {
-      "id": "input-bias-consistent",
+      "id": "input-sat",
       "kind": "guardrail",
-      "lhs": "abs(in__vgs - vgs_est_in)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the tail-node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+      "lhs": "V_a - V_tail - in__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: V_a must sit at least a vdsat above the tail node — the drops sum to the rail by construction, so what is left to check is that each node leaves its device saturated"
+    },
+    {
+      "id": "casc-n-sat",
+      "kind": "guardrail",
+      "lhs": "V_out_dc - V_a - casc_n__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: the output DC must sit at least a vdsat above V_a"
+    },
+    {
+      "id": "casc-p-sat",
+      "kind": "guardrail",
+      "lhs": "V_b - V_out_dc - casc_p__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: V_b must sit at least a vdsat above the output DC"
+    },
+    {
+      "id": "mir-sat",
+      "kind": "guardrail",
+      "lhs": "VDD - V_b - mir__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: V_b must leave the mirror at least a vdsat below VDD"
     }
   ]
 }

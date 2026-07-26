@@ -166,7 +166,6 @@ describe('exemplar goldens: 5T OTA', () => {
     // 5 decimals: the bracket closes at PIN_TOL_REL x its span (~0.7 µV on V_tail), which the
     // CM relation's slope stretches to just under a µV — 6 decimals would ride on luck.
     expect(res.values.CM_in).toBeCloseTo(1.1, 5);
-    expect(res.values.V_tail + res.values.in__vgs).toBeCloseTo(1.1, 5);
   });
 
   it('the common-mode rules close at defaults', () => {

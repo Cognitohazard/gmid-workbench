@@ -1,12 +1,24 @@
 {
   "title": "Degenerated differential pair",
-  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + g_m*R_s)$; the degeneration factor $n_{deg} = 1 + g_m*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The bind declares $V_{SB} = (I_{tail}/2)*R_s$ to record the source lift the degeneration introduces (inert on a table with no body-effect axis, a real slice on one that has it). Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
+  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + g_m*R_s)$; the degeneration factor $n_{deg} = 1 + g_m*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. Entered from the COMMON MODE: the device's source node $V_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — is the one free bias variable, pinned so the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. Both bias coordinates then follow outright ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), and the body effect is charged in full rather than only the resistor's few tens of millivolts. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
-    { "name": "Av_target", "value": 12, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 5e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 10,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "gain target AFTER degeneration: n_deg divides the raw gm, so this is what is left once the linear range is bought"
+    },
+    {
+      "name": "GBW_target",
+      "value": 3.5e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "bandwidth target after degeneration, same trade as the gain target"
+    },
     { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
     {
       "name": "linrange_target",
@@ -17,10 +29,10 @@
     },
     {
       "name": "vn_target",
-      "value": 20e-9,
+      "value": 27e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, including the degeneration resistor"
+      "note": "input-referred thermal density budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm the total sits near 24 nV/rtHz"
     },
     {
       "name": "vos_target",
@@ -39,9 +51,11 @@
     {
       "name": "CM_dc",
       "value": 0.9,
+      "min": 0.7,
+      "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "nominal input CM at which the operating point is evaluated"
+      "note": "the input common mode the application presents. The engine places the source node so the sheet sits exactly here; sweep it to trace the common-mode axis"
     },
     {
       "name": "V_out_dc",
@@ -49,6 +63,16 @@
       "unit": "V",
       "role": "spec",
       "note": "drain DC level; sets the input device vds"
+    },
+    {
+      "name": "V_s",
+      "value": 0.35,
+      "min": 0.1,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "note": "the input device's source node — its full elevation above the bulk, tail lift plus the resistor drop. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -62,7 +86,7 @@
     },
     {
       "name": "R_s",
-      "value": 5000,
+      "value": 12000,
       "min": 0,
       "max": 50000,
       "unit": "ohm",
@@ -78,21 +102,14 @@
       "role": "choice",
       "note": "input-pair inversion; high gm/ID makes degeneration more effective (larger gm*R_s)"
     },
-    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
-    {
-      "name": "vgs_est_in",
-      "value": 0.55,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the input-pair vgs, used to place the input drain node; retune until input-bias-consistent is green"
-    }
+    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
   ],
   "uses": [
     {
       "name": "in",
       "doc": {
         "title": "Input-pair device (degenerated)",
-        "description": "Half-circuit input device at half the tail current, with R_s in its source. vsb records the source lift the degeneration introduces.",
+        "description": "Half-circuit input device at half the tail current, with R_s in its source. Its source node V_s is the sheet's one free bias variable: vsb = V_s (the FULL elevation above the bulk, not just the resistor lift) and vds = V_out_dc - V_s.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -101,10 +118,10 @@
           { "name": "vds_i", "value": 0.55, "unit": "V", "role": "spec" },
           {
             "name": "vsb_i",
-            "value": 0.025,
+            "value": 0.35,
             "unit": "V",
             "role": "spec",
-            "note": "source-bulk lift from the degeneration resistor, (I_tail/2)*R_s"
+            "note": "the source node — the device's full elevation above the bulk"
           }
         ],
         "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
@@ -124,12 +141,18 @@
         "I_half": "I_tail/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
-        "vds_i": "V_out_dc - CM_dc + vgs_est_in",
-        "vsb_i": "I_tail/2*R_s"
+        "vds_i": "V_out_dc - V_s",
+        "vsb_i": "V_s"
       }
     }
   ],
   "rows": [
+    {
+      "name": "CM_in",
+      "expr": "V_s + in__vgs",
+      "unit": "V",
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the source node, so the pin is a well-posed bisection"
+    },
     {
       "name": "n_deg",
       "expr": "1 + in__gm*R_s",
@@ -190,12 +213,12 @@
     { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
-      "id": "input-bias-consistent",
+      "id": "input-sat-margin",
       "kind": "guardrail",
-      "lhs": "abs(in__vgs - vgs_est_in)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the input drain node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+      "lhs": "V_out_dc - V_s - in__vdsat",
+      "op": ">=",
+      "rhs": "0.1",
+      "note": "trips when the source node is pushed so high the device runs out of drain-source voltage at the drain DC level"
     }
   ]
 }

@@ -1,6 +1,6 @@
 {
   "title": "Folded cascode OTA",
-  "description": "A folded cascode: the input pair steers current into a folding node, and a cascoded output branch carries it to a high-impedance output. It is the branch-current bookkeeping showcase. The input pair evaluates FIRST at half the tail current; each folding-branch current source is biased at $I_{branch}$, and the output cascode and mirror carry the fold current $I_{fold} = I_{branch} - I_{tail}/2$ — a later child reads the earlier input device's provided current to compute its own bias. The fold current is a real design knob: it must exceed the peak steered current ($I_{tail}/2$) so the branch never starves during slew, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is $g_{m,in}$ times the folded-cascode output resistance; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise.",
+  "description": "A folded cascode: the input pair steers current into a folding node, and a cascoded output branch carries it to a high-impedance output. It is the branch-current bookkeeping showcase. The input pair evaluates FIRST at half the tail current; each folding-branch current source is biased at $I_{branch}$, and the output cascode and mirror carry the fold current $I_{fold} = I_{branch} - I_{tail}/2$ — a later child reads the earlier input device's provided current to compute its own bias. The fold current is a real design knob: it must exceed the peak steered current ($I_{tail}/2$) so the branch never starves during slew, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is $g_{m,in}$ times the folded-cascode output resistance; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the folding node $V_{fold}$ and the mirror-drain node $V_c$ are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction. The retired per-device estimates could not even agree on where the folding node sat; the node form makes that inconsistency inexpressible.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -10,24 +10,61 @@
     { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
     {
       "name": "vn_target",
-      "value": 18e-9,
+      "value": 28e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, including the folding current sources"
+      "note": "input-referred thermal density budget. The folding current sources are the fold's noise price: the gamma-model total lands near 25 nV/rtHz at the default currents, well above a telescopic at the same gm — this budget leaves headroom while keeping that trade visible"
     },
     {
       "name": "vos_target",
-      "value": 5e-3,
+      "value": 12e-3,
       "unit": "V",
       "role": "spec",
-      "note": "input offset budget, 1 sigma"
+      "note": "input offset budget, 1 sigma; the output mirror's spread referred through the fold puts the total near 10 mV at half-micron areas"
     },
     {
       "name": "CM_dc",
+      "value": 1.05,
+      "min": 0.7,
+      "max": 1.3,
+      "unit": "V",
+      "role": "spec",
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis"
+    },
+    {
+      "name": "V_out_dc",
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "nominal input CM at which the operating point is evaluated"
+      "note": "output DC level; the NMOS-side nodes climb to it and the folding node descends to it"
+    },
+    {
+      "name": "V_tail",
+      "value": 0.4,
+      "min": 0.1,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "note": "the tail node — the pair's source. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc"
+    },
+    {
+      "name": "V_fold",
+      "value": 1.4,
+      "min": 0.9,
+      "max": 1.7,
+      "unit": "V",
+      "role": "choice",
+      "note": "the folding node: input-pair drains, folding-source drain, and PMOS-cascode source in one. The input vds is V_fold - V_tail, the folding source's is VDD - V_fold, and the PMOS cascode's is V_fold - V_out_dc — by construction"
+    },
+    {
+      "name": "V_c",
+      "value": 0.3,
+      "min": 0.1,
+      "max": 0.6,
+      "unit": "V",
+      "role": "choice",
+      "note": "the NMOS-side internal node: mirror drain and NMOS-cascode source. The mirror vds is V_c and the cascode's is V_out_dc - V_c, by construction"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -92,52 +129,7 @@
       "unit": "m",
       "role": "choice"
     },
-    { "name": "L_cs", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
-    {
-      "name": "vds_in_est",
-      "value": 0.6,
-      "min": 0.1,
-      "max": 1.1,
-      "unit": "V",
-      "role": "choice",
-      "note": "input-device vds (folding node above the input source)"
-    },
-    {
-      "name": "vds_pcs_est",
-      "value": 0.4,
-      "min": 0.1,
-      "max": 1.0,
-      "unit": "V",
-      "role": "choice",
-      "note": "top current-source vds magnitude (VDD minus the folding node)"
-    },
-    {
-      "name": "vds_pcasc_est",
-      "value": 0.4,
-      "min": 0.1,
-      "max": 1.0,
-      "unit": "V",
-      "role": "choice",
-      "note": "PMOS-cascode vds magnitude (folding node minus the output)"
-    },
-    {
-      "name": "vds_ncasc_est",
-      "value": 0.5,
-      "min": 0.1,
-      "max": 1.0,
-      "unit": "V",
-      "role": "choice",
-      "note": "NMOS-cascode vds (output minus the NMOS mirror drain)"
-    },
-    {
-      "name": "vds_nmir_est",
-      "value": 0.25,
-      "min": 0.05,
-      "max": 0.8,
-      "unit": "V",
-      "role": "choice",
-      "note": "NMOS-mirror vds (its drain node above ground)"
-    }
+    { "name": "L_cs", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
   ],
   "uses": [
     {
@@ -150,9 +142,10 @@
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_i", "value": 14, "unit": "1/V", "role": "choice" },
-          { "name": "vds_i", "value": 0.6, "unit": "V", "role": "spec" }
+          { "name": "vds_i", "value": 1.05, "unit": "V", "role": "spec" },
+          { "name": "vsb_i", "value": 0.35, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
         "rows": [],
         "rules": [
           {
@@ -169,14 +162,15 @@
         "I_half": "I_tail/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
-        "vds_i": "vds_in_est"
+        "vds_i": "V_fold - V_tail",
+        "vsb_i": "V_tail"
       }
     },
     {
       "name": "tail",
       "doc": {
         "title": "Tail current source",
-        "description": "Carries the full bias current; its vds reads the input vgs to place the tail node.",
+        "description": "Carries the full bias current; its drain-source voltage IS the tail node.",
         "polarity": "n",
         "params": [
           { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -201,7 +195,7 @@
         "I_t": "I_tail",
         "L_t": "L_cs",
         "gm_id_t": "gm_id_cs",
-        "vds_t": "CM_dc - in__vgs"
+        "vds_t": "V_tail"
       }
     },
     {
@@ -233,7 +227,7 @@
         "I_b": "I_branch",
         "L_p": "L_cs",
         "gm_id_p": "gm_id_cs",
-        "vds_p": "sign_p*vds_pcs_est"
+        "vds_p": "sign_p*(VDD - V_fold)"
       }
     },
     {
@@ -246,9 +240,10 @@
           { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_c", "value": 0.4, "unit": "V", "role": "spec" }
+          { "name": "vds_c", "value": 0.5, "unit": "V", "role": "spec" },
+          { "name": "vsb_c", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "bind": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
         "rows": [],
         "rules": [
           {
@@ -265,7 +260,8 @@
         "I_f": "I_branch - in__id",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
-        "vds_c": "sign_p*vds_pcasc_est"
+        "vds_c": "sign_p*(V_fold - V_out_dc)",
+        "vsb_c": "VDD - V_fold"
       }
     },
     {
@@ -278,9 +274,10 @@
           { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_c", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_c", "value": 0.5, "unit": "V", "role": "spec" }
+          { "name": "vds_c", "value": 0.6, "unit": "V", "role": "spec" },
+          { "name": "vsb_c", "value": 0.3, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "bind": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
         "rows": [],
         "rules": [
           {
@@ -297,7 +294,8 @@
         "I_f": "I_branch - in__id",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
-        "vds_c": "vds_ncasc_est"
+        "vds_c": "V_out_dc - V_c",
+        "vsb_c": "V_c"
       }
     },
     {
@@ -310,7 +308,7 @@
           { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_m", "value": 8, "unit": "1/V", "role": "choice" },
-          { "name": "vds_m", "value": 0.25, "unit": "V", "role": "spec" }
+          { "name": "vds_m", "value": 0.3, "unit": "V", "role": "spec" }
         ],
         "bind": { "L": "L_m", "id": "I_f", "gm_id": "gm_id_m", "vds": "vds_m" },
         "rows": [],
@@ -329,11 +327,23 @@
         "I_f": "I_branch - in__id",
         "L_m": "L_cs",
         "gm_id_m": "gm_id_cs",
-        "vds_m": "vds_nmir_est"
+        "vds_m": "V_c"
       }
     }
   ],
   "rows": [
+    {
+      "name": "CM_in",
+      "expr": "V_tail + in__vgs",
+      "unit": "V",
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+    },
+    {
+      "name": "tail_headroom",
+      "expr": "V_tail - tail__vdsat",
+      "unit": "V",
+      "note": "how far the tail node sits above the tail device's saturation edge — exact, because the tail node is the variable rather than something inferred from a common mode"
+    },
     {
       "name": "I_fold",
       "expr": "I_branch - in__id",
@@ -384,6 +394,14 @@
     { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
     { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
+      "id": "tail-saturated",
+      "kind": "invariant",
+      "lhs": "tail_headroom",
+      "op": ">=",
+      "rhs": "0",
+      "note": "below this the tail source drops out of saturation and the bias current collapses; the mechanism behind the low end of the common-mode range"
+    },
+    {
       "id": "fold-current",
       "kind": "invariant",
       "lhs": "I_fold",
@@ -392,6 +410,46 @@
       "note": "the folded branch must carry at least the peak steered current so it does not starve during slew"
     },
     { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
-    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" }
+    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    {
+      "id": "input-sat",
+      "kind": "guardrail",
+      "lhs": "V_fold - V_tail - in__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: the folding node must sit at least a vdsat above the tail node. The branch drops close by construction — what is left to check is that each node leaves its device saturated"
+    },
+    {
+      "id": "pcs-sat",
+      "kind": "guardrail",
+      "lhs": "VDD - V_fold - pcs__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: the folding node must leave the folding source at least a vdsat below VDD"
+    },
+    {
+      "id": "pcasc-sat",
+      "kind": "guardrail",
+      "lhs": "V_fold - V_out_dc - pcasc__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: the folding node must sit at least a vdsat above the output DC"
+    },
+    {
+      "id": "ncasc-sat",
+      "kind": "guardrail",
+      "lhs": "V_out_dc - V_c - ncasc__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: the output DC must sit at least a vdsat above V_c"
+    },
+    {
+      "id": "nmir-sat",
+      "kind": "guardrail",
+      "lhs": "V_c - nmir__vdsat",
+      "op": ">=",
+      "rhs": "0",
+      "note": "node placement: V_c must leave the mirror at least a vdsat above ground"
+    }
   ]
 }

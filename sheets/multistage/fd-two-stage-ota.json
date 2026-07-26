@@ -38,9 +38,21 @@
     {
       "name": "CM_dc",
       "value": 1.0,
+      "min": 0.7,
+      "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "nominal input common-mode for the input-device operating point"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis"
+    },
+    {
+      "name": "V_tail",
+      "value": 0.4,
+      "min": 0.1,
+      "max": 0.8,
+      "unit": "V",
+      "role": "choice",
+      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke"
     },
     {
       "name": "I_cmfb",
@@ -149,13 +161,6 @@
       "note": "stage-2 output common-mode DC, set by CMFB"
     },
     {
-      "name": "vgs_est_in",
-      "value": 0.567,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the input-pair vgs; retune with input-bias-consistent"
-    },
-    {
       "name": "ld_sign",
       "value": 1,
       "unit": "1",
@@ -214,9 +219,10 @@
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.7, "unit": "V", "role": "spec" }
+          { "name": "vx", "value": 0.7, "unit": "V", "role": "spec" },
+          { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
         "rows": [],
         "rules": [
           {
@@ -229,7 +235,13 @@
         ],
         "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
       },
-      "params": { "Ix": "I1/2", "Lx": "L_in", "gx": "gm_id_in", "vx": "V1 - CM_dc + vgs_est_in" }
+      "params": {
+        "Ix": "I1/2",
+        "Lx": "L_in",
+        "gx": "gm_id_in",
+        "vx": "V1 - V_tail",
+        "vsbx": "V_tail"
+      }
     },
     {
       "name": "s2",
@@ -293,6 +305,12 @@
     }
   ],
   "rows": [
+    {
+      "name": "CM_in",
+      "expr": "V_tail + in__vgs",
+      "unit": "V",
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+    },
     {
       "name": "gm1",
       "expr": "in__gm",
@@ -450,12 +468,12 @@
       "note": "stage-2 load saturated at the output common mode"
     },
     {
-      "id": "input-bias-consistent",
+      "id": "input-sat-margin",
       "kind": "guardrail",
-      "lhs": "abs(in__vgs - vgs_est_in)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the input-device drain placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
+      "lhs": "V1 - V_tail - in__vdsat",
+      "op": ">=",
+      "rhs": "0.1",
+      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage at the CMFB-set stage-1 output level V1"
     }
   ]
 }
