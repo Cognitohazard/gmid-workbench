@@ -14,6 +14,8 @@ import {
   sweepSheet,
   sweepSheet2,
   sweepable,
+  bindingConstraint,
+  isHardRule,
   MAX_TORN_PARAMS,
   SOLVE_TOL_REL,
 } from './index';
@@ -1354,6 +1356,59 @@ describe('composition semantics (ratified)', () => {
     expect(ids).toContain('cs.feasible-inversion'); // the child's own invariant, path-prefixed
     const child = sw.rules.find((r) => r.id === 'cs.feasible-inversion')!;
     expect(child.marginPct.filter((m) => m !== null).length).toBeGreaterThan(0);
+  });
+});
+
+describe('bindingConstraint — naming the cause of one verdict', () => {
+  const ex = EXAMPLES.find((e) => e.title === 'NMOS noise & matching')!;
+  // Force the noise requirement to fail hard, and the matching one to fail harder.
+  const at = (o: Record<string, number>): SheetDoc => ({
+    ...ex,
+    params: ex.params.map((p) => (o[p.name] !== undefined ? { ...p, value: o[p.name] } : p)),
+  });
+
+  it('names the worst-margin failing hard rule, ignoring advisory guardrails', () => {
+    const res = runSheet(at({ vn_target: 1e-12, vos_target: 1e-9 }), dev);
+    expect(res.feasible).toBe(false);
+    const b = bindingConstraint(res);
+    const named = res.rules.find((r) => r.id === b?.id);
+    expect(named?.status).toBe('fail');
+    expect(isHardRule(named!.kind)).toBe(true);
+    // It is the WORST one, not merely a failing one.
+    const worst = Math.min(
+      ...res.rules.filter((r) => isHardRule(r.kind) && r.status === 'fail').map((r) => r.marginPct),
+    );
+    expect(b?.marginPct).toBe(worst);
+  });
+
+  it('is undefined when no hard rule fails — never a feasibility verdict of its own', () => {
+    expect(bindingConstraint(runSheet(ex, dev))).toBeUndefined();
+    // A tree with no rules at all is the degenerate case, not an error.
+    expect(bindingConstraint({ rules: [] })).toBeUndefined();
+  });
+
+  it('attributes a child block rule by its use path, and outranks a milder top-level one', () => {
+    const child: SheetDoc = {
+      title: 'c',
+      polarity: 'n',
+      params: [{ name: 'x', value: 1 }],
+      rows: [],
+      // Fails by 90%: the worst rule in the tree, and it lives below the top sheet.
+      rules: [{ id: 'child-floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: '10' }],
+      provide: [],
+    };
+    const parent: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [{ name: 'y', value: 9 }],
+      rows: [],
+      // Fails by only 10%, so a walk that stopped at the top would name this one.
+      rules: [{ id: 'top-floor', kind: 'requirement', lhs: 'y', op: '>=', rhs: '10' }],
+      uses: [{ name: 'k', doc: child }],
+    };
+    const b = bindingConstraint(runSheet(parent, dev));
+    expect(b?.id).toBe('k.child-floor');
+    expect(b?.marginPct).toBeCloseTo(-0.9, 6);
   });
 });
 

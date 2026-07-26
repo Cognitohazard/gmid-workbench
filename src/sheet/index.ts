@@ -115,6 +115,30 @@ function indexTreeResults(
 }
 
 /**
+ * The BINDING CONSTRAINT of one evaluation: the failing HARD rule with the worst relative margin
+ * anywhere in the composition, its id carrying the use path (`amp.s1.pm-spec`) so a child's rule
+ * is attributable. `undefined` when no hard rule fails — including when the design is infeasible
+ * for a reason that is not a failing rule (a bind error, a child's structural error), which is
+ * why callers must treat "no binding constraint" as "no rule to name", never as "feasible".
+ *
+ * One definition, so the 2-D map's per-cell cause and a caller naming the cause of a single
+ * verdict can never disagree about which rule binds.
+ */
+export function bindingConstraint(res: {
+  rules: RuleResult[];
+  children?: SheetChildReport[];
+}): { id: string; marginPct: number } | undefined {
+  const byPath = new Map<string, RuleResult>();
+  indexTreeResults(res.rules, res.children, '', byPath);
+  let worst: { id: string; marginPct: number } | undefined;
+  for (const [id, rr] of byPath) {
+    if (!isHardRule(rr.kind) || rr.status !== 'fail') continue;
+    if (!worst || rr.marginPct < worst.marginPct) worst = { id, marginPct: rr.marginPct };
+  }
+  return worst;
+}
+
+/**
  * Trace a leaf sheet across one parameter's slider range: at each of `n` evenly spaced samples,
  * override that parameter, evaluate, and collect every rule's relative margin plus the overall
  * feasibility. Structural validation runs once (its result is constant across the sweep) and
@@ -234,19 +258,10 @@ export function sweepSheet2(
     for (let xi = 0; xi < pts; xi++) {
       const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice);
       frow.push(!blocked && res.feasible);
-      // Name the binding constraint: the failing HARD rule with the worst relative
-      // margin anywhere in the tree. null when feasible, or when infeasibility came
-      // from something other than a failing rule (bind error, child structural error).
-      let worst: { id: string; m: number } | undefined;
-      if (!res.feasible) {
-        const byPath = new Map<string, RuleResult>();
-        indexTreeResults(res.rules, res.children, '', byPath);
-        for (const [id, rr] of byPath) {
-          if (!isHardRule(rr.kind) || rr.status !== 'fail') continue;
-          if (!worst || rr.marginPct < worst.m) worst = { id, m: rr.marginPct };
-        }
-      }
-      brow.push(worst?.id ?? null);
+      // Name the binding constraint — null when the cell is feasible, and also when
+      // infeasibility came from something other than a failing rule (bind error, child
+      // structural error), which bindingConstraint reports as "no rule to name".
+      brow.push(res.feasible ? null : (bindingConstraint(res)?.id ?? null));
     }
     feasible.push(frow);
     binding.push(brow);
