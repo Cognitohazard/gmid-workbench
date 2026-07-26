@@ -8,6 +8,7 @@
     { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
     { "name": "GBW_target", "value": 12e6, "unit": "Hz", "role": "spec" },
     { "name": "SR_target", "value": 10e6, "unit": "V/s", "role": "spec" },
+    { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
     {
       "name": "vn_target",
       "value": 20e-9,
@@ -272,6 +273,12 @@
       "expr": "mload__gm/(2*pi*(mload__cgg + moutp__cgg))",
       "unit": "Hz",
       "note": "estimate: the mirror-node pole, set by the diode gm over its own plus the K_m-scaled output gate cap"
+    },
+    {
+      "name": "PM",
+      "expr": "90 - atan(GBW/f_pole)*180/pi",
+      "unit": "deg",
+      "note": "estimate: phase margin left after the mirror node. BOTH input drains reach the output through a mirror here, so this node is a full pole in the whole signal path — unlike the 5T's mirror, which only half the signal traverses and which therefore carries a pole-zero doublet costing far less phase. Measured against the ACHIEVED GBW, so overshooting the bandwidth target spends margin honestly"
     }
   ],
   "rules": [
@@ -280,12 +287,12 @@
     { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
     {
-      "id": "mirror-pole",
+      "id": "pm-spec",
       "kind": "guardrail",
-      "lhs": "f_pole",
+      "lhs": "PM",
       "op": ">=",
-      "rhs": "3*GBW_target",
-      "note": "estimate: keep the mirror-node pole well above GBW for phase margin; sim owns the real stability"
+      "rhs": "PM_target",
+      "note": "estimate: margin left at crossover once the mirror node is paid for; advisory, since an open-loop OTA needs none of it and sim owns the real stability"
     },
     {
       "id": "input-bias-consistent",

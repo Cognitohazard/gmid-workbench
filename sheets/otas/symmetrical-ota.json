@@ -8,6 +8,7 @@
     { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
     { "name": "GBW_target", "value": 12e6, "unit": "Hz", "role": "spec" },
     { "name": "SR_target", "value": 10e6, "unit": "V/s", "role": "spec" },
+    { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
     {
       "name": "vn_target",
       "value": 20e-9,
@@ -309,6 +310,12 @@
       "expr": "nmir__gm/(2*pi*nmir__cgg)",
       "unit": "Hz",
       "note": "estimate: the intermediate NMOS mirror-node pole"
+    },
+    {
+      "name": "PM",
+      "expr": "90 - (atan(GBW/f_pole_p) + atan(GBW/f_pole_n) - atan(GBW/(2*f_pole_n)))*180/pi",
+      "unit": "deg",
+      "note": "estimate: the two mirror nodes cost phase differently, because the signal reaches them differently. Both input branches pass the PMOS mirror, so $f_{pole,p}$ is a full pole. Only the branch heading for the bottom output passes the intermediate NMOS mirror, so half the signal is delayed there and $f_{pole,n}$ is a pole-ZERO DOUBLET — a zero at twice the pole — costing far less phase than the pole alone implies. Measured against the ACHIEVED GBW"
     }
   ],
   "rules": [
@@ -317,12 +324,12 @@
     { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
     {
-      "id": "mirror-pole",
+      "id": "pm-spec",
       "kind": "guardrail",
-      "lhs": "min(f_pole_p, f_pole_n)",
+      "lhs": "PM",
       "op": ">=",
-      "rhs": "3*GBW_target",
-      "note": "estimate: keep the lower of the two mirror-node poles well above GBW for phase margin; sim owns stability"
+      "rhs": "PM_target",
+      "note": "estimate: margin left at crossover once both mirror nodes are paid for; advisory, since an open-loop OTA needs none of it and sim owns the real stability"
     },
     {
       "id": "input-bias-consistent",
