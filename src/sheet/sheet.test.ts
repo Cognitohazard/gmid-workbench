@@ -340,24 +340,49 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     expect(res.warnings.some((w) => w.rule === 'sheet-solve' && w.severity === 'error')).toBe(true);
   });
 
-  it('fails closed on a loop that cannot converge', () => {
-    // An estimate that solves for its own negation has no attracting fixed point away from 0,
-    // and the sheet must say so rather than return whichever iterate it stopped on.
+  it('fails closed on a loop with no fixed point at all', () => {
+    // `run = run + 1` is satisfied by no value, so the estimate walks away in ONE direction
+    // forever. No step length rescues that — shortening only slows the escape — so this is the
+    // shape the divergence verdict exists for, and the sheet must say so rather than return
+    // whichever iterate it stopped on.
     const res = evaluateSheet(
       loopDoc({
         params: [
           { name: 'L', value: 0.5e-6 },
           { name: 'id', value: 10e-6 },
-          { name: 'osc', value: 1, solveFor: 'flip' },
+          { name: 'run', value: 1, solveFor: 'onward' },
         ],
         bind: undefined,
-        rows: [{ name: 'flip', expr: '-2*osc' }],
+        rows: [{ name: 'onward', expr: 'run + 1' }],
       }),
       dev,
     );
     expect(res.feasible).toBe(false);
     expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(true);
     expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(/diverging/);
+  });
+
+  it('closes an OVERSHOOTING loop by shortening the step, instead of bouncing over the answer', () => {
+    // `flip = -2*osc + 3` has the fixed point 3/(1+2) = 1, but a full substitution step lands
+    // twice as far past it on the other side, so plain substitution oscillates with a GROWING
+    // amplitude and never arrives — the answer exists, is unique, and is unreachable at that
+    // step length. Shortening the step turns the overshoot into a contraction. This is the whole
+    // reason the solver adapts its step, and the real bias loops it was found on behave this way
+    // at weak inversion.
+    const res = evaluateSheet(
+      loopDoc({
+        params: [
+          { name: 'L', value: 0.5e-6 },
+          { name: 'id', value: 10e-6 },
+          { name: 'osc', value: 5, solveFor: 'flip' },
+        ],
+        bind: undefined,
+        rows: [{ name: 'flip', expr: '-2*osc + 3' }],
+      }),
+      dev,
+    );
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toHaveLength(0);
+    expect(res.values.osc).toBeCloseTo(1, 6);
   });
 
   it('refuses a param that solves for itself', () => {
@@ -434,10 +459,13 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(true);
   });
 
-  it('fails closed on a loop that neither converges nor diverges', () => {
-    // A period-2 oscillation: the gap never shrinks, so it never settles, and never grows, so
-    // the divergence test correctly stays quiet. Only the backstop iteration cap ends it —
-    // this is the exit that exists for exactly this shape.
+  it('closes a period-2 oscillation, whose error neither shrinks nor grows', () => {
+    // `flip = -flip` from 1 bounces 1, -1, 1, -1 … at CONSTANT amplitude. That is the case no
+    // error-watching test can catch — the gap never shrinks, so it never settles, and never
+    // grows, so a divergence test correctly stays quiet — and it is why the step length adapts
+    // on the DIRECTION of the step reversing rather than on the size of the error moving.
+    // A half step lands on 0 EXACTLY here, which matters: the convergence test is purely
+    // relative, so a fixed point at zero is certifiable only when the gap reaches exactly zero.
     const res = evaluateSheet(
       loopDoc({
         params: [{ name: 'flip', value: 1, solveFor: 'negated' }],
@@ -446,10 +474,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       }),
       dev,
     );
-    expect(res.feasible).toBe(false);
-    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
-      /neither converging nor clearly diverging/,
-    );
+    expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(false);
+    expect(res.values.flip).toBeCloseTo(0, 6);
   });
 
   it('reports the disagreement, not a value compared with itself', () => {

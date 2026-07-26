@@ -538,7 +538,6 @@ function evaluateOnce(
   budget: SolveBudget,
   solved?: Record<string, number>,
 ): SheetResult {
-  budget.left--;
   const warnings: QAWarning[] = [];
   const warn = (w: QAWarning): void => void warnings.push(w);
   const values: Record<string, number> = {};
@@ -637,7 +636,27 @@ const SOLVE_PASSES_PER_LOOP = 500;
 /** Consecutive increases of the error measure that count as divergence, not a transient wobble. */
 const SOLVE_DIVERGING = 4;
 
-/** The pass budget shared across one composed evaluation. */
+/**
+ * Smallest under-relaxation factor the solver will fall back to. Plain substitution steps the
+ * whole way to the value the sheet resolved (factor 1) and converges only where the loop map
+ * contracts; a loop that OVERSHOOTS instead settles into a two-cycle, bouncing between the same
+ * pair of values forever — no pass budget rescues that, since it is not converging slowly, it is
+ * not converging at all. Stepping only part of the way turns the overshoot into a contraction.
+ * A loop that runs away monotonically is unaffected by any factor and still gets caught as
+ * divergent, so damping costs no detection.
+ */
+const SOLVE_DAMP_MIN = 1 / 64;
+
+/** Per-pass error ratio that still counts as real progress; anything slower reads as a stall. */
+const SOLVE_PROGRESS = 0.99;
+
+/**
+ * The pass budget shared across one composed evaluation, counted in SOLVE PASSES — iterations of
+ * a tearing loop — and not in sheet evaluations. Those differ by the size of the tree: a pass of a
+ * three-child sheet evaluates four documents, so charging per evaluation quietly handed that sheet
+ * a quarter of the passes the constant promises, and a wider one less still. Iterations a loop
+ * needs do not shrink because the design has more blocks in it.
+ */
 interface SolveBudget {
   left: number;
 }
@@ -723,8 +742,12 @@ export function evaluateSheet(
   let first = Infinity;
   let growing = 0;
   let passes = 0;
+  let damp = 1;
+  const lastStep: Record<string, number> = {};
+  let revRun = 0;
   while (passes < SOLVE_PASSES_PER_LOOP && budget.left > 0) {
     passes++;
+    budget.left--;
     let done = true;
     let sq = 0;
     for (const p of unknowns) {
@@ -749,9 +772,29 @@ export function evaluateSheet(
     const prev = err;
     err = Math.sqrt(sq);
     if (passes === 1) first = err;
-    // An error that keeps growing means substitution is walking away from the fixed point; say
-    // so after a few passes rather than burning the whole allowance to reach the same verdict.
-    growing = err > prev ? growing + 1 : 0;
+
+    // Shorten the step when it CHANGES SIGN, which is what overshooting looks like: the iterate
+    // steps past the fixed point and back, settling into a two-cycle whose error stops falling
+    // but never rises. Neither a growing-error nor a stalled-error trigger finds that — the first
+    // never fires, and the second also fires on a slow monotone contraction, where a shorter step
+    // is precisely the wrong answer.
+    //
+    // The step only ever shortens. Growing it back on a good pass sounds better and is worse: the
+    // longer step overshoots again, the next one shortens, and the step length itself falls into a
+    // cycle that never settles. Shortening alone stops as soon as the iteration stops reversing,
+    // which is exactly when it has become a contraction.
+    let reversed = false;
+    for (const p of unknowns) {
+      const step = target(p) - est[p.name];
+      if (lastStep[p.name] !== undefined && step * lastStep[p.name] < 0) reversed = true;
+      lastStep[p.name] = step;
+    }
+
+    // A loop running away in ONE direction is genuinely divergent — no step length rescues it,
+    // since shortening only slows the escape. One that runs away while reversing is overshooting,
+    // and the step above is already being cut, so give that a chance and judge it only once the
+    // shortest step still walks away.
+    growing = err > prev && (!reversed || damp <= SOLVE_DAMP_MIN) ? growing + 1 : 0;
     if (growing >= SOLVE_DIVERGING) {
       return solveFailed(
         res,
@@ -760,8 +803,15 @@ export function evaluateSheet(
           `rest of the design depends on more weakly`,
       );
     }
-    // Commit the iterate only after every check above has had the pre-update values.
-    for (const p of unknowns) est[p.name] = target(p);
+    // Reversal ALONE is not overshoot. A loop with two coupled unknowns rotates as it contracts,
+    // reversing every few passes while closing in perfectly well, and shortening its step only
+    // slows it down. Overshoot reverses on EVERY pass and buys nothing for it, so require both:
+    // reversals back to back, and an error that has stopped moving.
+    revRun = reversed ? revRun + 1 : 0;
+    if (revRun >= 2 && err >= prev * SOLVE_PROGRESS) damp = Math.max(damp / 2, SOLVE_DAMP_MIN);
+    // Commit the iterate only after every check above has had the pre-update values. At damp = 1
+    // this is plain substitution; below it, a partial step toward what the sheet resolved.
+    for (const p of unknowns) est[p.name] += damp * lastStep[p.name];
     res = evaluateOnce(doc, table, resolveDevice, _depth, budget, est);
   }
 
