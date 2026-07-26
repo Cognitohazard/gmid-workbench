@@ -21,6 +21,11 @@ export interface ChartData {
   /** Log-scale the X / Y axis (uPlot `distr: 3`); absent/false ⇒ linear. */
   xLog?: boolean;
   yLog?: boolean;
+  /** Fixed Y range `[min, max]`, overriding autoscale; lines outside it are clipped by uPlot.
+   *  For data where a few series run orders of magnitude past the interesting band and would
+   *  otherwise flatten every other curve against the axis. Keeps the DATA true — the caller
+   *  hands over real values and states the window, rather than pre-clamping the numbers. */
+  yRange?: readonly [number, number];
   /** Vertical reference marks (e.g. the sized gm/ID); drawn as dashed rules with a label. */
   marks?: readonly { x: number; label?: string }[];
 }
@@ -56,6 +61,7 @@ export class ChartAdapter {
   private marks: readonly { x: number; label?: string }[] = [];
   private xLog = false;
   private yLog = false;
+  private yRange: readonly [number, number] | undefined;
   private lastData: ChartData;
   private onCtx: (e: MouseEvent) => void;
 
@@ -123,13 +129,24 @@ export class ChartAdapter {
     const sameDash = sameDashes(nextDash, this.dashes);
     const eff = effLog(data);
     const sameScale = eff.x === this.xLog && eff.y === this.yLog;
+    // A fixed y-range is baked into the scale at construction, so a CHANGED one needs a rebuild
+    // (an unchanged one must not force it — setData runs on every drag frame).
+    const sameRange =
+      data.yRange?.[0] === this.yRange?.[0] && data.yRange?.[1] === this.yRange?.[1];
     this.colors = next;
     this.dashes = nextDash;
     this.marks = data.marks ?? [];
     this.xLog = eff.x;
     this.yLog = eff.y;
+    this.yRange = data.yRange;
     this.lastData = data;
-    if (sameColors && sameDash && sameScale && this.u.series.length - 1 === data.lines.length) {
+    if (
+      sameColors &&
+      sameDash &&
+      sameScale &&
+      sameRange &&
+      this.u.series.length - 1 === data.lines.length
+    ) {
       this.u.setData(aligned(data)); // resetScales: true — refit to the new quantity's range
     } else {
       this.u.destroy();
@@ -187,7 +204,10 @@ export class ChartAdapter {
       // data isn't strictly positive, so uPlot never sees a non-positive log range.
       scales: {
         x: { time: false, distr: this.xLog ? 3 : 1 },
-        y: { distr: this.yLog ? 3 : 1 },
+        y: {
+          distr: this.yLog ? 3 : 1,
+          ...(data.yRange ? { range: [data.yRange[0], data.yRange[1]] as [number, number] } : {}),
+        },
       },
       legend: { show: false }, // we own the readout/color-key in the app footer
       cursor: { focus: { prox: 24 } },

@@ -8,6 +8,7 @@
     sweepSheet2,
     sweepable as isSweepable,
     torn,
+    bindingConstraint,
     resolveSheetRefs,
     flattenSheetDoc,
     formatEng,
@@ -30,9 +31,9 @@
     type RuleResult,
     type RuleStatus,
   } from '@gmid/mostab-core';
-  import { type ChartData } from './chart';
+  import { PALETTE, type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
-  import { axisUnit, qFormula, qLabel, mathText } from './labels';
+  import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
   import { CONTROL_HELP } from './help';
   import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
   import { copyText, download } from './export';
@@ -125,14 +126,17 @@
   const rr = $derived(resolveSheetRefs(cfg, refs));
   const result = $derived(runSheet(rr.doc, device, resolveDevice));
 
-  // Feasibility preview for the picker: evaluate every menu sheet against the active device
-  // so the dropdown flags which topologies already close before one is loaded. runSheet is
-  // pure and never throws; the whole menu re-evaluates only when the device or bias changes.
-  // Deliberately simple: O(menu) evals per device change (each sub-ms) — fine at library
-  // scale; revisit with a shared eval cache if the menu grows into the hundreds.
-  const menuFeasible = $derived(
-    menu.map((g) => g.sheets.map((s) => runSheet(s, device, resolveDevice, refs).feasible)),
-  );
+  // The picker deliberately does NOT preview feasibility. A verdict at a sheet's shipped
+  // defaults says nothing about whether that topology can meet YOUR spec — the defaults are
+  // someone else's operating point — so a ✓/✗ there reads as a recommendation while
+  // carrying no information about the design in front of you. Answering it honestly means
+  // searching each sheet's choice space against the entered spec, which is a different
+  // feature (see the topology picker in the roadmap), not a decoration on a dropdown.
+
+  // "infeasible" alone names no cause, and the offending rule is often a child's — not in the
+  // table below at all. Core owns the definition, so the badge and the 2-D map's per-cell cause
+  // can never disagree about which rule binds.
+  const binding = $derived(bindingConstraint(result));
 
   // ── Feasibility sweep: vary one slider parameter across its range and chart every rule's
   // relative margin. Only finitely-bounded params can be swept (the sweep walks [min,max]).
@@ -166,6 +170,13 @@
 
   // One line per rule, margin as a percentage; guardrails dashed (advisory, never gate). The
   // y = 0 gridline is the constraint boundary; PALETTE cycles the colours by default.
+  //
+  // The y window is FIXED at ±MARGIN_CLIP%. Rules like slew rate scale linearly with the swept
+  // current and run to several thousand percent, which auto-scales every rule near its boundary
+  // into one flat band at y = 0 — hiding the only thing the chart is for. No zero crossing can
+  // fall outside the window, so every feasibility edge survives; the data stays true (the chart
+  // clips the view, the numbers are not clamped) and the rules table carries exact values.
+  const MARGIN_CLIP = 100;
   const chartData = $derived.by((): ChartData | null => {
     if (!swept || swept.x.length === 0) return null;
     return {
@@ -173,6 +184,7 @@
       lines: swept.rules.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
       lineLabels: swept.rules.map((r) => r.id),
       lineDash: swept.rules.map((r) => (r.kind === 'guardrail' ? [4, 3] : null)),
+      yRange: [-MARGIN_CLIP, MARGIN_CLIP],
     };
   });
 
@@ -372,14 +384,20 @@
   // Author rule notes by id (a RuleResult carries no note — the physical-meaning note lives on the
   // authored SheetRule). Top-level result.rules mirror cfg.rules 1:1, so the id lookup is exact.
   const ruleNote = $derived(new Map(cfg.rules.map((r) => [r.id, r.note])));
+  const ruleWhy = $derived(new Map(cfg.rules.map((r) => [r.id, r.justification])));
   // A rule row's tooltip carries the rule-SPECIFIC bits (its authored physical-meaning note and any
   // eval detail); the generic kind/amber/na explanations live on their own elements via CONTROL_HELP.
+  // A rule's authored prose for the row tooltip. `justification` is the author's stated reason
+  // for a relaxed or unusual constraint — the thing a reviewer most needs — so it is shown,
+  // not just stored. A title attribute is a plain-TEXT sink: math goes through mathPlain.
   function ruleTitle(r: RuleResult): string {
     const parts: string[] = [];
     const note = ruleNote.get(r.id);
     if (note) parts.push(note);
+    const why = ruleWhy.get(r.id);
+    if (why) parts.push(`why: ${why}`);
     if (r.detail) parts.push(r.detail);
-    return parts.join(' — ');
+    return mathPlain(parts.join(' — '));
   }
 
   // The operating point a bind sliced at — declared, or filled from the namespace default —
@@ -482,7 +500,7 @@
 </script>
 
 {#snippet paramRow(p: SheetVar)}
-  <label class="svar" title={p.note} data-param={p.name}>
+  <label class="svar" title={p.note && mathPlain(p.note)} data-param={p.name}>
     <span class="vn"
       >{@html qLabel(p.name)}{#if p.unit}<i>{p.unit}</i>{/if}</span
     >
@@ -609,6 +627,9 @@
         </select>
       {/if}
     </div>
+    {#if use?.doc?.description}
+      <p class="snote sudesc">{@html mathText(use.doc.description)}</p>
+    {/if}
     {#if c?.bind?.ok}
       <div class="susebind">
         W={fmt(c.bind.W)}m · V<sub>GS</sub>={fmt(c.bind.vgs)}V · I<sub>D</sub>={fmt(c.bind.id)}A
@@ -656,16 +677,16 @@
       <option value="" selected>sheet…</option>
       {#each menu as g, gi}
         <optgroup label={g.label}>
-          {#each g.sheets as s, si}<option value={`${gi}:${si}`}
-              >{menuFeasible[gi][si] ? '✓' : '✗'} {s.title}</option
-            >{/each}
+          {#each g.sheets as s, si}<option value={`${gi}:${si}`}>{s.title}</option>{/each}
         </optgroup>
       {/each}
     </select>
     <strong>{cfg.title}</strong>
-    <span class="feasb {result.feasible ? 'ok' : 'no'}"
-      >{result.feasible ? 'feasible' : 'infeasible'}</span
-    >
+    <span class="feasb {result.feasible ? 'ok' : 'no'}" title={CONTROL_HELP.feasBadge}>
+      {result.feasible ? 'feasible' : 'infeasible'}{#if binding}<i
+          >{binding.id} {pct(binding.marginPct)}</i
+        >{/if}
+    </span>
     {#if result.bind}
       {#if result.bind.ok}
         <span class="bind"
@@ -834,9 +855,22 @@
   {:else if active && chartData && !twoD}
     <div class="scap">
       margin (%) vs <b>{active}</b>{#if swept?.unit}
-        ({swept.unit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory)
+        ({swept.unit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory); clipped
+      at ±{MARGIN_CLIP}%
     </div>
     <div class="pchart" bind:this={el}></div>
+    <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
+         legend the way a data panel does. Index order matches what ChartAdapter strokes. A
+         guardrail is dashed on the chart and tagged here, since an inline-styled swatch cannot
+         carry the dash. -->
+    <div class="skey">
+      {#each swept?.rules ?? [] as r, i}
+        <span class="kitem"
+          ><i style="background:{PALETTE[i % PALETTE.length]}"
+          ></i>{r.id}{#if r.kind === 'guardrail'}&nbsp;·&nbsp;adv{/if}</span
+        >
+      {/each}
+    </div>
     {#if feasWindow}
       <p class="feas">
         {#if feasWindow.none}
@@ -896,6 +930,16 @@
   }
   .feasb.no {
     color: var(--err);
+  }
+  /* The binding constraint rides inside the badge: same colour, but normal-case and lighter,
+     so the verdict still reads as the headline and the cause as its subtitle. */
+  .feasb i {
+    font-style: normal;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    opacity: 0.85;
+    margin-left: 0.34rem;
   }
   .sbias {
     font-family: ui-monospace, monospace;
@@ -981,6 +1025,25 @@
     height: 220px;
     min-width: 0;
   }
+  /* Colour key for the margin chart — the chart canvas carries no legend of its own. */
+  .skey {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem 0.7rem;
+    font-size: calc(0.72rem * var(--text-scale));
+    font-family: ui-monospace, monospace;
+  }
+  .kitem {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    opacity: 0.85;
+  }
+  .kitem i {
+    width: 0.7rem;
+    height: 0.24rem;
+    border-radius: 1px;
+  }
   .feas {
     margin: 0;
     font-family: ui-monospace, monospace;
@@ -1064,6 +1127,11 @@
   }
   .sdetail {
     font-style: italic;
+  }
+  /* A composed block's own description: what this device IS in the topology. Authored on every
+     library sheet and, until now, never shown — the card read as three anonymous devices. */
+  .sudesc {
+    margin: 0.1rem 0 0.2rem;
   }
   .srules {
     border-collapse: collapse;

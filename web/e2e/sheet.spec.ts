@@ -456,15 +456,24 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await expect(sp.locator('.suse .prov code sub').first()).not.toHaveCount(0);
   await expect(sp.locator('.srules')).toContainText('≥');
 
-  // The picker previews feasibility inline: every option is marked ✓ or ✗ before loading.
+  // The picker offers titles ONLY: a verdict at a sheet's shipped defaults would read as a
+  // recommendation while saying nothing about whether that topology can meet the user's spec.
   const options = sp.locator('.shead select.rm option:not([value=""])');
-  await expect(options.first()).toHaveText(/^[✓✗] /);
+  await expect(options.first()).not.toHaveText(/^[✓✗]/);
 
   // A composed multi-child library sheet (no parent bind) loads from another group.
   await pickSheet(sp, '5T OTA');
   await expect(sp.locator('.shead')).toContainText('5T OTA');
   await expect(sp.locator('.suse')).toHaveCount(3);
   await expect(sp.locator('.srules tr').first()).toBeVisible();
+  // Each composed block explains itself: the author's description of what the device IS in the
+  // topology, typeset (the 5T's blocks all carry $V_{GS}$-style math in that prose).
+  await expect(sp.locator('.suse .sudesc').first()).toBeVisible();
+  await expect(sp.locator('.suse .sudesc sub').first()).not.toHaveCount(0);
+  // An infeasible verdict names the binding constraint rather than stopping at "infeasible".
+  const badge = sp.locator('.shead .feasb');
+  if ((await badge.getAttribute('class'))?.includes('no'))
+    await expect(badge.locator('i')).not.toHaveCount(0);
 
   expect(errors).toEqual([]);
 });

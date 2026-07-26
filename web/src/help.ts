@@ -55,7 +55,9 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Make this the active device: it drives the dashboard, the pickers, the bias sliders, and the sizer.',
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
   sheet:
-    'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device. ✓/✗ marks whether the sheet closes (all hard rules pass) on the active device at its defaults.',
+    'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device.',
+  feasBadge:
+    'Does the design close on the active device at the current variables? Feasible = every hard rule (invariant + requirement) passes; guardrails are advisory and never gate it. When it does not close, the badge names the binding constraint: the failing hard rule with the worst margin, anywhere in the composition (a child’s rule is shown by path).',
   sheetSweep:
     'Sweep one variable across its range and chart every rule’s margin — the feasibility region where the design closes.',
   sheetSweep2:

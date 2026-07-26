@@ -106,31 +106,59 @@ const TEX_SYMBOLS: Readonly<Record<string, string>> = {
   chi: 'χ', psi: 'ψ', omega: 'ω', pi: 'π', Delta: 'Δ', Omega: 'Ω', Phi: 'Φ', Sigma: 'Σ',
 }; // prettier-ignore
 
-// Render one inline-math run (the text between $…$) as a LaTeX subset: \frac{a}{b} → a/b,
-// \sqrt{x} → √(x), \cmd → its symbol, _{…}/^{…} and _x/^x → sub/superscripts, * → ·. Escaped
-// FIRST, so only our own <sub>/<sup> tags reach the output — always safe for {@html}.
-function renderMath(tex: string): string {
-  return escapeHtml(tex)
+// The part of the LaTeX subset that is sink-independent: \frac{a}{b} → a/b, \sqrt{x} → √(x),
+// \cmd → its symbol. Both renderers below wrap this; the ONE place a command is added or a
+// pattern fixed. Sub/superscripts are deliberately NOT here — they are exactly what differs
+// between an HTML sink (<sub> tags) and a text sink (braces dropped).
+function texSubst(tex: string): string {
+  return tex
     .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '$1/$2')
     .replace(/\\sqrt\{([^{}]*)\}/g, '√($1)')
-    .replace(/\\([A-Za-z]+)/g, (_m, c: string) => TEX_SYMBOLS[c] ?? c)
-    .replace(/_\{([^{}]*)\}/g, '<sub>$1</sub>')
-    .replace(/\^\{([^{}]*)\}/g, '<sup>$1</sup>')
-    .replace(/_([A-Za-z0-9])/g, '<sub>$1</sub>')
-    .replace(/\^([A-Za-z0-9*])/g, '<sup>$1</sup>')
-    .replace(/\*/g, '·');
+    .replace(/\\([A-Za-z]+)/g, (_m, c: string) => TEX_SYMBOLS[c] ?? c);
+}
+
+/** Split author prose on `$…$` fences and render each run with the sink's own renderer: `math`
+ *  for an inline-math run (fences already stripped), `text` for the prose between them. An
+ *  unpaired `$` never matches, so it passes through as ordinary prose. */
+function overMathRuns(s: string, math: (t: string) => string, text: (t: string) => string): string {
+  return s
+    .split(/(\$[^$]*\$)/)
+    .map((seg, i) => (i % 2 === 1 ? math(seg.slice(1, -1)) : text(seg)))
+    .join('');
 }
 
 /**
  * Render author prose that may carry inline math delimited by `$…$` (a deliberate LaTeX subset —
- * see renderMath; no math engine, to keep the offline build lean). Text outside the delimiters is
- * escaped, so ordinary prose (and an unpaired `$`) passes through unchanged and {@html}-safe.
+ * no math engine, to keep the offline build lean). Math runs escape FIRST, so only our own
+ * <sub>/<sup> tags reach the output; prose outside the fences is escaped too. Always
+ * {@html}-safe.
  */
 export function mathText(s: string): string {
-  return s
-    .split(/(\$[^$]*\$)/)
-    .map((seg, i) => (i % 2 === 1 ? renderMath(seg.slice(1, -1)) : escapeHtml(seg)))
-    .join('');
+  return overMathRuns(
+    s,
+    (tex) =>
+      texSubst(escapeHtml(tex))
+        .replace(/_\{([^{}]*)\}/g, '<sub>$1</sub>')
+        .replace(/\^\{([^{}]*)\}/g, '<sup>$1</sup>')
+        .replace(/_([A-Za-z0-9])/g, '<sub>$1</sub>')
+        .replace(/\^([A-Za-z0-9*])/g, '<sup>$1</sup>')
+        .replace(/\*/g, '·'),
+    escapeHtml,
+  );
+}
+
+/**
+ * The same author prose rendered for a plain-TEXT sink — a `title` attribute, a copied
+ * report — where markup cannot go. Symbols still resolve (`\gamma` → γ); the `$` fences and the
+ * sub/superscript braces drop away, so a note reads as `V_GS` rather than as raw `$V_{GS}$`.
+ * Never emits HTML, so callers must NOT pass it to {@html}.
+ */
+export function mathPlain(s: string): string {
+  return overMathRuns(
+    s,
+    (tex) => texSubst(tex).replace(/([_^])\{([^{}]*)\}/g, '$1$2'),
+    (t) => t,
+  );
 }
 
 /** Canonical base-quantity key → SI unit (e.g. 'vgs' → 'V'); for axis and bias readouts. */
