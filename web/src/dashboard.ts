@@ -9,6 +9,7 @@ import {
   EXAMPLES,
   MAX_USE_DEPTH,
   BIND_KEYS,
+  BIND_FLAGS,
   RULE_KINDS,
   RULE_OPS,
   type DeviceTable,
@@ -368,6 +369,9 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
     const b = o.bind as Record<string, unknown>;
     if (typeof b.L === 'string') {
       const cand: SheetBind = { L: b.L };
+      // Members are written through an index view: SheetBind mixes expression strings with a
+      // boolean flag, so assigning by `keyof SheetBind` narrows the value type to never.
+      const into = cand as unknown as Record<string, unknown>;
       // Walk what the document actually carries, checking each key against the core's own
       // lists rather than a copy of them: a hand-maintained whitelist here silently deleted
       // every bind quantity added to BINDABLE, which round-tripped a legal two-quantity bind
@@ -376,8 +380,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       // instead of quietly rewriting the design.
       for (const k of Object.keys(b)) {
         if (k === 'L') continue;
-        if (BIND_KEYS.has(k) && typeof b[k] === 'string')
-          cand[k as keyof SheetBind] = b[k] as string;
+        if (BIND_KEYS.has(k) && typeof b[k] === 'string') into[k] = b[k];
+        // A flag (the diode connection) is a boolean, and would fail the string test above —
+        // which would delete the connection and leave the device unbiased on every reload.
+        else if (BIND_FLAGS.has(k) && typeof b[k] === 'boolean') into[k] = b[k];
         else dropField(true, `bind.${k}`);
       }
       bind = cand;

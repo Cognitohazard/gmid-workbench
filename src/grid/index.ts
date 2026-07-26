@@ -285,6 +285,93 @@ export interface Oriented {
 // generous, so valid (slightly noisy) silicon data is never false-flagged.
 const FOLD_TOL = 0.25;
 
+/** The diode fold and whether it had to clamp. Returned together, deliberately: the clamp is the
+ *  one thing about this operation a caller must not miss, and a separate predicate they have to
+ *  remember to ask is a warning waiting to be dropped. */
+export interface DiodeFold {
+  readonly grid: Grid;
+  /** True where part of the vgs sweep lies outside the characterized vds range, so the diagonal
+   *  read the table's edge rather than the point the connection implies. */
+  readonly clamped: boolean;
+}
+
+/**
+ * Collapse the `vds` axis onto the DIODE DIAGONAL: at every point, take the table where the
+ * drain-source voltage equals the gate-source voltage. That is what a diode connection is —
+ * gate tied to drain — so the operating point is not a free coordinate to be chosen or guessed,
+ * it is fixed by the wiring. Interpolates along vds exactly as sliceGrid does, clamping at the
+ * hull, but at a coordinate that moves with vgs instead of standing still.
+ *
+ * Works for either polarity: a signed PMOS table sweeps both axes negative and the identity
+ * holds unchanged. `vds` survives as a QUANTITY column carrying the diagonal's coordinate, so a
+ * caller can still read the operating point it landed on.
+ *
+ * Returns the grid untouched when there is no live vds axis (already collapsed, or never swept)
+ * or no vgs axis to follow — the caller decides whether that is an error in context.
+ */
+export function diodeGrid(grid: Grid): DiodeFold {
+  const dVds = grid.axes.findIndex((a) => a.name === 'vds' && a.values.length > 1);
+  const dVgs = grid.axes.findIndex((a) => a.name === 'vgs');
+  if (dVds < 0 || dVgs < 0) return { grid, clamped: false };
+
+  const vdsValues = grid.axes[dVds].values;
+  const vgsValues = grid.axes[dVgs].values;
+  const vdsLo = vdsValues[0];
+  const vdsHi = vdsValues[vdsValues.length - 1];
+  const keepDims: number[] = [];
+  const remainingAxes: Axis[] = [];
+  for (let d = 0; d < grid.axes.length; d++) {
+    if (d === dVds) continue;
+    keepDims.push(d);
+    remainingAxes.push({ name: grid.axes[d].name, values: grid.axes[d].values });
+  }
+  const remVgs = keepDims.indexOf(dVgs); // which remaining dimension carries vgs
+
+  const remainingNames = new Set(remainingAxes.map((a) => a.name));
+  const carryKeys = [...grid.quantities.keys()].filter(
+    (k) => k !== 'vds' && !remainingNames.has(k),
+  );
+  const remShape = remainingAxes.map((a) => a.values.length);
+  const remTotal = gridSize(remShape);
+  const srcCols = carryKeys.map((k) => grid.quantities.get(k)!);
+  const dstCols = carryKeys.map(() => new Float64Array(remTotal));
+  const outCols = new Map<string, Float64Array>();
+  carryKeys.forEach((k, c) => outCols.set(k, dstCols[c]));
+  // The coordinate the diagonal landed on, kept so the sizing report can show it.
+  const vdsCol = new Float64Array(remTotal);
+  outCols.set('vds', vdsCol);
+
+  const fullIdx = new Array<number>(grid.axes.length);
+  const remIdx = new Array<number>(keepDims.length);
+  let clamped = false;
+  for (let r = 0; r < remTotal; r++) {
+    // decode remaining-grid multi-index (row-major over remShape), as sliceGrid does
+    let rem = r;
+    for (let k = keepDims.length - 1; k >= 0; k--) {
+      remIdx[k] = rem % remShape[k];
+      rem = Math.floor(rem / remShape[k]);
+    }
+    for (let k = 0; k < keepDims.length; k++) fullIdx[keepDims[k]] = remIdx[k];
+    // vds follows vgs at this cell — the diode identity, evaluated pointwise. Where the vgs
+    // range runs past the characterized vds range, `locate` clamps to the hull, so the RECORDED
+    // coordinate is clamped too: reporting the raw vgs would name an operating point the
+    // quantities beside it were never sampled at. `diodeClamps` lets a caller say so out loud.
+    const target = vgsValues[remIdx[remVgs]];
+    const { i, w } = locate(vdsValues, target);
+    if (target < vdsLo || target > vdsHi) clamped = true;
+    vdsCol[r] = target < vdsLo ? vdsLo : target > vdsHi ? vdsHi : target;
+    fullIdx[dVds] = i;
+    const lo = flatIndex(grid.shape, fullIdx);
+    fullIdx[dVds] = i + 1 < vdsValues.length ? i + 1 : i;
+    const hi = flatIndex(grid.shape, fullIdx);
+    for (let c = 0; c < carryKeys.length; c++) {
+      const col = srcCols[c];
+      dstCols[c][r] = col[lo] * (1 - w) + col[hi] * w;
+    }
+  }
+  return { grid: makeGrid(remainingAxes, outCols), clamped };
+}
+
 /**
  * Keep finite (x, y) pairs, order them by ascending X (so interp1 can bracket), and
  * decide whether X is a usable monotone axis — true unless the curve genuinely folds

@@ -156,7 +156,10 @@ export function mathText(s: string): string {
 export function mathPlain(s: string): string {
   return overMathRuns(
     s,
-    (tex) => texSubst(tex).replace(/([_^])\{([^{}]*)\}/g, '$1$2'),
+    (tex) =>
+      texSubst(tex)
+        .replace(/([_^])\{([^{}]*)\}/g, '$1$2')
+        .replace(/\*/g, '·'),
     (t) => t,
   );
 }

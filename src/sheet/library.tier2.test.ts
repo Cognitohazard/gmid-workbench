@@ -32,9 +32,16 @@ describe('tier-2 goldens: cascode current mirror', () => {
   });
 
   it('systematic error is essentially zero: both mirror devices share one vds', () => {
-    // The cascode holds the reference and output mirror devices at the same declared
-    // vds (vgs_est_m), so their CLM factors are identical and the ratio error vanishes.
-    expect(Math.abs(res.values.sys_err)).toBeLessThan(1e-9);
+    // The cascode holds the reference and output mirror devices at the same vds — the reference
+    // diode's own drop — so their CLM factors match and the ratio error all but vanishes.
+    //
+    // It is no longer EXACTLY zero, and the reason is worth keeping: the two sides now reach that
+    // shared voltage by different routes. The reference is folded onto the vds = vgs diagonal
+    // while the output device is sliced at a fixed vds, so they interpolate the same grid
+    // differently and disagree in the fifth decimal. The old exact zero came from both sides
+    // reading one hand-typed literal, which agreed with itself but not necessarily with the
+    // device.
+    expect(Math.abs(res.values.sys_err)).toBeLessThan(1e-4);
   });
 
   it('the K-times-larger output device carries half the reference current spread', () => {
@@ -68,8 +75,10 @@ describe('tier-2 goldens: degenerated current mirror', () => {
   // reference diode at 0.7 V. VA = 5 V.
 
   it('systematic error is the demo CLM ratio between the two vds points', () => {
+    // The reference is diode-connected, so its vds is its own drop rather than a typed estimate;
+    // read it from the result and let this test own the CLM model check.
     const va = VA_PER_L * 1e-6;
-    const err = (1 + 0.8 / va) / (1 + 0.7 / va) - 1;
+    const err = (1 + 0.8 / va) / (1 + res.values.ref__vgs / va) - 1;
     expect(relErr(res.values.sys_err, err)).toBeLessThan(1e-2);
   });
 

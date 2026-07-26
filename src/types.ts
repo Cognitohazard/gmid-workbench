@@ -133,6 +133,17 @@ export interface Scope {
 export interface CompiledExpr {
   readonly src: string;
   readonly names: readonly string[]; // free identifiers referenced (for dependency/QA)
+  /**
+   * Per CALL SITE, the free identifiers appearing inside that call's arguments, keyed by the
+   * function's name — so `abs(a - b) + abs(c)` yields `abs → [{a,b}, {c}]`. Filled during the
+   * same walk that gathers `names`, so it costs nothing extra and rides the compile cache.
+   *
+   * It exists because a caller that wants "what is inside this call" would otherwise scan the
+   * SOURCE TEXT for it, and a hand-rolled scanner is a second, worse grammar living beside the
+   * real one: the first version of the sheet validator's missed `abs (x)` outright, because the
+   * parser accepts a space before the paren and a literal search does not.
+   */
+  readonly calls: ReadonlyMap<string, readonly ReadonlySet<string>[]>;
   eval(scope: Scope): Value;
 }
 

@@ -536,18 +536,21 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
 
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
-  await pickSheet(sp, 'CS amp, diode-connected load');
+  // The diode-load stage used to carry this hint; declaring the connection retired its sign
+  // param, because the vds = vgs diagonal follows whichever convention the table itself uses.
+  // The hint still matters wherever a child's vds is an AUTHORED expression, as here.
+  await pickSheet(sp, '5T OTA');
 
-  // Bind the load child to the signed PMOS table: load_sign still reads +1, so the
+  // Bind the mirror-load child to the signed PMOS table: ld_sign still reads +1, so the
   // panel names the ONE root cause instead of a wall of derived n/a warnings.
-  await sp.locator('.suse', { hasText: 'load' }).locator('.dsel').selectOption({ index: 2 });
-  await expect(sp.locator('.pwarn', { hasText: 'set load_sign = -1' })).toBeVisible();
+  await sp.locator('.suse', { hasText: 'ld' }).first().locator('.dsel').selectOption({ index: 2 });
+  await expect(sp.locator('.pwarn', { hasText: 'set ld_sign = -1' })).toBeVisible();
 
   // Fixing the param clears the hint.
-  const sign = sp.locator('.svar[data-param="load_sign"] .num');
+  const sign = sp.locator('.svar[data-param="ld_sign"] .num');
   await sign.fill('-1');
   await sign.blur();
-  await expect(sp.locator('.pwarn', { hasText: 'set load_sign = -1' })).toHaveCount(0);
+  await expect(sp.locator('.pwarn', { hasText: 'set ld_sign = -1' })).toHaveCount(0);
 });
 
 test('design sheet: an imported fT bind survives import and reload (not silently stripped)', async ({
@@ -638,6 +641,53 @@ test('design sheet: an imported solveFor survives import and reload (not silentl
   await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
 
   // And again after a reload, which restores the sheet from persisted state.
+  await page.reload();
+  const after = page.locator('.sheet').first();
+  await expect(after.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(after.locator('.srules tr.st-fail')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: an imported diode connection survives import and reload (not silently stripped)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // The connection is a BOOLEAN in a bind whose other members are all expression strings, so a
+  // sanitizer that type-checks every member as a string deletes it — leaving the device with no
+  // vds at all. The rule below reads the drop the diagonal produced: on the demo device a diode
+  // sits well above 0.2 V, and a stripped connection makes the sizing fail outright rather than
+  // report a smaller number, so the chip catches either outcome.
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'diode-block.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Diode connection',
+        polarity: 'n',
+        params: [
+          { name: 'L', value: 5e-7 },
+          { name: 'Ib', value: 1e-5 },
+        ],
+        bind: { L: 'L', id: 'Ib', gm_id: '10', diode: true },
+        rows: [{ name: 'drop', expr: 'vgs' }],
+        rules: [{ id: 'diode-drop', kind: 'invariant', lhs: 'drop', op: '>=', rhs: '0.2' }],
+      }),
+    ),
+  });
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Diode connection');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
+
   await page.reload();
   const after = page.locator('.sheet').first();
   await expect(after.locator('.srules tr.st-pass')).toHaveCount(1);

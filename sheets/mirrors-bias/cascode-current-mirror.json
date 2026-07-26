@@ -1,6 +1,6 @@
 {
   "title": "Cascode current mirror",
-  "description": "A K:1 cascode current mirror. Four unit devices: the bottom reference (diode-connected), the reference-branch cascode (diode-connected, stacked on it), the output mirror device, and the output cascode. The cascode devices force the two mirror devices to sit at the SAME low drain voltage, so the channel-length-modulation ($\\lambda$) mismatch between them is essentially zero and the systematic ratio error collapses. That matched bias is the whole point of cascoding a mirror: unlike the simple mirror, the output current no longer drifts with the output node voltage. The cost is output compliance: the output node must clear two stacked saturation voltages before the cascode leaves saturation, so $V_{out}$ cannot swing as low as a simple mirror's. Both mirror devices bind width-first as unit-device multiples (output width = K times the reference), and the reference diode drops are estimated by vgs_est params with consistency guardrails. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
+  "description": "A K:1 cascode current mirror. Four unit devices: the bottom reference (diode-connected), the reference-branch cascode (diode-connected, stacked on it), the output mirror device, and the output cascode. The cascode devices force the two mirror devices to sit at the SAME low drain voltage, so the channel-length-modulation ($\\lambda$) mismatch between them is essentially zero and the systematic ratio error collapses. That matched bias is the whole point of cascoding a mirror: unlike the simple mirror, the output current no longer drifts with the output node voltage. The cost is output compliance: the output node must clear two stacked saturation voltages before the cascode leaves saturation, so $V_{out}$ cannot swing as low as a simple mirror's. Both mirror devices bind width-first as unit-device multiples (output width = K times the reference). The two reference devices are diode-connected, so their drops are read off the table rather than estimated, and the output devices are biased from what the reference actually sits at. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -66,20 +66,6 @@
       "note": "cascode inversion"
     },
     {
-      "name": "vgs_est_m",
-      "value": 0.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the bottom mirror diode vgs; it is also the matched drain voltage of BOTH mirror devices, so it drives the near-zero systematic error. Retune until diode-bias-consistent is green"
-    },
-    {
-      "name": "vgs_est_c",
-      "value": 0.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the reference-branch cascode diode vgs; retune until casc-bias-consistent is green"
-    },
-    {
       "name": "v_margin",
       "value": 0.05,
       "unit": "V",
@@ -125,16 +111,9 @@
         "params": [
           { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vds_r",
-            "value": 0.7,
-            "unit": "V",
-            "role": "spec",
-            "note": "the mirror node voltage (the M1 diode drop)"
-          }
+          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r" },
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true },
         "rows": [],
         "rules": [
           {
@@ -150,29 +129,28 @@
       "params": {
         "I_ref": "I_in",
         "L_r": "L",
-        "gm_id_r": "gm_id_m",
-        "vds_r": "vgs_est_m"
+        "gm_id_r": "gm_id_m"
       }
     },
     {
       "name": "ref_casc",
       "doc": {
         "title": "Reference-branch cascode (diode)",
-        "description": "The diode-connected cascode stacked on the reference device, carrying the same reference current. Its vgs adds to the bottom device's to set the reference stack's top rail; the output cascode scales from its width.",
+        "description": "The diode-connected cascode stacked on the reference device, carrying the same reference current. Its source stands on the mirror node rather than the bulk, so its body bias is declared as that node's voltage - the reference diode's own drop - rather than defaulted to zero, which would understate its threshold. Its vgs adds to the bottom device's to set the reference stack's top rail; the output cascode scales from its width.",
         "polarity": "n",
         "params": [
           { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_rc", "value": 1e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_rc", "value": 8, "unit": "1/V", "role": "choice" },
           {
-            "name": "vds_rc",
+            "name": "vsb_rc",
             "value": 0.7,
             "unit": "V",
             "role": "spec",
-            "note": "diode connection: vds equals vgs"
+            "note": "the source sits on the mirror node, not the bulk"
           }
         ],
-        "bind": { "L": "L_rc", "id": "I_ref", "gm_id": "gm_id_rc", "vds": "vds_rc" },
+        "bind": { "L": "L_rc", "id": "I_ref", "gm_id": "gm_id_rc", "diode": true, "vsb": "vsb_rc" },
         "rows": [],
         "rules": [
           {
@@ -189,14 +167,14 @@
         "I_ref": "I_in",
         "L_rc": "L_c",
         "gm_id_rc": "gm_id_c",
-        "vds_rc": "vgs_est_c"
+        "vsb_rc": "ref__vgs"
       }
     },
     {
       "name": "out_casc",
       "doc": {
         "title": "Output cascode",
-        "description": "The output-branch cascode: a K-times-wider copy of the reference cascode, sized width-first. It passes the output current and holds the output mirror device at the matched low drain voltage. Its saturation voltage sets the second term of the output compliance floor.",
+        "description": "The output-branch cascode: a K-times-wider copy of the reference cascode, sized width-first. Its source stands on the same mirror node, so it carries the same declared body bias. It passes the output current and holds the output mirror device at the matched low drain voltage. Its saturation voltage sets the second term of the output compliance floor.",
         "polarity": "n",
         "params": [
           { "name": "W_out", "value": 4e-6, "unit": "m", "role": "spec" },
@@ -208,9 +186,22 @@
             "unit": "V",
             "role": "spec",
             "note": "output node minus the mirror node"
+          },
+          {
+            "name": "vsb_oc",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "the source sits on the mirror node, not the bulk"
           }
         ],
-        "bind": { "L": "L_oc", "W": "W_out", "gm_id": "gm_id_oc", "vds": "vds_oc" },
+        "bind": {
+          "L": "L_oc",
+          "W": "W_out",
+          "gm_id": "gm_id_oc",
+          "vds": "vds_oc",
+          "vsb": "vsb_oc"
+        },
         "rows": [],
         "rules": [
           {
@@ -227,11 +218,12 @@
         "W_out": "K*ref_casc__W",
         "L_oc": "L_c",
         "gm_id_oc": "gm_id_c",
-        "vds_oc": "V_out - vgs_est_m"
+        "vds_oc": "V_out - ref__vgs",
+        "vsb_oc": "ref__vgs"
       }
     }
   ],
-  "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "vgs_est_m" },
+  "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "ref__vgs" },
   "rows": [
     { "name": "I_out", "expr": "id", "unit": "A" },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
@@ -294,22 +286,6 @@
       "op": "<=",
       "rhs": "VDD",
       "note": "the two stacked diode drops of the reference branch must fit under the supply"
-    },
-    {
-      "id": "diode-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(ref__vgs - vgs_est_m)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the declared mirror-node voltage should equal the actual bottom diode vgs; retune vgs_est_m if this trips"
-    },
-    {
-      "id": "casc-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(ref_casc__vgs - vgs_est_c)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the declared cascode vds should equal the actual cascode diode vgs; retune vgs_est_c if this trips"
     }
   ]
 }

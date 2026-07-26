@@ -97,8 +97,8 @@ describe('exemplar goldens: CS amp, current-source load', () => {
 
 describe('exemplar goldens: simple current mirror', () => {
   const res = runSheet(sheet('mirrors-bias/simple-mirror.json'), table);
-  // Defaults: I_in 20 µA, K = 4, gm/ID 8, L = 1 µm, diode at vgs_est 0.7 V, output
-  // at V_out 0.9 V.
+  // Defaults: I_in 20 µA, K = 4, gm/ID 8, L = 1 µm, output at V_out 0.9 V. The reference
+  // needs no bias default — it is diode-connected, so the table's vds = vgs diagonal fixes it.
 
   it('sizes the output device at exactly K times the reference width', () => {
     expect(res.bind?.ok).toBe(true);
@@ -106,20 +106,29 @@ describe('exemplar goldens: simple current mirror', () => {
   });
 
   it('systematic error is the demo CLM ratio between the two vds points', () => {
-    // id ∝ (1 + vds/VA) at fixed vgs: err = (1 + 0.9/VA)/(1 + 0.7/VA) − 1, VA = 5 V.
+    // id ∝ (1 + vds/VA) at fixed vgs, so err = (1 + V_out/VA)/(1 + vds_ref/VA) − 1, VA = 5 V.
+    // The reference is diode-connected, so its vds is its own vgs — read the converged drop from
+    // the result rather than a hand-typed estimate; the model check is what this test owns.
     const va = VA_PER_L * 1e-6;
-    const err = (1 + 0.9 / va) / (1 + 0.7 / va) - 1;
+    const err = (1 + 0.9 / va) / (1 + res.values.ref__vgs / va) - 1;
     expect(relErr(res.values.sys_err, err)).toBeLessThan(1e-2);
+  });
+
+  it('the reference sits at its own diode drop, with no estimate to retune', () => {
+    // The whole point of the connection: the operating point is wiring, not a guess. Nothing in
+    // the sheet may ask the author to reconcile a stand-in with what the device turned out to be.
+    expect(res.values.ref__vgs).toBeGreaterThan(0);
+    expect(sheet('mirrors-bias/simple-mirror.json').params.map((p) => p.name)).not.toContain(
+      'vgs_est',
+    );
+    expect(sheet('mirrors-bias/simple-mirror.json').rules.map((r) => r.id)).not.toContain(
+      'diode-bias-consistent',
+    );
   });
 
   it('the K-times-larger output device carries half the reference current spread', () => {
     // pelgrom_irel ∝ 1/sqrt(W·L): W_out = 4·W_ref at the same L ⇒ ratio exactly 1/2.
     expect(relErr(res.values.irel_out / res.values.irel_ref, 0.5)).toBeLessThan(1e-9);
-  });
-
-  it('diode-bias consistency guardrail is green at defaults', () => {
-    const g = res.rules.find((r) => r.id === 'diode-bias-consistent');
-    expect(g && g.status !== 'fail' && g.status !== 'na').toBe(true);
   });
 });
 

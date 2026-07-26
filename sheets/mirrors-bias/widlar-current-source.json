@@ -64,13 +64,6 @@
       "note": "reference-device inversion"
     },
     {
-      "name": "vgs_est",
-      "value": 0.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the reference diode vgs; retune until diode-bias-consistent is green"
-    },
-    {
       "name": "fp_tol",
       "value": 2,
       "unit": "%",
@@ -88,16 +81,9 @@
         "params": [
           { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_r2", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vds_r",
-            "value": 0.7,
-            "unit": "V",
-            "role": "spec",
-            "note": "diode connection: vds equals vgs"
-          }
+          { "name": "gm_id_r2", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r2", "vds": "vds_r" },
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r2", "diode": true },
         "rows": [],
         "rules": [
           {
@@ -113,8 +99,7 @@
       "params": {
         "I_ref": "I_in",
         "L_r": "L",
-        "gm_id_r2": "gm_id_r",
-        "vds_r": "vgs_est"
+        "gm_id_r2": "gm_id_r"
       }
     }
   ],
@@ -172,14 +157,6 @@
       "op": "<=",
       "rhs": "I_in",
       "note": "a Widlar source produces a fraction of the reference current; a positive gate-source step needs I_out < I_in"
-    },
-    {
-      "id": "diode-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(ref__vgs - vgs_est)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
     }
   ]
 }

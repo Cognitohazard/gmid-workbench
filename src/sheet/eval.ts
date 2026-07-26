@@ -11,6 +11,7 @@ import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
+import { diodeGrid } from '../grid';
 import { BIAS_AXES, MAX_USE_DEPTH, isHardRule, joinProvide, prefixUseWarning, torn } from './types';
 import type {
   BindReport,
@@ -120,22 +121,35 @@ function evalScalar(
  * BIAS param mints one full-grid slice per sample, and an unbounded cache would hold
  * tens of MB — clearing wholesale at the cap trades a rare recompute for a hard ceiling.
  */
-const SLICE_CACHE = new WeakMap<DeviceTable, Map<string, DeviceTable>>();
+const SLICE_CACHE = new WeakMap<DeviceTable, Map<string, unknown>>();
 const SLICE_CACHE_CAP = 64;
-function fixAxisCached(t: DeviceTable, axis: string, v: number): DeviceTable {
+
+/** Memoize any pure table→table collapse under `key`, per source table. */
+function collapsed<T>(t: DeviceTable, key: string, make: () => T): T {
   let m = SLICE_CACHE.get(t);
   if (!m) {
     m = new Map();
     SLICE_CACHE.set(t, m);
   }
-  const key = `${axis}=${v}`;
   const hit = m.get(key);
-  if (hit) return hit;
+  if (hit !== undefined) return hit as T;
   if (m.size >= SLICE_CACHE_CAP) m.clear();
-  const out = fixTable(t, { [axis]: v });
+  const out = make();
   m.set(key, out);
   return out;
 }
+
+const fixAxisCached = (t: DeviceTable, axis: string, v: number): DeviceTable =>
+  collapsed(t, `${axis}=${v}`, () => fixTable(t, { [axis]: v }));
+
+/** The diode diagonal — same memo, same reason: a sweep re-folds the SAME table for every
+ *  sample, and the fold re-interpolates every quantity column. Carries the fold's own clamp
+ *  report along with the table, so a caller cannot hold one without the other. */
+const diodeTableCached = (t: DeviceTable): { table: DeviceTable; clamped: boolean } =>
+  collapsed(t, 'diode', () => {
+    const f = diodeGrid(t.grid);
+    return { table: { ...t, grid: f.grid }, clamped: f.clamped };
+  });
 
 /**
  * Collapse the table's bias axes (vds/vsb) to the operating point before sizing: a value
@@ -166,7 +180,41 @@ function applyBindBias(
     bias[axis] = applied;
     return applied;
   };
+  // A diode connection is resolved BEFORE the per-axis loop: it collapses vds without being
+  // given a coordinate, because the wiring supplies one that moves with vgs. The applied value
+  // then varies across the slice, so `bias.vds` would be a single number that is true nowhere —
+  // the report says "diode" instead, which is the whole content of the operating point here.
+  if (b.diode) {
+    const live = t.grid.axes.find((a) => a.name === 'vds' && a.values.length > 1);
+    if (live) {
+      const fold = diodeTableCached(t);
+      // Say it out loud when the diagonal cannot be followed everywhere: past the characterized
+      // vds range the fold reads the table's edge, so a diode biased up there is reported at a
+      // drop the data never measured. Silently clamping is exactly what this project does not do.
+      if (fold.clamped)
+        warn({
+          rule: 'sheet-bind',
+          severity: 'warning',
+          message:
+            `diode connection: the vgs sweep runs outside the characterized vds range, so the ` +
+            `vds = vgs diagonal is clamped to the table's edge where it does. A drop landing in ` +
+            `that region is read from data taken at a different vds`,
+          location: 'bind',
+        });
+      t = fold.table;
+    } else
+      warn({
+        rule: 'sheet-bind',
+        severity: 'warning',
+        message:
+          'bind declares a diode connection, but the table has no live vds axis to fold onto the ' +
+          'vds = vgs diagonal — using the table as-is',
+        location: 'bind',
+      });
+  }
+
   for (const axis of BIAS_AXES) {
+    if (axis === 'vds' && b.diode) continue; // the connection already fixed it
     const live = t.grid.axes.find((a) => a.name === axis && a.values.length > 1);
     // BIAS_AXES is namespace-derived (dynamic strings), while SheetBind's declared bias
     // fields are static — index structurally rather than by the literal key union.
@@ -783,6 +831,11 @@ export function evaluateSheet(
     // longer step overshoots again, the next one shortens, and the step length itself falls into a
     // cycle that never settles. Shortening alone stops as soon as the iteration stops reversing,
     // which is exactly when it has become a contraction.
+    // Reversal is judged for the loop as a WHOLE, not per unknown, for the same reason the error
+    // measure is: judging each estimate separately and combining the verdicts is what made a
+    // rotating loop read as divergent. The cost is a short blind spot — one oscillating estimate
+    // can hold the step short while another walks away — but the step grinds to its floor within
+    // a few passes and the divergence verdict then lands correctly.
     let reversed = false;
     for (const p of unknowns) {
       const step = target(p) - est[p.name];
@@ -815,10 +868,30 @@ export function evaluateSheet(
     res = evaluateOnce(doc, table, resolveDevice, _depth, budget, est);
   }
 
-  // Out of passes. Distinguish "still closing, just slowly" from "stuck": a loop whose error
-  // shrank the whole way was converging, and telling its author to check for instability would
-  // be false. Substitution converges at |f'| per pass, so a weak contraction can genuinely need
-  // more passes than any cap allows.
+  // Out of passes — but WHOSE passes? The budget is shared across the whole composition so that
+  // nesting cannot multiply the work without bound, which means an expensive loop elsewhere in
+  // the design can consume it before this one has iterated at all. Blaming this loop for that
+  // would send an author to rewrite a sheet that is fine; the cost is somewhere else entirely.
+  //
+  // KNOWN GAP: naming the cause is not fixing it. The allowance is linear in the NUMBER of loops
+  // while nesting multiplies their cost, so a well-posed sheet can still read infeasible because
+  // of how expensive an unrelated sibling is — order-dependence this codebase rejects elsewhere.
+  // The fix is a reservation: a floor each loop can always draw on, with the shared ceiling above
+  // it. Not built, because no real sheet nests torn loops yet.
+  if (budget.left <= 0 && passes < SOLVE_PASSES_PER_LOOP) {
+    return solveFailed(
+      res,
+      `bias loop stopped after ${passes} pass(es) (${report()}) because the design's shared ` +
+        `iteration budget was already spent — by another loop in this tree, not by this one. ` +
+        `This loop was not shown to diverge. Simplify or reparametrize the costliest loop ` +
+        `elsewhere in the composition, or reduce the nesting depth`,
+    );
+  }
+
+  // Its own allowance ran out. Distinguish "still closing, just slowly" from "stuck": a loop whose
+  // error shrank the whole way was converging, and telling its author to check for instability
+  // would be false. Substitution converges at |f'| per pass, so a weak contraction can genuinely
+  // need more passes than any cap allows.
   return solveFailed(
     res,
     `bias loop did not reach tolerance in ${passes} passes (${report()}) — ` +

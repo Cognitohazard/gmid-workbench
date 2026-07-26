@@ -1,6 +1,6 @@
 {
   "title": "CS amp, diode-connected load",
-  "description": "Common-source stage with a diode-connected transistor as the load. The load's low-impedance $\\approx 1/g_m$ sets a gain that is a ratio of transconductances, $A_v = g_{m,in}/(g_{m,load} + g_{ds,in} + g_{ds,load})$, which is well-controlled across process and temperature - the classic teaching load. The load is a composed child (pick its device table to the opposite polarity; set load_sign to -1 for a signed-PMOS table). Because it is diode-connected, the load's drain-source voltage equals its own gate-source voltage: the child is biased at vgs_est_load and the diode-bias-consistent guardrail checks that estimate against the reported $V_{GS}$; retune vgs_est_load until green. The output DC level sits one load $V_{GS}$ below the supply.",
+  "description": "Common-source stage with a diode-connected transistor as the load. The load's low-impedance $\\approx 1/g_m$ sets a gain that is a ratio of transconductances, $A_v = g_{m,in}/(g_{m,load} + g_{ds,in} + g_{ds,load})$, which is well-controlled across process and temperature - the classic teaching load. The load is a composed child (pick its device table to the opposite polarity). Because it is diode-connected, its drain-source voltage equals its own gate-source voltage, so the bind declares the connection and the table is read along that diagonal - there is no drop to estimate, and no polarity knob to set, since the diagonal follows whichever sign convention the table itself uses. The output DC level sits one load $V_{GS}$ below the supply.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -69,20 +69,6 @@
       "unit": "1/V",
       "role": "choice",
       "note": "load inversion: lower gm/ID gives a higher gain (smaller load gm) but costs the output more headroom and adds noise"
-    },
-    {
-      "name": "vgs_est_load",
-      "value": 0.67,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the diode load's |vgs| = its |vds|; retune until the diode-bias-consistent guardrail is green"
-    },
-    {
-      "name": "load_sign",
-      "value": 1,
-      "unit": "1",
-      "role": "spec",
-      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis"
     }
   ],
   "uses": [
@@ -95,16 +81,9 @@
         "params": [
           { "name": "I_load", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_ld", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_ld", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vds_ld",
-            "value": 0.67,
-            "unit": "V",
-            "role": "spec",
-            "note": "diode connection: vds equals vgs, signed to this table's axis convention"
-          }
+          { "name": "gm_id_ld", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_ld", "id": "I_load", "gm_id": "gm_id_ld", "vds": "vds_ld" },
+        "bind": { "L": "L_ld", "id": "I_load", "gm_id": "gm_id_ld", "diode": true },
         "rows": [],
         "rules": [
           {
@@ -120,8 +99,7 @@
       "params": {
         "I_load": "2*pi*GBW_target*CL*(1 + gbw_margin)/gm_id",
         "L_ld": "L_load",
-        "gm_id_ld": "gm_id_load",
-        "vds_ld": "load_sign*vgs_est_load"
+        "gm_id_ld": "gm_id_load"
       }
     }
   ],
@@ -179,14 +157,6 @@
       "op": ">=",
       "rhs": "GBW_target",
       "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
-    },
-    {
-      "id": "diode-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(abs(load__vgs) - vgs_est_load)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the declared diode vds should equal the load's actual |vgs|; retune vgs_est_load if this trips"
     }
   ]
 }

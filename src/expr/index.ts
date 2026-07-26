@@ -342,6 +342,44 @@ function collectNames(node: Node, constants: Record<string, number>, acc: Set<st
   }
 }
 
+/** Record, per call site, the free identifiers inside that call's arguments. Walks the same AST
+ *  the evaluator will, so it inherits the parser's handling of whitespace, nesting and
+ *  precedence rather than re-deriving them from the source text. */
+function collectCalls(
+  node: Node,
+  constants: Record<string, number>,
+  acc: Map<string, ReadonlySet<string>[]>,
+): void {
+  switch (node.type) {
+    case 'CallExpression': {
+      const fn = node.callee.type === 'Identifier' ? node.callee.name : '';
+      if (fn) {
+        const inside = new Set<string>();
+        for (const a of node.arguments) collectNames(a, constants, inside);
+        const at = acc.get(fn);
+        if (at) at.push(inside);
+        else acc.set(fn, [inside]);
+      }
+      for (const a of node.arguments) collectCalls(a, constants, acc);
+      return;
+    }
+    case 'UnaryExpression':
+      collectCalls(node.argument, constants, acc);
+      return;
+    case 'BinaryExpression':
+      collectCalls(node.left, constants, acc);
+      collectCalls(node.right, constants, acc);
+      return;
+    case 'ConditionalExpression':
+      collectCalls(node.test, constants, acc);
+      collectCalls(node.consequent, constants, acc);
+      collectCalls(node.alternate, constants, acc);
+      return;
+    default:
+      return;
+  }
+}
+
 // --- public API --------------------------------------------------------------
 
 /**
@@ -359,10 +397,13 @@ export function createEngine(constants: Record<string, number> = { ...CONSTANTS 
     const nameSet = new Set<string>();
     collectNames(ast, constants, nameSet);
     const names = [...nameSet];
+    const calls = new Map<string, ReadonlySet<string>[]>();
+    collectCalls(ast, constants, calls);
 
     return {
       src,
       names,
+      calls,
       eval(scope: Scope): Value {
         return evalNode(ast, scope, constants);
       },

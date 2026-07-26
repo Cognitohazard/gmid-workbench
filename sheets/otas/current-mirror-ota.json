@@ -96,16 +96,39 @@
       "unit": "V",
       "role": "choice",
       "note": "estimate of the input-pair vgs, used to place the tail node; retune until input-bias-consistent is green"
-    },
-    {
-      "name": "vgs_est_ml",
-      "value": 0.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the input-mirror diode vgs, used as its own vds; retune until mirror-bias-consistent is green"
     }
   ],
   "uses": [
+    {
+      "name": "mload",
+      "doc": {
+        "title": "Input mirror device (diode)",
+        "description": "Diode-connected mirror load at half the tail current; its vds equals its own vgs and its gate node carries the mirror pole.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_m", "value": 10, "unit": "1/V", "role": "choice" }
+        ],
+        "bind": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "diode": true },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_m",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W", "vnth_m"]
+      },
+      "params": {
+        "I_half": "I_tail/2",
+        "L_m": "L_mir",
+        "gm_id_m": "gm_id_ml"
+      }
+    },
     {
       "name": "in",
       "doc": {
@@ -135,39 +158,7 @@
         "I_half": "I_tail/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
-        "vds_i": "VDD - vgs_est_ml - CM_dc + vgs_est_in"
-      }
-    },
-    {
-      "name": "mload",
-      "doc": {
-        "title": "Input mirror device (diode)",
-        "description": "Diode-connected mirror load at half the tail current; its vds equals its own vgs and its gate node carries the mirror pole.",
-        "polarity": "p",
-        "params": [
-          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
-          { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_m", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_m", "value": 0.7, "unit": "V", "role": "spec" }
-        ],
-        "bind": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "vds": "vds_m" },
-        "rows": [],
-        "rules": [
-          {
-            "id": "feasible-inversion",
-            "kind": "invariant",
-            "lhs": "gm_id_m",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W", "vnth_m"]
-      },
-      "params": {
-        "I_half": "I_tail/2",
-        "L_m": "L_mir",
-        "gm_id_m": "gm_id_ml",
-        "vds_m": "vgs_est_ml"
+        "vds_i": "VDD - abs(mload__vgs) - CM_dc + vgs_est_in"
       }
     },
     {
@@ -301,14 +292,6 @@
       "op": "<=",
       "rhs": "0.05",
       "note": "the tail-node placement uses vgs_est_in; retune it to the reported in__vgs if this trips"
-    },
-    {
-      "id": "mirror-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(mload__vgs - vgs_est_ml)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the diode mirror's declared vds should equal its actual vgs; retune vgs_est_ml if this trips"
     }
   ]
 }

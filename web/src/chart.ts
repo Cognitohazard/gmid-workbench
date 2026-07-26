@@ -91,6 +91,9 @@ export class ChartAdapter {
     const eff = effLog(data);
     this.xLog = eff.x;
     this.yLog = eff.y;
+    // Record the range the chart was BUILT with, or the first setData — even one passing the
+    // identical range — reads as a change and forces a needless destroy-and-rebuild.
+    this.yRange = data.yRange;
     this.lastData = data;
     this.u = this.build(data);
     this.emitScale();

@@ -49,13 +49,6 @@
       "note": "mirror inversion"
     },
     {
-      "name": "vgs_est",
-      "value": 0.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the reference diode vgs (the transistor's own vds); retune until diode-bias-consistent is green"
-    },
-    {
       "name": "avt",
       "value": 5e-9,
       "unit": "V*m",
@@ -96,13 +89,6 @@
           { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" },
           {
-            "name": "vds_r",
-            "value": 0.7,
-            "unit": "V",
-            "role": "spec",
-            "note": "diode connection: the transistor vds equals its vgs"
-          },
-          {
             "name": "vsb_r",
             "value": 0.1,
             "unit": "V",
@@ -110,7 +96,7 @@
             "note": "source above ground by the reference-leg IR drop (body grounded)"
           }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r", "vsb": "vsb_r" },
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true, "vsb": "vsb_r" },
         "rows": [],
         "rules": [
           {
@@ -127,7 +113,6 @@
         "I_ref": "I_in",
         "L_r": "L",
         "gm_id_r": "gm_id_m",
-        "vds_r": "vgs_est",
         "vsb_r": "I_in*R_s"
       }
     }
@@ -210,14 +195,6 @@
       "lhs": "sigma_ratio",
       "op": "<=",
       "rhs": "match_target"
-    },
-    {
-      "id": "diode-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(ref__vgs - vgs_est)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
     }
   ]
 }

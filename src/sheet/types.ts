@@ -91,6 +91,15 @@ export interface SheetBind {
   vstar?: string;
   vds?: string;
   vsb?: string;
+  /**
+   * The device is DIODE-CONNECTED: gate tied to drain, so `vds = vgs` by wiring rather than by
+   * choice. Declaring it collapses the vds axis onto that diagonal, which is the honest way to
+   * write a diode — the alternative is a param holding a guess at the drop plus a guardrail
+   * reminding the author to retune it, which makes every number downstream depend on how
+   * carefully somebody re-typed a voltage. Mutually exclusive with a declared `vds`, since the
+   * connection already fixes it.
+   */
+  diode?: boolean;
 }
 
 /** The bias axes a bind may declare — every namespace sweep axis except the inversion
@@ -102,11 +111,16 @@ export const BIAS_AXES: readonly string[] = BASE_QUANTITIES.filter(
   (q) => q.axis && q.key !== 'vgs' && q.key !== 'l',
 ).map((q) => q.key);
 
-/** Every key a `bind` may carry besides `L` — the bindable quantities plus the bias axes it
- *  may pin. Stated once beside the interface it describes, so a document sanitizer can check
- *  a parsed bind against the real shape instead of a copy that goes stale when BINDABLE
+/** Every EXPRESSION-valued key a `bind` may carry besides `L` — the bindable quantities plus the
+ *  bias axes it may pin. Stated once beside the interface it describes, so a document sanitizer
+ *  can check a parsed bind against the real shape instead of a copy that goes stale when BINDABLE
  *  grows (which is exactly how a legal fT bind once got deleted on every reload). */
 export const BIND_KEYS: ReadonlySet<string> = new Set<string>([...BINDABLE, ...BIAS_AXES]);
+
+/** Bind keys that are FLAGS rather than expressions. Listed separately because a sanitizer has
+ *  to type-check them differently, and because a flag silently failing a string test is the same
+ *  reload-eating bug BIND_KEYS was introduced to stop. */
+export const BIND_FLAGS: ReadonlySet<string> = new Set<string>(['diode']);
 
 // invariant = a hard physical floor (must hold or the design is unphysical); requirement = a
 // hard application spec (must hold or the design misses its purpose) — both gate feasibility.

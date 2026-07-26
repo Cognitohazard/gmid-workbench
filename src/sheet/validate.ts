@@ -35,20 +35,31 @@ function namesOf(expr: string): readonly string[] {
  *  absolute difference — which is what separates it from a headroom guardrail like
  *  `V_node - child__vdsat >= 0`, where the same two names appear with no claim that they are
  *  equal. Scans for the matching close paren; unbalanced source simply yields nothing. */
-function absArgNames(expr: string): Set<string>[] {
-  const out: Set<string>[] = [];
-  for (let i = expr.indexOf('abs('); i >= 0; i = expr.indexOf('abs(', i + 1)) {
-    let depth = 0;
-    for (let j = i + 3; j < expr.length; j++) {
-      if (expr[j] === '(') depth++;
-      else if (expr[j] === ')' && --depth === 0) {
-        out.push(new Set(namesOf(expr.slice(i + 4, j))));
-        break;
-      }
-    }
+/** Free names inside each `abs(...)` call of an expression. A consistency check reads
+ *  `abs(child__vgs - vgs_est) <= tol`, so the two sides of the round trip appear inside ONE
+ *  absolute difference — which is what separates it from a headroom guardrail like
+ *  `V_node - child__vdsat >= 0`, where the same two names appear with no claim that they are
+ *  equal. The parser supplies the call sites (CompiledExpr.calls), so whitespace and nesting are
+ *  its problem, not a second grammar's. */
+function absArgNames(expr: string): readonly ReadonlySet<string>[] {
+  try {
+    return compileExpr(expr).calls.get('abs') ?? [];
+  } catch {
+    return [];
   }
-  return out;
 }
+
+/**
+ * Quantities a bias stand-in can be a stand-in FOR: the LEVEL a device sits at. A margin
+ * quantity like vdsat is not one, and letting it count made a legitimately declared bias paired
+ * with a symmetric headroom check — `abs(v_bias - dev__vdsat) <= 0.15`, which the format docs
+ * recommend — read as a hand-tuned estimate.
+ *
+ * Hand-maintained, which the BIND_KEYS comment warns against for good reason. It stays a list
+ * because nothing in the namespace distinguishes a level from a margin; deriving it needs a new
+ * flag on BASE_QUANTITIES. Tolerable only because the blast radius is one advisory warning.
+ */
+const STANDIN_TARGETS: readonly string[] = ['vgs', 'vth'];
 
 /**
  * A param that BIASES a child block while a rule asserts that same param EQUALS the child's own
@@ -92,23 +103,30 @@ function standInEstimates(doc: SheetDoc): QAWarning[] {
       const childParam = (bind as unknown as Partial<Record<string, string>>)[axis];
       const expr = childParam === undefined ? undefined : use.params?.[childParam];
       if (expr === undefined) continue;
-      const standIns = namesOf(expr).filter((n) => paramNames.has(n));
+      const exprNames = namesOf(expr);
+      const standIns = exprNames.filter((n) => paramNames.has(n));
       if (standIns.length === 0) continue;
 
       for (const r of ruleNames) {
         // Both sides of the round trip must sit inside ONE absolute difference — the sheet
         // asserting they are the same number, not a guardrail that happens to mention both.
+        const levels = STANDIN_TARGETS.map((q) => joinProvide(use.name, q)).filter((q) =>
+          provided.has(q),
+        );
         const pair = r.absArgs.find(
-          (a) => standIns.some((n) => a.has(n)) && [...provided].some((q) => a.has(q)),
+          (a) => standIns.some((n) => a.has(n)) && levels.some((q) => a.has(q)),
         );
         if (!pair) continue;
-        const tiedTo = [...provided].filter((q) => pair.has(q));
+        const tiedTo = levels.filter((q) => pair.has(q));
         const hit = standIns.find((n) => pair.has(n)) as string;
-        // Diode-connected only when the bias IS the stand-in, nothing else in the expression:
-        // `vds = vgs_est` is the diode identity written as a guess. A compound expression that
-        // merely contains the stand-in is a node voltage, not a connection.
-        const sole = namesOf(expr).length === 1 && namesOf(expr)[0] === hit;
-        const diode = axis === 'vds' && sole && tiedTo.includes(joinProvide(use.name, 'vgs'));
+        // Diode-connected requires BOTH: the bias is nothing but the stand-in (`vds = vgs_est`,
+        // the identity written as a guess), and the rule compares exactly those two quantities.
+        // A stack's KVL check — `abs((CM - in__vgs) + vds_a + vds_b - V_out)` — also puts the
+        // two inside one abs, but it is summing a loop of node drops, not asserting an identity.
+        const sole = exprNames.length === 1 && exprNames[0] === hit;
+        const pairwise = pair.size === 2;
+        const diode =
+          axis === 'vds' && sole && pairwise && tiedTo.includes(joinProvide(use.name, 'vgs'));
         const fix = diode
           ? `"${use.name}" is diode-connected — its vds IS its vgs, so bind the connection instead of estimating it`
           : axis === 'vsb'
@@ -223,6 +241,19 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         location: r.id,
       });
     }
+  }
+
+  // A diode connection already fixes vds; declaring both means one of them is a fiction, and
+  // guessing which the author meant would be worse than saying so.
+  if (doc.bind?.diode && doc.bind.vds !== undefined) {
+    out.push({
+      rule: 'sheet-bind',
+      severity: 'error',
+      message:
+        'bind declares both a diode connection and a vds — the connection ties vds to vgs, so a ' +
+        'separate vds cannot also hold. Drop one',
+      location: 'bind',
+    });
   }
 
   // Composition: validate each child block and attribute its findings to the use site.

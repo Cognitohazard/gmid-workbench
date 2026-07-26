@@ -1,6 +1,6 @@
 {
   "title": "Matched mirror bank (current-steering unit)",
-  "description": "A bank of identical unit current sources, the building block of a current-steering DAC or a binary/thermometer bias array. One diode-connected unit device sets the reference; the bank is $N_{legs}$ copies of it, sized width-first as unit-device multiples (bank width = $N_{legs}$ times the unit), so every element is a faithful replica and the full-scale current is $N_{legs}$ times the unit current, give or take the channel-length-modulation gain error between the reference diode point and the shared output rail. Matching is what limits a current-steering converter's linearity: each unit element has a Pelgrom current spread, and across $N_{legs}$ elements the worst-case accumulated error grows as the square root of $N$ (a random-walk bound), which is the estimate this sheet reports and budgets. Compliance is a single saturation voltage, since the bank shares one output rail; a cascoded bank (see the cascode mirror) would trade headroom for a flatter output. The unit reference diode drop is estimated with a consistency guardrail.",
+  "description": "A bank of identical unit current sources, the building block of a current-steering DAC or a binary/thermometer bias array. One diode-connected unit device sets the reference; the bank is $N_{legs}$ copies of it, sized width-first as unit-device multiples (bank width = $N_{legs}$ times the unit), so every element is a faithful replica and the full-scale current is $N_{legs}$ times the unit current, give or take the channel-length-modulation gain error between the reference diode point and the shared output rail. Matching is what limits a current-steering converter's linearity: each unit element has a Pelgrom current spread, and across $N_{legs}$ elements the worst-case accumulated error grows as the square root of $N$ (a random-walk bound), which is the estimate this sheet reports and budgets. Compliance is a single saturation voltage, since the bank shares one output rail; a cascoded bank (see the cascode mirror) would trade headroom for a flatter output. The unit reference is diode-connected, so its drop is read off the table rather than estimated.",
   "polarity": "n",
   "params": [
     {
@@ -47,13 +47,6 @@
       "note": "unit-element inversion: lower gm/ID (higher V*) tightens matching but costs compliance headroom"
     },
     {
-      "name": "vgs_est",
-      "value": 0.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the unit reference diode vgs; retune until diode-bias-consistent is green"
-    },
-    {
       "name": "avt",
       "value": 5e-9,
       "unit": "V*m",
@@ -92,16 +85,9 @@
         "params": [
           { "name": "I_u", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_u", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_u", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vds_u",
-            "value": 0.7,
-            "unit": "V",
-            "role": "spec",
-            "note": "diode connection: vds equals vgs"
-          }
+          { "name": "gm_id_u", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_u", "id": "I_u", "gm_id": "gm_id_u", "vds": "vds_u" },
+        "bind": { "L": "L_u", "id": "I_u", "gm_id": "gm_id_u", "diode": true },
         "rows": [],
         "rules": [
           {
@@ -117,8 +103,7 @@
       "params": {
         "I_u": "I_unit",
         "L_u": "L",
-        "gm_id_u": "gm_id_m",
-        "vds_u": "vgs_est"
+        "gm_id_u": "gm_id_m"
       }
     }
   ],
@@ -181,14 +166,6 @@
       "op": "<=",
       "rhs": "err_target",
       "note": "the uncascoded bank's full-scale current drifts with the output rail; cascode it if this must be tighter"
-    },
-    {
-      "id": "diode-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(unit__vgs - vgs_est)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
     }
   ]
 }

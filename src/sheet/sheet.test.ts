@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice, withoutColumns } from '../demo';
 import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { fixTable } from '../series';
+import { diodeGrid, makeGrid } from '../grid';
 import { lookup } from '../lookup';
 import {
   evaluateSheet,
@@ -1023,6 +1024,21 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
     expect(w[0]).toMatch(/node voltage/);
   });
 
+  it('sees the call, not the letters: a space before the paren does not hide the pattern', () => {
+    // The parser treats `abs (x)` and `abs(x)` identically, so a literal "abs(" scan let a
+    // one-space reformat silently switch the lint off.
+    expect(standins(withRule('abs (k__vgs - guess)'))).toHaveLength(1);
+    // …and a name merely ENDING in abs is not a call.
+    expect(standins(withRule('fabs(k__vgs - guess)'))).toEqual([]);
+  });
+
+  it('does not flag a declared bias paired with a symmetric headroom check', () => {
+    // `abs(bias - dev__vdsat) <= margin` is the format docs' own recommended shape: a real
+    // declared bias plus a margin check. Only a LEVEL the stand-in could stand in for — vgs,
+    // vth — closes the round trip; a saturation margin does not.
+    expect(standins(withRule('abs(V_node - k__vdsat)', 'V_node'))).toEqual([]);
+  });
+
   it('is advisory — a sheet carrying the pattern still validates without errors', () => {
     expect(validateSheet(withRule('abs(k__vgs - guess)')).some((w) => w.severity === 'error')).toBe(
       false,
@@ -1452,6 +1468,54 @@ describe('composition semantics (ratified)', () => {
   });
 });
 
+describe('a loop starved by a SIBLING is not accused of failing', () => {
+  // The pass budget is shared so nesting cannot multiply the work without bound. The cost of that
+  // is real: a loop that NESTS another re-converges the child on every one of its own passes, and
+  // the product can spend the pool before a later sibling iterates at all. What must not happen is
+  // the innocent sibling being told IT failed — an author would go and rewrite a sheet that is fine.
+  const torn = (name: string, f: number, uses?: SheetDoc['uses']): SheetDoc => ({
+    title: name,
+    polarity: 'n',
+    params: [{ name: 'x', value: 1, solveFor: 'fx' }],
+    // |f'| just under 1: converging, but far too slowly to finish inside any cap.
+    rows: [{ name: 'fx', expr: `${f}*x + 1` }],
+    rules: [],
+    provide: ['fx'],
+    ...(uses ? { uses } : {}),
+  });
+
+  const res = evaluateSheet(
+    {
+      title: 'root',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [
+        { name: 'eater', doc: torn('eater', 0.999, [{ name: 'sub', doc: torn('sub', 0.999) }]) },
+        // Alone this closes in a handful of passes: |f'| = 0.3.
+        { name: 'victim', doc: torn('victim', 0.3) },
+      ],
+    },
+    dev,
+  );
+  const victim = res.warnings.find(
+    (w) => w.rule === 'sheet-solve' && w.message.includes('"victim"'),
+  )?.message;
+
+  it('is starved to zero passes by the nested loop ahead of it', () => {
+    expect(victim).toBeDefined();
+    expect(victim).toMatch(/stopped after 0 pass/);
+  });
+
+  it('is told the budget went elsewhere, not that it failed to converge', () => {
+    expect(victim).toMatch(/budget was already spent/);
+    expect(victim).toMatch(/not by this one/);
+    expect(victim).not.toMatch(/diverging/);
+    expect(victim).not.toMatch(/did not reach tolerance/);
+  });
+});
+
 describe('bindingConstraint — naming the cause of one verdict', () => {
   const ex = EXAMPLES.find((e) => e.title === 'NMOS noise & matching')!;
   // Force the noise requirement to fail hard, and the matching one to fail harder.
@@ -1596,5 +1660,91 @@ describe('override and bias reporting fail closed (adversarial review regression
     expect(res.bind?.ok).toBe(true);
     expect(res.bind?.bias).toEqual({ vds: 1.2 }); // the slice actually used
     expect(res.warnings.some((w) => /vds 5 is outside/.test(w.message))).toBe(true);
+  });
+});
+
+describe('diode-connected bind', () => {
+  const diodeDoc = (extra: Record<string, unknown> = {}): SheetDoc => ({
+    title: 'd',
+    polarity: 'n',
+    params: [
+      { name: 'L', value: 0.5e-6 },
+      { name: 'I', value: 10e-6 },
+      { name: 'gm_id', value: 10 },
+    ],
+    bind: { L: 'L', id: 'I', gm_id: 'gm_id', diode: true, ...extra },
+    rows: [],
+    rules: [],
+  });
+
+  it('lands on the vds = vgs diagonal, matching a fixed slice taken at the answer', () => {
+    const res = runSheet(diodeDoc(), dev);
+    expect(res.bind?.ok).toBe(true);
+    const vgs = res.bind!.vgs;
+    // Re-size the SAME device with vds pinned to the drop the diagonal produced. If the fold is
+    // right the two agree; a diagonal that silently used some other vds would not.
+    const fixed = runSheet(
+      {
+        ...diodeDoc(),
+        params: [...diodeDoc().params, { name: 'v', value: vgs }],
+        bind: { L: 'L', id: 'I', gm_id: 'gm_id', vds: 'v' },
+      },
+      dev,
+    );
+    expect(fixed.bind?.ok).toBe(true);
+    const rel = (a: number, b: number): number => Math.abs(a - b) / Math.max(Math.abs(b), 1e-30);
+    expect(rel(fixed.bind!.vgs, vgs)).toBeLessThan(1e-3);
+    expect(rel(fixed.bind!.W, res.bind!.W)).toBeLessThan(1e-3);
+  });
+
+  it('reports no single vds coordinate, because the diagonal has none', () => {
+    // The applied vds moves with vgs across the fold, so one number in the report would be a
+    // coordinate that is true nowhere. It must not be silently invented either.
+    const res = runSheet(diodeDoc(), dev);
+    expect(res.bind?.bias?.vds).toBeUndefined();
+    expect(res.bind?.assumed ?? []).not.toContain('vds');
+  });
+
+  it('reports the coordinate it SAMPLED at, and says so when the diagonal had to clamp', () => {
+    // Where the vgs sweep runs past the characterized vds range the fold reads the table's edge.
+    // Reporting the raw vgs there would name an operating point the quantities beside it were
+    // never measured at — a silent repair, which is precisely what this project does not do.
+    const wide = makeGrid(
+      [
+        { name: 'vds', values: new Float64Array([0.2, 0.5, 0.8]) },
+        { name: 'vgs', values: new Float64Array([0.2, 0.5, 0.8, 1.1]) },
+      ],
+      new Map([
+        ['gm', Float64Array.from({ length: 12 }, (_, k) => [0.2, 0.5, 0.8][Math.floor(k / 4)])],
+      ]),
+    );
+    const fold = diodeGrid(wide);
+    expect(fold.clamped).toBe(true);
+    const vds = fold.grid.quantities.get('vds')!;
+    const gm = fold.grid.quantities.get('gm')!;
+    // At vgs = 1.1 the axis stops at 0.8: both the coordinate and the data say 0.8.
+    expect(vds[3]).toBeCloseTo(0.8, 12);
+    expect(gm[3]).toBeCloseTo(0.8, 12);
+    // And a table whose vds covers the whole vgs sweep does not claim a clamp.
+    const covered = makeGrid(
+      [
+        { name: 'vds', values: new Float64Array([0.2, 0.5, 0.8, 1.1]) },
+        { name: 'vgs', values: new Float64Array([0.2, 0.5, 0.8, 1.1]) },
+      ],
+      new Map([['gm', new Float64Array(16)]]),
+    );
+    expect(diodeGrid(covered).clamped).toBe(false);
+  });
+
+  it('refuses a bind that declares both the connection and a vds', () => {
+    const errs = validateSheet(diodeDoc({ vds: '0.5' })).filter((w) => w.severity === 'error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0].message).toMatch(/both a diode connection and a vds/);
+  });
+
+  it('warns rather than fails when the table has no vds axis to fold', () => {
+    const res = runSheet(diodeDoc(), withoutColumns(fixTable(dev, { vds: 0.9 }), []));
+    expect(res.bind?.ok).toBe(true);
+    expect(res.warnings.some((w) => /no live vds axis to fold/.test(w.message))).toBe(true);
   });
 });

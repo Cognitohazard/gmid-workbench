@@ -1,6 +1,6 @@
 {
   "title": "Simple current mirror",
-  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its $V_{DS}$ is its own $V_{GS}$ — declare the estimate and the consistency guardrail checks it), and the output device binds width-first at K times the reference width, evaluated at the served output node's $V_{DS}$. The systematic error is the $\\lambda$ mismatch between the two operating points; the random error is the Pelgrom spread of the ratio.",
+  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its $V_{DS}$ is its own $V_{GS}$, so the bind declares the connection and the table is read along that diagonal), and the output device binds width-first at K times the reference width, evaluated at the served output node's $V_{DS}$. The systematic error is the $\\lambda$ mismatch between the two operating points; the random error is the Pelgrom spread of the ratio.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -41,13 +41,6 @@
       "note": "mirror inversion: lower gm/ID (higher V*) tightens current matching but costs compliance headroom"
     },
     {
-      "name": "vgs_est",
-      "value": 0.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the diode vgs, used as the reference device's vds; retune until the diode-bias-consistent guardrail is green"
-    },
-    {
       "name": "avt",
       "value": 5e-9,
       "unit": "V*m",
@@ -81,21 +74,14 @@
       "name": "ref",
       "doc": {
         "title": "Reference (diode) device",
-        "description": "The diode-connected reference: binds at the input current, with vds declared equal to the (estimated) vgs. Exposes its width so the output side can size as a unit-device multiple.",
+        "description": "The diode-connected reference: binds at the input current, with vds tied to its own vgs by the connection rather than by an estimate. Exposes its width so the output side can size as a unit-device multiple.",
         "polarity": "n",
         "params": [
           { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vds_r",
-            "value": 0.7,
-            "unit": "V",
-            "role": "spec",
-            "note": "diode connection: vds equals vgs"
-          }
+          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r" },
+        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true },
         "rows": [],
         "rules": [
           {
@@ -111,8 +97,7 @@
       "params": {
         "I_ref": "I_in",
         "L_r": "L",
-        "gm_id_r": "gm_id_m",
-        "vds_r": "vgs_est"
+        "gm_id_r": "gm_id_m"
       }
     }
   ],
@@ -168,14 +153,6 @@
       "lhs": "sigma_ratio",
       "op": "<=",
       "rhs": "match_target"
-    },
-    {
-      "id": "diode-bias-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(ref__vgs - vgs_est)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the declared reference vds should equal the actual diode vgs; retune vgs_est if this trips"
     }
   ]
 }
