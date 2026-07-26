@@ -963,6 +963,73 @@ describe('composition — scalar provide/use', () => {
   });
 });
 
+describe('validateSheet — hand-tuned stand-ins for a device operating point', () => {
+  // A child that binds vds from a parent param, and provides its own vgs back.
+  const withRule = (lhs: string, biasExpr = 'guess'): SheetDoc => ({
+    title: 'p',
+    polarity: 'n',
+    params: [
+      { name: 'guess', value: 0.7 },
+      { name: 'V_node', value: 0.9 },
+    ],
+    rows: [],
+    rules: [{ id: 'check', kind: 'guardrail', lhs, op: '<=', rhs: '0.05' }],
+    uses: [
+      {
+        name: 'k',
+        doc: {
+          title: 'c',
+          polarity: 'n',
+          params: [
+            { name: 'L', value: 0.5e-6 },
+            { name: 'id', value: 10e-6 },
+            { name: 'gm_id', value: 10 },
+            { name: 'vd', value: 0.7 },
+          ],
+          bind: { L: 'L', id: 'id', gm_id: 'gm_id', vds: 'vd' },
+          rows: [],
+          rules: [],
+          provide: ['vgs', 'vdsat'],
+        },
+        params: { vd: biasExpr },
+      },
+    ],
+  });
+  const standins = (d: SheetDoc): string[] =>
+    validateSheet(d)
+      .filter((w) => w.rule === 'sheet-standin')
+      .map((w) => w.message);
+
+  it('flags a param that biases a block while a rule asserts it equals that block’s own vgs', () => {
+    const w = standins(withRule('abs(k__vgs - guess)'));
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/"guess" biases block "k" \(vds\)/);
+    // The bias IS the stand-in and it is tied to vgs, so this is the diode identity.
+    expect(w[0]).toMatch(/diode-connected/);
+  });
+
+  it('does NOT flag a headroom guardrail that merely mentions both names', () => {
+    // The discriminator: this asserts nothing about the two being equal. Before the abs(...)
+    // requirement this shape produced a false finding on a third of the library.
+    expect(standins(withRule('V_node - k__vdsat'))).toEqual([]);
+    // Nor does an abs() elsewhere in the same expression create a pairing.
+    expect(standins(withRule('abs(k__vdsat) - V_node + guess'))).toEqual([]);
+  });
+
+  it('calls a compound bias expression a node voltage, not a diode connection', () => {
+    const w = standins(withRule('abs(k__vgs - guess)', 'V_node - guess'));
+    expect(w).toHaveLength(1);
+    expect(w[0]).not.toMatch(/diode-connected/);
+    expect(w[0]).toMatch(/node voltage/);
+  });
+
+  it('is advisory — a sheet carrying the pattern still validates without errors', () => {
+    expect(validateSheet(withRule('abs(k__vgs - guess)')).some((w) => w.severity === 'error')).toBe(
+      false,
+    );
+  });
+});
+
 describe('validateSheet — composition', () => {
   it('flags a separator in a use name, a duplicate name, and a stray override', () => {
     const child: SheetDoc = {

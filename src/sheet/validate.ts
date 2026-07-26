@@ -8,6 +8,7 @@ import type { QAWarning } from '../types';
 import { compileExpr } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
 import {
+  BIAS_AXES,
   MAX_TORN_PARAMS,
   MAX_USE_DEPTH,
   torn,
@@ -27,6 +28,107 @@ function namesOf(expr: string): readonly string[] {
   } catch {
     return [];
   }
+}
+
+/** Free names inside each `abs(...)` call of an expression. A consistency check reads
+ *  `abs(child__vgs - vgs_est) <= tol`, so the two sides of the round trip appear inside ONE
+ *  absolute difference — which is what separates it from a headroom guardrail like
+ *  `V_node - child__vdsat >= 0`, where the same two names appear with no claim that they are
+ *  equal. Scans for the matching close paren; unbalanced source simply yields nothing. */
+function absArgNames(expr: string): Set<string>[] {
+  const out: Set<string>[] = [];
+  for (let i = expr.indexOf('abs('); i >= 0; i = expr.indexOf('abs(', i + 1)) {
+    let depth = 0;
+    for (let j = i + 3; j < expr.length; j++) {
+      if (expr[j] === '(') depth++;
+      else if (expr[j] === ')' && --depth === 0) {
+        out.push(new Set(namesOf(expr.slice(i + 4, j))));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * A param that BIASES a child block while a rule asserts that same param EQUALS the child's own
+ * operating point is a hand-tuned stand-in: the author guessed a value, biased the device with the
+ * guess, and added a guardrail telling themselves to retune until the guess agrees. It works, and
+ * it silently makes every number downstream depend on how carefully somebody re-typed a voltage.
+ *
+ * Detected structurally, never by name: for each bias axis a child binds, take the free names of
+ * the expression feeding it, keep the ones that are parent params, and look for a rule that puts
+ * one of those params and something the same child provides inside a single absolute difference.
+ * The absolute difference is the discriminator — it is the sheet asserting the two are the same
+ * number. A guardrail that merely mentions both (headroom against a node voltage) is not a round
+ * trip and must not be flagged.
+ *
+ * The message names the fix, which depends on where the stand-in is used:
+ *  - as `vds`, tied to the child's own `vgs` — the device is DIODE-CONNECTED. `vds = vgs` holds by
+ *    construction; nothing needs estimating, the table can be read on that diagonal.
+ *  - as `vsb` — the source sits above the bulk, so the node it sits on is the natural variable.
+ *    Parameterize by that node and both of the device's bias coordinates are known outright.
+ *  - anything else — usually a node voltage inside a stack, written as an estimated difference.
+ *    Declare the node voltages and each bias becomes a subtraction.
+ *
+ * Advisory: the sheets carrying this pattern give correct answers today. It is a standing
+ * invitation to reparameterize, not a defect report.
+ */
+function standInEstimates(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
+  const paramNames = new Set(doc.params.map((p) => p.name));
+  const ruleNames = doc.rules.map((r) => ({
+    id: r.id,
+    absArgs: [...absArgNames(r.lhs), ...absArgNames(r.rhs)],
+  }));
+
+  for (const use of doc.uses ?? []) {
+    const bind = use.doc?.bind;
+    if (!bind) continue;
+    const provided = new Set((use.doc?.provide ?? []).map((k) => joinProvide(use.name, k)));
+    for (const axis of BIAS_AXES) {
+      // BIAS_AXES is namespace-derived; SheetBind's bias fields are static keys. Index
+      // structurally, as eval does, rather than by the literal key union.
+      const childParam = (bind as unknown as Partial<Record<string, string>>)[axis];
+      const expr = childParam === undefined ? undefined : use.params?.[childParam];
+      if (expr === undefined) continue;
+      const standIns = namesOf(expr).filter((n) => paramNames.has(n));
+      if (standIns.length === 0) continue;
+
+      for (const r of ruleNames) {
+        // Both sides of the round trip must sit inside ONE absolute difference — the sheet
+        // asserting they are the same number, not a guardrail that happens to mention both.
+        const pair = r.absArgs.find(
+          (a) => standIns.some((n) => a.has(n)) && [...provided].some((q) => a.has(q)),
+        );
+        if (!pair) continue;
+        const tiedTo = [...provided].filter((q) => pair.has(q));
+        const hit = standIns.find((n) => pair.has(n)) as string;
+        // Diode-connected only when the bias IS the stand-in, nothing else in the expression:
+        // `vds = vgs_est` is the diode identity written as a guess. A compound expression that
+        // merely contains the stand-in is a node voltage, not a connection.
+        const sole = namesOf(expr).length === 1 && namesOf(expr)[0] === hit;
+        const diode = axis === 'vds' && sole && tiedTo.includes(joinProvide(use.name, 'vgs'));
+        const fix = diode
+          ? `"${use.name}" is diode-connected — its vds IS its vgs, so bind the connection instead of estimating it`
+          : axis === 'vsb'
+            ? `the source of "${use.name}" sits above the bulk — parameterize by that node voltage and both of its bias coordinates follow directly`
+            : `this reads as a node voltage written as an estimated difference — declare the node voltages and let ${axis} be a subtraction`;
+        out.push({
+          rule: 'sheet-standin',
+          severity: 'warning',
+          message:
+            `param "${hit}" biases block "${use.name}" (${axis}) while rule "${r.id}" ties it back ` +
+            `to that block's own ${tiedTo.join(', ')} — a hand-tuned stand-in for the operating ` +
+            `point it is meant to produce. ${fix}`,
+          location: use.name,
+          symbol: hit,
+        });
+        break; // one finding per axis; the first rule that closes the loop names it
+      }
+    }
+  }
+  return out;
 }
 
 /** Surface authoring problems as warnings; never throws, never mutates the doc. Structural
@@ -155,6 +257,8 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         });
       }
     }
+
+    out.push(...standInEstimates(doc));
 
     // Children evaluate in document order, and a use's param overrides may reference the
     // provides of EARLIER siblings only. A forward (or self) reference is statically
