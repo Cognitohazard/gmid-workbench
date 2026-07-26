@@ -56,14 +56,15 @@ export const SWEEP_POINTS = 41;
 /** True when a param is a finitely-bounded slider variable (sweepable). The ONE
  *  definition of sweepability — both sweep engines and the UI's param pickers consult
  *  it, so they can never disagree about which params can be swept. A param carrying
- *  `solveFor` is a tearing variable the engine solves for, not a knob anyone may set,
- *  so it is excluded however its bounds are written. */
+ *  `solveFor` or `pin` is solved by the engine, not set by anyone — and a pinned param's
+ *  min/max are its bisection bracket, not slider bounds — so both are excluded. */
 export function sweepable(
-  v: { min?: number; max?: number; solveFor?: string } | undefined,
+  v: { min?: number; max?: number; solveFor?: string; pin?: unknown } | undefined,
 ): v is { min: number; max: number } {
   return (
     !!v &&
     !v.solveFor &&
+    !v.pin &&
     v.min !== undefined &&
     v.max !== undefined &&
     Number.isFinite(v.min) &&
@@ -199,14 +200,15 @@ export const SWEEP2_POINTS = 21;
  * feasibility map a 1-D cut cannot answer ("does any L hold the phase margin across the
  * whole gm_id range?"). Each infeasible cell also names the WORST failing hard rule —
  * walking the composition tree, so a child block's constraint is attributed by path.
- * Cost is n² full-tree evaluations (sub-millisecond each on real tables). A sheet that closes
- * a bias loop costs several times that: every sample converges its own fixed point AND lands
- * on a bias the slice cache has not seen, since a solved estimate genuinely differs per sample.
- * Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~25 ms/cell once
- * it solves a loop AND declares both bias axes, i.e. ~11 s for the default 21x21 — and this runs
- * synchronously, so a caller driving it from a UI should expect to block for that long. Each
- * declared axis costs another slice per pass, so the cheaper figure is cheaper only because a
- * frozen estimate re-slices at the same handful of biases; the honest computation is the slower.
+ * Cost is n² full-tree evaluations (sub-millisecond each on real tables). A sheet the engine
+ * SOLVES costs far more per cell: every sample converges its own fixed point or bisects its own
+ * pin (~20 probes, each a full tree evaluation) AND lands on biases the slice cache has not
+ * seen. Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~50-60
+ * ms/cell once a pin and both declared bias axes are in play, i.e. ~21-27 s for the default
+ * 21x21 — and this runs synchronously, so a caller driving it from a UI should expect to block
+ * for that long. Each declared axis costs another slice per pass, so the cheap figure is cheap
+ * only because a frozen estimate re-slices at the same handful of biases; the honest
+ * computation is the slower one.
  *
  * Each sample is solved INDEPENDENTLY, from the doc's authored starting guess. Seeding a sample
  * from its neighbour's converged estimate is the obvious optimisation and is deliberately not

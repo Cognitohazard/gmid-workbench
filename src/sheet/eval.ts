@@ -12,7 +12,16 @@ import { scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
 import { diodeGrid } from '../grid';
-import { BIAS_AXES, MAX_USE_DEPTH, isHardRule, joinProvide, prefixUseWarning, torn } from './types';
+import {
+  BIAS_AXES,
+  MAX_USE_DEPTH,
+  isHardRule,
+  joinProvide,
+  pinProblem,
+  pinned,
+  prefixUseWarning,
+  torn,
+} from './types';
 import type {
   BindReport,
   RuleResult,
@@ -119,7 +128,10 @@ function evalScalar(
  * table (chained vds→vsb slices hit because a cached first slice returns the identical
  * object). fixTable is pure, so a hit is referentially transparent. Bounded: sweeping a
  * BIAS param mints one full-grid slice per sample, and an unbounded cache would hold
- * tens of MB — clearing wholesale at the cap trades a rare recompute for a hard ceiling.
+ * tens of MB — at the cap the least-recently-used entry is evicted, never the whole map:
+ * solver probes mint a unique key per pass, and flushing wholesale threw out the
+ * constant-bias slices (e.g. vsb=0) that hit on every probe — measured at 11% of a
+ * sweep's fixTable work redone.
  */
 const SLICE_CACHE = new WeakMap<DeviceTable, Map<string, unknown>>();
 const SLICE_CACHE_CAP = 64;
@@ -132,8 +144,13 @@ function collapsed<T>(t: DeviceTable, key: string, make: () => T): T {
     SLICE_CACHE.set(t, m);
   }
   const hit = m.get(key);
-  if (hit !== undefined) return hit as T;
-  if (m.size >= SLICE_CACHE_CAP) m.clear();
+  if (hit !== undefined) {
+    // Re-insert so insertion order tracks recency and the cap evicts the coldest entry.
+    m.delete(key);
+    m.set(key, hit);
+    return hit as T;
+  }
+  if (m.size >= SLICE_CACHE_CAP) m.delete(m.keys().next().value as string);
   const out = make();
   m.set(key, out);
   return out;
@@ -445,6 +462,15 @@ function applyUseParams(
         location: use.name,
       });
     }
+    // A pinned param is stronger still: bisection needs no seed, so the wired value does nothing.
+    if (pinned(child)) {
+      warn({
+        rule: 'sheet-use-param',
+        severity: 'warning',
+        message: `use "${use.name}": override "${k}" sets a param the child PINS — the engine chooses it from the pin's own bracket, so the override is ignored entirely`,
+        location: use.name,
+      });
+    }
     const v = evalScalar(expr, parentValues, parentScope, warn, `use "${use.name}" param ${k}`);
     if (v === undefined || !Number.isFinite(v)) {
       ok = false;
@@ -718,7 +744,8 @@ interface SolveBudget {
  */
 function tornSheets(doc: SheetDoc, depth = 0): number {
   if (depth >= MAX_USE_DEPTH) return 0;
-  let n = doc.params.some(torn) ? 1 : 0;
+  // A pinned sheet runs a solver too (bisection probes are passes); count each mechanism.
+  let n = (doc.params.some(torn) ? 1 : 0) + (doc.params.some(pinned) ? 1 : 0);
   for (const u of doc.uses ?? []) if (u.doc) n += tornSheets(u.doc, depth + 1);
   return n;
 }
@@ -758,17 +785,20 @@ function solveFailed(res: SheetResult, message: string): SheetResult {
  * sized against a stale estimate. `evalChildren` recurses through here, so a child closes its
  * own loops, and `budget` is shared across the whole tree so nesting cannot go exponential.
  */
-export function evaluateSheet(
+function solveTorn(
   doc: SheetDoc,
-  table?: DeviceTable,
-  resolveDevice?: DeviceResolver,
-  _depth = 0,
-  budget: SolveBudget = { left: SOLVE_PASSES_PER_LOOP * tornSheets(doc) },
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+  _depth: number,
+  budget: SolveBudget,
+  extra?: Record<string, number>,
 ): SheetResult {
   const unknowns = doc.params.filter(torn);
-  if (unknowns.length === 0) return evaluateOnce(doc, table, resolveDevice, _depth, budget);
+  if (unknowns.length === 0) return evaluateOnce(doc, table, resolveDevice, _depth, budget, extra);
 
-  const est: Record<string, number> = {};
+  // `extra` (a pinned param's probe value) merges UNDER the torn estimates: the two mechanisms
+  // never share a param — validation refuses that — so the spread order is belt and braces.
+  const est: Record<string, number> = { ...extra };
   for (const p of unknowns) est[p.name] = p.value;
 
   /** Each estimate against what the sheet last resolved for it — read BEFORE the update, so a
@@ -869,22 +899,24 @@ export function evaluateSheet(
   }
 
   // Out of passes — but WHOSE passes? The budget is shared across the whole composition so that
-  // nesting cannot multiply the work without bound, which means an expensive loop elsewhere in
-  // the design can consume it before this one has iterated at all. Blaming this loop for that
-  // would send an author to rewrite a sheet that is fine; the cost is somewhere else entirely.
+  // nesting cannot multiply the work without bound, which means the pool can drain before this
+  // loop has iterated at all: an expensive sibling elsewhere in the design, or a pin ABOVE this
+  // loop whose every probe re-closes it (the multiplicative cost is then this loop's own, spread
+  // across probes). Blaming this loop alone would send an author to rewrite a sheet that is
+  // fine; the message names both spenders because the engine cannot tell them apart here.
   //
   // KNOWN GAP: naming the cause is not fixing it. The allowance is linear in the NUMBER of loops
   // while nesting multiplies their cost, so a well-posed sheet can still read infeasible because
-  // of how expensive an unrelated sibling is — order-dependence this codebase rejects elsewhere.
+  // of how expensive the rest of the tree is — order-dependence this codebase rejects elsewhere.
   // The fix is a reservation: a floor each loop can always draw on, with the shared ceiling above
   // it. Not built, because no real sheet nests torn loops yet.
   if (budget.left <= 0 && passes < SOLVE_PASSES_PER_LOOP) {
     return solveFailed(
       res,
       `bias loop stopped after ${passes} pass(es) (${report()}) because the design's shared ` +
-        `iteration budget was already spent — by another loop in this tree, not by this one. ` +
-        `This loop was not shown to diverge. Simplify or reparametrize the costliest loop ` +
-        `elsewhere in the composition, or reduce the nesting depth`,
+        `iteration budget ran out — spent by an expensive loop elsewhere in the tree, or by a ` +
+        `pin above this loop re-closing it on every probe. This loop was not shown to diverge. ` +
+        `Simplify or reparametrize the costliest loop in the composition, or reduce the nesting`,
     );
   }
 
@@ -902,4 +934,161 @@ export function evaluateSheet(
         : `it is neither converging nor clearly diverging; check that each solveFor names the ` +
           `value its estimate really stands in for`),
   );
+}
+
+/** Probes bisection may spend before giving up — a backstop far above the ~20 halvings a real
+ *  bracket needs; the shared budget is the real ceiling. */
+const PIN_MAX_PROBES = 200;
+
+/** Bracket-width tolerance, relative to the AUTHORED bracket's span — not to the iterates,
+ *  which never close a purely relative test when the root sits at 0 (|lo|,|hi| stay ~constant
+ *  while the width shrinks). Its own constant, looser than SOLVE_TOL_REL, because a bisection
+ *  digit costs a full tree evaluation where a substitution digit is nearly free: 1e-6 lands in
+ *  ~20 probes and resolves a volt-scale node to a microvolt. */
+const PIN_TOL_REL = 1e-6;
+
+/** Residual tolerance at the accepted root, relative to the relation's RANGE over the authored
+ *  bracket (max |lhs-rhs| at the two ends — already in hand from the sign check). Scaling by the
+ *  range is form-invariant: the verdict is the same whether the author writes lhs=CM_in/rhs=CM_dc
+ *  or lhs=CM_in-CM_dc/rhs=0, where scaling by |lhs| itself rejected every correct root written in
+ *  residual form and waved through a real jump riding a large DC offset. A steep-but-continuous
+ *  relation leaves a residual of (slope x final width) — vanishing on the range scale — while a
+ *  JUMP leaves a fixed fraction of it. */
+const PIN_RESIDUAL_REL = 1e-5;
+
+/**
+ * Evaluate a sheet with every engine-solved parameter resolved. Two mechanisms, by what the
+ * author could honestly write down:
+ *
+ *  - `solveFor` — the param is an ESTIMATE of a value the sheet itself resolves; closed by
+ *    damped substitution (solveTorn above), with all the care that method needs.
+ *  - `pin` — the param is a FREE internal variable (a node voltage) chosen so an output equals
+ *    a spec. Closed by bisection on the param's [min, max]: no contraction requirement, no
+ *    overshoot, no dependence on a starting guess. The honesty conditions are explicit —
+ *    `lhs - rhs` must change sign across the bracket and must actually reach zero at the root —
+ *    and every violation fails closed with the reason, never a design sized where the data was
+ *    not.
+ *
+ * The pinned solve is the OUTER loop: each probe re-closes any torn loops inside, and both
+ * mechanisms draw on the one tree-wide pass budget, so nesting stays bounded.
+ */
+export function evaluateSheet(
+  doc: SheetDoc,
+  table?: DeviceTable,
+  resolveDevice?: DeviceResolver,
+  _depth = 0,
+  budget: SolveBudget = { left: SOLVE_PASSES_PER_LOOP * tornSheets(doc) },
+): SheetResult {
+  // One home for the structural pin checks (validateSheet raises the same words as errors);
+  // checked BEFORE filtering by the pinned() shape guard, because the guard rejects a
+  // half-written pin — which would otherwise sail past as "no pins" and freeze the param.
+  const problem = pinProblem(doc.params);
+  if (problem) {
+    return solveFailed(solveTorn(doc, table, resolveDevice, _depth, budget), problem);
+  }
+  const pins = doc.params.filter(pinned);
+  if (pins.length === 0) return solveTorn(doc, table, resolveDevice, _depth, budget);
+
+  const p = pins[0];
+  const { lhs, rhs } = p.pin;
+  const probeAt = (x: number): SheetResult => {
+    budget.left--;
+    return solveTorn(doc, table, resolveDevice, _depth, budget, { [p.name]: x });
+  };
+
+  /** lhs - rhs at an already-evaluated probe; undefined when either side does not resolve.
+   *  Diagnostics are swallowed (no-op warn): a side that stops resolving is reported once,
+   *  with the pin's own message, not once per probe. */
+  const noWarn = (): void => {};
+  const gap = (res: SheetResult): number | undefined => {
+    const at = (src: string): number | undefined => {
+      const v = evalScalar(src, res.values, scalarScope(res.values), noWarn, `pin ${p.name}`);
+      return v !== undefined && Number.isFinite(v) ? v : undefined;
+    };
+    const l = at(lhs);
+    const r = at(rhs);
+    return l === undefined || r === undefined ? undefined : l - r;
+  };
+  const atEnd = (x: number, which: string): { res: SheetResult; g?: number } => {
+    const res = probeAt(x);
+    const g = gap(res);
+    return g === undefined
+      ? {
+          res: solveFailed(
+            res,
+            `pinned param "${p.name}": ${lhs} - ${rhs} did not evaluate at the ${which} of ` +
+              `its bracket (${p.name} = ${x}) — tighten min/max to where the design sizes`,
+          ),
+        }
+      : { res, g };
+  };
+
+  let lo = p.min!;
+  let hi = p.max!;
+  const span = hi - lo;
+  const first = atEnd(lo, 'low end');
+  if (first.g === undefined) return first.res;
+  const second = atEnd(hi, 'high end');
+  if (second.g === undefined) return second.res;
+  let gLo = first.g;
+  const gHi = second.g;
+  if (gLo === 0) return first.res;
+  if (gHi === 0) return second.res;
+  if (gLo > 0 === gHi > 0) {
+    return solveFailed(
+      second.res,
+      `pinned param "${p.name}": ${lhs} - ${rhs} does not change sign across ` +
+        `[${lo}, ${hi}] (${gLo.toExponential(3)} at both … ${gHi.toExponential(3)}) — the ` +
+        `bracket does not straddle the target. Widen min/max, or the relation cannot reach it ` +
+        `on this table`,
+    );
+  }
+  // The residual scale for acceptRoot: the relation's range over the authored bracket,
+  // captured before the loop shrinks it. Nonzero here — a zero end already returned above.
+  const gScale = Math.max(Math.abs(gLo), Math.abs(gHi));
+
+  let res = second.res;
+  for (let probes = 0; probes < PIN_MAX_PROBES && budget.left > 0; probes++) {
+    const mid = (lo + hi) / 2;
+    res = probeAt(mid);
+    const g = gap(res);
+    if (g === undefined)
+      return solveFailed(
+        res,
+        `pinned param "${p.name}": ${lhs} - ${rhs} stopped evaluating inside the bracket ` +
+          `(${p.name} = ${mid}) — the relation is not defined everywhere between min and max`,
+      );
+    if (g === 0) return res; // an exact root needs no residual argument
+    if (g > 0 === gLo > 0) {
+      lo = mid;
+      gLo = g;
+    } else hi = mid;
+    // Accept only a genuine crossing (see acceptRoot): a relation that JUMPS across the target
+    // brings the bracket to nothing while the residual stays macroscopic.
+    if (hi - lo <= PIN_TOL_REL * span) {
+      return acceptRoot(res, g);
+    }
+  }
+
+  return solveFailed(
+    res,
+    budget.left <= 0
+      ? `pinned param "${p.name}" stopped before its bracket closed because the design's ` +
+          `shared iteration budget ran out — spent by the loops this pin re-closes on every ` +
+          `probe, or by an expensive sibling elsewhere in the tree. This pin was not shown ` +
+          `to be unsolvable`
+      : `pinned param "${p.name}": the bracket did not close in ${PIN_MAX_PROBES} probes`,
+  );
+
+  function acceptRoot(at: SheetResult, g: number): SheetResult {
+    if (Math.abs(g) > PIN_RESIDUAL_REL * gScale) {
+      return solveFailed(
+        at,
+        `pinned param "${p.name}": the bracket closed but ${lhs} - ${rhs} still reads ` +
+          `${g.toExponential(3)} — the relation steps across the target without touching it ` +
+          `(a table edge or a fold), so no ${p.name} in [${p.min}, ${p.max}] produces it`,
+      );
+    }
+    return at;
+  }
 }

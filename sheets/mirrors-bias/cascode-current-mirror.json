@@ -1,6 +1,6 @@
 {
   "title": "Cascode current mirror",
-  "description": "A K:1 cascode current mirror. Four unit devices: the bottom reference (diode-connected), the reference-branch cascode (diode-connected, stacked on it), the output mirror device, and the output cascode. The cascode devices force the two mirror devices to sit at the SAME low drain voltage, so the channel-length-modulation ($\\lambda$) mismatch between them is essentially zero and the systematic ratio error collapses. That matched bias is the whole point of cascoding a mirror: unlike the simple mirror, the output current no longer drifts with the output node voltage. The cost is output compliance: the output node must clear two stacked saturation voltages before the cascode leaves saturation, so $V_{out}$ cannot swing as low as a simple mirror's. Both mirror devices bind width-first as unit-device multiples (output width = K times the reference). The two reference devices are diode-connected, so their drops are read off the table rather than estimated, and the output devices are biased from what the reference actually sits at. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
+  "description": "A K:1 cascode current mirror. Four unit devices: the bottom reference (diode-connected), the reference-branch cascode (diode-connected, stacked on it), the output mirror device, and the output cascode. The cascode devices force the two mirror devices to sit at the SAME low drain voltage, so the channel-length-modulation ($\\lambda$) mismatch between them is essentially zero and the systematic ratio error collapses. That matched bias is the whole point of cascoding a mirror: unlike the simple mirror, the output current no longer drifts with the output node voltage. The cost is output compliance: with the cascode gates riding the diode stack, the output cascode's source sits a full $V_{GS}$ up at the mirror node, so the output must clear $V_{GS} + V_{dsat}$ — roughly a threshold more than the two stacked $V_{dsat}$ a wide-swing bias achieves, and the reason the wide-swing variant exists. Both mirror devices bind width-first as unit-device multiples (output width = K times the reference). The two reference devices are diode-connected, so their drops are read off the table rather than estimated, and the output devices are biased from what the reference actually sits at. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -261,8 +261,8 @@
       "kind": "invariant",
       "lhs": "V_out",
       "op": ">=",
-      "rhs": "vdsat + out_casc__vdsat + v_margin",
-      "note": "output floor: the output mirror and the output cascode each need one saturation voltage, plus a design margin (two stacked vdsat)"
+      "rhs": "ref__vgs + out_casc__vdsat + v_margin",
+      "note": "output floor: the output cascode's source stands at the mirror node — a full diode drop, ref__vgs, because this is the CLASSIC cascode whose gates ride the diode stack — plus the cascode's own saturation voltage and a design margin. Two stacked vdsat is the WIDE-SWING variant's floor, not this one's; that difference is the wide-swing sheet's reason to exist"
     },
     {
       "id": "systematic-error",

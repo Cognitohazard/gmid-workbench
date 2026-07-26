@@ -93,6 +93,10 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'This block must pin its drain bias (vds) but hasn’t — the table has a vds axis and there is no safe default, so sizing fails closed. Set a value here to size it in place.',
   solvedParam:
     'Solved, not set. This estimate stands in for a value only the evaluated sheet knows, closing a bias loop the block order cannot express: it is iterated until the two agree. The stored number is just a starting guess, so the field is read-only and the parameter cannot be swept.',
+  pinnedParam:
+    'Solved, not set. This is an internal bias node the engine chooses so a sheet output equals a spec you typed (e.g. the tail node placed so the common mode lands exactly on CM_dc). Solved by bisection between the parameter\u2019s min and max — its bracket, not slider bounds. Sweep the spec on the other side of the pin instead; the shown value is where the node landed.',
+  pinNotLanded:
+    'This pin did not land, so there is no solved value to show. The engine found no point in the parameter’s [min, max] bracket where the pinned equation holds — the warnings below name which way it failed (the bracket does not straddle the target, or the design stopped evaluating inside it). Move or widen the bracket, or relax the spec the pin chases.',
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',

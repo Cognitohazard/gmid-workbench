@@ -160,10 +160,31 @@ describe('exemplar goldens: 5T OTA', () => {
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
   });
 
-  it('the input common-mode range rules close at defaults', () => {
-    for (const id of ['icmr-low', 'icmr-high']) {
+  it('the pin lands the common mode exactly where the spec asked', () => {
+    // The tail node is solved, not typed: the engine bisects V_tail until CM_in equals CM_dc.
+    // This is the whole two-door design — internal coordinate canonical, external one typed.
+    // 5 decimals: the bracket closes at PIN_TOL_REL x its span (~0.7 µV on V_tail), which the
+    // CM relation's slope stretches to just under a µV — 6 decimals would ride on luck.
+    expect(res.values.CM_in).toBeCloseTo(1.1, 5);
+    expect(res.values.V_tail + res.values.in__vgs).toBeCloseTo(1.1, 5);
+  });
+
+  it('the common-mode rules close at defaults', () => {
+    for (const id of ['tail-saturated', 'cm-not-below', 'cm-not-above']) {
       const r = res.rules.find((x) => x.id === id);
       expect(r?.status === 'pass' || r?.status === 'amber', id).toBe(true);
     }
+  });
+
+  it('PM pays the mirror node as a pole-zero DOUBLET, not a lone pole', () => {
+    // A structure golden: the doublet's zero (at twice the pole) must be OBSERVABLE, so
+    // deleting it cannot pass. Reconstructed from the sheet's own GBW/f_pole to isolate the
+    // PM algebra — the value goldens above own the underlying quantities.
+    const v = res.values;
+    const doublet =
+      90 - ((Math.atan(v.GBW / v.f_pole) - Math.atan(v.GBW / (2 * v.f_pole))) * 180) / Math.PI;
+    expect(relErr(v.PM, doublet)).toBeLessThan(1e-9);
+    const lonePole = 90 - (Math.atan(v.GBW / v.f_pole) * 180) / Math.PI;
+    expect(v.PM - lonePole).toBeGreaterThan(1e-4);
   });
 });

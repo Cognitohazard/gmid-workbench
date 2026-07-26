@@ -10,6 +10,11 @@ import {
   MAX_USE_DEPTH,
   BIND_KEYS,
   BIND_FLAGS,
+  DOC_KEYS,
+  VAR_KEYS,
+  ROW_KEYS,
+  RULE_KEYS,
+  USE_KEYS,
   RULE_KINDS,
   RULE_OPS,
   type DeviceTable,
@@ -265,9 +270,11 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  * Coerce an untrusted saved leaf design-sheet (from localStorage, or a user's imported
  * sheet JSON) into a valid SheetDoc, dropping malformed entries but keeping every
  * author expression verbatim — an unresolvable one surfaces as a per-rule 'na' chip at
- * evaluation, never a silent drop. A bind is kept only when well-formed (L + exactly
- * two of {gm,gm_id,id}); else it is dropped and its rules go 'na'. Returns undefined
- * only when `v` is not an object.
+ * evaluation, never a silent drop. A bind is kept whenever it carries a string `L` — its
+ * arity is validateSheet's business, which names the problem instead of silently unsizing
+ * the sheet — so only an L-less bind is dropped, and its rules then go 'na'. Every piece
+ * this pass does not carry over is recorded in `lost`, including a key no core key set
+ * knows. Returns undefined only when `v` is not an object.
  */
 export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc | undefined {
   if (!v || typeof v !== 'object') return undefined;
@@ -292,17 +299,31 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   const dropField = (bad: boolean, path: string): void => {
     if (bad) lost?.push(path);
   };
+  // An UNKNOWN key is a drop too: every container below is rebuilt field by field, so a key
+  // nothing carries over vanishes exactly like a malformed one. Each is checked against the
+  // core's own key set rather than a copy of it — a whitelist maintained here is precisely the
+  // mechanism that silently ate a legal fT bind (and would have eaten `pin` and `diode`) on
+  // reload, and the same hole stayed open on the doc, params, rows, rules and uses.
+  const unknownKeys = (
+    obj: Record<string, unknown>,
+    keys: ReadonlySet<string>,
+    at: string,
+  ): void => {
+    for (const k of Object.keys(obj)) if (!keys.has(k)) lost?.push(`${at}${k}`);
+  };
   for (const k of ['params', 'rows', 'rules', 'uses', 'provide'] as const)
     if (o[k] !== undefined && !Array.isArray(o[k])) lost?.push(k);
   dropField(o.title !== undefined && !(typeof o.title === 'string' && o.title), 'title');
   dropField(o.description !== undefined && typeof o.description !== 'string', 'description');
   dropField(o.polarity !== undefined && o.polarity !== 'n' && o.polarity !== 'p', 'polarity');
+  unknownKeys(o, DOC_KEYS, '');
 
   const params: SheetVar[] = Array.isArray(o.params)
     ? o.params.flatMap((p, i) => {
         if (!p || typeof p !== 'object') return drop(`params[${i}]`);
         const pp = p as Record<string, unknown>;
         if (typeof pp.name !== 'string' || !finite(pp.value)) return drop(`params[${i}]`);
+        unknownKeys(pp, VAR_KEYS, `params[${i}].`);
         const out: SheetVar = { name: pp.name, value: pp.value };
         if (finite(pp.min)) out.min = pp.min;
         else dropField(pp.min !== undefined, `params[${i}].min`);
@@ -318,6 +339,12 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         // a hand-tuned estimate, which is exactly the wrong answer the field exists to prevent.
         if (typeof pp.solveFor === 'string' && pp.solveFor !== '') out.solveFor = pp.solveFor;
         else dropField(pp.solveFor !== undefined, `params[${i}].solveFor`);
+        // Same stakes as solveFor: dropping a pin silently turns a solved node back into the
+        // stale default it displays. An OBJECT field, so it needs its own shape check.
+        const pin = pp.pin as { lhs?: unknown; rhs?: unknown } | undefined;
+        if (pin && typeof pin.lhs === 'string' && typeof pin.rhs === 'string')
+          out.pin = { lhs: pin.lhs, rhs: pin.rhs };
+        else dropField(pp.pin !== undefined, `params[${i}].pin`);
         return [out];
       })
     : [];
@@ -327,6 +354,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         if (!r || typeof r !== 'object') return drop(`rows[${i}]`);
         const rr = r as Record<string, unknown>;
         if (typeof rr.name !== 'string' || typeof rr.expr !== 'string') return drop(`rows[${i}]`);
+        unknownKeys(rr, ROW_KEYS, `rows[${i}].`);
         const out: SheetRow = { name: rr.name, expr: rr.expr };
         if (typeof rr.unit === 'string') out.unit = rr.unit;
         else dropField(rr.unit !== undefined, `rows[${i}].unit`);
@@ -343,6 +371,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         if (typeof rr.lhs !== 'string' || typeof rr.rhs !== 'string') return drop(`rules[${i}]`);
         if (!RULE_OPS.has(rr.op as string) || !RULE_KINDS.has(rr.kind as string))
           return drop(`rules[${i}]`);
+        unknownKeys(rr, RULE_KEYS, `rules[${i}].`);
         dropField(rr.id !== undefined && !(typeof rr.id === 'string' && rr.id), `rules[${i}].id`);
         const out: SheetRule = {
           id: str(rr.id, uid()),
@@ -402,6 +431,8 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         if (!u || typeof u !== 'object') return drop(`uses[${i}]`);
         const uu = u as Record<string, unknown>;
         if (typeof uu.name !== 'string' || !uu.name) return drop(`uses[${i}]`);
+        // The use ITSELF only; `params` maps author-chosen param names, which no key set knows.
+        unknownKeys(uu, USE_KEYS, `uses[${i}].`);
         const childLost: string[] = [];
         const childDoc = sanitizeSheet(uu.doc, depth + 1, childLost);
         if (uu.doc !== undefined && !childDoc) lost?.push(`uses[${i}].doc`);

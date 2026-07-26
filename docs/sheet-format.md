@@ -497,6 +497,50 @@ costs real time — about 25 ms per sample for a three-child sheet that solves a
 both bias axes on a real PDK table, so roughly 11 s for a 21×21 map, run synchronously. Each
 declared bias axis adds a slice per pass, so most of that is the cost of not assuming.
 
+## Entering from a spec (`pin`)
+
+`solveFor` closes a loop the author could not avoid. `pin` is the opposite move: the sheet is
+already loop-free because its bias variable is an internal node the tables are indexed by — and
+the designer still gets to type the external quantity the application hands them.
+
+```json
+{ "name": "V_tail", "value": 0.4, "min": 0.15, "max": 0.8, "role": "choice",
+  "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+  "note": "the tail node, chosen so the produced common mode equals CM_dc" }
+```
+
+The engine chooses the parameter so that `lhs == rhs`, by **bisection between `min` and `max`** —
+for a pinned parameter they are the bracket, not slider bounds. Bisection needs no contraction,
+cannot overshoot, and owes nothing to a starting guess, so none of the substitution solver's care
+applies; its honesty conditions are stated instead: `lhs − rhs` must evaluate at both bracket ends
+and change sign between them, and must actually reach zero at the root. Each violation fails
+closed with the reason:
+
+| situation | result |
+|-|-|
+| `lhs − rhs` does not evaluate at a bracket end | infeasible, error naming the end — tighten the bracket to where the design sizes |
+| `lhs − rhs` stops evaluating INSIDE the bracket | infeasible — the relation is not defined everywhere between `min` and `max` |
+| no sign change across the bracket | infeasible — the bracket does not straddle the target, or the table cannot reach it |
+| the bracket closes but the residual stays large | infeasible — the relation steps across the target (a table edge or a fold) without touching it |
+| the shared iteration budget runs out first | infeasible — spent by the loops each probe re-closes or by an expensive sibling; the pin itself was not shown unsolvable |
+| the probe backstop (200) is hit | infeasible — cannot occur before the width tolerance on a finite bracket; a backstop, not a tuning knob |
+| the parameter also carries `solveFor` | validation error — one solver per parameter |
+| more than one parameter carries `pin` | validation error — bisection is a scalar method |
+| `pin` missing `lhs` or `rhs` | validation error — a half-written pin would freeze the parameter without solving it |
+| `min`/`max` missing or inverted | validation error — the bracket is required |
+
+The residual test is **form-invariant**: it is scaled by the relation's range over the authored
+bracket, so `lhs: "CM_in", rhs: "CM_dc"` and `lhs: "CM_in - CM_dc", rhs: "0"` get the same
+verdict. The bracket closes at 10⁻⁶ of its own span (a volt-scale node resolves to a microvolt),
+which also means a root sitting exactly at zero converges like any other.
+
+If the relation folds inside the bracket there may be more than one root; the one found is
+determined by the authored bracket alone, never by history, so repeated evaluations always agree.
+A pinned parameter is solved rather than set: the GUI shows it read-only with the value it landed
+on, and it is not sweepable — sweep the spec on the other side of the pin instead. The library's
+5T OTA is the worked example: the tail node is pinned so the produced common mode equals `CM_dc`,
+which makes the common-mode axis a sweep of `CM_dc` with one bisection per point.
+
 ## Sweeps
 
 Two views trace a sheet across parameter ranges (both need finitely-bounded slider params):

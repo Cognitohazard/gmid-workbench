@@ -197,15 +197,14 @@
       "name": "nmir",
       "doc": {
         "title": "Intermediate mirror device (NMOS diode)",
-        "description": "The second-path mirror that folds the other input branch to the bottom output device; carries the K_m-scaled current and adds the second mirror pole.",
+        "description": "The diode-connected second-path mirror that folds the other input branch to the bottom output device; carries the K_m-scaled current and adds the second mirror pole. Diode-connected, so its drop is read off the vds = vgs diagonal rather than guessed.",
         "polarity": "n",
         "params": [
           { "name": "I_o", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_n", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_n", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_n", "value": 0.5, "unit": "V", "role": "spec" }
+          { "name": "gm_id_n", "value": 10, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_n", "id": "I_o", "gm_id": "gm_id_n", "vds": "vds_n" },
+        "bind": { "L": "L_n", "id": "I_o", "gm_id": "gm_id_n", "diode": true },
         "rows": [],
         "rules": [
           {
@@ -221,8 +220,7 @@
       "params": {
         "I_o": "K_m*I_tail/2",
         "L_n": "L_mir",
-        "gm_id_n": "gm_id_ml",
-        "vds_n": "0.5"
+        "gm_id_n": "gm_id_ml"
       }
     },
     {
@@ -248,7 +246,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat"]
+        "provide": ["gds", "vdsat", "cgg"]
       },
       "params": {
         "I_o": "K_m*I_tail/2",
@@ -298,9 +296,9 @@
     },
     {
       "name": "f_pole_n",
-      "expr": "nmir__gm/(2*pi*nmir__cgg)",
+      "expr": "nmir__gm/(2*pi*(nmir__cgg + moutn__cgg))",
       "unit": "Hz",
-      "note": "estimate: the intermediate NMOS mirror-node pole"
+      "note": "estimate: the intermediate NMOS mirror-node pole — the diode gm over its own plus the output device's gate cap, mirroring f_pole_p's accounting"
     },
     {
       "name": "PM",

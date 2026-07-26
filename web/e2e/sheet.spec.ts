@@ -696,6 +696,47 @@ test('design sheet: an imported diode connection survives import and reload (not
   expect(errors).toEqual([]);
 });
 
+test('design sheet: an imported pin survives import and reload (not silently stripped)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // The pin is an OBJECT on a param whose siblings are scalars, so a sanitizer that only carries
+  // known scalar fields deletes it — and the param then silently reverts to its stored default.
+  // The rule below passes only at the solved root (x = 0.25), never at the default (0.3).
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'pinned-node.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Pinned node',
+        polarity: 'n',
+        params: [{ name: 'x', value: 0.3, min: 0, max: 1, pin: { lhs: 'y', rhs: '0.5' } }],
+        rows: [{ name: 'y', expr: '2*x' }],
+        rules: [{ id: 'at-root', kind: 'invariant', lhs: 'abs(x - 0.25)', op: '<=', rhs: '0.001' }],
+      }),
+    ),
+  });
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Pinned node');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
+
+  await page.reload();
+  const after = page.locator('.sheet').first();
+  await expect(after.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(after.locator('.srules tr.st-fail')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
 test('design sheet: imported sheets join the library — pickable, referenceable, removable, persistent', async ({
   page,
 }) => {
@@ -766,6 +807,23 @@ test('design sheet: imported sheets join the library — pickable, referenceable
     'malformed sheet content at uses[0].device',
   );
   await expect(page.locator('.usheets .dev', { hasText: 'bad-device' })).toHaveCount(0);
+
+  // A key the core does not know is rejected on the same footing: the sanitizer rebuilds each
+  // container field by field, so an unrecognized one is dropped as surely as a malformed one —
+  // silently, until it is recorded. That silence is how a legal fT bind and a legal pin were lost.
+  await input.setInputFiles(
+    asFile('unknown-key.json', {
+      title: 'Unknown key',
+      polarity: 'n',
+      params: [{ name: 'x', value: 2, sweep: true }],
+      rows: [{ name: 'y', expr: '2*x' }],
+      rules: [],
+    }),
+  );
+  await expect(page.locator('.qa.error')).toContainText(
+    'malformed sheet content at params[0].sweep',
+  );
+  await expect(page.locator('.usheets .dev', { hasText: 'unknown-key' })).toHaveCount(0);
 
   await input.setInputFiles(
     asFile('my-top.json', {

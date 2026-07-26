@@ -8,6 +8,8 @@
     sweepSheet2,
     sweepable as isSweepable,
     torn,
+    pinned as isPinned,
+    engineSolved,
     bindingConstraint,
     resolveSheetRefs,
     flattenSheetDoc,
@@ -24,6 +26,7 @@
     type SheetDoc,
     type SheetBind,
     type SheetVar,
+    type SheetRule,
     type SheetUse,
     type SheetSweep2,
     type SheetChildReport,
@@ -390,11 +393,16 @@
   // A rule's authored prose for the row tooltip. `justification` is the author's stated reason
   // for a relaxed or unusual constraint — the thing a reviewer most needs — so it is shown,
   // not just stored. A title attribute is a plain-TEXT sink: math goes through mathPlain.
-  function ruleTitle(r: RuleResult): string {
+  // A CHILD's rule is looked up in `childRules` — the rules of the doc it was authored in.
+  // Rule ids are unique only WITHIN a sheet (ten shipped sheets carry a `feasible-inversion`),
+  // so reading a child chip out of the top-level maps shows the parent's note for an unrelated
+  // constraint. Absent ⇒ this sheet's own rules, which DO mirror result.rules 1:1.
+  function ruleTitle(r: RuleResult, childRules?: readonly SheetRule[]): string {
+    const own = childRules?.find((a) => a.id === r.id);
     const parts: string[] = [];
-    const note = ruleNote.get(r.id);
+    const note = childRules ? own?.note : ruleNote.get(r.id);
     if (note) parts.push(note);
-    const why = ruleWhy.get(r.id);
+    const why = childRules ? own?.justification : ruleWhy.get(r.id);
     if (why) parts.push(`why: ${why}`);
     if (r.detail) parts.push(r.detail);
     return mathPlain(parts.join(' — '));
@@ -417,6 +425,20 @@
   // red child block is on screen, not just its ✗.
   const childFails = (c: SheetChildReport | undefined): RuleResult[] =>
     c && !c.feasible ? c.rules.filter((r) => r.kind !== 'guardrail' && r.status === 'fail') : [];
+
+  // A pin whose bisection never landed leaves `values[name]` at the last PROBE — a bracket end,
+  // not a solved node — so the field must not present it as the value the design used. The solver
+  // marks that failure as an error warning naming the param (solveFailed in the core's eval).
+  const pinFailed = (p: SheetVar): boolean =>
+    isPinned(p) &&
+    !result.feasible &&
+    result.warnings.some((w) => w.message.includes(`pinned param "${p.name}"`));
+  // The read-only field's tooltip: which mechanism owns the number, or that there is none.
+  const solvedHelp = (p: SheetVar): string | undefined => {
+    if (torn(p)) return CONTROL_HELP.solvedParam;
+    if (!isPinned(p)) return undefined;
+    return pinFailed(p) ? CONTROL_HELP.pinNotLanded : CONTROL_HELP.pinnedParam;
+  };
 
   // Params group by role when ANY carries one (spec = the requirement, choice = the design knobs);
   // otherwise a single flat list, unchanged. Untagged params in a role-bearing doc trail ungrouped.
@@ -506,17 +528,19 @@
     >
     <!-- A tearing variable is solved, not set: show what it converged to (the authored value is
          only a starting guess) and refuse edits, rather than offering a knob the next
-         evaluation discards. -->
+         evaluation discards. A pin that did not land has nothing to show, so it reads "—". -->
     <input
       class="num"
-      class:solved={torn(p)}
+      class:solved={engineSolved(p)}
       type="text"
       inputmode="text"
       spellcheck="false"
-      readonly={torn(p)}
-      tabindex={torn(p) ? -1 : undefined}
-      title={torn(p) ? CONTROL_HELP.solvedParam : undefined}
-      value={formatEng(torn(p) ? (result.values[p.name] ?? p.value) : p.value)}
+      readonly={engineSolved(p)}
+      tabindex={engineSolved(p) ? -1 : undefined}
+      title={solvedHelp(p)}
+      value={pinFailed(p)
+        ? '—'
+        : formatEng(engineSolved(p) ? (result.values[p.name] ?? p.value) : p.value)}
       onchange={(e) => commitEng(e.currentTarget, p.value, (v) => v != null && setParam(p.name, v))}
     />
     {#if isSweepable(p)}
@@ -653,7 +677,7 @@
     {/if}
     {#if childFails(c).length}
       <div class="cfails">
-        {#each childFails(c) as r}<span class="cfail" title={ruleTitle(r)}
+        {#each childFails(c) as r}<span class="cfail" title={ruleTitle(r, use?.doc?.rules ?? [])}
             >✗ {r.id} {pct(r.marginPct)}</span
           >{/each}
       </div>

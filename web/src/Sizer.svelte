@@ -44,7 +44,8 @@
   // vgs by itself), the second sets the scale — so a spec that arrives as "fT ≥ 5 GHz"
   // or "gain ≥ 40 dB" is entered directly instead of hand-iterating gm/ID toward it.
   // Keyed by the CORE bind key, so the entered text, the persisted blob, and the query
-  // handed to sizeDevice all speak the same names — one list to extend, not three. This is
+  // handed to sizeDevice all speak the same names — one list to extend (the display labels
+  // stay a hand-kept sibling; presentation only). This is
   // a deliberate SUBSET of the core's BINDABLE: av0 is the same expression as gm/gds, and
   // V* is a hand conversion from gm/ID, so neither earns a seventh box. Sheets can still
   // bind them.

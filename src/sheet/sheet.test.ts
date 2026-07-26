@@ -1024,6 +1024,17 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
     expect(w[0]).toMatch(/node voltage/);
   });
 
+  it('a scaled or offset bias is not a diode either — the identity must be the bare param', () => {
+    // `2*guess` and `guess - 0.1` say the drop is NOT the vgs, and "bind the connection"
+    // would change those designs. Counting free names (one) cannot see that; only the bare
+    // identifier earns the diode advice.
+    for (const bias of ['2*guess', 'guess - 0.1', 'guess*1.0']) {
+      const w = standins(withRule('abs(k__vgs - guess)', bias));
+      expect(w).toHaveLength(1);
+      expect(w[0]).not.toMatch(/diode-connected/);
+    }
+  });
+
   it('sees the call, not the letters: a space before the paren does not hide the pattern', () => {
     // The parser treats `abs (x)` and `abs(x)` identically, so a literal "abs(" scan let a
     // one-space reformat silently switch the lint off.
@@ -1509,10 +1520,35 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
   });
 
   it('is told the budget went elsewhere, not that it failed to converge', () => {
-    expect(victim).toMatch(/budget was already spent/);
-    expect(victim).toMatch(/not by this one/);
+    // The message must not ACCUSE a specific spender: an expensive sibling and a pin nesting
+    // this loop under its probes are indistinguishable here, and "another loop, not this one"
+    // was provably false for the pin-over-torn case.
+    expect(victim).toMatch(/budget ran out/);
+    expect(victim).toMatch(/not shown to diverge/);
     expect(victim).not.toMatch(/diverging/);
     expect(victim).not.toMatch(/did not reach tolerance/);
+  });
+});
+
+describe('duplicate rule ids', () => {
+  it('are a validation error — results are keyed by id, so one would shadow the other', () => {
+    // Two rules named "same": indexTreeResults Map.set-collapses them, the sweep charts one
+    // curve where two exist, and bindingConstraint can name the WRONG worst rule.
+    const doc: SheetDoc = {
+      title: 'dup',
+      polarity: 'n',
+      params: [{ name: 'a', value: 1 }],
+      rows: [],
+      rules: [
+        { id: 'same', kind: 'requirement', lhs: 'a', op: '>=', rhs: '100' },
+        { id: 'same', kind: 'requirement', lhs: 'a', op: '>=', rhs: '1' },
+      ],
+    };
+    expect(
+      validateSheet(doc).some(
+        (w) => w.severity === 'error' && /duplicate rule id "same"/.test(w.message),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -1746,5 +1782,159 @@ describe('diode-connected bind', () => {
     const res = runSheet(diodeDoc(), withoutColumns(fixTable(dev, { vds: 0.9 }), []));
     expect(res.bind?.ok).toBe(true);
     expect(res.warnings.some((w) => /no live vds axis to fold/.test(w.message))).toBe(true);
+  });
+});
+
+describe('pinned params — bracketed inversion of a monotone relation', () => {
+  const mk = (
+    expr: string,
+    pin: { lhs: string; rhs: string },
+    bounds: { min?: number; max?: number } = { min: 0, max: 10 },
+  ): SheetDoc => ({
+    title: 'p',
+    polarity: 'n',
+    params: [
+      { name: 'x', value: 1, ...bounds, pin },
+      { name: 'T', value: 5 },
+    ],
+    rows: [{ name: 'y', expr }],
+    rules: [],
+  });
+
+  // Precision below is PIN_TOL_REL x the bracket's span (1e-6 x 10): the root lands anywhere
+  // inside the final bracket, so 4 digits is what a volt-scale bracket honestly guarantees.
+  it('inverts an increasing relation to the root, from no starting guess at all', () => {
+    const res = evaluateSheet(mk('2*x + 1', { lhs: 'y', rhs: 'T' }), dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(2, 4);
+  });
+
+  it('handles a DECREASING relation identically — bisection only needs a sign change', () => {
+    const res = evaluateSheet(mk('9 - x', { lhs: 'y', rhs: 'T' }), dev);
+    expect(res.values.x).toBeCloseTo(4, 4);
+  });
+
+  it('accepts a correct root written in RESIDUAL form (rhs = 0)', () => {
+    // The residual scale is the relation's range over the bracket, not |lhs| at the root —
+    // scaling by |lhs| rejected every pin whose lhs IS the residual (it vanishes at the root).
+    const res = evaluateSheet(mk('2*x + 1', { lhs: 'y - T', rhs: '0' }), dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(2, 4);
+  });
+
+  it('closes on a root at ZERO — the bracket test is span-relative, not iterate-relative', () => {
+    // A width test relative to |lo|,|hi| never fires when the root is 0 (the ratio stays ~1
+    // while the width shrinks); a symmetric node whose answer is 0 V is not exotic.
+    const doc = mk('2*x', { lhs: 'y', rhs: 'T' }, { min: -10, max: 9.5 });
+    doc.params[1].value = 0; // T = 0 → root at x = 0, deliberately off the first midpoint
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(0, 4);
+  });
+
+  it('still refuses a jump riding a large DC offset', () => {
+    // Scaling the residual by |lhs| (~1e6 here) would call a 10-unit step "converged".
+    const doc = mk('1e6 + (x < 3 ? 0 : 10)', { lhs: 'y', rhs: 'T' });
+    doc.params[1].value = 1000005;
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+      /steps across the target/,
+    );
+  });
+
+  it('fails closed on a HALF-WRITTEN pin instead of silently freezing the param', () => {
+    // {lhs} without {rhs} fails the pinned() shape guard: without this check the param would be
+    // neither swept nor solved — stuck at its authored value with the sheet reading feasible.
+    const doc = mk('2*x + 1', { lhs: 'y' } as unknown as { lhs: string; rhs: string });
+    expect(
+      validateSheet(doc).some(
+        (w) => w.severity === 'error' && /pin needs both lhs and rhs/.test(w.message),
+      ),
+    ).toBe(true);
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => /pin needs both lhs and rhs/.test(w.message))).toBe(true);
+  });
+
+  it('fails closed when the bracket does not straddle the target', () => {
+    const res = evaluateSheet(mk('x + 20', { lhs: 'y', rhs: 'T' }), dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+      /does not change sign/,
+    );
+  });
+
+  it('refuses a JUMP: the bracket closes but nothing in it produces the target', () => {
+    // A discontinuity steps across the target; bisection converges to the step, and shipping
+    // that point would size the design at an operating point that does not exist.
+    const res = evaluateSheet(mk('x < 3 ? 0 : 10', { lhs: 'y', rhs: 'T' }), dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+      /steps across the target/,
+    );
+  });
+
+  it('names the bracket end where the relation stops evaluating', () => {
+    const res = evaluateSheet(mk('sqrt(x - 1)', { lhs: 'y', rhs: '0.5' }), dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(/low end/);
+  });
+
+  it('is not sweepable, and its min/max are the bracket rather than slider bounds', () => {
+    const p = mk('2*x + 1', { lhs: 'y', rhs: 'T' }).params[0];
+    expect(sweepable(p)).toBe(false);
+  });
+
+  it('validation refuses a missing bracket, a second pin, and a pin that is also torn', () => {
+    const noBracket = mk('2*x + 1', { lhs: 'y', rhs: 'T' }, {});
+    expect(
+      validateSheet(noBracket).some(
+        (w) => w.severity === 'error' && /bisection bracket/.test(w.message),
+      ),
+    ).toBe(true);
+    const two: SheetDoc = {
+      ...noBracket,
+      params: [
+        { name: 'x', value: 1, min: 0, max: 1, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'z', value: 1, min: 0, max: 1, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'T', value: 5 },
+      ],
+    };
+    expect(
+      validateSheet(two).some((w) => w.severity === 'error' && /scalar method/.test(w.message)),
+    ).toBe(true);
+    const both: SheetDoc = {
+      ...noBracket,
+      params: [
+        { name: 'x', value: 1, min: 0, max: 1, pin: { lhs: 'y', rhs: 'T' }, solveFor: 'y' },
+        { name: 'T', value: 5 },
+      ],
+    };
+    expect(
+      validateSheet(both).some((w) => w.severity === 'error' && /keep one solver/.test(w.message)),
+    ).toBe(true);
+  });
+
+  it('solves the pin AND an inner torn loop together, off one budget', () => {
+    // The pin is the outer solver; each probe re-closes the substitution loop inside.
+    const doc: SheetDoc = {
+      title: 'both',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'T', value: 5 },
+        { name: 'e', value: 0, solveFor: 'fe' },
+      ],
+      rows: [
+        { name: 'fe', expr: '0.5*e + x' }, // fixed point: e = 2x
+        { name: 'y', expr: 'fe - x + 1' }, // = x + 1 at the fixed point → x = 4
+      ],
+      rules: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(4, 4);
+    expect(res.values.e).toBeCloseTo(8, 4);
   });
 });

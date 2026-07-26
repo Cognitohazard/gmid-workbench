@@ -112,6 +112,26 @@ describe('tier-3 goldens: current-mirror OTA', () => {
     // Both output devices sit at L_mir, vds 0.9, so gds_p = gds_n and K_m cancels.
     expect(relErr(res.values.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
   });
+
+  it('PM pays the PMOS node as a FULL pole and the folded NMOS node as a DOUBLET', () => {
+    // Structure golden on the sheet's own poles: both branches pass a PMOS mirror (full
+    // pole); only the folded branch passes the bottom NMOS mirror (doublet — zero at twice
+    // the pole). Both terms must be observable, so dropping either cannot pass.
+    const v = res.values;
+    const pm =
+      90 -
+      ((Math.atan(v.GBW / v.f_pole) +
+        Math.atan(v.GBW / v.f_pole_n) -
+        Math.atan(v.GBW / (2 * v.f_pole_n))) *
+        180) /
+        Math.PI;
+    expect(relErr(v.PM, pm)).toBeLessThan(1e-9);
+    const withoutN = 90 - ((Math.atan(v.GBW / v.f_pole) - 0) * 180) / Math.PI;
+    expect(withoutN - v.PM).toBeGreaterThan(1e-4); // the NMOS node costs real phase…
+    const nAsFullPole =
+      90 - ((Math.atan(v.GBW / v.f_pole) + Math.atan(v.GBW / v.f_pole_n)) * 180) / Math.PI;
+    expect(v.PM - nAsFullPole).toBeGreaterThan(1e-4); // …but less than a lone pole would
+  });
 });
 
 describe('tier-3 goldens: symmetrical OTA', () => {
@@ -126,6 +146,23 @@ describe('tier-3 goldens: symmetrical OTA', () => {
 
   it('DC gain matches the current-mirror OTA form (K_m-independent)', () => {
     expect(relErr(res.values.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
+  });
+
+  it('PM pays the PMOS node as a FULL pole and the intermediate NMOS node as a DOUBLET', () => {
+    // Same structure golden as the current-mirror OTA — the symmetrical OTA shares the
+    // asymmetric path accounting (every branch passes a PMOS mirror; half pass the NMOS one).
+    const v = res.values;
+    const pm =
+      90 -
+      ((Math.atan(v.GBW / v.f_pole_p) +
+        Math.atan(v.GBW / v.f_pole_n) -
+        Math.atan(v.GBW / (2 * v.f_pole_n))) *
+        180) /
+        Math.PI;
+    expect(relErr(v.PM, pm)).toBeLessThan(1e-9);
+    const nAsFullPole =
+      90 - ((Math.atan(v.GBW / v.f_pole_p) + Math.atan(v.GBW / v.f_pole_n)) * 180) / Math.PI;
+    expect(v.PM - nAsFullPole).toBeGreaterThan(1e-4);
   });
 });
 

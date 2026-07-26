@@ -43,6 +43,73 @@ export interface SheetVar {
    * A solved param is no longer a free variable, so it is not sweepable.
    */
   solveFor?: string;
+  /**
+   * Marks this param as PINNED: a free internal variable — typically a node voltage — that the
+   * engine chooses so that one of the sheet's OUTPUTS equals a SPEC (`CM_in == CM_dc`). This is
+   * the second door onto the same design: internally the node is the canonical coordinate the
+   * tables are indexed by; externally the designer types the quantity the application presents,
+   * and the pin is the declared inversion between them.
+   *
+   * Solved by BISECTION on [min, max] (both required — they are the bracket, not slider bounds).
+   * Bisection needs no contraction, cannot overshoot, and cannot depend on a starting guess, so
+   * the failure modes substitution has (two-cycles, rotation, damping heuristics) do not exist
+   * for it. Its honesty condition is stated instead of hidden: `lhs - rhs` must change sign
+   * across the bracket, and the solve fails closed when it does not, when an end does not
+   * evaluate, or when the crossing turns out to be a jump. If the relation folds inside the
+   * bracket the root found is determined by the authored bracket alone — never by history.
+   *
+   * `value` is only the displayed default; the solved value replaces it. A pinned param is not
+   * sweepable (sweep the spec on the other side of the pin instead), and at most
+   * MAX_PINNED_PARAMS may exist per sheet — bisection is a scalar method.
+   */
+  pin?: { lhs: string; rhs: string };
+}
+
+/** Type guard: a param the engine PINS via bracketed inversion (see SheetVar.pin). */
+export function pinned(p: SheetVar): p is SheetVar & { pin: { lhs: string; rhs: string } } {
+  return typeof p.pin?.lhs === 'string' && typeof p.pin?.rhs === 'string';
+}
+
+/** At most this many pinned params per sheet: bisection is a scalar method, and a second
+ *  unknown would need simultaneous root-finding this engine deliberately does not do. */
+export const MAX_PINNED_PARAMS = 1;
+
+/**
+ * The structural problems that make a document's pins unsolvable, stated ONCE — evaluation
+ * fails closed on the same words validation reports, mirroring bindProblem. Returns null when
+ * the pins are well-formed. The half-written check comes first because `pinned()` rejects a
+ * pin missing a side: such a param would otherwise be neither swept nor solved — frozen at its
+ * authored value with no warning, and the sheet reported feasible on a design never solved.
+ */
+export function pinProblem(params: readonly SheetVar[]): string | null {
+  const half = params.find((p) => p.pin !== undefined && !pinned(p));
+  if (half)
+    return (
+      `param "${half.name}": pin needs both lhs and rhs — half-written, it would freeze the ` +
+      `param without solving it`
+    );
+  const pins = params.filter(pinned);
+  if (pins.length > MAX_PINNED_PARAMS)
+    return (
+      `${pins.length} pinned params — bisection is a scalar method, so at most ` +
+      `${MAX_PINNED_PARAMS} may be pinned per sheet`
+    );
+  const both = pins.find((p) => torn(p));
+  if (both)
+    return (
+      `param "${both.name}" is both pinned and a tearing variable — the two would fight over ` +
+      `it; keep one solver`
+    );
+  const unbracketed = pins.find(
+    (p) =>
+      !(Number.isFinite(p.min) && Number.isFinite(p.max) && (p.min as number) < (p.max as number)),
+  );
+  if (unbracketed)
+    return (
+      `pinned param "${unbracketed.name}" needs finite min < max — they are the bisection ` +
+      `bracket, not slider bounds`
+    );
+  return null;
 }
 
 /**
@@ -211,6 +278,15 @@ export function torn(p: SheetVar): p is SheetVar & { solveFor: string } {
   return typeof p.solveFor === 'string' && p.solveFor !== '';
 }
 
+/** A param the ENGINE resolves rather than the author setting — torn (substitution) or pinned
+ *  (bisection). The one predicate for every surface that renders "solved, not set": read-only
+ *  fields, slider suppression. (`sweepable` keeps its own structural test on purpose: it must
+ *  also refuse to sweep a MALFORMED pin, which the shape guards here deliberately reject so
+ *  pinProblem can name it.) */
+export function engineSolved(p: SheetVar): boolean {
+  return torn(p) || pinned(p);
+}
+
 /** The separator joining a child use-name to a provided key. The engine has no member
  *  access (`child.key` cannot parse), so a child's scalars surface in the parent scope as
  *  the flat name `child__key`. One source of truth for the producer (eval), the collision
@@ -245,6 +321,28 @@ export interface SheetDoc {
   uses?: SheetUse[];
   provide?: string[];
 }
+
+/**
+ * The exact key set of every authored container, stated beside the interfaces they mirror so a
+ * document sanitizer can walk a parsed object against the REAL shape. BIND_KEYS/BIND_FLAGS above
+ * exist for the same reason and stay separate only because a bind's keys additionally split by
+ * type (expression vs flag). A sanitizer keeping its own copy of this knowledge is the mechanism
+ * that silently ate a legal fT bind on reload — and would have eaten `pin` and `diode` — so any
+ * new field belongs HERE, in the same edit that adds it to its interface.
+ */
+export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
+  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'pin',
+]); // prettier-ignore
+export const ROW_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
+export const RULE_KEYS: ReadonlySet<string> = new Set<string>([
+  'id', 'kind', 'lhs', 'op', 'rhs', 'tolPct', 'justification', 'note',
+]); // prettier-ignore
+export const USE_KEYS: ReadonlySet<string> = new Set<string>([
+  'name', 'doc', 'ref', 'device', 'params',
+]); // prettier-ignore
+export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
+  'title', 'description', 'polarity', 'params', 'bind', 'rows', 'rules', 'uses', 'provide',
+]); // prettier-ignore
 
 /** A child block's evaluated summary, surfaced so the UI can show each child's title,
  *  feasibility, and the scalar values it exposed — without re-evaluating the tree.

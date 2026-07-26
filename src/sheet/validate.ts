@@ -12,6 +12,7 @@ import {
   MAX_TORN_PARAMS,
   MAX_USE_DEPTH,
   torn,
+  pinProblem,
   PROVIDE_SEP,
   RULE_KINDS,
   RULE_OPS,
@@ -30,11 +31,6 @@ function namesOf(expr: string): readonly string[] {
   }
 }
 
-/** Free names inside each `abs(...)` call of an expression. A consistency check reads
- *  `abs(child__vgs - vgs_est) <= tol`, so the two sides of the round trip appear inside ONE
- *  absolute difference — which is what separates it from a headroom guardrail like
- *  `V_node - child__vdsat >= 0`, where the same two names appear with no claim that they are
- *  equal. Scans for the matching close paren; unbalanced source simply yields nothing. */
 /** Free names inside each `abs(...)` call of an expression. A consistency check reads
  *  `abs(child__vgs - vgs_est) <= tol`, so the two sides of the round trip appear inside ONE
  *  absolute difference — which is what separates it from a headroom guardrail like
@@ -106,24 +102,25 @@ function standInEstimates(doc: SheetDoc): QAWarning[] {
       const exprNames = namesOf(expr);
       const standIns = exprNames.filter((n) => paramNames.has(n));
       if (standIns.length === 0) continue;
+      // Both sides of the round trip must sit inside ONE absolute difference — the sheet
+      // asserting they are the same number, not a guardrail that happens to mention both.
+      const levels = STANDIN_TARGETS.map((q) => joinProvide(use.name, q)).filter((q) =>
+        provided.has(q),
+      );
 
       for (const r of ruleNames) {
-        // Both sides of the round trip must sit inside ONE absolute difference — the sheet
-        // asserting they are the same number, not a guardrail that happens to mention both.
-        const levels = STANDIN_TARGETS.map((q) => joinProvide(use.name, q)).filter((q) =>
-          provided.has(q),
-        );
         const pair = r.absArgs.find(
           (a) => standIns.some((n) => a.has(n)) && levels.some((q) => a.has(q)),
         );
         if (!pair) continue;
         const tiedTo = levels.filter((q) => pair.has(q));
         const hit = standIns.find((n) => pair.has(n)) as string;
-        // Diode-connected requires BOTH: the bias is nothing but the stand-in (`vds = vgs_est`,
-        // the identity written as a guess), and the rule compares exactly those two quantities.
-        // A stack's KVL check — `abs((CM - in__vgs) + vds_a + vds_b - V_out)` — also puts the
-        // two inside one abs, but it is summing a loop of node drops, not asserting an identity.
-        const sole = exprNames.length === 1 && exprNames[0] === hit;
+        // Diode-connected requires ALL of: the bias IS the stand-in — the bare identifier, not
+        // an expression over it (`2*vgs_est` or `vgs_est - 0.1` states the drop is NOT the vgs,
+        // and "bind the diode" would change that design) — and the rule compares exactly those
+        // two quantities. A stack's KVL check — `abs((CM - in__vgs) + vds_a + vds_b - V_out)` —
+        // also puts the two inside one abs, but it sums a loop of node drops, not an identity.
+        const sole = expr.trim() === hit;
         const pairwise = pair.size === 2;
         const diode =
           axis === 'vds' && sole && pairwise && tiedTo.includes(joinProvide(use.name, 'vgs'));
@@ -194,6 +191,20 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     });
   }
 
+  // Pinned params: one home for the structural checks (pinProblem), so evaluation fails closed
+  // on the SAME words this raises as an error — the bindProblem discipline. This also catches a
+  // half-written pin ({lhs} only), which the pinned() shape guard rejects and which would
+  // otherwise freeze the param: neither swept nor solved, with the sheet still reading feasible.
+  const pinIssue = pinProblem(doc.params);
+  if (pinIssue) {
+    out.push({
+      rule: 'sheet-param',
+      severity: 'error',
+      message: pinIssue,
+      location: 'params',
+    });
+  }
+
   if (doc.bind) {
     const problem = bindProblem(BINDABLE.filter((k) => doc.bind?.[k] !== undefined));
     if (problem) {
@@ -204,6 +215,22 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         location: 'bind',
       });
     }
+  }
+
+  // Duplicate rule ids collapse silently downstream: indexTreeResults keys results by id, so
+  // the sweep charts one curve where two rules exist and bindingConstraint can name the WRONG
+  // worst rule. (A child reusing a parent's id is fine — paths disambiguate across levels.)
+  const ruleIds = new Set<string>();
+  for (const r of doc.rules) {
+    if (ruleIds.has(r.id)) {
+      out.push({
+        rule: 'sheet-rule',
+        severity: 'error',
+        message: `duplicate rule id "${r.id}" — results are keyed by id, so one of them would silently shadow the other in sweeps and the binding-constraint badge`,
+        location: r.id,
+      });
+    }
+    ruleIds.add(r.id);
   }
 
   for (const r of doc.rules) {

@@ -309,8 +309,23 @@ function evalNode(node: Node, scope: Scope, constants: Record<string, number>): 
   }
 }
 
-/** Collect free identifiers that are neither constants nor function names. */
-function collectNames(node: Node, constants: Record<string, number>, acc: Set<string>): void {
+/**
+ * Collect free identifiers — those that are neither constants nor function names — into every
+ * open accumulator at once. `sinks` is the stack of sets a name found here belongs to: always
+ * the expression's own name set, plus one set per enclosing call site, which is how
+ * CompiledExpr.calls records the arguments each call was written with. Walks the same AST the
+ * evaluator will, so it inherits the parser's handling of whitespace, nesting and precedence
+ * rather than re-deriving them from the source text.
+ *
+ * One walk over the grammar, deliberately: a second traversal with the same five node cases is
+ * a copy that stops matching this one the first time a node type is added.
+ */
+function collectInto(
+  node: Node,
+  constants: Record<string, number>,
+  sinks: Set<string>[],
+  calls: Map<string, ReadonlySet<string>[]>,
+): void {
   switch (node.type) {
     case 'Identifier':
       if (
@@ -318,63 +333,36 @@ function collectNames(node: Node, constants: Record<string, number>, acc: Set<st
         !Object.prototype.hasOwnProperty.call(REGISTERED, node.name) &&
         !Object.prototype.hasOwnProperty.call(constants, node.name)
       ) {
-        acc.add(node.name);
+        for (const acc of sinks) acc.add(node.name);
       }
       return;
     case 'UnaryExpression':
-      collectNames(node.argument, constants, acc);
+      collectInto(node.argument, constants, sinks, calls);
       return;
     case 'BinaryExpression':
-      collectNames(node.left, constants, acc);
-      collectNames(node.right, constants, acc);
+      collectInto(node.left, constants, sinks, calls);
+      collectInto(node.right, constants, sinks, calls);
       return;
     case 'ConditionalExpression':
-      collectNames(node.test, constants, acc);
-      collectNames(node.consequent, constants, acc);
-      collectNames(node.alternate, constants, acc);
+      collectInto(node.test, constants, sinks, calls);
+      collectInto(node.consequent, constants, sinks, calls);
+      collectInto(node.alternate, constants, sinks, calls);
       return;
-    case 'CallExpression':
-      // The callee is a function name, not a free identifier; skip it.
-      for (const a of node.arguments) collectNames(a, constants, acc);
-      return;
-    default:
-      return;
-  }
-}
-
-/** Record, per call site, the free identifiers inside that call's arguments. Walks the same AST
- *  the evaluator will, so it inherits the parser's handling of whitespace, nesting and
- *  precedence rather than re-deriving them from the source text. */
-function collectCalls(
-  node: Node,
-  constants: Record<string, number>,
-  acc: Map<string, ReadonlySet<string>[]>,
-): void {
-  switch (node.type) {
     case 'CallExpression': {
+      // The callee is a function name, not a free identifier; skip it.
       const fn = node.callee.type === 'Identifier' ? node.callee.name : '';
+      let argSinks = sinks;
       if (fn) {
+        // Registered before descending, so call sites land in source order.
         const inside = new Set<string>();
-        for (const a of node.arguments) collectNames(a, constants, inside);
-        const at = acc.get(fn);
+        const at = calls.get(fn);
         if (at) at.push(inside);
-        else acc.set(fn, [inside]);
+        else calls.set(fn, [inside]);
+        argSinks = [...sinks, inside];
       }
-      for (const a of node.arguments) collectCalls(a, constants, acc);
+      for (const a of node.arguments) collectInto(a, constants, argSinks, calls);
       return;
     }
-    case 'UnaryExpression':
-      collectCalls(node.argument, constants, acc);
-      return;
-    case 'BinaryExpression':
-      collectCalls(node.left, constants, acc);
-      collectCalls(node.right, constants, acc);
-      return;
-    case 'ConditionalExpression':
-      collectCalls(node.test, constants, acc);
-      collectCalls(node.consequent, constants, acc);
-      collectCalls(node.alternate, constants, acc);
-      return;
     default:
       return;
   }
@@ -395,10 +383,9 @@ export function createEngine(constants: Record<string, number> = { ...CONSTANTS 
       throw new ExprError(`parse error in "${src}": ${msg}`);
     }
     const nameSet = new Set<string>();
-    collectNames(ast, constants, nameSet);
-    const names = [...nameSet];
     const calls = new Map<string, ReadonlySet<string>[]>();
-    collectCalls(ast, constants, calls);
+    collectInto(ast, constants, [nameSet], calls);
+    const names = [...nameSet];
 
     return {
       src,

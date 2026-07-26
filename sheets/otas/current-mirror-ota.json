@@ -1,6 +1,6 @@
 {
   "title": "Current-mirror OTA",
-  "description": "A current-mirror (or current-amplifier) OTA: the input pair drives diode-connected mirror loads, and each mirror is copied with ratio $K_m$ to a push-out output branch, so the effective output transconductance is $K_m*g_{m,in}$. This buys bandwidth and slew almost for free — GBW = $K_m*g_{m,in}/(2*\\pi*C_L)$ and SR = $K_m*I_{tail}/C_L$ — but not DC gain: raising $K_m$ scales both the output transconductance and the output conductance together, so the low-frequency gain is nearly independent of $K_m$. The catch shows up in noise: to hit a fixed GBW at larger $K_m$ the input pair shrinks ($g_{m,in}$ falls as $1/K_m$), so its input-referred thermal density grows as $\\sqrt{K_m}$. The current-mirror node carries a real pole; its estimate is shown but settling is sim-owned.",
+  "description": "A current-mirror (or current-amplifier) OTA: the input pair drives diode-connected mirror loads, and each mirror is copied with ratio $K_m$ to a push-out output branch, so the effective output transconductance is $K_m*g_{m,in}$. This buys bandwidth and slew almost for free — GBW = $K_m*g_{m,in}/(2*\\pi*C_L)$ and SR = $K_m*I_{tail}/C_L$ — but not DC gain: raising $K_m$ scales both the output transconductance and the output conductance together, so the low-frequency gain is nearly independent of $K_m$. The catch shows up in noise: to hit a fixed GBW at larger $K_m$ the input pair shrinks ($g_{m,in}$ falls as $1/K_m$), so its input-referred thermal density grows as $\\sqrt{K_m}$. Two mirror nodes carry poles: the PMOS node every branch passes (a full pole), and the bottom NMOS node only the folded branch passes (a pole-zero doublet). Both estimates are shown; settling is sim-owned.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -194,6 +194,36 @@
       }
     },
     {
+      "name": "nmir",
+      "doc": {
+        "title": "Bottom mirror device (NMOS diode)",
+        "description": "The diode-connected NMOS that folds the second branch down to the bottom output device: one input branch reaches the output through its PMOS mirror alone, the other continues through this device to moutn. Carries the K_m-scaled current; its gate node is the second mirror pole. Diode-connected, so its drop is read off the vds = vgs diagonal.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_o", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_n", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_n", "value": 10, "unit": "1/V", "role": "choice" }
+        ],
+        "bind": { "L": "L_n", "id": "I_o", "gm_id": "gm_id_n", "diode": true },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gm_id_n",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "cgg"]
+      },
+      "params": {
+        "I_o": "K_m*I_tail/2",
+        "L_n": "L_mir",
+        "gm_id_n": "gm_id_ml"
+      }
+    },
+    {
       "name": "moutn",
       "doc": {
         "title": "Output mirror device (NMOS side)",
@@ -216,7 +246,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat"]
+        "provide": ["gds", "vdsat", "cgg"]
       },
       "params": {
         "I_o": "K_m*I_tail/2",
@@ -263,13 +293,19 @@
       "name": "f_pole",
       "expr": "mload__gm/(2*pi*(mload__cgg + moutp__cgg))",
       "unit": "Hz",
-      "note": "estimate: the mirror-node pole, set by the diode gm over its own plus the K_m-scaled output gate cap"
+      "note": "estimate: the PMOS mirror-node pole, set by the diode gm over its own plus the K_m-scaled output gate cap"
+    },
+    {
+      "name": "f_pole_n",
+      "expr": "nmir__gm/(2*pi*(nmir__cgg + moutn__cgg))",
+      "unit": "Hz",
+      "note": "estimate: the bottom NMOS mirror-node pole, same accounting as f_pole on the folded branch"
     },
     {
       "name": "PM",
-      "expr": "90 - atan(GBW/f_pole)*180/pi",
+      "expr": "90 - (atan(GBW/f_pole) + atan(GBW/f_pole_n) - atan(GBW/(2*f_pole_n)))*180/pi",
       "unit": "deg",
-      "note": "estimate: phase margin left after the mirror node. BOTH input drains reach the output through a mirror here, so this node is a full pole in the whole signal path — unlike the 5T's mirror, which only half the signal traverses and which therefore carries a pole-zero doublet costing far less phase. Measured against the ACHIEVED GBW, so overshooting the bandwidth target spends margin honestly"
+      "note": "estimate: the two mirror nodes cost phase differently, because the signal reaches them differently. BOTH input branches pass a PMOS mirror node, so $f_{pole}$ is a full pole in the whole path — unlike the 5T's mirror. Only the folded branch passes the bottom NMOS mirror, so half the signal is delayed there and $f_{pole,n}$ is a pole-ZERO DOUBLET (zero at twice the pole), costing far less phase. Measured against the ACHIEVED GBW, so overshooting the bandwidth target spends margin honestly"
     }
   ],
   "rules": [

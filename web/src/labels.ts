@@ -68,7 +68,9 @@ function withQualifier(html: string, qual: string): string {
  * (`gm_id_casc` keeps g_m/I_D). Always escaped, so {@html} stays safe for arbitrary names.
  */
 export function qLabel(expr: string): string {
-  const known = SUBSCRIPTED[expr];
+  // hasOwn, not a bare index: an authored name like `constructor` or `toString` would otherwise
+  // reach a prototype member and render native-code junk instead of the name the author typed.
+  const known = Object.hasOwn(SUBSCRIPTED, expr) ? SUBSCRIPTED[expr] : undefined;
   if (known) return known;
   const sep = expr.indexOf(PROVIDE_SEP);
   if (sep >= 0) {
@@ -114,7 +116,9 @@ function texSubst(tex: string): string {
   return tex
     .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '$1/$2')
     .replace(/\\sqrt\{([^{}]*)\}/g, '√($1)')
-    .replace(/\\([A-Za-z]+)/g, (_m, c: string) => TEX_SYMBOLS[c] ?? c);
+    .replace(/\\([A-Za-z]+)/g, (_m, c: string) =>
+      Object.hasOwn(TEX_SYMBOLS, c) ? TEX_SYMBOLS[c] : c,
+    );
 }
 
 /** Split author prose on `$…$` fences and render each run with the sink's own renderer: `math`

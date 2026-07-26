@@ -171,38 +171,56 @@ export function interpolate(
 }
 
 /**
- * Interpolate away the `fixed` axes, returning a lower-D Grid over the remaining
- * axes. Remaining axis columns are re-materialized by makeGrid.
+ * The scaffolding every "drop one or more axes" transform needs: which axes survive, the
+ * columns to carry across, and the decode from an output cell back to a full-grid index.
+ * Only the per-cell arithmetic differs between the callers — sliceGrid interpolates over the
+ * dropped axes, diodeGrid walks a diagonal across one — so the frame is built here once
+ * instead of being reproduced, and drifting, at each site.
  */
-export function sliceGrid(grid: Grid, fixed: Record<string, number>): Grid {
-  const fixedNames = new Set(Object.keys(fixed));
+interface DropFrame {
+  /** Source dimensions that survive, ascending; `keepDims[k]` is remaining dimension k. */
+  readonly keepDims: number[];
+  readonly remainingAxes: Axis[];
+  /** Number of output cells (product of the remaining axis lengths). */
+  readonly remTotal: number;
+  /** The carried quantity columns, source and destination, in matching order. */
+  readonly srcCols: Float64Array[];
+  readonly dstCols: Float64Array[];
+  /** carryKeys → dstCols, ready for makeGrid once the caller has filled them. */
+  readonly outCols: Map<string, Float64Array>;
+  /** Scratch multi-indices, rewritten by `decode`. Reused across cells, never handed out. */
+  readonly remIdx: number[];
+  readonly fullIdx: number[];
+  /** Load output cell `r` into `remIdx`, and its kept coordinates into `fullIdx`. The dropped
+   *  dimensions of `fullIdx` are the caller's to fill. */
+  decode(r: number): void;
+}
+
+/**
+ * Build the drop frame for removing `dropDims` (source dimension indices). `dropKeys` names the
+ * quantity columns that must not be carried across — the dropped axes' own columns, which no
+ * longer have a coordinate to stand for.
+ */
+function dropFrame(
+  grid: Grid,
+  dropDims: ReadonlySet<number>,
+  dropKeys: ReadonlySet<string>,
+): DropFrame {
   const keepDims: number[] = [];
   const remainingAxes: Axis[] = [];
   for (let d = 0; d < grid.axes.length; d++) {
-    if (!fixedNames.has(grid.axes[d].name)) {
+    if (!dropDims.has(d)) {
       keepDims.push(d);
       remainingAxes.push({ name: grid.axes[d].name, values: grid.axes[d].values });
     }
   }
 
-  // Precompute the locate (lower index + weight) for each fixed axis once.
-  const fixedLowers = new Map<number, number>();
-  const fixedWeights = new Map<number, number>();
-  for (let d = 0; d < grid.axes.length; d++) {
-    const axis = grid.axes[d];
-    if (fixedNames.has(axis.name)) {
-      const { i, w } = locate(axis.values, fixed[axis.name]);
-      fixedLowers.set(d, i);
-      fixedWeights.set(d, w);
-    }
-  }
-
-  // Quantities to carry across: everything except the fixed axis columns
+  // Quantities to carry across: everything except the dropped axis columns
   // (remaining axis columns are re-materialized by makeGrid, so skip them too).
   const remainingNames = new Set(remainingAxes.map((a) => a.name));
   const carryKeys: string[] = [];
   for (const key of grid.quantities.keys()) {
-    if (fixedNames.has(key)) continue;
+    if (dropKeys.has(key)) continue;
     if (remainingNames.has(key)) continue;
     carryKeys.push(key);
   }
@@ -216,23 +234,60 @@ export function sliceGrid(grid: Grid, fixed: Record<string, number>): Grid {
   const outCols = new Map<string, Float64Array>();
   carryKeys.forEach((k, c) => outCols.set(k, dstCols[c]));
 
-  const dims = grid.axes.length;
   const remIdx = new Array<number>(keepDims.length);
-  const fullIdx = new Array<number>(dims);
+  const fullIdx = new Array<number>(grid.axes.length);
+
+  return {
+    keepDims,
+    remainingAxes,
+    remTotal,
+    srcCols,
+    dstCols,
+    outCols,
+    remIdx,
+    fullIdx,
+    decode(r: number): void {
+      // decode remaining-grid multi-index (row-major over remShape)
+      let rem = r;
+      for (let k = keepDims.length - 1; k >= 0; k--) {
+        remIdx[k] = rem % remShape[k];
+        rem = Math.floor(rem / remShape[k]);
+      }
+      for (let k = 0; k < keepDims.length; k++) {
+        fullIdx[keepDims[k]] = remIdx[k];
+      }
+    },
+  };
+}
+
+/**
+ * Interpolate away the `fixed` axes, returning a lower-D Grid over the remaining
+ * axes. Remaining axis columns are re-materialized by makeGrid.
+ */
+export function sliceGrid(grid: Grid, fixed: Record<string, number>): Grid {
+  const fixedNames = new Set(Object.keys(fixed));
+
+  // Precompute the locate (lower index + weight) for each fixed axis once.
+  const fixedLowers = new Map<number, number>();
+  const fixedWeights = new Map<number, number>();
+  for (let d = 0; d < grid.axes.length; d++) {
+    const axis = grid.axes[d];
+    if (fixedNames.has(axis.name)) {
+      const { i, w } = locate(axis.values, fixed[axis.name]);
+      fixedLowers.set(d, i);
+      fixedWeights.set(d, w);
+    }
+  }
+
+  const frame = dropFrame(grid, new Set(fixedLowers.keys()), fixedNames);
+  const { remTotal, srcCols, dstCols, fullIdx } = frame;
+
   const fixedDims = [...fixedLowers.keys()]; // loop-invariant
   const corners = 1 << fixedDims.length;
-  const acc = new Float64Array(carryKeys.length); // reused per output cell
+  const acc = new Float64Array(srcCols.length); // reused per output cell
 
   for (let r = 0; r < remTotal; r++) {
-    // decode remaining-grid multi-index (row-major over remShape)
-    let rem = r;
-    for (let k = keepDims.length - 1; k >= 0; k--) {
-      remIdx[k] = rem % remShape[k];
-      rem = Math.floor(rem / remShape[k]);
-    }
-    for (let k = 0; k < keepDims.length; k++) {
-      fullIdx[keepDims[k]] = remIdx[k];
-    }
+    frame.decode(r);
 
     // multilinear over the fixed axes only
     acc.fill(0);
@@ -262,7 +317,7 @@ export function sliceGrid(grid: Grid, fixed: Record<string, number>): Grid {
     }
   }
 
-  return makeGrid(remainingAxes, outCols);
+  return makeGrid(frame.remainingAxes, frame.outCols);
 }
 
 /**
@@ -318,44 +373,23 @@ export function diodeGrid(grid: Grid): DiodeFold {
   const vgsValues = grid.axes[dVgs].values;
   const vdsLo = vdsValues[0];
   const vdsHi = vdsValues[vdsValues.length - 1];
-  const keepDims: number[] = [];
-  const remainingAxes: Axis[] = [];
-  for (let d = 0; d < grid.axes.length; d++) {
-    if (d === dVds) continue;
-    keepDims.push(d);
-    remainingAxes.push({ name: grid.axes[d].name, values: grid.axes[d].values });
-  }
-  const remVgs = keepDims.indexOf(dVgs); // which remaining dimension carries vgs
 
-  const remainingNames = new Set(remainingAxes.map((a) => a.name));
-  const carryKeys = [...grid.quantities.keys()].filter(
-    (k) => k !== 'vds' && !remainingNames.has(k),
-  );
-  const remShape = remainingAxes.map((a) => a.values.length);
-  const remTotal = gridSize(remShape);
-  const srcCols = carryKeys.map((k) => grid.quantities.get(k)!);
-  const dstCols = carryKeys.map(() => new Float64Array(remTotal));
-  const outCols = new Map<string, Float64Array>();
-  carryKeys.forEach((k, c) => outCols.set(k, dstCols[c]));
+  const frame = dropFrame(grid, new Set([dVds]), new Set(['vds']));
+  const { remTotal, srcCols, dstCols, remIdx, fullIdx } = frame;
+  const remVgs = frame.keepDims.indexOf(dVgs); // which remaining dimension carries vgs
+
   // The coordinate the diagonal landed on, kept so the sizing report can show it.
   const vdsCol = new Float64Array(remTotal);
-  outCols.set('vds', vdsCol);
+  frame.outCols.set('vds', vdsCol);
 
-  const fullIdx = new Array<number>(grid.axes.length);
-  const remIdx = new Array<number>(keepDims.length);
   let clamped = false;
   for (let r = 0; r < remTotal; r++) {
-    // decode remaining-grid multi-index (row-major over remShape), as sliceGrid does
-    let rem = r;
-    for (let k = keepDims.length - 1; k >= 0; k--) {
-      remIdx[k] = rem % remShape[k];
-      rem = Math.floor(rem / remShape[k]);
-    }
-    for (let k = 0; k < keepDims.length; k++) fullIdx[keepDims[k]] = remIdx[k];
+    frame.decode(r);
     // vds follows vgs at this cell — the diode identity, evaluated pointwise. Where the vgs
     // range runs past the characterized vds range, `locate` clamps to the hull, so the RECORDED
     // coordinate is clamped too: reporting the raw vgs would name an operating point the
-    // quantities beside it were never sampled at. `diodeClamps` lets a caller say so out loud.
+    // quantities beside it were never sampled at. The returned `clamped` flag lets a caller
+    // say so out loud.
     const target = vgsValues[remIdx[remVgs]];
     const { i, w } = locate(vdsValues, target);
     if (target < vdsLo || target > vdsHi) clamped = true;
@@ -364,12 +398,12 @@ export function diodeGrid(grid: Grid): DiodeFold {
     const lo = flatIndex(grid.shape, fullIdx);
     fullIdx[dVds] = i + 1 < vdsValues.length ? i + 1 : i;
     const hi = flatIndex(grid.shape, fullIdx);
-    for (let c = 0; c < carryKeys.length; c++) {
+    for (let c = 0; c < srcCols.length; c++) {
       const col = srcCols[c];
       dstCols[c][r] = col[lo] * (1 - w) + col[hi] * w;
     }
   }
-  return { grid: makeGrid(remainingAxes, outCols), clamped };
+  return { grid: makeGrid(frame.remainingAxes, frame.outCols), clamped };
 }
 
 /**
