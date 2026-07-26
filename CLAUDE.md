@@ -71,3 +71,40 @@ Avoid in committed text:
 
 Competitor/library names used as concrete technical references (e.g. "mostab format,"
 "medwatt `.npz`") are fine — they identify real artifacts.
+
+## Project tour (the maintainer's read surface)
+
+The maintainer reads this project through a guided tour of its *decisions* — source at
+`[.claude/artifacts/project_tour.html]`, published as a private page whose address is in
+`[.claude/artifacts/project_tour.url]` (that file is gitignored; this one is public).
+Republish with the Artifact tool passing that address as `url` so the page keeps it; a
+publish without it mints a new URL and orphans the one the maintainer has open.
+
+Its layout is expected to change — it is a live document, not a template. What must not
+change:
+
+- **Decisions, not code.** Each entry is a question a returning reader would not know to
+  ask ("why is the dependency's kill-all function deliberately never called?"), answered
+  in a paragraph, with a path to open. They can read the code; they cannot read the
+  reasons.
+- **One sitting.** Reading it end to end is what surfaces the questions, so it has to
+  stay readable end to end. That is the size limit — there is no correct number of
+  sections. When it stops fitting, cut what has stopped being surprising: a doctrine now
+  taken for granted has earned its way out, and the archive for it is the plan docs.
+- **Sequence carries meaning.** Ordered, with a next link. A reader who knew where to
+  click would not need the page.
+- **A view, never a source.** When it disagrees with the code, the code is right.
+- **Monospace is machine-checkable fact; serif is judgement the maintainer may overrule.**
+- **`#calls` is their authority surface.** Every judgement call you make that they would
+  plausibly overrule gets a block there: the call, and the position currently in force,
+  so their silence is a real answer rather than a default nobody chose. Delete a block
+  when they rule on it — resolved decisions belong in a commit message or a plan doc.
+  Reference that section by its `#calls` anchor, never by ordinal.
+
+**Maintain it at commit-batch time, not per commit** — after the cleanup pass and the
+test gate, before reporting done. Refresh when the batch changed a doctrine, a contract,
+a headline number, or the known-broken list; a batch of leaf fixes needs no edit. To find
+out whether you have drifted:
+`git rev-list --count --since="@$(stat -c %Y [.claude/artifacts/project_tour.html])" HEAD`
+prints the commits since the last refresh — a number to judge against what those commits
+did, not a threshold to clear.
