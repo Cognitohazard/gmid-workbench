@@ -175,6 +175,21 @@ describe('exemplar goldens: 5T OTA', () => {
     }
   });
 
+  it('the claimed CM range is proven at its ENDS by containment edges', () => {
+    // Structure golden: the sheet re-evaluates at CM_dc = CM_lo and CM_hi on every run,
+    // each edge re-solving the tail node from the full bracket. The landed nodes must
+    // bracket the base solve (CM_in is monotone in V_tail), and the linearized reach
+    // guardrails the edges replaced must stay gone. Edge FEASIBILITY on the demo device
+    // is deliberately not asserted — budgets are tuned for real tables.
+    expect(res.edges?.map((e) => e.name)).toEqual(['cm-lo', 'cm-hi']);
+    const [lo, hi] = res.edges!;
+    expect(lo.solved.V_tail).toBeLessThan(res.values.V_tail);
+    expect(hi.solved.V_tail).toBeGreaterThan(res.values.V_tail);
+    const ids = sheet('otas/five-transistor-ota.json').rules.map((r) => r.id);
+    expect(ids).not.toContain('cm-lo-reach');
+    expect(ids).not.toContain('cm-hi-reach');
+  });
+
   it('PM pays the mirror node as a pole-zero DOUBLET, not a lone pole', () => {
     // A structure golden: the doublet's zero (at twice the pole) must be OBSERVABLE, so
     // deleting it cannot pass. Reconstructed from the sheet's own GBW/f_pole to isolate the

@@ -15,12 +15,14 @@ import { diodeGrid } from '../grid';
 import {
   BIAS_AXES,
   MAX_USE_DEPTH,
+  engineSolved,
   isHardRule,
   joinProvide,
   pinProblem,
   pinned,
   prefixUseWarning,
   torn,
+  withParams,
 } from './types';
 import type {
   BindReport,
@@ -29,6 +31,8 @@ import type {
   SheetBind,
   SheetChildReport,
   SheetDoc,
+  SheetEdge,
+  SheetEdgeReport,
   SheetResult,
   SheetUse,
 } from './types';
@@ -43,14 +47,28 @@ export const AMBER_BAND = 0.05; // 5% of the bound
 /** Floor for the relative-margin denominator so a zero bound cannot divide by zero. */
 const TINY = 1e-300;
 
+/** Past this magnitude a relative margin carries no information — it came from the TINY
+ *  clamp on a ~0 bound, not from the design. The ONE definition consumers (sweep
+ *  aggregation, the UI's percentage formatter) share for "show no ratio here". */
+export const MARGIN_PCT_CAP = 1e4;
+
+/** Swallow diagnostics for a probe that is re-evaluated many times — the caller reports
+ *  once, with its own message, instead of once per probe. */
+const NO_WARN = (): void => {};
+
 /**
- * Margins within this relative distance of zero snap to exactly 0. A spec that is pinned
- * by its own bind (e.g. bind gm = 2π·GBW·CL, then rule GBW >= GBW_target) lands within
- * floating-point rounding of the boundary, and without the snap the verdict is a coin
- * flip between pass and fail on ±1e-16 noise. Snapped-to-zero margins read as a
- * deterministic near-miss (amber) — the honest description of a pinned spec.
+ * Margins within this relative distance of zero snap to exactly 0. Two mechanisms park a
+ * rule ON its own boundary by construction: a spec pinned by its own bind (bind
+ * gm = 2π·GBW·CL, then rule GBW >= GBW_target) lands within floating-point rounding, and
+ * a containment edge lands CM_in within the pin's landing tolerance of the very range end
+ * the rule compares it against (PIN_TOL_REL x the bracket span, stretched by the
+ * relation's slope — microvolts on a volt-scale node, ~1e-6 relative). Without the snap
+ * either verdict is a coin flip. 1e-5 covers the pin case with margin while staying two
+ * orders below the ~0.1% the sizer resolves between grid nodes — a rule "failing" by
+ * less than the data can distinguish is not failing, it is sitting on the boundary,
+ * and the snap reads it as the deterministic near-miss (amber) that it is.
  */
-export const MARGIN_SNAP_REL = 1e-12;
+export const MARGIN_SNAP_REL = 1e-5;
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -396,12 +414,19 @@ function evalRule(
       detail: 'margin did not compute to a finite number (check tolPct)',
     };
   }
-  if (margin !== 0 && Math.abs(margin) <= MARGIN_SNAP_REL * Math.max(Math.abs(lhs), Math.abs(rhs)))
-    margin = 0; // see MARGIN_SNAP_REL — a bind-pinned spec must not coin-flip on FP noise
+  // see MARGIN_SNAP_REL — a bind-pinned spec must not coin-flip on FP noise
+  const snapped =
+    margin !== 0 && Math.abs(margin) <= MARGIN_SNAP_REL * Math.max(Math.abs(lhs), Math.abs(rhs));
+  if (snapped) margin = 0;
   const marginPct = margin / Math.max(Math.abs(rhs), TINY);
 
   let status: RuleStatus;
   if (margin < 0) status = 'fail';
+  else if (snapped)
+    // A SNAPPED zero always reads amber, whatever the operator: the rule is sitting on
+    // its boundary by construction, and for '==' the alternative would be worse than a
+    // coin flip — a margin just OUTSIDE the tolerance band silently reading full pass.
+    status = 'amber';
   else if (rule.op === '==')
     status = 'pass'; // '==' is pass/fail only — no near-miss (amber) band
   else status = marginPct < AMBER_BAND ? 'amber' : 'pass';
@@ -568,7 +593,9 @@ function evalChildren(
     }
 
     const { doc: childDoc, ok: paramsOk } = applyUseParams(use, srcDoc, values, scope, warn);
-    const res = evaluateSheet(childDoc, childTable, resolveDevice, depth + 1, budget);
+    // evaluateNode, not evaluateSheet: a composed child never evaluates its own edges —
+    // the parent owns range claims (validation says so at the use site).
+    const res = evaluateNode(childDoc, childTable, resolveDevice, depth + 1, budget);
 
     // Roll up child warnings, attributed to the use site (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
@@ -957,8 +984,28 @@ const PIN_TOL_REL = 1e-6;
 const PIN_RESIDUAL_REL = 1e-5;
 
 /**
- * Evaluate a sheet with every engine-solved parameter resolved. Two mechanisms, by what the
- * author could honestly write down:
+ * Evaluate a sheet document — the single public entry. A doc that declares containment
+ * edges dispatches to the edge wrapper; everything else, and every step the engine takes
+ * below the top of a tree (composed children, solver probes, the edge runs themselves),
+ * goes through evaluateNode — which structurally has no edge branch, so "edges evaluate
+ * only at the top" holds with no runtime guard to maintain.
+ */
+export function evaluateSheet(
+  doc: SheetDoc,
+  table?: DeviceTable,
+  resolveDevice?: DeviceResolver,
+): SheetResult {
+  // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (edges as a
+  // string or object — validation's problem) must degrade to a plain evaluation, not a
+  // TypeError out of .map.
+  return Array.isArray(doc.edges) && doc.edges.length
+    ? evaluateWithEdges(doc, table, resolveDevice)
+    : evaluateNode(doc, table, resolveDevice, 0);
+}
+
+/**
+ * Evaluate one node of a sheet tree with every engine-solved parameter resolved. Two
+ * mechanisms, by what the author could honestly write down:
  *
  *  - `solveFor` — the param is an ESTIMATE of a value the sheet itself resolves; closed by
  *    damped substitution (solveTorn above), with all the care that method needs.
@@ -972,11 +1019,11 @@ const PIN_RESIDUAL_REL = 1e-5;
  * The pinned solve is the OUTER loop: each probe re-closes any torn loops inside, and both
  * mechanisms draw on the one tree-wide pass budget, so nesting stays bounded.
  */
-export function evaluateSheet(
+function evaluateNode(
   doc: SheetDoc,
-  table?: DeviceTable,
-  resolveDevice?: DeviceResolver,
-  _depth = 0,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+  _depth: number,
   budget: SolveBudget = { left: SOLVE_PASSES_PER_LOOP * tornSheets(doc) },
 ): SheetResult {
   // One home for the structural pin checks (validateSheet raises the same words as errors);
@@ -997,12 +1044,11 @@ export function evaluateSheet(
   };
 
   /** lhs - rhs at an already-evaluated probe; undefined when either side does not resolve.
-   *  Diagnostics are swallowed (no-op warn): a side that stops resolving is reported once,
+   *  Diagnostics are swallowed (NO_WARN): a side that stops resolving is reported once,
    *  with the pin's own message, not once per probe. */
-  const noWarn = (): void => {};
   const gap = (res: SheetResult): number | undefined => {
     const at = (src: string): number | undefined => {
-      const v = evalScalar(src, res.values, scalarScope(res.values), noWarn, `pin ${p.name}`);
+      const v = evalScalar(src, res.values, scalarScope(res.values), NO_WARN, `pin ${p.name}`);
       return v !== undefined && Number.isFinite(v) ? v : undefined;
     };
     const l = at(lhs);
@@ -1091,4 +1137,97 @@ export function evaluateSheet(
     }
     return at;
   }
+}
+
+/**
+ * Evaluate a doc that declares containment edges: the base run, then one more complete
+ * evaluation per edge with that edge's params overridden. Every run — base and each edge —
+ * takes the default budget of a fresh top-level call: edge runs are independent evaluations,
+ * and sharing one pool sized for a single solve would starve the later runs into phantom
+ * infeasibility. Cost is therefore (1 + edge count) full evaluations everywhere the sheet
+ * evaluates, sweep cells included — the price of a swept cell never disagreeing with the
+ * same numbers evaluated alone.
+ */
+function evaluateWithEdges(
+  doc: SheetDoc,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+): SheetResult {
+  const base = evaluateNode(doc, table, resolveDevice, 0);
+  const reports = (doc.edges ?? []).map((e) => runEdge(e, doc, base, table, resolveDevice));
+  return { ...base, edges: reports, feasible: base.feasible && reports.every((r) => r.feasible) };
+}
+
+/** One edge: resolve its `set` expressions against the base result, re-evaluate the doc
+ *  with those values (through evaluateNode, so the run cannot recurse into edges), and
+ *  report the outcome. An edge that cannot be evaluated at all — a `set` expression that
+ *  does not resolve, a solve that fails — is infeasible with the underlying message
+ *  VERBATIM in `error`, so a shared-budget starvation stays distinguishable from "the
+ *  bracket cannot reach it". Rule-level failures are not errors: they live in `rules`,
+ *  like anywhere else. */
+function runEdge(
+  edge: SheetEdge,
+  doc: SheetDoc,
+  base: SheetResult,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+): SheetEdgeReport {
+  const scope = scalarScope(base.values);
+  const over: Record<string, number> = {};
+  // `?? {}`: a half-written edge (no set) is validation's error to name; evaluate never throws.
+  for (const [param, expr] of Object.entries(edge.set ?? {})) {
+    const v = evalScalar(expr, base.values, scope, NO_WARN, `edge ${edge.name}`);
+    if (v === undefined || !Number.isFinite(v)) {
+      return {
+        name: edge.name,
+        feasible: false,
+        set: over,
+        rules: [],
+        solved: {},
+        warnings: [],
+        error:
+          `edge "${edge.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
+          `number against the base result`,
+      };
+    }
+    over[param] = v;
+  }
+  const res = evaluateNode(withParams(doc, over), table, resolveDevice, 0);
+  // `error` promises the SOLVER's own message when one exists — a child's solve failure
+  // rolls up mid-evaluation and later diagnostics (a non-finite parent row) land after
+  // it, so "last error" alone reports the consequence instead of the cause. One reverse
+  // scan: remember the last error of any kind as the fallback, prefer the last
+  // sheet-solve. (Reverse loop: the target lib predates findLast, and a filter would
+  // copy the array to read one element.)
+  let err: string | undefined;
+  if (!res.feasible) {
+    let lastError: string | undefined;
+    for (let i = res.warnings.length - 1; i >= 0 && err === undefined; i--) {
+      const w = res.warnings[i];
+      if (w.severity !== 'error') continue;
+      lastError ??= w.message;
+      if (w.rule === 'sheet-solve') err = w.message;
+    }
+    err ??= lastError;
+  }
+  // The solved map is "where the edge LANDED" — an errored run (a pin that never landed)
+  // leaves the values at the last probe, which must not be reported as a landing.
+  const solved: Record<string, number> = {};
+  if (err === undefined)
+    for (const p of doc.params)
+      if (engineSolved(p) && Number.isFinite(res.values[p.name]))
+        solved[p.name] = res.values[p.name];
+  // The run's warnings ride the report VERBATIM (never merged into the parent's): a bias
+  // clamp fires exactly at a claim's extreme, and a green chip must not rest on silently
+  // clamped data — but the base result's warning contract stays untouched.
+  return {
+    name: edge.name,
+    feasible: res.feasible,
+    set: over,
+    rules: res.rules,
+    ...(res.children ? { children: res.children } : {}),
+    solved,
+    warnings: res.warnings,
+    ...(err !== undefined ? { error: err } : {}),
+  };
 }

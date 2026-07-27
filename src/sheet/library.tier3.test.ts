@@ -71,7 +71,9 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
   const res = runSheet(sheet('telescopic-cascode-ota.json'), table);
   // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8, all L 0.5 µm; the stack is
   // parameterized by its NODES — V_a 0.55, V_b 1.35, V_out 0.9, the tail node pinned so
-  // CM_in lands on CM_dc 0.95 — and every device vds is a subtraction between them.
+  // CM_in lands on CM_dc 0.97 — and every device vds is a subtraction between them.
+  // (0.97, not a rounder number: the DC point must sit inside the claimed [0.95, 1.12]
+  // AND below the demo table's pin ceiling near 0.98 — the telescopic's ICMR is a slot.)
   const gmIn = 10e-6 * 14;
 
   it('slew and GBW follow exactly from the tail current and input gm', () => {
@@ -80,7 +82,7 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
   });
 
   it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
-    expect(res.values.CM_in).toBeCloseTo(0.95, 5);
+    expect(res.values.CM_in).toBeCloseTo(0.97, 5);
   });
 
   it('gain is gm_in times the parallel cascoded output resistance', () => {
@@ -190,7 +192,7 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
   const res = runSheet(sheet('gain-boosted-cascode-ota.json'), table);
   // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8 / boost 12, all L 0.5 µm; the
   // stack is node-parameterized — V_a 0.55, V_b 1.3, V_out 0.9, the tail node pinned so
-  // CM_in lands on CM_dc 0.9 — and every device vds is a subtraction between nodes.
+  // CM_in lands on CM_dc 0.95 — and every device vds is a subtraction between nodes.
   const gmIn = 10e-6 * 14;
 
   it('GBW follows from the input gm (boosting lifts gain, not bandwidth)', () => {
@@ -198,7 +200,7 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
   });
 
   it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
-    expect(res.values.CM_in).toBeCloseTo(0.9, 5);
+    expect(res.values.CM_in).toBeCloseTo(0.95, 5);
   });
 
   it('gain is the cascode gain multiplied again by the booster gain on each side', () => {
@@ -226,5 +228,23 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     expect(relErr(res.values.Av, ((12 + 12) * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
     const vn = vnthM(gmTot);
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-2);
+  });
+});
+
+describe('containment honesty on the demo table', () => {
+  // The claimed CM ranges are tuned against real sky130 data. On the demo device the
+  // current-mirror OTA's CM_hi (1.35 V) is genuinely unreachable — the tail bracket plus
+  // the demo diode drop cap the producible common mode near 1.1 V — so the cm-hi edge
+  // must FAIL and the sheet must read infeasible on this table. That is the kit working,
+  // not a regression: before edges, the identical false claim simply went unchecked and
+  // the sheet read feasible. Locked as a golden so the flip stays ASSERTED intent.
+  const res = runSheet(sheet('current-mirror-ota.json'), table);
+
+  it('the unreachable cm-hi edge fails with the solver reason and gates the verdict', () => {
+    expect(res.feasible).toBe(false);
+    const hi = res.edges?.find((e) => e.name === 'cm-hi');
+    expect(hi?.feasible).toBe(false);
+    expect(hi?.error).toMatch(/does not change sign/);
+    expect(hi?.solved).toEqual({}); // a bracket end is never reported as a landing
   });
 });

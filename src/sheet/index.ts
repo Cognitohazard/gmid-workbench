@@ -3,11 +3,13 @@
 // importMostab discipline so a caller cannot skip validation.
 
 import type { DeviceTable, QAWarning } from '../types';
-import { isHardRule } from './types';
+import { EDGE_SEP, isHardRule, withParams } from './types';
+import { MARGIN_PCT_CAP } from './eval';
 import type {
   RuleResult,
   SheetChildReport,
   SheetDoc,
+  SheetEdgeReport,
   SheetResult,
   SheetSweep,
   SheetSweep2,
@@ -73,16 +75,6 @@ export function sweepable(
   );
 }
 
-/** Clone a doc with the named params' VALUES overridden — the sweeps' sample injection. */
-function withParams(doc: SheetDoc, o: Record<string, number>): SheetDoc {
-  return {
-    ...doc,
-    params: doc.params.map((p) =>
-      Object.prototype.hasOwnProperty.call(o, p.name) ? { ...p, value: o[p.name] } : p,
-    ),
-  };
-}
-
 /**
  * Every rule the sweep should trace, walking the WHOLE composition: all of the top
  * sheet's rules, plus every HARD (invariant/requirement) rule of each descendant block,
@@ -103,6 +95,36 @@ function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepRule[])
   }
 }
 
+/**
+ * One number for "how close is this containment edge to closing": the WORST hard-rule
+ * margin anywhere in the edge run's tree, each clamped to ±MARGIN_PCT_CAP (a rule against
+ * a ~0 bound carries a TINY-scaled, information-free ratio that would otherwise peg the
+ * aggregate). Exact-zero margins are SKIPPED: an edge run parks its own boundary rule on
+ * zero by construction (the snap), and letting that tautology be the min hid the real
+ * headroom — the curve read 0-or-negative forever. An edge that did not stand at all
+ * (solve failure, unresolvable set) reads -MARGIN_PCT_CAP, not null: the chart clips it
+ * at the bottom, so an edge-driven feasibility flip ALWAYS has an on-chart cause. A
+ * standing edge with nothing left to measure reads its verdict as 0 / -MARGIN_PCT_CAP.
+ */
+function edgeMargin(e: SheetEdgeReport): number {
+  if (e.error !== undefined) return -MARGIN_PCT_CAP;
+  const byPath = new Map<string, RuleResult>();
+  indexTreeResults(e.rules, e.children, '', byPath);
+  let worst: number | null = null;
+  for (const rr of byPath.values()) {
+    if (!isHardRule(rr.kind) || rr.status === 'na' || !Number.isFinite(rr.marginPct)) continue;
+    if (rr.margin === 0) continue; // the snapped boundary tautology — no headroom information
+    const m = Math.max(-MARGIN_PCT_CAP, Math.min(MARGIN_PCT_CAP, rr.marginPct));
+    if (worst === null || m < worst) worst = m;
+  }
+  // An INFEASIBLE edge must never chart non-negative: hard `na` fails the run closed
+  // while contributing no margin, so without this floor a passing sibling rule could
+  // paint a broken edge at +margin — a feasibility flip with no on-chart cause, the
+  // exact defect this curve exists to prevent.
+  if (!e.feasible && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
+  return worst ?? 0;
+}
+
 /** Index one evaluation's rule outcomes by the same path scheme collectTreeRules uses. */
 function indexTreeResults(
   rules: RuleResult[],
@@ -118,9 +140,11 @@ function indexTreeResults(
 /**
  * The BINDING CONSTRAINT of one evaluation: the failing HARD rule with the worst relative margin
  * anywhere in the composition, its id carrying the use path (`amp.s1.pm-spec`) so a child's rule
- * is attributable. `undefined` when no hard rule fails — including when the design is infeasible
- * for a reason that is not a failing rule (a bind error, a child's structural error), which is
- * why callers must treat "no binding constraint" as "no rule to name", never as "feasible".
+ * is attributable — and across the containment-edge runs, their ids carrying the edge name
+ * (`cm-lo@tail-saturated`). `undefined` when no hard rule fails — including when the design is
+ * infeasible for a reason that is not a failing rule (a bind error, a child's structural error,
+ * an edge whose solve failed), which is why callers must treat "no binding constraint" as "no
+ * rule to name", never as "feasible".
  *
  * One definition, so the 2-D map's per-cell cause and a caller naming the cause of a single
  * verdict can never disagree about which rule binds.
@@ -128,9 +152,12 @@ function indexTreeResults(
 export function bindingConstraint(res: {
   rules: RuleResult[];
   children?: SheetChildReport[];
+  edges?: SheetEdgeReport[];
 }): { id: string; marginPct: number } | undefined {
   const byPath = new Map<string, RuleResult>();
   indexTreeResults(res.rules, res.children, '', byPath);
+  for (const e of res.edges ?? [])
+    indexTreeResults(e.rules, e.children, `${e.name}${EDGE_SEP}`, byPath);
   let worst: { id: string; marginPct: number } | undefined;
   for (const [id, rr] of byPath) {
     if (!isHardRule(rr.kind) || rr.status !== 'fail') continue;
@@ -172,6 +199,16 @@ export function sweepSheet(
     validateSheet(withParams(r.doc, { [param]: v.min })).some((w) => w.severity === 'error');
   const rules: SheetSweepRule[] = [];
   collectTreeRules(r.doc, '', rules);
+  // Each containment edge rides the sweep as ONE aggregate curve: its worst hard-rule
+  // margin per sample. Without it a cell can flip infeasible with no on-chart cause — the
+  // same gap collectTreeRules closes for descendant rules. Held in a parallel array
+  // (res.edges mirrors doc.edges by index), so the sample loop needs no id matching.
+  const edgeRules: SheetSweepRule[] = (r.doc.edges ?? []).map((e) => ({
+    id: e.name + EDGE_SEP,
+    kind: 'requirement',
+    marginPct: [],
+    edge: e.name,
+  }));
   const x: number[] = [];
   const feasible: boolean[] = [];
 
@@ -182,14 +219,18 @@ export function sweepSheet(
     feasible.push(!blocked && res.feasible);
     const byPath = new Map<string, RuleResult>();
     indexTreeResults(res.rules, res.children, '', byPath);
-    for (const r of rules) {
-      const rr = byPath.get(r.id);
-      r.marginPct.push(
+    for (const rl of rules) {
+      const rr = byPath.get(rl.id);
+      rl.marginPct.push(
         !rr || rr.status === 'na' || !Number.isFinite(rr.marginPct) ? null : rr.marginPct,
       );
     }
+    for (let j = 0; j < edgeRules.length; j++) {
+      const rep = res.edges?.[j];
+      edgeRules[j].marginPct.push(rep ? edgeMargin(rep) : null);
+    }
   }
-  return { param, unit: v.unit ?? '', x, rules, feasible };
+  return { param, unit: v.unit ?? '', x, rules: [...rules, ...edgeRules], feasible };
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */
@@ -205,8 +246,9 @@ export const SWEEP2_POINTS = 21;
  * pin (~20 probes, each a full tree evaluation) AND lands on biases the slice cache has not
  * seen. Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~50-60
  * ms/cell once a pin and both declared bias axes are in play, i.e. ~21-27 s for the default
- * 21x21 — and this runs synchronously, so a caller driving it from a UI should expect to block
- * for that long. Each declared axis costs another slice per pass, so the cheap figure is cheap
+ * 21x21 — and containment edges multiply every cell by (1 + edge count) on top, so the
+ * library's two-edge OTAs sit near three times that. This runs synchronously; a caller
+ * driving it from a UI should expect to block for that long. Each declared axis costs another slice per pass, so the cheap figure is cheap
  * only because a frozen estimate re-slices at the same handful of biases; the honest
  * computation is the slower one.
  *

@@ -15,6 +15,7 @@ import {
   ROW_KEYS,
   RULE_KEYS,
   USE_KEYS,
+  EDGE_KEYS,
   RULE_KINDS,
   RULE_OPS,
   type DeviceTable,
@@ -24,6 +25,7 @@ import {
   type SheetRule,
   type SheetBind,
   type SheetUse,
+  type SheetEdge,
   type RuleKind,
   type RuleOp,
 } from '@gmid/mostab-core';
@@ -311,8 +313,18 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   ): void => {
     for (const k of Object.keys(obj)) if (!keys.has(k)) lost?.push(`${at}${k}`);
   };
-  for (const k of ['params', 'rows', 'rules', 'uses', 'provide'] as const)
+  for (const k of ['params', 'rows', 'rules', 'uses', 'provide', 'edges'] as const)
     if (o[k] !== undefined && !Array.isArray(o[k])) lost?.push(k);
+  // Keep only the string-valued entries of an authored name→expression map, recording the
+  // rest — shared by a use's param overrides and an edge's set.
+  const strMap = (obj: Record<string, unknown>, at: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [k, val] of Object.entries(obj)) {
+      if (typeof val === 'string') out[k] = val;
+      else lost?.push(`${at}.${k}`);
+    }
+    return out;
+  };
   dropField(o.title !== undefined && !(typeof o.title === 'string' && o.title), 'title');
   dropField(o.description !== undefined && typeof o.description !== 'string', 'description');
   dropField(o.polarity !== undefined && o.polarity !== 'n' && o.polarity !== 'p', 'polarity');
@@ -452,11 +464,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         if (typeof uu.device === 'string') use.device = uu.device;
         else dropField(uu.device !== undefined, `uses[${i}].device`);
         if (uu.params && typeof uu.params === 'object' && !Array.isArray(uu.params)) {
-          const ov: Record<string, string> = {};
-          for (const [k, val] of Object.entries(uu.params as Record<string, unknown>)) {
-            if (typeof val === 'string') ov[k] = val;
-            else lost?.push(`uses[${i}].params.${k}`);
-          }
+          const ov = strMap(uu.params as Record<string, unknown>, `uses[${i}].params`);
           if (Object.keys(ov).length) use.params = ov;
         } else if (uu.params !== undefined) lost?.push(`uses[${i}].params`);
         return [use];
@@ -470,6 +478,29 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
+  // Containment edges: same stakes as `pin` — dropping one silently turns a proven range
+  // claim back into an unchecked number. An edge whose `set` survives EMPTY is kept, not
+  // dropped: validateSheet owns that verdict ("sets nothing", blocking feasibility), and
+  // eating it here would let the sheet reload MORE feasible than the core reads it — the
+  // exact hole the empty-ref rule above refuses.
+  const edges: SheetEdge[] = Array.isArray(o.edges)
+    ? o.edges.flatMap((e, i) => {
+        if (!e || typeof e !== 'object') return drop(`edges[${i}]`);
+        const ee = e as Record<string, unknown>;
+        if (typeof ee.name !== 'string' || !ee.name) return drop(`edges[${i}]`);
+        unknownKeys(ee, EDGE_KEYS, `edges[${i}].`);
+        if (!ee.set || typeof ee.set !== 'object' || Array.isArray(ee.set))
+          return drop(`edges[${i}]`);
+        const out: SheetEdge = {
+          name: ee.name,
+          set: strMap(ee.set as Record<string, unknown>, `edges[${i}].set`),
+        };
+        if (typeof ee.note === 'string') out.note = ee.note;
+        else dropField(ee.note !== undefined, `edges[${i}].note`);
+        return [out];
+      })
+    : [];
+
   return {
     title: str(o.title, 'Sheet'),
     ...(typeof o.description === 'string' && o.description ? { description: o.description } : {}),
@@ -480,6 +511,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
     ...(bind ? { bind } : {}),
     ...(uses.length ? { uses } : {}),
     ...(provide.length ? { provide } : {}),
+    ...(edges.length ? { edges } : {}),
   };
 }
 

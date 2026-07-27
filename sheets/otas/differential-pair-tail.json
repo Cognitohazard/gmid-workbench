@@ -31,17 +31,17 @@
     },
     {
       "name": "CM_lo",
-      "value": 0.85,
+      "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, low edge"
+      "note": "input CM range, low edge — proven exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95-1.19 V on sky130 tt). The edge proves the ENDPOINT; the interior is the sweep's to show"
     },
     {
       "name": "CM_hi",
-      "value": 1.2,
+      "value": 1.15,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, high edge"
+      "note": "input CM range, high edge — its ENDPOINT proven by the cm-hi edge"
     },
     {
       "name": "CM_dc",
@@ -272,30 +272,24 @@
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage at the drain DC level"
     },
     {
-      "id": "cm-lo-reach",
-      "kind": "guardrail",
-      "lhs": "V_tail - (CM_dc - CM_lo) - tail__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "justification": "estimate, conservative: the tail node falls by LESS than the common mode does, so charging the full CM_dc - CM_lo against today's headroom can only understate the edge margin. The CM_dc sweep is the authority",
-      "note": "whether the tail is still saturated at the LOW edge of the claimed range — the pin lands the evaluated point exactly on CM_dc, so nothing else here looks at the edges"
-    },
-    {
-      "id": "cm-hi-reach",
-      "kind": "guardrail",
-      "lhs": "V_out_dc - (V_tail + CM_hi - CM_dc) - in__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "justification": "estimate, conservative, the shift charged upward: the pair's saturation margin at the HIGH edge of the claimed range. The CM_dc sweep is the authority",
-      "note": "whether the input device still saturates at the HIGH edge of the claimed range"
-    },
-    {
       "id": "cmrr-spec",
       "kind": "guardrail",
       "lhs": "CMRR",
       "op": ">=",
       "rhs": "1000",
       "note": "estimate: a longer tail L (lower tail gds) lifts CMRR; sim owns the real number"
+    }
+  ],
+  "edges": [
+    {
+      "name": "cm-lo",
+      "set": { "CM_dc": "CM_lo" },
+      "note": "the claimed low edge, proven exactly: the sheet re-evaluates at CM_dc = CM_lo with its own tail-node solve. Replaces the linearized reach estimate"
+    },
+    {
+      "name": "cm-hi",
+      "set": { "CM_dc": "CM_hi" },
+      "note": "the claimed high edge, proven the same way; the CM_dc sweep remains the authority on the full landscape"
     }
   ]
 }

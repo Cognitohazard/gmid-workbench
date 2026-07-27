@@ -11,6 +11,7 @@
     pinned as isPinned,
     engineSolved,
     bindingConstraint,
+    MARGIN_PCT_CAP,
     resolveSheetRefs,
     flattenSheetDoc,
     formatEng,
@@ -30,6 +31,8 @@
     type SheetUse,
     type SheetSweep2,
     type SheetChildReport,
+    type SheetEdgeReport,
+    type QAWarning,
     type BindReport,
     type RuleResult,
     type RuleStatus,
@@ -185,7 +188,7 @@
     return {
       x: swept.x,
       lines: swept.rules.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
-      lineLabels: swept.rules.map((r) => r.id),
+      lineLabels: swept.rules.map(ruleLabel),
       lineDash: swept.rules.map((r) => (r.kind === 'guardrail' ? [4, 3] : null)),
       yRange: [-MARGIN_CLIP, MARGIN_CLIP],
     };
@@ -380,8 +383,46 @@
 
   const fmt = (v: number | undefined): string =>
     v == null || !Number.isFinite(v) ? '—' : formatSI(v);
+
+  /** The one-line cause on a failing edge chip: the solver's own message when the run
+   *  could not stand at all, else its worst failing hard rule (same definition the badge
+   *  uses, scoped to the edge's own tree — an edge report satisfies its shape directly). */
+  const edgeCause = (e: SheetEdgeReport): string => {
+    if (e.error) return e.error;
+    const b = bindingConstraint(e);
+    return b ? `${b.id} ${pct(b.marginPct)}` : 'infeasible';
+  };
+  const edgeSolved = (e: SheetEdgeReport): string =>
+    Object.entries(e.solved)
+      .map(([k, v]) => `${k} ${fmt(v)}`)
+      .join(' · ');
+  const edgeNote = $derived(new Map((cfg.edges ?? []).map((e) => [e.name, e.note])));
+  /** The run's own non-info diagnostics — a bias clamp fires exactly at a claim's extreme,
+   *  and a green chip must not hide that it rests on clamped data. */
+  const edgeWarns = (e: SheetEdgeReport): QAWarning[] =>
+    e.warnings.filter((w) => w.severity !== 'info');
+  // The tooltip carries WHICH point was proven (the resolved overrides), the authored note,
+  // any run diagnostics, and — on a failure — the full cause, because the chip clamps long
+  // solver messages with an ellipsis. The concept-level help lives on the group label.
+  const edgeTitle = (e: SheetEdgeReport, detail: string): string => {
+    const at = Object.entries(e.set)
+      .map(([k, v]) => `${k} = ${fmt(v)}`)
+      .join(' · ');
+    const warns = edgeWarns(e)
+      .map((w) => `⚠ ${w.message}`)
+      .join('\n');
+    return [at, edgeNote.get(e.name), warns, e.feasible ? '' : detail].filter(Boolean).join('\n\n');
+  };
+  /** One label for an edge's aggregate sweep curve, shared by the legend and the chart
+   *  series — consumers read the field, never parse the id's trailing separator. */
+  const ruleLabel = (r: { id: string; edge?: string }): string =>
+    r.edge ? `edge ${r.edge}` : r.id;
+  // A rule whose rhs is ~0 gets its marginPct from the TINY clamp (~1e300) — past
+  // MARGIN_PCT_CAP the ratio carries no information, so it reads as "no percentage".
   const pct = (v: number): string =>
-    Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(0)}%` : '—';
+    Number.isFinite(v) && Math.abs(v) < MARGIN_PCT_CAP
+      ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(0)}%`
+      : '—';
   const CHIP: Record<RuleStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author rule notes by id (a RuleResult carries no note — the physical-meaning note lives on the
@@ -853,6 +894,20 @@
     </tbody>
   </table>
 
+  {#if result.edges?.length}
+    <div class="sedges">
+      <span class="glabel" title={CONTROL_HELP.edges}>range edges</span>
+      {#each result.edges as e (e.name)}
+        {@const detail = e.feasible ? edgeSolved(e) : edgeCause(e)}
+        <span class="sedge {e.feasible ? 'ok' : 'no'}" title={edgeTitle(e, detail)}>
+          {e.feasible ? '✓' : '✗'}
+          {e.name}{#if edgeWarns(e).length}&nbsp;⚠{/if}
+          {#if detail}<i>{detail}</i>{/if}
+        </span>
+      {/each}
+    </div>
+  {/if}
+
   {#if twoD && swept2 && swept2.x.length}
     <div class="scap">
       feasibility · <b>{active}</b> × <b>{active2}</b> — green closes, red fails a hard rule (X → right,
@@ -880,7 +935,9 @@
     <div class="scap">
       margin (%) vs <b>{active}</b>{#if swept?.unit}
         ({swept.unit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory); clipped
-      at ±{MARGIN_CLIP}%
+      at ±{MARGIN_CLIP}%{#if (cfg.edges ?? []).some( (e) => Object.keys(e.set ?? {}).includes(active) )}
+        · the containment edges pin {active} to the claimed ends, so their verdicts are constant along
+        this sweep — a broken claim reads infeasible at every sample{/if}
     </div>
     <div class="pchart" bind:this={el}></div>
     <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
@@ -890,8 +947,9 @@
     <div class="skey">
       {#each swept?.rules ?? [] as r, i}
         <span class="kitem"
-          ><i style="background:{PALETTE[i % PALETTE.length]}"
-          ></i>{r.id}{#if r.kind === 'guardrail'}&nbsp;·&nbsp;adv{/if}</span
+          ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{ruleLabel(
+            r,
+          )}{#if r.kind === 'guardrail'}&nbsp;·&nbsp;adv{/if}</span
         >
       {/each}
     </div>
@@ -940,19 +998,43 @@
   }
   /* Overall feasibility badge: the design's headline verdict, so a red advisory guardrail below
      it is never mistaken for the whole design failing. */
+  /* One pill shell for the verdict badge and the edge chips; each keeps only its own
+     text treatment. */
+  .feasb,
+  .sedge {
+    padding: 0.04rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+  }
   .feasb {
     font-size: calc(0.66rem * var(--text-scale));
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.03em;
-    padding: 0.04rem 0.4rem;
-    border-radius: 999px;
-    border: 1px solid currentColor;
   }
-  .feasb.ok {
+  .sedges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+  }
+  .sedge {
+    font-size: calc(0.72rem * var(--text-scale));
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sedge i {
+    font-style: normal;
+    opacity: 0.85;
+  }
+  .feasb.ok,
+  .sedge.ok {
     color: var(--ok);
   }
-  .feasb.no {
+  .feasb.no,
+  .sedge.no {
     color: var(--err);
   }
   /* The binding constraint rides inside the badge: same colour, but normal-case and lighter,

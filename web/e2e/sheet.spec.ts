@@ -887,3 +887,30 @@ test('discoverability: device bar counts from the first import, child picker lab
   await expect(page.locator('header .device .prov')).toContainText('device');
   await expect(page.locator('header .device .prov')).toContainText('nmos_demo');
 });
+
+test('containment edges: chips report each range end; a dead edge names the solver reason', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, '5T OTA');
+
+  // The 5T claims a CM range; the engine proves both ends on every evaluation and the
+  // panel reports one chip per edge. (Whether they read ✓ or ✗ on the demo device is the
+  // demo's business — budgets are tuned for real tables — the report SHAPE is the contract.)
+  const chips = sp.locator('.sedge');
+  await expect(chips).toHaveCount(2);
+  await expect(chips.nth(0)).toContainText('cm-lo');
+  await expect(chips.nth(1)).toContainText('cm-hi');
+
+  // Make the low edge unreachable: no tail-node position produces CM_in = 0.3 (the demo
+  // table's diode drop alone exceeds it) — the chip must carry the solver's reason, not a
+  // generic red.
+  const lo = sp.locator('.svar[data-param="CM_lo"] .num');
+  await lo.fill('0.3');
+  await lo.blur();
+  await expect(chips.nth(0)).toHaveClass(/no/);
+  await expect(chips.nth(0)).toContainText(/does not change sign/);
+});

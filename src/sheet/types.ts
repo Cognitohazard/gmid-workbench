@@ -295,6 +295,18 @@ export const PROVIDE_SEP = '__';
 export const joinProvide = (useName: string, key: string): string =>
   `${useName}${PROVIDE_SEP}${key}`;
 
+/** Clone a doc with the named params' VALUES overridden — the one override mechanism the
+ *  sweeps and the containment edges share, so a change to what an override must touch
+ *  (e.g. clearing a solver field) has exactly one home. */
+export function withParams(doc: SheetDoc, o: Record<string, number>): SheetDoc {
+  return {
+    ...doc,
+    params: doc.params.map((p) =>
+      Object.prototype.hasOwnProperty.call(o, p.name) ? { ...p, value: o[p.name] } : p,
+    ),
+  };
+}
+
 /** Re-attribute a composed child's warning to its use site, so a rolled-up warning points at
  *  the offending block (and a child error still blocks the parent's closed feasibility). */
 export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
@@ -303,6 +315,40 @@ export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
     message: `use "${useName}": ${w.message}`,
     location: `${useName}.${w.location ?? ''}`,
   };
+}
+
+/**
+ * A containment edge: one more full evaluation of THIS doc with the named params' values
+ * overridden — each `set` expression evaluated against the base result — whose hard verdict
+ * gates the sheet like any rule. The canonical use is the claimed common-mode range:
+ * `{name: "cm-lo", set: {CM_dc: "CM_lo"}}` proves the low edge closes EXACTLY (its own pin
+ * solve from the full authored bracket, its own children) where a linearized guardrail could
+ * only estimate it. Edges prove the EDGES, not the interior — the sweep remains the interval
+ * authority. A composed child's edges are not evaluated; the parent owns range claims.
+ */
+export interface SheetEdge {
+  name: string;
+  /** param name → expression, evaluated in the BASE evaluation's scope */
+  set: Record<string, string>;
+  note?: string;
+}
+
+/** Separator between an edge name and a rule id in edge-qualified ids
+ *  (`cm-lo@tail-saturated`). */
+export const EDGE_SEP = '@';
+
+/** Separator that joins a use path to a rule id in tree-keyed results (`cs.headroom`). */
+export const PATH_SEP = '.';
+
+/** The first tree-key separator `name` contains, or undefined. Rule outcomes across the
+ *  whole composition — use paths (`cs.headroom`), edge-qualified ids (`cm-lo@rule`) —
+ *  share ONE map, so every identifier that becomes part of a key (rule ids, edge names,
+ *  use names) reserves both separators; a name carrying one could silently shadow
+ *  another rule's outcome. One definition, so the reserved set cannot drift per site. */
+export function idSepProblem(name: string): string | undefined {
+  if (name.includes(EDGE_SEP)) return EDGE_SEP;
+  if (name.includes(PATH_SEP)) return PATH_SEP;
+  return undefined;
 }
 
 /** A sheet document — the authored model the GUI edits and persists verbatim. A leaf
@@ -320,6 +366,7 @@ export interface SheetDoc {
   rules: SheetRule[];
   uses?: SheetUse[];
   provide?: string[];
+  edges?: SheetEdge[];
 }
 
 /**
@@ -340,8 +387,9 @@ export const RULE_KEYS: ReadonlySet<string> = new Set<string>([
 export const USE_KEYS: ReadonlySet<string> = new Set<string>([
   'name', 'doc', 'ref', 'device', 'params',
 ]); // prettier-ignore
+export const EDGE_KEYS: ReadonlySet<string> = new Set<string>(['name', 'set', 'note']);
 export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
-  'title', 'description', 'polarity', 'params', 'bind', 'rows', 'rules', 'uses', 'provide',
+  'title', 'description', 'polarity', 'params', 'bind', 'rows', 'rules', 'uses', 'provide', 'edges',
 ]); // prettier-ignore
 
 /** A child block's evaluated summary, surfaced so the UI can show each child's title,
@@ -360,6 +408,28 @@ export interface SheetChildReport {
   provides: Record<string, number>;
   rules: RuleResult[];
   children?: SheetChildReport[];
+}
+
+/**
+ * One containment edge's evaluated outcome: the numeric overrides the edge resolved to
+ * (`set` — WHICH point was proven; the authored side may be an expression), its own rule
+ * results (and children, so a failure below the top doc keeps its path), the engine-solved
+ * params where the edge landed (e.g. V_tail at CM_lo — empty when the run did not stand,
+ * so a bracket end is never reported as a landing), the run's own warnings VERBATIM (a
+ * bias clamp fires exactly at a claim's extreme, and a green chip must not rest on
+ * silently clamped data), and — when the run could not be evaluated at all — the solver's
+ * message in `error`, so a budget starvation stays tellable from "the bracket cannot
+ * reach it". Rule-level failures live in `rules`, never in `error`.
+ */
+export interface SheetEdgeReport {
+  name: string;
+  feasible: boolean;
+  set: Record<string, number>;
+  rules: RuleResult[];
+  children?: SheetChildReport[];
+  solved: Record<string, number>;
+  warnings: QAWarning[];
+  error?: string;
 }
 
 export type RuleStatus = 'pass' | 'amber' | 'fail' | 'na';
@@ -425,6 +495,8 @@ export interface SheetResult {
   warnings: QAWarning[];
   /** Present (possibly empty) only when the sheet composes children; absent for a leaf. */
   children?: SheetChildReport[];
+  /** Present only when the doc declares containment edges (top-level evaluation only). */
+  edges?: SheetEdgeReport[];
 }
 
 /**
@@ -438,6 +510,10 @@ export interface SheetSweepRule {
   id: string;
   kind: RuleKind;
   marginPct: (number | null)[];
+  /** Present on a containment edge's aggregate curve (the edge's name): the trace is the
+   *  edge run's WORST hard-rule margin, not a single authored rule — consumers label it as
+   *  an edge rather than parsing the trailing separator out of the id. */
+  edge?: string;
 }
 
 /**

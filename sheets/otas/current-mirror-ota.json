@@ -24,8 +24,22 @@
       "note": "output DC level; sets the output mirror devices' vds"
     },
     {
+      "name": "CM_lo",
+      "value": 0.95,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range the application presents, low edge — proven exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.89-1.42 V on sky130 tt at the shipped choices). The edge proves the ENDPOINT; the interior is the sweep's to show"
+    },
+    {
+      "name": "CM_hi",
+      "value": 1.35,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range the application presents, high edge — its ENDPOINT proven by the cm-hi edge the same way"
+    },
+    {
       "name": "CM_dc",
-      "value": 0.9,
+      "value": 1.05,
       "min": 0.7,
       "max": 1.3,
       "unit": "V",
@@ -341,6 +355,34 @@
       "op": ">=",
       "rhs": "0.1",
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the diode load — lower gm/ID on the mirror spends less diode drop"
+    },
+    {
+      "id": "cm-not-below",
+      "kind": "invariant",
+      "lhs": "CM_in",
+      "op": ">=",
+      "rhs": "CM_lo",
+      "note": "the common mode this bias produces has to sit inside the range the application presents"
+    },
+    {
+      "id": "cm-not-above",
+      "kind": "invariant",
+      "lhs": "CM_hi",
+      "op": ">=",
+      "rhs": "CM_in",
+      "note": "paired with cm-not-below; the cm-lo/cm-hi edges prove the range ENDS close, and the CM_dc sweep shows the whole landscape"
+    }
+  ],
+  "edges": [
+    {
+      "name": "cm-lo",
+      "set": { "CM_dc": "CM_lo" },
+      "note": "the claimed low edge, proven exactly: the whole sheet re-evaluates at CM_dc = CM_lo — its own tail-node solve from the full bracket, its own devices — and every hard rule must hold there"
+    },
+    {
+      "name": "cm-hi",
+      "set": { "CM_dc": "CM_hi" },
+      "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ]
 }

@@ -27,6 +27,7 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | `rules` | array | Named comparisons the design must satisfy (see [Rules](#rules)). |
 | `uses` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
 | `provide` | array of string, optional | The names this sheet exposes to a parent (ignored at the top level). |
+| `edges` | array, optional | Containment edges: complete re-evaluations at claimed range ends whose hard verdicts gate the sheet (see [Containment edges](#containment-edges-edges)). |
 
 Evaluation runs in one pass: seed the params, compose any children, size the device, evaluate
 the rows in order, then check the rules. Everything a rule or row can reference — params,
@@ -268,13 +269,19 @@ as a `fail` would. The 5% amber band applies to `>=`/`<=`; an `==` rule is pass/
 
 ### Zero-margin snap and the pin-then-test pitfall
 
-A margin within a tiny relative distance (1e-12) of zero snaps to exactly 0, which reads as
-`amber`. This exists for the common case where a rule tests the very quantity the bind pinned.
-If you bind `gm = 2*pi*GBW_target*CL` and then write a rule `GBW_target*CL*2*pi <= gm`, the two
-sides are algebraically identical and land within floating-point rounding of the boundary —
-without the snap, the verdict would coin-flip between pass and fail on ±1e-16 noise. The snap
-makes it a deterministic `amber`: the honest description of a spec that is pinned by
-construction rather than genuinely met with margin.
+A margin within a tiny relative distance of zero — 1e-5 of the LARGER operand,
+`max(|lhs|, |rhs|)` — snaps to exactly 0, and a snapped margin reads `amber` for EVERY
+operator, `==` included: an equality sitting a hair outside its tolerance band must
+surface as a near-miss, not silently read full pass. Two mechanisms park a rule ON its own boundary by construction. First, a rule that
+tests the very quantity the bind pinned: bind `gm = 2*pi*GBW_target*CL` and then write
+`GBW_target*CL*2*pi <= gm`, and the two sides are algebraically identical, landing within
+floating-point rounding of the boundary. Second, a containment edge evaluated AT a claimed
+range end: the pin lands `CM_in` within its landing tolerance (10⁻⁶ of the bracket span,
+stretched by the relation's slope — microvolts on a volt-scale node) of the very value
+`cm-not-below` compares it against. Without the snap either verdict would coin-flip; with it,
+both read as a deterministic `amber`. The threshold sits two orders below the ~0.1% the sizer
+resolves between grid nodes, so a rule "failing" by less than the data can distinguish is
+read for what it is: sitting on the boundary.
 
 A bound **operating-point** quantity (`gm_id`, `ft`, `gm_gds`, `av0`, `vstar`) reads back as
 exactly the value you asked for, so a rule restating it behaves the same way. Be aware of what
@@ -547,6 +554,63 @@ A pinned parameter is solved rather than set: the GUI shows it read-only with th
 on, and it is not sweepable — sweep the spec on the other side of the pin instead. The library's
 5T OTA is the worked example: the tail node is pinned so the produced common mode equals `CM_dc`,
 which makes the common-mode axis a sweep of `CM_dc` with one bisection per point.
+
+## Containment edges (`edges`)
+
+A sheet that claims a RANGE — "this amplifier accepts any input common mode in
+`[CM_lo, CM_hi]`" — used to check the claim with linearized guardrails, which could only
+estimate the edges from the evaluated point. `edges` proves them instead:
+
+```json
+"edges": [
+  { "name": "cm-lo", "set": { "CM_dc": "CM_lo" } },
+  { "name": "cm-hi", "set": { "CM_dc": "CM_hi" } }
+]
+```
+
+Each edge re-evaluates the WHOLE sheet once more with the named params' values overridden —
+each `set` expression is evaluated against the base result, so it may reference params, rows,
+or provided scalars. The edge run is a complete, independent evaluation: its own pin solve
+from the full authored bracket, its own children, its own solver budget. Every hard rule must
+hold there, and a solve that fails at an edge — the bracket cannot reach `CM_lo` because no
+tail-node position produces it — is itself the honest verdict that the edge does not close,
+reported with the solver's own message. The badge names an edge failure through the same
+binding-constraint definition as everything else, with the edge name prefixed:
+`cm-lo@tail-saturated`. Both tree-key separators are reserved: rule ids, edge names, AND
+use names may contain neither `@` nor `.` — every one of them becomes part of a key in the
+single map rule outcomes share, and a name carrying a separator could silently shadow
+another rule's result (validation refuses them).
+
+What edges do and do not prove: they prove the **endpoints**, exactly. The interior is
+covered only where feasibility is monotone toward the edges — true of the saturation
+mechanisms that end a CM range, not a theorem about arbitrary rules — so the sweep remains
+the authority on the full landscape. Costs and semantics to know:
+
+- Cost is `(1 + edge count)` full evaluations everywhere the sheet evaluates — sweep cells
+  included, because a swept cell must never disagree with the same numbers evaluated alone.
+  A pinned sheet's 21-point sweep goes from ~0.6 s to ~1.8 s with two edges.
+- A composed child's `edges` are **not evaluated** (validation warns): in composition the
+  parent typically drives the child's spec params, which would make the child's own range
+  claim a fiction. Re-declare the claim on the parent if it should gate there.
+- `set` may not target an engine-solved param (`pin`/`solveFor`) — the solve would discard
+  the override; validation refuses it.
+- The report carries the full story per edge: `set` (the NUMERIC point that was proven —
+  the authored side may be an expression), `rules` and `children` (path-attributable
+  outcomes), `solved` (where the engine-solved params landed; EMPTY when the run did not
+  stand, so a bracket end is never reported as a landing), `warnings` (the run's own
+  diagnostics, verbatim — a bias clamp fires exactly at a claim's extreme, and a green
+  verdict must not rest on silently clamped data), and `error` (the solver's message when
+  the run could not be evaluated at all).
+- In the 1-D sweep each edge rides as one aggregate curve (legended `edge cm-lo`): its
+  worst hard-rule margin per sample, SKIPPING margins that sit exactly on zero — the
+  edge's own range rule is parked there by construction (the snap) and carries no
+  headroom information. A broken edge draws at the bottom clip rather than vanishing, so
+  an edge-driven feasibility flip always has an on-chart cause.
+- Sweeping a param that an edge overrides (the canonical kit sweeps `CM_dc`, which both
+  edges pin to the claimed ends) makes those edge verdicts CONSTANT across the sweep: a
+  claim too wide for the device reads infeasible at every sample, because the claim is
+  part of the design. The margin curves still show where the design itself would close;
+  the caption says when this is in effect.
 
 ## Sweeps
 

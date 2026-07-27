@@ -9,8 +9,12 @@ import { compileExpr } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
 import {
   BIAS_AXES,
+  EDGE_SEP,
+  PATH_SEP,
+  idSepProblem,
   MAX_TORN_PARAMS,
   MAX_USE_DEPTH,
+  engineSolved,
   torn,
   pinProblem,
   PROVIDE_SEP,
@@ -20,6 +24,17 @@ import {
   prefixUseWarning,
   type SheetDoc,
 } from './types';
+
+/** Whether an expression parses at all — distinct from namesOf, whose empty result also
+ *  describes a legal literal like "0.9". */
+function parses(expr: string): boolean {
+  try {
+    compileExpr(expr);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Free identifiers of an expression, or [] when it does not parse (eval names the
  *  parse error at the failing site; the validator only needs the names). */
@@ -234,6 +249,17 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   }
 
   for (const r of doc.rules) {
+    // Reserved so a tree-keyed id (`cs.headroom`, `cm-lo@rule`) can never collide with an
+    // authored one — the same silent-shadowing hazard the duplicate-id check above exists for.
+    const idSep = idSepProblem(r.id);
+    if (idSep) {
+      out.push({
+        rule: 'sheet-rule',
+        severity: 'error',
+        message: `rule id "${r.id}" contains "${idSep}" — reserved for tree-keyed rule ids (use paths like cs${PATH_SEP}headroom, edge-qualified ids like cm-lo${EDGE_SEP}rule)`,
+        location: r.id,
+      });
+    }
     if (!RULE_KINDS.has(r.kind)) {
       out.push({
         rule: 'sheet-rule',
@@ -267,6 +293,78 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         message: `rule "${r.id}" tolPct must be a finite number >= 0, got ${r.tolPct}`,
         location: r.id,
       });
+    }
+  }
+
+  // Containment edges: structural checks only — whether the overridden evaluation closes
+  // is eval's verdict, not a shape question.
+  if (doc.edges?.length) {
+    const edgeNames = new Set<string>();
+    const paramByName = new Map(doc.params.map((p) => [p.name, p]));
+    for (const e of doc.edges) {
+      const name = e.name?.trim();
+      if (!name) {
+        out.push({
+          rule: 'sheet-edge',
+          severity: 'error',
+          message: 'an edge has an empty name',
+          location: 'edges',
+        });
+        continue;
+      }
+      if (edgeNames.has(name)) {
+        out.push({
+          rule: 'sheet-edge',
+          severity: 'error',
+          message: `duplicate edge name "${name}" — edge results are keyed by name`,
+          location: name,
+        });
+      }
+      edgeNames.add(name);
+      const sep = idSepProblem(name);
+      if (sep) {
+        out.push({
+          rule: 'sheet-edge',
+          severity: 'error',
+          message: `edge name "${name}" must not contain "${sep}" — it becomes part of tree-keyed rule ids`,
+          location: name,
+        });
+      }
+      const entries = Object.entries(e.set ?? {});
+      if (entries.length === 0) {
+        out.push({
+          rule: 'sheet-edge',
+          severity: 'error',
+          message: `edge "${name}" sets nothing — name at least one param to override`,
+          location: name,
+        });
+      }
+      for (const [k, expr] of entries) {
+        const p = paramByName.get(k);
+        if (!p) {
+          out.push({
+            rule: 'sheet-edge',
+            severity: 'error',
+            message: `edge "${name}" sets "${k}", which is not a param of this sheet`,
+            location: name,
+          });
+        } else if (engineSolved(p)) {
+          out.push({
+            rule: 'sheet-edge',
+            severity: 'error',
+            message: `edge "${name}" sets "${k}", which the engine solves — the override would be discarded by the solve`,
+            location: name,
+          });
+        }
+        if (typeof expr !== 'string' || !parses(expr)) {
+          out.push({
+            rule: 'sheet-edge',
+            severity: 'error',
+            message: `edge "${name}": the expression for "${k}" does not parse`,
+            location: name,
+          });
+        }
+      }
     }
   }
 
@@ -392,6 +490,15 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
             location: name,
           });
         }
+        const useSep = idSepProblem(name);
+        if (useSep) {
+          out.push({
+            rule: 'sheet-use',
+            severity: 'error',
+            message: `use name "${name}" must not contain "${useSep}" — it becomes part of tree-keyed rule ids`,
+            location: name,
+          });
+        }
       }
       // A provide key normally must not contain the separator — EXCEPT when it names a
       // scalar the child itself received from ITS children (`grand__key`): re-exporting a
@@ -439,6 +546,18 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         continue;
       }
       if (use.doc) {
+        // Edges are a top-of-tree feature: in composition the parent typically drives the
+        // child's spec params, which would make the child's own range claim a fiction —
+        // so the engine ignores them, and this says so rather than letting the author
+        // believe the child's containment still gates.
+        if (use.doc.edges?.length) {
+          out.push({
+            rule: 'sheet-edge',
+            severity: 'warning',
+            message: `use "${use.name}": the composed child declares containment edges — they are not evaluated in composition; re-declare the claim on the parent if it should gate here`,
+            location: use.name,
+          });
+        }
         for (const w of validateSheet(use.doc, _depth + 1)) {
           out.push(prefixUseWarning(use.name, w));
         }

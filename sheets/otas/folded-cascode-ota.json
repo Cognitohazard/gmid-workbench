@@ -23,6 +23,20 @@
       "note": "input offset budget, 1 sigma; the output mirror's spread referred through the fold puts the total near 10 mV at half-micron areas"
     },
     {
+      "name": "CM_lo",
+      "value": 1.0,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range the application presents, low edge — proven exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95 up to the 1.55 probe ceiling V on sky130 tt at the shipped choices). The edge proves the ENDPOINT; the interior is the sweep's to show"
+    },
+    {
+      "name": "CM_hi",
+      "value": 1.45,
+      "unit": "V",
+      "role": "spec",
+      "note": "input CM range the application presents, high edge — its ENDPOINT proven by the cm-hi edge the same way"
+    },
+    {
       "name": "CM_dc",
       "value": 1.05,
       "min": 0.7,
@@ -450,6 +464,34 @@
       "op": ">=",
       "rhs": "0",
       "note": "node placement: V_c must leave the mirror at least a vdsat above ground"
+    },
+    {
+      "id": "cm-not-below",
+      "kind": "invariant",
+      "lhs": "CM_in",
+      "op": ">=",
+      "rhs": "CM_lo",
+      "note": "the common mode this bias produces has to sit inside the range the application presents"
+    },
+    {
+      "id": "cm-not-above",
+      "kind": "invariant",
+      "lhs": "CM_hi",
+      "op": ">=",
+      "rhs": "CM_in",
+      "note": "paired with cm-not-below; the cm-lo/cm-hi edges prove the range ENDS close, and the CM_dc sweep shows the whole landscape"
+    }
+  ],
+  "edges": [
+    {
+      "name": "cm-lo",
+      "set": { "CM_dc": "CM_lo" },
+      "note": "the claimed low edge, proven exactly: the whole sheet re-evaluates at CM_dc = CM_lo — its own tail-node solve from the full bracket, its own devices — and every hard rule must hold there"
+    },
+    {
+      "name": "cm-hi",
+      "set": { "CM_dc": "CM_hi" },
+      "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ]
 }

@@ -16,6 +16,7 @@ import {
   sweepSheet2,
   sweepable,
   bindingConstraint,
+  withParams,
   isHardRule,
   MAX_TORN_PARAMS,
   SOLVE_TOL_REL,
@@ -1936,5 +1937,256 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(res.feasible).toBe(true);
     expect(res.values.x).toBeCloseTo(4, 4);
     expect(res.values.e).toBeCloseTo(8, 4);
+  });
+});
+
+describe('containment edges — exact range checks folded into the verdict', () => {
+  // Mirrors the library's CM idiom: x is the internal node the pin solves, y = 2x + 1 the
+  // produced output, T the typed spec, [T_lo, T_hi] the claimed range the edges prove.
+  const mk = (over: Partial<SheetDoc> = {}): SheetDoc => ({
+    title: 'e',
+    polarity: 'n',
+    params: [
+      { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+      { name: 'T', value: 5 },
+      { name: 'T_lo', value: 3 },
+      { name: 'T_hi', value: 7 },
+      // max deliberately OFF the lo edge's landing point (x = 1): a sweep sample exactly on
+      // a bound would coin-flip on the pin's ~1e-5 landing tolerance.
+      { name: 'x_floor', value: 0.5, min: 0, max: 1.6 },
+    ],
+    rows: [{ name: 'y', expr: '2*x + 1' }],
+    rules: [{ id: 'node-floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: 'x_floor' }],
+    edges: [
+      { name: 'lo', set: { T: 'T_lo' } },
+      { name: 'hi', set: { T: 'T_hi' } },
+    ],
+    ...over,
+  });
+
+  it('re-solves the pin at each edge and reports where it landed', () => {
+    const res = runSheet(mk(), dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(2, 4); // base: y = 5 → x = 2
+    expect(res.edges?.map((e) => e.name)).toEqual(['lo', 'hi']);
+    expect(res.edges?.[0].feasible).toBe(true);
+    expect(res.edges?.[0].solved.x).toBeCloseTo(1, 4); // y = 3 → x = 1
+    expect(res.edges?.[1].solved.x).toBeCloseTo(3, 4); // y = 7 → x = 3
+  });
+
+  it('never throws on malformed edges — half-written or mistyped shapes degrade', () => {
+    // evaluate's contract is never-throw; curated JSON bypasses the sanitizer, so a
+    // half-written edge (no set) or a mistyped edges field must not TypeError.
+    expect(() => evaluateSheet(mk({ edges: [{ name: 'lo' } as never] }), dev)).not.toThrow();
+    expect(() => evaluateSheet(mk({ edges: 'garbage' as never }), dev)).not.toThrow();
+    const res = evaluateSheet(mk({ edges: 'garbage' as never }), dev);
+    expect(res.edges).toBeUndefined(); // degrades to a plain evaluation
+  });
+
+  it('the report says WHICH point was proven, and never fabricates a landing', () => {
+    const ok = evaluateSheet(mk(), dev);
+    expect(ok.edges?.[0].set).toEqual({ T: 3 }); // the resolved override, not the expression
+    expect(ok.edges?.[0].warnings).toEqual([]);
+    const doc = mk();
+    doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // unreachable edge
+    const bad = evaluateSheet(doc, dev);
+    expect(bad.edges?.[0].solved).toEqual({}); // a bracket end is not a landing
+  });
+
+  it('a rule failing ONLY at an edge fails the sheet, and the binding id names the edge', () => {
+    const doc = mk();
+    doc.params.find((p) => p.name === 'x_floor')!.value = 1.5; // base x=2 passes; lo edge x=1 fails
+    const res = evaluateSheet(doc, dev);
+    expect(res.rules.every((r) => r.status === 'pass' || r.status === 'amber')).toBe(true);
+    expect(res.feasible).toBe(false);
+    expect(res.edges?.[0].feasible).toBe(false);
+    expect(bindingConstraint(res)?.id).toBe('lo@node-floor');
+  });
+
+  it('an edge the bracket cannot reach fails with the solver reason, verbatim', () => {
+    const doc = mk();
+    doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // y spans [1, 21]: unreachable
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.edges?.[0].error).toMatch(/does not change sign/);
+    // no failing RULE anywhere — the cause is the solve, so there is no rule to name
+    expect(bindingConstraint(res)).toBeUndefined();
+    // the failed edge does not leak error warnings into the base result
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+  });
+
+  it('set expressions evaluate against the BASE result, not just params', () => {
+    const doc = mk({
+      edges: [{ name: 'lo', set: { T: 'y - 2' } }], // base y = 5 → edge T = 3
+    });
+    const res = evaluateSheet(doc, dev);
+    expect(res.edges?.[0].solved.x).toBeCloseTo(1, 4);
+  });
+
+  it('a set expression that does not resolve fails that edge closed, by name', () => {
+    const doc = mk({ edges: [{ name: 'lo', set: { T: 'nonsense_name' } }] });
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.edges?.[0].error).toMatch(/did not evaluate to a finite number/);
+  });
+
+  it('an infeasible edge can NEVER chart non-negative — na fails it closed, on-chart', () => {
+    // Hard `na` fails an edge closed while contributing no margin; without the floor a
+    // passing sibling rule painted the broken edge at +margin — a feasibility flip with
+    // no on-chart cause. sqrt(6 - T) is finite at the base (T=5) and lo edge (T=3), na
+    // at the hi edge (T=7).
+    const doc = mk({
+      rules: [
+        { id: 'node-floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: 'x_floor' },
+        { id: 'na-at-hi', kind: 'invariant', lhs: 'sqrt(6 - T)', op: '>=', rhs: '0' },
+      ],
+    });
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.edges?.[1].feasible).toBe(false);
+    const sw = sweepSheet(doc, 'x_floor', dev, 2);
+    const hiCurve = sw.rules.find((r) => r.id === 'hi@');
+    expect(hiCurve!.marginPct.every((m) => m !== null && m < 0)).toBe(true);
+  });
+
+  it("edge.error prefers the SOLVER's message over whatever error landed last", () => {
+    // A child's pin failure rolls up mid-evaluation; a later parent row goes non-finite
+    // AFTER it. "Last error" alone would report the consequence (the row) instead of the
+    // cause (the solve).
+    const child: SheetDoc = {
+      title: 'c',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'P' } },
+        { name: 'P', value: 5 },
+      ],
+      rows: [{ name: 'y', expr: '2*x + 1' }],
+      rules: [],
+    };
+    const parent: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [
+        { name: 'T', value: 5 },
+        { name: 'T_hi', value: 25 }, // child y spans [1, 21]: unreachable at the edge
+      ],
+      rows: [{ name: 'bad', expr: 'sqrt(21 - T)' }], // non-finite at T = 25, fine at 5
+      rules: [],
+      uses: [{ name: 'amp', doc: child, params: { P: 'T' } }],
+      edges: [{ name: 'hi', set: { T: 'T_hi' } }],
+    };
+    const res = evaluateSheet(parent, dev);
+    expect(res.edges?.[0].feasible).toBe(false);
+    expect(res.edges?.[0].error).toMatch(/pinned param|does not change sign/);
+  });
+
+  it('a snapped zero reads amber for EVERY operator — == included', () => {
+    // 1.010005 == 1 at tolPct 1 sits ~5e-6 OUTSIDE its band: genuinely failing, inside
+    // the snap. Reading it full pass would silently hide the miss; amber says "on the
+    // boundary". Clearly outside the snap still fails.
+    const eq = (lhs: string): SheetDoc => ({
+      title: 'q',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [{ id: 'eq', kind: 'requirement', lhs, op: '==', rhs: '1', tolPct: 1 }],
+    });
+    expect(evaluateSheet(eq('1.010005'), dev).rules[0].status).toBe('amber');
+    expect(evaluateSheet(eq('1.02'), dev).rules[0].status).toBe('fail');
+    // The inequality face of the same coin: a sub-snap genuine shortfall reads amber.
+    const ge: SheetDoc = {
+      title: 'g',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [{ id: 'ge', kind: 'requirement', lhs: '0.999995', op: '>=', rhs: '1' }],
+    };
+    expect(evaluateSheet(ge, dev).rules[0].status).toBe('amber');
+  });
+
+  it("a composed child's edges are ignored, and validation says so", () => {
+    const child = mk();
+    child.params.find((p) => p.name === 'T_lo')!.value = 0.5; // its lo edge would fail hard
+    child.provide = ['y'];
+    const parent: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'amp', doc: child }],
+    };
+    const res = runSheet(parent, dev);
+    expect(res.feasible).toBe(true); // the child's base run closes; its edges never ran
+    expect(res.children?.[0].feasible).toBe(true);
+    expect(res.warnings.some((w) => /not evaluated in composition/.test(w.message))).toBe(true);
+  });
+
+  it('a swept cell agrees with the same values evaluated alone, and the edge curve shows why', () => {
+    const doc = mk();
+    const sw = sweepSheet(doc, 'x_floor', dev, 3); // samples 0, 0.8, 1.6
+    expect(sw.feasible).toEqual([true, true, false]); // at 1.6: lo edge x=1 < 1.6
+    const alone = evaluateSheet(withParams(doc, { x_floor: 1.6 }), dev);
+    expect(alone.feasible).toBe(false);
+    const loCurve = sw.rules.find((r) => r.id === 'lo@');
+    expect(loCurve).toBeDefined();
+    expect(loCurve!.marginPct[2]).toBeLessThan(0); // the on-chart cause of the flip
+    expect(loCurve!.marginPct[0]).toBeGreaterThan(0);
+  });
+
+  it('use names reserve the rule-path separators — a collision would shadow rule results', () => {
+    // Rule outcomes are keyed `${usePath}.${ruleId}` and `${edgeName}@${ruleId}` in one map;
+    // a use named across either separator could silently shadow an edge-qualified id.
+    const child: SheetDoc = { title: 'c', polarity: 'n', params: [], rows: [], rules: [] };
+    for (const name of ['a@b', 'a.b']) {
+      const doc: SheetDoc = {
+        title: 'p',
+        polarity: 'n',
+        params: [],
+        rows: [],
+        rules: [],
+        uses: [{ name, doc: child }],
+      };
+      const hit = validateSheet(doc).some(
+        (w) => w.severity === 'error' && /tree-keyed rule ids/.test(w.message),
+      );
+      expect(hit, name).toBe(true);
+    }
+  });
+
+  it('validateSheet rejects malformed edges and reserves the @ separator', () => {
+    const errs = (doc: SheetDoc): string[] =>
+      validateSheet(doc)
+        .filter((w) => w.severity === 'error')
+        .map((w) => w.message);
+    expect(
+      errs(
+        mk({
+          edges: [
+            { name: 'lo', set: { T: 'T_lo' } },
+            { name: 'lo', set: { T: 'T_hi' } },
+          ],
+        }),
+      ).join(),
+    ).toMatch(/duplicate edge name/);
+    expect(errs(mk({ edges: [{ name: 'a@b', set: { T: 'T_lo' } }] })).join()).toMatch(
+      /must not contain/,
+    );
+    expect(errs(mk({ edges: [{ name: 'lo', set: {} }] })).join()).toMatch(/sets nothing/);
+    expect(errs(mk({ edges: [{ name: 'lo', set: { nope: 'T_lo' } }] })).join()).toMatch(
+      /not a param/,
+    );
+    expect(errs(mk({ edges: [{ name: 'lo', set: { x: 'T_lo' } }] })).join()).toMatch(
+      /the engine solves/,
+    );
+    expect(errs(mk({ edges: [{ name: 'lo', set: { T: 'T_lo +* 2' } }] })).join()).toMatch(
+      /does not parse/,
+    );
+    expect(
+      errs(mk({ rules: [{ id: 'a@b', kind: 'invariant', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
+    ).toMatch(/tree-keyed rule ids/);
+    expect(
+      errs(mk({ rules: [{ id: 'a.b', kind: 'invariant', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
+    ).toMatch(/tree-keyed rule ids/);
   });
 });

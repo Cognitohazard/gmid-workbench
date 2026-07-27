@@ -24,17 +24,17 @@
     },
     {
       "name": "CM_lo",
-      "value": 0.9,
+      "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge"
+      "note": "input CM range the application presents, low edge. The cm-lo edge re-evaluates the whole sheet here, so this claim is PROVEN at every evaluation — the sweep shows the widest range that would close (0.95-1.39 V on sky130 tt at the shipped choices). The edge proves the ENDPOINT; the interior is the sweep's to show"
     },
     {
       "name": "CM_hi",
-      "value": 1.4,
+      "value": 1.35,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge"
+      "note": "input CM range the application presents, high edge — its ENDPOINT proven by the cm-hi edge the same way"
     },
     {
       "name": "CM_dc",
@@ -321,24 +321,18 @@
       "rhs": "0.1",
       "justification": "the pair's two drains sit at different levels — one a diode drop below the supply, the other at the output — and which is lower depends on V_out_dc, so this watches whichever it is. Gain collapses well before this trips, so treat it as a floor rather than as the usable ceiling",
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage — lower V_tail, or spend less diode drop (lower gm_id_ld)"
+    }
+  ],
+  "edges": [
+    {
+      "name": "cm-lo",
+      "set": { "CM_dc": "CM_lo" },
+      "note": "the claimed low edge, proven exactly: the whole sheet re-evaluates at CM_dc = CM_lo — its own tail-node solve from the full bracket, its own devices — and every hard rule must hold there. Replaces the linearized reach estimate this sheet used to carry"
     },
     {
-      "id": "cm-lo-reach",
-      "kind": "guardrail",
-      "lhs": "V_tail - (CM_dc - CM_lo) - tail__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "justification": "estimate, conservative: the tail node falls by LESS than the common mode does (d V_tail/d CM < 1), so charging the full CM_dc - CM_lo against today's headroom can only understate the margin at the edge — it flags designs the sweep might clear, never the reverse. The CM_dc sweep is the authority on what actually closes",
-      "note": "whether the tail is still saturated at the LOW edge of the claimed range. The rules above only check the range brackets the evaluated point — since the pin lands CM_in exactly on CM_dc, nothing else here looks at the edges"
-    },
-    {
-      "id": "cm-hi-reach",
-      "kind": "guardrail",
-      "lhs": "min(VDD - abs(ld__vgs), V_out_dc) - (V_tail + CM_hi - CM_dc) - in__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "justification": "estimate, conservative, same argument as cm-lo-reach with the shift charged upward: the pair's saturation margin at the HIGH edge of the claimed range, before gain collapse — which arrives first — is even counted. The CM_dc sweep is the authority",
-      "note": "whether the input pair still saturates at the HIGH edge of the claimed range; trips first when CM_hi is ambitious for this V_out_dc and load diode drop"
+      "name": "cm-hi",
+      "set": { "CM_dc": "CM_hi" },
+      "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the interior is monotone for the saturation mechanisms here, and the CM_dc sweep remains the authority on the full landscape"
     }
   ]
 }
