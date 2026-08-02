@@ -109,7 +109,7 @@
       "name": "fb",
       "doc": {
         "title": "Shunt feedback device",
-        "description": "The feedback device that regulates the input device's current; its gm sets the loop gain that drives the output resistance down.",
+        "description": "The feedback device that regulates the input device's current; its gm sets the loop gain that drives the output resistance down. Its gate is the input device's drain, which the sheet places at $V_{out} + V_{ds,in}$, and its source is at ground — the wiring declaration checks that node against the gate-source voltage this bind actually needs. At the shipped defaults the two DISAGREE, which is the sheet's known open problem: the drain node is fixed by the wiring, so vds_in cannot be typed independently of the feedback device's inversion level. The same goes for vds_fb, which this branch pins to V_out — this device's drain IS the output node — and only the gate side of that is checked. Choose gm_id_fb so its gate-source voltage matches the node, or reparameterize the branch around its nodes instead of around the two typed drain-source voltages.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
@@ -130,7 +130,8 @@
         ],
         "provide": ["gm", "vdsat"]
       },
-      "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" }
+      "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" },
+      "wiring": { "gate": "V_out + vds_in", "source": "0" }
     }
   ],
   "rows": [

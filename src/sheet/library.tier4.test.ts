@@ -19,7 +19,16 @@
 import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, sheet as libSheet, REFS } from './library.fixtures';
+import {
+  table,
+  relErr,
+  VA_PER_L,
+  sheet as libSheet,
+  REFS,
+  VGS_GMID8_L05,
+  VGS_GMID10_L05,
+  VGS_GMID12_L05,
+} from './library.fixtures';
 
 const par = (a: number, b: number): number => 1 / (1 / a + 1 / b);
 
@@ -30,9 +39,6 @@ const sheet = (file: string) => libSheet(`multistage/${file}.json`);
 const UT = (PHYS.k * PHYS.T) / PHYS.q;
 const vthDemo = (L: number): number => 0.4 + 0.02 * Math.log(L / 0.18e-6 + 1);
 const vdsatDemo = (vgs: number, L: number): number => 2 * UT + Math.max(vgs - vthDemo(L), 0);
-// Diode vgs from the EKV inversion gm/ID = sigmoid(x)/(n·UT·softplus(x)), n = 1.3, at L = 0.5 µm.
-const VGS_GMID8_L05 = 0.668042;
-const VGS_GMID10_L05 = 0.610063;
 
 describe('tier4 goldens: Two-stage Miller OTA', () => {
   const res = runSheet(sheet('two-stage-miller-ota'), table, undefined, REFS);
@@ -177,7 +183,7 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
   });
 
   it('differential swing is twice the range left after four cascode vdsat drops', () => {
-    const v12 = vdsatDemo(0.567023, 0.5e-6); // input pair, gm/ID 12
+    const v12 = vdsatDemo(VGS_GMID12_L05, 0.5e-6); // input pair, gm/ID 12
     const v8 = vdsatDemo(VGS_GMID8_L05, 0.5e-6); // cascodes + load, gm/ID 8
     const swing = 2 * (1.8 - v12 - 3 * v8 - 0.3);
     expect(relErr(res.values.swing_diff, swing)).toBeLessThan(1e-2);
@@ -198,18 +204,52 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
     expect(relErr(res.values.SR, Math.min(20e-6 / Cc, 60e-6 / CL))).toBeLessThan(1e-9);
   });
 
-  it('the phase-margin estimate matches the arctan formula on the exact poles/zero', () => {
+  it('the phase margin costs the second pole only — the nulling resistor removes the zero', () => {
+    // Rz = 1/gm2 moves the RHP zero to infinity, so the estimate carries no zero term; z_rhp
+    // stays as the uncompensated reference point asserted above.
     const wc = gm1 / Cc;
-    const z = gm2 / Cc;
     const p2 = gm2 / (CL + 0.5e-12);
-    const pm = 90 - (Math.atan(wc / p2) * 180) / Math.PI - (Math.atan(wc / z) * 180) / Math.PI;
+    const pm = 90 - (Math.atan(wc / p2) * 180) / Math.PI;
     expect(relErr(res.values.PM, pm)).toBeLessThan(1e-6);
+  });
+
+  it('the stage-1 output level is what the stage-2 gate needs, not a typed number', () => {
+    // V1 is the stage-2 gate, so it sits one stage-2 vgs below the supply: for gm/ID 12 at
+    // L 0.5 µm that is 1.8 - 0.567023 = 1.232977 V. Declared wiring on that use restates the
+    // same identity, so it agrees to the last digit and reports nothing.
+    expect(relErr(res.values.V1, 1.8 - VGS_GMID12_L05)).toBeLessThan(1e-3);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);
+
+    // That silence means nothing unless the check is LIVE on this sheet — a declaration this
+    // sheet derives its own node from cannot disagree with itself, which is exactly the shape
+    // that would hide a check that had quietly stopped running. Re-type the node 100 mV off,
+    // the way a hand-typed V1 used to be, and it is reported at once, on the block that owns
+    // the gate.
+    const doc = sheet('fd-two-stage-ota');
+    const v1 = doc.rows.find((r) => r.name === 'V1');
+    expect(v1).toBeDefined();
+    (v1 as { expr: string }).expr = 'VDD - abs(s2__vgs) + 0.1';
+    const off = runSheet(doc, table, undefined, REFS);
+    expect(off.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location)).toEqual([
+      's2',
+    ]);
+  });
+
+  it('stage-1 gain follows from the two levels that derived node fixes', () => {
+    // The tail is bisected until the produced common mode equals CM_dc = 1.0 V, and the demo
+    // vgs depends on neither vds nor body bias, so V_tail = CM_dc - vgs(12) — and the input
+    // device's drain-source V1 - V_tail collapses to VDD - CM_dc = 0.8 V, free of the EKV
+    // constant. The stage-1 load carries the rest of the supply, VDD - V1 = vgs(12).
+    const va = VA_PER_L * 0.5e-6;
+    const gdsIn = 10e-6 / (va + (1.8 - 1.0));
+    const gdsLd1 = 10e-6 / (va + VGS_GMID12_L05);
+    expect(relErr(res.values.Av1, gm1 / (gdsIn + gdsLd1))).toBeLessThan(1e-3);
   });
 
   it('total supply current is the two stage-2 branches, the tail, and the CMFB budget', () => {
     expect(relErr(res.values.I_total, 2 * 60e-6 + 20e-6 + 10e-6)).toBeLessThan(1e-9);
     // FD output swing doubles the single-ended range set by the two output vdsats.
-    const swing = 2 * (1.8 - vdsatDemo(0.567023, 0.5e-6) - vdsatDemo(VGS_GMID8_L05, 0.5e-6));
+    const swing = 2 * (1.8 - vdsatDemo(VGS_GMID12_L05, 0.5e-6) - vdsatDemo(VGS_GMID8_L05, 0.5e-6));
     expect(relErr(res.values.swing_diff, swing)).toBeLessThan(1e-2);
   });
 });

@@ -18,10 +18,20 @@
 // (hence sized W and Pelgrom area) differs from real tables.
 
 import { describe, it, expect } from 'vitest';
-import { runSheet, validateSheet } from './index';
+import { runSheet, validateSheet, WIRING_TOL } from './index';
 import { resolveSheetRefs } from './resolve';
 import { isHardRule, type SheetChildReport, type SheetResult } from './types';
-import { loadLibrary, sheet, table, relErr, vnthM, VA_PER_L, REFS } from './library.fixtures';
+import {
+  loadLibrary,
+  sheet,
+  table,
+  relErr,
+  vnthM,
+  VA_PER_L,
+  REFS,
+  VGS_GMID10_L05,
+  VGS_GMID12_L05,
+} from './library.fixtures';
 
 const LIBRARY = loadLibrary();
 
@@ -200,5 +210,58 @@ describe('exemplar goldens: 5T OTA', () => {
     expect(relErr(v.PM, doublet)).toBeLessThan(1e-9);
     const lonePole = 90 - (Math.atan(v.GBW / v.f_pole) * 180) / Math.PI;
     expect(v.PM - lonePole).toBeGreaterThan(1e-4);
+  });
+});
+
+// Two library sheets ship with a gate-wiring disagreement, and the engine now says so on
+// every evaluation. Neither is a defect in the check: both sheets offer a knob their own
+// schematic does not leave free — one shared gate cannot satisfy two independently chosen
+// inversion levels — and repairing that changes which quantities the sheet asks a designer
+// for. That is a change to the sheets' contract, not a number to slip under a golden, so the
+// finding stays loud while it waits. Locked here as ASSERTED intent, the same way the
+// containment-honesty golden locks a claim the demo table refutes: if one of these stops
+// firing, either someone repaired the sheet — and should replace this test with its golden —
+// or the check quietly stopped working.
+describe('gate-wiring disagreements the library reports at its shipped defaults', () => {
+  const wiringWarnings = (res: SheetResult): string[] =>
+    res.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location ?? '');
+
+  /** The residual the engine ITSELF reported for one block, in volts — read back out of the
+   *  finding rather than recomputed alongside it, so what is asserted is the number a designer
+   *  reads, arithmetic and all. */
+  const reportedDelta = (res: SheetResult, block: string): number => {
+    const found = res.warnings.filter((w) => w.rule === 'sheet-wiring' && w.location === block);
+    expect(found).toHaveLength(1);
+    const m = /delta (-?[\d.]+e[+-]\d+) V/.exec(found[0].message);
+    expect(m).not.toBeNull();
+    return Number((m as RegExpExecArray)[1]);
+  };
+
+  it('the CMOS inverter sizes its two devices for gates 0.62 V apart', () => {
+    const res = runSheet(sheet('stages/cmos-inverter-amp.json'), table);
+    // One gate, two binds: the NMOS puts it at its own vgs above ground, the PMOS its own vgs
+    // below VDD. On the demo table (one NMOS dataset standing in for both polarities) that is
+    // vgs(12) = 0.567023 against 1.8 - vgs(10) = 1.189937, so the node is over-determined by
+    // -0.622914 V — sixty times the 10 mV tolerance, and the sheet still reads feasible.
+    const delta = reportedDelta(res, 'p');
+    expect(relErr(delta, VGS_GMID12_L05 - (1.8 - VGS_GMID10_L05))).toBeLessThan(1e-3);
+    expect(delta).toBeLessThan(-WIRING_TOL);
+    // The NMOS side is the one that DEFINES the node, so only the PMOS can disagree.
+    expect(wiringWarnings(res)).toEqual(['p']);
+    expect(res.feasible).toBe(true); // a wiring warning never moves the verdict
+  });
+
+  it('the flipped voltage follower puts its feedback gate 0.89 V off the node it assumes', () => {
+    const res = runSheet(sheet('multistage/flipped-voltage-follower.json'), table);
+    // The feedback device's gate is the input device's drain, which the sheet places at
+    // V_out + vds_in = 1.5 V; its own bind needs vgs(10) = 0.610063 V above its grounded
+    // source, so the gate is reported +0.889937 V above the node the bind asks for. Typing the
+    // drain-source voltage and the inversion level as two free choices is exactly what leaves
+    // the node claiming two values at once.
+    const delta = reportedDelta(res, 'fb');
+    expect(relErr(delta, 1.5 - VGS_GMID10_L05)).toBeLessThan(1e-3);
+    expect(delta).toBeGreaterThan(WIRING_TOL);
+    expect(wiringWarnings(res)).toEqual(['fb']);
+    expect(res.feasible).toBe(true);
   });
 });

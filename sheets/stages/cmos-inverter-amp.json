@@ -55,7 +55,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "PMOS inversion; match the two gm/ID for a balanced transfer and lowest offset"
+      "note": "PMOS inversion. Matching it to gm_id_n balances the transfer and minimizes offset, but the two devices share one gate, so the choice is also what places the input level — see the V_in row: at these defaults the two binds ask that node for different voltages"
     },
     {
       "name": "L_n",
@@ -86,7 +86,7 @@
       "name": "n",
       "doc": {
         "title": "NMOS device",
-        "description": "The pull-down device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, current, and channel-noise density.",
+        "description": "The pull-down device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, current, and channel-noise density. Its wiring declaration is TAUTOLOGICAL as the sheet stands: the input level $V_{in}$ is derived from this device’s own gate-source voltage, so the declared node and the checked node are the same number and the check cannot fire. It is kept because it stops being tautological the moment someone re-types $V_{in}$ as a plain parameter — which is exactly the defect this mechanism was built after.",
         "polarity": "n",
         "params": [
           { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -105,14 +105,15 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "id", "vnth_m"]
+        "provide": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m"]
       },
       "params": {
         "I_d": "I_bias",
         "L_d": "L_n",
         "gm_id_d": "gm_id_n",
         "vds_d": "V_out"
-      }
+      },
+      "wiring": { "gate": "V_in", "source": "0" }
     },
     {
       "name": "p",
@@ -150,10 +151,17 @@
         "L_d": "L_p",
         "gm_id_d": "gm_id_p",
         "vds_d": "p_sign*(VDD - V_out)"
-      }
+      },
+      "wiring": { "gate": "V_in", "source": "VDD" }
     }
   ],
   "rows": [
+    {
+      "name": "V_in",
+      "expr": "n__vgs",
+      "unit": "V",
+      "note": "the input DC level, read off the NMOS bind: its source is at ground, so the gate sits at its own gate-source voltage. The PMOS shares that gate, and the wiring declarations on both children check the two devices against this one node — at the shipped defaults they DISAGREE, which is the sheet's known open problem: gm_id_n and gm_id_p are offered as two free knobs when one shared gate leaves only one of them free. Set the two inversion levels so both devices land on the same input level, or size against a supply that can carry both"
+    },
     {
       "name": "gm_tot",
       "expr": "n__gm + p__gm",

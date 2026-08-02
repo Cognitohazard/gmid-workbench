@@ -55,3 +55,12 @@ export const relErr = (v: number, expected: number): number => Math.abs(v / expe
 
 /** γ-model input-referred thermal density sqrt(4kTγ/gm) at the demo's γ = GAMMA_DEFAULT. */
 export const vnthM = (gm: number): number => Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / gm);
+
+// The gate-source voltage the demo model needs for a given gm/ID at L = 0.5 µm, from the EKV
+// inversion gm/ID = sigmoid(x)/(n·UT·softplus(x)) with n = 1.3. Shared because a NODE LEVEL a
+// sheet derives from one device's gate — rather than typing it — lands on exactly these
+// numbers, so several goldens now hinge on the same three. The demo's gm/ID is independent of
+// vds and (with no vsb axis) of body bias, so one constant per gm/ID is the whole story.
+export const VGS_GMID8_L05 = 0.668042;
+export const VGS_GMID10_L05 = 0.610063;
+export const VGS_GMID12_L05 = 0.567023;

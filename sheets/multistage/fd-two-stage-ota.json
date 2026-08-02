@@ -1,6 +1,6 @@
 {
   "title": "Fully differential two-stage OTA",
-  "description": "The fully differential version of the two-stage Miller OTA: a differential input stage with current-source loads driving a differential common-source second stage, Miller-compensated with $C_c$ on each side. The small-signal frequency plan is the same as the single-ended Miller OTA — GBW = $g_{m1}/(2*\\pi*C_c)$, an RHP zero $z = g_{m2}/C_c$ removed by the $R_z = 1/g_{m2}$ nulling resistor, a second-pole/phase-margin estimate, and SR = $min(I_1/C_c, I_2/C_L)$. Three things genuinely differ in the fully differential form: the stage-1 load is a current source rather than a current mirror, so there is no mirror pole or pole-zero doublet in the signal path (a cleaner frequency response); the differential output swing is twice the single-ended range; and a common-mode feedback loop is needed to set the output common mode, costing supply current. As in the telescopic sheet, the CMFB loop is out of scope (no loop solving) and appears only as the current line item $I_{cmfb}$; the stage-1 output common mode $V_1$ is set by CMFB, not by a diode drop. The pole and phase-margin rows are ESTIMATE-grade; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
+  "description": "The fully differential version of the two-stage Miller OTA: a differential input stage with current-source loads driving a differential common-source second stage, Miller-compensated with $C_c$ on each side. The small-signal frequency plan is the same as the single-ended Miller OTA — GBW = $g_{m1}/(2*\\pi*C_c)$, an RHP zero $z = g_{m2}/C_c$ removed by the $R_z = 1/g_{m2}$ nulling resistor, a second-pole/phase-margin estimate, and SR = $min(I_1/C_c, I_2/C_L)$. Three things genuinely differ in the fully differential form: the stage-1 load is a current source rather than a current mirror, so there is no mirror pole or pole-zero doublet in the signal path (a cleaner frequency response); the differential output swing is twice the single-ended range; and a common-mode feedback loop is needed to set the output common mode, costing supply current. As in the telescopic sheet, the CMFB loop is out of scope (no loop solving) and appears only as the current line item $I_{cmfb}$. The stage-1 output common mode $V_1$ is the node the CMFB loop holds, but it is not a free number: that node is the stage-2 gate, so the loop must hold it exactly one stage-2 $V_{GS}$ from the supply, and the sheet derives it there rather than asking for it. The pole and phase-margin rows are ESTIMATE-grade; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -143,15 +143,6 @@
       "role": "choice"
     },
     {
-      "name": "V1",
-      "value": 1.13,
-      "min": 0.6,
-      "max": 1.7,
-      "unit": "V",
-      "role": "choice",
-      "note": "stage-1 output common-mode DC, set by CMFB"
-    },
-    {
       "name": "V_out2",
       "value": 0.9,
       "min": 0.6,
@@ -177,77 +168,10 @@
   ],
   "uses": [
     {
-      "name": "ld1",
-      "doc": {
-        "title": "Stage-1 current-source load",
-        "description": "A stage-1 current-source load (not a mirror — this is what removes the mirror pole) carrying half the tail current at the stage-1 output common mode.",
-        "polarity": "p",
-        "params": [
-          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vx",
-            "value": 0.67,
-            "unit": "V",
-            "role": "spec",
-            "note": "signed to this table's axis convention"
-          }
-        ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
-          {
-            "id": "feasible-inversion",
-            "kind": "invariant",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provide": ["gds", "vdsat"]
-      },
-      "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1", "vx": "ld_sign*(VDD - V1)" }
-    },
-    {
-      "name": "in",
-      "doc": {
-        "title": "Stage-1 input-pair device",
-        "description": "Half-circuit input device at half the tail current; its drain sits at the stage-1 output common mode, its source one vgs below the input common mode.",
-        "polarity": "n",
-        "params": [
-          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.7, "unit": "V", "role": "spec" },
-          { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
-        ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
-          {
-            "id": "feasible-inversion",
-            "kind": "invariant",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
-      },
-      "params": {
-        "Ix": "I1/2",
-        "Lx": "L_in",
-        "gx": "gm_id_in",
-        "vx": "V1 - V_tail",
-        "vsbx": "V_tail"
-      }
-    },
-    {
       "name": "s2",
       "doc": {
         "title": "Stage-2 common-source device",
-        "description": "The second-stage gain device (per side) carrying the stage-2 current at the output common mode; its gm sets the RHP zero, second pole, and nulling resistor.",
+        "description": "The second-stage gain device (per side) carrying the stage-2 current at the output common mode; its gm sets the RHP zero, second pole, and nulling resistor. Sized FIRST, because its gate-source voltage is what fixes the stage-1 output level the rest of the sheet biases against. Its wiring declaration is TAUTOLOGICAL as the sheet stands: $V_1$ is derived from this device’s own gate-source voltage, so the declared node and the checked node are the same number and the check cannot fire. It is kept because it stops being tautological the moment someone re-types $V_1$ as a plain parameter — which is exactly the defect this mechanism was built after.",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
@@ -272,9 +196,83 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "cgg", "vdsat"]
+        "provide": ["gm", "gds", "cgg", "vgs", "vdsat"]
       },
-      "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" }
+      "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" },
+      "wiring": { "gate": "V1", "source": "VDD" }
+    },
+    {
+      "name": "ld1",
+      "doc": {
+        "title": "Stage-1 current-source load",
+        "description": "A stage-1 current-source load (not a mirror — this is what removes the mirror pole) carrying half the tail current at the stage-1 output common mode.",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.67,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention. The parent drives it from the supply minus the stage-1 output level, which is the V1 row's expression written out — use params are evaluated before rows, so the level is restated here rather than referenced"
+          }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gds", "vdsat"]
+      },
+      "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1", "vx": "ld_sign*abs(s2__vgs)" }
+    },
+    {
+      "name": "in",
+      "doc": {
+        "title": "Stage-1 input-pair device",
+        "description": "Half-circuit input device at half the tail current; its drain sits at the stage-1 output common mode, its source one vgs below the input common mode.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "the drain sits at the stage-1 output level and the source at the tail node, so the parent drives this from the V1 row's expression written out — use params are evaluated before rows, so the level is restated here rather than referenced"
+          },
+          { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
+      },
+      "params": {
+        "Ix": "I1/2",
+        "Lx": "L_in",
+        "gx": "gm_id_in",
+        "vx": "(VDD - abs(s2__vgs)) - V_tail",
+        "vsbx": "V_tail"
+      }
     },
     {
       "name": "ld2",
@@ -305,6 +303,12 @@
     }
   ],
   "rows": [
+    {
+      "name": "V1",
+      "expr": "VDD - abs(s2__vgs)",
+      "unit": "V",
+      "note": "stage-1 output common-mode DC. Derived, not typed: this node IS the stage-2 gate, so the level is whatever the stage-2 device's own gate-source voltage asks for, one vgs below the supply for a p-type stage-2 (abs() keeps both table conventions working). The common-mode feedback loop is what holds the node there — it commands the level, it does not choose it, and typing a different number here is the classic way to starve stage 2. The wiring declaration on the stage-2 use is what keeps the two descriptions of this node in agreement"
+    },
     {
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
@@ -339,7 +343,7 @@
       "name": "z_rhp",
       "expr": "gm2/Cc",
       "unit": "rad/s",
-      "note": "right-half-plane zero from the feedforward path through Cc"
+      "note": "the right-half-plane zero the feedforward path through Cc would place, kept as a reference point for the UNCOMPENSATED stage: the Rz = 1/gm2 nulling resistor below moves it to infinity, which is why the phase-margin row carries no zero term"
     },
     {
       "name": "p2",
@@ -355,9 +359,9 @@
     },
     {
       "name": "PM",
-      "expr": "90 - atan(wc/p2)*180/pi - atan(wc/z_rhp)*180/pi",
+      "expr": "90 - atan(wc/p2)*180/pi",
       "unit": "deg",
-      "note": "ESTIMATE: crossover phase lag from the second pole plus the RHP zero (the nulling resistor removes the zero term). The simulator owns stability sign-off"
+      "note": "ESTIMATE: crossover phase lag from the second pole alone, because the Rz = 1/gm2 nulling resistor removes the RHP zero. The simulator owns stability sign-off"
     },
     {
       "name": "SR",
@@ -441,15 +445,7 @@
       "lhs": "PM",
       "op": ">=",
       "rhs": "PM_target",
-      "note": "ESTIMATE-grade phase margin; the simulator owns the real stability sign-off"
-    },
-    {
-      "id": "zero-above-crossover",
-      "kind": "guardrail",
-      "lhs": "z_rhp",
-      "op": ">=",
-      "rhs": "wc",
-      "note": "the RHP zero must sit above crossover (equivalently gm2 >= gm1) or it collapses phase margin; the Rz = 1/gm2 nulling resistor removes it if this is tight"
+      "note": "ESTIMATE-grade phase margin; the simulator owns the real stability sign-off. This is also the sheet’s only check on pole spacing: PM falls as the second pole approaches the crossover, so a design that crowds them fails here rather than needing a separate zero/pole guardrail"
     },
     {
       "id": "stage2-sat",
@@ -473,7 +469,7 @@
       "lhs": "V1 - V_tail - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
-      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage at the CMFB-set stage-1 output level V1"
+      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the stage-1 output level V1 that the stage-2 gate sets"
     }
   ]
 }
