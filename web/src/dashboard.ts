@@ -16,6 +16,7 @@ import {
   RULE_KEYS,
   USE_KEYS,
   EDGE_KEYS,
+  WIRING_KEYS,
   RULE_KINDS,
   RULE_OPS,
   type DeviceTable,
@@ -25,6 +26,7 @@ import {
   type SheetRule,
   type SheetBind,
   type SheetUse,
+  type SheetWiring,
   type SheetEdge,
   type RuleKind,
   type RuleOp,
@@ -467,6 +469,29 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
           const ov = strMap(uu.params as Record<string, unknown>, `uses[${i}].params`);
           if (Object.keys(ov).length) use.params = ov;
         } else if (uu.params !== undefined) lost?.push(`uses[${i}].params`);
+        // Gate wiring: an OBJECT of expression strings on a use whose other members are plain
+        // strings, so a pass that rebuilds field by field deletes it — and the consistency check
+        // the declaration exists for silently stops running on every reload, which is the one
+        // thing that check is there to prevent. Same stakes as `pin` and the diode flag.
+        if (uu.wiring && typeof uu.wiring === 'object' && !Array.isArray(uu.wiring)) {
+          const w = uu.wiring as Record<string, unknown>;
+          // ONE keyed walk, exactly like the bind sanitizer above: each key checked against the
+          // core's own set, anything unrecognized or non-string recorded once. Written through an
+          // index view because the members are assigned by name.
+          const into: Record<string, string> = {};
+          for (const k of Object.keys(w)) {
+            if (WIRING_KEYS.has(k) && typeof w[k] === 'string') into[k] = w[k] as string;
+            else dropField(true, `uses[${i}].wiring.${k}`);
+          }
+          // A HALF-declaration is carried through rather than completed or deleted: validateSheet
+          // raises a visible "half-written wiring" error the author can fix, whereas dropping the
+          // surviving half here would silently retire the check. A declaration that survives with
+          // NOTHING — `{}`, or only keys this rejected — is recorded as lost for the same reason:
+          // it is a structural error the core would name, and a sheet must never reload cleaner
+          // than the core reads it.
+          if (Object.keys(into).length) use.wiring = into as unknown as SheetWiring;
+          else lost?.push(`uses[${i}].wiring`);
+        } else if (uu.wiring !== undefined) lost?.push(`uses[${i}].wiring`);
         return [use];
       })
     : [];

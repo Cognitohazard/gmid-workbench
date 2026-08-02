@@ -58,6 +58,10 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device.',
   feasBadge:
     'Does the design close on the active device at the current variables? Feasible = every hard rule (invariant + requirement) passes; guardrails are advisory and never gate it. When it does not close, the badge names the binding constraint: the failing hard rule with the worst margin, anywhere in the composition (a child’s rule is shown by path).',
+  sensitivity:
+    'Which knob to turn. For the rule the badge names (or, when the design closes, the one with the least room left), this ranks the design choices by how far each moves that rule’s margin over one small step of its own value — up and down shown separately, since a knob is rarely symmetric and an equality rule genuinely differs on the two sides. It is a snapshot: each knob costs two full re-evaluations of the whole sheet, so it is taken when you ask and retired as soon as you change the design.',
+  wiringWarning:
+    'A block declares which node its gate and source are tied to, and the sizing says what its V_GS came out at. Those describe the same wire, so they must agree — this says by how much they do not. Nothing is repaired and no verdict moves: which of the two is wrong (the declared node, or the bind that implied a different one) is a design decision. It is the failure that lets two blocks be sized at gate voltages hundreds of millivolts apart with every rule still green. To make it gate the design, write a hard rule on the same two numbers.',
   sheetSweep:
     'Sweep one variable across its range and chart every rule’s margin — the feasibility region where the design closes.',
   sheetSweep2:

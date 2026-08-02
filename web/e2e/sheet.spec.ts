@@ -914,3 +914,125 @@ test('containment edges: chips report each range end; a dead edge names the solv
   await expect(chips.nth(0)).toHaveClass(/no/);
   await expect(chips.nth(0)).toContainText(/does not change sign/);
 });
+
+test('design sheet: the sensitivity readout ranks the knobs that move the binding rule', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // Nothing is computed until asked: every knob costs two full re-evaluations, so the readout
+  // must never ride along with the badge.
+  await expect(sp.locator('.ssens')).toHaveCount(0);
+
+  await sp.locator('.sensb').click();
+  const sens = sp.locator('.ssens');
+  await expect(sens).toBeVisible();
+  // The default example fails `headroom` at gm/ID = 12 (V* ≈ 167 mV under a 200 mV floor), so
+  // that is the rule the knobs are ranked against — the same one the badge names.
+  await expect(sens.locator('.scap')).toContainText('headroom');
+
+  // One line per design knob, ranked by how far it moves that margin over a common fractional
+  // step. V* = 2/(gm/ID) depends on the efficiency knob and not at all on L, so gm_id leads.
+  const lines = sens.locator('.skline');
+  await expect(lines).toHaveCount(2);
+  await expect(lines.first().locator('code')).toHaveText('gm_id');
+  await expect(lines.first()).toContainText('↑');
+  await expect(lines.first()).toContainText('↓');
+  await page.screenshot({ path: `${SCREENS}/sheet-sensitivity.png`, fullPage: true });
+
+  // It is a snapshot of one operating point: moving the design retires it rather than letting a
+  // stale ranking describe a sheet that has changed underneath it.
+  const gmId = sp.locator('.svar[data-param="gm_id"] .num');
+  await gmId.fill('8');
+  await gmId.blur();
+  await expect(sp.locator('.ssens')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: an imported gate-wiring declaration survives import and reload (still checked)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // `wiring` is an OBJECT on a use whose siblings are strings, so a sanitizer that rebuilds the
+  // use field by field deletes it — and the consistency check goes quiet on the next reload
+  // without anything on screen saying so. Here the declared gate node (0 V) contradicts the
+  // block's own sized V_GS by hundreds of millivolts, so a live check must say so out loud.
+  // The block publishes nothing: the check reads the bind, so no `provide` list is involved.
+  const wiredSheet = (wiring: unknown): string =>
+    JSON.stringify({
+      title: 'Wired gate',
+      polarity: 'n',
+      params: [{ name: 'V_g', value: 0 }],
+      rows: [],
+      rules: [],
+      uses: [
+        {
+          name: 'n1',
+          wiring,
+          doc: {
+            title: 'input device',
+            polarity: 'n',
+            params: [
+              { name: 'L', value: 5e-7 },
+              { name: 'Ib', value: 1e-5 },
+            ],
+            bind: { L: 'L', id: 'Ib', gm_id: '10', vds: '0.9' },
+            rows: [],
+            rules: [],
+          },
+        },
+      ],
+    });
+  const load = page.locator('.load input[type=file]');
+  await load.setInputFiles({
+    name: 'wired-gate.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(wiredSheet({ gate: 'V_g', source: '0' })),
+  });
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Wired gate');
+  const warn = page.locator('.sheet .pwarn', { hasText: 'wiring' });
+  await expect(warn).toContainText('delta');
+  // The finding IS the two voltages and the delta at the end of the sentence, so the line has to
+  // survive to its last word — captured at panel scope, where a clipped one would show.
+  await warn.scrollIntoViewIfNeeded();
+  await page
+    .locator('.grid .panel')
+    .last()
+    .screenshot({ path: `${SCREENS}/sheet-wiring.png` });
+
+  // A declaration that survives sanitization with NOTHING in it — `{}` here, or an object whose
+  // every key was rejected — is the same hole from the other side: the core errors on a
+  // half-written wiring, so a sheet that imported without it would read CLEANER than the core
+  // reads it. Fail closed at the door, naming the field.
+  await load.setInputFiles({
+    name: 'empty-wiring.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(wiredSheet({})),
+  });
+  await expect(page.locator('.qa.error')).toContainText(
+    'malformed sheet content at uses[0].wiring',
+  );
+  await expect(page.locator('.usheets .dev', { hasText: 'empty-wiring' })).toHaveCount(0);
+
+  // And again after a reload, which restores the sheet through the same sanitizer.
+  await page.reload();
+  await expect(page.locator('.sheet .pwarn', { hasText: 'wiring' })).toContainText('delta');
+
+  expect(errors).toEqual([]);
+});

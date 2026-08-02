@@ -11,6 +11,9 @@
     pinned as isPinned,
     engineSolved,
     bindingConstraint,
+    limitingConstraint,
+    sheetSensitivities,
+    SENSITIVITY_REL_STEP,
     MARGIN_PCT_CAP,
     resolveSheetRefs,
     flattenSheetDoc,
@@ -30,6 +33,7 @@
     type SheetRule,
     type SheetUse,
     type SheetSweep2,
+    type SheetSensitivity,
     type SheetChildReport,
     type SheetEdgeReport,
     type QAWarning,
@@ -76,11 +80,17 @@
   // One unresolved or mis-parameterized child makes every parent expression that
   // reads its provides "not defined" — a ~20-line wall for one root cause. Collapse
   // the fan-out to one line per child prefix; every other warning passes through.
+  /** One diagnostic line: what happened, and — where the finding needs a concept to read it —
+   *  the standing explanation of what the check is, carried into the tooltip. */
+  type WarnLine = { text: string; help?: string };
+  /** Validation and evaluation diagnostics as one list — walked twice below (warnings, then the
+   *  informational solver notes), so the concatenation is built once. */
+  const allWarn = $derived.by(() => [...rr.warnings, ...result.warnings]);
   const shownWarnings = $derived.by(() => {
-    const ws = [...rr.warnings, ...result.warnings].filter((w) => w.severity !== 'info');
+    const ws = allWarn.filter((w) => w.severity !== 'info');
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive grouping scratch, discarded on return
     const byChild = new Map<string, { count: number; first: string }>();
-    const rest: string[] = [];
+    const rest: WarnLine[] = [];
     for (const w of ws) {
       // The core reports the undefined name structurally; a child-provide symbol
       // (`ld__gm`) groups under its child prefix.
@@ -90,15 +100,39 @@
         const e = byChild.get(child) ?? { count: 0, first: w.message };
         e.count++;
         byChild.set(child, e);
-      } else rest.push(w.message);
+      } else {
+        // A gate-wiring disagreement states two voltages and nothing about WHY the tool is
+        // comparing them; the concept — a node the sizing and the schematic describe
+        // differently — rides along in the tooltip so the number has a meaning.
+        rest.push({
+          text: w.message,
+          ...(w.rule === 'sheet-wiring' ? { help: CONTROL_HELP.wiringWarning } : {}),
+        });
+      }
     }
-    const collapsed = [...byChild].map(([child, e]) =>
-      e.count > 1
-        ? `block "${child}" resolves nothing yet — ${e.count} dependent expressions read n/a (assign its device and check its params)`
-        : e.first,
-    );
+    const collapsed = [...byChild].map(([child, e]): WarnLine => ({
+      text:
+        e.count > 1
+          ? `block "${child}" resolves nothing yet — ${e.count} dependent expressions read n/a (assign its device and check its params)`
+          : e.first,
+    }));
     return [...rest, ...collapsed];
   });
+
+  // The solver's pass-count note is INFO, not a warning: the loop closed and the verdict stands,
+  // so it must not sit among the things that went wrong — but a loop that needed that many
+  // substitutions is contracting weakly, which is worth knowing before the sheet is trusted at
+  // another operating point. Its own quiet line, in the core's words.
+  const solveNotes = $derived(
+    allWarn.filter((w) => w.severity === 'info' && w.rule === 'sheet-solve').map((w) => w.message),
+  );
+
+  // Onboarding hints lead the same list the diagnostics land in — they are the likeliest cause of
+  // the diagnostics below them — and carry no help of their own (they already name the remedy).
+  const warnLines = $derived.by(() => [
+    ...signHints.map((text): WarnLine => ({ text })),
+    ...shownWarnings,
+  ]);
 
   // Onboarding guard: a child bound to a signed-PMOS table while its companion
   // `<child>_sign` param still reads +1 is the most common dead-on-arrival state for
@@ -143,6 +177,92 @@
   // table below at all. Core owns the definition, so the badge and the 2-D map's per-cell cause
   // can never disagree about which rule binds.
   const binding = $derived(bindingConstraint(result));
+
+  // ── Sensitivity readout: the missing half of a margin. A margin says how much room is left;
+  // this says which knob moves it and how far, so an infeasible design comes with somewhere to
+  // turn. Each knob costs TWO full evaluations, so it is never part of the reactive path — it is
+  // a snapshot taken on click, against the doc and device it was taken at. When the design moves
+  // under it the snapshot stops describing what is on screen, so it simply stops rendering rather
+  // than ageing silently; one more click re-takes it. $state.raw: the snapshot holds the device
+  // table, which must never be deep-proxied (megabytes of Float64Array), and identity comparison
+  // against the props is the freshness test.
+  type Snapshot = {
+    doc: SheetDoc;
+    dev: DeviceTable;
+    focus: { id: string; marginPct: number } | undefined;
+    rows: SheetSensitivity[];
+  };
+  let snap = $state.raw<Snapshot | null>(null);
+  const shot = $derived(snap && snap.doc === cfg && snap.dev === device ? snap : null);
+  const sens = $derived(shot?.rows ?? null);
+  // A retired snapshot stops RENDERING through `shot` immediately; this drops the reference so it
+  // stops holding a device table nobody is looking at any more — a switched-away table is
+  // megabytes of Float64Array.
+  $effect(() => {
+    if (snap && snap !== shot) snap = null;
+  });
+
+  // The rule the readout points at: the one that broke the design when something did, else the
+  // one closest to breaking. Both are core definitions over the whole composition, so the knobs
+  // are ranked against the same rule the badge names. Taken WITH the snapshot, not derived
+  // reactively: the tree walk behind the limiting constraint would otherwise run on every slider
+  // frame to answer a question only this readout asks, and any design change that could move the
+  // answer retires the snapshot anyway.
+  const focusRule = $derived(shot?.focus);
+  function toggleSens(): void {
+    if (shot) {
+      snap = null;
+      return;
+    }
+    const focus = binding ?? limitingConstraint(result);
+    snap = {
+      doc: cfg,
+      dev: device,
+      focus,
+      // Naming the rule keeps the probes off the containment-edge path unless the rule in
+      // question lives on an edge — the difference between 2 and 2*(1 + edges) evaluations per
+      // knob.
+      rows: sheetSensitivities(cfg, device, resolveDevice, {
+        refs,
+        ...(focus ? { rule: focus.id } : {}),
+      }),
+    };
+  }
+
+  // Knobs ranked for that rule. The ranking quantity is the margin change over ONE STEP of each
+  // knob — a common fractional move — not the per-unit slope: the params are in different SI
+  // units (a length against a gm/ID against a current), and a per-unit derivative would rank them
+  // by how small their units are. Both directions are shown rather than one slope, because an
+  // equality rule's margin has a cusp at agreement where the two sides genuinely differ.
+  const KNOBS_SHOWN = 3;
+  const sensLines = $derived.by(() => {
+    const rows = sens;
+    const id = focusRule?.id;
+    if (!rows || id === undefined) return null;
+    const knobs: { param: string; plus: number; minus: number; mag: number; step: number }[] = [];
+    // A knob that could not be probed reports WHY (an unbounded zero, a range too narrow, an
+    // evaluation that did not stand). Never a fabricated number in place of a missing one.
+    const blocked: { param: string; why: string }[] = [];
+    const reach = (v: number): number => (Number.isFinite(v) ? Math.abs(v) : 0);
+    for (const s of rows) {
+      const r = s.rules.find((x) => x.id === id);
+      if (r && (Number.isFinite(r.deltaPlus) || Number.isFinite(r.deltaMinus)))
+        knobs.push({
+          param: s.param,
+          plus: r.deltaPlus,
+          minus: r.deltaMinus,
+          mag: Math.max(reach(r.deltaPlus), reach(r.deltaMinus)),
+          step: s.step,
+        });
+      else
+        blocked.push({
+          param: s.param,
+          why: s.error ?? `no response to "${id}" was recorded`,
+        });
+    }
+    knobs.sort((a, b) => b.mag - a.mag);
+    return { knobs: knobs.slice(0, KNOBS_SHOWN), blocked: blocked.slice(0, KNOBS_SHOWN) };
+  });
 
   // ── Feasibility sweep: vary one slider parameter across its range and chart every rule's
   // relative margin. Only finitely-bounded params can be swept (the sweep walks [min,max]).
@@ -383,6 +503,10 @@
 
   const fmt = (v: number | undefined): string =>
     v == null || !Number.isFinite(v) ? '—' : formatSI(v);
+  /** A signed change, for the sensitivity readout: an explicit '+' so the direction reads at a
+   *  glance, and '—' wherever a probe produced no number — never a stand-in zero. */
+  const signedFmt = (v: number): string =>
+    Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${formatSI(v)}` : '—';
 
   /** The one-line cause on a failing edge chip: the solver's own message when the run
    *  could not stand at all, else its worst failing hard rule (same definition the badge
@@ -752,6 +876,13 @@
           >{binding.id} {pct(binding.marginPct)}</i
         >{/if}
     </span>
+    <!-- On demand only: each knob costs two full evaluations, so this never runs with the badge. -->
+    <button
+      class="sensb"
+      class:on={sens !== null}
+      title={CONTROL_HELP.sensitivity}
+      onclick={toggleSens}>sensitivities</button
+    >
     {#if result.bind}
       {#if result.bind.ok}
         <span class="bind"
@@ -807,6 +938,33 @@
       {/if}
     </span>
   </div>
+
+  {#if sensLines}
+    <div class="ssens">
+      <span class="glabel" title={CONTROL_HELP.sensitivity}>sensitivities</span>
+      {#if focusRule}
+        <p class="scap">
+          how <b>{focusRule.id}</b>’s margin moves per {SENSITIVITY_REL_STEP * 100}% step of each
+          knob, in that rule’s own units — ↑ raises the knob, ↓ lowers it
+        </p>
+        {#each sensLines.knobs as k}
+          <div class="skline" title="step {fmt(k.step)} on {k.param}">
+            <code>{k.param}</code>
+            <span>↑ {signedFmt(k.plus)}</span>
+            <span>↓ {signedFmt(k.minus)}</span>
+          </div>
+        {/each}
+        {#each sensLines.blocked as b}
+          <div class="skline dead"><code>{b.param}</code><span>{b.why}</span></div>
+        {/each}
+        {#if !sensLines.knobs.length && !sensLines.blocked.length}
+          <div class="skline dead">this sheet has no free design knob to probe</div>
+        {/if}
+      {:else}
+        <div class="skline dead">no hard rule reports a finite margin to rank knobs against</div>
+      {/if}
+    </div>
+  {/if}
 
   {#if cfg.description}
     <p class="sdesc">{@html mathText(cfg.description)}</p>
@@ -970,8 +1128,14 @@
        referenced block below reads infeasible. One dead child makes EVERY dependent
        row "not defined"; that fan-out is collapsed to a single line per child so the
        root cause isn't buried under its own consequences. -->
-  {#each [...signHints, ...shownWarnings] as w}
-    <p class="pwarn" title={w}>⚠ {w}</p>
+  {#each warnLines as w}
+    <p class="pwarn" title={w.help ? `${w.text}\n\n${w.help}` : w.text}>⚠ {w.text}</p>
+  {/each}
+
+  <!-- Informational, and kept out of the warning list above: nothing went wrong, the loop closed
+       and the verdict stands. -->
+  {#each solveNotes as n}
+    <p class="pinfo">{n}</p>
   {/each}
 </div>
 
@@ -1322,6 +1486,7 @@
     opacity: 0.55;
   }
   .detach,
+  .sensb,
   .sexp button {
     font: inherit;
     font-size: calc(0.68rem * var(--text-scale));
@@ -1335,8 +1500,42 @@
     opacity: 0.7;
   }
   .detach:hover,
+  .sensb:hover,
   .sexp button:hover {
     opacity: 1;
+  }
+  /* The toggle stays lit while its snapshot is on screen, so it reads as a mode rather than a
+     one-shot action — and goes dark by itself when a design edit retires the snapshot. */
+  .sensb.on {
+    opacity: 1;
+    border-color: currentColor;
+  }
+  /* On-demand knob ranking for the binding (or limiting) rule — a short block, deliberately:
+     three knobs and their reasons, not a table of every rule against every param. */
+  .ssens {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.25rem 0.45rem;
+    border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    border-radius: 4px;
+  }
+  .skline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.15rem 0.9rem;
+    font-family: ui-monospace, monospace;
+    font-size: calc(0.76rem * var(--text-scale));
+  }
+  .skline code {
+    min-width: 7rem;
+  }
+  /* A knob that could not be probed states the reason in prose — no number, so no monospace
+     column to line up with. */
+  .skline.dead {
+    opacity: 0.6;
+    font-family: inherit;
   }
   .sexp button:disabled {
     opacity: 0.35;
@@ -1458,7 +1657,8 @@
     opacity: 0.55;
   }
   .perr,
-  .pwarn {
+  .pwarn,
+  .pinfo {
     margin: 0;
     /* .sheet is a height-constrained flex column: without this a warning at the
        bottom is squashed to zero height (invisible) instead of scrolling. */
@@ -1470,7 +1670,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Warnings WRAP where the inline errors do not: a wiring disagreement's whole content is the
+     two voltages and the delta at the end of the sentence, which a single clipped line throws
+     away. Two or three lines in a scrolling panel is the cheaper cost. */
   .pwarn {
     opacity: 0.8;
+    white-space: normal;
+  }
+  /* A note, not a warning: the design closed. Same line treatment, none of the alarm colour. */
+  .pinfo {
+    color: inherit;
+    opacity: 0.6;
+    white-space: normal;
   }
 </style>
