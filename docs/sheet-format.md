@@ -166,6 +166,70 @@ hit rate teaches authors to ignore the channel.
 A device whose `vsb` depends on its own `VGS` — an input pair standing on a tail node — is a bias
 loop, so declare it through a tearing variable (see [Closing a bias loop](#closing-a-bias-loop-solvefor)).
 
+### Gate wiring (`wiring`)
+
+A bind declares two of a device's three terminal voltages — `vds` and `vsb` — because those are
+table axes the sizing has to slice. The third, the gate, it never declares: `vgs` is an *output*
+of the bind, the answer to "what drive does this current at this inversion level need". So a
+sheet can name the node a gate is tied to, size the device, and never compare the two. That is
+how a design ends up sized at one voltage and wired at another with every rule still green.
+
+The declaration therefore lives on the **use**, not on the bind — it is a fact about how the
+parent wired the child in, which is knowledge only the parent has:
+
+```json
+{ "name": "s2", "doc": { }, "params": { },
+  "wiring": { "gate": "V1", "source": "VDD" } }
+```
+
+| Key | Meaning |
+|-|-|
+| `gate` | Expression for the node the child's gate is tied to. |
+| `source` | Expression for the node its source sits on. |
+
+Both node expressions evaluate in the **parent's final scope**: unlike a param override, which
+sees only earlier siblings, the check runs once on the settled result, so every sibling's
+provides *and* the parent's own rows are in scope. A node the sheet derives as a row is
+therefore as usable here as one it types as a param. The identity checked is
+
+```
+gate == source ± |the child's sized VGS|      (+ for an n child, - for a p one)
+```
+
+**No sign to write, and none to get wrong.** The magnitude comes from the child's own bind and
+the direction from its declared `polarity`, so the check is the same on a signed PMOS export
+(negative `vgs` axis) and on one in N convention (positive) — the two conventions differ only in
+a sign the identity never reads. There is deliberately no author-supplied sign expression: a
+wrong one would silently invert the identity and report agreement on a design wired backwards,
+and the polarity the block already declares carries the same information with nothing to mistype.
+
+Because the voltage compared against is the **bind**, not a scalar the child publishes, no
+`provide` list stands between the declaration and the number: a block that sizes can always be
+checked. A block with no bind has no sized gate-source voltage, and the evaluation says so
+rather than reading silently clean.
+
+**Warn, never fail.** A disagreement larger than **10 mV** (absolute, in the voltage domain —
+a relative tolerance would excuse a bigger error on a bigger supply) is reported as a
+`sheet-wiring` warning naming both voltages and the delta. It never changes the verdict and
+never repairs anything: the declaration and the sizing are two descriptions of one node, and
+which of them is wrong is a design question the author answers. An author who wants the
+disagreement to *gate* writes a hard rule over the same two quantities — that is the escalation
+path, and it is a deliberate one, because a sheet mid-repair should still evaluate.
+
+**A half-declaration is a validation error.** `gate` without `source`, an unknown key, an
+expression that does not parse — none of these state an identity, and a sheet reported as
+wiring-checked when nothing was checked is exactly the silence this mechanism exists to break.
+Structural problems are the *only* route by which wiring reaches a verdict.
+
+A sheet may declare `wiring` on a child *and* claim operating ranges through `edges`. The
+disagreement is then reported once per run — the base evaluation plus each edge — and that is
+intended, not a duplicate: an edge re-sizes the design at another point, so its residual is a
+different measurement of the same identity.
+
+The check is local to each node of the tree: a child sheet's own uses are checked when that
+child evaluates. There is no cross-tree wiring graph and no KCL — this declares one identity
+per gate and checks it, nothing more.
+
 ## Rows
 
 Each entry in `rows` is a named author expression — an intermediate `let` or an output —
@@ -345,6 +409,7 @@ exposes named scalars to the parent through its `provide` list.
 | `ref` | string | A library-sheet id to include by reference (resolved before evaluation). A use needs `doc` or `ref`; carrying **both** is a pinned snapshot — the embedded copy wins and the ref remains as provenance. |
 | `device` | string, optional | The device the child sizes against (a resolver key); absent ⇒ the child inherits the parent's table. |
 | `params` | object, optional | Overrides of the child's param values, each an expression evaluated in the **parent** scope. |
+| `wiring` | object, optional | The nodes the child's gate and source are tied to, checked against the `vgs` its own bind sized to (see [Gate wiring](#gate-wiring-wiring)). |
 
 A child's provided scalars surface in the parent namespace as flat names `name__key` (the
 engine has no member access, so `child.key` cannot parse — the join is a `__` separator).
@@ -625,6 +690,69 @@ Two views trace a sheet across parameter ranges (both need finitely-bounded slid
   is the classic), answering questions a 1-D cut cannot: "what is the minimum `L` that stays
   feasible across the whole `gm_id` range?" Each infeasible cell names the worst failing hard
   rule (by tree path), so a child's constraint is attributed to the block it lives in.
+
+A margin says how much room a rule has but not which knob moves it, so the core also exports
+`sheetSensitivities(doc, table?, resolveDevice?, opts?)`: it re-evaluates the whole sheet a
+step either side of each `choice` param and reports, per rule, how far that rule's margin
+moved — the ranking a designer needs to know what to turn next.
+
+## The author's contract
+
+The engine evaluates what a sheet declares; it never traverses a circuit. That division of
+labor puts specific responsibilities on the sheet author. They are collected here in one
+place, each with the check that catches a violation. The pattern throughout: the author
+states the bias plan honestly, and the engine makes a false statement loud — it never
+silently repairs one.
+
+1. **Declare the operating point of every device.** Bias axes (`vds`, `vsb`) are expressions
+   over named node parameters, stated at the bind (see *The operating point*). A bias axis
+   the author did not declare is taken from the namespace default and reported in the bind's
+   `assumed` list — visible, never silently adopted.
+2. **Name internal nodes as parameters and write every `vds` as a subtraction of nodes.**
+   Node form makes branch sums checkable and inconsistencies expressible. A source sitting
+   above the bulk means `vsb` is declared from the same node that sets the source — body
+   effect enters through the declared coordinate, not through a corrected formula.
+3. **Never bias a child with an estimate of that child's own answer.** A hand-tuned
+   parameter standing in for a quantity the sheet itself computes is the retired pattern.
+   Backstop: the `sheet-standin` validation rule flags a parameter that feeds a child's bias
+   while a rule asserts it equals that child's output.
+4. **Declare wiring identities instead of copying their consequence.** A diode-connected
+   device is `diode: true` — resolved exactly on the table's `vds = vgs` diagonal — not a
+   hand-copied drop that goes stale when the operating point moves.
+5. **Close a genuine loop explicitly, or do not close it at all.** `solveFor` is for a
+   quantity defined in terms of the device's own answer; `pin` is for a typed specification
+   an internal node must produce, with a bracket that must size at both ends (see *Closing a
+   bias loop* and *Entering from a spec*). Backstop: both solvers fail closed with named
+   reasons — divergence, overshoot, a bracket that never straddles, a residual that never
+   reaches zero — and a failed solve is never reported as a sized design.
+6. **A claimed operating range is a claim to prove.** Declare `edges` so the ends re-evaluate
+   completely on every run, and say in the note that the edges prove the endpoints while the
+   sweep owns the interior (see *Containment edges*). Backstop: a failing edge fails the
+   sheet hard under an edge-qualified rule id.
+7. **Pick each rule's kind for its verdict semantics.** Requirements and invariants gate
+   feasibility; guardrails advise and never block; `==` fixed points carry a tolerance (see
+   *Rule kinds*). A hard rule whose side cannot compute reads `na` and fails closed — so
+   hard rules may only use quantities every supported table carries; model missing data as
+   explicit `*_est` parameters with notes.
+8. **Say "estimate" where the sheet estimates.** Stability, dynamics, and anything a
+   simulator owns is labeled estimate-grade in its note. The sheet's authority ends where
+   the lookup table's does.
+9. **Respect polarity by declaration, not sign-fixing.** Signed PMOS tables pair with
+   `*_sign` parameters; value columns are magnitudes, axes keep their signs (see
+   *Signed-table sign parameters*). Backstop: the panel warns when a sign parameter
+   disagrees with the bound table's recorded polarity.
+10. **Keep identifiers plain.** `@` and `.` are reserved in rule ids, edge names, and block
+    names — they become tree-keyed, edge-qualified ids in reports. Validation rejects them.
+11. **A node parameter's note names its setter.** Every declared node should say who sets
+    it: a solve, a derivation from another block's output, a bias network the application
+    provides, or a deliberate choice checked by a rule. Writing the sentence is the point —
+    "this node is set by …" has exactly one honest completion, and a node whose setter is a
+    device's own gate cannot honestly be typed as a free number. Backstop: declare the
+    child's `wiring` (see *Gate wiring*) and the engine checks that node against the same
+    device's sized `vgs` on every evaluation, reporting a disagreement past 10 mV. The note says
+    which description is authoritative; the check says whether the two still agree, so a
+    gate that must sit one `vgs` below a rail, or one gate shared by two devices, no longer
+    evaluates without complaint.
 
 ## A complete worked example
 
