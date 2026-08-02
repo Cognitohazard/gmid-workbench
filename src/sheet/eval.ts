@@ -15,6 +15,7 @@ import { diodeGrid } from '../grid';
 import {
   BIAS_AXES,
   MAX_USE_DEPTH,
+  PATH_SEP,
   engineSolved,
   isHardRule,
   joinProvide,
@@ -69,6 +70,22 @@ const NO_WARN = (): void => {};
  * and the snap reads it as the deterministic near-miss (amber) that it is.
  */
 export const MARGIN_SNAP_REL = 1e-5;
+
+/**
+ * How far a declared gate wiring may disagree with the child's own vgs before it is reported.
+ * ABSOLUTE and in the voltage domain, not relative: a relative tolerance would excuse a larger
+ * error on a higher supply, where the node budget is no roomier. 10 mV is the resolution bias
+ * plans are actually written to — designers round node levels to about that — and it sits an
+ * order of magnitude below the real disagreements this check exists to catch (the three found
+ * by hand were 41, 350 and 690 mV).
+ */
+export const WIRING_TOL = 0.01;
+
+/** Passes a tearing loop may take and still be unremarkable. Above it the closure is weak or
+ *  oscillatory — the designer's two-pass smell — which is worth a note even though the loop
+ *  did close. Pins are excluded: bisection spends ~20 probes by construction, so a probe
+ *  count carries no fragility signal there. */
+const SOLVE_PASSES_NOTE = 16;
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -381,13 +398,14 @@ function evalRule(
   const rhs = evalScalar(rule.rhs, values, scope, warn, `rule "${rule.id}" rhs`);
   const lhsValue = lhs ?? NaN;
   const rhsValue = rhs ?? NaN;
-  const base = { id: rule.id, kind: rule.kind, text, lhsValue, rhsValue };
+  const base = { id: rule.id, kind: rule.kind, op: rule.op, text, lhsValue, rhsValue };
 
   if (lhs === undefined || rhs === undefined || !Number.isFinite(lhs) || !Number.isFinite(rhs)) {
     return {
       ...base,
       margin: NaN,
       marginPct: NaN,
+      rawMargin: NaN,
       status: 'na',
       detail: 'a side did not resolve to a finite number',
     };
@@ -410,10 +428,14 @@ function evalRule(
       ...base,
       margin: NaN,
       marginPct: NaN,
+      rawMargin: NaN,
       status: 'na',
       detail: 'margin did not compute to a finite number (check tolPct)',
     };
   }
+  // Kept before the snap: the verdict wants the snapped value, a DERIVATIVE wants the honest
+  // one (see RuleResult.rawMargin).
+  const rawMargin = margin;
   // see MARGIN_SNAP_REL — a bind-pinned spec must not coin-flip on FP noise
   const snapped =
     margin !== 0 && Math.abs(margin) <= MARGIN_SNAP_REL * Math.max(Math.abs(lhs), Math.abs(rhs));
@@ -430,7 +452,7 @@ function evalRule(
   else if (rule.op === '==')
     status = 'pass'; // '==' is pass/fail only — no near-miss (amber) band
   else status = marginPct < AMBER_BAND ? 'amber' : 'pass';
-  return { ...base, margin, marginPct, status };
+  return { ...base, margin, marginPct, rawMargin, status };
 }
 
 /**
@@ -628,6 +650,109 @@ function evalChildren(
 }
 
 /**
+ * Check every child use that DECLARES its gate wiring against the identity that wiring imposes:
+ * the gate sits one gate-source voltage from the source, above it for an N device and below it
+ * for a P one (see SheetWiring). Runs once, on the FINAL result of a node — after any pin or
+ * tearing solve, and after the parent's own rows, so a node the sheet defines as a row is as
+ * reachable as one it defines as a param, and a solver's probes never spam the diagnostic.
+ *
+ * The voltage compared against is the child's own BIND — the sizing's answer, which the sizing
+ * always has — not a scalar the child publishes upward. That is what keeps the check
+ * unswitchoffable: no `provide` list, no parent expression, and no sign convention stands
+ * between the declaration and the number it is checked against.
+ *
+ * A sheet that also claims operating ranges reports the disagreement once per RUN — the base
+ * evaluation plus each containment edge, whose warnings ride its own report verbatim. That is
+ * intended: an edge re-sizes the design at another point, so its residual is a different
+ * measurement of the identity, not a duplicate of the first.
+ *
+ * A DEDICATED evaluator, deliberately: every runtime problem here — an expression that does not
+ * resolve, a block with no sized operating point, a disagreement past WIRING_TOL — is a
+ * warning-severity 'sheet-wiring' diagnostic and nothing more. It never throws, never touches
+ * feasibility, and never repairs anything. A wiring declaration describes the schematic the
+ * author drew; when it disagrees with the sizing, which of the two is wrong is the author's
+ * call, and an author who wants the disagreement to GATE writes a hard rule on the same numbers.
+ * (Structural problems — a half-declaration, an unknown key, an expression that does not parse —
+ * are validation errors, which is the only way wiring reaches a verdict.)
+ */
+function checkWiring(doc: SheetDoc, res: SheetResult): SheetResult {
+  // Shape-guarded rather than trusted: evaluate never throws, so a malformed authored doc
+  // (uses as a string, wiring as a string) has to degrade to "nothing to check".
+  const uses = Array.isArray(doc.uses) ? doc.uses : [];
+  const out: QAWarning[] = [];
+  const scope = scalarScope(res.values);
+  const sized = new Map((res.children ?? []).map((c) => [c.name, c.bind]));
+  for (const use of uses) {
+    // Read as `unknown`: a persisted doc reaches evaluation unverified, and the shape checks
+    // below are the same ones validate.ts reports on — stated here in the types, not assumed.
+    const w: unknown = use?.wiring;
+    if (typeof w !== 'object' || w === null) continue;
+    const decl = w as Record<string, unknown>;
+    const where = `use "${use.name}" wiring`;
+    const warn = (message: string): void => {
+      out.push({ rule: 'sheet-wiring', severity: 'warning', message, location: use.name });
+    };
+    // A use the evaluation already killed — an unresolved ref, a device that did not resolve, an
+    // override that would not evaluate, a bind that could not size — has no operating point to
+    // check against, and the reason is already reported. A second line advising a fix to the
+    // wiring would be noise stacked on the finding, and worse, advice about the wrong thing. The
+    // prefix match is what makes that true for a child's INTERNAL errors: they roll up to this
+    // use under its path (`<use>.bind`, `<use>.<inner>`), not under the bare use name. That
+    // path spelling is a contract with ONE owner — prefixUseWarning (types.ts) — so this match
+    // moves if and only if that function does.
+    if (
+      res.warnings.some(
+        (v) =>
+          v.severity === 'error' &&
+          (v.location === use.name || (v.location ?? '').startsWith(use.name + PATH_SEP)),
+      )
+    )
+      continue;
+    // The sized gate-source voltage first: without it there is no identity to form, and reporting
+    // each expression separately as well would turn one unsized block into three warnings.
+    const vgs = sized.get(use.name)?.vgs;
+    if (vgs === undefined || !Number.isFinite(vgs)) {
+      warn(
+        `${where}: the block declares no bind, so it has no sized gate-source voltage for the ` +
+          `wiring identity to be checked against`,
+      );
+      continue;
+    }
+    /** One wiring expression against the final scope. Diagnostics are swallowed (NO_WARN) and
+     *  re-raised here: this evaluator emits 'sheet-wiring' warnings only, never the parse
+     *  errors evalScalar would otherwise push at error severity. */
+    const at = (src: unknown, key: string): number | undefined => {
+      if (typeof src !== 'string') {
+        warn(`${where}: ${key} is not an expression`);
+        return undefined;
+      }
+      const v = evalScalar(src, res.values, scope, NO_WARN, where);
+      if (v === undefined || !Number.isFinite(v)) {
+        warn(`${where}: ${key} "${src}" did not resolve to a finite number — cannot check`);
+        return undefined;
+      }
+      return v;
+    };
+    const gate = at(decl.gate, 'gate');
+    const source = at(decl.source, 'source');
+    if (gate === undefined || source === undefined) continue;
+    // Magnitude plus direction, never the raw axis value: the sign lives in the child's declared
+    // polarity, so a signed PMOS export and one in N convention check identically.
+    const expected = source + (use.doc?.polarity === 'p' ? -1 : 1) * Math.abs(vgs);
+    const delta = gate - expected;
+    if (Math.abs(delta) > WIRING_TOL) {
+      warn(
+        `${where}: gate reads ${gate.toExponential(4)} V but the block's source and its own ` +
+          `sized V_GS put that node at ${expected.toExponential(4)} V — they describe the same ` +
+          `node, so the design is sized at one voltage and wired at another (delta ` +
+          `${delta.toExponential(3)} V, tolerance ${WIRING_TOL} V)`,
+      );
+    }
+  }
+  return out.length ? { ...res, warnings: [...res.warnings, ...out] } : res;
+}
+
+/**
  * One evaluation pass. `solved` overrides the seeded value of a tearing-variable param
  * (see SheetVar.solveFor); everything else behaves as if the doc had those values.
  */
@@ -777,6 +902,30 @@ function tornSheets(doc: SheetDoc, depth = 0): number {
   return n;
 }
 
+/**
+ * A loop that DID close, but only after SOLVE_PASSES_NOTE passes. Informational: the design is
+ * sized and the verdict stands, so nothing about feasibility changes — but a loop that needs
+ * that many substitutions is contracting weakly or oscillating into place, and either is worth
+ * a look before the sheet is trusted at a different operating point. Whether the step had to be
+ * damped separates the two, so it rides along.
+ */
+function slowClosure(res: SheetResult, passes: number, damp: number): SheetResult {
+  return {
+    ...res,
+    warnings: [
+      ...res.warnings,
+      {
+        rule: 'sheet-solve',
+        severity: 'info',
+        message:
+          `bias loop needed ${passes} substitution passes — inspect weak or oscillatory ` +
+          `closure` +
+          (damp < 1 ? ` (the step was damped to ${damp} to stop it overshooting)` : ''),
+      },
+    ],
+  };
+}
+
 /** The evaluation, marked infeasible and carrying one more error warning. */
 function solveFailed(res: SheetResult, message: string): SheetResult {
   return {
@@ -872,7 +1021,9 @@ function solveTorn(
     }
     // `res` was evaluated AT `est` as it stood, so once every estimate agrees with what the
     // sheet resolved for it, this result already IS the converged one.
-    if (done) return res;
+    // `passes - 1`: the first pass only CHECKS the authored guesses against what the sheet
+    // resolved for them, so a loop that agreed immediately performed no substitution at all.
+    if (done) return passes - 1 > SOLVE_PASSES_NOTE ? slowClosure(res, passes - 1, damp) : res;
 
     const prev = err;
     err = Math.sqrt(sq);
@@ -1004,8 +1155,23 @@ export function evaluateSheet(
 }
 
 /**
- * Evaluate one node of a sheet tree with every engine-solved parameter resolved. Two
- * mechanisms, by what the author could honestly write down:
+ * Evaluate one node of a sheet tree: solve it (below), then check the gate wiring its children
+ * declare against the result. The wiring check sits HERE, outside the solve, so it sees the
+ * settled design exactly once — a probe's intermediate estimate is not a wiring disagreement.
+ */
+function evaluateNode(
+  doc: SheetDoc,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+  _depth: number,
+  budget: SolveBudget = { left: SOLVE_PASSES_PER_LOOP * tornSheets(doc) },
+): SheetResult {
+  return checkWiring(doc, solveNode(doc, table, resolveDevice, _depth, budget));
+}
+
+/**
+ * Resolve one node's engine-solved parameters. Two mechanisms, by what the author could
+ * honestly write down:
  *
  *  - `solveFor` — the param is an ESTIMATE of a value the sheet itself resolves; closed by
  *    damped substitution (solveTorn above), with all the care that method needs.
@@ -1019,12 +1185,12 @@ export function evaluateSheet(
  * The pinned solve is the OUTER loop: each probe re-closes any torn loops inside, and both
  * mechanisms draw on the one tree-wide pass budget, so nesting stays bounded.
  */
-function evaluateNode(
+function solveNode(
   doc: SheetDoc,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   _depth: number,
-  budget: SolveBudget = { left: SOLVE_PASSES_PER_LOOP * tornSheets(doc) },
+  budget: SolveBudget,
 ): SheetResult {
   // One home for the structural pin checks (validateSheet raises the same words as errors);
   // checked BEFORE filtering by the pinned() shape guard, because the guard rejects a

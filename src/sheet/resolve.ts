@@ -92,6 +92,14 @@ export function resolveSheetRefs(doc: SheetDoc, refs: SheetRefIndex): ResolveRes
   return { doc: resolveDoc(doc, refs, [], '', warnings, { left: MAX_REF_EXPANSION }), warnings };
 }
 
+/** Materialize refs when an index is supplied; otherwise pass the doc through — the shape every
+ *  entrypoint that takes an optional `refs` opens with. The resolver's failures are error
+ *  warnings, so an unresolved ref rides the same fail-closed channel as a validation error
+ *  wherever this is used. */
+export function resolvedSheet(doc: SheetDoc, refs?: SheetRefIndex): ResolveResult {
+  return refs ? resolveSheetRefs(doc, refs) : { doc, warnings: [] };
+}
+
 function resolveDoc(
   doc: SheetDoc,
   refs: SheetRefIndex,

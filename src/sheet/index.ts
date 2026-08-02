@@ -2,8 +2,16 @@
 // it validates then evaluates, attaching the validation warnings — mirroring the
 // importMostab discipline so a caller cannot skip validation.
 
-import type { DeviceTable, QAWarning } from '../types';
-import { EDGE_SEP, isHardRule, withParams } from './types';
+import type { DeviceTable } from '../types';
+import {
+  EDGE_SEP,
+  indexTreeResults,
+  isHardRule,
+  sweepable,
+  treeRuleResults,
+  withParams,
+} from './types';
+export { sweepable } from './types';
 import { MARGIN_PCT_CAP } from './eval';
 import type {
   RuleResult,
@@ -17,20 +25,14 @@ import type {
 } from './types';
 import { validateSheet } from './validate';
 import { evaluateSheet, type DeviceResolver } from './eval';
-import { resolveSheetRefs, type SheetRefIndex } from './resolve';
+import { resolvedSheet, type SheetRefIndex } from './resolve';
 
 export * from './types';
 export * from './eval';
 export * from './validate';
 export * from './resolve';
+export * from './sensitivity';
 export * from './examples';
-
-/** Materialize refs when an index is supplied; otherwise pass the doc through. The
- *  resolver's failures are error warnings, so they ride the same fail-closed channel
- *  as validation errors in every entrypoint below. */
-function resolved(doc: SheetDoc, refs?: SheetRefIndex): { doc: SheetDoc; warnings: QAWarning[] } {
-  return refs ? resolveSheetRefs(doc, refs) : { doc, warnings: [] };
-}
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a child block's
@@ -45,7 +47,7 @@ export function runSheet(
   resolveDevice?: DeviceResolver,
   refs?: SheetRefIndex,
 ): SheetResult {
-  const r = resolved(doc, refs);
+  const r = resolvedSheet(doc, refs);
   const pre = [...r.warnings, ...validateSheet(r.doc)];
   const res = evaluateSheet(r.doc, table, resolveDevice);
   const blocked = pre.some((w) => w.severity === 'error');
@@ -54,26 +56,6 @@ export function runSheet(
 
 /** Default sample count for a parameter sweep across its [min,max] bound. */
 export const SWEEP_POINTS = 41;
-
-/** True when a param is a finitely-bounded slider variable (sweepable). The ONE
- *  definition of sweepability — both sweep engines and the UI's param pickers consult
- *  it, so they can never disagree about which params can be swept. A param carrying
- *  `solveFor` or `pin` is solved by the engine, not set by anyone — and a pinned param's
- *  min/max are its bisection bracket, not slider bounds — so both are excluded. */
-export function sweepable(
-  v: { min?: number; max?: number; solveFor?: string; pin?: unknown } | undefined,
-): v is { min: number; max: number } {
-  return (
-    !!v &&
-    !v.solveFor &&
-    !v.pin &&
-    v.min !== undefined &&
-    v.max !== undefined &&
-    Number.isFinite(v.min) &&
-    Number.isFinite(v.max) &&
-    v.max > v.min
-  );
-}
 
 /**
  * Every rule the sweep should trace, walking the WHOLE composition: all of the top
@@ -96,45 +78,59 @@ function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepRule[])
 }
 
 /**
- * One number for "how close is this containment edge to closing": the WORST hard-rule
- * margin anywhere in the edge run's tree, each clamped to ±MARGIN_PCT_CAP (a rule against
- * a ~0 bound carries a TINY-scaled, information-free ratio that would otherwise peg the
- * aggregate). Exact-zero margins are SKIPPED: an edge run parks its own boundary rule on
- * zero by construction (the snap), and letting that tautology be the min hid the real
- * headroom — the curve read 0-or-negative forever. An edge that did not stand at all
- * (solve failure, unresolvable set) reads -MARGIN_PCT_CAP, not null: the chart clips it
- * at the bottom, so an edge-driven feasibility flip ALWAYS has an on-chart cause. A
- * standing edge with nothing left to measure reads its verdict as 0 / -MARGIN_PCT_CAP.
+ * Whether a rule outcome carries HEADROOM information — the one definition of "measurable"
+ * shared by the limiting constraint and the containment-edge aggregate, which had drifted
+ * apart as two near-copies. A rule is measurable when it gates the design (hard), produced a
+ * finite relative margin at all, and is not parked exactly on its own boundary: two mechanisms
+ * put it there by construction — a spec pinned by its own bind, and a containment edge landing
+ * on the very range end its rule compares against — and the near-zero snap makes both read
+ * exactly 0. A tautology admitted as the minimum is the answer forever, hiding every rule that
+ * can actually move.
+ */
+function measurable(rr: RuleResult): boolean {
+  return (
+    isHardRule(rr.kind) && rr.status !== 'na' && Number.isFinite(rr.marginPct) && rr.margin !== 0
+  );
+}
+
+/** The smallest relative margin among the outcomes `keep` admits, with the tree key that names
+ *  it — the one selector behind every "which rule is it" answer, so they can never disagree
+ *  about how the minimum is taken. */
+function worstBy(
+  rules: Iterable<[string, RuleResult]>,
+  keep: (rr: RuleResult) => boolean,
+): { id: string; marginPct: number } | undefined {
+  let worst: { id: string; marginPct: number } | undefined;
+  for (const [id, rr] of rules) {
+    if (!keep(rr)) continue;
+    if (!worst || rr.marginPct < worst.marginPct) worst = { id, marginPct: rr.marginPct };
+  }
+  return worst;
+}
+
+/**
+ * One number for "how close is this containment edge to closing": the WORST measurable hard-rule
+ * margin anywhere in the edge run's tree, clamped to ±MARGIN_PCT_CAP (a rule against a ~0 bound
+ * carries a TINY-scaled, information-free ratio that would otherwise peg the aggregate; the
+ * clamp is monotone, so clamping the minimum is the same as taking the minimum of the clamped).
+ * An edge that did not stand at all (solve failure, unresolvable set) reads -MARGIN_PCT_CAP, not
+ * null: the chart clips it at the bottom, so an edge-driven feasibility flip ALWAYS has an
+ * on-chart cause. A standing edge with nothing left to measure reads its verdict as
+ * 0 / -MARGIN_PCT_CAP.
  */
 function edgeMargin(e: SheetEdgeReport): number {
   if (e.error !== undefined) return -MARGIN_PCT_CAP;
-  const byPath = new Map<string, RuleResult>();
-  indexTreeResults(e.rules, e.children, '', byPath);
-  let worst: number | null = null;
-  for (const rr of byPath.values()) {
-    if (!isHardRule(rr.kind) || rr.status === 'na' || !Number.isFinite(rr.marginPct)) continue;
-    if (rr.margin === 0) continue; // the snapped boundary tautology — no headroom information
-    const m = Math.max(-MARGIN_PCT_CAP, Math.min(MARGIN_PCT_CAP, rr.marginPct));
-    if (worst === null || m < worst) worst = m;
-  }
+  const found = worstBy(treeRuleResults(e), measurable);
+  const worst =
+    found === undefined
+      ? null
+      : Math.max(-MARGIN_PCT_CAP, Math.min(MARGIN_PCT_CAP, found.marginPct));
   // An INFEASIBLE edge must never chart non-negative: hard `na` fails the run closed
   // while contributing no margin, so without this floor a passing sibling rule could
   // paint a broken edge at +margin — a feasibility flip with no on-chart cause, the
   // exact defect this curve exists to prevent.
   if (!e.feasible && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
   return worst ?? 0;
-}
-
-/** Index one evaluation's rule outcomes by the same path scheme collectTreeRules uses. */
-function indexTreeResults(
-  rules: RuleResult[],
-  children: SheetChildReport[] | undefined,
-  prefix: string,
-  into: Map<string, RuleResult>,
-): void {
-  for (const rr of rules) into.set(prefix + rr.id, rr);
-  for (const c of children ?? [])
-    indexTreeResults(c.rules, c.children, `${prefix}${c.name}.`, into);
 }
 
 /**
@@ -154,16 +150,28 @@ export function bindingConstraint(res: {
   children?: SheetChildReport[];
   edges?: SheetEdgeReport[];
 }): { id: string; marginPct: number } | undefined {
-  const byPath = new Map<string, RuleResult>();
-  indexTreeResults(res.rules, res.children, '', byPath);
-  for (const e of res.edges ?? [])
-    indexTreeResults(e.rules, e.children, `${e.name}${EDGE_SEP}`, byPath);
-  let worst: { id: string; marginPct: number } | undefined;
-  for (const [id, rr] of byPath) {
-    if (!isHardRule(rr.kind) || rr.status !== 'fail') continue;
-    if (!worst || rr.marginPct < worst.marginPct) worst = { id, marginPct: rr.marginPct };
-  }
-  return worst;
+  return worstBy(treeRuleResults(res), (rr) => isHardRule(rr.kind) && rr.status === 'fail');
+}
+
+/**
+ * The LIMITING constraint of one evaluation: the hard rule with the smallest finite relative
+ * margin anywhere in the composition, whatever its status — the same walk and the same tree-keyed
+ * ids as bindingConstraint, over a wider net. The two answer different questions and are kept
+ * apart on purpose. "Which rule broke the design" only exists when something failed, so
+ * bindingConstraint stays failing-only and a caller reading it can never mistake a comfortable
+ * pass for a cause. "Which rule is closest to breaking" is the question a FEASIBLE design poses —
+ * the one to point a sensitivity readout at — and it has an answer whether or not anything is
+ * failing. `undefined` when no hard rule produced a finite margin at all (an all-`na` tree).
+ *
+ * The admissible set is `measurable` above — which skips the boundary tautologies, the reason
+ * that predicate exists. bindingConstraint never had to care: a snapped zero is never `fail`.
+ */
+export function limitingConstraint(res: {
+  rules: RuleResult[];
+  children?: SheetChildReport[];
+  edges?: SheetEdgeReport[];
+}): { id: string; marginPct: number } | undefined {
+  return worstBy(treeRuleResults(res), measurable);
 }
 
 /**
@@ -189,7 +197,7 @@ export function sweepSheet(
   const pts = Math.max(2, Math.min(401, Math.floor(n)));
   // Resolve refs ONCE — the tree is constant across the sweep, only param values move —
   // so ref'd children's hard rules ride the sweep like embedded ones.
-  const r = resolved(doc, refs);
+  const r = resolvedSheet(doc, refs);
   // Validate the doc AS SWEPT: the swept param's stored default is overridden at every
   // sample, so validating it (e.g. a NaN default with a finite [min,max]) would force
   // every sample infeasible for a value no sample ever uses. Any finite stand-in works
@@ -284,7 +292,7 @@ export function sweepSheet2(
   if (paramX === paramY || !sweepable(px) || !sweepable(py)) return empty;
 
   const pts = Math.max(2, Math.min(101, Math.floor(n)));
-  const r = resolved(doc, refs); // once — constant tree, only the two params move
+  const r = resolvedSheet(doc, refs); // once — constant tree, only the two params move
   const overrideTwo = (vx: number, vy: number): SheetDoc =>
     withParams(r.doc, { [paramX]: vx, [paramY]: vy });
   const blocked =

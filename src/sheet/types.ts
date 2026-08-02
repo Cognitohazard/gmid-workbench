@@ -252,12 +252,46 @@ export interface SheetRule {
  * parent references child outputs and writes its own author math over them. There is
  * NO node/port/KCL machinery — those remain the deferred coupling channels.
  */
+/**
+ * How a child block's GATE is wired, declared so the engine can check the identity that
+ * wiring imposes. A sheet already declares vds/vsb — differences the tables are indexed by —
+ * but never the gate NODE, because vgs is an output of the bind rather than an input. That
+ * leaves a node that is free (some param names its level), implied (the child's vgs describes
+ * the same wire), and unchecked, which is how two binds can imply gate voltages hundreds of
+ * millivolts apart with every rule still green.
+ *
+ * Both `gate` and `source` are expressions in the PARENT's scope — the node the child's gate
+ * is tied to, and the node its source sits on. The identity checked is
+ * `gate == source + (the child is p-type ? -1 : +1) * abs(<the child's bound vgs>)`: a gate
+ * sits one gate-source voltage ABOVE its source on an N device and one BELOW it on a P device,
+ * which is the whole of the convention. Taking the magnitude and the direction separately is
+ * what makes the check independent of how the table was exported — a signed PMOS export
+ * (negative vgs axis) and one in N convention (positive) give the same answer — where an
+ * author-written sign expression could silently INVERT the identity and report agreement on a
+ * design wired backwards.
+ *
+ * The voltage compared against is the child's BIND, not a scalar it publishes: the sizing
+ * always has it, so the check cannot be switched off by an authoring omission upstream.
+ */
+export interface SheetWiring {
+  gate: string;
+  source: string;
+}
+
+/** The exact key set of a `wiring` declaration — strict, like BIND_KEYS/EDGE_KEYS, so a typo
+ *  is named rather than silently dropping half of the identity. */
+export const WIRING_KEYS: ReadonlySet<string> = new Set<string>(['gate', 'source']);
+
 export interface SheetUse {
   name: string;
   doc?: SheetDoc;
   ref?: string;
   device?: string;
   params?: Record<string, string>;
+  /** The node this child's gate and source are tied to; checked, never used to size (see
+   *  SheetWiring). Disagreement is a warning — a wiring declaration describes the schematic,
+   *  and QA surfaces what it finds instead of quietly repairing the design. */
+  wiring?: SheetWiring;
 }
 
 /** Maximum composition nesting depth — a backstop against a pathologically deep
@@ -285,6 +319,26 @@ export function torn(p: SheetVar): p is SheetVar & { solveFor: string } {
  *  pinProblem can name it.) */
 export function engineSolved(p: SheetVar): boolean {
   return torn(p) || pinned(p);
+}
+
+/** True when a param is a finitely-bounded slider variable (sweepable). The ONE
+ *  definition of a free, finitely-bounded variable — the sweep UIs and the sensitivity
+ *  step-scaler both read it, so they can never disagree about what "bounded" means. A param
+ *  under `solveFor` or `pin` is solved by the engine, not set by anyone — and a pinned param's
+ *  min/max are its bisection bracket, not slider bounds — so both are excluded. */
+export function sweepable(
+  v: { min?: number; max?: number; solveFor?: string; pin?: unknown } | undefined,
+): v is { min: number; max: number } {
+  return (
+    !!v &&
+    !v.solveFor &&
+    !v.pin &&
+    v.min !== undefined &&
+    v.max !== undefined &&
+    Number.isFinite(v.min) &&
+    Number.isFinite(v.max) &&
+    v.max > v.min
+  );
 }
 
 /** The separator joining a child use-name to a provided key. The engine has no member
@@ -385,7 +439,7 @@ export const RULE_KEYS: ReadonlySet<string> = new Set<string>([
   'id', 'kind', 'lhs', 'op', 'rhs', 'tolPct', 'justification', 'note',
 ]); // prettier-ignore
 export const USE_KEYS: ReadonlySet<string> = new Set<string>([
-  'name', 'doc', 'ref', 'device', 'params',
+  'name', 'doc', 'ref', 'device', 'params', 'wiring',
 ]); // prettier-ignore
 export const EDGE_KEYS: ReadonlySet<string> = new Set<string>(['name', 'set', 'note']);
 export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
@@ -443,11 +497,24 @@ export type RuleStatus = 'pass' | 'amber' | 'fail' | 'na';
 export interface RuleResult {
   id: string;
   kind: RuleKind;
+  /** The comparison this outcome came from, carried structurally rather than left to be read
+   *  back out of `text` — the same discipline SheetRule states for the authored side. A
+   *  consumer that must treat '==' differently (its margin has a CUSP at agreement, so a
+   *  central derivative across it is meaningless) needs the operator, not a rendering of it. */
+  op: RuleOp;
   text: string; // human-readable "lhs op rhs"
   lhsValue: number;
   rhsValue: number;
   margin: number;
   marginPct: number;
+  /**
+   * The margin BEFORE the near-zero snap (see MARGIN_SNAP_REL) — the honest signed distance,
+   * whatever its size. `margin` deliberately reads 0 on a rule parked on its own boundary so a
+   * verdict cannot coin-flip on floating-point noise; a derivative taken from that snapped
+   * value would read zero slope for a rule that is in fact moving. Verdicts and display use
+   * `margin`; anything DIFFERENCING margins uses this.
+   */
+  rawMargin: number;
   status: RuleStatus;
   detail?: string;
 }
@@ -497,6 +564,80 @@ export interface SheetResult {
   children?: SheetChildReport[];
   /** Present only when the doc declares containment edges (top-level evaluation only). */
   edges?: SheetEdgeReport[];
+}
+
+/** Index one evaluation's rule outcomes under `prefix`, by the tree-key scheme the sweep's
+ *  rule collection uses: a child's outcomes carry its use path (`cs.headroom`). */
+export function indexTreeResults(
+  rules: readonly RuleResult[],
+  children: readonly SheetChildReport[] | undefined,
+  prefix: string,
+  into: Map<string, RuleResult>,
+): void {
+  for (const rr of rules) into.set(prefix + rr.id, rr);
+  for (const c of children ?? [])
+    indexTreeResults(c.rules, c.children, `${prefix}${c.name}${PATH_SEP}`, into);
+}
+
+/** Every rule outcome of one evaluation keyed by its tree key — use paths below the top sheet,
+ *  edge names for the containment runs (`cm-lo@tail-saturated`). The ONE walk every consumer
+ *  that names a rule across a whole evaluation shares (the binding and limiting constraints,
+ *  the sensitivity readout), so they can never disagree about what a rule is called.
+ *
+ *  An edge that did not stand contributes NOTHING: its rules were evaluated wherever its solve
+ *  stopped, which is a design point the engine never landed on, so reading them as outcomes
+ *  names a constraint that was measured on a phantom. The edge's own `error` is the finding
+ *  there. */
+export function treeRuleResults(res: {
+  rules: readonly RuleResult[];
+  children?: readonly SheetChildReport[];
+  edges?: readonly SheetEdgeReport[];
+}): Map<string, RuleResult> {
+  const byPath = new Map<string, RuleResult>();
+  indexTreeResults(res.rules, res.children, '', byPath);
+  for (const e of res.edges ?? [])
+    if (e.error === undefined)
+      indexTreeResults(e.rules, e.children, `${e.name}${EDGE_SEP}`, byPath);
+  return byPath;
+}
+
+/**
+ * One rule's response to one parameter's perturbation — the missing half of a margin. A margin
+ * says how much room a constraint has; this says which knob moves it, and how fast, so
+ * "infeasible" comes with somewhere to turn.
+ *
+ * Margins are DIFFERENCED raw (see RuleResult.rawMargin), in SI units of the rule's own two
+ * sides. `deltaPlus`/`deltaMinus` are the change over one step in each direction — the ranking
+ * quantity, since they compare knobs at a common fractional move — and `dMarginPerUnit` is the
+ * slope in margin per unit of the parameter. Any of the three is NaN where it could not be
+ * formed: a probe that did not stand, a direction a bound blocked, or an equality rule, whose
+ * margin has a cusp at agreement and therefore no central derivative.
+ */
+export interface SheetSensitivityRule {
+  id: string;
+  kind: RuleKind;
+  baseStatus: RuleStatus;
+  baseMargin: number;
+  dMarginPerUnit: number;
+  deltaPlus: number;
+  deltaMinus: number;
+}
+
+/**
+ * One parameter's sensitivity entry: the point it was taken at, the step used, and one record
+ * per rule in the whole composition. `error` explains what could not be probed — a parameter the
+ * engine solves rather than the author setting, a zero value with no range to scale a step from,
+ * a step that does not fit inside the bounds, or a perturbed evaluation that did not stand. The
+ * first three leave `rules` empty; the last is per-DIRECTION, so an entry can carry both an error
+ * and the records the surviving side still supports. Never a fabricated slope: whatever the
+ * failed side would have contributed reads NaN.
+ */
+export interface SheetSensitivity {
+  param: string;
+  value: number;
+  step: number;
+  rules: SheetSensitivityRule[];
+  error?: string;
 }
 
 /**

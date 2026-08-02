@@ -20,9 +20,11 @@ import {
   PROVIDE_SEP,
   RULE_KINDS,
   RULE_OPS,
+  WIRING_KEYS,
   joinProvide,
   prefixUseWarning,
   type SheetDoc,
+  type SheetUse,
 } from './types';
 
 /** Whether an expression parses at all — distinct from namesOf, whose empty result also
@@ -156,6 +158,53 @@ function standInEstimates(doc: SheetDoc): QAWarning[] {
         });
         break; // one finding per axis; the first rule that closes the loop names it
       }
+    }
+  }
+  return out;
+}
+
+/**
+ * Structural checks on a use's declared gate wiring — the ONLY route by which a wiring
+ * declaration reaches a verdict. What the check finds at RUNTIME (an expression that will not
+ * resolve, a disagreement past the tolerance) stays a warning: the declaration and the sizing
+ * are two descriptions of one node, and picking a winner between them is the author's call, not
+ * QA's. But a declaration that is not a declaration — half-written, misspelled, unparseable —
+ * states no identity at all, and a sheet reported as wiring-checked when nothing was checked is
+ * precisely the silence this mechanism exists to break.
+ */
+function wiringProblems(use: SheetUse): QAWarning[] {
+  // `unknown`, not SheetWiring: a persisted document arrives unverified, so the shape is what
+  // is being checked here rather than what may be assumed.
+  const w: unknown = use.wiring;
+  if (w === undefined) return [];
+  const out: QAWarning[] = [];
+  const bad = (message: string): void => {
+    out.push({
+      rule: 'sheet-wiring',
+      severity: 'error',
+      message: `use "${use.name}": ${message}`,
+      location: use.name,
+    });
+  };
+  if (typeof w !== 'object' || w === null || Array.isArray(w)) {
+    bad('wiring must be an object declaring the gate and source nodes');
+    return out;
+  }
+  const decl = w as Record<string, unknown>;
+  for (const k of Object.keys(decl)) {
+    if (!WIRING_KEYS.has(k)) {
+      bad(`wiring has unknown key "${k}" — only ${[...WIRING_KEYS].join(', ')} are declared`);
+    }
+  }
+  for (const k of ['gate', 'source'] as const) {
+    const e = decl[k];
+    if (typeof e !== 'string' || !e.trim()) {
+      bad(
+        `wiring needs both gate and source (${k} is missing) — half-declared, it names no ` +
+          `identity to check`,
+      );
+    } else if (!parses(e)) {
+      bad(`wiring ${k} expression "${e}" does not parse`);
     }
   }
   return out;
@@ -536,6 +585,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
           }
         }
       }
+      out.push(...wiringProblems(use));
       if (_depth >= MAX_USE_DEPTH) {
         out.push({
           rule: 'sheet-use',

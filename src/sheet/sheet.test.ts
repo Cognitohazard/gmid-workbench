@@ -3,7 +3,7 @@
 // degrades to warnings / 'na' chips instead of throwing.
 
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice, withoutColumns } from '../demo';
+import { generateDemoDevice, signedMirrorDemo, withoutColumns } from '../demo';
 import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { fixTable } from '../series';
 import { diodeGrid, makeGrid } from '../grid';
@@ -16,13 +16,17 @@ import {
   sweepSheet2,
   sweepable,
   bindingConstraint,
+  limitingConstraint,
+  sheetSensitivities,
   withParams,
   isHardRule,
   MAX_TORN_PARAMS,
   SOLVE_TOL_REL,
+  WIRING_TOL,
 } from './index';
 import { EXAMPLES } from './examples';
-import type { SheetDoc } from './types';
+import type { DeviceTable } from '../types';
+import type { SheetDoc, SheetResult, SheetVar } from './types';
 
 const dev = generateDemoDevice();
 
@@ -383,8 +387,15 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       }),
       dev,
     );
-    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toHaveLength(0);
+    // It CLOSES — no solve failure — and the closure it needed is exactly the kind the
+    // pass-count note exists to surface, damping and all.
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve' && w.severity === 'error')).toEqual(
+      [],
+    );
     expect(res.values.osc).toBeCloseTo(1, 6);
+    const note = res.warnings.find((w) => w.rule === 'sheet-solve' && w.severity === 'info');
+    expect(note?.message).toMatch(/substitution passes/);
+    expect(note?.message).toMatch(/damped/);
   });
 
   it('refuses a param that solves for itself', () => {
@@ -523,7 +534,9 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       },
       dev,
     );
-    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toHaveLength(0);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve' && w.severity === 'error')).toEqual(
+      [],
+    );
     expect(res.feasible).toBe(true);
     // The map's true fixed point, reached independently.
     let x = 0;
@@ -2188,5 +2201,564 @@ describe('containment edges — exact range checks folded into the verdict', () 
     expect(
       errs(mk({ rules: [{ id: 'a.b', kind: 'invariant', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
     ).toMatch(/tree-keyed rule ids/);
+  });
+});
+
+describe('gate wiring — the node a child sits on, declared and checked', () => {
+  /** A child that SIZES. The identity is checked against the voltage the BIND resolved to, so
+   *  the number under test is the sizing's own answer — a `provide` list is deliberately absent
+   *  here, because nothing the child publishes upward takes part in the check. */
+  const boundChild = (polarity: 'n' | 'p' = 'n', gmId = 10): SheetDoc => ({
+    title: 'dev',
+    polarity,
+    params: [
+      { name: 'L', value: 0.5e-6 },
+      { name: 'gm_id', value: gmId },
+      { name: 'Ib', value: 20e-6 },
+    ],
+    bind: { L: 'L', id: 'Ib', gm_id: 'gm_id' },
+    rows: [],
+    rules: [],
+  });
+
+  /** A parent tying one such child between two nodes. */
+  const wired = (
+    gate: string,
+    source: string,
+    child: SheetDoc,
+    extra: Partial<SheetDoc> = {},
+    device?: string,
+  ): SheetDoc => ({
+    title: 'p',
+    polarity: 'n',
+    params: [{ name: 'VDD', value: 1.8 }],
+    rows: [],
+    rules: [],
+    uses: [{ name: 'm', doc: child, ...(device ? { device } : {}), wiring: { gate, source } }],
+    ...extra,
+  });
+
+  const wiringWarnings = (r: SheetResult): string[] =>
+    r.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.message);
+
+  /** The vgs the child's bind actually landed on — the quantity the check reads. */
+  const sizedVgs = (doc: SheetDoc, table = dev, resolve?: (id: string) => DeviceTable): number =>
+    evaluateSheet(doc, table, resolve).children![0].bind!.vgs;
+
+  it('passes just inside the tolerance and reports just outside it', () => {
+    // 10 mV absolute (WIRING_TOL): the real disagreements this catches are tens to hundreds of
+    // millivolts, and a bias plan is written to about this resolution.
+    expect(WIRING_TOL).toBe(0.01);
+    const child = boundChild();
+    const v = sizedVgs(wired('0', '0', child));
+    expect(v).toBeGreaterThan(0.4);
+
+    expect(wiringWarnings(evaluateSheet(wired(`${v + 0.0099}`, '0', child), dev))).toEqual([]);
+
+    const off = evaluateSheet(wired(`${v + 0.0101}`, '0', child), dev);
+    expect(wiringWarnings(off)).toHaveLength(1);
+    // Both numbers AND the delta — a warning that only says "disagrees" cannot be acted on.
+    expect(wiringWarnings(off)[0]).toContain((v + 0.0101).toExponential(4));
+    expect(wiringWarnings(off)[0]).toContain(v.toExponential(4));
+    expect(wiringWarnings(off)[0]).toContain('delta 1.010e-2 V');
+  });
+
+  it('checks a child that publishes NOTHING — the bind is what it reads', () => {
+    // The identity used to be arithmetic over a `<use>__vgs` scalar, which quietly made the check
+    // depend on an author remembering to add 'vgs' to that block's provide list. This child
+    // provides nothing at all, and is checked anyway.
+    const child = boundChild();
+    expect(child.provide).toBeUndefined();
+    const v = sizedVgs(wired('0', '0', child));
+    expect(wiringWarnings(evaluateSheet(wired(`${v}`, '0', child), dev))).toEqual([]);
+    expect(wiringWarnings(evaluateSheet(wired(`${v + 0.5}`, '0', child), dev))).toHaveLength(1);
+  });
+
+  it('reads the same node in all four polarity/table-convention combinations', () => {
+    // The direction comes from the child's declared polarity and the magnitude from its bind, so
+    // a signed PMOS export (negative vgs axis) and one in N convention (positive) check
+    // identically. That is the whole reason no author-written sign expression exists: a wrong one
+    // would silently INVERT the identity and report agreement on a design wired backwards.
+    const pmos = signedMirrorDemo(dev);
+    const resolve = (id: string): DeviceTable => (id === 'signed' ? pmos : dev);
+    for (const polarity of ['n', 'p'] as const) {
+      for (const device of [undefined, 'signed'] as const) {
+        const where = `${polarity} child, ${device ?? 'N-convention'} table`;
+        const child = boundChild(polarity);
+        const v = sizedVgs(wired('0', 'VDD', child, {}, device), dev, resolve);
+        // The four cells really are different data: only the signed export returns a negative
+        // axis value, and the identity below never looks at that sign.
+        expect(`${where}: ${v < 0}`).toBe(`${where}: ${device === 'signed'}`);
+
+        const dir = polarity === 'p' ? -1 : 1;
+        const node = 1.8 + dir * Math.abs(v);
+        const agrees = evaluateSheet(wired(`${node}`, 'VDD', child, {}, device), dev, resolve);
+        expect(`${where}: ${wiringWarnings(agrees).length}`).toBe(`${where}: 0`);
+        // Wired the other way — the error the removed sign expression made possible — is reported.
+        const flipped = evaluateSheet(
+          wired(`${1.8 - dir * Math.abs(v)}`, 'VDD', child, {}, device),
+          dev,
+          resolve,
+        );
+        expect(`${where}: ${wiringWarnings(flipped).length}`).toBe(`${where}: 1`);
+      }
+    }
+  });
+
+  it('never touches the verdict — a disagreement is a warning, never a feasibility flip', () => {
+    // The escalation path is documented instead: an author who wants it to gate writes a hard
+    // rule on the same two numbers.
+    const res = evaluateSheet(wired('1.2', '0', boundChild()), dev);
+    expect(wiringWarnings(res)).toHaveLength(1);
+    expect(res.warnings.every((w) => w.severity !== 'error')).toBe(true);
+    expect(res.feasible).toBe(true);
+  });
+
+  it('reaches a gate node the sheet defines as a ROW, not only as a param', () => {
+    // Rows run AFTER children, so a node the parent derives from a child's own output only
+    // exists at the end of the evaluation. The check runs there for exactly this reason.
+    const child = { ...boundChild(), provide: ['vgs'] };
+    const doc = wired('V_in', '0', child, { rows: [{ name: 'V_in', expr: 'm__vgs' }] });
+    const res = evaluateSheet(doc, dev);
+    expect(wiringWarnings(res)).toEqual([]);
+    expect(res.values.V_in).toBeCloseTo(sizedVgs(doc), 12);
+  });
+
+  it('says the block has no sized gate-source voltage when it declares no bind', () => {
+    const bindless: SheetDoc = {
+      title: 'dev',
+      polarity: 'n',
+      params: [],
+      rows: [{ name: 'vgs', expr: '0.65' }],
+      rules: [],
+      provide: ['vgs'],
+    };
+    // The block publishes a `vgs` scalar and is STILL not checked against it: a row named vgs is
+    // an author's arithmetic, not a sized operating point.
+    const res = evaluateSheet(wired('0.65', '0', bindless), dev);
+    expect(wiringWarnings(res)[0]).toMatch(/no bind, so it has no sized gate-source voltage/);
+    expect(res.values.m__vgs).toBeCloseTo(0.65, 12);
+  });
+
+  it('stays silent about a block whose own evaluation already failed', () => {
+    // A child that could not size has no operating point to check against, and the bind error
+    // says so already — under the child's PATH (`m.bind`), not the bare use name. Advising the
+    // author about the wiring here would stack a second, wrong finding on the real one.
+    const broken: SheetDoc = { ...boundChild(), bind: { L: 'L', id: 'Ib', gm_id: 'nope' } };
+    const res = evaluateSheet(wired('0.65', '0', broken), dev);
+    expect(res.warnings.some((w) => w.severity === 'error' && w.location === 'm.bind')).toBe(true);
+    expect(wiringWarnings(res)).toEqual([]);
+  });
+
+  it('reports an unresolvable wiring expression instead of failing the sheet', () => {
+    const res = evaluateSheet(wired('nope', '0', boundChild()), dev);
+    expect(wiringWarnings(res)[0]).toMatch(/gate "nope" did not resolve/);
+    // The dedicated evaluator emits ONLY sheet-wiring warnings — no undeclared-name error
+    // leaks out of it to fail the design closed.
+    expect(res.warnings.every((w) => w.severity === 'warning')).toBe(true);
+    expect(res.feasible).toBe(true);
+  });
+
+  it('degrades instead of throwing on malformed wiring', () => {
+    const half = wired('0.65', '0', boundChild());
+    half.uses![0].wiring = { gate: 5 } as unknown as { gate: string; source: string };
+    expect(() => evaluateSheet(half, dev)).not.toThrow();
+    expect(wiringWarnings(evaluateSheet(half, dev))[0]).toMatch(/gate is not an expression/);
+
+    const garbage = wired('0.65', '0', boundChild());
+    garbage.uses![0].wiring = 'garbage' as unknown as { gate: string; source: string };
+    expect(() => evaluateSheet(garbage, dev)).not.toThrow();
+    expect(wiringWarnings(evaluateSheet(garbage, dev))).toEqual([]); // nothing to check
+    expect(validateSheet(garbage).some((w) => /wiring must be an object/.test(w.message))).toBe(
+      true,
+    );
+  });
+
+  it('reports the LANDED design once, not a bracket end and not every probe', () => {
+    // A pinned parent bisects its whole tree ~20 times. Wiring the gate to the pinned node makes
+    // the reported numbers say WHERE the check ran: at the landing (0.4713) the delta is the
+    // distance from there to the sized vgs, where the bracket ends (0 and 1) would give a very
+    // different pair. So this pins the placement, not merely the count — a check running inside
+    // the solve would report a probe's voltage.
+    const doc = wired('x', '0', boundChild(), {
+      params: [{ name: 'x', value: 0.5, min: 0, max: 1, pin: { lhs: 'x2', rhs: '0.4713' } }],
+      rows: [{ name: 'x2', expr: 'x' }],
+    });
+    const res = evaluateSheet(doc, dev);
+    expect(res.values.x).toBeCloseTo(0.4713, 5);
+    expect(wiringWarnings(res)).toHaveLength(1);
+    expect(wiringWarnings(res)[0]).toMatch(/gate reads 4\.713\de-1 V/);
+    expect(wiringWarnings(res)[0]).toContain((0.4713 - sizedVgs(doc)).toExponential(3));
+  });
+
+  it('reports once per RUN when the sheet also claims a range through edges', () => {
+    // Base plus one edge = two lines about the same declaration, and that is the intent: an edge
+    // re-sizes the design at another point, so its residual is a genuinely different measurement.
+    // An edge run's warnings ride its own report verbatim, so the second copy is not a duplicate
+    // of the first — it belongs to a different evaluation.
+    const doc = wired('0', '0', boundChild(), {
+      params: [
+        { name: 'VDD', value: 1.8 },
+        { name: 'I_lo', value: 10e-6 },
+      ],
+      edges: [{ name: 'lo', set: { VDD: 'I_lo' } }],
+    });
+    const res = evaluateSheet(doc, dev);
+    expect(wiringWarnings(res)).toHaveLength(1);
+    expect(res.edges![0].warnings.filter((w) => w.rule === 'sheet-wiring')).toHaveLength(1);
+  });
+
+  it('makes structural wiring problems validation ERRORS', () => {
+    const errs = (w: unknown): string[] =>
+      validateSheet(
+        wired('0.65', '0', boundChild(), {
+          uses: [{ name: 'm', doc: boundChild(), wiring: w as { gate: string; source: string } }],
+        }),
+      )
+        .filter((v) => v.rule === 'sheet-wiring' && v.severity === 'error')
+        .map((v) => v.message);
+
+    // Half-declared: the pin discipline — a declaration missing a side checks nothing while
+    // looking like it does.
+    expect(errs({ gate: 'VDD' }).join()).toMatch(
+      /needs both gate and source \(source is missing\)/,
+    );
+    expect(errs({ source: 'VDD' }).join()).toMatch(/\(gate is missing\)/);
+    // Strict keys, like BIND_KEYS/EDGE_KEYS: a typo must not silently drop half the identity —
+    // and a `sign` expression, which this check deliberately does not take, is named rather
+    // than ignored.
+    expect(errs({ gate: 'VDD', source: '0', polarity: 'p' }).join()).toMatch(
+      /unknown key "polarity"/,
+    );
+    expect(errs({ gate: 'VDD', source: '0', sign: '-1' }).join()).toMatch(/unknown key "sign"/);
+    expect(errs({ gate: '1 +', source: '0' }).join()).toMatch(
+      /gate expression "1 \+" does not parse/,
+    );
+    // A well-formed declaration raises none of them.
+    expect(errs({ gate: 'VDD', source: '0' })).toEqual([]);
+  });
+});
+
+describe('rawMargin — the honest distance beside the snapped one', () => {
+  it('survives the near-zero snap', () => {
+    const doc: SheetDoc = {
+      title: 'snap',
+      polarity: 'n',
+      params: [{ name: 'a', value: 1 }],
+      rows: [],
+      rules: [{ id: 'r', kind: 'requirement', lhs: 'a', op: '>=', rhs: 'a + 1e-9' }],
+    };
+    const r = evaluateSheet(doc).rules[0];
+    // The verdict reads the boundary it is parked on; a DERIVATIVE would read zero slope from
+    // that and conclude the rule cannot be moved.
+    expect(r.margin).toBe(0);
+    expect(r.status).toBe('amber');
+    expect(r.rawMargin).toBeCloseTo(-1e-9, 15);
+    expect(r.rawMargin).not.toBe(0);
+  });
+
+  it('is NaN wherever the margin is', () => {
+    const doc: SheetDoc = {
+      title: 'na',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [{ id: 'r', kind: 'requirement', lhs: 'nope', op: '>=', rhs: '0' }],
+    };
+    const r = evaluateSheet(doc).rules[0];
+    expect(r.status).toBe('na');
+    expect(Number.isNaN(r.rawMargin)).toBe(true);
+  });
+});
+
+describe('solver pass count — a loop that closes slowly says so', () => {
+  /** Fixed point 1, contracting at exactly |f'| = k per pass, started 0.9 away. */
+  const geometric = (k: number): SheetDoc => ({
+    title: 'g',
+    polarity: 'n',
+    params: [{ name: 'x', value: 0.1, solveFor: 'f' }],
+    rows: [{ name: 'f', expr: `${k}*x + ${1 - k}` }],
+    rules: [],
+  });
+  const note = (doc: SheetDoc) =>
+    evaluateSheet(doc).warnings.find((w) => w.rule === 'sheet-solve' && w.severity === 'info');
+
+  it('notes a weak contraction that needed many passes', () => {
+    const slow = note(geometric(0.6)); // ~32 passes to SOLVE_TOL_REL
+    expect(slow?.message).toMatch(/inspect weak or oscillatory closure/);
+    const passes = Number(/needed (\d+) substitution/.exec(slow!.message)![1]);
+    expect(passes).toBeGreaterThan(16);
+    // Informational only: the design is sized and the verdict stands.
+    expect(evaluateSheet(geometric(0.6)).feasible).toBe(true);
+  });
+
+  it('stays quiet about a loop that closes briskly', () => {
+    expect(note(geometric(0.05))).toBeUndefined(); // ~6 passes
+  });
+});
+
+describe('limitingConstraint — the rule closest to breaking', () => {
+  const child = (rhs: string): SheetDoc => ({
+    title: 'c',
+    polarity: 'n',
+    params: [],
+    rows: [],
+    rules: [{ id: 'tightest', kind: 'invariant', lhs: '1', op: '>=', rhs }],
+    provide: [],
+  });
+  const doc = (childRhs: string, topRhs: string): SheetDoc => ({
+    title: 'p',
+    polarity: 'n',
+    params: [],
+    rows: [],
+    rules: [
+      { id: 'loose', kind: 'requirement', lhs: '1', op: '>=', rhs: topRhs },
+      // Tighter than either hard rule, and advisory — it must never be named.
+      { id: 'advice', kind: 'guardrail', lhs: '1', op: '>=', rhs: '0.999' },
+    ],
+    uses: [{ name: 'c', doc: child(childRhs) }],
+  });
+
+  it('names the tightest hard rule on a FEASIBLE tree, where nothing is failing', () => {
+    const res = evaluateSheet(doc('0.99', '0.5'));
+    expect(res.feasible).toBe(true);
+    expect(bindingConstraint(res)).toBeUndefined(); // no rule to blame — nothing failed
+    // Path-keyed exactly as bindingConstraint would name it.
+    expect(limitingConstraint(res)?.id).toBe('c.tightest');
+  });
+
+  it('agrees with bindingConstraint once a rule fails', () => {
+    const res = evaluateSheet(doc('0.99', '2'));
+    expect(res.feasible).toBe(false);
+    expect(bindingConstraint(res)?.id).toBe('loose');
+    expect(limitingConstraint(res)?.id).toBe('loose');
+  });
+
+  it('looks past the boundary tautology a containment edge parks on', () => {
+    // An edge lands the design exactly on the range end its own rule compares against, so that
+    // rule reads margin 0 by construction. Naming it as the limiter would be true and useless —
+    // it would be the answer forever, hiding every rule that can actually move.
+    const res = evaluateSheet({
+      title: 'edge',
+      polarity: 'n',
+      params: [
+        { name: 'a', value: 1 },
+        { name: 'A_lo', value: 0.5 },
+      ],
+      rows: [],
+      rules: [
+        { id: 'range', kind: 'requirement', lhs: 'a', op: '>=', rhs: 'A_lo' },
+        { id: 'tight', kind: 'requirement', lhs: 'a', op: '>=', rhs: '0.49' },
+      ],
+      edges: [{ name: 'lo', set: { a: 'A_lo' } }],
+    });
+    expect(res.feasible).toBe(true);
+    expect(res.edges![0].rules.find((r) => r.id === 'range')!.margin).toBe(0);
+    const lim = limitingConstraint(res)!;
+    expect(lim.id).toBe('lo@tight');
+    expect(lim.marginPct).toBeCloseTo(0.01 / 0.49, 9);
+  });
+
+  it('ignores a containment edge whose solve never landed', () => {
+    // A failed edge's rules were evaluated wherever its bisection stopped — a design point the
+    // engine never landed on. Naming a constraint measured there points the designer at a
+    // phantom, and here the phantom is TIGHTER than anything real, so it would win the minimum.
+    // The edge's own `error` is the finding; its rules are not outcomes.
+    const doc: SheetDoc = {
+      title: 'edge',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'T', value: 5 },
+        { name: 'T_lo', value: 0.5 }, // y spans [1, 21] over the bracket — unreachable
+      ],
+      rows: [{ name: 'y', expr: '2*x + 1' }],
+      rules: [{ id: 'ceiling', kind: 'invariant', lhs: 'x', op: '<=', rhs: '10.5' }],
+      edges: [{ name: 'lo', set: { T: 'T_lo' } }],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.edges![0].error).toMatch(/does not change sign/);
+    expect(res.edges![0].rules[0].marginPct).toBeLessThan(res.rules[0].marginPct);
+    expect(limitingConstraint(res)?.id).toBe('ceiling');
+    expect(bindingConstraint(res)).toBeUndefined();
+  });
+
+  it('has nothing to name when every hard rule is na', () => {
+    const res = evaluateSheet({
+      title: 'x',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [{ id: 'r', kind: 'invariant', lhs: 'nope', op: '>=', rhs: '0' }],
+    });
+    expect(limitingConstraint(res)).toBeUndefined();
+  });
+});
+
+describe('sheetSensitivities — which knob moves which margin', () => {
+  /** margin = 2a - rhs, so d(margin)/da is exactly 2 and a difference scheme must reproduce it. */
+  const linear = (over: Partial<SheetVar> = {}, rhs = '1', extra: Partial<SheetDoc> = {}) => ({
+    title: 'lin',
+    polarity: 'n' as const,
+    params: [{ name: 'a', value: 1, role: 'choice' as const, min: 0, max: 10, ...over }],
+    rows: [],
+    rules: [{ id: 'r', kind: 'requirement' as const, lhs: '2*a', op: '>=' as const, rhs }],
+    ...extra,
+  });
+
+  it('reproduces an analytic slope exactly', () => {
+    const s = sheetSensitivities(linear());
+    expect(s).toHaveLength(1);
+    expect(s[0].param).toBe('a');
+    expect(s[0].step).toBeCloseTo(0.01, 12); // 1% of the value
+    expect(s[0].error).toBeUndefined();
+    const r = s[0].rules[0];
+    expect(r.id).toBe('r');
+    expect(r.baseStatus).toBe('pass');
+    expect(r.baseMargin).toBeCloseTo(1, 12);
+    expect(r.dMarginPerUnit).toBeCloseTo(2, 9);
+    expect(r.deltaPlus).toBeCloseTo(0.02, 9);
+    expect(r.deltaMinus).toBeCloseTo(-0.02, 9);
+  });
+
+  it('treats a FAILING hard rule as an ordinary point — that is where direction is wanted', () => {
+    const s = sheetSensitivities(linear({}, '100'));
+    expect(s[0].error).toBeUndefined();
+    expect(s[0].rules[0].baseStatus).toBe('fail');
+    expect(s[0].rules[0].baseMargin).toBeCloseTo(-98, 9);
+    expect(s[0].rules[0].dMarginPerUnit).toBeCloseTo(2, 9);
+  });
+
+  it('switches to a one-sided difference for a knob sitting on its bound', () => {
+    const s = sheetSensitivities(linear({ value: 0.5, min: 0.5 }));
+    expect(s[0].step).toBeCloseTo(0.005, 12);
+    const r = s[0].rules[0];
+    expect(r.dMarginPerUnit).toBeCloseTo(2, 9); // second-order one-sided: exact on a line
+    expect(r.deltaPlus).toBeCloseTo(0.01, 9);
+    expect(Number.isNaN(r.deltaMinus)).toBe(true); // no probe below the bound was taken
+  });
+
+  it('leans the other way for a knob sitting on its UPPER bound', () => {
+    const s = sheetSensitivities(linear({ value: 10 })); // max is 10
+    expect(s[0].step).toBeCloseTo(0.1, 12);
+    const r = s[0].rules[0];
+    expect(r.dMarginPerUnit).toBeCloseTo(2, 9);
+    expect(r.deltaMinus).toBeCloseTo(-0.2, 9);
+    expect(Number.isNaN(r.deltaPlus)).toBe(true);
+  });
+
+  it('says so when the step does not fit inside the bounds at all', () => {
+    // Neither direction has room for the two probes a second-order difference needs.
+    const s = sheetSensitivities(linear({ value: 1, min: 0.995, max: 1.005 }));
+    expect(s[0].error).toMatch(/too narrow to difference across/);
+    expect(s[0].rules).toEqual([]);
+  });
+
+  it('reports one-sided deltas and NO slope across an equality rule cusp', () => {
+    // margin = tol*|rhs| - |lhs - rhs| peaks where the rule is satisfied, so both directions
+    // move it DOWN and a central difference averages them to a flat 0 — the one number that is
+    // certainly wrong.
+    const s = sheetSensitivities({
+      ...linear(),
+      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: '1', tolPct: 10 }],
+    });
+    const r = s[0].rules[0];
+    expect(Number.isNaN(r.dMarginPerUnit)).toBe(true);
+    expect(r.deltaPlus).toBeCloseTo(-0.01, 9);
+    expect(r.deltaMinus).toBeCloseTo(-0.01, 9);
+  });
+
+  it('records a probe that did not stand, and fabricates nothing from it', () => {
+    // sqrt of a negative headroom at a + h: the row is non-finite from resolved inputs, which is
+    // an error-severity diagnostic, so that side of the difference does not exist.
+    const s = sheetSensitivities(
+      linear({}, '1', { rows: [{ name: 'q', expr: 'sqrt(1.005 - a)' }] }),
+    );
+    expect(s[0].error).toMatch(/did not stand/);
+    expect(s[0].error).toContain('a = 1.01');
+    const r = s[0].rules[0];
+    expect(Number.isNaN(r.deltaPlus)).toBe(true);
+    expect(Number.isNaN(r.dMarginPerUnit)).toBe(true);
+    expect(r.deltaMinus).toBeCloseTo(-0.02, 9); // the surviving side is still reported
+  });
+
+  it('re-proves the containment edges only for a rule that lives on one', () => {
+    // Every edge costs each probe another full evaluation of the whole sheet, so a readout about
+    // a rule at the top must not pay for range ends nobody asked about. Naming an edge-keyed rule
+    // is how a caller opts in — and then the edge outcomes are keyed exactly as bindingConstraint
+    // names them.
+    const doc = linear({}, '1', {
+      params: [
+        { name: 'a', value: 1, role: 'choice', min: 0, max: 10 },
+        { name: 'A_lo', value: 0.5 },
+      ],
+      edges: [{ name: 'lo', set: { a: 'A_lo' } }],
+    });
+    // Unasked: the edge runs never happen, so nothing edge-keyed is reported at all — never a
+    // row of NaNs standing in for a measurement that was deliberately skipped.
+    expect(sheetSensitivities(doc)[0].rules.map((r) => r.id)).toEqual(['r']);
+
+    const byId = new Map(
+      sheetSensitivities(doc, undefined, undefined, { rule: 'lo@r' })[0].rules.map((r) => [
+        r.id,
+        r,
+      ]),
+    );
+    expect([...byId.keys()].sort()).toEqual(['lo@r', 'r']);
+    expect(byId.get('r')!.dMarginPerUnit).toBeCloseTo(2, 9);
+    // The edge pins `a` to its own value, so the knob cannot move that run at all.
+    expect(byId.get('lo@r')!.dMarginPerUnit).toBeCloseTo(0, 12);
+  });
+
+  it('probes the author choices by default and never a param the engine solves', () => {
+    const doc: SheetDoc = {
+      title: 'mix',
+      polarity: 'n',
+      params: [
+        { name: 'a', value: 1, role: 'choice' },
+        { name: 'spec', value: 1, role: 'spec' },
+        { name: 'e', value: 1, role: 'choice', solveFor: 't' },
+      ],
+      rows: [{ name: 't', expr: '0.5*e + 0.5' }],
+      rules: [{ id: 'r', kind: 'requirement', lhs: '2*a', op: '>=', rhs: '1' }],
+    };
+    expect(sheetSensitivities(doc).map((s) => s.param)).toEqual(['a']);
+    // Asked for by name, it is still refused — with the reason, not silently.
+    const asked = sheetSensitivities(doc, undefined, undefined, { params: ['e', 'ghost'] });
+    expect(asked[0].error).toMatch(/the engine solves "e"/);
+    expect(asked[1].error).toMatch(/"ghost" is not a param/);
+    expect(asked.every((s) => s.rules.length === 0)).toBe(true);
+  });
+
+  it('scales a zero-valued knob from its range, and refuses to invent one without a range', () => {
+    const bounded = sheetSensitivities(linear({ value: 0, min: -1, max: 1 }, '-1'));
+    expect(bounded[0].step).toBeCloseTo(0.02, 12); // 1% of the span
+    expect(bounded[0].rules[0].dMarginPerUnit).toBeCloseTo(2, 9);
+
+    const unbounded = sheetSensitivities(
+      linear({ value: 0, min: undefined, max: undefined }, '-1'),
+    );
+    expect(unbounded[0].error).toMatch(/pass an absolute step/);
+    expect(unbounded[0].rules).toEqual([]);
+
+    const told = sheetSensitivities(
+      linear({ value: 0, min: undefined, max: undefined }, '-1'),
+      undefined,
+      undefined,
+      { absStep: 0.01 },
+    );
+    expect(told[0].rules[0].dMarginPerUnit).toBeCloseTo(2, 9);
+  });
+
+  it('refuses to differentiate a doc that does not validate', () => {
+    const s = sheetSensitivities({
+      ...linear(),
+      rules: [
+        { id: 'r', kind: 'requirement', lhs: '2*a', op: '>=', rhs: '1' },
+        { id: 'r', kind: 'requirement', lhs: '2*a', op: '>=', rhs: '2' }, // duplicate id
+      ],
+    });
+    expect(s[0].error).toMatch(/does not validate/);
+    expect(s[0].rules).toEqual([]);
   });
 });
