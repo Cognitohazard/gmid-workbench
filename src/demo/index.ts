@@ -34,7 +34,10 @@ const DEFAULT_W = 10e-6;
 
 // EKV / model constants.
 const N_SLOPE = 1.3; // subthreshold slope factor n (dimensionless)
-const COX = 0.01; // gate oxide capacitance per area [F/m^2]
+// Gate oxide capacitance per area [F/m^2]. Exported so golden tests derive expected gate
+// capacitance (cgg = W·L·Cox exactly, at every operating point) from the one model constant
+// instead of re-declaring the number.
+export const COX = 0.01;
 const VTH0 = 0.4; // nominal threshold [V]
 const ISPEC_REF = 1e-6; // specific-current scale [A] at the reference geometry W/L = 1
 // Body-effect Vth slope [V/V]: Vth rises BODY_FACTOR·vsb (0 at vsb = 0). Since the

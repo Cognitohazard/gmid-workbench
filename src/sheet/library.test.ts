@@ -38,9 +38,25 @@ import {
   REFS,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
+  cggOf,
+  roMirrored,
+  stage2Rout,
 } from './library.fixtures';
 
 const LIBRARY = loadLibrary();
+
+// One evaluation of the whole library on the demo device, shared by every check below that
+// needs a result — the contract per sheet and the interface check both read this.
+const EVALUATED = LIBRARY.map(({ file, doc }) => {
+  // Evaluated once at module scope and shared by every test below. The try keeps a sheet
+  // that ever makes runSheet throw failing inside its own named test rather than as a
+  // collection error that takes the whole file down with it.
+  try {
+    return { file, doc, res: runSheet(doc, table, undefined, REFS), error: undefined };
+  } catch (e) {
+    return { file, doc, res: undefined, error: e instanceof Error ? e.message : String(e) };
+  }
+});
 
 function hardNaRules(res: SheetResult): string[] {
   const out: string[] = [];
@@ -61,7 +77,7 @@ describe('sheet library: generic contract', () => {
     expect(new Set(titles).size).toBe(titles.length);
   });
 
-  for (const { file, doc } of LIBRARY) {
+  for (const { file, doc, res, error } of EVALUATED) {
     describe(file, () => {
       it('resolves refs and validates clean', () => {
         const r = resolveSheetRefs(doc, REFS);
@@ -71,12 +87,13 @@ describe('sheet library: generic contract', () => {
       });
 
       it('evaluates on the demo device: bind ok, no errors, no hard-rule na', () => {
-        const res = runSheet(doc, table, undefined, REFS);
-        expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+        expect(error).toBeUndefined();
+        const r = res!;
+        expect(r.warnings.filter((w) => w.severity === 'error')).toEqual([]);
         if (doc.bind) {
-          expect(res.bind?.ok, res.bind?.error).toBe(true);
+          expect(r.bind?.ok, r.bind?.error).toBe(true);
         }
-        expect(hardNaRules(res)).toEqual([]);
+        expect(hardNaRules(r)).toEqual([]);
       });
     });
   }
@@ -151,6 +168,68 @@ describe('sheet library: vetting lints', () => {
   });
 });
 
+// The interface a sheet publishes to a parent is a naming convention, not a schema field, so
+// nothing in the engine can keep it from decaying: a sheet may quietly stop declaring its output
+// resistance and still evaluate perfectly. What follows is the convention stated as a rule rather
+// than as a list of every sheet's answer.
+//
+// The reserved names are the terminals a composing parent reaches for: Rout/Rin the impedance it
+// loads or is loaded by, cgg_in the capacitance one input terminal presents, Ron the resistance a
+// switch inserts. A block sheet publishes exactly the reserved names it has rows for — both
+// directions, so adding the row without the provide entry (or the reverse) fails.
+const RESERVED_PORTS: readonly string[] = ['Rout', 'Rin', 'cgg_in', 'Ron'];
+
+// A sheet under applications/ is the TOP of a composition: it consumes blocks and nothing
+// consumes it, so a reserved name it computes is an internal number and publishing it would be
+// theatre. Those publish nothing — unless they are in the map below.
+const CONSUMER_GROUP = 'applications/';
+
+// The sheets whose interface is not a reserved-name row at all: a bias generator, a spec
+// translator, a stage published for its device-level quantities. Each publishes the thing it
+// exists to produce, so there is nothing to derive and the list is the claim.
+const NAMED_INTERFACE: Readonly<Record<string, readonly string[]>> = {
+  'applications/sc-settling-to-ota-spec.json': ['GBW_req', 'A_req', 'SR_req', 'CL_eff'],
+  'mirrors-bias/beta-multiplier-bias.json': ['gm_target'],
+  'multistage/rail-to-rail-input-stage.json': ['gm_min', 'gm_mid', 'gm_max'],
+  'multistage/stage2-current-source-load.json': ['gds', 'vdsat'],
+};
+
+describe('sheet library: the published interface', () => {
+  it('every sheet publishes exactly the interface the convention gives it', () => {
+    // Accepted residual: deleting a reserved-name ROW and its provide entry together still
+    // satisfies the rule, since both sides move at once. The per-sheet Rout goldens in the
+    // tier suites are the mitigation — they read the row by name and fail when it goes.
+    const sorted = (xs: readonly string[]): string[] => [...xs].sort();
+    const actual: Record<string, string[]> = {};
+    const expected: Record<string, string[]> = {};
+    for (const { file, doc } of LIBRARY) {
+      actual[file] = sorted(doc.provide ?? []);
+      // Union, not override: a sheet in the hand map still owes its reserved-name rows, so
+      // one that later grows a real Rout row is required to publish it like everyone else.
+      const reserved = file.startsWith(CONSUMER_GROUP)
+        ? []
+        : doc.rows.map((r) => r.name).filter((n) => RESERVED_PORTS.includes(n));
+      expected[file] = sorted([...(NAMED_INTERFACE[file] ?? []), ...reserved]);
+    }
+    expect(actual).toEqual(expected);
+    // A stale key in the hand map names a sheet that no longer exists.
+    expect(Object.keys(NAMED_INTERFACE).filter((f) => !(f in actual))).toEqual([]);
+  });
+
+  it('every published name resolves to a value on the demo device', () => {
+    // A provide list is inert outside composition, so a name that has quietly stopped resolving
+    // would cost nothing here and everything the first time a parent read it.
+    const dangling: string[] = [];
+    for (const { file, doc, res } of EVALUATED) {
+      if (!res) continue; // an evaluation that threw already fails its own contract test
+      for (const key of doc.provide ?? []) {
+        if (!Number.isFinite(res.values[key])) dangling.push(`${file}: ${key}`);
+      }
+    }
+    expect(dangling).toEqual([]);
+  });
+});
+
 describe('exemplar goldens: CS amp, current-source load', () => {
   const res = runSheet(sheet('stages/cs-amp-current-source-load.json'), table);
   // Defaults: GBW 10 MHz into 2 pF with a 1.25 over-design factor, gm/ID 12,
@@ -174,6 +253,17 @@ describe('exemplar goldens: CS amp, current-source load', () => {
     // Load gm/input gm = 8/12 exactly (same current).
     const vn = vnthM(gm) * Math.sqrt(1 + 8 / 12);
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
+  });
+
+  it('the interface rows are the output node and the input gate', () => {
+    // Both devices carry the same current at the same L and |vds|, so the output node collapses
+    // to (VA + vds)/(2·id); Rout is the inverse of the denominator Av already used, which is why
+    // the gain golden above did not move when the row was named. cgg = W·L·Cox exactly in the
+    // demo model, at the width the bind landed on.
+    const id = gm / 12;
+    expect(relErr(res.values.Rout, stage2Rout(id, 0.5e-6, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
   });
 
   it('is feasible at defaults on the demo device', () => {
@@ -216,6 +306,14 @@ describe('exemplar goldens: simple current mirror', () => {
     // pelgrom_irel ∝ 1/sqrt(W·L): W_out = 4·W_ref at the same L ⇒ ratio exactly 1/2.
     expect(relErr(res.values.irel_out / res.values.irel_ref, 0.5)).toBeLessThan(1e-9);
   });
+
+  it('output resistance is the output device r_o, and the output vds cancels out of it', () => {
+    // The reference fixes the saturation current idSat = I_in/(1 + vgs_ref/VA); the output copies
+    // that density at K times the width and gds = idSat/VA in the demo model, so r_o =
+    // (VA + vgs_ref)/(K·I_in) — independent of where the output node happens to sit. That is the
+    // whole interface of a simple mirror: no cascode, no degeneration, just one device's r_o.
+    expect(relErr(res.values.Rout, roMirrored(res.values.ref__vgs, 4, 20e-6))).toBeLessThan(1e-3);
+  });
 });
 
 describe('exemplar goldens: 5T OTA', () => {
@@ -239,6 +337,16 @@ describe('exemplar goldens: 5T OTA', () => {
     const gdsLd = 10e-6 / (va + 0.9);
     const av = 120e-6 / (gdsIn + gdsLd);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
+    // Rout is the inverse of that same sum, and the gain now reads through it — a name for the
+    // output node, not a second opinion about it.
+    expect(relErr(res.values.Rout, 1 / (gdsIn + gdsLd))).toBeLessThan(1e-2);
+    expect(relErr(res.values.Av, res.values.in__gm * res.values.Rout)).toBeLessThan(1e-12);
+  });
+
+  it('input capacitance is one input gate, at the width the bind landed on', () => {
+    // Per input terminal: the pair is a half circuit, so a differential source drives one of
+    // these on each side. cgg = W·L·Cox exactly in the demo model.
+    expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, 0.5e-6))).toBeLessThan(1e-9);
   });
 
   it('input noise counts both pair and both mirror devices (two-sided)', () => {
@@ -289,16 +397,20 @@ describe('exemplar goldens: 5T OTA', () => {
   });
 });
 
-// Two library sheets ship with a gate-wiring disagreement, and the engine now says so on
-// every evaluation. Neither is a defect in the check: both sheets offer a knob their own
-// schematic does not leave free — one shared gate cannot satisfy two independently chosen
-// inversion levels — and repairing that changes which quantities the sheet asks a designer
-// for. That is a change to the sheets' contract, not a number to slip under a golden, so the
-// finding stays loud while it waits. Locked here as ASSERTED intent, the same way the
-// containment-honesty golden locks a claim the demo table refutes: if one of these stops
-// firing, either someone repaired the sheet — and should replace this test with its golden —
-// or the check quietly stopped working.
-describe('gate-wiring disagreements the library reports at its shipped defaults', () => {
+// The two shapes a gate-wiring declaration can take, one library sheet each.
+//
+// Where a node is DERIVED from the device that owns it, the declaration re-states an identity
+// and can never fire — the flipped voltage follower is now that case, and its declaration is
+// kept precisely so the identity stays checked if anyone types the node back in.
+//
+// Where a node is STATED as a spec and two devices are sized against it independently, the
+// declaration is a real comparison and may disagree. The CMOS inverter is that case and
+// disagrees on both sides at its defaults: one shared gate carrying one shared current leaves a
+// single real degree of freedom between the two inversion levels, so the sheet asks for the
+// input level, reports where each device's sizing actually lands, and leaves the reconciliation
+// to the designer. Locked here so that a sheet losing either behaviour shows up as a test
+// failure rather than as silence.
+describe('what the gate-wiring check reports on the library at its shipped defaults', () => {
   const wiringWarnings = (res: SheetResult): string[] =>
     res.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location ?? '');
 
@@ -313,31 +425,48 @@ describe('gate-wiring disagreements the library reports at its shipped defaults'
     return Number((m as RegExpExecArray)[1]);
   };
 
-  it('the CMOS inverter sizes its two devices for gates 0.62 V apart', () => {
+  it('the CMOS inverter reports both devices missing the input level it was given', () => {
     const res = runSheet(sheet('stages/cmos-inverter-amp.json'), table);
-    // One gate, two binds: the NMOS puts it at its own vgs above ground, the PMOS its own vgs
-    // below VDD. On the demo table (one NMOS dataset standing in for both polarities) that is
-    // vgs(12) = 0.567023 against 1.8 - vgs(10) = 1.189937, so the node is over-determined by
-    // -0.622914 V — sixty times the 10 mV tolerance, and the sheet still reads feasible.
-    const delta = reportedDelta(res, 'p');
-    expect(relErr(delta, VGS_GMID12_L05 - (1.8 - VGS_GMID10_L05))).toBeLessThan(1e-3);
-    expect(delta).toBeLessThan(-WIRING_TOL);
-    // The NMOS side is the one that DEFINES the node, so only the PMOS can disagree.
-    expect(wiringWarnings(res)).toEqual(['p']);
-    expect(res.feasible).toBe(true); // a wiring warning never moves the verdict
+    // V_in is a spec, 0.9 V (mid-supply, where an inverting stage is biased). On the demo table —
+    // one NMOS dataset standing in for both polarities — the NMOS bind puts the shared gate at
+    // vgs(12) = 0.567 V and the PMOS bind at 1.8 - vgs(10) = 1.190 V, so both sides miss by
+    // thirty times the 10 mV tolerance and both consistency guardrails read fail.
+    expect(relErr(res.values.V_in_n, VGS_GMID12_L05)).toBeLessThan(1e-3);
+    expect(relErr(res.values.V_in_p, 1.8 - VGS_GMID10_L05)).toBeLessThan(1e-3);
+    expect(relErr(reportedDelta(res, 'n'), 0.9 - VGS_GMID12_L05)).toBeLessThan(1e-3);
+    expect(relErr(reportedDelta(res, 'p'), 0.9 - (1.8 - VGS_GMID10_L05))).toBeLessThan(1e-3);
+    expect(reportedDelta(res, 'n')).toBeGreaterThan(WIRING_TOL);
+    expect(reportedDelta(res, 'p')).toBeLessThan(-WIRING_TOL);
+    expect(wiringWarnings(res)).toEqual(['n', 'p']);
+    // Closing both guardrails at once needs vgs_n + |vgs_p| = VDD, i.e. both devices near 0.9 V,
+    // which on this table is gm/ID about 4-5 — below the min of 6 that both inversion params
+    // declare. The declared ranges are the user's spec and are not widened to manufacture a green
+    // rule; the residual IS the sheet showing the reconciliation the designer has to make.
+    //
+    // Both rules put V_in on the right, so both bands are 1% of the one typed input level:
+    // 9 mV at the 0.9 V default, under the 10 mV wiring tolerance on BOTH sides. A '==' margin
+    // is (tolPct/100)*|rhs| - |lhs - rhs|, so each is 0.009 V less the residual above.
+    const rule = (id: string): { status: string; margin: number } =>
+      res.rules.find((r) => r.id === id) as { status: string; margin: number };
+    expect(rule('input-consistent-n').status).toBe('fail');
+    expect(rule('input-consistent-p').status).toBe('fail');
+    expect(relErr(rule('input-consistent-n').margin, 0.009 - (0.9 - VGS_GMID12_L05))).toBeLessThan(
+      1e-3,
+    );
+    expect(
+      relErr(rule('input-consistent-p').margin, 0.009 - (1.8 - VGS_GMID10_L05 - 0.9)),
+    ).toBeLessThan(1e-3);
+    expect(res.feasible).toBe(true); // guardrails and wiring warnings never move the verdict
   });
 
-  it('the flipped voltage follower puts its feedback gate 0.89 V off the node it assumes', () => {
+  it('the flipped voltage follower derives its internal node instead of declaring one', () => {
     const res = runSheet(sheet('multistage/flipped-voltage-follower.json'), table);
-    // The feedback device's gate is the input device's drain, which the sheet places at
-    // V_out + vds_in = 1.5 V; its own bind needs vgs(10) = 0.610063 V above its grounded
-    // source, so the gate is reported +0.889937 V above the node the bind asks for. Typing the
-    // drain-source voltage and the inversion level as two free choices is exactly what leaves
-    // the node claiming two values at once.
-    const delta = reportedDelta(res, 'fb');
-    expect(relErr(delta, 1.5 - VGS_GMID10_L05)).toBeLessThan(1e-3);
-    expect(delta).toBeGreaterThan(WIRING_TOL);
-    expect(wiringWarnings(res)).toEqual(['fb']);
+    // Node X is the feedback device's gate above its grounded source, so the node IS that
+    // device's own sized gate-source voltage — vgs(10) on the demo table — and the input device's
+    // drain-source voltage is what is left of it above the output. Nothing is typed, so the
+    // declaration re-states an identity and reports nothing.
+    expect(relErr(res.values.V_x, VGS_GMID10_L05)).toBeLessThan(1e-3);
+    expect(wiringWarnings(res)).toEqual([]);
     expect(res.feasible).toBe(true);
   });
 });

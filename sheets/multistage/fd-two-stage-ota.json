@@ -264,7 +264,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
+        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
       },
       "params": {
         "Ix": "I1/2",
@@ -376,8 +376,14 @@
       "note": "stage-1 gain into the input-device and current-source-load output conductances"
     },
     {
+      "name": "Rout",
+      "expr": "1/(s2__gds + ld2__gds)",
+      "unit": "ohm",
+      "note": "SINGLE-SIDE output resistance: stage two's own output conductance in parallel with its load device's, on one of the two output branches. The differential output resistance a parent loads is twice this, the same half-circuit convention the gain and the input-capacitance rows use. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av2",
-      "expr": "gm2/(s2__gds + ld2__gds)",
+      "expr": "gm2*Rout",
       "unit": "V/V",
       "note": "stage-2 common-source gain into its own and the load conductances"
     },
@@ -404,6 +410,12 @@
       "expr": "s2__cgg",
       "unit": "F",
       "note": "stage-2 gate capacitance — the dominant term in the stage-1 output cap C1_est"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
@@ -471,5 +483,6 @@
       "rhs": "0.1",
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the stage-1 output level V1 that the stage-2 gate sets"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

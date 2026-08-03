@@ -90,8 +90,14 @@
       "note": "degeneration boosts the device output resistance by the same factor Gm is lowered"
     },
     {
+      "name": "Rout",
+      "expr": "par(R_load, Rout_dev)",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its output: the load resistor in parallel with the degeneration-boosted device resistance. The load knob is already inside this row and inside the gain, so the loading contract here is the arithmetic rather than a separate rule"
+    },
+    {
       "name": "Av",
-      "expr": "Gm*par(R_load, Rout_dev)",
+      "expr": "Gm*Rout",
       "unit": "V/V",
       "note": "degenerated transconductance into the load; into an ideal load Av -> gm/gds (gain preserved, linearity gained)"
     },
@@ -100,6 +106,12 @@
       "expr": "sqrt(vnth_m^2 + 4*k*T*R_s)",
       "unit": "V/sqrt(Hz)",
       "note": "channel noise is unchanged input-referred; the degeneration resistor adds 4kT*R_s directly at the input"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings: the inverting drain would multiply its share, while the degenerated source follows PART of the gate swing — the fraction 1 - 1/loop, about a third at these defaults — and bootstraps that much of $C_{GS}$ away. The two corrections pull opposite ways and neither is computable from this data. No rule reads it"
     }
   ],
   "rules": [
@@ -120,6 +132,14 @@
       "note": "device saturated: the drain-to-source voltage is the drain level minus the I*R_s source lift"
     },
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" }
-  ]
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    }
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

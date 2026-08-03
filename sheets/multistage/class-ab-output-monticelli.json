@@ -90,7 +90,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "id", "vgs", "vdsat"]
+        "provide": ["gm", "id", "vgs", "vdsat", "gds"]
       },
       "params": { "Ix": "I_q", "Lx": "L_n", "gx": "gm_id_n", "vx": "V_out" }
     },
@@ -123,7 +123,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "id", "vgs", "vdsat"]
+        "provide": ["gm", "id", "vgs", "vdsat", "gds"]
       },
       "params": { "Ix": "I_q", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*(VDD - V_out)" }
     }
@@ -158,6 +158,12 @@
       "expr": "VDD - mn__vdsat - mp__vdsat",
       "unit": "V",
       "note": "peak-to-peak output swing between the two saturation limits"
+    },
+    {
+      "name": "Rout",
+      "expr": "1/(mn__gds + mp__gds)",
+      "unit": "ohm",
+      "note": "the resistance this output stage presents at its output — both devices' output conductances in parallel, since at quiescent they conduct together. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
     }
   ],
   "rules": [
@@ -194,5 +200,6 @@
       "rhs": "mn__vdsat",
       "note": "NMOS output device saturated at the quiescent output level"
     }
-  ]
+  ],
+  "provide": ["Rout"]
 }

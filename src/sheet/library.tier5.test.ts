@@ -64,10 +64,12 @@ describe('tier5 goldens: Track & hold budget', () => {
 describe('tier5 goldens: Gm-C filter pole', () => {
   const res = runSheet(loadSheet('gm-c-filter-pole.json'), table);
   // Defaults: f_c 10 MHz into C_int 2 pF with a 1.2 over-design factor, gm/ID 12,
-  // fco_est 50 kHz, band 1 Hz .. 10 MHz.
+  // fco_est 8 MHz, band 1 Hz .. 10 MHz. With the corner that close to the band edge the
+  // 1/f tail dominates the integral: it contributes fco*ln(f_hi/f_lo) = 1.29e8 against the
+  // thermal band's 1e7, so vn_int is about 3.6x what a 50 kHz corner would predict.
   const gm = 2 * Math.PI * 1e7 * 2e-12 * 1.2;
   const vnth_m = vnthM(gm);
-  const vn_int = Math.sqrt(vnth_m ** 2 * (1e7 - 1 + 5e4 * Math.log(1e7 / 1)));
+  const vn_int = Math.sqrt(vnth_m ** 2 * (1e7 - 1 + 8e6 * Math.log(1e7 / 1)));
 
   it('pins gm from the cutoff spec and V* from the inversion knob', () => {
     expect(res.bind?.ok).toBe(true);
@@ -78,6 +80,18 @@ describe('tier5 goldens: Gm-C filter pole', () => {
   it('integrates the thermal floor plus the 1/f tail over the band', () => {
     expect(relErr(res.values.vn_dens, vnth_m)).toBeLessThan(1e-3);
     expect(relErr(res.values.vn_int, vn_int)).toBeLessThan(1e-3);
+  });
+
+  it('deliberately misses its own noise budget at the honest flicker corner', () => {
+    // The megahertz corner puts the integrated noise about 2.5x past vn_target, and the
+    // sheet keeps the tight budget ON PURPOSE: the red advisory is the 1/f tail made
+    // visible, the same teaching stance as the inverter's consistency guardrails. The rule
+    // is a guardrail, so feasibility is untouched — this locks both halves of that
+    // statement so neither edit can be silently "fixed" away.
+    const noise = res.rules.find((r) => r.id === 'noise-spec');
+    expect(noise?.kind).toBe('guardrail');
+    expect(noise?.status).toBe('fail');
+    expect(res.feasible).toBe(true);
   });
 });
 

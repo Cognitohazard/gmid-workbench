@@ -98,6 +98,12 @@
       "expr": "vnth_m",
       "unit": "V/sqrt(Hz)",
       "note": "input-referred channel thermal density; the near-unity gain passes it through with little change"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings. The drain sits at the supply, so there is no Miller multiplication to miss here; what there is instead is bootstrapping — the source follows the gate to within a few percent, taking most of $C_{GS}$ out of the driver's way, so this row OVERSTATES what the driver sees. No rule reads it"
     }
   ],
   "rules": [
@@ -118,7 +124,22 @@
       "note": "device saturated: the drain-to-source voltage is VDD minus the source (output) level"
     },
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
+    {
+      "id": "loading",
+      "kind": "guardrail",
+      "lhs": "R_L",
+      "op": ">=",
+      "rhs": "10*Rout",
+      "note": "the stage is actually buffering only while the load it drives is well above its own output resistance. Ten to one is the convention for that regime, not physics: at exactly ten to one the loaded gain still sits within about ten percent of what an unloaded follower would give, and below it the load, not the device, sets the gain"
+    },
     {
       "id": "level-shift-consistent",
       "kind": "guardrail",
@@ -127,5 +148,6 @@
       "rhs": "0.05",
       "note": "the biasing vgs_est should match the reported vgs; retune it if this trips"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

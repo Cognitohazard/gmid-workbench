@@ -59,10 +59,10 @@
     },
     {
       "name": "fco_est",
-      "value": 5e4,
+      "value": 8e6,
       "unit": "Hz",
       "role": "spec",
-      "note": "flicker corner estimate; read fco from the table when it carries noise PSDs"
+      "note": "flicker corner estimate — about 8.4 MHz was measured on a sky130 typical-corner realization of this stage at the shipped operating point, so the megahertz class is the honest default rather than the tens of kilohertz an older process would suggest. It stays an estimate; read fco from the table when it carries noise PSDs. At this corner the shipped defaults overrun vn_target on purpose — the red advisory is the 1/f tail made visible. Widen the budget, shrink the band, or spend transconductance to close it"
     },
     {
       "name": "f_lo",
@@ -167,11 +167,11 @@
     },
     {
       "id": "noise-spec",
-      "kind": "requirement",
+      "kind": "guardrail",
       "lhs": "vn_int",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "integrated input noise under budget"
+      "note": "integrated input noise under budget; computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
     },
     {
       "id": "dynamic-range",

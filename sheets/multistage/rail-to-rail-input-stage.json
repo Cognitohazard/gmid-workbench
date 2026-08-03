@@ -224,5 +224,6 @@
       "rhs": "gm_ratio_target",
       "note": "the total transconductance swings by this ratio across the CM range; constant-gm control (current switching to hold gm_n + gm_p constant) is the standard fix and is a simulation-level technique out of scope here"
     }
-  ]
+  ],
+  "provide": ["gm_min", "gm_mid", "gm_max"]
 }

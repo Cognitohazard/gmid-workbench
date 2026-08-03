@@ -74,8 +74,14 @@
   },
   "rows": [
     {
+      "name": "Rout",
+      "expr": "par(R_load, 1/gds)",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its output: the load resistor in parallel with the device output resistance. The load knob is already inside this row and inside the gain, so the loading contract here is the arithmetic rather than a separate rule"
+    },
+    {
       "name": "Av",
-      "expr": "gm*par(R_load, 1/gds)",
+      "expr": "gm*Rout",
       "unit": "V/V",
       "note": "gm into the load resistor in parallel with the device output resistance"
     },
@@ -98,6 +104,12 @@
       "expr": "sqrt(vnth_m^2 + 4*k*T/(R_load*gm^2))",
       "unit": "V/sqrt(Hz)",
       "note": "device channel thermal density plus the load resistor's 4kT/R_load current noise referred to the input by 1/gm"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
@@ -118,7 +130,14 @@
       "note": "device saturated at the DC output level the load drop leaves"
     },
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     {
       "id": "gbw-margin",
       "kind": "guardrail",
@@ -135,5 +154,6 @@
       "rhs": "0.05",
       "note": "the biasing V_out estimate should match the actual VDD - I*R_load; retune V_out or R_load if this trips"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

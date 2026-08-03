@@ -1,6 +1,6 @@
 {
   "title": "CMOS inverter amplifier",
-  "description": "A CMOS inverter used as an analog amplifier: the input drives both an NMOS and a PMOS gate, and the two devices share one drain current stacked between the rails (current reuse). Because both transconductances act on the same input, the stage transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$, so the inverter gives roughly twice the $g_m$ of a single device at the same current - the reason it is the workhorse gain cell for low-voltage, power-efficient design. The gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$. Both devices are composed children biased at the same current; pick the PMOS child table to the p polarity and set p_sign to -1 for a signed-PMOS axis.",
+  "description": "A CMOS inverter used as an analog amplifier: the input drives both an NMOS and a PMOS gate, and the two devices share one drain current stacked between the rails (current reuse). Because both transconductances act on the same input, the stage transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$, so the inverter gives roughly twice the $g_m$ of a single device at the same current - the reason it is the workhorse gain cell for low-voltage, power-efficient design. The gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$. Both devices are composed children biased at the same current; pick the PMOS child table to the p polarity and set p_sign to -1 for a signed-PMOS axis. The input DC level $V_{in}$ is a spec you state, and each device's sizing then implies its own value for that same node: the NMOS gate sits one $V_{GS}$ above ground, the PMOS gate one $V_{GS}$ below the supply. Two consistency guardrails compare $V_{in}$ against both, because one shared gate carrying one shared current leaves a single real degree of freedom between the two inversion levels — satisfying both at once requires $V_{GS,n} + |V_{GS,p}| = V_{DD}$, a constraint on the pair rather than a choice made twice. Reconciling them is the design work this sheet exists to show.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -12,6 +12,13 @@
       "unit": "V",
       "role": "spec",
       "note": "output DC level; sets both devices' drain-source voltages (ideally near mid-supply)"
+    },
+    {
+      "name": "V_in",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "input DC level — the voltage on the shared gate. An inverting amplifier is biased at its own trip point, where the input and output levels coincide, so mid-supply is the usual starting choice. Both devices are checked against this node rather than either one defining it"
     },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
     { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
@@ -55,7 +62,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "PMOS inversion. Matching it to gm_id_n balances the transfer and minimizes offset, but the two devices share one gate, so the choice is also what places the input level — see the V_in row: at these defaults the two binds ask that node for different voltages"
+      "note": "PMOS inversion. Matching it to gm_id_n balances the transfer and minimizes offset, but the two devices share one gate, so this choice also places the input level — see the V_in_p row and the input-consistent-p guardrail"
     },
     {
       "name": "L_n",
@@ -86,7 +93,7 @@
       "name": "n",
       "doc": {
         "title": "NMOS device",
-        "description": "The pull-down device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, current, and channel-noise density. Its wiring declaration is TAUTOLOGICAL as the sheet stands: the input level $V_{in}$ is derived from this device’s own gate-source voltage, so the declared node and the checked node are the same number and the check cannot fire. It is kept because it stops being tautological the moment someone re-types $V_{in}$ as a plain parameter — which is exactly the defect this mechanism was built after.",
+        "description": "The pull-down device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, current, gate-source voltage, and channel-noise density. Its wiring declaration puts the shared gate at $V_{in}$ above a grounded source, which this bind must then agree with: the input level is stated, not read off this device, so the check compares two independently chosen numbers.",
         "polarity": "n",
         "params": [
           { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -105,7 +112,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m"]
+        "provide": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m", "cgg"]
       },
       "params": {
         "I_d": "I_bias",
@@ -119,7 +126,7 @@
       "name": "p",
       "doc": {
         "title": "PMOS device",
-        "description": "The pull-up device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, and current.",
+        "description": "The pull-up device at the shared current, drain at the output. Exposes its transconductance, output conductance, saturation headroom, current, and gate-source voltage — the last so the sheet can place the shared gate one gate-source voltage below the supply.",
         "polarity": "p",
         "params": [
           { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -144,7 +151,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "id", "vnth_m"]
+        "provide": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m", "cgg"]
       },
       "params": {
         "I_d": "I_bias",
@@ -157,10 +164,16 @@
   ],
   "rows": [
     {
-      "name": "V_in",
+      "name": "V_in_n",
       "expr": "n__vgs",
       "unit": "V",
-      "note": "the input DC level, read off the NMOS bind: its source is at ground, so the gate sits at its own gate-source voltage. The PMOS shares that gate, and the wiring declarations on both children check the two devices against this one node — at the shipped defaults they DISAGREE, which is the sheet's known open problem: gm_id_n and gm_id_p are offered as two free knobs when one shared gate leaves only one of them free. Set the two inversion levels so both devices land on the same input level, or size against a supply that can carry both"
+      "note": "where the NMOS sizing puts the shared gate: its source is at ground, so the gate sits at its own gate-source voltage"
+    },
+    {
+      "name": "V_in_p",
+      "expr": "VDD - abs(p__vgs)",
+      "unit": "V",
+      "note": "where the PMOS sizing puts the same gate: its source is at VDD, so the gate sits one gate-source voltage below the supply. abs() because a signed-PMOS table keeps that axis negative"
     },
     {
       "name": "gm_tot",
@@ -175,8 +188,14 @@
       "note": "both output conductances load the node"
     },
     {
+      "name": "Rout",
+      "expr": "1/gout",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its output — both devices' output conductances in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av",
-      "expr": "gm_tot/gout",
+      "expr": "gm_tot*Rout",
       "unit": "V/V",
       "note": "combined transconductance into the combined output conductance"
     },
@@ -187,6 +206,12 @@
       "expr": "sqrt(n__vnth_m^2*(n__gm/gm_tot)^2 + p__vnth_m^2*(p__gm/gm_tot)^2)",
       "unit": "V/sqrt(Hz)",
       "note": "both channel-noise currents (each device's own vnth_m*gm) sum and refer to the input by gm_tot"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "n__cgg + p__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents. Both gates are driven together, so both gate capacitances load the driver. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it — and here the drain swings against the gate, so that omission is at its worst. No rule reads it"
     }
   ],
   "rules": [
@@ -206,8 +231,33 @@
       "rhs": "p__vdsat",
       "note": "PMOS saturated: its headroom is the supply minus the output level"
     },
+    {
+      "id": "input-consistent-n",
+      "kind": "guardrail",
+      "lhs": "V_in_n",
+      "op": "==",
+      "rhs": "V_in",
+      "tolPct": 1,
+      "note": "the NMOS inversion must put the shared gate where V_in says it is. The tolerance is one percent of the TYPED input level — V_in sits on the right so both sides of the reconciliation are held to the same window in volts, rather than each to a window set by whatever level its own device happened to imply. For any input below one volt that window is tighter than the 10 mV gate-wiring tolerance, so this rule closes first; tune gm_id_n (or L_n, or the bias current) until it does"
+    },
+    {
+      "id": "input-consistent-p",
+      "kind": "guardrail",
+      "lhs": "V_in_p",
+      "op": "==",
+      "rhs": "V_in",
+      "tolPct": 1,
+      "note": "the same reconciliation on the pull-up side, against the same one percent of the typed input level. The two inversion levels are not independent knobs: one gate carrying one current is a single real degree of freedom, so both rules close together only where V_GS,n + |V_GS,p| equals the supply. Where no pair inside the declared inversion ranges reaches that, the honest answers are a different supply, different lengths, or a different bias current — not a wider range"
+    },
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     {
       "id": "gbw-margin",
       "kind": "guardrail",
@@ -216,5 +266,6 @@
       "rhs": "GBW_target",
       "note": "combined gm over the total output capacitance"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

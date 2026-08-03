@@ -11,11 +11,19 @@
 
 import { describe, it, expect } from 'vitest';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, vnthM, gmbOf, sheet as libSheet } from './library.fixtures';
+import type { SheetResult } from './types';
+import {
+  table,
+  relErr,
+  va,
+  gdsOf,
+  stage2Rout,
+  vnthM,
+  gmbOf,
+  cggOf,
+  sheet as libSheet,
+} from './library.fixtures';
 
-const va = (L: number): number => VA_PER_L * L;
-/** gds of a device bound to current `id` at length `L`, declared vds — exact in the model. */
-const gdsOf = (id: number, L: number, vds: number): number => id / (va(L) + vds);
 /** Intrinsic gain av0 = (gm/ID)·(VA + vds) at length `L`, declared vds. */
 const av0Of = (gm_id: number, L: number, vds: number): number => gm_id * (va(L) + vds);
 
@@ -24,6 +32,19 @@ const sheet = (file: string) => libSheet(`otas/${file}`);
 const TWO_PI = 2 * Math.PI;
 const CL = 2e-12;
 const L = 0.5e-6; // every default sheet sizes at 0.5 µm
+
+// Every OTA's cgg_in is the gate of ONE input device, per input terminal. cgg = W*L*Cox is
+// exact in the demo model at the width the bind landed on, so where the input child exposes its
+// sized width the row has a closed form to check; the estimate the sheet notes warn about is the
+// missing Miller term, which no table here carries and no rule reads.
+const cggInOf = (res: SheetResult): number => cggOf(res.values.in__W, L);
+
+/** The cgg_in golden five of these OTAs share verbatim; registered per describe. */
+const itIsOneInputGate = (res: SheetResult): void => {
+  it('input capacitance is one input gate at the width the bind landed on', () => {
+    expect(relErr(res.values.cgg_in, cggInOf(res))).toBeLessThan(1e-9);
+  });
+};
 
 describe('tier-3 goldens: differential pair + tail', () => {
   const res = runSheet(sheet('differential-pair-tail.json'), table);
@@ -46,6 +67,13 @@ describe('tier-3 goldens: differential pair + tail', () => {
     const av = gmIn / (gdsOf(10e-6, L, 0.9 - res.values.V_tail) + 3e-6);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
   });
+
+  it('Rout is the inverse of that same denominator, and Av now reads through it', () => {
+    const rout = 1 / (gdsOf(10e-6, L, 0.9 - res.values.V_tail) + 3e-6);
+    expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Av, res.values.Gm * res.values.Rout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.cgg_in, cggInOf(res))).toBeLessThan(1e-9);
+  });
 });
 
 describe('tier-3 goldens: degenerated differential pair', () => {
@@ -67,6 +95,17 @@ describe('tier-3 goldens: degenerated differential pair', () => {
   it('offset improves by exactly the degeneration factor', () => {
     expect(relErr(res.values.vos / res.values.vos_undeg, 1 / nDeg)).toBeLessThan(1e-3);
     expect(relErr(res.values.SR, 20e-6 / CL)).toBeLessThan(1e-9);
+  });
+
+  it('degeneration lowers the transconductance but not the output node it drives', () => {
+    // Rout is the input device gds against the estimated load conductance — the row deliberately
+    // does NOT claim the degeneration boost the source resistor also gives the device r_o, which
+    // is the same conservatism the gain note already records. The pair's source node V_s is
+    // pinned to CM_dc, so read it from the result and let the model check own the rest.
+    const rout = 1 / (gdsOf(10e-6, L, 0.9 - res.values.V_s) + 3e-6);
+    expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Av, res.values.Gm_eff * res.values.Rout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.cgg_in, cggInOf(res))).toBeLessThan(1e-9);
   });
 });
 
@@ -96,6 +135,8 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     const Rout = 1 / (1 / Rn + 1 / Rp);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
   });
+
+  itIsOneInputGate(res);
 });
 
 describe('tier-3 goldens: folded cascode OTA', () => {
@@ -121,6 +162,8 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     const Rout = 1 / (1 / Rp + 1 / Rn);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
   });
+
+  itIsOneInputGate(res);
 });
 
 describe('tier-3 goldens: current-mirror OTA', () => {
@@ -137,6 +180,8 @@ describe('tier-3 goldens: current-mirror OTA', () => {
     // Both output devices sit at L_mir, vds 0.9, so gds_p = gds_n and K_m cancels.
     expect(relErr(res.values.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
   });
+
+  itIsOneInputGate(res);
 
   it('PM pays the PMOS node as a FULL pole and the folded NMOS node as a DOUBLET', () => {
     // Structure golden on the sheet's own poles: both branches pass a PMOS mirror (full
@@ -172,6 +217,8 @@ describe('tier-3 goldens: symmetrical OTA', () => {
   it('DC gain matches the current-mirror OTA form (K_m-independent)', () => {
     expect(relErr(res.values.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
   });
+
+  itIsOneInputGate(res);
 
   it('PM pays the PMOS node as a FULL pole and the intermediate NMOS node as a DOUBLET', () => {
     // Same structure golden as the current-mirror OTA — the symmetrical OTA shares the
@@ -213,6 +260,8 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
     const Rout = 1 / (1 / Rn + 1 / Rp);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
   });
+
+  itIsOneInputGate(res);
 });
 
 describe('tier-3 goldens: inverter-based OTA', () => {
@@ -231,6 +280,17 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     expect(relErr(res.values.Av, ((12 + 12) * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
     const vn = vnthM(gmTot);
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-2);
+  });
+
+  it('one output node, and both stacked gates on the input terminal', () => {
+    // Equal L and |vds| put the two devices at the same gds, so Rout = (VA + vds)/(2*I_bias)
+    // exactly. Current reuse means the input drives BOTH gates, so cgg_in sums them; at equal
+    // gm/ID and equal current the two widths match, making the sum exactly twice one gate.
+    expect(relErr(res.values.Rout, stage2Rout(20e-6, L, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(res.values.Av, res.values.gm_tot * res.values.Rout)).toBeLessThan(1e-12);
+    const cgg = cggOf(res.values.n__W, L) + cggOf(res.values.p__W, L);
+    expect(relErr(res.values.cgg_in, cgg)).toBeLessThan(1e-9);
+    expect(relErr(res.values.cgg_in, 2 * cggOf(res.values.n__W, L))).toBeLessThan(1e-9);
   });
 });
 

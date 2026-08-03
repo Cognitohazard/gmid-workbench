@@ -130,8 +130,14 @@
   },
   "rows": [
     {
+      "name": "Rout",
+      "expr": "1/(gds + load__gds)",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its output — both devices' output conductances in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av",
-      "expr": "gm/(gds + load__gds)",
+      "expr": "gm*Rout",
       "unit": "V/V",
       "note": "both devices' output conductances load the gain"
     },
@@ -142,6 +148,12 @@
       "expr": "sqrt(vnth_m^2 + load__vnth_m^2*(load__gm/gm)^2)",
       "unit": "V/sqrt(Hz)",
       "note": "the load's own drain noise (vnth_m_load*gm_load) referred to the input by 1/gm_in"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
@@ -170,7 +182,14 @@
       "note": "load device saturated: its headroom is the supply minus the output level"
     },
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     {
       "id": "gbw-margin",
       "kind": "guardrail",
@@ -179,5 +198,6 @@
       "rhs": "GBW_target",
       "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

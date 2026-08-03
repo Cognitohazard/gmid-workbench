@@ -12,7 +12,19 @@
 import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, vnthM, gmbOf, sheet as libSheet } from './library.fixtures';
+import {
+  table,
+  relErr,
+  VA_PER_L,
+  vnthM,
+  gmbOf,
+  cggOf,
+  par,
+  gdsOf,
+  stage2Rout,
+  sheet as libSheet,
+  VGS_GMID8_L05,
+} from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`stages/${file}`);
 
@@ -38,6 +50,16 @@ describe('tier1 goldens: CS amp, resistive load', () => {
   it('output DC level is VDD minus the load drop', () => {
     expect(relErr(res.values.V_out_actual, 1.8 - id * 50e3)).toBeLessThan(1e-9);
   });
+
+  it('the interface rows are the load resistor paralleled with ro, and the gate capacitance', () => {
+    // Rout is the inverse of the denominator the gain already used, so Av = gm*Rout is the same
+    // number by construction; what this pins is that the row IS that output node. cgg = W*L*Cox
+    // exactly in the demo model, at the width the bind landed on.
+    const gds = id / (VA_PER_L * 0.5e-6 + 0.9);
+    expect(relErr(res.values.Rout, par(50e3, 1 / gds))).toBeLessThan(2e-3);
+    expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
+  });
 });
 
 describe('tier1 goldens: CS amp, diode-connected load', () => {
@@ -59,6 +81,18 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
   it('input noise is the density scaled by the load contribution', () => {
     const vn = vnthM(gm) * Math.sqrt(1 + 8 / 12);
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(3e-3);
+  });
+
+  it('the diode load, not the output conductances, sets the output resistance', () => {
+    // The load sits on the vds = vgs diagonal at gm/ID 8, so its drop is the fixture constant and
+    // the input device sees VDD minus it. Rout carries load__gm, which is ~13x the two gds terms
+    // together — the reason a diode load buys so little gain.
+    const id = gm / 12;
+    const va = VA_PER_L * 0.5e-6;
+    const rout = 1 / (8 * id + id / (va + 1.8 - VGS_GMID8_L05) + id / (va + VGS_GMID8_L05));
+    expect(relErr(res.values.Rout, rout)).toBeLessThan(2e-3);
+    expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
   });
 });
 
@@ -83,6 +117,15 @@ describe('tier1 goldens: Source-degenerated CS amp', () => {
   it('input noise adds the 4kT*R_s resistor term to the channel density', () => {
     const vn = Math.sqrt(vnthM(gm) ** 2 + 4 * PHYS.k * PHYS.T * Rs);
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(3e-3);
+  });
+
+  it('the output node is the load resistor against the degeneration-boosted device', () => {
+    // The source lift I_bias*R_s is the device's own vds offset, so gds is read at 0.86 V.
+    const gds = 20e-6 / (VA_PER_L * 0.5e-6 + (0.9 - 20e-6 * Rs));
+    const routDev = (1 + (gm + gmb) * Rs) / gds + Rs;
+    expect(relErr(res.values.Rout, par(100e3, routDev))).toBeLessThan(1e-3);
+    expect(relErr(res.values.Av, res.values.Gm * res.values.Rout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
   });
 });
 
@@ -113,6 +156,13 @@ describe('tier1 goldens: Cascode CS amp', () => {
     const Rout = 1 / (1 / RoutCasc + loadGds);
     expect(relErr(res.values.Av, inGm * Rout)).toBeLessThan(2e-3);
   });
+
+  it('input capacitance is the input device gate, and nothing the cascode adds', () => {
+    // Composition golden. The input child does not expose its sized width, so the absolute
+    // capacitance has no closed form to check here; what the row must get right is WHICH gate it
+    // reads — the driven one at the bottom of the stack, not the cascode's fixed gate above it.
+    expect(res.values.cgg_in).toBe(res.values.in__cgg);
+  });
 });
 
 describe('tier1 goldens: Source follower', () => {
@@ -129,7 +179,7 @@ describe('tier1 goldens: Source follower', () => {
   });
 
   it('gain is gm/(gm + gds + 1/R_L)', () => {
-    const gds = 20e-6 / (VA_PER_L * 0.5e-6 + vds);
+    const gds = gdsOf(20e-6, 0.5e-6, vds);
     const av = gm / (gm + gds + 1 / 100e3);
     expect(relErr(res.values.Av, av)).toBeLessThan(2e-3);
   });
@@ -142,6 +192,17 @@ describe('tier1 goldens: Source follower', () => {
     expect(g?.status).toBe('pass');
     expect(res.feasible).toBe(true);
     expect(res.warnings).toHaveLength(0);
+  });
+
+  it('the ten-to-one loading guardrail is the buffering claim, and the load clears it', () => {
+    // R_L >= 10*Rout is not an identity: Rout folds 1/R_L in, so the condition reduces to
+    // R_L*(gm + gds) >= 9 — about 36.7 kohm here, which the 100 kohm default clears. At exactly
+    // ten to one the loaded gain sits 10% below what an unloaded follower would give.
+    const gds = gdsOf(20e-6, 0.5e-6, vds);
+    expect(relErr(res.values.Rout, 1 / (gm + gds + 1 / 100e3))).toBeLessThan(2e-3);
+    expect(res.rules.find((r) => r.id === 'loading')?.status).toBe('pass');
+    expect(9 / (gm + gds)).toBeLessThan(100e3);
+    expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
   });
 });
 
@@ -174,6 +235,15 @@ describe('tier1 goldens: Common gate', () => {
     expect(res.rules.find((r) => r.id === 'gain-spec')?.status).toBe('fail');
     expect(res.rules.find((r) => r.id === 'input-match')?.status).toBe('fail');
   });
+
+  it('the drain-side interface is the load paralleled with ro, and the gain rides it', () => {
+    // Rout is the inverse of the denominator the gain row already used, so the rewrite is
+    // arithmetic-free; the gds feedforward stays visible in the transconductance factor.
+    expect(relErr(res.values.Rout, 1 / (1 / 50e3 + gds))).toBeLessThan(1e-9);
+    expect(relErr(res.values.Av, (gm + gmb + gds) * res.values.Rout)).toBeLessThan(1e-3);
+    // Rin, not Rout, is this stage's headline: the input is the low-impedance side.
+    expect(res.values.Rin).toBeLessThan(res.values.Rout);
+  });
 });
 
 describe('tier1 goldens: CMOS inverter amplifier', () => {
@@ -193,8 +263,20 @@ describe('tier1 goldens: CMOS inverter amplifier', () => {
 
   it('gain is the summed gm into the summed output conductance', () => {
     const gmTot = I * 22;
-    const gds = I / (VA_PER_L * 0.5e-6 + 0.9); // same for both: equal L and |vds|
+    const gds = gdsOf(I, 0.5e-6, 0.9); // same for both: equal L and |vds|
     expect(relErr(res.values.Av, gmTot / (2 * gds))).toBeLessThan(2e-3);
+  });
+
+  it('both gates load the driver, and the stronger-inversion device is the smaller one', () => {
+    // Rout is one output node: equal L and |vds| put both devices at the same gds, so it is
+    // (VA + vds)/(2*I_bias) exactly. cgg_in sums both gates because they are driven together;
+    // neither child exposes its width, so what is pinned is the sum and its ordering — the
+    // PMOS runs at gm/ID 10 against the NMOS at 12, which is a HIGHER current density and
+    // therefore a narrower device, so it contributes the smaller gate.
+    expect(relErr(res.values.Rout, stage2Rout(I, 0.5e-6, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(res.values.Av, res.values.gm_tot * res.values.Rout)).toBeLessThan(1e-12);
+    expect(res.values.cgg_in).toBe(res.values.n__cgg + res.values.p__cgg);
+    expect(res.values.p__cgg).toBeLessThan(res.values.n__cgg);
   });
 });
 

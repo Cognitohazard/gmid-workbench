@@ -174,7 +174,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -346,7 +346,7 @@
       "name": "Rout",
       "expr": "par(Rout_n, Rout_p)",
       "unit": "ohm",
-      "note": "the two cascoded sides in parallel"
+      "note": "the two cascoded sides in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
@@ -373,6 +373,12 @@
       "expr": "2*min(V_out_dc - (V_a + casc_n__vdsat), (V_b - casc_p__vdsat) - V_out_dc)",
       "unit": "V",
       "note": "peak-to-peak output swing the PLACED nodes actually leave, symmetric about the output DC: the output can fall to V_a plus the NMOS cascode's vdsat and rise to V_b minus the PMOS cascode's — the idealized stacked-vdsat budget read ~3x optimistic once the nodes were explicit. Push V_a down and V_b up to widen it"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
@@ -387,7 +393,14 @@
       "rhs": "0",
       "note": "below this the tail source drops out of saturation and the bias current collapses; the mechanism behind the low end of the common-mode range"
     },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "swing",
@@ -457,5 +470,6 @@
       "set": { "CM_dc": "CM_hi" },
       "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

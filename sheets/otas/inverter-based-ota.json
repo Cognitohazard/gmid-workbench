@@ -92,7 +92,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m", "cgg"]
       },
       "params": {
         "I_d": "I_bias",
@@ -124,7 +124,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "W", "vnth_m"]
+        "provide": ["gm", "gds", "vdsat", "W", "vnth_m", "cgg"]
       },
       "params": {
         "I_d": "I_bias",
@@ -148,8 +148,14 @@
       "note": "effective composite gm/ID = gm_id_n + gm_id_p — the current-reuse efficiency win"
     },
     {
+      "name": "Rout",
+      "expr": "1/(n__gds + p__gds)",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its output — both devices' output conductances in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av",
-      "expr": "gm_tot/(n__gds + p__gds)",
+      "expr": "gm_tot*Rout",
       "unit": "V/V",
       "note": "composite transconductance into the two output conductances in parallel"
     },
@@ -166,13 +172,26 @@
       "expr": "sqrt(pelgrom_vos(avt, abeta, n__W, L_n, gm_id_n)^2 + pelgrom_vos(avt, abeta, p__W, L_p, gm_id_p)^2)",
       "unit": "V",
       "note": "estimate: the N and P threshold-mismatch offsets combined, input-referred"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "n__cgg + p__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents. Both gates are driven together, so both gate capacitances load the driver. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it — and here the drain swings against the gate, so that omission is at its worst. No rule reads it"
     }
   ],
   "rules": [
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
     { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "stacked-headroom",
@@ -190,5 +209,6 @@
       "rhs": "40",
       "note": "estimate: very high composite gm/ID means weak inversion and strong VDD dependence of the bias — budget a common-mode bias loop; sim owns PSRR"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

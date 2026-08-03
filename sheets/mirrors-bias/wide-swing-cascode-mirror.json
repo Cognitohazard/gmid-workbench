@@ -178,7 +178,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["vgs", "vdsat", "W"]
+        "provide": ["vgs", "vdsat", "W", "gm", "gmb", "gds"]
       },
       "params": {
         "I_c": "I_in",
@@ -218,6 +218,12 @@
       "expr": "sqrt(irel_ref^2 + irel_out^2)",
       "unit": "1",
       "note": "random 1-sigma error of the K:1 ratio; the K-times-larger output device contributes 1/sqrt(K) of the reference spread"
+    },
+    {
+      "name": "Rout",
+      "expr": "(1/(K*casc__gds))*(1 + K*(casc__gm + casc__gmb)*ro) + ro",
+      "unit": "ohm",
+      "note": "output resistance of the OUTPUT branch. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series; both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. The K factors are what make this the OUTPUT leg rather than the reference one: casc is a representative device carried at the reference current, and the leg described here runs K times that through a K-times-wider device. At a fixed gm/ID, K times the current is exactly K times the transconductance and exactly K times the output conductance, so the scaling is an identity of the sizing rather than an approximation, and no separate output-branch device has to be sized to state it. This is the number a stage loading the mirror sees"
     }
   ],
   "rules": [
@@ -258,5 +264,6 @@
       "op": "<=",
       "rhs": "match_target"
     }
-  ]
+  ],
+  "provide": ["Rout"]
 }

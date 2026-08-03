@@ -1,17 +1,17 @@
 {
   "title": "Flipped voltage follower",
-  "description": "The flipped voltage follower (FVF): a source follower whose bias current is held constant by a shunt feedback device, so the input device's gate-source voltage barely moves and the buffer is highly linear with very low output resistance. Because the current through the input device is fixed, its $V_{GS}$ is constant and the output tracks the input with little level-shift variation — the reason the FVF is the workhorse buffer inside low-dropout regulators and switched-capacitor drivers. The feedback device closes a local loop that multiplies the follower's already-low output resistance down to $R_{out} \\approx g_{ds,in}/(g_{m,in}*g_{m,fb})$. This sheet sizes the DC operating point and low-frequency output resistance; the local loop's stability is a small-signal AC check the simulator owns. On the demo NMOS table both devices size against the same data.",
+  "description": "The flipped voltage follower (FVF): a source follower whose bias current is held constant by a shunt feedback device, so the input device's gate-source voltage barely moves and the buffer is highly linear with very low output resistance. Because the current through the input device is fixed, its $V_{GS}$ is constant and the output tracks the input with little level-shift variation — the reason the FVF is the workhorse buffer inside low-dropout regulators and switched-capacitor drivers. The feedback device closes a local loop that multiplies the follower's already-low output resistance down to $R_{out} \\approx g_{ds,in}/(g_{m,in}*g_{m,fb})$. This sheet sizes the DC operating point and low-frequency output resistance; the local loop's stability is a small-signal AC check the simulator owns. The branch's internal node is derived rather than declared: node X is the feedback device's gate, one gate-source voltage above its grounded source, and the input device's drain-source voltage is whatever remains of that above the output. Deriving it is also what makes the sheet state the cell's real output ceiling — see V_out. On the demo NMOS table both devices size against the same data.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
     {
       "name": "V_out",
-      "value": 0.9,
-      "min": 0.3,
-      "max": 1.5,
+      "value": 0.3,
+      "min": 0.1,
+      "max": 0.4,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level (also the input follower's source node)"
+      "note": "output DC level (also the input follower's source node, and the feedback device's drain). Both walls on this level belong to the CELL rather than to the tool, and both MOVE with the inversion knobs and with the process. The floor is the feedback device's own saturation voltage — its drain-source voltage IS the output level, so the output cannot sit below it; a weaker inversion on that device drops the floor. The ceiling is node X minus the input device's saturation voltage — node X is the feedback device's gate-source voltage, so the ceiling tracks it upward. On the demo table at the shipped inversions that window is roughly 0.24 V to 0.37 V"
     },
     {
       "name": "Rout_target",
@@ -57,59 +57,14 @@
       "note": "feedback device inversion (sets gm_fb, hence the loop gain)"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
-    { "name": "L_fb", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
-    {
-      "name": "vds_in",
-      "value": 0.6,
-      "min": 0.15,
-      "max": 1.2,
-      "unit": "V",
-      "role": "spec",
-      "note": "input-device drain-source"
-    },
-    {
-      "name": "vds_fb",
-      "value": 0.6,
-      "min": 0.15,
-      "max": 1.2,
-      "unit": "V",
-      "role": "spec",
-      "note": "feedback-device drain-source"
-    }
+    { "name": "L_fb", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
   ],
   "uses": [
-    {
-      "name": "in",
-      "doc": {
-        "title": "Input follower device",
-        "description": "The FVF input device carrying a fixed current; its gm and output conductance set the base output resistance, and its constant current keeps its Vgs (hence the level shift) nearly fixed.",
-        "polarity": "n",
-        "params": [
-          { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
-        ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
-          {
-            "id": "feasible-inversion",
-            "kind": "invariant",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provide": ["gm", "gds", "vgs", "vdsat"]
-      },
-      "params": { "Ix": "I_in", "Lx": "L_in", "gx": "gm_id_in", "vx": "vds_in" }
-    },
     {
       "name": "fb",
       "doc": {
         "title": "Shunt feedback device",
-        "description": "The feedback device that regulates the input device's current; its gm sets the loop gain that drives the output resistance down. Its gate is the input device's drain, which the sheet places at $V_{out} + V_{ds,in}$, and its source is at ground — the wiring declaration checks that node against the gate-source voltage this bind actually needs. At the shipped defaults the two DISAGREE, which is the sheet's known open problem: the drain node is fixed by the wiring, so vds_in cannot be typed independently of the feedback device's inversion level. The same goes for vds_fb, which this branch pins to V_out — this device's drain IS the output node — and only the gate side of that is checked. Choose gm_id_fb so its gate-source voltage matches the node, or reparameterize the branch around its nodes instead of around the two typed drain-source voltages.",
+        "description": "The feedback device that regulates the input device's current; its gm sets the loop gain that drives the output resistance down. Its source is at ground and its drain IS the output node, so its drain-source voltage is $V_{out}$ outright. Its gate is the branch's internal node X, and since that gate sits one gate-source voltage above the grounded source, sizing this device is what FIXES node X — there is nothing left about the node to type. It is placed first in the branch for exactly that reason: the input device's drain-source voltage is then measured down from the node this bind produced.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
@@ -128,13 +83,46 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vdsat"]
+        "provide": ["gm", "vgs", "vdsat"]
       },
-      "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" },
-      "wiring": { "gate": "V_out + vds_in", "source": "0" }
+      "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "V_out" },
+      "wiring": { "gate": "V_x", "source": "0" }
+    },
+    {
+      "name": "in",
+      "doc": {
+        "title": "Input follower device",
+        "description": "The FVF input device carrying a fixed current; its gm and output conductance set the base output resistance, and its constant current keeps its Vgs (hence the level shift) nearly fixed. Its source is the output node and its drain is node X, so its drain-source voltage is the distance between those two nodes rather than a free choice.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
+          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
+        ],
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "rows": [],
+        "rules": [
+          {
+            "id": "feasible-inversion",
+            "kind": "invariant",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W"]
+      },
+      "params": { "Ix": "I_in", "Lx": "L_in", "gx": "gm_id_in", "vx": "fb__vgs - V_out" }
     }
   ],
   "rows": [
+    {
+      "name": "V_x",
+      "expr": "fb__vgs",
+      "unit": "V",
+      "note": "the branch's internal node — the input device's drain and the feedback device's gate. That gate sits one gate-source voltage above a grounded source, so the node is the feedback device's own sized gate-source voltage: derived, never typed"
+    },
     { "name": "gm_in", "expr": "in__gm", "unit": "S", "note": "input device transconductance" },
     {
       "name": "gm_fb",
@@ -159,6 +147,12 @@
       "expr": "in__vdsat + fb__vdsat",
       "unit": "V",
       "note": "the stacked saturation voltage the FVF branch needs (input device over the feedback/current-source device)"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents, taken as the input device's whole gate capacitance. It OVERSTATES what a driver sees — the feedback holds this device's current, so its gate-source voltage barely moves and most of the gate-source capacitance is bootstrapped away. No rule reads it"
     }
   ],
   "rules": [
@@ -181,18 +175,19 @@
     {
       "id": "in-sat",
       "kind": "invariant",
-      "lhs": "vds_in",
+      "lhs": "V_x - V_out",
       "op": ">=",
       "rhs": "in__vdsat",
-      "note": "input device stays saturated at its operating vds"
+      "note": "the input device stays saturated on what node X leaves above the output — this is the rule that caps the output level, since raising V_out eats directly into it"
     },
     {
       "id": "fb-sat",
       "kind": "invariant",
-      "lhs": "vds_fb",
+      "lhs": "V_out",
       "op": ">=",
       "rhs": "fb__vdsat",
-      "note": "feedback device stays saturated at its operating vds"
+      "note": "the feedback device stays saturated: its drain is the output node and its source is at ground, so the output level IS its drain-source voltage"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

@@ -90,8 +90,14 @@
       "note": "low-frequency input resistance looking into the source, with the drain load carried through: (R_load + ro)/(1 + (gm + gmb)*ro). The finite ro couples the load back to the source, so a heavier R_load raises Rin — the 1/(gm + gmb) shorthand drops that and reads low (on a sky130 tt realization of this stage it gives 4.21 k against a measured 4.73 k)"
     },
     {
+      "name": "Rout",
+      "expr": "par(R_load, 1/gds)",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its drain: the load resistor in parallel with the device output resistance. It holds for an ideal driving source; a real source impedance degenerates the device and raises it"
+    },
+    {
       "name": "Av",
-      "expr": "(gm + gmb + gds)*par(R_load, 1/gds)",
+      "expr": "(gm + gmb + gds)*Rout",
       "unit": "V/V",
       "note": "non-inverting gain: the source drive acts through gm, the source-body generator gmb, and the device's own gds in parallel, into the load paralleled with ro"
     },
@@ -138,5 +144,6 @@
       "rhs": "GBW_target",
       "note": "actual GBW into CL plus the parasitic estimate"
     }
-  ]
+  ],
+  "provide": ["Rin", "Rout"]
 }

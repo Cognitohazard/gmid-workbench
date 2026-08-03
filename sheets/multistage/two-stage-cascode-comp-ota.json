@@ -222,7 +222,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m"]
+        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
       },
       "params": {
         "Ix": "I1/2",
@@ -385,8 +385,14 @@
       "note": "stage-1 gain into the input-device and mirror-load output conductances"
     },
     {
+      "name": "Rout",
+      "expr": "1/(s2__gds + ld2__gds)",
+      "unit": "ohm",
+      "note": "the resistance the amplifier presents at its output — stage two's own output conductance in parallel with its load device's. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av2",
-      "expr": "gm2/(s2__gds + ld2__gds)",
+      "expr": "gm2*Rout",
       "unit": "V/V",
       "note": "stage-2 common-source gain into its own and the load conductances"
     },
@@ -401,6 +407,12 @@
       "expr": "s2__cgg",
       "unit": "F",
       "note": "stage-2 gate capacitance — the dominant term in the stage-1 output cap C1_est"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
@@ -476,5 +488,6 @@
       "rhs": "0.05",
       "note": "the stage-2 gate sits at V1 = VDD - |vgs_ld1|, so stage 2 carries its intended current only when its own |vgs| at (I2, gm_id_s2) matches the mirror diode drop — the classic W/L-ratio condition. Retune gm_id_s2 or I2 until these agree, or the second stage sits at a different current than the sheet assumes"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

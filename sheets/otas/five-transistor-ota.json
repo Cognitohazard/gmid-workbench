@@ -181,7 +181,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -232,8 +232,14 @@
       "note": "the input common mode this bias produces — an OUTPUT here, not a setting. It rises monotonically with the tail node — which is why the pin that places the tail node from $CM_{dc}$ is a well-posed bisection"
     },
     {
+      "name": "Rout",
+      "expr": "1/(in__gds + ld__gds)",
+      "unit": "ohm",
+      "note": "the resistance this OTA presents at its output — the two output-node conductances in parallel, both read at $V_{out,dc}$. The gain below assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av",
-      "expr": "in__gm/(in__gds + ld__gds)",
+      "expr": "in__gm*Rout",
       "unit": "V/V",
       "note": "half-circuit differential gain into the two output conductances, both read at the OUTPUT node $V_{out,dc}$ — the drain that actually loads the gain. Raising the tail node squeezes the pair's $v_{ds}$, so gain falls as the common mode rises"
     },
@@ -273,6 +279,12 @@
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
       "note": "how far the tail node sits above the tail device's saturation edge — exact here, because the tail node is the variable rather than something inferred from a common mode"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
@@ -287,7 +299,14 @@
       "note": "estimate: margin left at crossover once the mirror doublet is paid for; advisory, since an open-loop OTA needs none of it and sim owns the real stability"
     },
     { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "tail-saturated",
@@ -334,5 +353,6 @@
       "set": { "CM_dc": "CM_hi" },
       "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the interior is monotone for the saturation mechanisms here, and the CM_dc sweep remains the authority on the full landscape"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

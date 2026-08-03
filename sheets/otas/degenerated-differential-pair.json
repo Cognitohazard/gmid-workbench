@@ -149,7 +149,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gmb", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+        "provide": ["gm", "gmb", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -180,8 +180,14 @@
       "note": "degenerated transconductance gm/(1 + (gm + gmb)*R_s)"
     },
     {
+      "name": "Rout",
+      "expr": "1/(in__gds + gds_load_est)",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its output: the input device's own output conductance in parallel with the estimated load conductance. Like the gain built on it, this neglects the degeneration boost the source resistor also gives the device r_o — so the row reads LOW, which is conservative for gain but not for loading: a parent checking a ratio against it will clear the check more easily than the real node would allow. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av",
-      "expr": "Gm_eff/(in__gds + gds_load_est)",
+      "expr": "Gm_eff*Rout",
       "unit": "V/V",
       "note": "conservative: neglects the degeneration boost of the device output resistance"
     },
@@ -210,6 +216,12 @@
       "expr": "sqrt(2*(in__vnth_m^2 + 4*k*T*R_s))",
       "unit": "V/sqrt(Hz)",
       "note": "device density plus the degeneration resistor's 4kT*R_s, both sides of the pair (estimate)"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
@@ -224,7 +236,14 @@
       "rhs": "linrange_target",
       "note": "degeneration must extend the linear range to the target"
     },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "input-sat-margin",
@@ -262,5 +281,6 @@
       "set": { "CM_dc": "CM_hi" },
       "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, gmbOf, sheet as libSheet } from './library.fixtures';
+import { table, relErr, VA_PER_L, gmbOf, roMirrored, sheet as libSheet } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`mirrors-bias/${file}`);
 
@@ -50,6 +50,22 @@ describe('tier-2 goldens: cascode current mirror', () => {
     // pelgrom_irel ∝ 1/sqrt(W·L): W_out = 4·W_ref at the same L ⇒ ratio exactly 1/2.
     expect(relErr(res.values.irel_out / res.values.irel_ref, 0.5)).toBeLessThan(1e-9);
   });
+
+  it('the cascode multiplies the mirror r_o by its own local feedback factor', () => {
+    // Rout = r_o,casc*(1 + (gm + gmb)*r_o,mirror) + r_o,mirror — the mirror device's own output
+    // resistance is what degenerates the cascode, playing the role a resistor plays in the
+    // degenerated mirror. Both legs are width-mirrored, so both r_o come from the closed form
+    // above; the cascode's gm/ID is bound, so its gm is its own current times 8, and that current
+    // is the mirrored saturation current scaled by the CLM factor of the vds it actually sits at.
+    const ro = roMirrored(res.values.ref__vgs, 4, 20e-6);
+    const roCasc = roMirrored(res.values.ref_casc__vgs, 4, 20e-6);
+    const va = VA_PER_L * 1e-6;
+    const idCasc = (4 * 20e-6 * (va + 1.1 - res.values.ref__vgs)) / (va + res.values.ref_casc__vgs);
+    const gm = 8 * idCasc;
+    expect(relErr(res.values.Rout, roCasc * (1 + (gm + gmbOf(gm)) * ro) + ro)).toBeLessThan(1e-3);
+    // The whole point of the cascode: two orders of magnitude over the bare mirror.
+    expect(res.values.Rout / ro).toBeGreaterThan(50);
+  });
 });
 
 describe('tier-2 goldens: wide-swing cascode mirror', () => {
@@ -76,6 +92,32 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
 
   it('systematic error is essentially zero: both mirror devices at the same low node', () => {
     expect(Math.abs(res.values.sys_err)).toBeLessThan(1e-9);
+  });
+
+  it('output resistance is the cascode boost on the OUTPUT branch, over the solved low node', () => {
+    // Two traps, both live here. First, both branch resistances hang off vds_lo, which this sheet
+    // SOLVES to the mirror vdsat plus the margin (0.285 V, not the 0.3 V starting guess) — the
+    // mirror leg sits at vds_lo and the cascode above it takes the rest of V_out, so the two move
+    // opposite ways and a golden that typed 0.3 for both would nearly cancel its own error.
+    // Second, the `casc` child is a REPRESENTATIVE device carrying the reference current, while
+    // the branch this row describes runs K times that through a K-times-wider device. At a fixed
+    // gm/ID that is exactly K times the gm and K times the gds, so the scaling is an identity of
+    // the sizing, not an approximation.
+    //
+    // The solved node is an INPUT to the arithmetic below, so the solve is pinned first, on its
+    // own terms: vds_lo is iterated until it equals wideswing_node, and a landed fixed point means
+    // that residual is zero. Everything after it is bound (id and gm/ID on the cascode, the width
+    // ratio on the mirror), so what follows is closed-form given the node.
+    expect(relErr(res.values.vds_lo, res.values.wideswing_node)).toBeLessThan(1e-9);
+    const node = res.values.vds_lo;
+    const ro = roMirrored(node, 4, 20e-6); // output mirror device
+    const roCasc = (VA_PER_L * 1e-6 + (0.6 - node)) / (4 * 20e-6); // output-branch cascode
+    const gm = 4 * 20e-6 * 10;
+    expect(relErr(res.values.Rout, roCasc * (1 + (gm + gmbOf(gm)) * ro) + ro)).toBeLessThan(1e-3);
+    // The K cancels out of the boost product, so getting the scaling wrong costs only the
+    // cascode's own series r_o — a few percent, easily mistaken for interpolation noise.
+    const unscaled = 4 * roCasc * (1 + (gm / 4 + gmbOf(gm / 4)) * ro) + ro;
+    expect(relErr(res.values.Rout, unscaled)).toBeGreaterThan(1e-2);
   });
 
   it('the K-times-larger output device carries half the reference current spread', () => {
@@ -126,6 +168,17 @@ describe('tier-2 goldens: Widlar current source', () => {
   it('the output device steps down: its vgs sits below the reference vgs', () => {
     // Same width, one quarter the current ⇒ lower density ⇒ lower vgs ⇒ positive step.
     expect(res.values.delta_vgs).toBeGreaterThan(0);
+  });
+
+  it('output resistance carries the degeneration boost, same form as the degenerated mirror', () => {
+    // The output device is bound by (W, id), not by gm/ID, so its gm is what the table gives at
+    // the density that lands — read it back, exactly as the degenerated-mirror golden does. What
+    // this test owns is the model's gds (id/(VA + vds), with the source lifted I_out*R_s) and the
+    // Rout algebra: the boost factor carries BOTH source-referred generators, and the resistor's
+    // own series contribution is added back.
+    const ro = (VA_PER_L * 1e-6 + (0.9 - 5e-6 * 10000)) / 5e-6;
+    const boost = 1 + (res.values.gm + gmbOf(res.values.gm)) * 10000;
+    expect(relErr(res.values.Rout, ro * boost + 10000)).toBeLessThan(1e-3);
   });
 });
 

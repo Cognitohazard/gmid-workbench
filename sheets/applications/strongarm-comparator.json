@@ -167,11 +167,11 @@
     },
     {
       "id": "noise-spec",
-      "kind": "requirement",
+      "kind": "guardrail",
       "lhs": "sigma_n",
       "op": "<=",
       "rhs": "noise_target",
-      "note": "integration-phase noise under budget; estimate-grade, sim signs off"
+      "note": "integration-phase noise under budget; computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
     },
     {
       "id": "decision-time",

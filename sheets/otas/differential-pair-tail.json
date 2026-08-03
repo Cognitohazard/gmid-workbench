@@ -132,7 +132,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -195,8 +195,14 @@
       "note": "differential-pair transconductance is the half-circuit gm"
     },
     {
+      "name": "Rout",
+      "expr": "1/(in__gds + gds_load_est)",
+      "unit": "ohm",
+      "note": "the resistance this stage presents at its output: the input device's own output conductance in parallel with the estimated load conductance. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+    },
+    {
       "name": "Av",
-      "expr": "in__gm/(in__gds + gds_load_est)",
+      "expr": "Gm*Rout",
       "unit": "V/V",
       "note": "half-circuit gain into the device gds in parallel with the load conductance"
     },
@@ -231,13 +237,26 @@
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
       "note": "how far the tail node sits above the tail device's saturation edge — exact, because the tail node is the variable rather than something inferred from a common mode"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
   "rules": [
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
     { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" },
+    {
+      "id": "noise-spec",
+      "kind": "guardrail",
+      "lhs": "vn_in",
+      "op": "<=",
+      "rhs": "vn_target",
+      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+    },
     { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "tail-saturated",
@@ -291,5 +310,6 @@
       "set": { "CM_dc": "CM_hi" },
       "note": "the claimed high edge, proven the same way; the CM_dc sweep remains the authority on the full landscape"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

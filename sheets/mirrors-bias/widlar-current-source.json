@@ -122,6 +122,12 @@
       "expr": "I_out*R_s",
       "unit": "V",
       "note": "the gate-source step the resistor must produce for the chosen output current"
+    },
+    {
+      "name": "Rout",
+      "expr": "ro*(1 + (gm + gmb)*R_s) + R_s",
+      "unit": "ohm",
+      "note": "output resistance boosted by the local series feedback of the source resistor, with the resistor's own series contribution added back. Both source-referred generators drive current through R_s, so gmb belongs inside the factor — the same form the degenerated mirror uses. This is the number a stage loading the source sees"
     }
   ],
   "rules": [
@@ -158,5 +164,6 @@
       "rhs": "I_in",
       "note": "a Widlar source produces a fraction of the reference current; a positive gate-source step needs I_out < I_in"
     }
-  ]
+  ],
+  "provide": ["Rout"]
 }

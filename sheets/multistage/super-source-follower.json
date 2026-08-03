@@ -100,7 +100,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gmb", "gds", "vgs", "vdsat"]
+        "provide": ["gm", "gmb", "gds", "vgs", "vdsat", "cgg", "W"]
       },
       "params": { "Ix": "I_in", "Lx": "L_in", "gx": "gm_id_in", "vx": "vds_in" }
     },
@@ -162,6 +162,12 @@
       "expr": "in__vgs",
       "unit": "V",
       "note": "output sits about one input Vgs below the input (source-follower DC level shift)"
+    },
+    {
+      "name": "cgg_in",
+      "expr": "in__cgg",
+      "unit": "F",
+      "note": "estimate: the capacitance the input terminal presents, taken as the input device's whole gate capacitance. It OVERSTATES what a driver sees — the source follows the gate near unity, bootstrapping most of the gate-source capacitance away. No rule reads it"
     }
   ],
   "rules": [
@@ -189,5 +195,6 @@
       "rhs": "fb__vdsat",
       "note": "feedback device stays saturated at its operating vds"
     }
-  ]
+  ],
+  "provide": ["Rout", "cgg_in"]
 }

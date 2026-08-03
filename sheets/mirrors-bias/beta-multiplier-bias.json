@@ -150,5 +150,6 @@
       "tolPct": 25,
       "note": "the classic square-law gm = (2/R)(1 - 1/sqrt(K)); the LUT gm is the truth, so this shows how far the hand formula drifts at this inversion. Estimate-grade"
     }
-  ]
+  ],
+  "provide": ["gm_target"]
 }

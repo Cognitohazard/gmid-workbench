@@ -122,6 +122,12 @@
       "expr": "sqrt(irel_ref^2 + irel_out^2)",
       "unit": "1",
       "note": "random 1-sigma error of the K:1 ratio; the K-times-larger output device contributes 1/sqrt(K) of the reference spread"
+    },
+    {
+      "name": "Rout",
+      "expr": "ro",
+      "unit": "ohm",
+      "note": "output resistance the mirror presents: the output device's own r_o and nothing more. That is the whole cost of the simple mirror — the output current tracks the node voltage through gds, which is what the systematic-error row measures at one particular V_out. This is the number a stage loading the mirror sees"
     }
   ],
   "rules": [
@@ -154,5 +160,6 @@
       "op": "<=",
       "rhs": "match_target"
     }
-  ]
+  ],
+  "provide": ["Rout"]
 }

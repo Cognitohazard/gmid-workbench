@@ -31,9 +31,10 @@ import {
   VGS_GMID8_L05,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
+  cggOf,
+  par,
+  stage2Rout,
 } from './library.fixtures';
-
-const par = (a: number, b: number): number => 1 / (1 / a + 1 / b);
 
 /** Load a multistage sheet document by file basename. */
 const sheet = (file: string) => libSheet(`multistage/${file}.json`);
@@ -73,6 +74,14 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     const pm = 90 - (Math.atan(wc / p2) * 180) / Math.PI;
     expect(relErr(res.values.PM, pm)).toBeLessThan(1e-6);
   });
+
+  it('the output interface is that same node, named, plus the input gate', () => {
+    expect(relErr(res.values.Rout, stage2Rout(60e-6, 0.5e-6, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(res.values.Av2, gm2 * res.values.Rout)).toBeLessThan(1e-12);
+    // Composition golden on cgg_in: the input child does not expose its sized width, so what is
+    // pinned is WHICH gate the row reads — one input device, per input terminal.
+    expect(res.values.cgg_in).toBe(res.values.in__cgg);
+  });
 });
 
 describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
@@ -93,6 +102,14 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     const p2 = gm2 / (CL + 0.5e-12);
     const pm = 90 - (Math.atan(wc / p2) * 180) / Math.PI;
     expect(relErr(res.values.PM, pm)).toBeLessThan(1e-6);
+  });
+
+  it('the output interface is that same node, named, plus the input gate', () => {
+    expect(relErr(res.values.Rout, stage2Rout(60e-6, 0.5e-6, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(res.values.Av2, gm2 * res.values.Rout)).toBeLessThan(1e-12);
+    // Composition golden on cgg_in: the input child does not expose its sized width, so what is
+    // pinned is WHICH gate the row reads — one input device, per input terminal.
+    expect(res.values.cgg_in).toBe(res.values.in__cgg);
   });
 });
 
@@ -128,6 +145,16 @@ describe('tier4 goldens: Class-AB output stage (Monticelli)', () => {
   it('the translinear vgs sum is the two output-device gate drives', () => {
     expect(relErr(res.values.vgs_sum, 2 * VGS_GMID8_L05)).toBeLessThan(1e-2);
   });
+
+  it('output resistance is the two devices in parallel — they conduct together at quiescent', () => {
+    // Same current, same L, same |vds| on both sides, so the node is (VA + vds)/(2*I_q). This
+    // is a class-AB output stage: at quiescent both devices are on, which is why both gds load
+    // the node rather than one. The push-pull transconductance sums for the same reason.
+    expect(relErr(res.values.Rout, stage2Rout(20e-6, 0.5e-6, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(res.values.gm_out * res.values.Rout, 8 * (VA_PER_L * 0.5e-6 + 0.9))).toBeLessThan(
+      1e-9,
+    );
+  });
 });
 
 describe('tier4 goldens: Super source follower', () => {
@@ -152,21 +179,55 @@ describe('tier4 goldens: Super source follower', () => {
   it('the DC level shift is the input follower vgs', () => {
     expect(relErr(res.values.level_shift, VGS_GMID10_L05)).toBeLessThan(1e-2);
   });
+
+  it('input capacitance is one input gate at the width the bind landed on', () => {
+    expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, 0.5e-6))).toBeLessThan(1e-9);
+  });
 });
 
 describe('tier4 goldens: Flipped voltage follower', () => {
   const res = runSheet(sheet('flipped-voltage-follower'), table);
-  // Defaults: in and fb both 50 µA, gm/ID 10, L 0.5 µm, vds 0.6 V.
+  // Defaults: in and fb both 50 µA, gm/ID 10, L 0.5 µm, V_out 0.3 V.
   const gm = 10 * 50e-6;
-  const gdsIn = 50e-6 / (VA_PER_L * 0.5e-6 + 0.6);
+  // Node X is the feedback device's gate above its grounded source, so it is that device's own
+  // gate-source voltage: vgs(10) = 0.610 V. The input device sits between node X and the output,
+  // so its drain-source voltage is the difference — nothing here is typed.
+  const vdsIn = VGS_GMID10_L05 - 0.3;
+  const gdsIn = 50e-6 / (VA_PER_L * 0.5e-6 + vdsIn);
 
-  it('output resistance is exact (built only from gm and gds)', () => {
-    // Rout = gds_in/(gm_in·gm_fb); no av0, so exact to 1e-9.
-    expect(relErr(res.values.Rout, gdsIn / (gm * gm))).toBeLessThan(1e-9);
+  it('the internal node is the FEEDBACK device’s own gate-source voltage', () => {
+    expect(relErr(res.values.V_x, VGS_GMID10_L05)).toBeLessThan(1e-3);
+    // At the shipped defaults both devices sit at gm/ID 10 and the same length, so a value read
+    // at those defaults cannot tell which child the node follows. Split them: move the feedback
+    // device to gm/ID 12 and leave the input device at 10. The node must land on the FEEDBACK
+    // device's vgs, the input device's transconductance must not budge, and its drain-source
+    // voltage must absorb the whole change.
+    const doc = sheet('flipped-voltage-follower');
+    doc.params.find((p) => p.name === 'gm_id_fb')!.value = 12;
+    const split = runSheet(doc, table);
+    expect(relErr(split.values.V_x, VGS_GMID12_L05)).toBeLessThan(1e-3);
+    expect(relErr(split.values.gm_in, gm)).toBeLessThan(1e-9);
+    // Rout rides the input device's gds, which follows the node: vds_in = vgs_fb(12) - V_out.
+    const gdsSplit = 50e-6 / (VA_PER_L * 0.5e-6 + (VGS_GMID12_L05 - 0.3));
+    expect(relErr(split.values.Rout, gdsSplit / (gm * 12 * 50e-6))).toBeLessThan(1e-4);
+  });
+
+  it('output resistance follows the derived node through the input device’s gds', () => {
+    // Rout = gds_in/(gm_in·gm_fb), and gds = ID/(VA + vds) is exact in the demo at any vds. What
+    // is not exact is vds itself: it now carries the interpolated vgs the node derives from, so
+    // this asserts at that constant's precision rather than at the bind's 1e-9.
+    expect(relErr(res.values.Rout, gdsIn / (gm * gm))).toBeLessThan(1e-5);
+    expect(res.values.Rout).toBeLessThan(res.values.Rout_plain / 10);
   });
 
   it('branch headroom is the two stacked saturation voltages', () => {
+    // Unmoved by the node derivation: vdsat is a function of vgs and L in the demo model, and
+    // neither device's inversion level changed.
     expect(relErr(res.values.headroom, 2 * vdsatDemo(VGS_GMID10_L05, 0.5e-6))).toBeLessThan(1e-2);
+  });
+
+  it('input capacitance is one input gate at the width the bind landed on', () => {
+    expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, 0.5e-6))).toBeLessThan(1e-9);
   });
 });
 
@@ -184,6 +245,16 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
     const av0cascp = 8 * (va + (1.3 - 0.95));
     const av = gmIn * par(av0cascn / gdsIn, av0cascp / gdsLoad);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
+    // …and Rout is that same parallel combination, which the gain row already reads through.
+    expect(relErr(res.values.Rout, par(av0cascn / gdsIn, av0cascp / gdsLoad))).toBeLessThan(1e-2);
+    expect(relErr(res.values.Av, gmIn * res.values.Rout)).toBeLessThan(1e-3);
+  });
+
+  it('input capacitance is the gate of one input device', () => {
+    // Composition golden: the input child does not expose its sized width, so what is pinned is
+    // which gate the row reads — one input device, per input terminal, half-circuit like the
+    // gain above.
+    expect(res.values.cgg_in).toBe(res.values.in__cgg);
   });
 
   it('the supply-current line item adds the CMFB budget exactly', () => {
@@ -241,6 +312,12 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
     expect(off.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location)).toEqual([
       's2',
     ]);
+  });
+
+  it('the output interface is the stage-2 node, named, plus the input gate', () => {
+    expect(relErr(res.values.Rout, stage2Rout(60e-6, 0.5e-6, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(res.values.Av2, gm2 * res.values.Rout)).toBeLessThan(1e-12);
+    expect(res.values.cgg_in).toBe(res.values.in__cgg);
   });
 
   it('stage-1 gain follows from the two levels that derived node fixes', () => {

@@ -212,7 +212,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["vdsat", "id", "W"]
+        "provide": ["vdsat", "id", "W", "gm", "gmb", "gds"]
       },
       "params": {
         "W_out": "K*ref_casc__W",
@@ -246,6 +246,12 @@
       "expr": "sqrt(irel_ref^2 + irel_out^2)",
       "unit": "1",
       "note": "random 1-sigma error of the K:1 ratio from the bottom mirror pair; the K-times-larger output device contributes 1/sqrt(K) of the reference spread"
+    },
+    {
+      "name": "Rout",
+      "expr": "(1/out_casc__gds)*(1 + (out_casc__gm + out_casc__gmb)*ro) + ro",
+      "unit": "ohm",
+      "note": "output resistance of the cascoded leg. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series. Both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. This is the number a stage loading the mirror sees"
     }
   ],
   "rules": [
@@ -287,5 +293,6 @@
       "rhs": "VDD",
       "note": "the two stacked diode drops of the reference branch must fit under the supply"
     }
-  ]
+  ],
+  "provide": ["Rout"]
 }

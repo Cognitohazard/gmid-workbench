@@ -161,5 +161,6 @@
       "rhs": "dv_inj_target",
       "note": "estimate-grade charge-injection step; a narrower switch or dummy/bottom-plate sampling reduces it"
     }
-  ]
+  ],
+  "provide": ["Ron"]
 }

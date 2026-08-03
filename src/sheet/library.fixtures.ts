@@ -7,7 +7,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { generateDemoDevice, VA_PER_L, BODY_FACTOR } from '../demo';
+import { generateDemoDevice, VA_PER_L, BODY_FACTOR, COX } from '../demo';
 import { GAMMA_DEFAULT, PHYS } from '../constants';
 import { buildSheetRefIndex, type SheetRefIndex } from './resolve';
 import type { SheetDoc } from './types';
@@ -53,11 +53,41 @@ export const table = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } 
 
 export const relErr = (v: number, expected: number): number => Math.abs(v / expected - 1);
 
+/** Two resistances in parallel — the shape half the library's output-node rows take. */
+export const par = (a: number, b: number): number => 1 / (1 / a + 1 / b);
+
+/** Early voltage of the demo model at length `L`. */
+export const va = (L: number): number => VA_PER_L * L;
+
+/** gds of a device bound to current `id` at length `L`, declared vds — exact in the model
+ *  once bound, since gds/id = 1/(VA + vds) there. The one spelling of the demo's
+ *  channel-length-modulation law; every output-node golden goes through it. */
+export const gdsOf = (id: number, L: number, vds: number): number => id / (va(L) + vds);
+
+/** Output-device r_o of a width-mirrored leg, in closed form. The reference sets the saturation
+ *  current idSat_ref = I_in/(1 + vds_ref/VA); the output device copies the same current density at
+ *  K times the width, and gds = idSat/VA in the demo model, so the vds the OUTPUT device sits at
+ *  cancels out entirely. For a diode reference vds_ref is its own solved drop, read from the
+ *  result the way the mirror goldens read it. The mirror sheets all size at L = 1 µm. */
+export const roMirrored = (vdsRef: number, K: number, iIn: number): number =>
+  1 / gdsOf(K * iIn, 1e-6, vdsRef);
+
+/** An output node where a driver and its load carry the same current at the same L and the same
+ *  |vds|: both gds are equal, so the node is half of one device's r_o. Pinning it alongside
+ *  Av = gm·Rout says the interface row added a name and no arithmetic. */
+export const stage2Rout = (I: number, L: number, vds: number): number => 1 / (2 * gdsOf(I, L, vds));
+
 /** γ-model input-referred thermal density sqrt(4kTγ/gm) at the demo's γ = GAMMA_DEFAULT. */
 export const vnthM = (gm: number): number => Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / gm);
 
 /** Body transconductance of the demo model — exact at every point (see src/demo/index.ts). */
 export const gmbOf = (gm: number): number => BODY_FACTOR * gm;
+
+/** Gate capacitance of the demo model at a sized width: cgg = W·L·Cox, exact at every
+ *  operating point (the model gives cgg no bias dependence at all). The sized W is what the
+ *  bind lands on, so an input-capacitance golden pins the model relation and which device the
+ *  row reads — the width itself is the sizer's answer, like a solved vgs. */
+export const cggOf = (W: number, L: number): number => W * L * COX;
 
 // The gate-source voltage the demo model needs for a given gm/ID at L = 0.5 µm, from the EKV
 // inversion gm/ID = sigmoid(x)/(n·UT·softplus(x)) with n = 1.3. Shared because a NODE LEVEL a
