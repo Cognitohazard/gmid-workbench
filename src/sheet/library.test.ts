@@ -22,10 +22,8 @@ import { createEngine } from '../expr';
 import { runSheet, validateSheet, WIRING_TOL } from './index';
 import { resolveSheetRefs } from './resolve';
 import {
-  PROVIDE_SEP,
   docExpressions,
   isHardRule,
-  joinProvide,
   type SheetChildReport,
   type SheetDoc,
   type SheetResult,
@@ -114,38 +112,16 @@ describe('sheet library: vetting lints', () => {
     doc: resolveSheetRefs(doc, REFS).doc,
   }));
 
-  it('every child scalar an expression reads is declared in that child’s provide list', () => {
-    // A child exposes NOTHING except what its `provide` names (eval.ts publishes exactly that
-    // list and silently skips the rest), so an undeclared `child__q` resolves to no value: the
-    // row is dropped with a warning and any hard rule downstream goes na. That degradation is
-    // by design for absent DATA, but a missing provide entry is an authoring slip, and it looks
-    // identical from the outside. Catch it here, statically, on every sheet in the library.
+  it('every name crossing a block boundary exists on both sides', () => {
+    // The check itself lives in validateSheet, so an app author hears about a missing provide
+    // entry while typing rather than only when the library suite runs. What stays here is the
+    // library's own verdict: nothing curated may ship with a dangling interface name. The
+    // check's two diagnostics are exercised directly in sheet.test.ts.
     const offenders: string[] = [];
     for (const { file, doc } of RESOLVED) {
-      walkDocs(doc, file, (d, path) => {
-        // The same injected-name idiom eval and validate use: what a child publishes upward
-        // IS the set of joinProvide(use, key) names, so membership is one Set lookup.
-        const published = new Set<string>();
-        const useNames = new Set<string>();
-        for (const u of d.uses ?? []) {
-          useNames.add(u.name);
-          for (const key of u.doc?.provide ?? []) published.add(joinProvide(u.name, key));
-        }
-        for (const expr of docExpressions(d)) {
-          for (const name of exprNames(expr)) {
-            const at = name.indexOf(PROVIDE_SEP);
-            if (at <= 0 || published.has(name)) continue;
-            // A child-shaped name whose prefix is no child at all — a typo'd use name
-            // degrades at runtime exactly like a missing provide entry, so it hides in
-            // the same blind spot this lint exists to close. No library sheet uses a
-            // plain identifier containing the separator, so a miss here is always a slip.
-            const use = name.slice(0, at);
-            offenders.push(
-              useNames.has(use) ? `${path}: ${name}` : `${path}: ${name} (no child named "${use}")`,
-            );
-          }
-        }
-      });
+      for (const w of validateSheet(doc)) {
+        if (w.rule === 'sheet-provide-coverage') offenders.push(`${file}: ${w.message}`);
+      }
     }
     expect(offenders).toEqual([]);
   });

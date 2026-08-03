@@ -1121,6 +1121,89 @@ describe('validateSheet — composition', () => {
     expect(w.some((x) => x.rule === 'sheet-collision' && /cs__id/.test(x.message))).toBe(false);
   });
 
+  it('distinguishes an undeclared child scalar from a name whose block does not exist', () => {
+    const child = boundDoc({ provide: ['gm'] });
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [],
+      rows: [
+        { name: 'a', expr: 'kid__gm' }, // provided — fine
+        { name: 'b', expr: 'kid__gds' }, // the block exists but does not provide it
+        { name: 'c', expr: 'kdi__gm' }, // no such block: a transposed use name
+      ],
+      rules: [],
+      uses: [{ name: 'kid', doc: child }],
+    };
+    const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
+    expect(w.map((x) => x.symbol)).toEqual(['kid__gds', 'kdi__gm']);
+    expect(w[0].message).toMatch(/block "kid" does not provide/);
+    expect(w[1].message).toMatch(/no child block is named "kdi"/);
+  });
+
+  it('says so when a sheet with no bind claims to expose a name that does not exist', () => {
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [{ name: 'L', value: 1e-6 }],
+      rows: [{ name: 'Rout', expr: '1/kid__gds' }],
+      rules: [],
+      uses: [{ name: 'kid', doc: boundDoc({ provide: ['gds'] }) }],
+      // L and Rout are declared right here and T and w come from the table metadata; R_out is
+      // a typo for the row and exposes nothing.
+      provide: ['Rout', 'L', 'T', 'w', 'R_out'],
+    };
+    const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
+    expect(w.map((x) => x.location)).toEqual(['R_out']);
+    expect(w[0].message).toMatch(/nothing of that name exists to expose/);
+  });
+
+  it('lets a sheet that sizes a device name any table quantity it exposes', () => {
+    // Sizing publishes the whole table at the operating point, and a table may carry columns
+    // no static list knows about — so a bound sheet's provide list is taken at its word. The
+    // upward half of the check still catches a parent reading a name the child never provides.
+    const doc = boundDoc({ provide: ['gds', 'W', 'some_foundry_column'] });
+    expect(validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage')).toEqual([]);
+  });
+
+  it('follows a grandchild re-export through both separators', () => {
+    const grand = boundDoc({ provide: ['id'] });
+    const mid: SheetDoc = {
+      title: 'm',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'g', doc: grand }],
+      provide: ['g__id'],
+    };
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [],
+      rows: [
+        { name: 'a', expr: 'm__g__id' }, // re-exported all the way up — resolves
+        { name: 'b', expr: 'm__g__gm' }, // the grandchild provides id only
+      ],
+      rules: [],
+      uses: [{ name: 'm', doc: mid }],
+    };
+    const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
+    expect(w.map((x) => x.symbol)).toEqual(['m__g__gm']);
+  });
+
+  it('says nothing about names under a ref-only block, whose provides arrive at resolution', () => {
+    const doc: SheetDoc = {
+      title: 't',
+      polarity: 'n',
+      params: [],
+      rows: [{ name: 'a', expr: 'later__gm + later__whatever' }],
+      rules: [],
+      uses: [{ name: 'later', ref: 'stages/cs-amp-resistive-load' }],
+    };
+    expect(validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage')).toEqual([]);
+  });
+
   it('recurses into a child and attributes its structural error to the use site', () => {
     const child: SheetDoc = {
       title: 'c',

@@ -1,11 +1,14 @@
 // Structural QA for a leaf sheet, in the qa/validate() shape: init an array, push
 // warning literals, skip-not-throw, return the bare array. It checks what evaluation
 // cannot conveniently express — bind arity, finite params, equality tolerance, kind/op
-// sanity, and a param shadowing a device quantity. Identifier resolution is left to
-// evaluateSheet, which surfaces undeclared names against the live value set. DOM-free.
+// sanity, and a param shadowing a device quantity. It also owns the table-independent
+// half of name resolution: whether a `block__key` reference names a scalar that block
+// actually publishes, and whether a name a sheet claims to publish exists at all. Those
+// answers need no device table, so they are structural. Resolving identifiers against
+// the live value set stays evaluateSheet's job. DOM-free.
 
 import type { QAWarning } from '../types';
-import { compileExpr } from '../derive';
+import { compileExpr, metaScalars } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
 import {
   BIAS_AXES,
@@ -14,6 +17,7 @@ import {
   idSepProblem,
   MAX_TORN_PARAMS,
   MAX_USE_DEPTH,
+  docExpressions,
   engineSolved,
   torn,
   pinProblem,
@@ -22,6 +26,7 @@ import {
   RULE_OPS,
   WIRING_KEYS,
   joinProvide,
+  providedNames,
   prefixUseWarning,
   type SheetDoc,
   type SheetUse,
@@ -109,7 +114,7 @@ function standInEstimates(doc: SheetDoc): QAWarning[] {
   for (const use of doc.uses ?? []) {
     const bind = use.doc?.bind;
     if (!bind) continue;
-    const provided = new Set((use.doc?.provide ?? []).map((k) => joinProvide(use.name, k)));
+    const provided = new Set(providedNames(use));
     for (const axis of BIAS_AXES) {
       // BIAS_AXES is namespace-derived; SheetBind's bias fields are static keys. Index
       // structurally, as eval does, rather than by the literal key union.
@@ -206,6 +211,94 @@ function wiringProblems(use: SheetUse): QAWarning[] {
     } else if (!parses(e)) {
       bad(`wiring ${k} expression "${e}" does not parse`);
     }
+  }
+  return out;
+}
+
+/** Scalars every evaluation seeds from the table's metadata, bind or no bind — so a sheet may
+ *  name one in `provide` without declaring it. Read off metaScalars itself rather than listed
+ *  again here. The probe must supply EVERY metadata field, because the key set follows the
+ *  fields present: thermalScalars yields nothing for a missing temp and `w` needs `W`, so a
+ *  slimmer probe would silently shrink the published-name set. The expression constants
+ *  (pi, k, gamma, …) are deliberately absent: they are in every scope already, so
+ *  publishing one exposes nothing to a parent and stays worth saying. */
+const META_PUBLISHED: ReadonlySet<string> = new Set(Object.keys(metaScalars({ W: 1, temp: 27 })));
+
+/**
+ * Both directions of the composition interface, which is one question asked twice: does the
+ * name on each side of a block boundary exist?
+ *
+ * Upward (what this sheet reads): a child exposes NOTHING except what its `provide` names —
+ * evaluation publishes exactly that list and silently skips the rest — so an undeclared
+ * `block__key` resolves to no value, the row using it is dropped with a warning, and any hard
+ * rule downstream goes `na`. That degradation is correct for absent DATA and looks identical
+ * from the outside, which is why the authoring slip is named here instead. A prefix naming no
+ * block at all (a typo'd use name) degrades the same way, so it gets its own message rather
+ * than hiding in the same blind spot.
+ *
+ * Downward (what this sheet publishes): a `provide` entry matching no param and no row exposes
+ * nothing, silently. For a leaf nobody composes yet there is no downstream reader to notice, so
+ * the declared interface would rot unread. Two carve-outs, both because this check must stay
+ * table-independent enough to run at edit time with no data loaded:
+ *  - a sheet that BINDS is exempt outright. Sizing publishes the whole table at the operating
+ *    point, pass-through columns included, and no static list can enumerate those. The upward
+ *    half still catches a parent consuming a name the child never provides, which is where a
+ *    real slip shows up.
+ *  - re-export keys (which carry the separator) are left to `sheet-provide`, which rules on
+ *    them from the use site.
+ *
+ * Only the CURRENT doc is inspected — validateSheet recurses into embedded children and
+ * re-attributes their findings to the use site, so walking the tree here would report
+ * everything twice. A ref-only use is skipped: its provide list arrives at resolution, and
+ * runSheet revalidates the resolved doc.
+ */
+function provideCoverage(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
+  const uses = new Map((doc.uses ?? []).map((u) => [u.name, u]));
+  const injected = new Set((doc.uses ?? []).flatMap(providedNames));
+
+  const reported = new Set<string>();
+  for (const expr of docExpressions(doc)) {
+    for (const name of namesOf(expr)) {
+      const at = name.indexOf(PROVIDE_SEP);
+      if (at <= 0 || injected.has(name) || reported.has(name)) continue;
+      const block = name.slice(0, at);
+      const use = uses.get(block);
+      if (use && !use.doc) continue; // ref-only: its provides are unknown until resolution
+      reported.add(name);
+      out.push({
+        rule: 'sheet-provide-coverage',
+        severity: 'warning',
+        message: use
+          ? `an expression reads "${name}", which block "${block}" does not provide — a block ` +
+            `exposes only the scalars its provide list names, so this resolves to no value`
+          : `an expression reads "${name}", but no child block is named "${block}" — the name ` +
+            `resolves to no value`,
+        location: block,
+        symbol: name,
+      });
+    }
+  }
+
+  // A sheet that sizes a device publishes the whole table at the operating point, which no
+  // static list can enumerate — so the downward half does not run for it.
+  if (doc.bind) return out;
+
+  const own = new Set<string>([...doc.params.map((p) => p.name), ...doc.rows.map((r) => r.name)]);
+  for (const key of doc.provide ?? []) {
+    // A separator-bearing key is the re-export idiom, and `sheet-provide` already rules on
+    // whether it names a real grandchild — from the USE site, so a child's bad re-export is
+    // reported once there rather than twice.
+    if (key.includes(PROVIDE_SEP)) continue;
+    if (own.has(key) || META_PUBLISHED.has(key)) continue;
+    out.push({
+      rule: 'sheet-provide-coverage',
+      severity: 'warning',
+      message:
+        `provide lists "${key}", which is no param and no row of this sheet — nothing of that ` +
+        `name exists to expose to a parent`,
+      location: key,
+    });
   }
   return out;
 }
@@ -430,6 +523,10 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     });
   }
 
+  // The composition interface, both ways: names read across a block boundary, and names this
+  // sheet declares it exposes. Runs for every doc — a leaf with no children still publishes.
+  out.push(...provideCoverage(doc));
+
   // Composition: validate each child block and attribute its findings to the use site.
   if (doc.uses) {
     // Collision guard: a child exposes scalars into the parent scope as `name__key`. If a
@@ -438,10 +535,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     // A ref-only use's provides are unknown until resolution, so these structural
     // checks cover embedded children only — run validation on the RESOLVED doc (as
     // runSheet does when given a ref index) for full coverage.
-    const injected = new Set<string>();
-    for (const use of doc.uses) {
-      for (const key of use.doc?.provide ?? []) injected.add(joinProvide(use.name, key));
-    }
+    const injected = new Set(doc.uses.flatMap(providedNames));
     for (const p of doc.params) {
       if (injected.has(p.name)) {
         out.push({
@@ -468,17 +562,10 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     // Children evaluate in document order, and a use's param overrides may reference the
     // provides of EARLIER siblings only. A forward (or self) reference is statically
     // detectable here: the joined name can never be in scope when the override resolves.
-    const providedBy = (idx: number): Set<string> => {
-      const s = new Set<string>();
-      const u = doc.uses![idx];
-      for (const key of u.doc?.provide ?? []) s.add(joinProvide(u.name, key));
-      return s;
-    };
     for (let i = 0; i < doc.uses.length; i++) {
       const use = doc.uses[i];
       if (!use.params) continue;
-      const later = new Set<string>();
-      for (let j = i; j < doc.uses.length; j++) for (const n of providedBy(j)) later.add(n);
+      const later = new Set(doc.uses.slice(i).flatMap(providedNames));
       for (const [k, expr] of Object.entries(use.params)) {
         for (const n of namesOf(expr)) {
           if (later.has(n)) {
@@ -553,10 +640,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       // scalar the child itself received from ITS children (`grand__key`): re-exporting a
       // grandchild value up the tree is the ratified idiom for surfacing a deep quantity,
       // so only a separator-bearing key that matches nothing injectable is flagged.
-      const childInjected = new Set<string>();
-      for (const g of use.doc?.uses ?? []) {
-        for (const k of g.doc?.provide ?? []) childInjected.add(joinProvide(g.name, k));
-      }
+      const childInjected = new Set((use.doc?.uses ?? []).flatMap(providedNames));
       for (const key of use.doc?.provide ?? []) {
         if (key.includes(PROVIDE_SEP) && !childInjected.has(key)) {
           out.push({

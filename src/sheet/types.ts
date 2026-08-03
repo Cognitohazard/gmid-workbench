@@ -349,6 +349,12 @@ export const PROVIDE_SEP = '__';
 export const joinProvide = (useName: string, key: string): string =>
   `${useName}${PROVIDE_SEP}${key}`;
 
+/** The flat names a child use injects into its parent's scope: exactly what its `provide` list
+ *  declares, each joined to the use name. A ref-only use (no embedded doc yet) injects nothing
+ *  — its list arrives at resolution. One spelling of "a block exposes only what it provides". */
+export const providedNames = (u: SheetUse): string[] =>
+  (u.doc?.provide ?? []).map((k) => joinProvide(u.name, k));
+
 /** Clone a doc with the named params' VALUES overridden — the one override mechanism the
  *  sweeps and the containment edges share, so a change to what an override must touch
  *  (e.g. clearing a solver field) has exactly one home. */
