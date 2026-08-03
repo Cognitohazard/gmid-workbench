@@ -26,7 +26,7 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | `rows` | array | Named intermediate/output expressions, evaluated in document order (see [Rows](#rows)). |
 | `rules` | array | Named comparisons the design must satisfy (see [Rules](#rules)). |
 | `uses` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
-| `provide` | array of string, optional | The names this sheet exposes to a parent (ignored at the top level). |
+| `provide` | array of string, optional | The names this sheet exposes to a parent. Inert to the engine at the top level, but load-bearing there as the sheet's declared interface (see [Port contracts](#port-contracts)). |
 | `edges` | array, optional | Containment edges: complete re-evaluations at claimed range ends whose hard verdicts gate the sheet (see [Containment edges](#containment-edges-edges)). |
 
 Evaluation runs in one pass: seed the params, compose any children, size the device, evaluate
@@ -497,6 +497,49 @@ still wrong. A few library sheets instead share one global sign param (e.g. `p_s
 across several same-polarity children; those get no per-child hint, so prefer the
 per-child form when authoring.
 
+### Port contracts
+
+A library sheet declares its interface the way a datasheet does: the small-signal quantities
+a neighboring stage would need are ordinary rows with reserved names, and the sheet's
+top-level `provide` lists them. There is no schema field and no engine machinery — the
+contract is a naming convention plus the declaration.
+
+- **`Rout`** — the output resistance at the sheet's output node, written as the inverse of
+  the very denominator the sheet's own gain row uses, so the output node has exactly one
+  definition (a one-stage sheet's `Av` is a transconductance times `Rout`; in a two-stage
+  sheet `Rout` is the output stage's node and `Av2` is the row that reads through it).
+- **`Rin`** — the input resistance, only where the input is genuinely low-impedance (a
+  common-gate stage). A gate input gets no `Rin`.
+- **`cgg_in`** — the capacitance a driver sees, per input terminal, taken as the input
+  device's total gate capacitance. An estimate that says so in its note, and which way it
+  errs depends on the stage: on an inverting stage the Miller term needs the gate–drain
+  fraction these tables do not carry, so the number is a lower bound; where the source
+  follows the gate (a follower's bootstrapped input) it is instead an over-estimate. Each
+  sheet's note states its direction — and `cgg_in` never appears in a hard rule.
+- **`Ron`** — a switch's on-resistance, where that is the interface.
+
+Loading expectations follow one rule: **state the claim on a quantity the sheet actually
+owns.** A sheet that models its load (a drain resistor, a `gds_load_est`) already folds
+loading into its gain arithmetic — the arithmetic is the contract, and no extra rule is
+added. A buffer whose approximation depends on a load regime writes a guardrail on its own
+load parameter (the source follower's `R_L >= 10*Rout`; ten-to-one keeps the loaded gain
+within about ten percent of intrinsic — a convention, not physics). A sheet that models no
+resistive load says so in its `Rout` note ("The gain assumes a capacitive load"). The
+cross-stage check belongs to the **composing parent**, which is the only place that sees
+both sides of a port: the interstage pole `1/(2*pi*s1__Rout*s2__cgg_in)` is one
+author-written row away, and `s2__Rin >= 10*s1__Rout` one guardrail.
+
+The `sheet-provide-coverage` warning polices both directions of the contract. Upward, every
+`child__key` an expression reads must appear in that child's `provide` list — a missing
+entry degrades at runtime exactly like absent data, so the validator names the slip
+statically, and a prefix naming no child at all is reported as the typo it is. A
+reference-only child is skipped (its provides are unknown until resolution, and the
+resolved document is validated again). Downward, a `provide` key on any block without its
+own `bind` — the top level or an embedded child alike — must name a param or a row of that
+block; a bound block is instead taken at its word, because a bind publishes every table
+quantity including pass-through columns no table-independent check can enumerate.
+Re-export keys carry the `__` separator and are ruled on at the use site instead.
+
 ## Closing a bias loop (`solveFor`)
 
 Children evaluate in document order and may only read *earlier* siblings, so the composition is
@@ -757,9 +800,14 @@ silently repairs one.
    *Rule kinds*). A hard rule whose side cannot compute reads `na` and fails closed — so
    hard rules may only use quantities every supported table carries; model missing data as
    explicit `*_est` parameters with notes.
-8. **Say "estimate" where the sheet estimates.** Stability, dynamics, and anything a
-   simulator owns is labeled estimate-grade in its note. The sheet's authority ends where
-   the lookup table's does.
+8. **Say "estimate" where the sheet estimates — and never gate feasibility on one.** Stability,
+   dynamics, and anything a simulator owns is labeled estimate-grade in its note. The sheet's
+   authority ends where the lookup table's does. The standing case is noise: a rule computed
+   from the γ-model thermal floor, on a table carrying no measured noise, ships as a
+   `guardrail` with a note saying why — it advises until the table carries measured noise
+   density, at which point the rule may be promoted back to a requirement. The exception
+   proves the rule: a kT/C noise bound is thermodynamics, not a γ-model estimate, and stays
+   a hard requirement.
 9. **Respect polarity by declaration, not sign-fixing.** Signed PMOS tables pair with
    `*_sign` parameters; value columns are magnitudes, axes keep their signs (see
    *Signed-table sign parameters*). Backstop: the panel warns when a sign parameter
