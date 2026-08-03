@@ -10,10 +10,10 @@
     { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
     {
       "name": "vn_target",
-      "value": 18e-9,
+      "value": 25e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget; the gamma-model total lands near 16 nV/rtHz at the default currents, so this leaves real headroom"
+      "note": "input-referred thermal density budget; the gamma-model total lands near 19 nV/rtHz at the default currents. the budget carries about 30% headroom over the gamma-model row (no measured floor exists for this topology)"
     },
     {
       "name": "CM_lo",

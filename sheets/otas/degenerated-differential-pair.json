@@ -1,6 +1,6 @@
 {
   "title": "Degenerated differential pair",
-  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + g_m*R_s)$; the degeneration factor $n_{deg} = 1 + g_m*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. Entered from the COMMON MODE: the device's source node $V_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — is the one free bias variable, pinned so the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. Both bias coordinates then follow outright ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), and the body effect is charged in full rather than only the resistor's few tens of millivolts. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
+  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. Entered from the COMMON MODE: the device's source node $V_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — is the one free bias variable, pinned so the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. Both bias coordinates then follow outright ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), and the body effect is charged in full rather than only the resistor's few tens of millivolts. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -29,10 +29,10 @@
     },
     {
       "name": "vn_target",
-      "value": 27e-9,
+      "value": 35e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm the total sits near 24 nV/rtHz"
+      "note": "input-referred thermal density budget, set above the 32.5 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model estimate — a budget that only clears the model is not a budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm it is most of the modelled power, and the row lands near 25 nV/rtHz"
     },
     {
       "name": "vos_target",
@@ -105,7 +105,7 @@
       "max": 50000,
       "unit": "ohm",
       "role": "choice",
-      "note": "per-side degeneration resistance; gm*R_s sets the linearization and offset improvement"
+      "note": "per-side degeneration resistance; (gm + gmb)*R_s sets the linearization and offset improvement"
     },
     {
       "name": "gm_id_in",
@@ -114,7 +114,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "input-pair inversion; high gm/ID makes degeneration more effective (larger gm*R_s)"
+      "note": "input-pair inversion; high gm/ID makes degeneration more effective (larger (gm + gmb)*R_s)"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
   ],
@@ -149,7 +149,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
+        "provide": ["gm", "gmb", "gds", "vgs", "vdsat", "W", "id", "vnth_m"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -169,15 +169,15 @@
     },
     {
       "name": "n_deg",
-      "expr": "1 + in__gm*R_s",
+      "expr": "1 + (in__gm + in__gmb)*R_s",
       "unit": "1",
-      "note": "degeneration factor; Gm, GBW, and vos all scale by 1/n_deg"
+      "note": "degeneration factor; Gm, GBW, and vos all scale by 1/n_deg. The source node carries the source-body generator's current through the same resistor, so gmb degenerates alongside gm — on a sky130 tt realization of this pair that takes the factor from 2.68 to 3.07 and lines Gm_eff and GBW up with the measured transfer instead of leaving them ~11% high. The device's own gds returns to the source node too, but at these impedances it is worth under 1% of the factor and is left out"
     },
     {
       "name": "Gm_eff",
       "expr": "in__gm/n_deg",
       "unit": "S",
-      "note": "degenerated transconductance gm/(1 + gm*R_s)"
+      "note": "degenerated transconductance gm/(1 + (gm + gmb)*R_s)"
     },
     {
       "name": "Av",

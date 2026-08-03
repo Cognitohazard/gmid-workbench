@@ -1,6 +1,6 @@
 {
   "title": "Source follower",
-  "description": "A source follower (common-drain buffer): the drain sits at VDD, the source drives the load, and the output tracks the input one gate-source drop below it. The voltage gain $A_v = g_m/(g_m + g_{ds} + 1/R_L)$ is just under unity and the output resistance is about $1/g_m$, so this stage buffers a high-impedance node into a resistive load $R_L$ without voltage gain. The DC level shift is one $V_{GS}$: $V_{out} = V_{in} - V_{GS}$. $V_{GS}$ is not known before sizing, so vgs_est places the operating point and the level-shift-consistent guardrail checks it against the reported $V_{GS}$; retune vgs_est until green. The body is assumed tied to the source ($V_{SB} = 0$), so no body effect appears and $g_{mb}$ - which is not on every table - is deliberately omitted.",
+  "description": "A source follower (common-drain buffer): the drain sits at VDD, the source drives the load, and the output tracks the input one gate-source drop below it. The voltage gain $A_v = g_m/(g_m + g_{ds} + 1/R_L)$ is just under unity and the output resistance is about $1/g_m$, so this stage buffers a high-impedance node into a resistive load $R_L$ without voltage gain. The DC level shift is one $V_{GS}$: $V_{out} = V_{in} - V_{GS}$. $V_{GS}$ is not known before sizing, so vgs_est places the operating point and the level-shift-consistent guardrail checks it against the reported $V_{GS}$; retune vgs_est until green. The body is assumed tied to the source ($V_{SB} = 0$), so no body effect appears and $g_{mb}$ drops out of the gain. That is an assumption about the layout, not an algebraic convenience: it requires an isolated body — a deep-n-well NMOS, or the PMOS-in-its-own-well version of this stage. On a bulk-grounded device the source-body generator loads the source directly; measured on a sky130 tt realization at these defaults it is about 52 uS against a 240 uS $g_m$, which pulls the gain from 0.95 down to roughly 0.79 and misses the 0.85 target. In a shared well, this sheet does not describe the circuit.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -65,7 +65,7 @@
       "value": 0.57,
       "unit": "V",
       "role": "choice",
-      "note": "estimate of the follower vgs, used to place the drain-source bias VDD - V_out; retune until the level-shift-consistent guardrail is green"
+      "note": "estimate of the follower vgs, used to place the drain-source bias VDD - V_out; retune until the level-shift-consistent guardrail is green. The shipped value is self-consistent on the demo table; a table with a different threshold wants a different value — on a sky130 tt nfet at these defaults the guardrail lands near 0.77 — and reporting that gap is exactly what the guardrail is for"
     }
   ],
   "bind": {
@@ -85,7 +85,7 @@
       "name": "Av",
       "expr": "gm/(gm + gds + 1/R_L)",
       "unit": "V/V",
-      "note": "follower gain, below unity; gmb is omitted (body tied to source)"
+      "note": "follower gain, below unity; gmb is absent because the body is tied to the source. On a bulk-grounded device it belongs in the denominator alongside gds, and costs roughly a sixth of the gain"
     },
     {
       "name": "Rout",

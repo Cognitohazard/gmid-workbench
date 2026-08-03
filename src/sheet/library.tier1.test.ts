@@ -3,13 +3,16 @@
 // forms (never by re-running the engine): supplied bind quantities are exact (gm =
 // gm/ID * id algebra), the Early-voltage model gives gds/id = 1/(VA + vds) exactly
 // after binding (VA = VA_PER_L * L), and the thermal density is sqrt(4kTgamma/gm).
+// gmb is BODY_FACTOR*gm at every point of the demo, but unlike gds it rides the
+// interpolated gm curve rather than the bound gm/ID, so rows built on it agree with
+// the closed form to interpolation order (~1e-3) instead of to the bind's 1e-9.
 // The generic contract in library.test.ts already checks these sheets validate,
 // bind, and raise no hard-rule na on the same table; here we pin the physics.
 
 import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, vnthM, sheet as libSheet } from './library.fixtures';
+import { table, relErr, VA_PER_L, vnthM, gmbOf, sheet as libSheet } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`stages/${file}`);
 
@@ -61,8 +64,9 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
 
 describe('tier1 goldens: Source-degenerated CS amp', () => {
   const res = runSheet(sheet('source-degenerated-cs-amp.json'), table);
-  // Defaults: I_bias 20 uA, gm/ID 12, R_s 2 kohm. gm = 20u*12 = 240 uS.
+  // Defaults: I_bias 20 uA, gm/ID 12, R_s 2 kohm. gm = 20u*12 = 240 uS, gmb = 48 uS.
   const gm = 20e-6 * 12;
+  const gmb = gmbOf(gm);
   const Rs = 2e3;
 
   it('binds gm exactly from the current and gm/ID', () => {
@@ -70,8 +74,10 @@ describe('tier1 goldens: Source-degenerated CS amp', () => {
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
   });
 
-  it('degenerated transconductance is gm/(1 + gm*R_s)', () => {
-    expect(relErr(res.values.Gm, gm / (1 + gm * Rs))).toBeLessThan(1e-9);
+  it('the degeneration factor carries both source-referred generators', () => {
+    // Both gm and gmb drive current through R_s, so the loop factor is 1 + (gm + gmb)*R_s.
+    expect(relErr(res.values.loop, 1 + (gm + gmb) * Rs)).toBeLessThan(1e-3);
+    expect(relErr(res.values.Gm, gm / (1 + (gm + gmb) * Rs))).toBeLessThan(1e-3);
   });
 
   it('input noise adds the 4kT*R_s resistor term to the channel density', () => {
@@ -112,8 +118,9 @@ describe('tier1 goldens: Cascode CS amp', () => {
 describe('tier1 goldens: Source follower', () => {
   const res = runSheet(sheet('source-follower.json'), table);
   // Defaults: I_bias 20 uA, gm/ID 12, L 0.5 um, VDD 1.8, V_in 1.2, vgs_est 0.57,
-  // R_L 100 kohm. Declared vds = VDD - V_in + vgs_est = 1.17. VA = 2.5.
+  // R_L 100 kohm. Declared vds = VDD - V_in + vgs_est = 1.17, inside the demo hull.
   const gm = 20e-6 * 12;
+  const vds = 1.17;
 
   it('binds gm exactly and the follower gain is below unity', () => {
     expect(res.bind?.ok).toBe(true);
@@ -122,33 +129,50 @@ describe('tier1 goldens: Source follower', () => {
   });
 
   it('gain is gm/(gm + gds + 1/R_L)', () => {
-    const gds = 20e-6 / (VA_PER_L * 0.5e-6 + (1.8 - 1.2 + 0.57));
+    const gds = 20e-6 / (VA_PER_L * 0.5e-6 + vds);
     const av = gm / (gm + gds + 1 / 100e3);
     expect(relErr(res.values.Av, av)).toBeLessThan(2e-3);
   });
 
-  it('level-shift-consistent guardrail is green at defaults', () => {
+  it('is self-consistent at defaults: the level-shift guardrail is green with no warnings', () => {
+    // The shipped vgs_est is tuned to the bundled demo device (a sky130-like table wants
+    // ~0.77 V — the param note records it); the guardrail is the retune loop's readout,
+    // so the shipped default must hold it green on the shipped table.
     const g = res.rules.find((r) => r.id === 'level-shift-consistent');
-    expect(g && g.status !== 'fail' && g.status !== 'na').toBe(true);
+    expect(g?.status).toBe('pass');
+    expect(res.feasible).toBe(true);
+    expect(res.warnings).toHaveLength(0);
   });
 });
 
 describe('tier1 goldens: Common gate', () => {
   const res = runSheet(sheet('common-gate.json'), table);
   // Defaults: I_bias 20 uA, gm/ID 10, L 0.5 um, V_out 0.9, V_in 0.3, R_load 50 kohm.
-  // gm = 200 uS, vds = 0.6, VA = 2.5.
+  // gm = 200 uS, gmb = 40 uS, vds = 0.6, VA = 2.5.
   const gm = 20e-6 * 10;
+  const gmb = gmbOf(gm);
+  const gds = 20e-6 / (VA_PER_L * 0.5e-6 + 0.6);
 
-  it('binds gm exactly and Rin = 1/gm', () => {
+  it('binds gm exactly and Rin carries the drain load back to the source', () => {
+    // The input looks into the source, so the finite ro couples R_load back: the resistance
+    // is (R_load + ro) divided by the device's own loop gain, not the 1/(gm + gmb) shorthand.
     expect(res.bind?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
-    expect(relErr(res.values.Rin, 1 / gm)).toBeLessThan(1e-9);
+    const rin = (50e3 + 1 / gds) / (1 + (gm + gmb) / gds);
+    expect(relErr(res.values.Rin, rin)).toBeLessThan(1e-3);
+    // …and that is well above the shorthand, which is what makes the input match bind.
+    expect(res.values.Rin).toBeGreaterThan(1 / (gm + gmb));
   });
 
-  it('gain is gm into the load resistor parallel with 1/gds', () => {
-    const gds = 20e-6 / (VA_PER_L * 0.5e-6 + 0.6);
-    const av = gm / (1 / 50e3 + gds);
+  it('gain drives the load through gm, gmb, and gds together', () => {
+    const av = (gm + gmb + gds) / (1 / 50e3 + gds);
     expect(relErr(res.values.Av, av)).toBeLessThan(2e-3);
+    // Adding gmb raises the gain by about a fifth. On a sky130 tt realization of this stage
+    // that is what carries it past the 10 V/V target (10.57 measured against an 8.72 gm-only
+    // estimate); the demo's Early voltage is lower, so here it lands short and the gain rule
+    // still reads fail. Either way the binding constraint is the input match.
+    expect(res.rules.find((r) => r.id === 'gain-spec')?.status).toBe('fail');
+    expect(res.rules.find((r) => r.id === 'input-match')?.status).toBe('fail');
   });
 });
 

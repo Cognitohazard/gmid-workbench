@@ -286,7 +286,7 @@
       "name": "z_rhp",
       "expr": "gm2/Cc",
       "unit": "rad/s",
-      "note": "right-half-plane zero from the feedforward path through Cc; erodes phase near crossover"
+      "note": "the right-half-plane zero the feedforward path through Cc would place, kept as a reference point for the UNCOMPENSATED stage: the Rz = 1/gm2 nulling resistor below moves it to infinity, which is why the phase-margin row carries no zero term"
     },
     {
       "name": "p2",
@@ -298,13 +298,13 @@
       "name": "Rz",
       "expr": "1/gm2",
       "unit": "ohm",
-      "note": "nulling resistor: Rz = 1/gm2 moves the RHP zero to infinity, cancelling the feedforward path"
+      "note": "nulling resistor Rz = 1/gm2 that moves the RHP zero to infinity"
     },
     {
       "name": "PM",
-      "expr": "90 - atan(wc/p2)*180/pi - atan(wc/z_rhp)*180/pi",
+      "expr": "90 - atan(wc/p2)*180/pi",
       "unit": "deg",
-      "note": "ESTIMATE: crossover phase lag from the second pole plus the RHP zero (the nulling resistor removes the zero term). Two-pole-plus-zero approximation — the simulator owns stability sign-off"
+      "note": "ESTIMATE: crossover phase lag from the second pole alone, because the Rz = 1/gm2 nulling resistor removes the RHP zero. The simulator owns stability sign-off"
     },
     {
       "name": "SR",
@@ -376,7 +376,7 @@
       "lhs": "z_rhp",
       "op": ">=",
       "rhs": "wc",
-      "note": "the RHP zero must sit above crossover (equivalently gm2 >= gm1) or it collapses phase margin; the Rz = 1/gm2 nulling resistor removes it if this is tight"
+      "note": "where the RHP zero would sit WITHOUT the nulling resistor: above crossover (equivalently gm2 >= gm1), or an uncompensated version of this stage loses its phase margin. With Rz = 1/gm2 in place the zero is gone and this is a design-margin reading, not a stability condition"
     },
     {
       "id": "stage2-sat",

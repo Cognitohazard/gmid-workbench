@@ -45,7 +45,7 @@
       "unit": "V",
       "role": "choice",
       "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke. Both bracket ends must leave the pair drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail, the pin will say so, and raising gm_id_ld1 (a smaller diode drop) is the knob that reopens it"
+      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke. Both bracket ends must leave the pair drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail, the pin will say so. This variant stacks the cascode node in the same budget, so raising gm_id_ld1 for a smaller diode drop is the right direction but does not get there alone: on a sky130 tt realization it closes only past the knob's own maximum. Lowering V_casc toward its floor is the second knob, and the two together are what reopen the budget"
     },
     {
       "name": "Cc",

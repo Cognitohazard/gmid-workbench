@@ -10,10 +10,10 @@
     { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
     {
       "name": "vn_target",
-      "value": 15e-9,
+      "value": 25e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget (one side)"
+      "note": "input-referred thermal density budget (one side), set above the 23.1 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model row — a budget that only clears the model is not a budget"
     },
     {
       "name": "vos_target",

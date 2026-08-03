@@ -1,6 +1,6 @@
 {
   "title": "Super source follower",
-  "description": "A super source follower (SSF): a plain source follower whose output resistance is driven down by a local feedback device. The input follower sets the DC level shift (the output sits about one input $V_{GS}$ below the input), and the feedback device senses the follower current and closes a local loop that lowers the output resistance by roughly the feedback device's intrinsic gain: $R_{out} \\approx 1/(g_{m,in} * A_{v0,fb})$, versus $1/g_{m,in}$ for a plain follower. That makes it a compact low-impedance buffer. The feedback is a local loop; its own phase margin (whether that loop is stable) is a small-signal AC check the simulator owns, out of this sheet's scope — this sheet sizes the DC operating point and the low-frequency output resistance only. On the demo NMOS table both devices size against the same data.",
+  "description": "A super source follower (SSF): a plain source follower whose output resistance is driven down by a local feedback device. The input follower sets the DC level shift (the output sits about one input $V_{GS}$ below the input), and the feedback device senses the follower current and closes a local loop that lowers the output resistance by the loop gain $g_{m,fb}/g_{ds,in}$ (the feedback transconductance into the follower's own output resistance): $R_{out} \\approx g_{ds,in}/((g_{m,in} + g_{mb,in}) * g_{m,fb})$, versus $1/g_{m,in}$ for a plain follower. That makes it a compact low-impedance buffer. The feedback is a local loop; its own phase margin (whether that loop is stable) is a small-signal AC check the simulator owns, out of this sheet's scope — this sheet sizes the DC operating point and the low-frequency output resistance only. On the demo NMOS table both devices size against the same data.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -45,7 +45,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "feedback device inversion (sets its intrinsic gain, hence the loop gain)"
+      "note": "feedback device inversion: at fixed I_fb it sets gm_fb, and with it the loop gain gm_fb/gds_in"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     {
@@ -55,7 +55,7 @@
       "max": 2e-6,
       "unit": "m",
       "role": "choice",
-      "note": "longer L_fb raises av0_fb and drives Rout down further"
+      "note": "the loop gain gm_fb/gds_in does not depend on L_fb (gm_fb is set by gm_id_fb and I_fb), so this knob moves the feedback device's vdsat and area, not Rout"
     },
     {
       "name": "vds_in",
@@ -100,7 +100,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vgs", "vdsat"]
+        "provide": ["gm", "gmb", "gds", "vgs", "vdsat"]
       },
       "params": { "Ix": "I_in", "Lx": "L_in", "gx": "gm_id_in", "vx": "vds_in" }
     },
@@ -108,7 +108,7 @@
       "name": "fb",
       "doc": {
         "title": "Feedback device",
-        "description": "The local-feedback device that senses the follower current; its intrinsic gain av0 is the loop gain that lowers the output resistance.",
+        "description": "The local-feedback device that senses the follower current; its transconductance into the follower's output resistance, gm_fb/gds_in, is the loop gain that lowers the output resistance.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
@@ -143,13 +143,13 @@
       "name": "av0_fb",
       "expr": "fb__av0",
       "unit": "V/V",
-      "note": "feedback device intrinsic gain = the local loop gain"
+      "note": "reference reading of the feedback device's own intrinsic gain; the loop gain that Rout actually divides by is gm_fb/gds_in, not this"
     },
     {
       "name": "Rout",
-      "expr": "1/(gm_in*av0_fb)",
+      "expr": "in__gds/((in__gm + in__gmb)*fb__gm)",
       "unit": "ohm",
-      "note": "SSF output resistance: the follower 1/gm_in reduced by the feedback loop gain av0_fb"
+      "note": "SSF output resistance: the local loop drives the follower's own output conductance down by the product of the two transconductances. The gds is the INPUT device's — it is the input device whose drain current the loop senses — and the source-body generator adds to gm because the output node is the input device's source. On a sky130 tt realization of this buffer this form lands within 3% of the measured 56 ohm"
     },
     {
       "name": "Rout_plain",

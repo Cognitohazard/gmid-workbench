@@ -10,10 +10,10 @@
     { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
     {
       "name": "vn_target",
-      "value": 20e-9,
+      "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget. At the default 20 uA and gm/ID split the gamma-model density lands near 17.5 nV/rtHz on a 1.8 V PDK, so this default leaves real headroom; tighten it and the sweep shows what the noise costs"
+      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor measured on a sky130 tt realization of this OTA rather than above the gamma-model row (21.5 nV/rtHz at the default 20 uA and gm/ID split). Clearing only the model is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
     },
     {
       "name": "vos_target",

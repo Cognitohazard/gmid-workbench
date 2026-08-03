@@ -43,16 +43,16 @@
     },
     {
       "name": "gm_id_m",
-      "value": 8,
+      "value": 10,
       "min": 4,
       "max": 14,
       "unit": "1/V",
       "role": "choice",
-      "note": "mirror inversion: lower gm/ID (higher V*) tightens matching but raises the saturation voltage the node sits at"
+      "note": "mirror inversion: lower gm/ID (higher V*) tightens matching but raises the saturation voltage the node sits at; the default keeps the compliance floor under the V_out default even on a high-V* device"
     },
     {
       "name": "gm_id_c",
-      "value": 8,
+      "value": 10,
       "min": 4,
       "max": 14,
       "unit": "1/V",
@@ -113,7 +113,7 @@
         "params": [
           { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "gm_id_r", "value": 10, "unit": "1/V", "role": "choice" },
           {
             "name": "vds_r",
             "value": 0.3,
@@ -151,7 +151,7 @@
         "params": [
           { "name": "I_c", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "L_cc", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_cc", "value": 8, "unit": "1/V", "role": "choice" },
+          { "name": "gm_id_cc", "value": 10, "unit": "1/V", "role": "choice" },
           {
             "name": "vds_cc",
             "value": 0.3,
@@ -207,9 +207,9 @@
     },
     {
       "name": "V_bias",
-      "expr": "casc__vgs + ref__vdsat",
+      "expr": "casc__vgs + vds_lo",
       "unit": "V",
-      "note": "wide-swing cascode gate bias: one cascode vgs above the mirror-node saturation voltage, which parks the mirror node at exactly vdsat_mirror"
+      "note": "wide-swing cascode gate bias: one cascode vgs above the mirror node where the design actually parks it. That node is vds_lo — the saturation knee plus node_margin, which is what the solve produces — so biasing to the bare knee instead would sit the node a full node_margin low"
     },
     { "name": "irel_ref", "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)", "unit": "1" },
     { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
@@ -233,8 +233,8 @@
       "kind": "invariant",
       "lhs": "V_out",
       "op": ">=",
-      "rhs": "ref__vdsat + casc__vdsat",
-      "note": "wide-swing output floor: two stacked saturation voltages, with no threshold overhead (contrast vgs + vdsat for a standard cascode)"
+      "rhs": "vds_lo + casc__vdsat",
+      "note": "wide-swing output floor: the mirror node plus the cascode's own saturation voltage, with no threshold overhead (contrast vgs + vdsat for a standard cascode). The floor is measured from where the node is actually parked, vds_lo, not from the bare saturation knee — the node_margin that keeps the mirror out of triode across corners is headroom the output has to clear too"
     },
     {
       "id": "vbias-realizable",

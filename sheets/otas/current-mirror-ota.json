@@ -11,10 +11,10 @@
     { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
     {
       "name": "vn_target",
-      "value": 20e-9,
+      "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget"
+      "note": "input-referred thermal density budget. the budget carries about 30% headroom over the gamma-model row (no measured floor exists for this topology)"
     },
     {
       "name": "V_out_dc",
@@ -312,7 +312,7 @@
     },
     {
       "name": "vn_gbw",
-      "expr": "sqrt(2*4*k*T*(2/3)/(2*pi*CL*GBW_target/K_m))",
+      "expr": "sqrt(2*4*k*T*gamma/(2*pi*CL*GBW_target/K_m))",
       "unit": "V/sqrt(Hz)",
       "note": "estimate: input density if the pair were sized to just meet GBW_target at this K_m — grows as sqrt(K_m), the current-mirror OTA's noise-for-bandwidth trade"
     },

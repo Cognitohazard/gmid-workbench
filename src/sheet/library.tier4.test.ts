@@ -13,6 +13,8 @@
 //     resistances) carries the demo grid's ~1e-4 interpolation error — those assert at 1e-2.
 //   - vdsat and diode vgs come from the EKV inversion (noted constants), so swing/level
 //     rows assert at 1e-2.
+//   - gmb = BODY_FACTOR·gm at every point, but like av0 it rides the interpolated gm, so
+//     rows built on it assert at interpolation order rather than at 1e-9.
 //   - The phase-margin rows are the sheet's own arctan estimate recomputed here from the
 //     exact gm values.
 
@@ -23,6 +25,7 @@ import {
   table,
   relErr,
   VA_PER_L,
+  gmbOf,
   sheet as libSheet,
   REFS,
   VGS_GMID8_L05,
@@ -62,11 +65,12 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     expect(relErr(res.values.Av2, av2)).toBeLessThan(1e-9);
   });
 
-  it('phase-margin estimate matches the arctan formula on the exact poles/zero', () => {
+  it('phase-margin estimate is the second pole alone, the nulling resistor having removed the zero', () => {
+    // The sheet supplies Rz = 1/gm2, which moves the RHP zero to infinity — so the estimate
+    // carries no zero term. Keeping one double-charged the design for a zero it had cancelled.
     const wc = gm1 / Cc;
-    const z = gm2 / Cc;
     const p2 = gm2 / (CL + 0.5e-12);
-    const pm = 90 - (Math.atan(wc / p2) * 180) / Math.PI - (Math.atan(wc / z) * 180) / Math.PI;
+    const pm = 90 - (Math.atan(wc / p2) * 180) / Math.PI;
     expect(relErr(res.values.PM, pm)).toBeLessThan(1e-6);
   });
 });
@@ -135,10 +139,14 @@ describe('tier4 goldens: Super source follower', () => {
     expect(relErr(res.values.gm_in, gmIn)).toBeLessThan(1e-9);
   });
 
-  it('output resistance is the follower 1/gm reduced by the feedback intrinsic gain', () => {
-    // av0_fb = gm_id·(VA+vds) = 10·(2.5+0.6) = 31 (from provided av0, so ~1e-2).
-    const av0fb = 10 * (VA_PER_L * 0.5e-6 + 0.6);
-    expect(relErr(res.values.Rout, 1 / (gmIn * av0fb))).toBeLessThan(1e-2);
+  it('output resistance is the input device gds divided by both transconductances', () => {
+    // The loop senses the INPUT device's drain current, so its gds is the numerator, and the
+    // output node is that device's source, so gmb adds to its gm. gds = ID/(VA + vds) is exact.
+    const gdsIn = 50e-6 / (VA_PER_L * 0.5e-6 + 0.6);
+    const gmFb = 10 * 50e-6;
+    expect(relErr(res.values.Rout, gdsIn / ((gmIn + gmbOf(gmIn)) * gmFb))).toBeLessThan(1e-3);
+    // Well below the plain follower it replaces — that reduction is the point of the stage.
+    expect(res.values.Rout).toBeLessThan(res.values.Rout_plain / 10);
   });
 
   it('the DC level shift is the input follower vgs', () => {

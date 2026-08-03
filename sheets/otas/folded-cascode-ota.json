@@ -10,10 +10,10 @@
     { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
     {
       "name": "vn_target",
-      "value": 28e-9,
+      "value": 40e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget. The folding current sources are the fold's noise price: the gamma-model total lands near 25 nV/rtHz at the default currents, well above a telescopic at the same gm — this budget leaves headroom while keeping that trade visible"
+      "note": "input-referred thermal density budget. The folding current sources are the fold's noise price: the gamma-model total lands near 30 nV/rtHz at the default currents, well above a telescopic at the same gm. the budget carries about 30% headroom over the gamma-model row (no measured floor exists for this topology)"
     },
     {
       "name": "vos_target",

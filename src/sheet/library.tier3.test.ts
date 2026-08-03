@@ -7,11 +7,11 @@
 //  - After binding at a declared vds, gds/id = 1/(VA + vds) EXACTLY (VA = 5e6·L),
 //    so gds = id/(VA + vds) and the intrinsic gain av0 = (gm/ID)·(VA + vds). Analytic
 //    single-stage gains therefore land within interpolation error (< 1e-2).
-//  - Thermal density vnth_m = sqrt(4kTγ/gm) with γ = 2/3.
+//  - Thermal density vnth_m = sqrt(4kTγ/gm) with γ = GAMMA_DEFAULT.
 
 import { describe, it, expect } from 'vitest';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, vnthM, sheet as libSheet } from './library.fixtures';
+import { table, relErr, VA_PER_L, vnthM, gmbOf, sheet as libSheet } from './library.fixtures';
 
 const va = (L: number): number => VA_PER_L * L;
 /** gds of a device bound to current `id` at length `L`, declared vds — exact in the model. */
@@ -53,16 +53,19 @@ describe('tier-3 goldens: degenerated differential pair', () => {
   // Defaults: I_tail 20 µA, gm/ID 14, R_s 12 kΩ (sized so the shipped linear-range target
   // is actually met: V* + I·R_s = 0.143 + 0.12), L 0.5 µm.
   const gmIn = 10e-6 * 14;
-  const nDeg = 1 + gmIn * 12000;
+  // Both source-referred generators drive current through R_s, so the degeneration factor
+  // carries gmb alongside gm. gmb rides the interpolated gm curve rather than the bound
+  // gm/ID, so rows built on it hold to interpolation order rather than to 1e-9.
+  const nDeg = 1 + (gmIn + gmbOf(gmIn)) * 12000;
 
-  it('the degeneration factor divides gm and GBW exactly', () => {
-    expect(relErr(res.values.n_deg, nDeg)).toBeLessThan(1e-9);
-    expect(relErr(res.values.Gm_eff, gmIn / nDeg)).toBeLessThan(1e-9);
-    expect(relErr(res.values.GBW, gmIn / nDeg / (TWO_PI * CL))).toBeLessThan(1e-9);
+  it('the degeneration factor divides gm and GBW by both source generators', () => {
+    expect(relErr(res.values.n_deg, nDeg)).toBeLessThan(1e-3);
+    expect(relErr(res.values.Gm_eff, gmIn / nDeg)).toBeLessThan(1e-3);
+    expect(relErr(res.values.GBW, gmIn / nDeg / (TWO_PI * CL))).toBeLessThan(1e-3);
   });
 
   it('offset improves by exactly the degeneration factor', () => {
-    expect(relErr(res.values.vos / res.values.vos_undeg, 1 / nDeg)).toBeLessThan(1e-9);
+    expect(relErr(res.values.vos / res.values.vos_undeg, 1 / nDeg)).toBeLessThan(1e-3);
     expect(relErr(res.values.SR, 20e-6 / CL)).toBeLessThan(1e-9);
   });
 });

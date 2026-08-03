@@ -123,7 +123,12 @@
       "note": "input gm into the diode load conductance (~load gm) plus both output conductances"
     },
     { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
-    { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
+    {
+      "name": "GBW",
+      "expr": "gm/(2*pi*Cout)",
+      "unit": "Hz",
+      "note": "the gm/ID currency, and a good estimate of the unity-gain frequency only while Av0 is comfortably above 1. A diode load is exactly the regime where it is not: a single-pole stage crosses unity at f_p*sqrt(Av0^2 - 1), so at Av0 near 1.4-1.5 the literal crossing sits 25-30% below this row. Read it as transconductance per load capacitance, not as a measured bandwidth"
+    },
     {
       "name": "vn_in",
       "expr": "sqrt(vnth_m^2 + load__vnth_m^2*(load__gm/gm)^2)",

@@ -12,7 +12,7 @@
 // operating point the sizer landed on, so those match only to interpolation order
 // (~1e-3), exactly like the exemplar goldens. gds/id = 1/(VA + vds) with VA = 5e6·L,
 // so the intrinsic gain gm·ro = (gm/ID)·(VA + vds); the gamma-model thermal density is
-// vnth_m = sqrt(4kTγ/gm) with γ = 2/3.
+// vnth_m = sqrt(4kTγ/gm) with γ = GAMMA_DEFAULT.
 
 import { describe, it, expect } from 'vitest';
 import { GAMMA_DEFAULT, PHYS } from '../constants';

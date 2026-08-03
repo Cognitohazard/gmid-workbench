@@ -15,10 +15,12 @@
 //    W/ref__W exactly N.
 //  - pelgrom_irel scales as 1/sqrt(W*L), so at fixed L and gm/ID a K-times-wider device
 //    has exactly 1/sqrt(K) of the reference's current spread.
+//  - gmb = BODY_FACTOR*gm at every point, but it rides the interpolated gm curve rather
+//    than the bound gm/ID, so rows built on it hold to interpolation order, not to 1e-9.
 
 import { describe, it, expect } from 'vitest';
 import { runSheet } from './index';
-import { table, relErr, VA_PER_L, sheet as libSheet } from './library.fixtures';
+import { table, relErr, VA_PER_L, gmbOf, sheet as libSheet } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`mirrors-bias/${file}`);
 
@@ -52,11 +54,19 @@ describe('tier-2 goldens: cascode current mirror', () => {
 
 describe('tier-2 goldens: wide-swing cascode mirror', () => {
   const res = runSheet(sheet('wide-swing-cascode-mirror.json'), table);
-  // Defaults: K = 4, gm/ID 8, L = 1 µm; the wide-swing node is SOLVED to the mirror
+  // Defaults: K = 4, gm/ID 10, L = 1 µm; the wide-swing node is SOLVED to the mirror
   // device's own vdsat plus the 50 mV node_margin, not typed.
 
   it('solves the node to the saturation knee plus the stated margin', () => {
     expect(res.values.vds_lo).toBeCloseTo(res.values.ref__vdsat + 0.05, 3);
+  });
+
+  it('closes at defaults: the corrected compliance floor stays under the V_out default', () => {
+    // The compliance floor is the solved node plus the cascode vdsat — the node's real
+    // parking spot, not the bare two-vdsat stack. The gm/ID 10 default exists so that this
+    // floor clears V_out = 0.6 even on this high-V* device; at gm/ID 8 it does not.
+    expect(res.feasible).toBe(true);
+    expect(res.values.vds_lo + res.values.casc__vdsat).toBeLessThan(0.6);
   });
 
   it('sizes the output device at exactly K times the reference width', () => {
@@ -92,9 +102,11 @@ describe('tier-2 goldens: degenerated current mirror', () => {
     expect(relErr(res.values.W / res.values.ref__W, 1)).toBeLessThan(1e-9);
   });
 
-  it('output resistance is boosted by the local-feedback factor (1 + gm·R_s_out)', () => {
-    // Rout·gds should equal 1 + gm·(R_s/K) by construction of the row; R_s/K = 5 kΩ at K = 1.
-    expect(relErr(res.values.Rout * res.values.gds, 1 + res.values.gm * 5000)).toBeLessThan(1e-9);
+  it('output resistance is boosted by the local-feedback factor (1 + (gm + gmb)·R_s_out)', () => {
+    // (Rout − R_s_out)·gds should equal 1 + (gm + gmb)·(R_s/K); R_s/K = 5 kΩ at K = 1. Both
+    // source-referred generators feed back through the resistor.
+    const boost = 1 + (res.values.gm + gmbOf(res.values.gm)) * 5000;
+    expect(relErr((res.values.Rout - 5000) * res.values.gds, boost)).toBeLessThan(1e-3);
   });
 });
 

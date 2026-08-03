@@ -1,6 +1,6 @@
 {
   "title": "Source-degenerated CS amp",
-  "description": "A common-source stage with a source-degeneration resistor $R_s$. The degeneration lowers the effective transconductance to $G_m = g_m/(1 + g_m*R_s)$ and raises the device output resistance by the same factor, so into an ideal load the intrinsic gain is unchanged; the payoff is linearity, since the stage transconductance is set by the (linear) resistor rather than the (nonlinear) device $g_m$. The cost is $R_s$'s own $4kT*R_s$ thermal noise, added directly at the input. The device source sits $I_{bias}*R_s$ above ground, so the bind declares $V_{SB} = I_{bias}*R_s$ (body grounded); on a table without a $V_{SB}$ axis this is advisory and the body effect $g_{mb}$ is omitted. Sweep $R_s$ to trade gain and noise against linearity.",
+  "description": "A common-source stage with a source-degeneration resistor $R_s$. The degeneration lowers the effective transconductance to $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$ and raises the device output resistance by the same factor, so into an ideal load the intrinsic gain is unchanged; the payoff is linearity, since the stage transconductance is set by the (linear) resistor rather than the (nonlinear) device $g_m$. The cost is $R_s$'s own $4kT*R_s$ thermal noise, added directly at the input. The device source sits $I_{bias}*R_s$ above ground, so the bind declares $V_{SB} = I_{bias}*R_s$ (body grounded) — and the resistor degenerates the source-body generator $g_{mb}$ along with $g_m$, since both currents flow through it. A table that carries no $g_{mb}$ column leaves the gain rows unresolved rather than quietly dropping the term. Sweep $R_s$ to trade gain and noise against linearity.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -72,16 +72,16 @@
   },
   "rows": [
     {
-      "name": "Gm",
-      "expr": "gm/(1 + gm*R_s)",
-      "unit": "S",
-      "note": "degenerated transconductance; approaches 1/R_s (resistor-set, linear) for gm*R_s >> 1"
+      "name": "loop",
+      "expr": "1 + (gm + gmb)*R_s",
+      "unit": "1",
+      "note": "degeneration factor: how far gm is traded for linearity and raised output resistance. The source-body generator sees the same resistor as gm, so it degenerates with it — the gmb term adds about a fifth on top of the gm term, and dropping it overstates the gain by roughly 7% on a sky130 tt realization of this stage (about 6% on the demo table)"
     },
     {
-      "name": "loop",
-      "expr": "1 + gm*R_s",
-      "unit": "1",
-      "note": "degeneration factor: how far gm is traded for linearity and raised output resistance"
+      "name": "Gm",
+      "expr": "gm/loop",
+      "unit": "S",
+      "note": "degenerated transconductance; approaches 1/R_s (resistor-set, linear) for (gm + gmb)*R_s >> 1"
     },
     {
       "name": "Rout_dev",

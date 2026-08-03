@@ -1,6 +1,6 @@
 {
   "title": "Common gate",
-  "description": "A common-gate stage: the input drives the source, the gate is AC-grounded, and the output is taken at the drain. It presents a low input resistance $R_{in} = 1/g_m$ (a current-mode input, so it is the classic input matching / current-buffer stage) and a non-inverting voltage gain $A_v = g_m*par(R_{load}, 1/g_{ds})$ equal in magnitude to a common source. Its current transfer from source to drain is essentially unity, so it passes an input current to the load with a low input impedance. The device source sits at the input DC level $V_{in}$, so the bind declares $V_{SB} = V_{in}$ (body grounded); on a table without a $V_{SB}$ axis this is advisory and the body effect $g_{mb}$ is omitted from $R_{in}$.",
+  "description": "A common-gate stage: the input drives the source, the gate is AC-grounded, and the output is taken at the drain. It presents a low input resistance (a current-mode input, so it is the classic input matching / current-buffer stage) and a non-inverting voltage gain $A_v = (g_m + g_{mb} + g_{ds})*par(R_{load}, 1/g_{ds})$ equal in magnitude to a common source. Its current transfer from source to drain is essentially unity, so it passes an input current to the load with a low input impedance. Both figures carry the source-body generator: the input drives the source, so $g_{mb}$ acts in parallel with $g_m$ rather than as a second-order correction. The input resistance is the DIVIDED form $R_{in} = (R_{load} + r_o)/(1 + (g_m + g_{mb})*r_o)$ — the drain load appears at the source divided by the device's own loop gain, which is why the popular $1/(g_m + g_{mb})$ shorthand reads low here. The device source sits at the input DC level $V_{in}$, so the bind declares $V_{SB} = V_{in}$ (body grounded); a table with no $g_{mb}$ column leaves these rows unresolved rather than quietly dropping the term.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -64,7 +64,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "lower gm/ID raises gm, so it lowers Rin = 1/gm (better matching) at the cost of headroom"
+      "note": "lower gm/ID raises gm, so it lowers Rin (better matching) at the cost of headroom"
     },
     {
       "name": "L",
@@ -85,18 +85,18 @@
   "rows": [
     {
       "name": "Rin",
-      "expr": "1/gm",
+      "expr": "(R_load + ro)/(1 + (gm + gmb)*ro)",
       "unit": "ohm",
-      "note": "low-frequency input resistance looking into the source; gmb omitted (not on every table)"
+      "note": "low-frequency input resistance looking into the source, with the drain load carried through: (R_load + ro)/(1 + (gm + gmb)*ro). The finite ro couples the load back to the source, so a heavier R_load raises Rin — the 1/(gm + gmb) shorthand drops that and reads low (on a sky130 tt realization of this stage it gives 4.21 k against a measured 4.73 k)"
     },
     {
       "name": "Av",
-      "expr": "gm*par(R_load, 1/gds)",
+      "expr": "(gm + gmb + gds)*par(R_load, 1/gds)",
       "unit": "V/V",
-      "note": "non-inverting gain, gm into the load in parallel with the device output resistance"
+      "note": "non-inverting gain: the source drive acts through gm, the source-body generator gmb, and the device's own gds in parallel, into the load paralleled with ro"
     },
     { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
-    { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
+    { "name": "GBW", "expr": "(gm + gmb + gds)/(2*pi*Cout)", "unit": "Hz" },
     {
       "name": "vn_in",
       "expr": "vnth_m",
@@ -127,7 +127,7 @@
       "lhs": "Rin",
       "op": "<=",
       "rhs": "Rin_target",
-      "note": "1/gm must meet the input-resistance budget"
+      "note": "the resistance looking into the source must meet the input-resistance budget. This is what a common gate is usually infeasible on: closing it takes proportionally more gm, i.e. more current, not a different topology"
     },
     { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
