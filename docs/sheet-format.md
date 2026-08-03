@@ -269,6 +269,29 @@ for combining conductances or capacitances.
 model default). A stored or bound name of the same spelling shadows a constant, so explicit
 values win.
 
+### Body effect and noise-model defaults
+
+Two quantities a sheet reaches for constantly are handled in deliberately different ways, and
+the difference is worth stating once.
+
+`gmb` is **data**. It is an optional base quantity like `gds` or `cgg`: present when the table
+carries it, absent otherwise. There is no fallback. A sheet that writes `gm + gmb` on a table
+without a `gmb` column gets a skipped row and a named warning, and any hard rule reading that
+row goes `na`, which fails feasibility closed. That is on purpose — a `gmb = 0` stand-in would
+make the same sheet compute different physics on different tables while both looked green,
+and would show a model zero where the tool promises data. Wherever the body terminal is not
+tied to the source, `gmb` belongs in the expression; write it, and let a table that cannot
+support the sheet say so.
+
+`gamma` is a **model default**. It is a named constant, so it is always in scope, and a table
+carrying its own per-point `gamma` column shadows it — real data wins. The default is 1.0,
+which is representative of the sub-micron devices this tool sees; the textbook long-channel
+value 2/3 describes no table anyone ships here, and for a noise *floor* an optimistic
+stand-in is the dangerous direction. Every quantity built on it is `_m`-marked (`svth_m`,
+`vnth_m`) so a model estimate is never mistaken for a measurement. It remains an estimate:
+against measured silicon noise on comparable topologies, γ = 1.0 closes only about half the
+gap, so treat a γ-model density as a lower bound and size a real budget above it.
+
 ### Author-callable functions
 
 The trusted noise and mismatch closed-forms are registered as expression functions, so a sheet

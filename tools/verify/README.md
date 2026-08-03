@@ -40,7 +40,7 @@ each deck at your own PDK before running.
   simulated OTA input noise is ≥ 2.25× the one-side per-device composition —
   the differential pair and mirror each contribute twice. Sheet noise rows must
   carry the factor 2 inside the sqrt.
-- **Model reality checks**: the pfet_01v8 thermal floor implies γ ≈ 1.0 (not the
-  2/3 the derived quantities assume), and sky130 flicker dominates the nfet input
+- **Model reality checks**: the pfet_01v8 thermal floor implies γ ≈ 1.0 (now the
+  derived quantities' default; the long-channel 2/3 understates it), and sky130 flicker dominates the nfet input
   noise to ~100 MHz at these gate areas — thermal-only densities are optimistic
   in-band. Treat table-derived noise as a floor, not a budget.
