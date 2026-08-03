@@ -446,6 +446,35 @@ export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
   'title', 'description', 'polarity', 'params', 'bind', 'rows', 'rules', 'uses', 'provide', 'edges',
 ]); // prettier-ignore
 
+/**
+ * Every authored expression in a doc, in one flat list: the bind, pinned and solved params,
+ * the rows, both sides of every rule, each use's param overrides and wiring declaration, and
+ * each edge's setting. Lives HERE for the same reason the key sets above do: a consumer
+ * keeping its own copy of which fields hold expressions goes silently stale the day a field
+ * is added — so a new expression-bearing field joins this walk in the same edit that adds it
+ * to its interface.
+ */
+export function docExpressions(doc: SheetDoc): string[] {
+  const out: string[] = [];
+  if (doc.bind) {
+    for (const [k, v] of Object.entries(doc.bind)) {
+      if (!BIND_FLAGS.has(k) && typeof v === 'string') out.push(v);
+    }
+  }
+  for (const p of doc.params) {
+    if (pinned(p)) out.push(p.pin.lhs, p.pin.rhs);
+    if (torn(p)) out.push(p.solveFor);
+  }
+  for (const r of doc.rows) out.push(r.expr);
+  for (const r of doc.rules) out.push(r.lhs, r.rhs);
+  for (const u of doc.uses ?? []) {
+    out.push(...Object.values(u.params ?? {}));
+    if (u.wiring) out.push(u.wiring.gate, u.wiring.source);
+  }
+  for (const e of doc.edges ?? []) out.push(...Object.values(e.set));
+  return out;
+}
+
 /** A child block's evaluated summary, surfaced so the UI can show each child's title,
  *  feasibility, and the scalar values it exposed — without re-evaluating the tree.
  *  `rules` (and nested `children`) carry the child's own rule outcomes so a composed

@@ -308,7 +308,7 @@ describe('validate: non-finite / id-monotonic / gm-sign', () => {
 describe('validate: clean demo triggers none of the deepened checks', () => {
   it('the analytic EKV demo is consistent, finite, monotonic, and noise-clean', () => {
     const w = validate(generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } }));
-    // Including the noise/sign checks: the demo ships gamma=2/3, sth>0, sfl>0, gds>0, cgg>0.
+    // Including the noise/sign checks: the demo ships a constant gamma, sth>0, sfl>0, gds>0, cgg>0.
     const noisy = new Set([
       'gm-consistency',
       'id-non-monotonic',

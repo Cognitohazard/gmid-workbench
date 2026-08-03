@@ -78,8 +78,9 @@ export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   { key: 'svth', expr: 'sth/(gm^2)', unit: 'V^2/Hz' }, // input-referred thermal PSD (data)
   { key: 'vnth', expr: 'sqrt(sth)/gm', unit: 'V/sqrt(Hz)' }, // input-referred thermal density (data)
   // MODEL estimate: Sid = 4kTγ·gm. Always available (needs only gm); γ from a `gamma`
-  // column when present, else GAMMA_DEFAULT. The `_m` keys + visible formula mark it
-  // as a model so it is never mistaken for measured device noise.
+  // column when present, else GAMMA_DEFAULT (a sub-micron stand-in, not the long-channel
+  // 2/3). The `_m` keys + visible formula mark it as a model so it is never mistaken for
+  // measured device noise.
   { key: 'svth_m', expr: '4*k*T*gamma/gm', unit: 'V^2/Hz' }, // input-referred thermal PSD (γ-model)
   { key: 'vnth_m', expr: 'sqrt(4*k*T*gamma/gm)', unit: 'V/sqrt(Hz)' }, // density (γ-model)
   // Input-referred 1/f (flicker) noise from the simulator's stored flicker PSD @ 1 Hz

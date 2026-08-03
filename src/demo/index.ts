@@ -36,8 +36,12 @@ const DEFAULT_W = 10e-6;
 const N_SLOPE = 1.3; // subthreshold slope factor n (dimensionless)
 const COX = 0.01; // gate oxide capacitance per area [F/m^2]
 const VTH0 = 0.4; // nominal threshold [V]
-const BODY_FACTOR = 0.2; // body-effect Vth slope [V/V]: Vth rises BODY_FACTOR·vsb (0 at vsb=0)
 const ISPEC_REF = 1e-6; // specific-current scale [A] at the reference geometry W/L = 1
+// Body-effect Vth slope [V/V]: Vth rises BODY_FACTOR·vsb (0 at vsb = 0). Since the
+// threshold enters only through vov = vgs - vth, it is also the exact body-transconductance
+// ratio gmb/gm of this model. Exported so golden tests derive expected gmb from the one
+// model constant instead of re-declaring the number.
+export const BODY_FACTOR = 0.2;
 // Early voltage slope: VA = VA_PER_L * L [V] (∝ L). Exported so golden tests derive
 // expected gds/gain from the one model constant instead of re-declaring the number.
 export const VA_PER_L = 5e6;
@@ -130,6 +134,11 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
   const id = new Float64Array(size);
   const gm = new Float64Array(size);
   const gds = new Float64Array(size);
+  // Body transconductance gmb = ∂id/∂vbs. The threshold shift is the only path from the
+  // body to the current (vov = vgs - vth, vth = vthL + BODY_FACTOR·vsb) and the
+  // channel-length-modulation factor multiplies id and gm alike, so gmb = BODY_FACTOR·gm
+  // exactly — well-defined whether or not the table carries a vsb axis.
+  const gmb = new Float64Array(size);
   const cgg = new Float64Array(size);
   const vth = new Float64Array(size);
   const vdsat = new Float64Array(size);
@@ -173,6 +182,7 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
           const gmv = gmSat * factor;
           id[flat] = idSat * factor;
           gm[flat] = gmv;
+          gmb[flat] = BODY_FACTOR * gmv;
           gds[flat] = gdsSat;
           cgg[flat] = cggL;
           vth[flat] = vthEff;
@@ -195,6 +205,7 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
   const quantities = new Map<string, Float64Array>([
     ['id', id],
     ['gm', gm],
+    ['gmb', gmb],
     ['gds', gds],
     ['cgg', cgg],
     ['vth', vth],

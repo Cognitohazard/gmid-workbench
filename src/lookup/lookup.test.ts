@@ -63,17 +63,34 @@ describe('lookup (forward)', () => {
     for (const key of ['id', 'gm', 'gds', 'cgg', 'vth', 'vdsat', 'l', 'vgs']) {
       expect(out[key]).toBeDefined();
     }
-    // Standard derived that are computable from {gm,id,gds,cgg}.
-    for (const key of ['gm_id', 'gm_gds', 'av0', 'ro', 'ft', 'vstar', 'ft_eff', 'av0_ft']) {
+    // Standard derived that are computable from {gm,id,gds,gmb,cgg}.
+    for (const key of [
+      'gm_id',
+      'gm_gds',
+      'av0',
+      'ro',
+      'ft',
+      'vstar',
+      'ft_eff',
+      'av0_ft',
+      'gmb_gm',
+    ]) {
       expect(out[key]).toBeDefined();
       expect(Number.isFinite(out[key])).toBe(true);
     }
     // id_w resolves through the metadata width (meta.W → w), same as tableScope.
     expect(out.id_w).toBeCloseTo(out.id / (table.meta.W as number), 12);
-    // Not computable: gmb_gm (no gmb), cgd_cgg / gm_cgd (no cgd column or scalar).
-    for (const key of ['gmb_gm', 'cgd_cgg', 'gm_cgd']) {
+    // Not computable: cgd_cgg / gm_cgd (no cgd column or scalar).
+    for (const key of ['cgd_cgg', 'gm_cgd']) {
       expect(out[key]).toBeUndefined();
     }
+    // …and gmb_gm goes back to not-computable on a table that omits the base column.
+    const noGmb = lookup(withoutColumns(table, ['gmb']), {
+      l: table.grid.axes[0].values[0],
+      vgs: 0.6,
+    });
+    expect(noGmb.gmb_gm).toBeUndefined();
+    expect(noGmb.av0).toBeDefined();
   });
 
   it('derived are evaluated from the interpolated base scalars (self-consistent)', () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice } from './index';
+import { generateDemoDevice, BODY_FACTOR } from './index';
 import type { Grid } from '../types';
+import { flatIndex } from '../grid';
 import { UT, PHYS, GAMMA_DEFAULT } from '../constants';
 
 function col(grid: Grid, key: string): Float64Array {
@@ -140,5 +141,52 @@ describe('generateDemoDevice', () => {
     expect(sth[i]).toBeCloseTo(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * gm[i], 30);
     // the flicker corner fco = sfl/sth is a positive, finite LUT quantity.
     expect(sfl[i] / sth[i]).toBeGreaterThan(0);
+  });
+
+  it('ships a gmb column at exactly BODY_FACTOR·gm on every grid point', () => {
+    // The body enters the model only through the threshold, so the ratio is the model
+    // constant itself — on every axis combination, including the plain 2-D table.
+    for (const opts of [
+      {},
+      { vds: { min: 0.3, max: 1.2, step: 0.3 } },
+      { vsb: { min: 0, max: 0.6, step: 0.2 } },
+      { vds: { min: 0.3, max: 1.2, step: 0.3 }, vsb: { min: 0, max: 0.6, step: 0.2 } },
+    ]) {
+      const dev = generateDemoDevice(opts);
+      const gm = col(dev.grid, 'gm');
+      const gmb = col(dev.grid, 'gmb');
+      expect(gmb.length).toBe(gm.length);
+      // Every point still checked; one assertion per combo carries the worst of them.
+      let worst = 0;
+      for (let i = 0; i < gm.length; i++) {
+        worst = Math.max(worst, Math.abs(gmb[i] / gm[i] - BODY_FACTOR));
+      }
+      expect(worst).toBeLessThan(1e-12);
+    }
+  });
+
+  it('has gmb equal to the measured body slope -Δid/Δvsb of its own table', () => {
+    // Central difference against the id column: gmb is a derivative, and this is the one
+    // check that reads it off the data rather than off the constant it was built from.
+    const step = 0.001;
+    const dev = generateDemoDevice({ vsb: { min: 0, max: 0.05, step } });
+    const [nL, nVsb, nVgs] = dev.grid.shape;
+    expect(dev.grid.axes.map((a) => a.name)).toEqual(['l', 'vsb', 'vgs']);
+    const id = col(dev.grid, 'id');
+    const gmb = col(dev.grid, 'gmb');
+    const flat = (li: number, si: number, vi: number) => flatIndex(dev.grid.shape, [li, si, vi]);
+    // Every interior point checked; one assertion carries the worst residual.
+    let worst = 0;
+    for (let li = 0; li < nL; li++) {
+      for (let si = 1; si < nVsb - 1; si++) {
+        for (let vi = 20; vi < nVgs; vi += 20) {
+          const at = flat(li, si, vi);
+          const slope = (id[flat(li, si + 1, vi)] - id[flat(li, si - 1, vi)]) / (2 * step);
+          worst = Math.max(worst, Math.abs(-slope - gmb[at]) / gmb[at]);
+        }
+      }
+    }
+    // Second-order accurate, so the residual is the O(step²) truncation term.
+    expect(worst).toBeLessThan(1e-3);
   });
 });

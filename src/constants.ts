@@ -12,12 +12,12 @@ export const PHYS = {
 export const UT: number = (PHYS.k * PHYS.T) / PHYS.q;
 
 /**
- * Default channel thermal-noise factor γ (Sid = 4kTγ·gm). 2/3 is the long-channel
- * saturation value; short devices run higher. It is only a default: a table that
- * carries a per-point `gamma` LUT column shadows this (stored data wins in
- * tableScope), so noise tracks the real bias-dependent γ when the sim provides it.
+ * Default channel thermal-noise factor γ (Sid = 4kTγ·gm). 1.0 matches measured
+ * sub-micron devices (sky130 ≈ 1.0); the long-channel 2/3 understates them — the
+ * full argument lives in docs/sheet-format.md ("Body effect and noise-model
+ * defaults"). Only a default: a table's own per-point `gamma` column shadows it.
  */
-export const GAMMA_DEFAULT = 2 / 3;
+export const GAMMA_DEFAULT = 1.0;
 
 /** Named constants available to every expression (pi, k, q, T, eps, UT, gamma). */
 export const CONSTANTS: Readonly<Record<string, number>> = {

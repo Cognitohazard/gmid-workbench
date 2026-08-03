@@ -7,7 +7,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { generateDemoDevice, VA_PER_L } from '../demo';
+import { generateDemoDevice, VA_PER_L, BODY_FACTOR } from '../demo';
 import { GAMMA_DEFAULT, PHYS } from '../constants';
 import { buildSheetRefIndex, type SheetRefIndex } from './resolve';
 import type { SheetDoc } from './types';
@@ -55,6 +55,9 @@ export const relErr = (v: number, expected: number): number => Math.abs(v / expe
 
 /** γ-model input-referred thermal density sqrt(4kTγ/gm) at the demo's γ = GAMMA_DEFAULT. */
 export const vnthM = (gm: number): number => Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / gm);
+
+/** Body transconductance of the demo model — exact at every point (see src/demo/index.ts). */
+export const gmbOf = (gm: number): number => BODY_FACTOR * gm;
 
 // The gate-source voltage the demo model needs for a given gm/ID at L = 0.5 µm, from the EKV
 // inversion gm/ID = sigmoid(x)/(n·UT·softplus(x)) with n = 1.3. Shared because a NODE LEVEL a
