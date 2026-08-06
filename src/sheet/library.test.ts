@@ -42,6 +42,10 @@ import {
   roMirrored,
   stage2Rout,
 } from './library.fixtures';
+// Test-only reach across to the picker: the searchable set is that module's curation, and the
+// interface gate below is the library-side half of the same fact.
+import { searchable } from '../picker';
+
 const LIBRARY = loadLibrary();
 
 // One evaluation of the whole library on the demo device, shared by every check below that
@@ -231,6 +235,24 @@ describe('sheet library: the published interface', () => {
       }
     }
     expect(dangling).toEqual([]);
+  });
+
+  it('every searchable sheet reports a quiescent supply current on the demo device', () => {
+    // Named positively, because the rule above cannot see this one: a sheet that drops its I_q row
+    // AND its provide entry together stays consistent and would vanish from a comparison silently.
+    // A search that ranks designs by supply current has to be told, per sheet, that the number is
+    // there — so the set is spelled out here and the count is asserted, which is what makes a new
+    // amplifier sheet arriving without an I_q fail rather than quietly go unranked.
+    // The set is the picker's own curation predicate, not a copy of it: a sheet that joins or
+    // leaves the search has to arrive here at the same moment.
+    const searched = EVALUATED.filter(({ file }) => searchable(file.replace(/\.json$/, '')));
+    expect(searched).toHaveLength(25);
+    const missing: string[] = [];
+    for (const { file, doc, res } of searched) {
+      if (!(doc.provide ?? []).includes('I_q')) missing.push(`${file}: not published`);
+      else if (!Number.isFinite(res?.values.I_q)) missing.push(`${file}: does not resolve`);
+    }
+    expect(missing).toEqual([]);
   });
 });
 

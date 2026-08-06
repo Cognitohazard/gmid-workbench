@@ -341,6 +341,16 @@ export function sweepable(
   );
 }
 
+/** The author's implementation knobs: the params declared 'choice' that the engine does not
+ *  solve — the set a designer re-balances, as opposed to 'spec' params, which state the
+ *  requirement. The ONE definition, so the sensitivity readout and any search that ranks knobs
+ *  through it can never disagree about which params are in play. Not filtered by `sweepable`:
+ *  a knob with no authored range is still a choice, and only a caller that needs a slider
+ *  range (a sweep, a scan) adds that filter. */
+export function choiceKnobs(doc: SheetDoc): SheetVar[] {
+  return doc.params.filter((p) => p.role === 'choice' && !engineSolved(p));
+}
+
 /** The separator joining a child use-name to a provided key. The engine has no member
  *  access (`child.key` cannot parse), so a child's scalars surface in the parent scope as
  *  the flat name `child__key`. One source of truth for the producer (eval), the collision
@@ -354,6 +364,18 @@ export const joinProvide = (useName: string, key: string): string =>
  *  — its list arrives at resolution. One spelling of "a block exposes only what it provides". */
 export const providedNames = (u: SheetUse): string[] =>
   (u.doc?.provide ?? []).map((k) => joinProvide(u.name, k));
+
+/**
+ * A private deep copy of a sheet document — the one clone every caller uses before editing a
+ * document it does not own, since `withParams` copies the params array and leaves the rules,
+ * rows and child uses aliased to the original.
+ *
+ * JSON rather than `structuredClone`, and both halves of that choice matter. A sheet edited in
+ * the app is a reactive proxy, which `structuredClone` refuses outright. And JSON turns a
+ * non-finite param value into `null` on the way through — harmless where validation refuses
+ * both anyway, but the reason this is a SHEET clone and not a general-purpose one.
+ */
+export const cloneDoc = (doc: SheetDoc): SheetDoc => JSON.parse(JSON.stringify(doc)) as SheetDoc;
 
 /** Clone a doc with the named params' VALUES overridden — the one override mechanism the
  *  sweeps and the containment edges share, so a change to what an override must touch

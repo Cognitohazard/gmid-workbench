@@ -9,7 +9,14 @@
 // the badge shows. Pure, deterministic, never throws.
 
 import type { DeviceTable } from '../types';
-import { EDGE_SEP, engineSolved, sweepable, treeRuleResults, withParams } from './types';
+import {
+  choiceKnobs,
+  EDGE_SEP,
+  engineSolved,
+  sweepable,
+  treeRuleResults,
+  withParams,
+} from './types';
 import type {
   RuleResult,
   SheetDoc,
@@ -69,10 +76,7 @@ interface Selected {
  * discards, so perturbing it measures the solver's tolerance, not the design.
  */
 function select(doc: SheetDoc, names?: readonly string[]): Selected[] {
-  if (!names)
-    return doc.params
-      .filter((p) => p.role === 'choice' && !engineSolved(p))
-      .map((p) => ({ name: p.name, param: p }));
+  if (!names) return choiceKnobs(doc).map((p) => ({ name: p.name, param: p }));
   return names.map((name) => {
     const p = doc.params.find((q) => q.name === name);
     if (!p) return { name, error: `"${name}" is not a param of this sheet` };

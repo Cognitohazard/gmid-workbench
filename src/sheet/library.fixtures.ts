@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { generateDemoDevice, VA_PER_L, BODY_FACTOR, COX } from '../demo';
 import { GAMMA_DEFAULT, PHYS } from '../constants';
-import { buildSheetRefIndex, type SheetRefIndex } from './resolve';
+import { buildSheetRefIndex, type SheetRefEntry, type SheetRefIndex } from './resolve';
 import type { SheetDoc } from './types';
 
 export { VA_PER_L };
@@ -41,11 +41,16 @@ export function sheet(path: string): SheetDoc {
   return JSON.parse(readFileSync(join(SHEETS_DIR, path), 'utf8')) as SheetDoc;
 }
 
-/** Ref index over the whole curated library (ids = `group/name`, extension dropped) —
- *  what the web app builds from its bundled sheets; library goldens resolve against it. */
-export const REFS: SheetRefIndex = buildSheetRefIndex(
-  loadLibrary().map(({ file, doc }) => ({ path: file.replace(/\.json$/, ''), doc })),
-);
+/** The library keyed the way the app keys it: `group/name`, extension dropped. That id is what
+ *  a `ref` names, what the picker reports, and what the curation lists are written in, so a
+ *  suite comparing against any of those reads the library through this. */
+export function libraryEntries(): SheetRefEntry[] {
+  return loadLibrary().map(({ file, doc }) => ({ path: file.replace(/\.json$/, ''), doc }));
+}
+
+/** Ref index over the whole curated library — what the web app builds from its bundled
+ *  sheets; library goldens resolve against it. */
+export const REFS: SheetRefIndex = buildSheetRefIndex(libraryEntries());
 
 // The 3-D [l, vds, vgs] demo table shared by every golden; the 0.05 V vds step keeps
 // declared operating points on-grid where goldens want to be tight.

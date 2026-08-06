@@ -14,6 +14,7 @@ import {
 export { sweepable } from './types';
 import { MARGIN_PCT_CAP } from './eval';
 import type {
+  RuleKind,
   RuleResult,
   SheetChildReport,
   SheetDoc,
@@ -79,19 +80,33 @@ function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepRule[])
 
 /**
  * Whether a rule outcome carries HEADROOM information — the one definition of "measurable"
- * shared by the limiting constraint and the containment-edge aggregate, which had drifted
- * apart as two near-copies. A rule is measurable when it gates the design (hard), produced a
- * finite relative margin at all, and is not parked exactly on its own boundary: two mechanisms
- * put it there by construction — a spec pinned by its own bind, and a containment edge landing
- * on the very range end its rule compares against — and the near-zero snap makes both read
- * exactly 0. A tautology admitted as the minimum is the answer forever, hiding every rule that
- * can actually move.
+ * shared by the limiting constraint, the containment-edge aggregate, and any search that scores
+ * a design point by its worst margin. A rule is measurable when it gates the design (hard),
+ * produced a finite relative margin at all, and is not parked exactly on its own boundary: two
+ * mechanisms put it there by construction — a spec pinned by its own bind, and a containment
+ * edge landing on the very range end its rule compares against — and the near-zero snap makes
+ * both read exactly 0. A tautology admitted as the minimum is the answer forever, hiding every
+ * rule that can actually move.
+ *
+ * Takes the two fields it decides on rather than a whole `RuleResult`, so a caller holding a
+ * SWEEP row — which carries exactly a kind and a margin per sample — reads the same predicate
+ * as a caller holding a full result, instead of restating it. The narrowing loses nothing: an
+ * `na` outcome has a NaN margin, and `margin` is zero exactly when `marginPct` is (the relative
+ * denominator is floored at TINY and the operands are finite by the time a margin exists).
  */
-function measurable(rr: RuleResult): boolean {
-  return (
-    isHardRule(rr.kind) && rr.status !== 'na' && Number.isFinite(rr.marginPct) && rr.margin !== 0
-  );
+export function measurable(kind: RuleKind, marginPct: number): boolean {
+  return isHardRule(kind) && Number.isFinite(marginPct) && marginPct !== 0;
 }
+
+/** A relative margin clamped to the range that carries information. Past MARGIN_PCT_CAP the
+ *  ratio came from the TINY-floored denominator rather than from the design, so every consumer
+ *  that compares margins — the edge aggregate, a search objective — clamps the same way. The
+ *  clamp is monotone, so clamping the minimum is the same as taking the minimum of the clamped. */
+export const clampMargin = (m: number): number =>
+  Math.max(-MARGIN_PCT_CAP, Math.min(MARGIN_PCT_CAP, m));
+
+/** `measurable` over a whole rule outcome — the shape the tree walks hand `worstBy`. */
+const isMeasurable = (rr: RuleResult): boolean => measurable(rr.kind, rr.marginPct);
 
 /** The smallest relative margin among the outcomes `keep` admits, with the tree key that names
  *  it — the one selector behind every "which rule is it" answer, so they can never disagree
@@ -110,9 +125,7 @@ function worstBy(
 
 /**
  * One number for "how close is this containment edge to closing": the WORST measurable hard-rule
- * margin anywhere in the edge run's tree, clamped to ±MARGIN_PCT_CAP (a rule against a ~0 bound
- * carries a TINY-scaled, information-free ratio that would otherwise peg the aggregate; the
- * clamp is monotone, so clamping the minimum is the same as taking the minimum of the clamped).
+ * margin anywhere in the edge run's tree, clamped to the informative range (see `clampMargin`).
  * An edge that did not stand at all (solve failure, unresolvable set) reads -MARGIN_PCT_CAP, not
  * null: the chart clips it at the bottom, so an edge-driven feasibility flip ALWAYS has an
  * on-chart cause. A standing edge with nothing left to measure reads its verdict as
@@ -120,11 +133,8 @@ function worstBy(
  */
 function edgeMargin(e: SheetEdgeReport): number {
   if (e.error !== undefined) return -MARGIN_PCT_CAP;
-  const found = worstBy(treeRuleResults(e), measurable);
-  const worst =
-    found === undefined
-      ? null
-      : Math.max(-MARGIN_PCT_CAP, Math.min(MARGIN_PCT_CAP, found.marginPct));
+  const found = worstBy(treeRuleResults(e), isMeasurable);
+  const worst = found === undefined ? null : clampMargin(found.marginPct);
   // An INFEASIBLE edge must never chart non-negative: hard `na` fails the run closed
   // while contributing no margin, so without this floor a passing sibling rule could
   // paint a broken edge at +margin — a feasibility flip with no on-chart cause, the
@@ -171,7 +181,7 @@ export function limitingConstraint(res: {
   children?: SheetChildReport[];
   edges?: SheetEdgeReport[];
 }): { id: string; marginPct: number } | undefined {
-  return worstBy(treeRuleResults(res), measurable);
+  return worstBy(treeRuleResults(res), isMeasurable);
 }
 
 /**
