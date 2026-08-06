@@ -9,13 +9,17 @@
     validate,
     EXAMPLES,
     DERIVED_QUANTITIES,
+    cloneDoc,
+    withParams,
     type QAWarning,
     type DeviceTable,
     type Grid,
+    type SheetDoc,
   } from '@gmid/mostab-core';
   import { axisUnit, baseUnit } from './labels';
   import Panel from './Panel.svelte';
   import Sizer from './Sizer.svelte';
+  import Picker from './Picker.svelte';
   import Help from './Help.svelte';
   import { CONTROL_HELP } from './help';
   import {
@@ -305,8 +309,16 @@
     sel.value = '';
   }
   // A sheet panel carries '' axes (so the chart axis guard in sanitizeDashboard keeps
-  // it) and a copy of the first vetted example as its starting doc.
-  function addSheetPanel(): void {
+  // it) and, by default, a copy of the first vetted example as its starting doc. The picker
+  // hands off through here too, with a library sheet and the values it found.
+  //
+  // It always pushes a NEW panel, never writes into an existing one: every panel mutation is
+  // persisted immediately and there is no undo, so adopting a picker result into a panel the
+  // designer had tuned would destroy that work silently.
+  //
+  // The clone comes FIRST because withParams copies only the params array — the rules, rows and
+  // child uses would stay aliased to the library literal that every other panel reads.
+  function addSheetPanel(doc: SheetDoc = EXAMPLES[0], params: Record<string, number> = {}): void {
     if (!activeTab) return;
     activeTab.panels.push({
       id: crypto.randomUUID(),
@@ -314,7 +326,7 @@
       yExpr: '',
       family: '',
       render: 'sheet',
-      sheet: structuredClone(EXAMPLES[0]),
+      sheet: withParams(cloneDoc(doc), params),
     });
   }
   function removePanel(id: string): void {
@@ -475,6 +487,7 @@
     overlayIdx = [];
     dashboard = null;
     sizerOpen = false;
+    pickerOpen = false;
     importError = null;
   }
 
@@ -494,6 +507,9 @@
   // owns only the open/close toggle and renders it (against the active device + bias)
   // while open.
   let sizerOpen = $state(false);
+  // ── Topology picker (the "which design-type" workflow). Same shape as the sizer: App owns
+  // the toggle and renders it while open, inside the device guard — the search needs a table.
+  let pickerOpen = $state(false);
 </script>
 
 <header>
@@ -567,6 +583,11 @@
       class:on={sizerOpen}
       onclick={() => (sizerOpen = !sizerOpen)}
       title={CONTROL_HELP.size}>size</button
+    ><button
+      class="btn pick"
+      class:on={pickerOpen}
+      onclick={() => (pickerOpen = !pickerOpen)}
+      title={CONTROL_HELP.picker}>pick</button
     >{/if}
   <!-- Escape-to-dismiss is a keyboard ENHANCEMENT on a natively interactive disclosure -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -739,7 +760,7 @@
       {#each templateOptions as { t, i }}<option value={i}>{t.name}</option>{/each}
     </select>
     <button class="btn" onclick={() => addPanel()} title="add a blank panel">+ panel</button>
-    <button class="btn" onclick={addSheetPanel} title={CONTROL_HELP.sheet}>+ sheet</button>
+    <button class="btn" onclick={() => addSheetPanel()} title={CONTROL_HELP.sheet}>+ sheet</button>
     {#if d.tabs.length > 1}
       <button class="btn" onclick={() => removeTab(d.activeTab)}>remove tab</button>
     {/if}
@@ -786,6 +807,9 @@
     </div>
     {#if sizerOpen}
       <Sizer {device} {sharedBias} />
+    {/if}
+    {#if pickerOpen}
+      <Picker {device} onOpen={(doc, params) => addSheetPanel(doc, params)} />
     {/if}
   {:else}
     <div class="welcome">

@@ -3,6 +3,7 @@
   // watch the author equations and pass/fail constraints recompute with signed margins.
   // It holds no numerics — runSheet (core) does all evaluation and never throws.
   import {
+    cloneDoc,
     runSheet,
     sweepSheet,
     sweepSheet2,
@@ -14,12 +15,10 @@
     limitingConstraint,
     sheetSensitivities,
     SENSITIVITY_REL_STEP,
-    MARGIN_PCT_CAP,
     resolveSheetRefs,
     flattenSheetDoc,
     formatEng,
     formatSI,
-    parseEng,
     joinProvide,
     PROVIDE_SEP,
     BIAS_AXES,
@@ -45,6 +44,7 @@
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
   import { CONTROL_HELP } from './help';
+  import { commitEng, pct } from './eng';
   import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
   import { copyText, download } from './export';
 
@@ -346,32 +346,6 @@
     if (!Number.isFinite(value)) return;
     onChange({ ...cfg, params: cfg.params.map((p) => (p.name === name ? { ...p, value } : p)) });
   }
-  // Commit an engineering-notation field ("20u", "1.8", "2p") on change: parse, normalize the
-  // display to the canonical suffix, and set. A malformed entry restores the last good value so
-  // a typo never writes NaN. Empty is allowed only when `clearable` (bias axes), clearing via null.
-  function commitEng(
-    el: HTMLInputElement,
-    current: number | undefined,
-    set: (v: number | null) => void,
-    clearable = false,
-  ): void {
-    const raw = el.value.trim();
-    if (raw === '' && clearable) {
-      set(null);
-      return;
-    }
-    try {
-      const v = parseEng(raw);
-      el.value = formatEng(v);
-      set(v);
-    } catch {
-      el.value = current === undefined ? '' : formatEng(current);
-    }
-  }
-  // JSON clone, not structuredClone: sheet docs are plain JSON, and a "Your sheets"
-  // entry is a $state proxy structuredClone cannot handle.
-  const cloneDoc = (d: SheetDoc): SheetDoc => JSON.parse(JSON.stringify(d)) as SheetDoc;
-
   function pickSheet(e: Event): void {
     const sel = e.currentTarget as HTMLSelectElement;
     const [gi, si] = sel.value.split(':').map(Number);
@@ -541,12 +515,6 @@
    *  series — consumers read the field, never parse the id's trailing separator. */
   const ruleLabel = (r: { id: string; edge?: string }): string =>
     r.edge ? `edge ${r.edge}` : r.id;
-  // A rule whose rhs is ~0 gets its marginPct from the TINY clamp (~1e300) — past
-  // MARGIN_PCT_CAP the ratio carries no information, so it reads as "no percentage".
-  const pct = (v: number): string =>
-    Number.isFinite(v) && Math.abs(v) < MARGIN_PCT_CAP
-      ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(0)}%`
-      : '—';
   const CHIP: Record<RuleStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author rule notes by id (a RuleResult carries no note — the physical-meaning note lives on the

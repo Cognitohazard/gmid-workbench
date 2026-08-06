@@ -29,6 +29,13 @@ turns them into gm/ID design charts, operating-point lookups, and sized devices.
   embedded inline or included **by reference** from the sheet library (with a flatten
   export for a frozen, self-contained copy). The authoring model is documented in
   [docs/sheet-format.md](docs/sheet-format.md).
+- **Topology picker** — type the spec you have (supply, load, gain, gain-bandwidth, slew,
+  noise, offset, common-mode range) and every amplifier and buffer sheet in the library is
+  searched against it on the loaded device: which design-types close, at what quiescent
+  current, with which knob settings, and what binds each one. Results carry their own
+  disclosures — how much of your spec each sheet could use, whether the search ran out of
+  budget rather than the design failing, and whether a reported current is really the author's
+  slider floor. Picking a result opens it as a new design sheet with the values found.
 - **Noise and mismatch** — input-referred thermal noise (from stored PSDs when the
   table carries them, or a γ-model estimate), 1/f noise and the flicker corner,
   integrated RMS noise over a band, and a Pelgrom mismatch budget on the sized geometry.

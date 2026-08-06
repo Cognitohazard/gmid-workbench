@@ -4,7 +4,7 @@
 // (src/sheet/library.test.ts) — trusted the same way the EXAMPLES literal is, so no
 // sanitize pass here.
 
-import { EXAMPLES, type SheetDoc, type SheetRefEntry } from '@gmid/mostab-core';
+import { EXAMPLES, searchable, type SheetDoc, type SheetRefEntry } from '@gmid/mostab-core';
 
 export interface SheetLibraryGroup {
   label: string;
@@ -34,6 +34,13 @@ export const CURATED_ENTRIES: readonly SheetRefEntry[] = Object.entries(modules)
     doc,
   }),
 );
+
+/** The picker's candidates — which sheets are searchable is the core's curation (`searchable`),
+ *  so the app cannot drift from what the core suite gates. In a stable display order: the queue
+ *  order is what the results table streams in, so it is alphabetical by title, not the glob's. */
+export const SEARCHABLE_SHEETS: readonly SheetRefEntry[] = CURATED_ENTRIES.filter((e) =>
+  searchable(e.path),
+).sort((a, b) => a.doc.title.localeCompare(b.doc.title));
 
 // One uniform menu for the sheet picker: the shipped examples are just the first
 // group, so the panel needs a single render loop and a single group:index decode.

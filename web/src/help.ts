@@ -117,6 +117,13 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   fco: 'Flicker (1/f) noise corner frequency f_co (Hz).',
   band: 'Integration band [f_lo, f_hi] (Hz) for the total RMS input-referred noise.',
   matching: 'Pelgrom mismatch budget on the sized geometry: σ(V_th), pair offset, and σ(I)/I.',
+  // topology picker (design-type search)
+  picker:
+    'Which design-type to start from. Type the spec you have — supply, load, gain, bandwidth, slew, noise, offset, common-mode range — and every amplifier and buffer sheet in the library is searched against it on the active device: does it close, at what quiescent current, with which knob settings, and what binds it. A screening instrument, not an optimizer — it finds feasible starting points and names their costs; the design still happens in the sheet. Each field is optional: an empty box means "not my requirement", and the sheet keeps its own default.',
+  pickerMargin:
+    'The worst hard-rule margin at the point reported — how much room the design has left where it is tightest, or how far it is from closing. A margin quoted on a sheet that did not close belongs to the last point the search reached, not to the design: it moves when the budget moves, so read the cause beside it before chasing the number.',
+  pickerCoverage:
+    'How many of the fields you typed this sheet actually has a parameter for and treats as a requirement you set. A sheet that consumed two of your ten is answering a smaller question than one that consumed ten, so the two are not comparable and are never ranked against each other. Hover for what was dropped and why — including a field whose name matches but whose unit does not (a noise density is not an integrated RMS), and one the sheet chooses for itself rather than taking from you.',
   fingers:
     'The table is characterized at ONE width; sizing scales it per-µm, and width effects (model bins, narrow-width V_th shifts) are NOT captured — a single wide finger can be off by tens of percent in moderate inversion. Realize the result as this many fingers of the characterization width, which tracks the table. The count is rounded, so the realized total (shown with its deviation) can differ from the sized W — materially at small counts.',
   avth: 'Pelgrom V_th matching coefficient A_Vth (mV·µm): σ(V_th) ≈ A_Vth/√(W·L). The default is a generic placeholder — replace it with your PDK\u2019s measured value.',
