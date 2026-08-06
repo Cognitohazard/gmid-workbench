@@ -108,6 +108,12 @@
       "expr": "vnth_m",
       "unit": "V/sqrt(Hz)",
       "note": "device channel thermal density; a common-gate input also passes the source's own noise, which is set outside this stage"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_bias",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the one branch these rows model; the source that sets it is outside the stage. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -145,5 +151,5 @@
       "note": "actual GBW into CL plus the parasitic estimate"
     }
   ],
-  "provide": ["Rin", "Rout"]
+  "provide": ["Rin", "Rout", "I_q"]
 }

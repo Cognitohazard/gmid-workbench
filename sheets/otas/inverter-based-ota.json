@@ -178,6 +178,12 @@
       "expr": "n__cgg + p__cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents. Both gates are driven together, so both gate capacitances load the driver. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it — and here the drain swings against the gate, so that omission is at its worst. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_bias",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — a single inverter leg as these rows model it; a pseudo-differential realization doubles it. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -210,5 +216,5 @@
       "note": "estimate: very high composite gm/ID means weak inversion and strong VDD dependence of the bias — budget a common-mode bias loop; sim owns PSRR"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

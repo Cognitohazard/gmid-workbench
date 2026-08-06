@@ -153,6 +153,12 @@
       "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents, taken as the input device's whole gate capacitance. It OVERSTATES what a driver sees — the feedback holds this device's current, so its gate-source voltage barely moves and most of the gate-source capacitance is bootstrapped away. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_in",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — ONE stacked branch: the feedback device reuses the input device's current rather than drawing its own, so the supply pays for it once. A realization that biases the output node with a source of its own adds that current on top. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -189,5 +195,5 @@
       "note": "the feedback device stays saturated: its drain is the output node and its source is at ground, so the output level IS its drain-source voltage"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

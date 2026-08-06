@@ -104,6 +104,12 @@
       "expr": "cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings. The drain sits at the supply, so there is no Miller multiplication to miss here; what there is instead is bootstrapping — the source follows the gate to within a few percent, taking most of $C_{GS}$ out of the driver's way, so this row OVERSTATES what the driver sees. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_bias",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the one branch these rows model, set by the bias source under the follower. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -149,5 +155,5 @@
       "note": "the biasing vgs_est should match the reported vgs; retune it if this trips"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

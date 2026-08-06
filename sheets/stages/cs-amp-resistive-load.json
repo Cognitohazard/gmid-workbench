@@ -110,6 +110,12 @@
       "expr": "cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "id",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -155,5 +161,5 @@
       "note": "the biasing V_out estimate should match the actual VDD - I*R_load; retune V_out or R_load if this trips"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

@@ -205,6 +205,12 @@
       "expr": "cm_p_max - cm_n_min",
       "unit": "V",
       "note": "width of the both-on window; positive means the NMOS and PMOS active ranges overlap for continuous rail-to-rail operation"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_n + I_p",
+      "unit": "A",
+      "note": "estimate: quiescent supply current at mid-supply, which is the worst case — both pairs are live there, and one of them shuts off as the common mode approaches either rail. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -225,5 +231,5 @@
       "note": "the total transconductance swings by this ratio across the CM range; constant-gm control (current switching to hold gm_n + gm_p constant) is the standard fix and is a simulation-level technique out of scope here"
     }
   ],
-  "provide": ["gm_min", "gm_mid", "gm_max"]
+  "provide": ["gm_min", "gm_mid", "gm_max", "I_q"]
 }

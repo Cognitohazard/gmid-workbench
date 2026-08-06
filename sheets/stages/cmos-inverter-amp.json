@@ -212,6 +212,12 @@
       "expr": "n__cgg + p__cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents. Both gates are driven together, so both gate capacitances load the driver. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it — and here the drain swings against the gate, so that omission is at its worst. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_bias",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the single inverting branch, with both devices stacked on the one current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -267,5 +273,5 @@
       "note": "combined gm over the total output capacitance"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

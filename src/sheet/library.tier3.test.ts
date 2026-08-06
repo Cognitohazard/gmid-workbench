@@ -152,6 +152,16 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
   });
 
+  it('the supply carries the two folding branches, and the tail current runs through them', () => {
+    // Only the two folding current sources sit on the supply rail, so what VDD delivers is
+    // 2 × 30 µA. The tail is not a third branch: it is drawn down THROUGH those sources, so
+    // the row is 2·I_branch. The cross-check is the other end of the circuit — everything
+    // reaching ground is the tail plus both fold currents, I_tail + 2·I_fold = 20 + 2 × 20 µA,
+    // and KCL requires the two to be the same 60 µA.
+    expect(relErr(res.values.I_q, 2 * 30e-6)).toBeLessThan(1e-9);
+    expect(relErr(res.values.I_q, 20e-6 + 2 * iFold)).toBeLessThan(1e-9);
+  });
+
   it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
     expect(res.values.CM_in).toBeCloseTo(1.05, 5);
   });
@@ -174,6 +184,12 @@ describe('tier-3 goldens: current-mirror OTA', () => {
   it('GBW and slew carry the mirror ratio K_m exactly', () => {
     expect(relErr(res.values.GBW, (2 * gmIn) / (TWO_PI * CL))).toBeLessThan(1e-9);
     expect(relErr(res.values.SR, (2 * 20e-6) / CL)).toBeLessThan(1e-9);
+  });
+
+  it('K_m is paid for out of the supply: the input branch plus two K_m-scaled output branches', () => {
+    // The mirror ratio buys GBW and slew above at a current price the gain row never shows:
+    // I_tail + 2·(K_m·I_tail/2) = I_tail·(1 + K_m) = 60 µA at the shipped K_m of 2.
+    expect(relErr(res.values.I_q, 20e-6 * 3)).toBeLessThan(1e-9);
   });
 
   it('DC gain is K_m-independent: gain = (gm/ID_in)·(VA + V_out)/2 for the matched output pair', () => {
@@ -218,6 +234,10 @@ describe('tier-3 goldens: symmetrical OTA', () => {
     expect(relErr(res.values.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
   });
 
+  it('the supply current matches the current-mirror OTA form, I_tail·(1 + K_m)', () => {
+    expect(relErr(res.values.I_q, 20e-6 * 3)).toBeLessThan(1e-9);
+  });
+
   itIsOneInputGate(res);
 
   it('PM pays the PMOS node as a FULL pole and the intermediate NMOS node as a DOUBLET', () => {
@@ -247,6 +267,12 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
 
   it('GBW follows from the input gm (boosting lifts gain, not bandwidth)', () => {
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
+  });
+
+  it('the boosters cost supply current the main branch never sees: one per cascode polarity', () => {
+    // 20 µA main branch + 2 × 5 µA of booster tail. The factor of two is the topology claim —
+    // the rows model an amplifier on the NMOS cascode and another on the PMOS cascode.
+    expect(relErr(res.values.I_q, 20e-6 + 2 * 5e-6)).toBeLessThan(1e-9);
   });
 
   it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {

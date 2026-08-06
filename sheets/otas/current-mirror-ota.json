@@ -339,6 +339,12 @@
       "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_tail*(1 + K_m)",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the input branch at the tail current plus the two mirrored output branches, each carrying K_m times half the tail. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -398,5 +404,5 @@
       "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

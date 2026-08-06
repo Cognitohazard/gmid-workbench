@@ -347,6 +347,12 @@
       "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I1 + I2",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the first-stage tail plus the output branch. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -423,5 +429,5 @@
       "note": "the stage-2 gate sits at V1 = VDD - |vgs_ld1|, so stage 2 carries its intended current only when its own |vgs| at (I2, gm_id_s2) matches the mirror diode drop — the classic W/L-ratio condition. Retune gm_id_s2 or I2 until these agree, or the second stage sits at a different current than the sheet assumes"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

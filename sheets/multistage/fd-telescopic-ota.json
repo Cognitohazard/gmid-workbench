@@ -344,10 +344,10 @@
       "note": "differential output swing = twice the single-ended range left after the four stacked cascode vdsat drops and the tail/safety margin"
     },
     {
-      "name": "I_total",
+      "name": "I_q",
       "expr": "I_tail + I_cmfb",
       "unit": "A",
-      "note": "total supply current including the CMFB network (the CMFB loop itself is out of scope)"
+      "note": "estimate: quiescent supply current — the tail plus the CMFB network's budget (the CMFB loop itself is out of scope). The datasheet line for comparing designs; no rule reads it"
     },
     {
       "name": "vn_in",
@@ -420,5 +420,5 @@
       "note": "PMOS load saturated across its node drop"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

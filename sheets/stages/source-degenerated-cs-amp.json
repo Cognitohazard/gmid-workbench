@@ -112,6 +112,12 @@
       "expr": "cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings: the inverting drain would multiply its share, while the degenerated source follows PART of the gate swing — the fraction 1 - 1/loop, about a third at these defaults — and bootstraps that much of $C_{GS}$ away. The two corrections pull opposite ways and neither is computable from this data. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_bias",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the one branch these rows model; the degeneration resistor carries the same current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -141,5 +147,5 @@
       "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

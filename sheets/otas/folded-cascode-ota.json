@@ -407,6 +407,12 @@
       "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "2*I_branch",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — both folding current sources, which are the only devices sitting on the supply rail. The tail current is not a third branch: it is drawn down THROUGH those sources and returned to ground by the tail device, so 2*I_branch already contains it and equals the other way of writing the same number, I_tail + 2*I_fold. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -507,5 +513,5 @@
       "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

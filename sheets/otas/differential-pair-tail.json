@@ -243,6 +243,12 @@
       "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_tail",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the tail is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -311,5 +317,5 @@
       "note": "the claimed high edge, proven the same way; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

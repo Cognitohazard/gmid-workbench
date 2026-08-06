@@ -208,6 +208,12 @@
       "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents — the input device's gate capacitance. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_bias",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the one branch these rows model; the cascode and the load sit in it and carry the same current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -261,5 +267,5 @@
       "note": "input gm over the load capacitance"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

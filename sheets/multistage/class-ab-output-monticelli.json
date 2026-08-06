@@ -201,5 +201,5 @@
       "note": "NMOS output device saturated at the quiescent output level"
     }
   ],
-  "provide": ["Rout"]
+  "provide": ["Rout", "I_q"]
 }

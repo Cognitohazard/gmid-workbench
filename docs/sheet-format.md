@@ -517,6 +517,13 @@ contract is a naming convention plus the declaration.
   follows the gate (a follower's bootstrapped input) it is instead an over-estimate. Each
   sheet's note states its direction — and `cgg_in` never appears in a hard rule.
 - **`Ron`** — a switch's on-resistance, where that is the interface.
+- **`I_q`** — the quiescent supply current as the sheet's own rows model the topology, which
+  is the datasheet line one design is compared against another by. Estimate-grade like
+  `cgg_in`: the note says which branches are counted (and, where the realization could differ
+  — a pseudo-differential copy, a common mode that shuts one pair off — which reading it is),
+  and it never appears in a rule. A sheet whose supply current is the designer's knob rather
+  than a consequence publishes that PARAMETER under the name instead of adding a row; the
+  quantity has one definition either way.
 
 Loading expectations follow one rule: **state the claim on a quantity the sheet actually
 owns.** A sheet that models its load (a drain resistor, a `gds_load_est`) already folds

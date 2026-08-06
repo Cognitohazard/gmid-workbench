@@ -400,10 +400,10 @@
       "note": "differential output swing = twice the single-ended range set by the two output-device saturation voltages (the fully differential swing doubling)"
     },
     {
-      "name": "I_total",
+      "name": "I_q",
       "expr": "2*I2 + I1 + I_cmfb",
       "unit": "A",
-      "note": "total supply current: two stage-2 branches, the stage-1 tail, and the CMFB network"
+      "note": "estimate: quiescent supply current — the two stage-2 branches, the stage-1 tail, and the CMFB network's budget. The datasheet line for comparing designs; no rule reads it"
     },
     {
       "name": "cgg2",
@@ -484,5 +484,5 @@
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the stage-1 output level V1 that the stage-2 gate sets"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }

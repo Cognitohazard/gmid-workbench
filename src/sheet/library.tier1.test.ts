@@ -39,6 +39,9 @@ describe('tier1 goldens: CS amp, resistive load', () => {
     expect(res.bind?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.id, id)).toBeLessThan(1e-9);
+    // Supply current is that derived branch current — an OUTPUT of the sizing here, since the
+    // bandwidth spec fixes gm and the inversion choice divides it down.
+    expect(relErr(res.values.I_q, id)).toBeLessThan(1e-9);
   });
 
   it('gain is gm into the load resistor parallel with 1/gds', () => {
@@ -71,6 +74,9 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
   it('binds the input gm exactly from the spec', () => {
     expect(res.bind?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
+    // The branch current follows from that gm and the inversion choice, and is what the supply
+    // pays — the load sits in the same branch and carries no current of its own.
+    expect(relErr(res.values.I_q, gm / 12)).toBeLessThan(1e-9);
   });
 
   it('input/load transconductance ratio is the gm/ID ratio (equal currents)', () => {

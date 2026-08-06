@@ -81,6 +81,8 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     // Composition golden on cgg_in: the input child does not expose its sized width, so what is
     // pinned is WHICH gate the row reads — one input device, per input terminal.
     expect(res.values.cgg_in).toBe(res.values.in__cgg);
+    // Supply current is the stage-1 tail plus the single-ended output branch: 20 µA + 60 µA.
+    expect(relErr(res.values.I_q, 20e-6 + 60e-6)).toBeLessThan(1e-9);
   });
 });
 
@@ -110,6 +112,9 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     // Composition golden on cgg_in: the input child does not expose its sized width, so what is
     // pinned is WHICH gate the row reads — one input device, per input terminal.
     expect(res.values.cgg_in).toBe(res.values.in__cgg);
+    // Cascode compensation changes where the compensation current flows, not what the two
+    // branches draw: the same 20 µA tail plus 60 µA output branch as the Miller version.
+    expect(relErr(res.values.I_q, 20e-6 + 60e-6)).toBeLessThan(1e-9);
   });
 });
 
@@ -125,6 +130,12 @@ describe('tier4 goldens: Rail-to-rail input stage', () => {
 
   it('matched complementary pairs give the classic gm ratio of 2', () => {
     expect(relErr(res.values.gm_ratio, 2)).toBeLessThan(1e-9);
+  });
+
+  it('the supply pays for both pairs, which is the mid-supply worst case', () => {
+    // Both tails, 20 µA each. The stage only draws this much where both pairs conduct; toward
+    // either rail one of them shuts off, so the row is deliberately the pessimistic reading.
+    expect(relErr(res.values.I_q, 20e-6 + 20e-6)).toBeLessThan(1e-9);
   });
 });
 
@@ -180,6 +191,13 @@ describe('tier4 goldens: Super source follower', () => {
     expect(relErr(res.values.level_shift, VGS_GMID10_L05)).toBeLessThan(1e-2);
   });
 
+  it('the loop costs no extra supply current: both devices are one stacked branch', () => {
+    // The feedback device REUSES the follower's current rather than drawing its own — it sits
+    // under the output node in the same stack — so the supply pays 50 µA once. Only a
+    // realization that biases the output node with a source of its own adds current on top.
+    expect(relErr(res.values.I_q, 50e-6)).toBeLessThan(1e-9);
+  });
+
   it('input capacitance is one input gate at the width the bind landed on', () => {
     expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, 0.5e-6))).toBeLessThan(1e-9);
   });
@@ -220,6 +238,13 @@ describe('tier4 goldens: Flipped voltage follower', () => {
     expect(res.values.Rout).toBeLessThan(res.values.Rout_plain / 10);
   });
 
+  it('the shunt feedback device shares the input branch, so the supply pays 50 µA once', () => {
+    // The bias source feeds node X, the input device carries that current down to the output
+    // node, and the feedback device reuses it on the way to ground: one stacked branch, one
+    // supply current. Biasing the output node separately is what would add current on top.
+    expect(relErr(res.values.I_q, 50e-6)).toBeLessThan(1e-9);
+  });
+
   it('branch headroom is the two stacked saturation voltages', () => {
     // Unmoved by the node derivation: vdsat is a function of vgs and L in the demo model, and
     // neither device's inversion level changed.
@@ -258,7 +283,7 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
   });
 
   it('the supply-current line item adds the CMFB budget exactly', () => {
-    expect(relErr(res.values.I_total, 40e-6 + 10e-6)).toBeLessThan(1e-9);
+    expect(relErr(res.values.I_q, 40e-6 + 10e-6)).toBeLessThan(1e-9);
   });
 
   it('differential swing is twice the range left after four cascode vdsat drops', () => {
@@ -332,7 +357,7 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
   });
 
   it('total supply current is the two stage-2 branches, the tail, and the CMFB budget', () => {
-    expect(relErr(res.values.I_total, 2 * 60e-6 + 20e-6 + 10e-6)).toBeLessThan(1e-9);
+    expect(relErr(res.values.I_q, 2 * 60e-6 + 20e-6 + 10e-6)).toBeLessThan(1e-9);
     // FD output swing doubles the single-ended range set by the two output vdsats.
     const swing = 2 * (1.8 - vdsatDemo(VGS_GMID12_L05, 0.5e-6) - vdsatDemo(VGS_GMID8_L05, 0.5e-6));
     expect(relErr(res.values.swing_diff, swing)).toBeLessThan(1e-2);

@@ -42,7 +42,6 @@ import {
   roMirrored,
   stage2Rout,
 } from './library.fixtures';
-
 const LIBRARY = loadLibrary();
 
 // One evaluation of the whole library on the demo device, shared by every check below that
@@ -175,9 +174,11 @@ describe('sheet library: vetting lints', () => {
 //
 // The reserved names are the terminals a composing parent reaches for: Rout/Rin the impedance it
 // loads or is loaded by, cgg_in the capacitance one input terminal presents, Ron the resistance a
-// switch inserts. A block sheet publishes exactly the reserved names it has rows for — both
-// directions, so adding the row without the provide entry (or the reverse) fails.
-const RESERVED_PORTS: readonly string[] = ['Rout', 'Rin', 'cgg_in', 'Ron'];
+// switch inserts, I_q the quiescent supply current. A block sheet publishes exactly the reserved
+// names it carries — both directions, so adding the row without the provide entry (or the reverse)
+// fails. I_q is the one reserved name a sheet may instead own as a PARAMETER, where the supply
+// current is the designer's knob rather than a consequence, so the derivation below reads both.
+const RESERVED_PORTS: readonly string[] = ['Rout', 'Rin', 'cgg_in', 'Ron', 'I_q'];
 
 // A sheet under applications/ is the TOP of a composition: it consumes blocks and nothing
 // consumes it, so a reserved name it computes is an internal number and publishing it would be
@@ -198,8 +199,9 @@ describe('sheet library: the published interface', () => {
   it('every sheet publishes exactly the interface the convention gives it', () => {
     // Accepted residual: deleting a reserved-name ROW and its provide entry together still
     // satisfies the rule, since both sides move at once. The per-sheet Rout goldens in the
-    // tier suites are the mitigation — they read the row by name and fail when it goes.
-    const sorted = (xs: readonly string[]): string[] => [...xs].sort();
+    // tier suites are the mitigation — they read the row by name and fail when it goes. For
+    // I_q the residual is closed outright, by the named-set test further down.
+    const sorted = (xs: Iterable<string>): string[] => [...xs].sort();
     const actual: Record<string, string[]> = {};
     const expected: Record<string, string[]> = {};
     for (const { file, doc } of LIBRARY) {
@@ -208,8 +210,10 @@ describe('sheet library: the published interface', () => {
       // one that later grows a real Rout row is required to publish it like everyone else.
       const reserved = file.startsWith(CONSUMER_GROUP)
         ? []
-        : doc.rows.map((r) => r.name).filter((n) => RESERVED_PORTS.includes(n));
-      expected[file] = sorted([...(NAMED_INTERFACE[file] ?? []), ...reserved]);
+        : [...doc.rows.map((r) => r.name), ...doc.params.map((p) => p.name)].filter((n) =>
+            RESERVED_PORTS.includes(n),
+          );
+      expected[file] = sorted(new Set([...(NAMED_INTERFACE[file] ?? []), ...reserved]));
     }
     expect(actual).toEqual(expected);
     // A stale key in the hand map names a sheet that no longer exists.
@@ -241,6 +245,9 @@ describe('exemplar goldens: CS amp, current-source load', () => {
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.id, gm / 12)).toBeLessThan(1e-9);
     expect(res.bind?.bias?.vds).toBe(0.9);
+    // The supply-current line is that same derived branch current: on a sheet bound from a
+    // bandwidth spec, what it costs to run is an OUTPUT of the sizing rather than a knob.
+    expect(relErr(res.values.I_q, gm / 12)).toBeLessThan(1e-9);
   });
 
   it('gain matches the demo model: Av = (gm/id)·(VA + vds)/2 for equal branches', () => {

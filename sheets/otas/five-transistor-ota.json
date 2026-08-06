@@ -285,6 +285,12 @@
       "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+    },
+    {
+      "name": "I_q",
+      "expr": "I_tail",
+      "unit": "A",
+      "note": "estimate: quiescent supply current — the tail current is the whole of it, because the mirror load carries that same current down from the supply. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "rules": [
@@ -354,5 +360,5 @@
       "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the interior is monotone for the saturation mechanisms here, and the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in"]
+  "provide": ["Rout", "cgg_in", "I_q"]
 }
