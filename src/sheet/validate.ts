@@ -10,15 +10,18 @@
 import type { QAWarning } from '../types';
 import { compileExpr, metaScalars } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
+import { PINNED_AT_A_RANGE_END } from './coverage';
 import {
   BIAS_AXES,
   EDGE_SEP,
   PATH_SEP,
+  blockPath,
   idSepProblem,
   MAX_TORN_PARAMS,
   MAX_USE_DEPTH,
   docExpressions,
   engineSolved,
+  pinned,
   torn,
   pinProblem,
   PROVIDE_SEP,
@@ -30,6 +33,7 @@ import {
   prefixUseWarning,
   type SheetDoc,
   type SheetUse,
+  type SheetVar,
 } from './types';
 
 /** Whether an expression parses at all — distinct from namesOf, whose empty result also
@@ -303,6 +307,170 @@ function provideCoverage(doc: SheetDoc): QAWarning[] {
   return out;
 }
 
+/** The names an engine-solved param's own defining relation reads: a pinned param depends on
+ *  both sides of its relation, a torn one on the name it solves for. */
+function solvedDeps(p: SheetVar): readonly string[] {
+  if (pinned(p)) return [...namesOf(p.pin.lhs), ...namesOf(p.pin.rhs)];
+  return torn(p) ? [p.solveFor] : [];
+}
+
+/** A list of bind keys as a warning spells them. */
+const quoted = (ks: string[]): string => ks.map((k) => `"${k}"`).join(', ');
+
+/** One bind of a tree, with the names an edge's overrides can reach at the point that bind is
+ *  evaluated. `path` spells the block the way warnings spell it: `bind` for the sheet's own
+ *  device, the use path for anything below. */
+interface ReachedBind {
+  path: string;
+  bind: NonNullable<SheetDoc['bind']>;
+  reached: ReadonlySet<string>;
+}
+
+/**
+ * Every bind in the tree paired with the names one edge MOVES at it — the params the edge sets,
+ * plus everything the sheet derives from them: rows reading one, engine-solved params whose
+ * defining relation reads one (a pinned node voltage is the case that matters — every containment
+ * edge in the library moves one), child params a use overrides from a moved expression, and the
+ * provides of a child whose own value moved. Closed to a fixed point within each document, and a
+ * single in-document-order pass over the uses is that fixed point across the tree, because a use
+ * override may only reference EARLIER siblings' provides.
+ *
+ * A reachability question, not an evaluation: it says which authored expressions could read
+ * something different at the range end, which is all the coverage checks below need. It
+ * UNDER-approximates in two known places, both of them on documents that are already errors
+ * here: the in-order argument holds because evaluation refuses a forward reference, and a
+ * composition nested past MAX_USE_DEPTH is skipped whole. An advisory check that says nothing
+ * about a broken document is the right way round — a warning that fires on correct sheets is
+ * worth less than no warning at all.
+ */
+function reachedBinds(
+  doc: SheetDoc,
+  moved: readonly string[],
+  path: string,
+  out: ReachedBind[],
+  depth: number,
+): ReadonlySet<string> {
+  const reached = new Set(moved);
+  const sources: readonly (readonly [string, readonly string[]])[] = [
+    ...doc.rows.map((r) => [r.name, namesOf(r.expr)] as const),
+    ...doc.params.filter(engineSolved).map((p) => [p.name, solvedDeps(p)] as const),
+  ];
+  const close = (): void => {
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const [name, deps] of sources) {
+        if (!reached.has(name) && deps.some((n) => reached.has(n))) {
+          reached.add(name);
+          grew = true;
+        }
+      }
+    }
+  };
+  close();
+  for (const use of doc.uses ?? []) {
+    if (!use.doc || depth >= MAX_USE_DEPTH) continue;
+    const seed = Object.entries(use.params ?? {})
+      .filter(([, e]) => typeof e === 'string' && namesOf(e).some((n) => reached.has(n)))
+      .map(([k]) => k);
+    const inner = reachedBinds(use.doc, seed, `${path}${use.name}${PATH_SEP}`, out, depth + 1);
+    // A block publishes two kinds of scalar, and the range end moves them for different reasons.
+    // Its rows and params move when the closure above says they do. Its DEVICE quantities — the
+    // vgs it settled at, the gm that came out — move whenever anything feeding its sizing moved,
+    // whatever the inputs happened to be called; a sibling biased off one of those (`VDD -
+    // ref__vgs`) is how the library writes a stack, so stopping at the block boundary would make
+    // both checks below silent on the sheets they exist for. The geometry and the authored
+    // current are the exceptions: a range end holds W and L fixed by construction, and an
+    // authored `id` moves only when its own expression does, which the closure already covers.
+    const inputs = use.doc.bind;
+    const sizingMoved =
+      inputs !== undefined &&
+      Object.values(inputs).some(
+        (v) => typeof v === 'string' && namesOf(v).some((n) => inner.has(n)),
+      );
+    for (const key of use.doc.provide ?? [])
+      if (inner.has(key) || (sizingMoved && !PINNED_AT_A_RANGE_END.has(key)))
+        reached.add(joinProvide(use.name, key));
+    close();
+  }
+  // Pushed last, because a block's own bind evaluates after the children it composes.
+  if (doc.bind) out.push({ path: blockPath(path), bind: doc.bind, reached });
+  return reached;
+}
+
+/**
+ * What a containment edge cannot honestly claim about the design it re-measures. A coverage run
+ * holds the hardware the base run sized and re-settles the bias; these two warnings mark the
+ * places where an authored sheet takes that outside where it holds. Both are advisory: what
+ * the author wrote is legal, and which of the reading and the writing is wrong is theirs to
+ * decide.
+ */
+function coverageReach(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
+  for (const e of doc.edges ?? []) {
+    const name = e.name?.trim();
+    if (!name) continue; // shape errors are named above; this check needs a usable name
+    const binds: ReachedBind[] = [];
+    reachedBinds(doc, Object.keys(e.set ?? {}), '', binds, 0);
+    for (const { path, bind, reached } of binds) {
+      const readsMoved = (expr: unknown): boolean =>
+        typeof expr === 'string' && namesOf(expr).some((n) => reached.has(n));
+      const where = path === 'bind' ? "this sheet's own bind" : `the bind at "${path}"`;
+      if (bind.W !== undefined) {
+        // A width-first bind is left exactly as authored at a range end, which makes two
+        // different things possible, and an author sent to the wrong one of them looks in the
+        // wrong place. If the GEOMETRY moves, the range end is not holding the design at all —
+        // it is a different transistor, and the report's claim is simply untrue. If the bias
+        // reach is elsewhere, the transistor is right and its operating point is the question:
+        // the authored spec still sets it there, which reproduces a gate tie only while vds is
+        // the one thing that moved; naming the reach is all the engine can honestly do.
+        //
+        // Hence `vds` is excluded here unconditionally — a drain-only reach never warns. Holding a
+        // gm/ID across a drain move is exact on the demo model and close on measured data (see the
+        // width-first case in pinHardware), close enough that warning on every range claim in the
+        // library would say nothing an author could act on.
+        const via = Object.keys(bind).filter((k) => k !== 'vds' && readsMoved(bind[k as never]));
+        const geometry = via.filter((k) => k === 'W' || k === 'L');
+        if (geometry.length)
+          out.push({
+            rule: 'sheet-edge',
+            severity: 'warning',
+            message:
+              `edge "${name}" moves the ${quoted(geometry)} of ${where} — the range end sizes a ` +
+              `DIFFERENT transistor there, so what it reports is not this design measured at ` +
+              `another condition`,
+            location: name,
+          });
+        const bias = via.filter((k) => k !== 'W' && k !== 'L');
+        if (bias.length)
+          out.push({
+            rule: 'sheet-edge',
+            severity: 'warning',
+            message:
+              `edge "${name}" reaches ${where}, which fixes a width, through ${quoted(bias)} — a ` +
+              `width-first bind keeps its authored operating-point spec at a range end, which ` +
+              `holds the same device only when the end moves vds alone`,
+            location: name,
+          });
+      } else if (readsMoved(bind.id)) {
+        // The authored current IS the hardware description at a range end (a mirror ratio, a
+        // tail split, a KCL difference), so it is re-evaluated there on purpose. A current that
+        // tracks the condition being swept is a different thing wearing that shape: it re-designs
+        // the device at the end instead of re-biasing it.
+        out.push({
+          rule: 'sheet-edge',
+          severity: 'warning',
+          message:
+            `edge "${name}" reaches the current expression of ${where} — a range end ` +
+            `re-evaluates that current as the design's own wiring, so a current that tracks the ` +
+            `swept condition re-sizes the device there instead of re-biasing it`,
+          location: name,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /** Surface authoring problems as warnings; never throws, never mutates the doc. Structural
  *  and device-independent — identifier resolution against the live values is eval's job.
  *  Recurses into composed children, attributing each child's findings to its use site. */
@@ -508,6 +676,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         }
       }
     }
+    out.push(...coverageReach(doc));
   }
 
   // A diode connection already fixes vds; declaring both means one of them is a fiction, and

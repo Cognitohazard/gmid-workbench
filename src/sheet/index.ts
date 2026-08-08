@@ -130,8 +130,18 @@ function worstBy(
  * null: the chart clips it at the bottom, so an edge-driven feasibility flip ALWAYS has an
  * on-chart cause. A standing edge with nothing left to measure reads its verdict as
  * 0 / -MARGIN_PCT_CAP.
+ *
+ * An edge that was NOT CHECKED reads null — a gap in the curve, the same shape a rule that could
+ * not be computed takes. It is not a bottom clip, because nothing about the claimed range was
+ * measured there: a sample only skips its range checks when its own evaluation did not complete,
+ * which is not an edge finding, and painting one would put a cause on the chart the engine never
+ * established. Such a sample is infeasible with no curve to explain it, exactly as a sample whose
+ * solve fails on a sheet claiming no range at all has always been. The gap also stays out of the
+ * picker's objective, which would otherwise flatten to the floor across the whole region a search
+ * exists to climb out of.
  */
-function edgeMargin(e: SheetEdgeReport): number {
+function edgeMargin(e: SheetEdgeReport): number | null {
+  if (e.state === 'not-checked') return null;
   if (e.error !== undefined) return -MARGIN_PCT_CAP;
   const found = worstBy(treeRuleResults(e), isMeasurable);
   const worst = found === undefined ? null : clampMargin(found.marginPct);
@@ -221,7 +231,9 @@ export function sweepSheet(
   // margin per sample. Without it a cell can flip infeasible with no on-chart cause — the
   // same gap collectTreeRules closes for descendant rules. Held in a parallel array
   // (res.edges mirrors doc.edges by index), so the sample loop needs no id matching.
-  const edgeRules: SheetSweepRule[] = (r.doc.edges ?? []).map((e) => ({
+  // Array.isArray, not truthiness, for the reason evaluateSheet's edges guard gives (eval.ts) — a
+  // malformed persisted doc must degrade to a sweep with no coverage curves, not throw out of .map.
+  const edgeRules: SheetSweepRule[] = (Array.isArray(r.doc.edges) ? r.doc.edges : []).map((e) => ({
     id: e.name + EDGE_SEP,
     kind: 'requirement',
     marginPct: [],
@@ -229,6 +241,10 @@ export function sweepSheet(
   }));
   const x: number[] = [];
   const feasible: boolean[] = [];
+  // Each sample's coverage answer, carried through as data. Built only for a sheet that claims a
+  // range: on one that claims none, "no design here" is not a fact the sweep can state, and an
+  // array of nulls would say the opposite (see SheetSweep.covers).
+  const covers: (boolean | null)[] | undefined = edgeRules.length ? [] : undefined;
 
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
@@ -247,8 +263,16 @@ export function sweepSheet(
       const rep = res.edges?.[j];
       edgeRules[j].marginPct.push(rep ? edgeMargin(rep) : null);
     }
+    covers?.push(res.covers ?? null);
   }
-  return { param, unit: v.unit ?? '', x, rules: [...rules, ...edgeRules], feasible };
+  return {
+    param,
+    unit: v.unit ?? '',
+    x,
+    rules: [...rules, ...edgeRules],
+    feasible,
+    ...(covers ? { covers } : {}),
+  };
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */

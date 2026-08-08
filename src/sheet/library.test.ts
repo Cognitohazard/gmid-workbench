@@ -398,12 +398,12 @@ describe('exemplar goldens: 5T OTA', () => {
     }
   });
 
-  it('the claimed CM range is proven at its ENDS by containment edges', () => {
-    // Structure golden: the sheet re-evaluates at CM_dc = CM_lo and CM_hi on every run,
-    // each edge re-solving the tail node from the full bracket. The landed nodes must
-    // bracket the base solve (CM_in is monotone in V_tail), and the linearized reach
-    // guardrails the edges replaced must stay gone. Edge FEASIBILITY on the demo device
-    // is deliberately not asserted — budgets are tuned for real tables.
+  it('the claimed CM range is checked at its ENDS by containment edges', () => {
+    // Structure golden: the sheet re-evaluates at CM_dc = CM_lo and CM_hi on every run, each
+    // edge re-solving the tail node from the full bracket on the design the base run produced.
+    // The landed nodes must bracket the base solve (CM_in is monotone in V_tail), and the
+    // linearized reach guardrails the edges replaced must stay gone. Whether the demo device
+    // COVERS those ends is deliberately not asserted — budgets are tuned for real tables.
     expect(res.edges?.map((e) => e.name)).toEqual(['cm-lo', 'cm-hi']);
     const [lo, hi] = res.edges!;
     expect(lo.solved.V_tail).toBeLessThan(res.values.V_tail);

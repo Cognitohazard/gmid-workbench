@@ -403,9 +403,11 @@ export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
  * A containment edge: one more full evaluation of THIS doc with the named params' values
  * overridden — each `set` expression evaluated against the base result — whose hard verdict
  * gates the sheet like any rule. The canonical use is the claimed common-mode range:
- * `{name: "cm-lo", set: {CM_dc: "CM_lo"}}` proves the low edge closes EXACTLY (its own pin
- * solve from the full authored bracket, its own children) where a linearized guardrail could
- * only estimate it. Edges prove the EDGES, not the interior — the sweep remains the interval
+ * `{name: "cm-lo", set: {CM_dc: "CM_lo"}}` asks whether the design the base run produced still
+ * holds at the low end, EXACTLY (its own pin solve from the full authored bracket, its own
+ * children) where a linearized guardrail could only estimate it. The devices are held at the
+ * geometry the base run sized and only the bias re-settles, so the answer is about that design
+ * and no other. Edges check the ENDS, not the interior — the sweep remains the interval
  * authority. A composed child's edges are not evaluated; the parent owns range claims.
  */
 export interface SheetEdge {
@@ -432,6 +434,12 @@ export function idSepProblem(name: string): string | undefined {
   if (name.includes(PATH_SEP)) return PATH_SEP;
   return undefined;
 }
+
+/** How a block names itself in a report or a warning: `bind` for the sheet's own device, the
+ *  trimmed use path for anything below. One spelling, because a reader is meant to match a
+ *  report's block against the warning that names the same one. */
+export const blockPath = (path: string): string =>
+  path === '' ? 'bind' : path.slice(0, -PATH_SEP.length);
 
 /** A sheet document — the authored model the GUI edits and persists verbatim. A leaf
  *  has no `uses`; a composed sheet embeds child blocks and references their `provide`d
@@ -523,7 +531,7 @@ export interface SheetChildReport {
 
 /**
  * One containment edge's evaluated outcome: the numeric overrides the edge resolved to
- * (`set` — WHICH point was proven; the authored side may be an expression), its own rule
+ * (`set` — WHICH point was checked; the authored side may be an expression), its own rule
  * results (and children, so a failure below the top doc keeps its path), the engine-solved
  * params where the edge landed (e.g. V_tail at CM_lo — empty when the run did not stand,
  * so a bracket end is never reported as a landing), the run's own warnings VERBATIM (a
@@ -534,14 +542,43 @@ export interface SheetChildReport {
  */
 export interface SheetEdgeReport {
   name: string;
+  /** Equivalent to `state === 'covers'` on an edge that ran. On a `not-checked` report it is
+   *  `false` as the fail-closed DEFAULT, not as a finding — nothing was measured — so a consumer
+   *  deciding how to describe an edge must read `state`, which is why this field predates it and
+   *  `state` exists. Kept because the aggregate `SheetResult.feasible` folds it. */
   feasible: boolean;
+  /**
+   * Which of THREE outcomes this edge reached, never two. `covers` / `does-not-cover` are
+   * verdicts about a design that was checked; `not-checked` says the question was never put,
+   * because the base run produced no design to check (see `stands`). Kept apart from `error`
+   * deliberately: the ordinary way not to cover is a solve that fails at the endpoint, so
+   * `error` is already spoken for by "checked, and it broke" — folding "we did not check" into
+   * the same field would make the two unreadable at every consumer that branches on it.
+   *
+   * A `not-checked` report carries no `error` and no outcomes: nothing ran, so there is nothing
+   * to report but the state. Several consumers still test the state ALONGSIDE `error` rather
+   * than relying on that — belt and braces on an invariant one edit could break, at a site where
+   * breaking it turns "we did not look" back into "we looked and it failed".
+   */
+  state: SheetEdgeState;
   set: Record<string, number>;
   rules: RuleResult[];
   children?: SheetChildReport[];
   solved: Record<string, number>;
   warnings: QAWarning[];
   error?: string;
+  /** Blocks whose bind named neither a width nor a current, so this run held the base current
+   *  by ASSUMPTION — an ideal source, since the sheet never said where the current comes from.
+   *  Paths as warnings spell them (`bind` for the sheet's own device, the use path for a
+   *  child). Reported rather than warned, like BindReport.assumed: it is a property of what
+   *  the author wrote down, and the fix is to author the current explicitly. */
+  assumedSource?: string[];
 }
+
+/** An edge's outcome. `not-checked` is a first-class answer, not an absence: an instance-level
+ *  question asked of a design that does not exist has no honest verdict, and inventing one
+ *  (either way) is what this state exists to prevent. */
+export type SheetEdgeState = 'covers' | 'does-not-cover' | 'not-checked';
 
 export type RuleStatus = 'pass' | 'amber' | 'fail' | 'na';
 
@@ -585,6 +622,12 @@ export interface RuleResult {
 export interface BindReport {
   ok: boolean;
   W: number;
+  /** The length the bind resolved to — what the sizing was ASKED for (a length off the table's
+   *  L hull is clamped by the sizer, which says so in its own warning). Reported beside W
+   *  because the two together are the transistor: a caller holding a design fixed while its
+   *  bias moves needs the geometry, and re-evaluating the authored L expression at the new
+   *  bias is exactly what "fixed" forbids. */
+  L: number;
   vgs: number;
   id: number;
   /** The operating-point coordinates the table was sliced at before sizing (per bias
@@ -621,7 +664,39 @@ export interface SheetResult {
   children?: SheetChildReport[];
   /** Present only when the doc declares containment edges (top-level evaluation only). */
   edges?: SheetEdgeReport[];
+  /**
+   * Whether the design this run produced still holds at every end of its claimed range —
+   * true only when every edge came back `covers`. ABSENT when the edges were not checked,
+   * which is the honest shape: an unanswered question is not a `false`, and a consumer that
+   * read one would report a range failure the engine never looked for. `feasible` keeps its
+   * aggregate meaning (this sheet's whole claim stands) and is unaffected by this field.
+   */
+  covers?: boolean;
 }
+
+/**
+ * Whether an evaluation produced numbers worth standing on — the ONE definition of "there is a
+ * design here", shared by the sensitivity readout (which will not difference around a point that
+ * is not one) and the coverage gate (which will not pin hardware to one). A hard rule FAILING is
+ * a perfectly good point: the signed margin is exactly the signal those callers want, and
+ * refusing the infeasible side would blind them precisely where a designer needs them. What does
+ * not stand is an evaluation that could not be COMPLETED: an error-severity diagnostic (which a
+ * bind that did not size already raises, and a failed pin raises through solveFailed), or a
+ * containment edge that was checked and could not be evaluated — an edge's failure is reported
+ * in its own `error` and never merged upward, so it needs its own clause. An edge that was
+ * SKIPPED says nothing about the point: it is skipped precisely because the point already failed
+ * this test, so reading it here would be circular.
+ */
+export function stands(res: SheetResult): boolean {
+  return !res.warnings.some((w) => w.severity === 'error') && !(res.edges ?? []).some(edgeBroke);
+}
+
+/** The edge was checked and could not be evaluated — a verdict about a design, as distinct
+ *  from `not-checked`, where nothing was measured at all. Named once rather than retyped at
+ *  each consumer: it is a two-field conjunction, and the site that gets its polarity wrong is
+ *  the site that turns "we did not look" back into "we looked and it failed". */
+export const edgeBroke = (e: SheetEdgeReport): boolean =>
+  e.state !== 'not-checked' && e.error !== undefined;
 
 /** Index one evaluation's rule outcomes under `prefix`, by the tree-key scheme the sweep's
  *  rule collection uses: a child's outcomes carry its use path (`cs.headroom`). */
@@ -644,7 +719,9 @@ export function indexTreeResults(
  *  An edge that did not stand contributes NOTHING: its rules were evaluated wherever its solve
  *  stopped, which is a design point the engine never landed on, so reading them as outcomes
  *  names a constraint that was measured on a phantom. The edge's own `error` is the finding
- *  there. */
+ *  there. An edge that was never checked contributes nothing for the plainer reason that it
+ *  has no outcomes at all — stated rather than left to the empty array, so the two reasons
+ *  stay tellable apart here as everywhere else. */
 export function treeRuleResults(res: {
   rules: readonly RuleResult[];
   children?: readonly SheetChildReport[];
@@ -653,7 +730,7 @@ export function treeRuleResults(res: {
   const byPath = new Map<string, RuleResult>();
   indexTreeResults(res.rules, res.children, '', byPath);
   for (const e of res.edges ?? [])
-    if (e.error === undefined)
+    if (e.state !== 'not-checked' && e.error === undefined)
       indexTreeResults(e.rules, e.children, `${e.name}${EDGE_SEP}`, byPath);
   return byPath;
 }
@@ -726,6 +803,13 @@ export interface SheetSweep {
   x: number[];
   rules: SheetSweepRule[];
   feasible: boolean[];
+  /**
+   * Each sample's `SheetResult.covers`, carried through rather than left to be inferred from a
+   * gap in an edge curve: `null` where the range checks were skipped because that sample produced
+   * no design. ABSENT — not an array of nulls — on a sheet that claims no range, so "no design
+   * here" is a fact only a sheet with edges can state, exactly as it is on a full result.
+   */
+  covers?: (boolean | null)[];
 }
 
 /**

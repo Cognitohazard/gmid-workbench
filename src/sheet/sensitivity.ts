@@ -13,6 +13,7 @@ import {
   choiceKnobs,
   EDGE_SEP,
   engineSolved,
+  stands,
   sweepable,
   treeRuleResults,
   withParams,
@@ -48,7 +49,8 @@ export const SENSITIVITY_REL_STEP = 1e-2;
  *
  * `rule` names the outcome the caller actually wants ranked, and it is a COST declaration as
  * much as a filter: containment edges are re-run per probe only when the named rule lives on one
- * (an edge-keyed id, `cm-lo@tail-saturated`). Without it every probe re-proves every range end —
+ * (an edge-keyed id, `cm-lo@tail-saturated`). Without it every probe re-checks coverage at every
+ * range end —
  * 2*(1 + edges) full evaluations per knob, dozens per click on a sheet with several claims — to
  * produce numbers about a rule at the top. The edge-free runs then carry no edge-keyed rules at
  * all, in the base as well as the probes, so nothing reads as an unmeasured NaN that was in fact
@@ -89,21 +91,6 @@ function select(doc: SheetDoc, names?: readonly string[]): Selected[] {
       };
     return { name, param: p };
   });
-}
-
-/**
- * Whether an evaluation produced numbers worth differencing. A hard rule FAILING is a perfectly
- * good point — the signed margin is exactly the signal being differentiated, and refusing the
- * infeasible side would blind the readout precisely where a designer needs it. What does not
- * stand is an evaluation that could not be completed: an error-severity diagnostic (which a
- * bind that did not size already raises), or a containment edge that never ran — an edge's
- * failure is reported in its own `error` and never merged upward, so it needs its own clause.
- */
-function stands(res: SheetResult): boolean {
-  return (
-    !res.warnings.some((w) => w.severity === 'error') &&
-    !(res.edges ?? []).some((e) => e.error !== undefined)
-  );
 }
 
 /** The same doc with its containment edges dropped — see SensitivityOptions.rule for why a
@@ -186,7 +173,7 @@ export function sheetSensitivities(
     );
   }
 
-  // Only a rule that lives ON an edge is worth re-proving every range end for; see
+  // Only a rule that lives ON an edge is worth re-checking coverage at every range end for; see
   // SensitivityOptions.rule.
   const probeDoc = opts.rule?.includes(EDGE_SEP) ? r.doc : withoutEdges(r.doc);
   const at = (over: Record<string, number>): SheetResult =>

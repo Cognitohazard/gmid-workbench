@@ -3,11 +3,11 @@
 // the wall-clock cap — the UI's default budget — is out of play and the search is a pure
 // function of the library and the spec.
 //
-// The goldens are deliberately behavioural rather than structural. Three of them exist because
-// a plan review measured the exact ways a picker of this shape lies: a spec matched by name
-// alone applies a noise DENSITY as an integrated budget; a sheet whose containment edge cannot
-// bracket reports "did not close within N evaluations" for a search that never ran; a back-off
-// that hits the author's slider floor reports the floor as if it were the design's answer.
+// The goldens are deliberately behavioural rather than structural. Three of them exist for the
+// measured ways a picker of this shape lies: a spec matched by name alone applies a noise DENSITY
+// as an integrated budget; a sheet whose containment edge cannot bracket reports "did not close
+// within N evaluations" for a search that never ran; a back-off that hits the author's slider
+// floor reports the floor as if it were the design's answer.
 
 import { describe, it, expect } from 'vitest';
 import { libraryEntries, loadLibrary, sheet, table, REFS } from '../sheet/library.fixtures';
@@ -15,6 +15,7 @@ import {
   runSheet,
   bindingConstraint,
   withParams,
+  type SheetDoc,
   type SheetRefEntry,
   type SheetVar,
 } from '../sheet';
@@ -240,7 +241,7 @@ describe('the search', () => {
     expect(c.verdict).toBe('closed');
     expect(c.specCoverage).toEqual({ consumed: 9, supplied: 9 });
     expect(Object.keys(c.knobs)).toEqual(['I_tail']);
-    expect(c.knobs.I_tail).toBeCloseTo(5.76875e-5, 12);
+    expect(c.knobs.I_tail).toBeCloseTo(5.9234375e-5, 12);
     expect(c.atRangeFloor).toEqual([]);
     // Every evaluation accounted for: 1 screening, then a first round that ranks all 7 knobs
     // (1 + 2 each) and scans the winner without finding a move, then a second round that reads
@@ -330,7 +331,7 @@ describe('the search', () => {
     expect(run()).toEqual(c);
   });
 
-  // The pair that makes the doctrine concrete, and the case the plan reviewer measured: ONE
+  // The pair that makes the doctrine concrete: ONE
   // sheet at ONE spec, closing or not depending only on which budget bounds it. Whatever the
   // clock-cut run reports is therefore a fact about the clock — so its cause must lead with
   // that, and its margin must never stand alone as the design's answer.
@@ -355,38 +356,32 @@ describe('the search', () => {
     expect(withClock.budgetExhausted).toBe(true);
     expect(withClock.cause).toContain('the search stopped when its budget ran out');
     expect(withClock.cause).toContain('the limits were 200 evaluations and 60 ms');
-    expect(withClock.cause).toContain('at the last point searched, cm-lo@offset-spec fails by');
+    expect(withClock.cause).toContain('at the last point searched, cm-hi@offset-spec fails by');
     // Not "cannot close": the same sheet and the same spec close when the clock is not the
     // thing bounding the search.
     expect(withClock.evals).toBeLessThan(withEvals.evals);
   });
 
   // The margin at a cut is an artifact OF the cut. Two budgets on one sheet and one spec give
-  // two different "fails by X%" numbers, ~4x apart, because the search stopped in two
+  // two different "fails by X%" numbers, ~3x apart, because the search stopped in two
   // different places. Neither may be read as the design's property — which is why both causes
   // lead with the stop rather than the number.
   it('never lets a margin quoted at a search cut stand as the design property', () => {
     const tight = pick('otas/folded-cascode-ota.json', {}, 30);
-    const looser = pick('otas/folded-cascode-ota.json', {}, 60);
+    const looser = pick('otas/folded-cascode-ota.json', {}, 80);
     expect(tight.verdict).toBe('did-not-close');
     expect(looser.verdict).toBe('did-not-close');
-    expect(tight.worstMargin?.marginPct).toBeCloseTo(-0.42, 2);
-    expect(looser.worstMargin?.marginPct).toBeCloseTo(-1.662, 2);
+    expect(tight.worstMargin?.marginPct).toBeCloseTo(-1.744, 2);
+    expect(looser.worstMargin?.marginPct).toBeCloseTo(-0.592, 2);
     for (const c of [tight, looser]) {
       expect(c.cause?.startsWith('the search stopped when its budget ran out')).toBe(true);
       expect(c.cause).toContain('at the last point searched');
     }
-    // At the tighter budget the search never escapes the region where a claimed common-mode
-    // extreme cannot be proven at all — and the candidate says so, beside the failing rule.
-    // Naming only the rule would send a designer after 42% of offset margin they could buy in
-    // full without closing this sheet.
-    expect(tight.cause).toContain('containment edge "cm-hi" could not be evaluated');
-    expect(tight.cause).toContain('does not straddle the target');
   });
 
   // A search that stops on its own terms owes two facts, not one: what binds the design, and
   // what stopped the search. Reporting only the constraint reads as though the search had
-  // proven something about it; reporting only the stop hides what to go and fix.
+  // established something about it; reporting only the stop hides what to go and fix.
   it('names both the binding constraint and the reason the search stopped', () => {
     const c = pick('stages/cascode-cs-amp.json', {});
     expect(c.verdict).toBe('did-not-close');
@@ -400,17 +395,125 @@ describe('the search', () => {
   });
 
   // The combination case, and the one most likely to regress into a confident-sounding lie.
-  // The telescopic OTA ends on a point carrying BOTH a failing rule and a containment edge
-  // whose pin cannot bracket. A cause that stopped at the first fact would send the designer
-  // after 65% of offset margin — which they could buy in full and still not close, because the
-  // unprovable edge gates the sheet whatever the rules say. Every fact, not the first.
-  it('names an unprovable edge even when a rule is failing too', () => {
-    const c = pick('otas/telescopic-cascode-ota.json', {});
+  // At this budget the folded cascode never leaves its own defaults, a point carrying BOTH a
+  // failing rule and a range end whose pin cannot bracket. A cause that stopped at the first
+  // fact would send the designer after 42% of offset margin — which they could buy in full and
+  // still not close, because the uncovered range end gates the sheet whatever the rules say.
+  // Every fact, not the first.
+  it('names a range end the design does not cover even when a rule is failing too', () => {
+    const c = pick('otas/folded-cascode-ota.json', {}, 25);
     expect(c.verdict).toBe('did-not-close');
-    expect(c.bindingConstraint?.id).toBe('cm-lo@offset-spec');
-    expect(c.cause).toContain('cm-lo@offset-spec fails by');
-    expect(c.cause).toContain('containment edge "cm-hi" could not be evaluated');
+    expect(c.bindingConstraint?.id).toBe('offset-spec');
+    expect(c.cause).toContain('offset-spec fails by');
+    expect(c.cause).toContain('stops covering its claimed range at "cm-hi"');
     expect(c.cause).toContain('does not change sign');
+  });
+
+  // The other way a checked range end fails, and the one that must NOT borrow the sentence above.
+  // This edge overrides a name that is not in scope, so it returns before anything is evaluated:
+  // nothing about the design was measured, and saying it stops covering its range would be
+  // inventing a result. Nothing else catches this — the base run stands, every rule passes,
+  // validation is silent (it checks that a `set` expression parses, never that its names
+  // resolve), so the cause string is the only place a mis-authored edge surfaces at all.
+  it('does not call a range end uncovered when its override never resolved', () => {
+    const doc: SheetDoc = {
+      title: 'typo',
+      polarity: 'n',
+      params: [
+        { name: 'Target', value: 5 },
+        { name: 'k', value: 5, min: 1, max: 9, role: 'choice' },
+      ],
+      rows: [{ name: 'y', expr: '2*k' }],
+      rules: [{ id: 'k-floor', kind: 'requirement', lhs: 'k', op: '>=', rhs: '1' }],
+      edges: [{ name: 'hi', set: { Target: 'Target_hi' } }], // Target_hi is declared nowhere
+    };
+    const c = pickTopology({}, { path: 'synthetic/typo', doc }, table, undefined, {});
+    expect(c.verdict).toBe('could-not-be-searched');
+    expect(c.bindingConstraint).toBeUndefined();
+    expect(c.cause).toContain('set Target = "Target_hi" did not evaluate to a finite number');
+    expect(c.cause).not.toContain('stops covering its claimed range');
+    // The message names its own edge, so wrapping it would print "hi" twice.
+    expect(c.cause?.match(/"hi"/g)).toHaveLength(1);
+  });
+
+  // Both halves of how the objective treats a point that produced no design, on the sheet where
+  // it bites. The telescopic OTA's own defaults do not settle on this table — its tail pin has
+  // no root there — so at the start the search is standing on nothing, and every neighbouring
+  // point in that region is in the same state.
+  //
+  // If such points scored the objective's floor, the whole region would read alike, the scan
+  // would find no move, and the search would stop where it began. If they scored on equal terms
+  // with real designs, the opposite failure: margins read off a bracket-end probe are not worse
+  // than a real design's, so the search would settle on a point that does not exist and quote
+  // its numbers. Ordered within their own band instead, the search climbs out and closes — and
+  // the point it reports stands on its own, at the ends of its claimed range as well.
+  it('searches out of a region with no design at all, and lands on one that exists', () => {
+    const c = pick('otas/telescopic-cascode-ota.json', {});
+    expect(c.verdict).toBe('closed');
+    const hand = runSheet(
+      withParams(sheet('otas/telescopic-cascode-ota.json'), c.knobs),
+      table,
+      undefined,
+      REFS,
+    );
+    expect(hand.feasible).toBe(true);
+    expect(hand.covers).toBe(true);
+  });
+
+  // The descent has to keep a gradient across the region where the centre does not settle —
+  // measurably a third of a slider on the library's OTAs. A range check is a question about a
+  // design, so it goes unanswered everywhere in that region; scoring the unanswered question at
+  // the objective's floor would make every point there read the same, `beats` would never fire
+  // (it is strict), and the search would report "ran out of knobs" without having moved. Scored
+  // on the only question that IS answerable there — the design's own worst margin — the same
+  // scan walks the knob to the far end of its range.
+  it('keeps a gradient across a region where no point has a design', () => {
+    const doc: SheetDoc = {
+      title: 'stuck',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'Target' } },
+        { name: 'Target', value: 100 }, // y spans [1, 21]: the pin never lands, anywhere
+        { name: 'Target_hi', value: 120 },
+        { name: 'k', value: 1, min: 1, max: 9, role: 'choice' },
+      ],
+      rows: [{ name: 'y', expr: '2*x + 1' }],
+      rules: [{ id: 'need-k', kind: 'requirement', lhs: 'k', op: '>=', rhs: '8' }],
+      edges: [{ name: 'hi', set: { Target: 'Target_hi' } }],
+    };
+    const c = pickTopology({}, { path: 'synthetic/stuck', doc }, table, undefined, {});
+    expect(c.verdict).toBe('did-not-close');
+    expect(c.knobs).toEqual({ k: 9 });
+    // And the candidate still says the range question was never put, so a reader cannot take
+    // the rule it now passes for a design that works.
+    expect(c.cause).toContain('the claimed range was not checked ("hi")');
+  });
+
+  // The other half of that: the incumbent is scored from a full result and a move from a sweep,
+  // so the two readings of the objective must agree about what they can see. A sheet claiming NO
+  // range gives neither of them a skipped range check to read, so neither may demote — if only
+  // one did, every sample would outrank the point the search is standing on and it would accept a
+  // move that makes the design worse. Here nothing ever settles, and the sheet's own k = 4 misses
+  // its floor by less than any point the scan visits misses one of the two bounds (the samples
+  // land at 1, 2.33, 3.67, 5, …), so the honest answer is to move nothing at all.
+  it('scores a sheet with no range claim the same way from a result and from a sweep', () => {
+    const doc: SheetDoc = {
+      title: 'no-range',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'Target' } },
+        { name: 'Target', value: 100 }, // y spans [1, 21]: the pin never lands, anywhere
+        { name: 'k', value: 4, min: 1, max: 9, role: 'choice' },
+      ],
+      rows: [{ name: 'y', expr: '2*x + 1' }],
+      rules: [
+        { id: 'k-floor', kind: 'requirement', lhs: 'k', op: '>=', rhs: '4.2' },
+        { id: 'k-ceiling', kind: 'requirement', lhs: 'k', op: '<=', rhs: '4.5' },
+      ],
+    };
+    const c = pickTopology({}, { path: 'synthetic/no-range', doc }, table, undefined, {});
+    expect(c.verdict).toBe('did-not-close');
+    expect(c.knobs).toEqual({});
   });
 
   // A sheet with nothing to turn cannot be searched — but the reason it fails is still the
@@ -440,15 +543,17 @@ describe('the search', () => {
   });
 
   // The distinct third verdict. This OTA is infeasible on the demo device with NO failing rule
-  // anywhere: its `cm-hi` containment edge cannot bracket its pinned tail node, so the edge
-  // never runs and the rules that did evaluate all pass. A search here would descend on
-  // interior margins that were never the problem and report progress, so it does not run at
-  // all — and the outcome must not borrow the language of a search that did.
+  // anywhere: at its `cm-hi` range end the pinned tail node cannot bracket, so nothing there
+  // resolves into a margin and the rules that did evaluate all pass. A search here would descend
+  // on interior margins that were never the problem and report progress, so it does not run at
+  // all — and the outcome must not borrow the language of a search that did. The cause has to
+  // name the claimed range as the thing the design misses; "the edge could not be evaluated"
+  // would read as a gap in the run and send a designer looking for a setting to fix.
   it('says a sheet could not be searched when nothing failing can be named', () => {
     const c = pick('otas/current-mirror-ota.json', {});
     expect(c.verdict).toBe('could-not-be-searched');
     expect(c.bindingConstraint).toBeUndefined();
-    expect(c.cause).toContain('containment edge "cm-hi"');
+    expect(c.cause).toContain('stops covering its claimed range at "cm-hi"');
     expect(c.cause).toContain('does not change sign');
     expect(c.evals).toBe(1);
     expect(c.budgetExhausted).toBe(false);
@@ -611,12 +716,12 @@ describe('reading the results', () => {
         worstMargin: { id: 'gain-spec', marginPct: -0.02 },
         bindingConstraint: { id: 'gain-spec', marginPct: -0.02 },
       }),
-      candidate('unprovable edge', {
+      candidate('unchecked edge', {
         verdict: 'could-not-be-searched',
         worstMargin: { id: 'interior', marginPct: 0.056 },
       }),
     ];
-    expect(titles(rankCandidates(cs, 'margin').ranked)).toEqual(['near miss', 'unprovable edge']);
+    expect(titles(rankCandidates(cs, 'margin').ranked)).toEqual(['near miss', 'unchecked edge']);
     // And two of them, both silent on the key, fall through to the title rather than to the
     // hidden numbers.
     const both = [
@@ -690,7 +795,7 @@ describe('reading the results', () => {
         }),
       ),
     ).toBe(true);
-    // The hazard: rules that all pass, on a sheet an unprovable containment edge gates anyway.
+    // The hazard: rules that all pass, on a sheet a range end it does not cover gates anyway.
     expect(
       marginSpeaksFor(
         candidate('unsearchable', {

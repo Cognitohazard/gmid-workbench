@@ -4,6 +4,7 @@
 // sizing (sizeDevice), and the constant scope verbatim — it adds no numeric or parser
 // logic and never traverses a circuit. Pure, deterministic, never throws. Zero DOM.
 
+import { LOOKUP_RANGE_MESSAGE } from '../types';
 import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, metaScalars } from '../derive';
@@ -22,9 +23,11 @@ import {
   pinProblem,
   pinned,
   prefixUseWarning,
+  stands,
   torn,
   withParams,
 } from './types';
+import { pinHardware, type PinnedHardware } from './coverage';
 import type {
   BindReport,
   RuleResult,
@@ -89,6 +92,11 @@ const SOLVE_PASSES_NOTE = 16;
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** An expression that is nothing but a decimal number — exactly the spellings `String` emits
+ *  for a finite value, plus a leading sign. Deliberately narrower than `Number`, which also
+ *  accepts hex, binary and `Infinity` literals the expression grammar need not share. */
+const NUMERIC_LITERAL = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
 /**
  * Compile + evaluate one expression to a scalar against `scope`, or undefined when it
  * cannot resolve (parse error, an undeclared free name, an eval error, or — defensively
@@ -103,6 +111,16 @@ function evalScalar(
   warn: (w: QAWarning) => void,
   where: string,
 ): number | undefined {
+  // A bare number is its own value: it compiles to itself and has no free names, so the whole
+  // path below is a no-op for it. Worth short-circuiting because the coverage transformation
+  // MINTS such sources (see coverage.ts numExpr), one per solved geometry per sample, and each
+  // one is a permanent entry in the compile memo that can never be hit again. Anything the
+  // pattern does not cover — a non-decimal spelling, a value that overflows to infinity — falls
+  // through to the parser, which stays the authority on what the grammar accepts.
+  if (NUMERIC_LITERAL.test(src)) {
+    const lit = Number(src);
+    if (Number.isFinite(lit)) return lit;
+  }
   let compiled;
   try {
     compiled = compileExpr(src);
@@ -337,7 +355,15 @@ function runBind(
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design).
   const fail = (error: string, needs?: string[]): BindReport => {
     warn({ rule: 'sheet-bind', severity: 'error', message: error, location: 'bind' });
-    return { ok: false, W: NaN, vgs: NaN, id: NaN, error, ...(needs?.length ? { needs } : {}) };
+    return {
+      ok: false,
+      W: NaN,
+      L: NaN,
+      vgs: NaN,
+      id: NaN,
+      error,
+      ...(needs?.length ? { needs } : {}),
+    };
   };
 
   if (!table) return fail('no device to size against');
@@ -372,7 +398,7 @@ function runBind(
     for (const m of res.warnings) {
       warn({ rule: 'sheet-bind', severity: 'warning', message: m, location: 'bind' });
     }
-    const report: BindReport = { ok: true, W: res.W, vgs: res.vgs, id: res.id };
+    const report: BindReport = { ok: true, W: res.W, L, vgs: res.vgs, id: res.id };
     if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
     if (sliced.assumed.length) report.assumed = sliced.assumed;
     return report;
@@ -663,8 +689,10 @@ function evalChildren(
  *
  * A sheet that also claims operating ranges reports the disagreement once per RUN — the base
  * evaluation plus each containment edge, whose warnings ride its own report verbatim. That is
- * intended: an edge re-sizes the design at another point, so its residual is a different
- * measurement of the identity, not a duplicate of the first.
+ * intended: an edge holds the SAME hardware at a different bias, and the identity is a statement
+ * about voltages, so the residual there is a different measurement for a different reason — not
+ * a duplicate of the first. A wiring declaration that holds at the center and breaks at a range
+ * end is exactly the finding worth having twice.
  *
  * A DEDICATED evaluator, deliberately: every runtime problem here — an expression that does not
  * resolve, a block with no sized operating point, a disagreement past WIRING_TOL — is a
@@ -1308,11 +1336,19 @@ function solveNode(
 /**
  * Evaluate a doc that declares containment edges: the base run, then one more complete
  * evaluation per edge with that edge's params overridden. Every run — base and each edge —
- * takes the default budget of a fresh top-level call: edge runs are independent evaluations,
- * and sharing one pool sized for a single solve would starve the later runs into phantom
- * infeasibility. Cost is therefore (1 + edge count) full evaluations everywhere the sheet
- * evaluates, sweep cells included — the price of a swept cell never disagreeing with the
- * same numbers evaluated alone.
+ * takes the default budget of a fresh top-level call: each is a complete evaluation with its own
+ * solves to close, and sharing one pool sized for a single solve would starve the later runs into
+ * phantom infeasibility. Cost is therefore at most (1 + edge count) full evaluations everywhere the
+ * sheet evaluates, sweep cells included — the price of a swept cell never disagreeing with the
+ * same numbers evaluated alone. A base run that did not stand costs one, for the reason below.
+ *
+ * The edge runs are the base run's DESIGN re-measured at another condition (see coverage.ts),
+ * which makes them conditional on there being a design at all. When the base run did not stand,
+ * every edge comes back `not-checked` rather than carrying a verdict about hardware the engine
+ * never landed on — a failed pin leaves its last bisection probe in the result with every bind
+ * reading `ok`, so "the binds sized" is nowhere near enough to have produced an instance. Rule
+ * FAILURES do not gate: a center that misses its spec is still a design, and whether it holds
+ * across its claimed range is still a real question.
  */
 function evaluateWithEdges(
   doc: SheetDoc,
@@ -1320,24 +1356,54 @@ function evaluateWithEdges(
   resolveDevice: DeviceResolver | undefined,
 ): SheetResult {
   const base = evaluateNode(doc, table, resolveDevice, 0);
-  const reports = (doc.edges ?? []).map((e) => runEdge(e, doc, base, table, resolveDevice));
-  return { ...base, edges: reports, feasible: base.feasible && reports.every((r) => r.feasible) };
+  const edges = doc.edges ?? [];
+  if (!stands(base)) {
+    const reports = edges.map((e): SheetEdgeReport => ({
+      name: e.name,
+      feasible: false,
+      state: 'not-checked',
+      // No `set`: the overrides resolve against the base VALUES, which here are wherever the
+      // failed solve stopped. Reporting the point that would have been proven from those is
+      // reporting a phantom, the same reason a bracket end is never reported as a landing.
+      set: {},
+      rules: [],
+      solved: {},
+      warnings: [],
+    }));
+    // No `feasible` override: a base that does not stand carries an error-severity warning,
+    // which evaluateNode has already folded into the `feasible` the spread brings along.
+    return { ...base, edges: reports };
+  }
+  const pinned = pinHardware(doc, base);
+  const reports = edges.map((e) => runEdge(e, pinned, base, table, resolveDevice));
+  return {
+    ...base,
+    edges: reports,
+    feasible: base.feasible && reports.every((r) => r.feasible),
+    covers: reports.every((r) => r.state === 'covers'),
+  };
 }
 
-/** One edge: resolve its `set` expressions against the base result, re-evaluate the doc
- *  with those values (through evaluateNode, so the run cannot recurse into edges), and
- *  report the outcome. An edge that cannot be evaluated at all — a `set` expression that
- *  does not resolve, a solve that fails — is infeasible with the underlying message
- *  VERBATIM in `error`, so a shared-budget starvation stays distinguishable from "the
- *  bracket cannot reach it". Rule-level failures are not errors: they live in `rules`,
+/** One edge: resolve its `set` expressions against the base result, re-evaluate the
+ *  FIXED-HARDWARE form of the doc with those values (through evaluateNode, so the run cannot
+ *  recurse into edges), and report the outcome. An edge that cannot be evaluated at all — a
+ *  `set` expression that does not resolve, a solve that fails — does not cover, with the
+ *  underlying message VERBATIM in `error`, so a shared-budget starvation stays distinguishable
+ *  from "the bracket cannot reach it". Rule-level failures are not errors: they live in `rules`,
  *  like anywhere else. */
 function runEdge(
   edge: SheetEdge,
-  doc: SheetDoc,
+  pinned: PinnedHardware,
   base: SheetResult,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
 ): SheetEdgeReport {
+  // Copied per report rather than shared: the transformation allocates one list for the whole
+  // document, and a consumer that sorted or de-duplicated one report's copy in place would be
+  // rewriting every sibling's at the same time.
+  const assumed = pinned.assumedSource.length
+    ? { assumedSource: [...pinned.assumedSource] }
+    : undefined;
   const scope = scalarScope(base.values);
   const over: Record<string, number> = {};
   // `?? {}`: a half-written edge (no set) is validation's error to name; evaluate never throws.
@@ -1347,6 +1413,7 @@ function runEdge(
       return {
         name: edge.name,
         feasible: false,
+        state: 'does-not-cover',
         set: over,
         rules: [],
         solved: {},
@@ -1354,11 +1421,12 @@ function runEdge(
         error:
           `edge "${edge.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
           `number against the base result`,
+        ...assumed,
       };
     }
     over[param] = v;
   }
-  const res = evaluateNode(withParams(doc, over), table, resolveDevice, 0);
+  const res = evaluateNode(withParams(pinned.doc, over), table, resolveDevice, 0);
   // `error` promises the SOLVER's own message when one exists — a child's solve failure
   // rolls up mid-evaluation and later diagnostics (a non-finite parent row) land after
   // it, so "last error" alone reports the consequence instead of the cause. One reverse
@@ -1375,12 +1443,23 @@ function runEdge(
       if (w.rule === 'sheet-solve') err = w.message;
     }
     err ??= lastError;
+    // A device held at a fixed width can run out of table: the endpoint bias moves the density
+    // its authored current (or transconductance) needs outside the swept vgs range, and the
+    // inverse lookup says so in its own accurate but width-domain words. That failure cannot
+    // arise while a range end is free to re-size the device — any gm/ID inside the ceiling lands
+    // — so it comes with no vocabulary of its own. Lead with what it MEANS for the question being
+    // asked and keep the lookup's message behind it, where its reach numbers stay quotable.
+    const reach = err === undefined ? null : LOOKUP_RANGE_MESSAGE.exec(err);
+    if (reach)
+      err =
+        `this device cannot ${reach[1] === 'id' ? 'carry its authored current' : 'reach its authored transconductance'}` +
+        ` at the endpoint bias — ${err}`;
   }
   // The solved map is "where the edge LANDED" — an errored run (a pin that never landed)
   // leaves the values at the last probe, which must not be reported as a landing.
   const solved: Record<string, number> = {};
   if (err === undefined)
-    for (const p of doc.params)
+    for (const p of pinned.doc.params)
       if (engineSolved(p) && Number.isFinite(res.values[p.name]))
         solved[p.name] = res.values[p.name];
   // The run's warnings ride the report VERBATIM (never merged into the parent's): a bias
@@ -1389,11 +1468,13 @@ function runEdge(
   return {
     name: edge.name,
     feasible: res.feasible,
+    state: res.feasible ? 'covers' : 'does-not-cover',
     set: over,
     rules: res.rules,
     ...(res.children ? { children: res.children } : {}),
     solved,
     warnings: res.warnings,
     ...(err !== undefined ? { error: err } : {}),
+    ...assumed,
   };
 }

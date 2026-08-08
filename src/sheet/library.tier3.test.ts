@@ -173,6 +173,47 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
   });
 
+  it('checks its claimed common-mode range on THIS design, not on a re-sized one', () => {
+    // A range end re-measures the amplifier the defaults produced: every device keeps the width
+    // and length the base run solved, to the last bit, and the endpoint bias comes out of the
+    // operating point instead. A range end free to re-size gave the input pair ~9% more width at
+    // cm-hi (1.194 µm → 1.302 µm) and reported the margins of a different amplifier.
+    for (const e of res.edges ?? []) {
+      expect(
+        e.children?.map((c) => c.bind?.W),
+        e.name,
+      ).toEqual(res.children?.map((c) => c.bind?.W));
+      expect(
+        e.children?.map((c) => c.bind?.L),
+        e.name,
+      ).toEqual(res.children?.map((c) => c.bind?.L));
+    }
+    // cm-lo's pin LANDS, so its operating point is a design point and can be locked as intent.
+    // Pulling the input common mode 50 mV down to 1.0 V is paid almost entirely by the tail node
+    // (0.5179 → 0.4689 V), because the input pair is held at the width the base run sized: its
+    // drain stays at the fold node, so the 49 mV the tail gives up lands on its own vds, and the
+    // extra channel-length modulation lets the gate back off the remaining ~1 mV at the same
+    // 10 µA. The margins move with that.
+    const lo = res.edges?.find((e) => e.name === 'cm-lo');
+    expect(lo?.error).toBeUndefined();
+    expect(lo?.solved.V_tail).toBeCloseTo(0.4688622, 6);
+    const inAt = lo?.children?.find((c) => c.name === 'in')?.bind;
+    expect(inAt?.vgs).toBeCloseTo(0.5311371, 6);
+    const margin = (id: string): number => lo!.rules.find((r) => r.id === id)!.marginPct;
+    expect(margin('gain-spec')).toBeCloseTo(-0.185759, 6);
+    expect(margin('offset-spec')).toBeCloseTo(-0.4126382, 6);
+    // cm-hi is the case where the pin never LANDS (cm-lo landed and merely fails its rules), and
+    // the only honest assertions about it are the three the engine actually vouches for. Its
+    // tail-node pin finds no sign change anywhere in the bracket, so there is no design at that
+    // end to measure at all. Whatever the bisection was holding when it gave up is the last
+    // PROBE, not a landing — locking those numbers would be asserting an operating point the run
+    // never reached, and `solved` is left empty precisely so no consumer can go looking for one.
+    const hi = res.edges?.find((e) => e.name === 'cm-hi');
+    expect(hi?.state).toBe('does-not-cover');
+    expect(hi?.error).toMatch(/does not change sign/);
+    expect(hi?.solved).toEqual({});
+  });
+
   itIsOneInputGate(res);
 });
 
@@ -333,7 +374,18 @@ describe('containment honesty on the demo table', () => {
     expect(res.feasible).toBe(false);
     const hi = res.edges?.find((e) => e.name === 'cm-hi');
     expect(hi?.feasible).toBe(false);
+    expect(hi?.state).toBe('does-not-cover'); // checked, and it broke — not "never checked"
     expect(hi?.error).toMatch(/does not change sign/);
     expect(hi?.solved).toEqual({}); // a bracket end is never reported as a landing
+    expect(res.covers).toBe(false);
+  });
+
+  it('the reachable cm-lo end lands the tail node where the fixed design puts it', () => {
+    // Holding the widths moves the landing: the same claim proven on the design the defaults
+    // produce settles the tail 0.65% higher than it did when the endpoint was free to re-size
+    // the devices around it (0.38292 → 0.38542). Locked as intent, not as a regression.
+    const lo = res.edges?.find((e) => e.name === 'cm-lo');
+    expect(lo?.state).toBe('covers');
+    expect(lo?.solved.V_tail).toBeCloseTo(0.385423, 6);
   });
 });

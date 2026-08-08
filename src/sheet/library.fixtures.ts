@@ -10,9 +10,13 @@ import { join } from 'node:path';
 import { generateDemoDevice, VA_PER_L, BODY_FACTOR, COX } from '../demo';
 import { GAMMA_DEFAULT, PHYS } from '../constants';
 import { buildSheetRefIndex, type SheetRefEntry, type SheetRefIndex } from './resolve';
+import { gdsOf } from './library.math';
 import type { SheetDoc } from './types';
 
 export { VA_PER_L };
+// The demo model's closed forms live in library.math.ts, which has no import-time work; they
+// are re-exported here so a suite already holding the fixtures needs no second import.
+export { relErr, par, va, gdsOf } from './library.math';
 
 const SHEETS_DIR = fileURLToPath(new URL('../../sheets', import.meta.url));
 
@@ -55,19 +59,6 @@ export const REFS: SheetRefIndex = buildSheetRefIndex(libraryEntries());
 // The 3-D [l, vds, vgs] demo table shared by every golden; the 0.05 V vds step keeps
 // declared operating points on-grid where goldens want to be tight.
 export const table = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
-
-export const relErr = (v: number, expected: number): number => Math.abs(v / expected - 1);
-
-/** Two resistances in parallel — the shape half the library's output-node rows take. */
-export const par = (a: number, b: number): number => 1 / (1 / a + 1 / b);
-
-/** Early voltage of the demo model at length `L`. */
-export const va = (L: number): number => VA_PER_L * L;
-
-/** gds of a device bound to current `id` at length `L`, declared vds — exact in the model
- *  once bound, since gds/id = 1/(VA + vds) there. The one spelling of the demo's
- *  channel-length-modulation law; every output-node golden goes through it. */
-export const gdsOf = (id: number, L: number, vds: number): number => id / (va(L) + vds);
 
 /** Output-device r_o of a width-mirrored leg, in closed form. The reference sets the saturation
  *  current idSat_ref = I_in/(1 + vds_ref/VA); the output device copies the same current density at

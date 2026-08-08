@@ -2038,7 +2038,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
 
 describe('containment edges — exact range checks folded into the verdict', () => {
   // Mirrors the library's CM idiom: x is the internal node the pin solves, y = 2x + 1 the
-  // produced output, T the typed spec, [T_lo, T_hi] the claimed range the edges prove.
+  // produced output, T the typed spec, [T_lo, T_hi] the claimed range the edges check.
   const mk = (over: Partial<SheetDoc> = {}): SheetDoc => ({
     title: 'e',
     polarity: 'n',
@@ -2079,7 +2079,7 @@ describe('containment edges — exact range checks folded into the verdict', () 
     expect(res.edges).toBeUndefined(); // degrades to a plain evaluation
   });
 
-  it('the report says WHICH point was proven, and never fabricates a landing', () => {
+  it('the report says WHICH point was checked, and never fabricates a landing', () => {
     const ok = evaluateSheet(mk(), dev);
     expect(ok.edges?.[0].set).toEqual({ T: 3 }); // the resolved override, not the expression
     expect(ok.edges?.[0].warnings).toEqual([]);
@@ -2475,10 +2475,11 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
   });
 
   it('reports once per RUN when the sheet also claims a range through edges', () => {
-    // Base plus one edge = two lines about the same declaration, and that is the intent: an edge
-    // re-sizes the design at another point, so its residual is a genuinely different measurement.
-    // An edge run's warnings ride its own report verbatim, so the second copy is not a duplicate
-    // of the first — it belongs to a different evaluation.
+    // Base plus one edge = two lines about the same declaration, and that is the intent: a range
+    // end re-settles the same hardware at a different bias, so its residual is a measurement of
+    // the same wire under different conditions. An edge run's warnings ride its own report
+    // verbatim, so the second copy is not a duplicate of the first — it belongs to a different
+    // evaluation.
     const doc = wired('0', '0', boundChild(), {
       params: [
         { name: 'VDD', value: 1.8 },
@@ -2765,7 +2766,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     expect(r.deltaMinus).toBeCloseTo(-0.02, 9); // the surviving side is still reported
   });
 
-  it('re-proves the containment edges only for a rule that lives on one', () => {
+  it('re-checks the containment edges only for a rule that lives on one', () => {
     // Every edge costs each probe another full evaluation of the whole sheet, so a readout about
     // a rule at the top must not pay for range ends nobody asked about. Naming an edge-keyed rule
     // is how a caller opts in — and then the edge outcomes are keyed exactly as bindingConstraint
