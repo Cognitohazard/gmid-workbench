@@ -503,7 +503,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  // Containment edges: same stakes as `pin` — dropping one silently turns a proven range
+  // Containment edges: same stakes as `pin` — dropping one silently turns a checked range
   // claim back into an unchecked number. An edge whose `set` survives EMPTY is kept, not
   // dropped: validateSheet owns that verdict ("sets nothing", blocking feasibility), and
   // eating it here would let the sheet reload MORE feasible than the core reads it — the

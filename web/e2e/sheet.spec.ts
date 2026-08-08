@@ -897,13 +897,22 @@ test('containment edges: chips report each range end; a dead edge names the solv
   const sp = page.locator('.grid .panel').last();
   await pickSheet(sp, '5T OTA');
 
-  // The 5T claims a CM range; the engine proves both ends on every evaluation and the
+  // The 5T claims a CM range; the engine checks both ends on every evaluation and the
   // panel reports one chip per edge. (Whether they read ✓ or ✗ on the demo device is the
   // demo's business — budgets are tuned for real tables — the report SHAPE is the contract.)
   const chips = sp.locator('.sedge');
   await expect(chips).toHaveCount(2);
   await expect(chips.nth(0)).toContainText('cm-lo');
   await expect(chips.nth(1)).toContainText('cm-hi');
+
+  // The strip and the sweep legend both name the QUESTION a range end answers. A chip says
+  // whether the design covers that end; the curve says by how much. Locked here because the
+  // two words are the whole point of keeping the questions apart, and prose drifts silently.
+  await expect(sp.locator('.sedges .glabel')).toHaveText('range coverage');
+  await sp.locator('.swsel select').selectOption('CM_dc');
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  await expect(sp.locator('.skey')).toContainText('covers cm-lo');
+  await expect(sp.locator('.scap')).toContainText('each sample checks its OWN design');
 
   // Make the low edge unreachable: no tail-node position produces CM_in = 0.3 (the demo
   // table's diode drop alone exceeds it) — the chip must carry the solver's reason, not a
@@ -913,6 +922,46 @@ test('containment edges: chips report each range end; a dead edge names the solv
   await lo.blur();
   await expect(chips.nth(0)).toHaveClass(/no/);
   await expect(chips.nth(0)).toContainText(/does not change sign/);
+});
+
+test('containment edges: an unchecked range end reads as a question nobody asked, not a failure', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, '5T OTA');
+  const chips = sp.locator('.sedge');
+  await expect(chips).toHaveCount(2);
+
+  // Push the CENTRE past what the tail node can produce (still inside CM_dc's own slider, so
+  // this is a point the sweep and the picker both visit). There is now no design at all here,
+  // so neither range end can be checked against one — and the whole reason the engine reports
+  // that as its own outcome is that showing it as a failure would answer a question it never
+  // asked. A red "cm-lo infeasible" beside an empty design is a statement about the claimed
+  // range that nothing measured.
+  // At the default centre both ends ARE checked and read red, so the strip starting from a
+  // state this test would fail on is what makes the transition below mean something.
+  await expect(chips.nth(0)).toHaveClass(/no/);
+
+  const cm = sp.locator('.svar[data-param="CM_dc"] .num');
+  await cm.fill('1.4');
+  await cm.blur();
+
+  for (const i of [0, 1]) {
+    await expect(chips.nth(i)).toHaveClass(/skip/);
+    await expect(chips.nth(i)).not.toHaveClass(/\bno\b/);
+    await expect(chips.nth(i)).toContainText('not checked');
+    await expect(chips.nth(i)).not.toContainText('infeasible');
+    await expect(chips.nth(i)).not.toContainText('✗');
+  }
+
+  // Recentre: the same two ends go back to being answerable, so the neutral state is a
+  // property of the point and not a latch.
+  await cm.fill('1.1');
+  await cm.blur();
+  await expect(chips.nth(0)).not.toHaveClass(/skip/);
 });
 
 test('design sheet: the sensitivity readout ranks the knobs that move the binding rule', async ({

@@ -35,6 +35,7 @@
     type SheetSensitivity,
     type SheetChildReport,
     type SheetEdgeReport,
+    type SheetEdgeState,
     type QAWarning,
     type BindReport,
     type RuleResult,
@@ -482,26 +483,43 @@
   const signedFmt = (v: number): string =>
     Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${formatSI(v)}` : '—';
 
-  /** The one-line cause on a failing edge chip: the solver's own message when the run
-   *  could not stand at all, else its worst failing hard rule (same definition the badge
-   *  uses, scoped to the edge's own tree — an edge report satisfies its shape directly). */
-  const edgeCause = (e: SheetEdgeReport): string => {
-    if (e.error) return e.error;
-    const b = bindingConstraint(e);
-    return b ? `${b.id} ${pct(b.marginPct)}` : 'infeasible';
-  };
   const edgeSolved = (e: SheetEdgeReport): string =>
     Object.entries(e.solved)
       .map(([k, v]) => `${k} ${fmt(v)}`)
       .join(' · ');
+  /** The one-line detail beside an edge chip, one wording per outcome. A range end that is
+   *  covered shows where its bias landed; one that is not shows why — the solver's own message
+   *  when the run could not stand at all, else its worst failing hard rule (same definition the
+   *  badge uses, scoped to the edge's own tree). An UNCHECKED end must never borrow either: it
+   *  is not a verdict about the range but the absence of one, so it says what is missing. */
+  const edgeDetail = (e: SheetEdgeReport): string => {
+    if (e.state === 'not-checked') return 'not checked — these settings produce no design';
+    if (e.state === 'covers') return edgeSolved(e);
+    if (e.error) return e.error;
+    const b = bindingConstraint(e);
+    return b ? `${b.id} ${pct(b.marginPct)}` : 'does not cover';
+  };
+  // Three outcomes, three appearances — a range end that was never checked must not borrow the
+  // failure's mark or colour, because "we did not ask" is not "the answer is no".
+  const EDGE_MARK: Record<SheetEdgeState, string> = {
+    covers: '✓',
+    'does-not-cover': '✗',
+    'not-checked': '–',
+  };
+  const EDGE_CLASS: Record<SheetEdgeState, string> = {
+    covers: 'ok',
+    'does-not-cover': 'no',
+    'not-checked': 'skip',
+  };
   const edgeNote = $derived(new Map((cfg.edges ?? []).map((e) => [e.name, e.note])));
   /** The run's own non-info diagnostics — a bias clamp fires exactly at a claim's extreme,
    *  and a green chip must not hide that it rests on clamped data. */
   const edgeWarns = (e: SheetEdgeReport): QAWarning[] =>
     e.warnings.filter((w) => w.severity !== 'info');
-  // The tooltip carries WHICH point was proven (the resolved overrides), the authored note,
-  // any run diagnostics, and — on a failure — the full cause, because the chip clamps long
-  // solver messages with an ellipsis. The concept-level help lives on the group label.
+  // The tooltip carries WHICH point was checked (the resolved overrides), the authored note,
+  // any run diagnostics, and — whenever the range end is not covered — the full detail, because
+  // the chip clamps long solver messages with an ellipsis. The concept-level help lives on the
+  // group label.
   const edgeTitle = (e: SheetEdgeReport, detail: string): string => {
     const at = Object.entries(e.set)
       .map(([k, v]) => `${k} = ${fmt(v)}`)
@@ -509,12 +527,15 @@
     const warns = edgeWarns(e)
       .map((w) => `⚠ ${w.message}`)
       .join('\n');
-    return [at, edgeNote.get(e.name), warns, e.feasible ? '' : detail].filter(Boolean).join('\n\n');
+    return [at, edgeNote.get(e.name), warns, e.state === 'covers' ? '' : detail]
+      .filter(Boolean)
+      .join('\n\n');
   };
   /** One label for an edge's aggregate sweep curve, shared by the legend and the chart
-   *  series — consumers read the field, never parse the id's trailing separator. */
+   *  series — consumers read the field, never parse the id's trailing separator. The verb
+   *  is the reading: above zero the design covers that range end, below zero it does not. */
   const ruleLabel = (r: { id: string; edge?: string }): string =>
-    r.edge ? `edge ${r.edge}` : r.id;
+    r.edge ? `covers ${r.edge}` : r.id;
   const CHIP: Record<RuleStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author rule notes by id (a RuleResult carries no note — the physical-meaning note lives on the
@@ -1022,11 +1043,11 @@
 
   {#if result.edges?.length}
     <div class="sedges">
-      <span class="glabel" title={CONTROL_HELP.edges}>range edges</span>
+      <span class="glabel" title={CONTROL_HELP.edges}>range coverage</span>
       {#each result.edges as e (e.name)}
-        {@const detail = e.feasible ? edgeSolved(e) : edgeCause(e)}
-        <span class="sedge {e.feasible ? 'ok' : 'no'}" title={edgeTitle(e, detail)}>
-          {e.feasible ? '✓' : '✗'}
+        {@const detail = edgeDetail(e)}
+        <span class="sedge {EDGE_CLASS[e.state]}" title={edgeTitle(e, detail)}>
+          {EDGE_MARK[e.state]}
           {e.name}{#if edgeWarns(e).length}&nbsp;⚠{/if}
           {#if detail}<i>{detail}</i>{/if}
         </span>
@@ -1061,9 +1082,9 @@
     <div class="scap">
       margin (%) vs <b>{active}</b>{#if swept?.unit}
         ({swept.unit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory); clipped
-      at ±{MARGIN_CLIP}%{#if (cfg.edges ?? []).some( (e) => Object.keys(e.set ?? {}).includes(active) )}
-        · the containment edges pin {active} to the claimed ends, so their verdicts are constant along
-        this sweep — a broken claim reads infeasible at every sample{/if}
+      at ±{MARGIN_CLIP}%{#if (cfg.edges ?? []).length}
+        · each sample checks its OWN design at the claimed range ends, so the coverage curves move
+        with the sweep{/if}
     </div>
     <div class="pchart" bind:this={el}></div>
     <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
@@ -1168,6 +1189,13 @@
   .feasb.no,
   .sedge.no {
     color: var(--err);
+  }
+  /* A range end nobody checked: the body text colour, dimmed. Deliberately neither status
+     colour — the chip has to read as an open question, and green or red would both answer it. */
+  .sedge.skip {
+    color: var(--fg);
+    opacity: 0.55;
+    border-style: dashed;
   }
   /* The binding constraint rides inside the badge: same colour, but normal-case and lighter,
      so the verdict still reads as the headline and the cause as its subtitle. */

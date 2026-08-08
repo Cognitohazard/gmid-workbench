@@ -34,14 +34,14 @@
       "value": 0.95,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — proven exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.92-1.16 V on sky130 tt at the shipped choices). The edge proves the ENDPOINT; the interior is the sweep's to show"
+      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.92-1.16 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show"
     },
     {
       "name": "CM_hi",
       "value": 1.12,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT proven by the cm-hi edge the same way"
+      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way"
     },
     {
       "name": "CM_dc",
@@ -462,19 +462,19 @@
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
-      "note": "paired with cm-not-below; the cm-lo/cm-hi edges prove the range ENDS close, and the CM_dc sweep shows the whole landscape"
+      "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
     }
   ],
   "edges": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, proven exactly: the whole sheet re-evaluates at CM_dc = CM_lo — its own tail-node solve from the full bracket, its own devices — and every hard rule must hold there"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve from the full bracket, every device held at the geometry it was sized to — and every hard rule must hold there"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, proven the same way. Edges prove the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provide": ["Rout", "cgg_in", "I_q"]

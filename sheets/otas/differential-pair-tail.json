@@ -34,14 +34,14 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, low edge — proven exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95-1.19 V on sky130 tt). The edge proves the ENDPOINT; the interior is the sweep's to show"
+      "note": "input CM range, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95-1.19 V on sky130 tt). The edge checks the ENDPOINT; the interior is the sweep's to show"
     },
     {
       "name": "CM_hi",
       "value": 1.15,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, high edge — its ENDPOINT proven by the cm-hi edge"
+      "note": "input CM range, high edge — its ENDPOINT checked by the cm-hi edge"
     },
     {
       "name": "CM_dc",
@@ -309,12 +309,12 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, proven exactly: the sheet re-evaluates at CM_dc = CM_lo with its own tail-node solve. Replaces the linearized reach estimate"
+      "note": "the claimed low edge, checked exactly: the sheet re-evaluates at CM_dc = CM_lo on the design this run produced, with its own tail-node solve. Replaces the linearized reach estimate"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, proven the same way; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high edge, checked the same way; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provide": ["Rout", "cgg_in", "I_q"]
