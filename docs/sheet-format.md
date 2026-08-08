@@ -12,6 +12,28 @@ solver and no circuit traversal: the only operating-point solving is the explici
 designer-named bind. This document specifies the model precisely enough to author a sheet by
 hand or generate one from code — see also [Scripting the core](../README.md#scripting-the-core).
 
+## Two questions: closes, and covers
+
+A sheet answers two questions, and keeping them apart is what makes its verdicts readable.
+
+- **Closes** — *does this design TYPE meet the spec at all?* A type-level question, so the
+  evaluation is free to re-derive the design: move a knob and every device re-sizes around it.
+  The base run, the sweeps and the topology picker's search all work this way.
+- **Covers** — *does the design this run just produced still hold at the ends of the range it
+  claims?* An instance-level question, so nothing is rebuilt: each device is held at the
+  geometry this run sized it to and only the bias re-settles.
+  [Containment edges](#containment-edges-edges) ask this one.
+
+Rebuilding is the whole point of the first question and the whole error of the second. The
+instance a coverage check is about is simply whatever the current settings produce — never a
+frozen reference design: turn a knob and a different instance is checked, and each cell of a
+sweep checks its own cell's design.
+
+The sheet's single feasibility verdict FOLDS both answers — a design that does not cover its
+claimed range is not feasible, so the badge can go red with every rule green (see
+[Feasibility](#feasibility)). `covers`, reported per range end, is where the second answer reads
+on its own.
+
 ## The document model
 
 A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
@@ -27,7 +49,7 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | `rules` | array | Named comparisons the design must satisfy (see [Rules](#rules)). |
 | `uses` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
 | `provide` | array of string, optional | The names this sheet exposes to a parent. Inert to the engine at the top level, but load-bearing there as the sheet's declared interface (see [Port contracts](#port-contracts)). |
-| `edges` | array, optional | Containment edges: complete re-evaluations at claimed range ends whose hard verdicts gate the sheet (see [Containment edges](#containment-edges-edges)). |
+| `edges` | array, optional | Containment edges: the claimed range's ends, re-checked on the design this run produced; their hard verdicts gate the sheet (see [Containment edges](#containment-edges-edges)). |
 
 Evaluation runs in one pass: seed the params, compose any children, size the device, evaluate
 the rows in order, then check the rules. Everything a rule or row can reference — params,
@@ -223,8 +245,8 @@ Structural problems are the *only* route by which wiring reaches a verdict.
 
 A sheet may declare `wiring` on a child *and* claim operating ranges through `edges`. The
 disagreement is then reported once per run — the base evaluation plus each edge — and that is
-intended, not a duplicate: an edge re-sizes the design at another point, so its residual is a
-different measurement of the same identity.
+intended, not a duplicate: a range end re-settles the SAME hardware at a different bias, so its
+residual is a measurement of the same identity under different conditions.
 
 The check is local to each node of the tree: a child sheet's own uses are checked when that
 child evaluates. There is no cross-tree wiring graph and no KCL — this declares one identity
@@ -399,6 +421,10 @@ A sheet is **feasible** only when all of the following hold (it fails closed oth
   data `ceiling`) held;
 - every **hard** rule (invariant and requirement) is `pass` or `amber`;
 - every composed child is feasible;
+- every declared containment edge covers — a claimed range is part of the spec, so a design
+  that misses its own claim fails (see [Containment edges](#containment-edges-edges)). A range
+  end that was not CHECKED never fails the sheet on its own account: that happens only where the
+  run already failed the last condition below;
 - no error-severity warning was raised (including structural validation errors).
 
 Guardrails are excluded from this aggregate. A sheet with no bind and no children is feasible
@@ -697,7 +723,7 @@ which makes the common-mode axis a sweep of `CM_dc` with one bisection per point
 
 A sheet that claims a RANGE — "this amplifier accepts any input common mode in
 `[CM_lo, CM_hi]`" — used to check the claim with linearized guardrails, which could only
-estimate the edges from the evaluated point. `edges` proves them instead:
+estimate the ends from the evaluated point. `edges` checks them directly:
 
 ```json
 "edges": [
@@ -708,47 +734,114 @@ estimate the edges from the evaluated point. `edges` proves them instead:
 
 Each edge re-evaluates the WHOLE sheet once more with the named params' values overridden —
 each `set` expression is evaluated against the base result, so it may reference params, rows,
-or provided scalars. The edge run is a complete, independent evaluation: its own pin solve
-from the full authored bracket, its own children, its own solver budget. Every hard rule must
-hold there, and a solve that fails at an edge — the bracket cannot reach `CM_lo` because no
-tail-node position produces it — is itself the honest verdict that the edge does not close,
-reported with the solver's own message. The badge names an edge failure through the same
-binding-constraint definition as everything else, with the edge name prefixed:
-`cm-lo@tail-saturated`. Both tree-key separators are reserved: rule ids, edge names, AND
-use names may contain neither `@` nor `.` — every one of them becomes part of a key in the
-single map rule outcomes share, and a name carrying a separator could silently shadow
-another rule's result (validation refuses them).
+or provided scalars. It is a coverage check, so the run is not free to build a new design at
+the range end: every device in the tree is held at the width and length the base run sized it
+to, and what re-settles is the bias. That re-settling is the machinery the engine already has —
+the pin solve runs again from the full authored bracket, `vds` subtractions re-evaluate against
+the moved nodes, each transformed device's `vgs` comes back out of the lookup at its held width —
+with its
+own children and its own solver budget. Every hard rule must hold there, and a solve that fails
+at an edge — the bracket cannot reach `CM_lo` because no tail-node position produces it — is
+itself the honest verdict that the design does not cover that end, reported with the solver's
+own message. The badge names an edge failure through the same binding-constraint definition as
+everything else, with the edge name prefixed: `cm-lo@tail-saturated`. Both tree-key separators
+are reserved: rule ids, edge names, AND use names may contain neither `@` nor `.` — every one of
+them becomes part of a key in the single map rule outcomes share, and a name carrying a
+separator could silently shadow another rule's result (validation refuses them).
 
-What edges do and do not prove: they prove the **endpoints**, exactly. The interior is
-covered only where feasibility is monotone toward the edges — true of the saturation
-mechanisms that end a CM range, not a theorem about arbitrary rules — so the sweep remains
-the authority on the full landscape. Costs and semantics to know:
+**Three outcomes, never two.** Each edge reports `covers`, `does-not-cover`, or `not-checked`.
+Coverage is a question about an instance, so it can only be asked where the run produced one:
+when the base evaluation raised an error-severity warning — a bind that did not size, a pin that
+never landed — the ends are not checked at all, and saying so is the answer. It is not a
+failure and must never be displayed as one. The distinction is load-bearing rather than
+cosmetic: a pin that fails leaves its last bisection probe behind in the result with every bind
+still reading `ok`, so a verdict computed from that point would describe hardware the engine
+never landed on. A rule FAILURE does not stop the check — a design that misses a spec is still a
+design, and whether it holds across its claimed range is still a real question. The result's
+aggregate `covers` is true when every edge reports `covers`, absent when nothing was checked.
+
+What edges do and do not check: they check the **endpoints**, exactly. The interior follows
+only where feasibility is monotone toward the ends — true of the saturation mechanisms that
+end a CM range, not a theorem about arbitrary rules — so the sweep remains the authority on
+the full landscape. Costs and semantics to know:
 
 - Cost is `(1 + edge count)` full evaluations everywhere the sheet evaluates — sweep cells
-  included, because a swept cell must never disagree with the same numbers evaluated alone.
-  A pinned sheet's 21-point sweep goes from ~0.6 s to ~1.8 s with two edges.
+  included, because a swept cell must never disagree with the same numbers evaluated alone —
+  except where the base run did not stand, which costs one. A pinned sheet's 21-point sweep goes
+  from ~0.6 s to ~1.8 s with two edges.
 - A composed child's `edges` are **not evaluated** (validation warns): in composition the
   parent typically drives the child's spec params, which would make the child's own range
   claim a fiction. Re-declare the claim on the parent if it should gate there.
 - `set` may not target an engine-solved param (`pin`/`solveFor`) — the solve would discard
   the override; validation refuses it.
-- The report carries the full story per edge: `set` (the NUMERIC point that was proven —
-  the authored side may be an expression), `rules` and `children` (path-attributable
-  outcomes), `solved` (where the engine-solved params landed; EMPTY when the run did not
-  stand, so a bracket end is never reported as a landing), `warnings` (the run's own
-  diagnostics, verbatim — a bias clamp fires exactly at a claim's extreme, and a green
-  verdict must not rest on silently clamped data), and `error` (the solver's message when
-  the run could not be evaluated at all).
-- In the 1-D sweep each edge rides as one aggregate curve (legended `edge cm-lo`): its
+- The report carries the full story per edge: `state` (the three-way outcome above), `set`
+  (the NUMERIC point that was checked — the authored side may be an expression), `rules` and
+  `children` (path-attributable outcomes), `solved` (where the engine-solved params landed;
+  EMPTY when the run did not stand, so a bracket end is never reported as a landing),
+  `warnings` (the run's own diagnostics, verbatim — a bias clamp fires exactly at a claim's
+  extreme, and a green verdict must not rest on silently clamped data), `error` (the solver's
+  message when the run could not be evaluated at all), and `assumedSource` (see the fidelity
+  notes below). A `not-checked` edge carries no outcomes: nothing ran.
+- A range end can push a device's required current density outside the swept `vgs` range —
+  its width is no longer free to grow to meet the current, so the inverse lookup can run out
+  of table. That is a failure to cover, and it is reported in those terms ("this device cannot
+  carry its authored current at the endpoint bias") with the lookup's own message and reach
+  numbers kept behind it.
+- In the 1-D sweep each edge rides as one aggregate curve (legended `covers cm-lo`): its
   worst hard-rule margin per sample, SKIPPING margins that sit exactly on zero — the
   edge's own range rule is parked there by construction (the snap) and carries no
-  headroom information. A broken edge draws at the bottom clip rather than vanishing, so
-  an edge-driven feasibility flip always has an on-chart cause.
-- Sweeping a param that an edge overrides (the canonical kit sweeps `CM_dc`, which both
-  edges pin to the claimed ends) makes those edge verdicts CONSTANT across the sweep: a
-  claim too wide for the device reads infeasible at every sample, because the claim is
-  part of the design. The margin curves still show where the design itself would close;
-  the caption says when this is in effect.
+  headroom information. An end that was checked and does not cover draws at the bottom clip
+  rather than vanishing, so an edge-driven feasibility flip always has an on-chart cause; a
+  sample whose ends were never checked leaves a GAP in the curve, because there is no
+  margin to draw and the bottom clip would read as a failure.
+- Edge curves move along EVERY sweep, including a sweep of a param an edge overrides (the
+  canonical kit sweeps `CM_dc`, which both ends pin). Each sample checks its own sample's
+  design, so what the curve traces is how the coverage margin of a changing design varies —
+  not a constant redrawn. The caption on the chart says so.
+
+### What "the same design" means at a range end
+
+"Held hardware" means held at the sheet's own level of description, which is worth stating
+exactly — an author reading a green chip should know what it is and is not a statement about.
+
+- **The geometry is pinned numerically, per bind.** A bind that names no width — the common
+  `(gm/ID, I_D)` form the library is nearly all written in — becomes `(W, I_D)` for the range-end
+  run, at the width and length the base run sized, keeping the authored current expression. A
+  bind that already names a width is left exactly as authored: its partner reproduces the true
+  gate tie under a drain-voltage move, which is the only move a range claim makes today. A bind
+  that names neither a width nor a current has both pinned numerically, and the run lists those
+  blocks in `assumedSource` — the sheet never said where their current comes from, so holding it
+  is an ideal-source assumption, and the fix is to author the current.
+- **The geometry is exact; the small-signal numbers read off it are not.** A rewritten bind
+  re-reads `gm` from the table at the pinned width instead of honouring the ratio the author
+  wrote, so a range-end `gm` — and every quantity derived from it — sits an interpolation
+  residual below the base's, about 0.1% on the demo model, even where nothing about the condition
+  changed. Read a base-against-end comparison with that floor already under it.
+- **The authored current expression IS the hardware model.** `I_o = K_m*I_tail/2` re-evaluates
+  at the range end, and that ratio is the mirror. What it does not model is a real tail source's
+  own output resistance re-settling the current as the drain moves; network-level re-settling is
+  out of scope here as everywhere else in this engine, and the sheet's authority ends where the
+  lookup table's does. Comparison against fixed-netlist simulation put that divergence at ~10%
+  at the far ends of the shipped range claims, without changing any of their verdicts.
+- **A device whose GATE is the fixed thing is outside these semantics.** `vgs` is not a bindable
+  quantity, so every device at a range end is current-driven by assumption. Two devices sharing
+  a gate node therefore stay at one voltage only while the range end moves `vds` alone — true of
+  every range claim in the library today. An end that moved body bias, supply or temperature
+  would need a `(W, vgs)` bind, which is an engine change and not an authoring one. Validation
+  warns when a width-first bind sits under a range end that reaches it through any other path,
+  and says so differently when the end reaches the bind's own `W` or `L`, because then the run is
+  sizing a different transistor rather than re-biasing this one. Both are advisory.
+- **At a bind the transformation rewrites, the data-ceiling verdict carries no information.** For
+  the same reason its `gm` drifts low, its operating point is read out of the table rather than
+  requested, so `gm/ID` is at or below the data ceiling by construction — that data-trust signal,
+  one of the things that gates an ordinary bind, is structurally absent there. The run's other
+  diagnostics (bias clamps, an inverse lookup that runs out of table) are what carry the trust
+  question instead, which is why they ride the report verbatim. A width-first bind is different:
+  it keeps its authored operating-point spec, so the ceiling still gates it at a range end. The
+  sheet's own ceiling RULE goes quiet in the same way and less visibly: it is authored against
+  the `gm/ID` param (`gm_id_in <= ceiling`), and at a range end that param no longer binds the
+  device, so the rule reports the base value unchanged and passes. A green ceiling chip on a
+  range end says the ceiling held at the centre, not that it was re-checked there.
 
 ## Sweeps
 
@@ -798,10 +891,11 @@ silently repairs one.
    bias loop* and *Entering from a spec*). Backstop: both solvers fail closed with named
    reasons — divergence, overshoot, a bracket that never straddles, a residual that never
    reaches zero — and a failed solve is never reported as a sized design.
-6. **A claimed operating range is a claim to prove.** Declare `edges` so the ends re-evaluate
-   completely on every run, and say in the note that the edges prove the endpoints while the
-   sweep owns the interior (see *Containment edges*). Backstop: a failing edge fails the
-   sheet hard under an edge-qualified rule id.
+6. **A claimed operating range is a claim to check.** Declare `edges` so both ends are
+   re-checked on every run — on the design that run produced, with its devices held — and say
+   in the note that the ends are checked exactly while the sweep owns the interior (see
+   *Containment edges*). Backstop: an end the design does not cover fails the sheet hard under
+   an edge-qualified rule id.
 7. **Pick each rule's kind for its verdict semantics.** Requirements and invariants gate
    feasibility; guardrails advise and never block; `==` fixed points carry a tolerance (see
    *Rule kinds*). A hard rule whose side cannot compute reads `na` and fails closed — so
