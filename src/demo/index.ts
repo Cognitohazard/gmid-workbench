@@ -291,3 +291,26 @@ export function withoutColumns(table: DeviceTable, keys: readonly string[]): Dev
   for (const k of keys) quantities.delete(k);
   return { ...table, grid: { ...table.grid, quantities } };
 }
+
+/**
+ * A copy of `table` with named quantity columns multiplied — how a second characterization of
+ * one device is made for a test: not physics, but a difference from nominal that is exactly
+ * known, so a per-condition verdict can be predicted in closed form rather than read back off
+ * the engine. A column the table does not carry is skipped; the grid is otherwise untouched,
+ * so axes and shape still agree.
+ */
+export function scaleQuantities(
+  table: DeviceTable,
+  scale: Readonly<Record<string, number>>,
+): DeviceTable {
+  const quantities = new Map(table.grid.quantities);
+  for (const [name, factor] of Object.entries(scale)) {
+    const col = quantities.get(name);
+    if (col)
+      quantities.set(
+        name,
+        Float64Array.from(col, (v) => v * factor),
+      );
+  }
+  return { ...table, grid: { ...table.grid, quantities } };
+}

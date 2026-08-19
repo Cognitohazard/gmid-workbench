@@ -6,7 +6,7 @@
 // unresolved, which evaluation refuses to size. Zero DOM; the library map is injected.
 
 import type { QAWarning } from '../types';
-import { MAX_USE_DEPTH, type SheetDoc, type SheetUse } from './types';
+import { MAX_USE_DEPTH, PATH_SEP, type SheetDoc, type SheetUse } from './types';
 
 /** One sheet the resolver can hand out: `path` is its library id — `folder/name`, no
  *  extension (curated sheets use their on-disk location; runtime-loaded sheets live
@@ -163,6 +163,53 @@ function resolveDoc(
     };
   });
   return changed ? { ...doc, uses } : doc;
+}
+
+/** One composed block that names its own device, and the binding string it names. `path` is
+ *  the use path (`amp.s1`), so a caller reporting a device it cannot supply can point at the
+ *  block that asked for it rather than at the sheet as a whole. */
+export interface NamedBinding {
+  path: string;
+  binding: string;
+}
+
+/**
+ * Every device binding a sheet's composed children NAME, over the tree as it will actually
+ * evaluate — refs materialized first, so a by-reference child's own children are walked too.
+ *
+ * Named children ONLY. The primary device is not a field of the doc (it is handed to
+ * `runSheet` alongside it), and a child that names nothing inherits its parent's already
+ * chosen table rather than being resolved a second time — so a caller preflighting device
+ * availability preflights exactly this list plus the primary it supplies itself.
+ *
+ * The resolution `warnings` come back with the bindings because they are the same question:
+ * a use whose ref did not resolve has no visible subtree, so the list of bindings below it is
+ * silently short. All of them are error severity — a caller that means to preflight must stop
+ * on them rather than proceed against a partial tree.
+ */
+export function namedBindings(
+  doc: SheetDoc,
+  refs?: SheetRefIndex,
+): { bindings: NamedBinding[]; warnings: QAWarning[] } {
+  const r = resolvedSheet(doc, refs);
+  const bindings: NamedBinding[] = [];
+  collectBindings(r.doc, '', 0, bindings);
+  return { bindings, warnings: r.warnings };
+}
+
+function collectBindings(doc: SheetDoc, prefix: string, depth: number, into: NamedBinding[]): void {
+  // Shape-guarded like the evaluator's own walk: a persisted doc reaches here unverified, and
+  // this must degrade to "nothing named", never throw.
+  if (depth >= MAX_USE_DEPTH || !Array.isArray(doc.uses)) return;
+  for (const use of doc.uses) {
+    if (typeof use?.name !== 'string') continue;
+    const path = prefix + use.name;
+    // Every binding the evaluator will try to resolve, on its predicate (a declared `device`,
+    // whatever its content) — a blank one included, so a caller preflighting availability
+    // refuses it by name here instead of meeting it as a mid-evaluation failure.
+    if (typeof use.device === 'string') into.push({ path, binding: use.device });
+    if (use.doc) collectBindings(use.doc, path + PATH_SEP, depth + 1, into);
+  }
 }
 
 /** Strip provenance `ref` fields from a resolved tree, leaving embedded docs only. */

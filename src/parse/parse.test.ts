@@ -85,6 +85,21 @@ L,VGS,ID,GM
     expect(t.meta.extra).toEqual({ mostab: '0.1', license: 'Apache-2.0', Source: 'SomePDK' });
   });
 
+  it('promotes the pdk header to a first-class field, leaving the rest passing through', () => {
+    // The process namespace decides whether two files that both call their device `nch` are
+    // one device, so it is read rather than preserved as opaque text.
+    const csv = `# device: nch
+# PDK: sky130A
+# license: Apache-2.0
+L,VGS,ID,GM
+1e-8,0.3,1e-6,1e-5
+1e-8,0.5,2e-6,2e-5
+`;
+    const t = expectOk(parseMostabCsv(csv)).tables[0];
+    expect(t.meta.pdk).toBe('sky130A');
+    expect(t.meta.extra).toEqual({ license: 'Apache-2.0' });
+  });
+
   it('honors hints over metadata for device/corner', () => {
     const ds = expectOk(parseMostabCsv(CSV, { device: 'override', corner: 'ff' }));
     expect(ds.tables[0].id.device).toBe('override');

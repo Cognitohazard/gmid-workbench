@@ -237,11 +237,14 @@ def main(argv=None) -> None:
                     for vgs, vds, params in pts:
                         rows.append([_g(L * 1e-6), _g(vds), _g(vsb), _g(vgs)]
                                     + [_g(p) for p in params])
+            # Polarity is stamped explicitly for BOTH device types, and pdk names the
+            # technology: together with the device name they are the identity the app
+            # groups corner variants by, so an undeclared field would fall back to
+            # name-only grouping.
             meta = {"mostab": "0.1", "device": subckt, "corner": corner, "temp": temp,
                     "W": W * 1e-6, "simulator": SIM, "license": "Apache-2.0",
-                    "source": SOURCES.get(pdk.name, pdk.name)}
-            if t == "p":
-                meta["polarity"] = "p"
+                    "source": SOURCES.get(pdk.name, pdk.name),
+                    "pdk": pdk.name, "polarity": t}
             out = os.path.join(outdir, f"{subckt}__{corner}__{int(temp)}C.mostab.csv")
             write_mostab(out, ["l", "vds", "vsb", "vgs", *SAVE_PARAMS], rows, meta)
             faults, warns = _qa(out, t)

@@ -62,6 +62,7 @@ interface ParsedMeta {
   corner?: string;
   temp?: number;
   W?: number;
+  pdk?: string;
   simulator?: string;
   date?: string;
   AVT?: number;
@@ -123,6 +124,9 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
       if (Number.isFinite(w)) meta.W = w;
       break;
     }
+    case 'pdk':
+      meta.pdk = value;
+      break;
     case 'simulator':
       meta.simulator = value;
       break;
@@ -402,6 +406,7 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
   const mutMeta = tableMeta as { -readonly [K in keyof TableMeta]: TableMeta[K] };
   if (meta.W !== undefined) mutMeta.W = meta.W;
   if (meta.temp !== undefined) mutMeta.temp = meta.temp;
+  if (meta.pdk !== undefined) mutMeta.pdk = meta.pdk;
   if (meta.simulator !== undefined) mutMeta.simulator = meta.simulator;
   if (meta.date !== undefined) mutMeta.date = meta.date;
   if (meta.AVT !== undefined) mutMeta.AVT = meta.AVT;

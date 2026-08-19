@@ -16,3 +16,4 @@ export * from './series';
 export * from './device';
 export * from './sheet';
 export * from './picker';
+export * from './corners';

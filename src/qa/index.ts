@@ -5,6 +5,16 @@
 // conventions into magnitudes, recording the polarity that was applied.
 
 import type { Axis, DeviceTable, Grid, Polarity, QAWarning, TableMeta } from '../types';
+import type { CornerFamily } from '../corners';
+import {
+  axisSignature,
+  extraScalar,
+  familyIdentityOf,
+  pdkOf,
+  sameVariant,
+  variantKeyOf,
+  variantLabel,
+} from '../corners';
 import { PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
@@ -437,6 +447,193 @@ export function validate(table: DeviceTable): QAWarning[] {
     });
   }
 
+  return out;
+}
+
+// --- family QA ---------------------------------------------------------------
+
+/** The distinct values of one per-table fact across a family, each with the conditions that
+ *  carry it. One entry means the family agrees; more means it does not, and the map already
+ *  says which corner is the odd one out. */
+function byFact(
+  variants: readonly DeviceTable[],
+  fact: (t: DeviceTable) => string,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const t of variants) {
+    const key = fact(t);
+    const labels = out.get(key);
+    if (labels) labels.push(variantLabel(t.id));
+    else out.set(key, [variantLabel(t.id)]);
+  }
+  return out;
+}
+
+/** A disagreement spelled out as `tt, ff: <value>; ss@-40: <other>`. */
+function describe(groups: Map<string, string[]>): string {
+  return [...groups].map(([v, labels]) => `${labels.join(', ')}: ${v === '' ? '—' : v}`).join('; ');
+}
+
+/** One axis as a range and a sample count. */
+function axisSummary(axis: Axis): string {
+  const v = axis.values;
+  return `${axis.name} ${v[0]?.toExponential(3) ?? '—'}…${v[v.length - 1]?.toExponential(3) ?? '—'} (${v.length})`;
+}
+
+/**
+ * Data-trust checks ACROSS one corner family — the questions that only exist once several
+ * tables claim to be one device. Pure, and warn-never-fix like every other check here: a
+ * family is never repaired, reordered, resampled, or silently split.
+ *
+ * Error severity marks a family nothing should project from, and projection independently
+ * enforces both cases: an ambiguous condition (`variantAt` refuses that condition) and
+ * variants that do not even sweep the same axes (`runVariant` refuses the whole family — a
+ * sheet pinned on one is not pinned on the other, compared here and there through the one
+ * `axisSignature`). Everything else is a warning, because coverage IS legitimately
+ * corner-specific — a slow corner characterized over a shorter vgs range is ordinary, not a
+ * defect — and gating on it would refuse valid data.
+ */
+export function validateFamily(f: CornerFamily): QAWarning[] {
+  const out: QAWarning[] = [];
+  const variants = f.variants;
+
+  for (const key of f.duplicates) {
+    const n = variants.filter((t) => sameVariant(variantKeyOf(t.id), key)).length;
+    const label = variantLabel(key);
+    out.push({
+      rule: 'family-duplicate-variant',
+      severity: 'error',
+      message: `${n} loaded tables claim "${f.device}" at ${label} — nothing evaluates at an ambiguous condition; remove one or replace it explicitly`,
+      location: label,
+    });
+  }
+  if (variants.length < 2) return out;
+
+  const axisSets = byFact(variants, axisSignature);
+  if (axisSets.size > 1) {
+    out.push({
+      rule: 'family-axes',
+      severity: 'error',
+      message: `variants of "${f.device}" sweep different axes — ${describe(axisSets)} — a design pinned on one is not pinned on the other`,
+      location: f.device,
+    });
+  } else {
+    // Compared on the sample points themselves, reported as ranges: two sweeps can share
+    // their endpoints and their count and still sit on different points (a log spacing
+    // against a linear one), and a summary-only comparison would call those identical.
+    const lattices = byFact(variants, (t) =>
+      t.grid.axes.map((a) => `${a.name}:${a.values.join(',')}`).join(' | '),
+    );
+    if (lattices.size > 1) {
+      out.push({
+        rule: 'family-sweep-range',
+        severity: 'warning',
+        message: `variants of "${f.device}" were swept over different ranges, step sizes or sample points — ${describe(byFact(variants, (t) => t.grid.axes.map(axisSummary).join(' | ')))} — each table is read as imported, so an operating point reachable at one condition may be out of range at another`,
+        location: f.device,
+      });
+    }
+  }
+
+  const widths = byFact(variants, (t) => (t.meta.W === undefined ? '' : t.meta.W.toExponential(3)));
+  if (widths.size > 1) {
+    out.push({
+      rule: 'family-width',
+      severity: 'warning',
+      message: `variants of "${f.device}" were characterized at different widths — ${describe(widths)} — sizing rescales from each table's own width, so compare the sized results, not the raw columns`,
+      location: f.device,
+    });
+  }
+
+  // Non-axis columns only: the grid materializes every axis as a column too, and an axis
+  // difference is the check above's finding, not a second one about quantities.
+  const columns = byFact(variants, (t) => {
+    const axes = new Set(t.grid.axes.map((a) => a.name));
+    return [...t.grid.quantities.keys()]
+      .filter((k) => !axes.has(k))
+      .sort()
+      .join(', ');
+  });
+  if (columns.size > 1) {
+    out.push({
+      rule: 'family-quantities',
+      severity: 'warning',
+      message: `variants of "${f.device}" carry different quantity columns — ${describe(columns)} — author math that reads a column a variant lacks goes na at that condition`,
+      location: f.device,
+    });
+  }
+
+  // Provenance says two different things depending on whether the process namespace is
+  // declared. Undeclared, it is the only evidence about IDENTITY — whether these tables are
+  // one device at all. Declared, identity is settled and a simulator difference is a fact
+  // about the DATA. One fact, one warning. The branch reads the whole family, not one member:
+  // grouping joins an undeclared member to a declared sibling, so a family can mix the two —
+  // and any undeclared member means its membership was INFERRED, which is exactly when the
+  // identity evidence must stay visible, whichever file the user happened to import first.
+  if (variants.some((t) => pdkOf(t) === '')) {
+    const provenance = byFact(variants, (t) =>
+      [extraScalar(t, 'source') ?? '', t.meta.simulator ?? '', t.meta.date ?? '']
+        .filter((s) => s !== '')
+        .join(' / '),
+    );
+    if (provenance.size > 1) {
+      out.push({
+        rule: 'family-provenance',
+        severity: 'warning',
+        message: `"${f.device}" was grouped by device name alone and its variants record different provenance — ${describe(provenance)} — declare "# pdk:" in the exports to confirm these are one device or to separate them`,
+        location: f.device,
+      });
+    }
+  } else {
+    const simulators = byFact(variants, (t) => t.meta.simulator ?? '');
+    if (simulators.size > 1) {
+      out.push({
+        rule: 'family-simulator',
+        severity: 'warning',
+        message: `variants of "${f.device}" were characterized with different simulators — ${describe(simulators)}`,
+        location: f.device,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Data-trust checks ACROSS families — the split question `validateFamily` cannot see, because
+ * it holds one family at a time. Grouping resolves an under-declared identity (blank `pdk`,
+ * undeclared polarity) into the unique declared candidate for the same device name; when
+ * several candidates make that join a guess, it refuses — and a refused join is as invisible
+ * per-family as a wrong one, so it is warned about here, naming the header that would settle
+ * it. Fully declared same-name families are legitimate (two PDKs both shipping an `nch`) and
+ * stay silent. Warn, never fix: nothing is ever joined or split by this check.
+ */
+export function validateFamilies(families: readonly CornerFamily[]): QAWarning[] {
+  const byName = new Map<string, CornerFamily[]>();
+  for (const f of families) {
+    const id = familyIdentityOf(f.familyUid);
+    if (!id) continue;
+    const list = byName.get(id.device) ?? [];
+    list.push(f);
+    byName.set(id.device, list);
+  }
+  const out: QAWarning[] = [];
+  for (const [name, group] of byName) {
+    if (group.length < 2) continue;
+    // Only a header that is declared in one family and undeclared in another is a split
+    // cause: undeclared-everywhere groups fine, and declared-everywhere is a real difference.
+    const ids = group.map((f) => familyIdentityOf(f.familyUid)!);
+    const varies: string[] = [];
+    if (ids.some((id) => id.pdk === '') && ids.some((id) => id.pdk !== '')) varies.push('# pdk:');
+    if (ids.some((id) => id.polarity === 'unknown') && ids.some((id) => id.polarity !== 'unknown'))
+      varies.push('# polarity:');
+    if (!varies.length) continue;
+    out.push({
+      rule: 'family-split',
+      severity: 'warning',
+      message: `${group.length} device groups share the name "${name}" and one of them declares no full identity — they stay separate because joining would be a guess; declare ${varies.join(' and ')} in the exports to say which device each file is`,
+      location: name,
+    });
+  }
   return out;
 }
 

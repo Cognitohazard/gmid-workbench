@@ -30,6 +30,13 @@ export interface Polarity {
 export interface TableMeta {
   readonly W?: number; // characterization width [m]
   readonly temp?: number; // [°C]
+  /**
+   * Process/library namespace the device name belongs to (e.g. "sky130A"). Optional, and
+   * blank on most exports — but when two files both call their device `nch`, this is the
+   * only fact that says whether they are one device characterized twice or two unrelated
+   * devices. Corner grouping reads it, which is why it is promoted out of `extra`.
+   */
+  readonly pdk?: string;
   readonly simulator?: string;
   readonly date?: string;
   readonly polarity?: Polarity;

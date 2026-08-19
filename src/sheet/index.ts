@@ -52,7 +52,13 @@ export function runSheet(
   const pre = [...r.warnings, ...validateSheet(r.doc)];
   const res = evaluateSheet(r.doc, table, resolveDevice);
   const blocked = pre.some((w) => w.severity === 'error');
-  return { ...res, feasible: res.feasible && !blocked, warnings: [...pre, ...res.warnings] };
+  // `closes` takes the same block as `feasible`: a structurally broken sheet closes nothing.
+  return {
+    ...res,
+    feasible: res.feasible && !blocked,
+    closes: res.closes && !blocked,
+    warnings: [...pre, ...res.warnings],
+  };
 }
 
 /** Default sample count for a parameter sweep across its [min,max] bound. */

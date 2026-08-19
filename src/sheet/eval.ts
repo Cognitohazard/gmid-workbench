@@ -858,7 +858,17 @@ function evaluateOnce(
     (children?.every((c) => c.feasible) ?? true) &&
     !warnings.some((w) => w.severity === 'error');
 
-  return { values, bind, rules, feasible, warnings, ...(children ? { children } : {}) };
+  // `closes` starts life equal to `feasible` and is left alone by the edge fold below —
+  // that fold is the ONLY place the two are allowed to diverge.
+  return {
+    values,
+    bind,
+    rules,
+    feasible,
+    closes: feasible,
+    warnings,
+    ...(children ? { children } : {}),
+  };
 }
 
 /**
@@ -959,6 +969,7 @@ function solveFailed(res: SheetResult, message: string): SheetResult {
   return {
     ...res,
     feasible: false,
+    closes: false,
     warnings: [...res.warnings, { rule: 'sheet-solve', severity: 'error', message }],
   };
 }
@@ -1376,6 +1387,8 @@ function evaluateWithEdges(
   }
   const pinned = pinHardware(doc, base);
   const reports = edges.map((e) => runEdge(e, pinned, base, table, resolveDevice));
+  // `closes` rides the spread untouched — it is the base verdict by definition, and this is
+  // the one fold that separates "the design closes" from "the whole claim stands".
   return {
     ...base,
     edges: reports,

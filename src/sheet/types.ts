@@ -659,6 +659,15 @@ export interface SheetResult {
   bind?: BindReport;
   rules: RuleResult[];
   feasible: boolean;
+  /**
+   * Whether the design CLOSES — this sheet's own binds, rules and children hold — before any
+   * containment edge is folded in. `feasible` is the whole claim (closure AND coverage), so a
+   * design that meets every spec at its center and loses one range end reads `feasible: false`;
+   * a caller that reported that as "does not close" would name the wrong failure. Equal to
+   * `feasible` on a sheet that declares no edges, and folded by exactly the same blocks
+   * (a validation or ref-resolution error forces both false).
+   */
+  closes: boolean;
   warnings: QAWarning[];
   /** Present (possibly empty) only when the sheet composes children; absent for a leaf. */
   children?: SheetChildReport[];
