@@ -36,6 +36,9 @@ release/
 # e2e demo fixtures (regenerated from the EKV oracle by web/e2e/global-setup.ts)
 web/e2e/fixtures/demo.mostab.csv
 web/e2e/fixtures/pmos-demo.mostab.csv
+web/e2e/fixtures/demo-ss.mostab.csv
+web/e2e/fixtures/demo-tt-alt.mostab.csv
+web/e2e/fixtures/legacy-family-name.mostab.csv
 
 # ngspice init (ngbehavior=hsa so sectioned .lib works)
 .spiceinit

@@ -28,8 +28,11 @@ import {
   type SheetUse,
   type SheetWiring,
   type SheetEdge,
+  variantKeyId,
+  variantKeyOf,
   type RuleKind,
   type RuleOp,
+  type VariantKey,
 } from '@gmid/mostab-core';
 
 // Canonical axis names the core's import seam guarantees (the `axis: true` base
@@ -187,6 +190,36 @@ export interface LegendConfig {
   include: number[]; // sample: family values to always include
 }
 
+/**
+ * Which characterization conditions a sheet panel is evaluated at. `nominal` is the family's
+ * designated condition (and refuses, rather than substituting one, when nothing designates it);
+ * `active` follows the active table's own condition; `chosen` is an explicit set; `all` is every
+ * condition the primary family holds.
+ */
+export type SheetCornerMode = 'nominal' | 'active' | 'chosen' | 'all';
+const CORNER_MODES: readonly SheetCornerMode[] = ['nominal', 'active', 'chosen', 'all'];
+
+/** Coerce an untrusted persisted list of conditions (a panel's chosen set). Keys are stored
+ *  structured, never as a joined string, and re-canonicalized on the way in so a hand-edited
+ *  `TT` still selects the condition `tt` names. */
+export function sanitizeVariantKeys(v: unknown): VariantKey[] {
+  if (!Array.isArray(v)) return [];
+  const out: VariantKey[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    if (typeof o.corner !== 'string' || typeof o.temp !== 'number' || !Number.isFinite(o.temp))
+      continue;
+    const key = variantKeyOf({ device: '', corner: o.corner, temp: o.temp });
+    const id = variantKeyId(key);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(key);
+  }
+  return out;
+}
+
 export interface Panel {
   id: string;
   xExpr: string; // X axis as an expression (the gm/ID view uses 'gm_id'); '' on a sheet panel
@@ -199,6 +232,11 @@ export interface Panel {
   sheet?: SheetDoc; // render === 'sheet': the authored leaf design-sheet, stored verbatim
   sheetSweep?: string; // render === 'sheet': the param the feasibility view sweeps; '' = card only
   sheetSweep2?: string; // render === 'sheet': the second (×) param; with sheetSweep set ⇒ a 2-D map
+  // Which characterization conditions this sheet is evaluated at. Bench state, never written
+  // into `sheet`: the document describes the design, while which corners are loaded and which
+  // of them a panel asks about is a property of this bench. Absent ⇒ 'nominal'.
+  sheetCornerMode?: SheetCornerMode;
+  sheetCornerKeys?: VariantKey[]; // mode 'chosen': the conditions selected, structured
   auto?: boolean; // an auto-generated canonical panel — regenerated per device on a swap, not
   // user-authored; absent on every panel the user adds, so user work survives a device swap.
 }
@@ -618,6 +656,14 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
         render === 'sheet' && typeof pp.sheetSweep === 'string' ? pp.sheetSweep : undefined;
       const sheetSweep2 =
         render === 'sheet' && typeof pp.sheetSweep2 === 'string' ? pp.sheetSweep2 : undefined;
+      // Corner state is reconstructed like every other panel field — a field this function does
+      // not name is dropped, so an unlisted addition would vanish on the next reload.
+      const cornerMode = CORNER_MODES.find((m) => m === pp.sheetCornerMode);
+      const sheetCornerMode = render === 'sheet' ? cornerMode : undefined;
+      // A chosen condition is kept even when nothing loaded answers to it: the panel renders it
+      // as its own not-evaluated row, which is the honest state — pruning it here would quietly
+      // narrow the question the panel is asking.
+      const cornerKeys = render === 'sheet' ? sanitizeVariantKeys(pp.sheetCornerKeys) : [];
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,
@@ -630,6 +676,8 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
         ...(sheet ? { sheet } : {}),
         ...(sheetSweep ? { sheetSweep } : {}),
         ...(sheetSweep2 ? { sheetSweep2 } : {}),
+        ...(sheetCornerMode ? { sheetCornerMode } : {}),
+        ...(cornerKeys.length ? { sheetCornerKeys: cornerKeys } : {}),
         ...(pp.auto === true ? { auto: true } : {}),
       });
     }

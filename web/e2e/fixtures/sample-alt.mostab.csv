@@ -1,5 +1,6 @@
 # mostab: 0.1
 # device: nch_lvt
+# pdk: otherfab
 # corner: tt
 # temp: 27
 # W: 1e-6

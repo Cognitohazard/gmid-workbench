@@ -10,10 +10,10 @@
     formatSI,
     parseEng,
     type DeviceTable,
-    type DeviceResolver,
     type OverlayCurvesXY,
     type OverlayLine,
   } from '@gmid/mostab-core';
+  import type { Bench } from './families';
   import { PALETTE, type ChartData, type CursorInfo } from './chart';
   import { chartHost } from './chartHost.svelte';
   import { copyText, download } from './export';
@@ -29,7 +29,7 @@
   let {
     device,
     overlays = [],
-    sheetDevices = [],
+    bench,
     sweep,
     sharedBias,
     cfg,
@@ -41,7 +41,7 @@
   }: {
     device: DeviceTable;
     overlays?: DeviceTable[];
-    sheetDevices?: { uid: string; label: string; table: DeviceTable }[];
+    bench: Bench;
     sweep: string;
     sharedBias: Record<string, number>;
     cfg: Panel;
@@ -135,33 +135,8 @@
   // declares its vds/vsb (or the panel's per-block bias control writes one), and body bias
   // defaults to 0. The dashboard's shared-bias sliders drive only the device-cockpit charts,
   // never a sheet's sizing — a stack's devices sit at different vds, so one shared value can't
-  // speak for all of them.
-
-  // Per-child device resolution for composed sheets: a child `use.device` is a table uid; resolve
-  // it to that loaded table (unreduced — the child's own bind/fallback picks the bias point).
-  // uids are unique per distinct content, so a first match is safe (same uid ⇒ same device); an
-  // absent uid returns undefined ⇒ the child fails closed.
-  const resolveDevice: DeviceResolver = $derived.by(() => {
-    const list = sheetDevices;
-    return (uid: string) => list.find((d) => d.uid === uid)?.table;
-  });
-  // Picker options: one per distinct uid (a re-imported identical table collapses to one), with a
-  // disambiguating suffix when two DIFFERENT devices share a display label.
-  const deviceOptions = $derived.by(() => {
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, rebuilt per recompute
-    const seenUid = new Set<string>();
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, rebuilt per recompute
-    const labelSeen = new Map<string, number>();
-    const out: { uid: string; label: string }[] = [];
-    for (const d of sheetDevices) {
-      if (seenUid.has(d.uid)) continue;
-      seenUid.add(d.uid);
-      const n = (labelSeen.get(d.label) ?? 0) + 1;
-      labelSeen.set(d.label, n);
-      out.push({ uid: d.uid, label: n > 1 ? `${d.label} #${n}` : d.label });
-    }
-    return out;
-  });
+  // speak for all of them. Device resolution for a composed child lives in SheetPanel, which
+  // owns the condition the whole run is projected to.
 
   // The overlaid family of curves across the primary + any overlay devices, on one shared X
   // lattice. A degenerate X or bad expression yields no curves and a message; the last good
@@ -532,12 +507,15 @@
         cfg={cfg.sheet}
         sweep={cfg.sheetSweep ?? ''}
         sweep2={cfg.sheetSweep2 ?? ''}
-        {resolveDevice}
-        {deviceOptions}
+        cornerMode={cfg.sheetCornerMode ?? 'nominal'}
+        cornerKeys={cfg.sheetCornerKeys ?? []}
+        {bench}
         {styleVersion}
         onChange={(s) => onChange({ sheet: s })}
         onSweep={(s) => onChange({ sheetSweep: s })}
         onSweep2={(s) => onChange({ sheetSweep2: s })}
+        onCornerMode={(m) => onChange({ sheetCornerMode: m })}
+        onCornerKeys={(k) => onChange({ sheetCornerKeys: k })}
       />
     {:else}
       <p class="perr">this panel has no sheet</p>

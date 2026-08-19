@@ -284,12 +284,14 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toHaveValue(/nch_lvt/);
   await expect(sp2.locator('.pwarn', { hasText: 'nch_lvt' })).toHaveCount(0);
 
-  // Removing the chosen device leaves the choice set-but-absent: the child fails closed
-  // with a clear message, and the picker surfaces the missing key rather than silently
-  // falling back to the active device.
+  // Removing the chosen device leaves the choice set-but-absent: the run is refused before the
+  // engine sees it and says which device is missing — not a design that fails, and never a
+  // silent fallback to the active device. The block still renders its device control, since
+  // that is what the refusal is fixed with.
   await page.locator('.devices .dev', { hasText: 'nch_lvt' }).locator('.drm').click();
-  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
-  await expect(sp2.locator('.pwarn', { hasText: 'nch_lvt' })).toContainText('did not resolve');
+  await expect(sp2.locator('[data-not-evaluated]')).toContainText('nch_lvt');
+  await expect(sp2.locator('.feasb')).toHaveText('not evaluated');
+  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-skip/);
   await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toContainText(
     'not loaded',
   );
@@ -306,8 +308,12 @@ test('design sheet: two loaded devices sharing a label are each individually sel
 
   await page.goto('/');
   await loadDemo(page);
-  // Two DIFFERENT tables that share the same display label (device·corner·temp), different data.
-  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  // Two DIFFERENT tables that share the same display label (device·corner·temp) with different
+  // data — and EACH declaring its own process namespace, which is what keeps them two devices
+  // rather than one device claiming the same condition twice. Declaring on one file alone would
+  // not separate them: an undeclared namespace joins the sole declared candidate of the same
+  // name (the re-export upgrade path), so a deliberate name collision must be declared on both.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample-fab.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(2); // demo + first import
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample-alt.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(3); // demo + two same-label nch_lvt
@@ -318,16 +324,17 @@ test('design sheet: two loaded devices sharing a label are each individually sel
   await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
   const dsel = sp.locator('.suse', { hasText: 'cs' }).locator('.dsel');
 
-  // The two same-label devices appear as DISTINCT options (one disambiguated with a suffix) —
-  // not collapsed to a single unselectable entry.
+  // The two same-named devices appear as DISTINCT options, told apart by the process namespace
+  // one of them declares — not collapsed into a single unselectable entry, and not merged into
+  // one device because their display labels happen to match.
   const opts = dsel.locator('option');
   await expect(opts.filter({ hasText: 'nch_lvt' })).toHaveCount(2);
-  await expect(opts.filter({ hasText: '#2' })).toHaveCount(1);
+  await expect(opts.filter({ hasText: 'otherfab' })).toHaveCount(1);
 
-  // Selecting the second same-label device takes effect (the child now sizes against the fixture,
-  // which can't reach gm/ID=12, so it goes infeasible — proving the selection is not inherit/demo)
-  // AND the device RESOLVES (no "device … did not resolve"; the unique key targeted the right table).
-  const second = await opts.filter({ hasText: '#2' }).getAttribute('value');
+  // Selecting the namespaced one takes effect (the child now sizes against that fixture, which
+  // can't reach gm/ID=12, so it goes infeasible — proving the selection is not inherit/demo)
+  // AND the device RESOLVES (no "device … did not resolve"; the binding named the right one).
+  const second = await opts.filter({ hasText: 'otherfab' }).getAttribute('value');
   await dsel.selectOption(second!);
   await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
   await expect(sp.locator('.pwarn', { hasText: 'device "' })).toHaveCount(0);
@@ -855,10 +862,11 @@ test('design sheet: imported sheets join the library — pickable, referenceable
   await expect(sp3.locator('.suse .refb')).toContainText('my-block');
   await expect(sp3.locator('.feasb')).toHaveText('feasible');
 
-  // Removing the referenced sheet fails closed: the design reads infeasible with an
-  // error naming the missing ref — never a silent fallback.
+  // Removing the referenced sheet fails closed: the document no longer assembles, so it is not
+  // evaluated at all — an error naming the missing ref, never a silent fallback and never a
+  // verdict about a design that could not be built.
   await page.locator('.usheets .dev', { hasText: 'my-block' }).locator('.drm').click();
-  await expect(sp3.locator('.feasb')).toHaveText('infeasible');
+  await expect(sp3.locator('.feasb')).toHaveText('not evaluated');
   await expect(sp3.locator('.pwarn', { hasText: 'my-block' }).first()).toBeVisible();
 
   expect(errors).toEqual([]);

@@ -66,7 +66,7 @@ test('topology picker: search streams, sorts, partitions, and hands off to a she
     await expect(box).toHaveValue(shown);
   }
 
-  await pk.getByRole('button', { name: /^search \d+ sheets$/ }).click();
+  await pk.getByRole('button', { name: /^search \d+ sheets/ }).click();
 
   // Progressive: rows land while the run is still going (the stop button is still up).
   const rows = pk.locator('tr.row');
@@ -74,10 +74,11 @@ test('topology picker: search streams, sorts, partitions, and hands off to a she
   await expect(pk.getByRole('button', { name: 'stop' })).toBeVisible();
 
   // ...and the run finishes on its own, one candidate per searchable sheet.
-  await expect(pk.getByRole('button', { name: /^search \d+ sheets$/ })).toBeVisible({
+  await expect(pk.getByRole('button', { name: /^search \d+ sheets/ })).toBeVisible({
     timeout: 150_000,
   });
-  await expect(pk.locator('.go .pbtn')).toHaveText(`search ${SEARCHABLE} sheets`);
+  // Idle again, and still naming the condition the next search would answer about.
+  await expect(pk.locator('.go .pbtn')).toHaveText(`search ${SEARCHABLE} sheets at tt`);
   await expect(rows).toHaveCount(SEARCHABLE);
   await expect(pk.locator('[data-progress]')).toContainText(`${SEARCHABLE} of ${SEARCHABLE}`);
   // A sheet the queue could not evaluate at all is named, not silently missing from the count.
@@ -134,7 +135,7 @@ test('topology picker: search streams, sorts, partitions, and hands off to a she
   await expect(own.locator('.shead strong')).toHaveText('Single NMOS gm/ID sizing');
 
   // Stopping a run keeps what it found and says it stopped.
-  await pk.getByRole('button', { name: /^search \d+ sheets$/ }).click();
+  await pk.getByRole('button', { name: /^search \d+ sheets/ }).click();
   await expect(rows.first()).toBeVisible();
   await pk.getByRole('button', { name: 'stop' }).click();
   await expect(pk.locator('[data-progress]')).toContainText('stopped');
@@ -159,8 +160,8 @@ test('topology picker: with no spec typed, every sheet is screened at its own va
   await budget.fill('30');
   await budget.blur();
 
-  await pk.getByRole('button', { name: /^search \d+ sheets$/ }).click();
-  await expect(pk.getByRole('button', { name: /^search \d+ sheets$/ })).toBeVisible({
+  await pk.getByRole('button', { name: /^search \d+ sheets/ }).click();
+  await expect(pk.getByRole('button', { name: /^search \d+ sheets/ })).toBeVisible({
     timeout: 120_000,
   });
   await expect(pk.locator('tr.row')).toHaveCount(SEARCHABLE);

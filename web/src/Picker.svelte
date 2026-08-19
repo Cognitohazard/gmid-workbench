@@ -7,19 +7,26 @@
   import {
     marginSpeaksFor,
     pickTopology,
+    preflightVariant,
+    projectingResolver,
     rankCandidates,
+    variantKeyOf,
+    variantLabel,
     SPEC_FIELDS,
     PICKER_MS_BUDGET,
     PICKER_EVAL_BUDGET,
     formatEng,
     formatSI,
-    type DeviceTable,
+    type CornerFamily,
+    type FamilyResolver,
     type PickerCandidate,
     type PickerSortKey,
     type PickerSpec,
     type PickerVerdict,
     type SheetDoc,
+    type SheetRefEntry,
     type SpecName,
+    type VariantKey,
   } from '@gmid/mostab-core';
   import Help from './Help.svelte';
   import { CONTROL_HELP } from './help';
@@ -27,15 +34,22 @@
   import { SEARCHABLE_SHEETS } from './library';
   import { tableUid } from './dashboard';
   import { sheetRefIndex } from './sheetlib.svelte';
+  import type { Bench } from './families';
 
-  // The picker reads the active device and the curated library; `onOpen` hands a chosen
+  // The picker reads the bench's families and the curated library; `onOpen` hands a chosen
   // candidate to the dashboard. The open/close toggle stays in App, which renders this only
   // while open (and only once a device is loaded — the search needs a table).
+  //
+  // It searches at the primary family's NOMINAL condition, always: nominal feasibility is the
+  // question a design-type search answers, and a cross-corner search is a different feature
+  // rather than a wider default. That is also why nothing here falls back to the active table —
+  // an undesignated family means the bench has not said what nominal IS, and searching some
+  // other condition would answer a question nobody asked.
   let {
-    device,
+    bench,
     onOpen,
   }: {
-    device: DeviceTable;
+    bench: Bench;
     onOpen: (doc: SheetDoc, overrides: Record<string, number>) => void;
   } = $props();
 
@@ -64,6 +78,16 @@
   let ranSpec = $state.raw<PickerSpec>({});
   /** The device the current results were searched on, for the same reason. */
   let ranTable = $state('');
+  /** The bench state the current results were searched against: which families exist, what is
+   *  in them, and which condition each designates. A result is an answer about all of it, and
+   *  the active table's uid cannot detect a change to any of it — importing a sibling corner or
+   *  redesignating a child family's nominal moves what a search would find without the active
+   *  table moving at all. */
+  let ranRevision = $state('');
+  /** Sheets that were never searched, and why: a device the sheet needs is not characterized at
+   *  the condition being searched. Reported apart from the verdicts, like a crash, because
+   *  "this was not searched" is not one of the three answers a candidate gives. */
+  let unsearched = $state.raw<{ path: string; why: string }[]>([]);
   /** Sheets whose evaluation threw — only reachable if the core ever breaks its never-throws
    *  contract. Listed by name so a run that is missing a design type says which one and why,
    *  rather than quietly returning 24 answers to a 25-sheet question. */
@@ -78,6 +102,34 @@
   let token = 0;
 
   const total = SEARCHABLE_SHEETS.length;
+
+  // The condition every candidate is searched at: the primary family's designated nominal.
+  const primary = $derived(bench.primary);
+  const nominalTable = $derived(primary?.nominal);
+  const nominalKey = $derived<VariantKey | undefined>(
+    nominalTable ? variantKeyOf(nominalTable.id) : undefined,
+  );
+
+  /** The first thing this bench cannot supply for a sheet at `key`, in words — or undefined when
+   *  the primary and every named child project. A sheet whose children all inherit the primary
+   *  names nothing of its own and turns on the primary alone.
+   *
+   *  The walk is the run transition's own preflight (`preflightVariant`), so the picker never
+   *  ranks a candidate the sheet panel would then refuse: same grounds, same order, same words,
+   *  from one definition rather than two kept in step by hand.
+   *
+   *  The bench arguments are parameters, not the live props: they are the run's frozen snapshot,
+   *  so a bench edit mid-run cannot preflight a later sheet against one bench and evaluate it
+   *  against another. */
+  function unavailableDevice(
+    sheet: SheetRefEntry,
+    primaryFamily: CornerFamily,
+    key: VariantKey,
+    index: ReturnType<typeof sheetRefIndex>,
+    familyOf: FamilyResolver,
+  ): string | undefined {
+    return preflightVariant(sheet.doc, primaryFamily, key, familyOf, index).issues[0]?.message;
+  }
 
   /** A budget box: the entered number when it is at or above the floor, and the last good value
    *  otherwise (restoring the box), so a cleared or nonsense entry never becomes the bound. */
@@ -96,20 +148,28 @@
   }
 
   function run(): void {
+    if (!primary || !nominalTable || !nominalKey) return; // the button is disabled in this state
     const mine = ++token;
-    // Everything the run is an answer ABOUT is frozen here: the spec, the reference index,
-    // the budgets, and the device table. `device` is a prop, so reading it inside the queue
-    // would let a device switch mid-run produce one table of rows answered on two different
-    // devices, ranked against each other with nothing saying so.
+    // Everything the run is an answer ABOUT is frozen here as ONE coherent snapshot: the spec,
+    // the reference index, the budgets, the primary table at its nominal condition, and the
+    // resolver that projects every named child to that same condition. They are props, so
+    // reading them inside the queue would let a bench edit mid-run produce one table of rows
+    // answered on two different benches, ranked against each other with nothing saying so.
     const frozen = { ...$state.snapshot(spec) } as PickerSpec;
     const index = refs;
-    const table = device;
+    const key = nominalKey;
+    const family = primary;
+    const table = nominalTable;
+    const familyOf = bench.familyOf;
+    const projected = projectingResolver(familyOf, key);
     const budget = { msBudget, evalBudget };
     ranSpec = frozen;
     ranTable = tableUid(table);
+    ranRevision = bench.revision;
     results = [];
     cancelled = false;
     crashed = [];
+    unsearched = [];
     running = true;
     elapsed = 0;
     const t0 = performance.now();
@@ -127,9 +187,20 @@
         elapsed = performance.now() - t0;
         return;
       }
+      // A design type that needs a device this bench cannot supply AT the searched condition is
+      // not searched at all: entering the repair loop with a child that fails to resolve would
+      // spend the budget improving a number whose failure has nothing to do with the design.
+      const missing = unavailableDevice(s, family, key, index, familyOf);
+      if (missing) {
+        unsearched = [...unsearched, { path: s.path, why: missing }];
+        i += 1;
+        elapsed = performance.now() - t0;
+        setTimeout(step, 0);
+        return;
+      }
       let c: PickerCandidate | undefined;
       try {
-        c = pickTopology(frozen, s, table, undefined, {
+        c = pickTopology(frozen, s, table, projected, {
           refs: index,
           ...budget,
           now: () => performance.now(),
@@ -165,11 +236,13 @@
 
   /** The results on screen answer the spec the run STARTED with. Editing a field afterwards
    *  leaves a table that reads as an answer to the question now on the form, so say it. */
-  const stale = $derived(
-    results.length > 0 &&
-      (tableUid(device) !== ranTable ||
-        SPEC_FIELDS.some((f) => (spec[f.name] ?? null) !== (ranSpec[f.name] ?? null))),
-  );
+  const staleCause = $derived.by((): 'spec' | 'bench' | null => {
+    if (results.length === 0) return null;
+    if (SPEC_FIELDS.some((f) => (spec[f.name] ?? null) !== (ranSpec[f.name] ?? null)))
+      return 'spec';
+    const nominalUid = nominalTable ? tableUid(nominalTable) : '';
+    return nominalUid !== ranTable || bench.revision !== ranRevision ? 'bench' : null;
+  });
 
   // The ordering, the partition and the coverage denominator are the core's: they are rules
   // about the results, not about the page, and they are pinned by the core suite.
@@ -313,11 +386,24 @@
     {/each}
   </div>
 
+  <!-- The search runs at one named condition. Without a designated nominal there is no such
+       condition, and no other one stands in for it. -->
+  {#if primary && !nominalTable}
+    <p class="fail" data-blocked="nominal">
+      <b>{primary.device}</b> is loaded at {primary.keys.length}
+      {primary.keys.length === 1 ? 'condition' : 'conditions'} and none is designated nominal, so no sheet
+      can be searched — this search always asks about the nominal condition. Designate one in the devices
+      strip above.
+    </p>
+  {/if}
+
   <div class="go">
     {#if running}
       <button class="pbtn" onclick={cancel}>stop</button>
     {:else}
-      <button class="pbtn" onclick={run}>search {total} sheets</button>
+      <button class="pbtn" disabled={!nominalTable} onclick={run}
+        >search {total} sheets{#if nominalKey}{` at ${variantLabel(nominalKey)}`}{/if}</button
+      >
     {/if}
     <label class="budget" title="wall clock allowed per sheet before the search stops and says so"
       >ms/sheet
@@ -347,13 +433,16 @@ one that stops the search first on a small table"
       /></label
     >
     <span class="prog" data-progress
-      >{results.length} of {total}{elapsed ? ` · ${(elapsed / 1000).toFixed(1)} s` : ''}{cancelled
-        ? ' · stopped'
-        : ''}</span
+      >{results.length + unsearched.length} of {total}{elapsed
+        ? ` · ${(elapsed / 1000).toFixed(1)} s`
+        : ''}{cancelled ? ' · stopped' : ''}</span
     >
   </div>
   {#each crashed as c (c.path)}
     <p class="fail">{c.path} could not be evaluated at all: {c.why}</p>
+  {/each}
+  {#each unsearched as u (u.path)}
+    <p class="fail" data-unsearched={u.path}>{u.path} could not be searched: {u.why}</p>
   {/each}
   {#if opened}
     <p class="hint" data-opened>{opened} — added as a new panel on the dashboard.</p>
@@ -368,10 +457,12 @@ one that stops the search first on a small table"
           <option value="current">current</option>
         </select>
       </label>
-      <span class="hint" data-stale={stale ? '' : undefined}
-        >{stale
+      <span class="hint" data-stale={staleCause ?? undefined}
+        >{staleCause === 'spec'
           ? 'the spec has been edited — these rows answer the previous one; search again'
-          : `feasible first · ${view.supplied} field${view.supplied === 1 ? '' : 's'} supplied`}</span
+          : staleCause === 'bench'
+            ? 'the devices have changed — these rows answer the previous bench; search again'
+            : `feasible first · ${view.supplied} field${view.supplied === 1 ? '' : 's'} supplied`}</span
       >
     </div>
 

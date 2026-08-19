@@ -54,6 +54,21 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   active:
     'Make this the active device: it drives the dashboard, the pickers, the bias sliders, and the sizer.',
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
+  // corner families: one logical device characterized at several (corner, temperature) conditions
+  cornerFamily:
+    'One device, characterized at several conditions. Tables group by process namespace (# pdk:), device name and declared polarity — all read from the files, never assigned here. A grouping you disagree with is corrected in the data: add # pdk: to the exports and re-import.',
+  cornerOverlay:
+    'Draw every condition of this device alongside the active one, so the corner spread shows on every panel at once.',
+  nominal:
+    'The condition this bench means by “nominal”. Sheets evaluate there by default and the topology picker always searches there. Marked “auto” when the tt-at-27 °C rule picked it and nothing has been chosen — click to pin that choice, so a later import cannot move it; click a pinned one to release it back to the rule.',
+  cornerMode:
+    'Which conditions this sheet is evaluated at. Every run fixes ONE condition and evaluates the whole composition there — the primary device and every named child block — because a verdict assembled from a fast input pair and a slow tail describes a chip that does not exist. nominal = the family’s designated condition; active table = whichever table is selected; chosen = the ones you tick; all = every condition loaded for this device.',
+  cornerAggregate:
+    'What the selected conditions say together. “Closes at all N” needs every one of them evaluated and passing; a single evaluated failure reads “does not close”; conditions that could not be evaluated are never counted as passing — they are counted as not evaluated, and the design is reported as unverified rather than closed. Coverage folds separately: a range end that fails is a coverage gap, not a failure to close. The worst-case margin quoted beside the counts is a reading over the conditions that were EVALUATED, and display only — no design decision is taken from it, and the per-condition rows below remain the authority.',
+  cornerNotEvaluated:
+    'This condition was refused before the engine ran — a device the design needs is not characterized there, two loaded tables claim it, or the sheet itself did not resolve. That is not “does not close”: nothing was measured, so there is no verdict to report. The reason is named below.',
+  cornerOneAtATime:
+    'Only with a single condition selected. A design plane and a knob ranking are statements about one operating point, and there is no single point while several conditions are on screen.',
   sheet:
     'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device.',
   feasBadge:

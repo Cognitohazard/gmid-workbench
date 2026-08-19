@@ -7,10 +7,14 @@
     formatEng,
     formatSI,
     validate,
+    validateFamilies,
+    validateFamily,
+    variantLabel,
     EXAMPLES,
     DERIVED_QUANTITIES,
     cloneDoc,
     withParams,
+    type CornerFamily,
     type QAWarning,
     type DeviceTable,
     type Grid,
@@ -47,6 +51,17 @@
     type PanelTemplate,
   } from './dashboard';
   import { clearTables, deleteTable, loadTables, putTable, saneTable } from './devstore';
+  import {
+    benchFamilies,
+    familyLabel,
+    familyOptions,
+    familyResolver,
+    familyRevision,
+    migrateNominals,
+    parseRegistry,
+    provenanceOf,
+    REGISTRY_VERSION,
+  } from './families';
 
   // The device-level core is the single source of truth. Devices are loaded at runtime by
   // importing a mostab file; the app boots EMPTY (no built-in data) and shows a load prompt
@@ -70,18 +85,19 @@
     overlayIdx.map((i) => devices[i]?.table).filter((d): d is DeviceTable => !!d),
   );
   const warnings = $derived(active?.warnings ?? []);
-  // Loaded devices for the per-child device picker in composed sheets: a unique stable uid (the
-  // resolver/persistence key), a human label, and the raw table (reduced to an [l × vgs] sizing
-  // slice inside Panel, like the active device).
-  const sheetDevices = $derived(
-    devices.map((d) => ({ uid: tableUid(d.table), label: deviceKey(d.table), table: d.table })),
-  );
-  // The registry sidecar: load order + active index, so a reload restores the bench
-  // exactly (IndexedDB getAll returns key order, which is not load order).
+
+  // The registry sidecar: load order + active index + each family's nominal designation, so a
+  // reload restores the bench exactly (IndexedDB getAll returns key order, which is not load
+  // order, and holds no designations at all).
   const REG_KEY = 'gmid.devreg';
   $effect(() => {
     if (devices.length) {
-      saveJSON(REG_KEY, { order: devices.map((d) => tableUid(d.table)), active: activeIdx });
+      saveJSON(REG_KEY, {
+        v: REGISTRY_VERSION,
+        order: devices.map((d) => tableUid(d.table)),
+        active: activeIdx,
+        nominalByFamily,
+      });
     }
   });
   // Restore locally persisted tables once at boot, MERGING with anything imported
@@ -101,18 +117,71 @@
   // unreadable or malformed registry (blocked localStorage, selectively cleared or
   // corrupted site data) must not read as an intentionally empty bench — then
   // everything sound is restored and nothing is deleted.
-  const bootReg = loadJSON(
-    REG_KEY,
-    (r) => {
-      if (!r || typeof r !== 'object') return null;
-      const order = (r as { order?: unknown }).order;
-      if (!Array.isArray(order) || order.some((u) => typeof u !== 'string')) return null;
-      return r as { order: string[]; active?: unknown };
-    },
-    () => null,
-  );
+  // Version 1 stored `{order, active}`; it parses here as a version-2 registry with no
+  // designations, which is the whole migration — a bench that designated nothing has nothing
+  // to carry over, and the first save writes the versioned shape.
+  const bootReg = loadJSON(REG_KEY, parseRegistry, () => null);
+  // familyUid → the table uid the bench designates as that family's nominal condition. Seeded
+  // from the registry before the first save effect can run, so a restore never writes an empty
+  // set over the stored designations.
+  let nominalByFamily = $state<Record<string, string>>({ ...(bootReg?.nominalByFamily ?? {}) });
+  // Corner families: the loaded tables regrouped into logical devices, one entry per
+  // (process namespace, device name, declared polarity). Identity is derived from the data
+  // headers, never assigned here — the bench displays, warns, and designates a nominal
+  // condition, but never decides who a table is. Everything a sheet or the picker projects
+  // goes through these.
+  //
+  // The previous grouping is kept so a family nothing touched comes back as the SAME object and
+  // everything memoized on it survives. Plain state, not `$state`: it is written from inside the
+  // derived purely as that derived's own memo, and nothing reads it as a value.
+  let lastFamilies: readonly CornerFamily[] = [];
+  const families = $derived.by(() => {
+    lastFamilies = benchFamilies(
+      devices.map((d) => d.table),
+      nominalByFamily,
+      lastFamilies,
+    );
+    return lastFamilies;
+  });
+  const familyOf = $derived(familyResolver(families));
+  const primaryFamily = $derived(device ? familyOf(tableUid(device)) : undefined);
+  // Data-trust checks that only exist once several tables claim to be one device (duplicate
+  // conditions, disagreeing axes, ranges, widths, provenance). Derived, so they are recomputed
+  // on every import, restore, removal and redesignation rather than stored and left to age —
+  // but per FAMILY OBJECT, so the redesignation of one family does not re-walk the axis lattice
+  // of every other. The cache is weak: a family that regrouped is unreachable and collectable.
+  const qaCache = new WeakMap<CornerFamily, QAWarning[]>();
+  const familyQAOf = (f: CornerFamily): QAWarning[] => {
+    const hit = qaCache.get(f);
+    if (hit) return hit;
+    const qa = validateFamily(f);
+    qaCache.set(f, qa);
+    return qa;
+  };
+  const familyQA = $derived(new Map(families.map((f) => [f.familyUid, familyQAOf(f)])));
+  // Cross-family identity warnings (a join grouping refused): bench-level, because no single
+  // family can see the sibling it stayed apart from.
+  const benchQA = $derived(validateFamilies(families));
+  const bench = $derived({
+    families,
+    familyOf,
+    primary: primaryFamily,
+    // What a composed child's device menu offers: one entry per FAMILY, because a child is bound
+    // to a logical device and projected to whichever condition the run fixed.
+    options: familyOptions(families),
+    revision: familyRevision(families),
+    designate,
+  });
+  // Position of a table in `devices` — the strip renders families, but select/overlay/remove
+  // still address the flat list.
+  const indexOfUid = $derived(new Map(devices.map((d, i) => [tableUid(d.table), i])));
   void loadTables().then((stored) => {
     const pos = new Map(bootReg?.order.map((u, i) => [u, i]) ?? []);
+    // Records whose stored key is not what the current algorithm computes. The registry names
+    // tables by uid in TWO places now (the order, and every designation), so a re-key that
+    // rewrote only the order would leave designations pointing at keys nothing holds.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive migration scratch, discarded below
+    const rekey = new Map<string, string>();
     // Imports that raced ahead keep their position, stay active, and are never
     // treated as unlisted leftovers; restored tables append behind them, ordered by
     // the STORED key's registry slot (a recomputed uid may not match what the
@@ -125,8 +194,13 @@
         if (!saneTable(dt)) continue;
         const uid = tableUid(dt);
         if (have.has(uid)) {
-          // A fresh import superseded this record; drop a stale-keyed copy.
-          if (key !== uid) void deleteTable(key);
+          // A fresh import superseded this record; drop a stale-keyed copy. Both spellings are
+          // in hand here, so the migration map records them: a designation naming the old key
+          // would otherwise read as unresolved while the table it names is on the bench.
+          if (key !== uid) {
+            void deleteTable(key);
+            rekey.set(key, uid);
+          }
           continue;
         }
         // The registry recorded the key the table was STORED under; match and delete
@@ -142,6 +216,7 @@
           // the record; the registry effect below then records the new uids.
           void putTable(uid, dt);
           void deleteTable(key);
+          rekey.set(key, uid);
         }
         restored.push({
           item: { table: dt, warnings: validate(dt) },
@@ -151,14 +226,17 @@
         // a table that no longer validates is dropped silently
       }
     }
+    // In the same breath as the tables themselves: the save effect fires as soon as `devices`
+    // changes below, and it would persist designations that still name the pre-migration uids.
+    // A designation whose table did NOT come back is left exactly as it was — it reads as an
+    // unresolved designation, which is the visible truth, where dropping it would let the
+    // family quietly designate a different corner.
+    if (rekey.size) nominalByFamily = migrateNominals(nominalByFamily, rekey);
     if (!restored.length) return;
     restored.sort((a, b) => a.rank - b.rank);
     const wasEmpty = devices.length === 0;
     devices = [...devices, ...restored.map((r) => r.item)];
-    if (wasEmpty) {
-      const ai = bootReg && typeof bootReg.active === 'number' ? Math.trunc(bootReg.active) : 0;
-      select(Math.min(Math.max(ai, 0), restored.length - 1));
-    }
+    if (wasEmpty) select(Math.min(Math.max(bootReg?.active ?? 0, 0), restored.length - 1));
   });
   let importError = $state<string | null>(null);
   let dragging = $state(false);
@@ -402,42 +480,96 @@
   // (last-selected wins, not last-resolved).
   let importSeq = 0;
 
-  // Import a file (picker or drag-drop): a .json is a design sheet for the library
-  // (sanitized + persisted by sheetlib); anything else is a mostab CSV device table.
+  /** One file, read and parsed but not yet committed to anything. */
+  type Staged =
+    | { kind: 'sheet'; name: string; text: string }
+    | { kind: 'tables'; name: string; tables: readonly DeviceTable[] }
+    | { kind: 'failed'; name: string; error: string };
+
+  /**
+   * Import a selection (file picker or drop): a .json is a design sheet for the library
+   * (sanitized + persisted by sheetlib); anything else is a mostab CSV device table — a
+   * multi-corner export is several files, since one file carries one table.
+   *
+   * One selection is ONE transaction. Every file is read and parsed first, mutating nothing;
+   * the supersede token is checked once, immediately before a single commit; and a superseded
+   * batch is discarded whole. That is what keeps "last selected wins" meaning what it says —
+   * committing file by file would let a stale batch leave half a bench behind, with a load
+   * order that depends on which read finished first.
+   */
   async function loadFiles(files: FileList | null | undefined): Promise<void> {
-    const file = files?.[0];
-    if (!file) return;
+    const batch = files ? [...files] : [];
+    if (!batch.length) return;
     const seq = ++importSeq;
-    if (/\.json$/i.test(file.name)) {
-      const text = await file.text();
-      if (seq !== importSeq) return;
-      const err = importSheetJSON(file.name, text);
-      importError = err ? `${file.name}: ${err}` : null;
-      return;
+    // Read in parallel, reassembled in selection order: load order is part of the family
+    // contract, and completion order is not an order at all.
+    const staged: Staged[] = await Promise.all(
+      batch.map(async (file): Promise<Staged> => {
+        try {
+          if (/\.json$/i.test(file.name))
+            return { kind: 'sheet', name: file.name, text: await file.text() };
+          const result = importMostab(new Uint8Array(await file.arrayBuffer()), {
+            filename: file.name,
+          });
+          return result.ok
+            ? { kind: 'tables', name: file.name, tables: result.dataset.tables }
+            : {
+                kind: 'failed',
+                name: file.name,
+                error: result.errors.map((e) => `${e.kind}: ${e.message}`).join(' · '),
+              };
+        } catch (e) {
+          return { kind: 'failed', name: file.name, error: (e as Error).message };
+        }
+      }),
+    );
+    if (seq !== importSeq) return; // superseded: the whole batch is discarded, nothing committed
+
+    // ── the commit, in selection order and in one pass.
+    const errors: string[] = [];
+    const incoming: Loaded[] = [];
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, discarded below
+    const seen = new Set<string>();
+    for (const s of staged) {
+      if (s.kind === 'failed') {
+        errors.push(`${s.name}: ${s.error}`);
+        continue;
+      }
+      if (s.kind === 'sheet') {
+        const err = importSheetJSON(s.name, s.text);
+        if (err) errors.push(`${s.name}: ${err}`);
+        continue;
+      }
+      for (const t of s.tables) {
+        // The same table twice in one selection is one table: the first occurrence stands,
+        // so the batch's order (and what "the first import" means below) is deterministic.
+        const uid = tableUid(t);
+        if (seen.has(uid)) continue;
+        seen.add(uid);
+        incoming.push({ table: t, warnings: validate(t) });
+      }
     }
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    if (seq !== importSeq) return; // superseded by a newer load
-    const result = importMostab(bytes, { filename: file.name });
-    if (!result.ok) {
-      importError = result.errors.map((e) => `${e.kind}: ${e.message}`).join(' · ');
-      return;
-    }
-    // Take in every table in the dataset (a multi-corner export brings TT/SS/FF in at
-    // once). A table already loaded under the same identity is REPLACED IN PLACE (a
-    // re-import refreshes it without moving its chip); the rest append in file order.
-    // The first table of the import becomes active, and the overlay selection resets.
-    const incoming = result.dataset.tables.map((t) => ({ table: t, warnings: validate(t) }));
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, discarded on return
+    // A table already loaded under the same identity is REPLACED IN PLACE (a re-import
+    // refreshes it without moving its chip); the rest append in selection order.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive merge scratch, discarded below
     const fresh = new Map(incoming.map((d) => [tableUid(d.table), d]));
     const next = devices.map((d) => {
-      const r = fresh.get(tableUid(d.table));
-      if (r) fresh.delete(tableUid(d.table));
+      const uid = tableUid(d.table);
+      const r = fresh.get(uid);
+      if (r) fresh.delete(uid);
       return r ?? d;
     });
     next.push(...fresh.values());
-    const first = next.indexOf(incoming[0]);
     devices = next;
-    select(first);
+    // Select by the first surviving imported UID, never by object identity: a batch whose
+    // first file also appears later collapses to one entry, and an identity search would
+    // then find nothing and select a slot that does not exist.
+    const firstUid = incoming.length ? tableUid(incoming[0].table) : undefined;
+    const first = next.findIndex((d) => tableUid(d.table) === firstUid);
+    if (first >= 0) select(first);
+    // AFTER select(), which clears the error line: a batch that loaded three files and lost
+    // one must still say which one, and say it by name.
+    importError = errors.length ? errors.join(' · ') : null;
     for (const d of incoming) void putTable(tableUid(d.table), d.table);
   }
 
@@ -464,6 +596,32 @@
     (d.querySelector('summary') as HTMLElement | null)?.focus();
   }
 
+  /** Designate (or, on the condition that already holds it, un-designate) a family's nominal.
+   *  A designation names a TABLE, so it survives a reload and goes visibly unresolved if that
+   *  table leaves — the one thing it must never do is slide to another corner unannounced. */
+  function designate(familyUid: string, uid: string): void {
+    const { [familyUid]: current, ...rest } = nominalByFamily;
+    nominalByFamily = current === uid ? rest : { ...rest, [familyUid]: uid };
+  }
+
+  /** The family's conditions that CAN be overlaid: every member but the active one, which is
+   *  already the curve the others are drawn against. */
+  const overlayable = (f: CornerFamily): number[] =>
+    f.variants
+      .map((t) => indexOfUid.get(tableUid(t)) ?? -1)
+      .filter((i) => i >= 0 && i !== activeIdx);
+  const familyOverlaid = (f: CornerFamily): boolean => {
+    const idx = overlayable(f);
+    return idx.length > 0 && idx.every((i) => overlayIdx.includes(i));
+  };
+  /** Draw the whole corner spread of one device, or clear it. */
+  function toggleFamilyOverlay(f: CornerFamily): void {
+    const idx = overlayable(f);
+    overlayIdx = familyOverlaid(f)
+      ? overlayIdx.filter((i) => !idx.includes(i))
+      : [...overlayIdx, ...idx.filter((i) => !overlayIdx.includes(i))];
+  }
+
   function removeDevice(i: number): void {
     if (devices.length <= 1 || i === activeIdx) return;
     void deleteTable(tableUid(devices[i].table));
@@ -478,13 +636,16 @@
   // The dashboard layout (localStorage) survives — it holds no characterization data.
   function clearAll(): void {
     void clearTables();
-    saveJSON(REG_KEY, { order: [], active: 0 });
+    saveJSON(REG_KEY, { v: REGISTRY_VERSION, order: [], active: 0, nominalByFamily: {} });
     // The sizer's persisted problem is design data too: "forget everything" must
     // leave no retained record the UI can no longer show or delete.
     removeJSON(SIZER_KEY);
     devices = [];
     activeIdx = 0;
     overlayIdx = [];
+    // The designations go with them: they name tables that no longer exist, and "forget
+    // everything" must not leave a choice behind that nothing on screen can show or undo.
+    nominalByFamily = {};
     dashboard = null;
     sizerOpen = false;
     pickerOpen = false;
@@ -570,10 +731,16 @@
       </dl>
     </details>
   {/if}
-  <label class="load" title="load a mostab .csv characterization table, or a design-sheet .json">
+  <!-- `multiple`: one file carries one table, so a device's corners arrive as a selection of
+       files — which is imported as ONE transaction (see loadFiles). -->
+  <label
+    class="load"
+    title="load mostab .csv characterization tables (several at once — one per corner), or a design-sheet .json"
+  >
     Load .csv / .json
     <input
       type="file"
+      multiple
       accept=".csv,.txt,text/csv,.json,application/json"
       onchange={(e) => loadFiles((e.currentTarget as HTMLInputElement).files)}
     />
@@ -650,7 +817,9 @@
 </header>
 
 {#if importError}
-  <div class="qa error">import failed — {importError}</div>
+  <!-- One selection can partly succeed: the files that failed are named here even when the
+       rest of the batch loaded, so the line says "not imported", not "the import failed". -->
+  <div class="qa error">not imported — {importError}</div>
 {:else if warnings.length}
   <div class="qa">
     <strong>QA</strong>
@@ -664,29 +833,102 @@
   <nav class="devices" aria-label="loaded devices">
     <span class="dlabel">devices ({devices.length})</span>
     <Help text={CONTROL_HELP.overlay} />
-    {#each devices as d, i}
-      <span class="dev" class:active={i === activeIdx}>
-        <button
-          class="dname"
-          class:active={i === activeIdx}
-          onclick={() => select(i)}
-          title={CONTROL_HELP.active}>{deviceKey(d.table)}</button
-        >
-        <label class="dov" title={CONTROL_HELP.overlay}>
-          <input
-            type="checkbox"
-            checked={overlayIdx.includes(i)}
-            disabled={i === activeIdx}
-            onchange={() => toggleOverlay(i)}
-          />overlay
-        </label>
-        <button
-          class="drm"
-          onclick={() => removeDevice(i)}
-          title="remove from registry"
-          aria-label="remove device">×</button
-        >
+    <!-- One group per logical device; its characterization conditions sit inside it. A device
+         loaded at a single condition looks exactly as it did before families existed — the
+         group chrome only appears once there is more than one condition to tell apart. -->
+    {#each families as f (f.familyUid)}
+      {@const multi = f.variants.length > 1}
+      {@const qa = familyQA.get(f.familyUid) ?? []}
+      <!-- A designation whose table has left is shown (and fixable) whatever the family's size:
+           the auto rule is deliberately not re-applied over it, so without this the bench would
+           have no nominal and no word about why. -->
+      {@const stale = f.nominalSource === 'unresolved'}
+      <!-- An unusable designation has two causes, and they are fixed differently: the table it
+           named has left, or the condition it named is claimed by two tables. Core made the
+           distinction when it resolved the designation; re-deriving it here would be a second
+           copy of its matching rule. -->
+      {@const ambiguous = f.unresolvedNominal === 'ambiguous'}
+      <span class="fam" class:multi={multi || stale} data-family={f.device}>
+        {#if multi}
+          <span class="fname" title={CONTROL_HELP.cornerFamily}>{familyLabel(f)}</span>
+          <label class="fov" title={CONTROL_HELP.cornerOverlay}>
+            <input
+              type="checkbox"
+              checked={familyOverlaid(f)}
+              onchange={() => toggleFamilyOverlay(f)}
+            />corners
+          </label>
+        {/if}
+        {#each f.variants as t (tableUid(t))}
+          {@const i = indexOfUid.get(tableUid(t)) ?? -1}
+          {@const nominal = f.nominal === t}
+          <span
+            class="dev"
+            class:active={i === activeIdx}
+            data-variant={variantLabel(t.id)}
+            title={provenanceOf(t)}
+          >
+            <button
+              class="dname"
+              class:active={i === activeIdx}
+              onclick={() => select(i)}
+              title={CONTROL_HELP.active}>{multi ? variantLabel(t.id) : deviceKey(t)}</button
+            >
+            {#if multi || stale}
+              <!-- Which condition the bench means by "nominal". Marked here and changed here,
+                   because it is a statement about this bench, not about the file. -->
+              <button
+                class="dnom"
+                class:on={nominal}
+                data-nominal={nominal ? '' : undefined}
+                onclick={() => designate(f.familyUid, tableUid(t))}
+                title={CONTROL_HELP.nominal}
+                >{nominal
+                  ? f.nominalSource === 'designated'
+                    ? '★ nominal'
+                    : '★ nominal · auto'
+                  : 'nominal'}</button
+              >
+            {/if}
+            {#if multi}
+              <!-- Where this condition came from. A family grouped on the device name alone is
+                   only an informed grouping if what it was grouped from is on screen. -->
+              <i class="dprov">{provenanceOf(t) || 'no provenance declared'}</i>
+            {/if}
+            <label class="dov" title={CONTROL_HELP.overlay}>
+              <input
+                type="checkbox"
+                checked={overlayIdx.includes(i)}
+                disabled={i === activeIdx}
+                onchange={() => toggleOverlay(i)}
+              />overlay
+            </label>
+            <button
+              class="drm"
+              onclick={() => removeDevice(i)}
+              title="remove from registry"
+              aria-label="remove device">×</button
+            >
+          </span>
+        {/each}
+        {#if stale}
+          <span class="fw error" data-nominal-state="unresolved"
+            >{ambiguous
+              ? 'the designated nominal condition is claimed by two tables — remove one'
+              : 'the designated nominal condition is not loaded — choose one'}</span
+          >
+        {:else if multi && f.nominalSource === 'none'}
+          <span class="fw warning" data-nominal-state="none"
+            >no nominal condition — designate one</span
+          >
+        {/if}
+        {#each qa as w}
+          <span class="fw {w.severity}" title={w.location ?? ''}>{w.rule}: {w.message}</span>
+        {/each}
       </span>
+    {/each}
+    {#each benchQA as w}
+      <span class="fw {w.severity}" title={w.location ?? ''}>{w.rule}: {w.message}</span>
     {/each}
     <button
       class="dclear"
@@ -785,7 +1027,7 @@
         <Panel
           {device}
           {overlays}
-          {sheetDevices}
+          {bench}
           sweep={dashboard.sweep}
           {sharedBias}
           {cfg}
@@ -809,7 +1051,7 @@
       <Sizer {device} {sharedBias} />
     {/if}
     {#if pickerOpen}
-      <Picker {device} onOpen={(doc, params) => addSheetPanel(doc, params)} />
+      <Picker {bench} onOpen={(doc, params) => addSheetPanel(doc, params)} />
     {/if}
   {:else}
     <div class="welcome">
@@ -1117,6 +1359,59 @@
     border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
     border-radius: 5px;
     padding: 0.05rem 0.3rem;
+  }
+  /* A family groups its conditions; with only one it adds nothing and draws nothing. */
+  .fam {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.4rem;
+  }
+  .fam.multi {
+    border: 1px dashed color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 7px;
+    padding: 0.1rem 0.35rem;
+  }
+  .fname {
+    font-weight: 600;
+  }
+  .fov {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    opacity: 0.85;
+  }
+  .dprov {
+    font-style: normal;
+    opacity: 0.5;
+    font-size: 0.92em;
+  }
+  .fw {
+    max-width: 42rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fw.error {
+    color: var(--err);
+  }
+  .fw.warning {
+    color: var(--warn);
+  }
+  .dnom {
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.92em;
+    color: inherit;
+    background: none;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 999px;
+    padding: 0 0.35rem;
+    opacity: 0.55;
+  }
+  .dnom.on {
+    opacity: 1;
+    border-color: color-mix(in srgb, currentColor 55%, transparent);
   }
   .dev.active {
     border-color: color-mix(in srgb, currentColor 45%, transparent);

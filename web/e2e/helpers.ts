@@ -1,5 +1,13 @@
 import { expect, type Page, type Locator } from '@playwright/test';
 
+// Fixture-pairing rule: the three nch_lvt fixtures are NOT freely combinable. sample.mostab.csv
+// deliberately declares no `# pdk:` (it is the "declares nothing" fixture), so loading it beside
+// sample-alt or sample-fab (which declare one) makes the undeclared file JOIN the declared
+// family — one family holding two tables at tt@27 is a duplicate condition that refuses every
+// projection, with no warning that the JOIN happened (the duplicate itself flags as a
+// family-QA error). Pair sample only with differently-NAMED fixtures; a deliberate
+// name collision uses sample-fab + sample-alt, which declare distinct namespaces.
+
 // The app boots empty (no built-in data); load the EKV demo device — global-setup regenerated it
 // as a fixture from the oracle — before tests that need its rich [l × vds × vgs] grid.
 export async function loadDemo(page: Page) {
