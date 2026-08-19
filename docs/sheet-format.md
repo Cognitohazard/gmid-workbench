@@ -32,7 +32,16 @@ sweep checks its own cell's design.
 The sheet's single feasibility verdict FOLDS both answers — a design that does not cover its
 claimed range is not feasible, so the badge can go red with every rule green (see
 [Feasibility](#feasibility)). `covers`, reported per range end, is where the second answer reads
-on its own.
+on its own. In results, `closes` carries the first answer before that fold, so a coverage gap
+never reads as a failure to close.
+
+**Process corners parameterize both questions; they do not add a third.** The same sheet can be
+evaluated at any (corner, temperature) condition its device tables are loaded for, and every
+verdict is then stamped with the condition it was measured at — "closes at tt" and "closes at
+all five loaded conditions" are different claims. Which conditions to evaluate is a property of
+the viewer's bench (which tables are loaded, which one is designated nominal), **never of this
+document**: nothing corner-related appears in the sheet JSON, and a sheet file is portable
+across benches with different corner sets.
 
 ## The document model
 
