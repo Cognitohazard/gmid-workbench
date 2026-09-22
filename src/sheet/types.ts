@@ -156,6 +156,24 @@ export interface SheetBind {
   gm_gds?: string;
   av0?: string;
   vstar?: string;
+  /**
+   * The device's GATE-SOURCE VOLTAGE, bound rather than reported. It is an operating-point
+   * quantity like the ones above — it pins where on the curve the device sits and says
+   * nothing about its size — but the spec it states is structural rather than a target: two
+   * devices whose gates are one wire and whose sources are one node are at one vgs, whatever
+   * the table, the corner or the temperature. `{ W: "K*ref__W", vgs: "ref__vgs" }` is a
+   * current mirror written down exactly; the same mirror written as a shared `gm_id` is an
+   * approximation that only holds while both devices read the same table at the same bias.
+   *
+   * Signed in the table's own axis convention, so a signed-export PMOS gate voltage is
+   * negative — the same convention `vds`/`vsb` already use.
+   *
+   * Legal alongside `diode: true`. The two statements are independent and both hold: the
+   * connection collapses the vds axis onto the vds = vgs diagonal, and the bind then names
+   * the point on that diagonal. It is `vds` a diode connection excludes, because that one
+   * would name the same coordinate twice.
+   */
+  vgs?: string;
   vds?: string;
   vsb?: string;
   /**
@@ -173,7 +191,12 @@ export interface SheetBind {
  *  sweep (vgs) and the geometry axis (l). Derived from the axis flags so a table axis
  *  added to the namespace is automatically collapsible by a bind or its namespace default,
  *  rather than
- *  dying on the sizer's extra-axis error because a hand-copied list went stale. */
+ *  dying on the sizer's extra-axis error because a hand-copied list went stale.
+ *
+ *  vgs stays out even though a bind may now name it, and the exclusion is load-bearing: a
+ *  bias axis is SLICED before sizing, which would collapse the very axis the sizing works
+ *  along and leave nothing to place an operating point on. vgs reaches BIND_KEYS as a
+ *  BINDABLE selector instead, and is consumed by sizeDevice — never by applyBindBias. */
 export const BIAS_AXES: readonly string[] = BASE_QUANTITIES.filter(
   (q) => q.axis && q.key !== 'vgs' && q.key !== 'l',
 ).map((q) => q.key);

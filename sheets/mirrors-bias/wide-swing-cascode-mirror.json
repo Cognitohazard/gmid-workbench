@@ -1,6 +1,6 @@
 {
   "title": "Wide-swing cascode mirror",
-  "description": "The low-voltage cascode mirror. It keeps the matched-$V_{DS}$ accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full $V_{GS}$ above ground), an explicit bias $V_{bias} = V_{GS,casc} + V_{dsat,mirror}$ places the mirror node at exactly one saturation voltage. The output then only has to clear two stacked saturation voltages, $V_{out}(min) = V_{dsat,mirror} + V_{dsat,casc}$, with no threshold overhead, so the output can swing far lower than a standard cascode's $V_{GS} + V_{dsat}$ floor. The two mirror devices still sit at the same low drain voltage, so the systematic error stays near zero. Both mirror devices bind width-first (output width = K times the reference); the cascode is modelled by one representative device (the matched reference and output cascodes share an inversion level). $V_{bias}$ is author math, and a rule checks it is realizable under the supply.",
+  "description": "The low-voltage cascode mirror. It keeps the matched-$V_{DS}$ accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full $V_{GS}$ above ground), an explicit bias $V_{bias} = V_{GS,casc} + V_{dsat,mirror}$ places the mirror node at exactly one saturation voltage. The output then only has to clear two stacked saturation voltages, $V_{out}(min) = V_{dsat,mirror} + V_{dsat,casc}$, with no threshold overhead, so the output can swing far lower than a standard cascode's $V_{GS} + V_{dsat}$ floor. The two mirror devices still sit at the same low drain voltage, so the systematic error stays near zero. The output mirror device binds width-first (width = K times the reference) on the reference's own $V_{GS}$, the gate wire they share; the cascode is modelled by one representative device (the matched reference and output cascodes share an inversion level). $V_{bias}$ is author math, and a rule checks it is realizable under the supply.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -189,7 +189,7 @@
       }
     }
   ],
-  "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "vds_lo" },
+  "bind": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "vds_lo" },
   "rows": [
     {
       "name": "wideswing_node",
@@ -212,7 +212,7 @@
       "note": "wide-swing cascode gate bias: one cascode vgs above the mirror node where the design actually parks it. That node is vds_lo — the saturation knee plus node_margin, which is what the solve produces — so biasing to the bare knee instead would sit the node a full node_margin low"
     },
     { "name": "irel_ref", "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)", "unit": "1" },
-    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
+    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id)", "unit": "1" },
     {
       "name": "sigma_ratio",
       "expr": "sqrt(irel_ref^2 + irel_out^2)",

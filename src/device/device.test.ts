@@ -9,7 +9,7 @@ import {
   integratedNoise,
 } from './index';
 import { lookup } from '../lookup';
-import { makeGrid } from '../grid';
+import { makeGrid, sliceGrid } from '../grid';
 import type { DeviceTable } from '../types';
 import { generateDemoDevice, signedMirrorDemo, withoutColumns } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
@@ -585,5 +585,199 @@ describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
       if (reachable.includes(len)) expect(sized).not.toThrow();
       else expect(sized).toThrow();
     }
+  });
+});
+
+// ── the gate tie: binding vgs ─────────────────────────────────────────────────
+// The demo model cannot tell a shared gate from a shared gm/ID. Its channel-length
+// modulation multiplies id and gm by the SAME factor (1 + vds/VA), so the factor cancels out
+// of every ratio and gm/ID is exactly independent of the drain voltage — two devices holding
+// one gm/ID therefore land on one gate voltage no matter how far apart their drains sit.
+// Measured silicon has no such cancellation. So the oracle below is an algebraic device where
+// the two CLM slopes DIFFER, which is the whole of what separates the two statements:
+//
+//   id(vgs, vds) = ID_SLOPE * vgs * (1 + vds/VA_ID)   [A at the characterization width]
+//   gm(vgs, vds) = GM0             * (1 + vds/VA_GM)  [S at the characterization width]
+//   ⇒ gm/ID     = (GM0/ID_SLOPE) * (1/vgs) * (1 + vds/VA_GM)/(1 + vds/VA_ID)
+//
+// Every column is bilinear in (vgs, vds), so the grid's multilinear interpolation reproduces
+// it EXACTLY, and gm/ID is strictly decreasing in vgs, so the inverse lookup is unambiguous.
+// It is not a physical model and is not meant to be: it is the smallest device on which the
+// two ways of writing a mirror give different currents, and both currents are closed form.
+const GT_ID_SLOPE = 1e-5; // A per volt of vgs, at the characterization width
+const GT_GM0 = 1e-5; // S, at the characterization width
+const GT_VA_ID = 1; // V — the current's CLM slope
+const GT_VA_GM = 4; // V — the transconductance's, deliberately different
+const GT_W0 = 1e-6; // m, the characterization width
+const GT_L = 1e-6; // m, the single characterized length
+/** vgs nodes 0.05 … 1.00. The step puts both operating points used below exactly ON a node,
+ *  so the inversion is a node hit rather than a piecewise-linear approximation of one. */
+const GT_VGS = Array.from({ length: 20 }, (_, i) => (i + 1) * 0.05);
+const GT_VDS = [0, 2];
+
+/** The oracle table over [l, vds, vgs]. */
+function gateTieTable(): DeviceTable {
+  const axes = [
+    { name: 'l', values: Float64Array.from([GT_L]) },
+    { name: 'vds', values: Float64Array.from(GT_VDS) },
+    { name: 'vgs', values: Float64Array.from(GT_VGS) },
+  ];
+  const size = GT_VDS.length * GT_VGS.length;
+  const id = new Float64Array(size);
+  const gm = new Float64Array(size);
+  let at = 0;
+  for (const vds of GT_VDS) {
+    for (const vgs of GT_VGS) {
+      id[at] = GT_ID_SLOPE * vgs * (1 + vds / GT_VA_ID);
+      gm[at] = GT_GM0 * (1 + vds / GT_VA_GM);
+      at++;
+    }
+  }
+  return {
+    id: { device: 'algebraic', corner: 'tt', temp: 27 },
+    grid: makeGrid(axes, new Map([['id', id] as const, ['gm', gm] as const])),
+    meta: { W: GT_W0 },
+  };
+}
+
+/** The oracle at one drain voltage — what a sheet's declared bias hands the sizer. */
+function gateTieAt(vds: number): DeviceTable {
+  const t = gateTieTable();
+  return { ...t, grid: sliceGrid(t.grid, { vds }) };
+}
+
+describe('sizeDevice — a bound gate-source voltage', () => {
+  it('places the device at the gate voltage given, on the table current density there', () => {
+    // At vds = 0: id = 1e-5·vgs per w0 = 1 µm, gm = 1e-5 per w0, both flat in vds' absence.
+    // At vgs = 0.4 and W = 3 µm (three characterization widths):
+    //   id = 1e-5 · 0.4 · 3 = 12 µA,  gm = 1e-5 · 3 = 30 µS,  gm/ID = 30/12 = 2.5 1/V.
+    const res = sizeDevice({ table: gateTieAt(0), L: GT_L, vgs: 0.4, W: 3 * GT_W0 });
+
+    expect(res.vgs).toBeCloseTo(0.4, 15);
+    expect(res.id).toBeCloseTo(12e-6, 15);
+    expect(res.gm).toBeCloseTo(30e-6, 15);
+    expect(res.gm_id).toBeCloseTo(2.5, 12);
+    expect(res.W).toBeCloseTo(3 * GT_W0, 15);
+    expect(res.warnings).toEqual([]);
+  });
+
+  it('carries no size information: the same gate voltage at 7x the current is 7x the width', () => {
+    // The property every operating-point selector rests on, asserted of the new one as the
+    // BINDING quantity rather than only as a reported one. On the oracle table the width is
+    // closed form — at vgs = 0.4 the density is 1e-5·0.4 = 4 µA per w0, so 12 µA is 3·w0.
+    const table = gateTieAt(0);
+    const small = sizeDevice({ table, L: GT_L, vgs: 0.4, id: 12e-6 });
+    const big = sizeDevice({ table, L: GT_L, vgs: 0.4, id: 7 * 12e-6 });
+
+    expect(small.W).toBeCloseTo(3 * GT_W0, 15);
+    expect(big.W).toBeCloseTo(21 * GT_W0, 15);
+    expect(big.vgs).toBeCloseTo(small.vgs, 15);
+    expect(big.gm_id).toBeCloseTo(small.gm_id, 12);
+
+    // The full selector set needs a table that carries every column the ratios are built from,
+    // which the two-column oracle deliberately does not; the demo device does.
+    const demo = generateDemoDevice();
+    const demoL = demo.grid.axes[0].values[1];
+    const one = sizeDevice({ table: demo, L: demoL, vgs: 0.6, id: 2e-5 });
+    const seven = sizeDevice({ table: demo, L: demoL, vgs: 0.6, id: 7 * 2e-5 });
+    expect(seven.W / one.W).toBeCloseTo(7, 9);
+    for (const key of OP_SELECTORS) {
+      expect(Number.isFinite(one.quantities[key])).toBe(true);
+      expect(seven.quantities[key] / one.quantities[key]).toBeCloseTo(1, 9);
+    }
+  });
+
+  it('a mirror sized on the shared gate carries the true ratio; one sized on a shared gm/ID does not', () => {
+    // K:1 mirror. Reference diode-connected at vds = V_REF carrying I_IN; output device K times
+    // as wide, at vds = V_OUT. The output shares the reference's GATE, and both sources are the
+    // same node, so it sits at the reference's own gate-source voltage.
+    const I_IN = 20e-6;
+    const K = 2;
+    const V_REF = 0;
+    const V_OUT = 2;
+
+    // Reference: gm/ID at vds = 0 is (GM0/ID_SLOPE)/vgs = 1/vgs, so gm/ID = 2 ⇒ vgs = 0.5 V.
+    // Its current density there is 1e-5 · 0.5 = 5 µA per w0, so 20 µA needs W = 4 · w0.
+    const ref = sizeDevice({ table: gateTieAt(V_REF), L: GT_L, id: I_IN, gm_id: 2 });
+    expect(ref.vgs).toBeCloseTo(0.5, 12);
+    expect(ref.W).toBeCloseTo(4 * GT_W0, 15);
+
+    // The truth: same gate voltage, same length, K times the width, its own drain voltage. Only
+    // the current's CLM slope survives, so I_out/I_in = K·(1 + V_OUT/VA_ID)/(1 + V_REF/VA_ID).
+    const trueRatio = (K * (1 + V_OUT / GT_VA_ID)) / (1 + V_REF / GT_VA_ID); // = 2·3/1 = 6
+    const tied = sizeDevice({ table: gateTieAt(V_OUT), L: GT_L, W: K * ref.W, vgs: ref.vgs });
+    expect(tied.id / I_IN).toBeCloseTo(trueRatio, 9);
+    expect(tied.id / I_IN).toBeCloseTo(6, 9);
+
+    // The proxy: holding the reference's gm/ID instead re-solves the gate voltage on the OUTPUT
+    // device's own drain slice, where gm/ID = 0.5/vgs, so it lands at vgs = 0.25 V — 250 mV off
+    // a wire that has one voltage. The ratio it reports keeps the TRANSCONDUCTANCE's CLM slope
+    // instead of the current's: I_out/I_in = K·(1 + V_OUT/VA_GM)/(1 + V_REF/VA_GM).
+    const proxyRatio = (K * (1 + V_OUT / GT_VA_GM)) / (1 + V_REF / GT_VA_GM); // = 2·1.5/1 = 3
+    const proxy = sizeDevice({ table: gateTieAt(V_OUT), L: GT_L, W: K * ref.W, gm_id: 2 });
+    expect(proxy.vgs).toBeCloseTo(0.25, 12);
+    expect(proxy.id / I_IN).toBeCloseTo(proxyRatio, 9);
+    expect(proxy.id / I_IN).toBeCloseTo(3, 9);
+
+    // Stated as the systematic error the mirror sheets rule on: the truth is +200%, the proxy
+    // reports +50%. One-sided and a factor of four low — a mirror the sheet passes at a 5%
+    // budget while its real error is forty times that.
+    const sysErr = (i: number): number => i / (K * I_IN) - 1;
+    expect(sysErr(tied.id)).toBeCloseTo(2, 9);
+    expect(sysErr(proxy.id)).toBeCloseTo(0.5, 9);
+  });
+
+  it('warns and clamps a gate voltage off the table, as it does for an off-table length', () => {
+    // vgs is a swept AXIS, so an off-hull request has a nearest characterized node to fall back
+    // to — the same situation an off-hull L is in, and it gets the same warned clamp rather than
+    // the refusal an unreachable SELECTOR target gets (there is no node to fall back to there).
+    const table = gateTieAt(0);
+    const res = sizeDevice({ table, L: GT_L, vgs: 1.3, W: GT_W0 });
+
+    expect(res.vgs).toBeCloseTo(1.0, 15); // the top characterized node
+    expect(res.id).toBeCloseTo(1e-5 * 1.0, 15); // read AT the hull, not at 1.3 V
+    expect(res.warnings).toHaveLength(1);
+    expect(res.warnings[0]).toMatch(/vgs 1\.3 .*outside .*\[0\.05, 1\].*clamped/);
+
+    // Below the hull too, and the sizing runs — a clamp is not an infeasibility.
+    const low = sizeDevice({ table, L: GT_L, vgs: -0.2, W: GT_W0 });
+    expect(low.vgs).toBeCloseTo(0.05, 15);
+    expect(low.warnings).toHaveLength(1);
+
+    // Contrast: an out-of-reach gm/ID on the same slice throws instead.
+    expect(() => sizeDevice({ table, L: GT_L, gm_id: 500, W: GT_W0 })).toThrow(LookupRangeError);
+  });
+
+  it('refuses to read a gate voltage while another bias axis is still live', () => {
+    // The forward read would otherwise take the first vds node silently, reporting a device at
+    // an operating point nobody pinned. Every other bind path refuses this; so does this one.
+    expect(() => sizeDevice({ table: gateTieTable(), L: GT_L, vgs: 0.4, W: GT_W0 })).toThrow(
+      /non-degenerate axis "vds"/,
+    );
+  });
+
+  it('is an operating-point selector, so it cannot be paired with another one', () => {
+    expect(() => sizeDevice({ table: gateTieAt(0), L: GT_L, vgs: 0.4, gm_id: 2 })).toThrow(
+      /both set the operating point/,
+    );
+    expect(() => sizeDevice({ table: gateTieAt(0), L: GT_L, vgs: 0.4 })).toThrow(/EXACTLY two/);
+  });
+
+  it('accepts the negative gate voltage a signed PMOS export sweeps', () => {
+    // vgs is the one bindable carried in the table's own AXIS convention rather than as a
+    // canonicalized magnitude, so the positivity rule that guards every other bind must not
+    // apply to it. signedMirrorDemo is the same device with its voltage axes negated, so the
+    // PMOS at -0.6 V is the NMOS at +0.6 V — same width, same current, same inversion level.
+    const n = generateDemoDevice();
+    const p = signedMirrorDemo(n);
+    const L = n.grid.axes[0].values[1];
+
+    const pRes = sizeDevice({ table: p, L, vgs: -0.6, id: 2e-5 });
+    const nRes = sizeDevice({ table: n, L, vgs: 0.6, id: 2e-5 });
+
+    expect(pRes.vgs).toBeCloseTo(-0.6, 12);
+    expect(pRes.W).toBeCloseTo(nRes.W, 12);
+    expect(pRes.gm_id).toBeCloseTo(nRes.gm_id, 12);
+    expect(pRes.warnings).toEqual([]);
   });
 });

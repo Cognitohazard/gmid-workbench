@@ -39,6 +39,14 @@ export const PER_WIDTH_KEYS: ReadonlySet<string> = new Set(
   BASE_QUANTITIES.filter((q) => q.perWidth).map((q) => q.key),
 );
 
+/** Base keys swept as grid coordinates rather than measured as values (see
+ *  BaseQuantity.axis). An axis coordinate is signed — a PMOS export sweeps vgs and vds
+ *  negative — where a value column has been canonicalized to a magnitude, so the two
+ *  cannot share the checks that assume positivity. */
+export const AXIS_KEYS: ReadonlySet<string> = new Set(
+  BASE_QUANTITIES.filter((q) => q.axis).map((q) => q.key),
+);
+
 /** Bias axes that carry a safe default operating point (see BaseQuantity.defaultBias),
  *  keyed by axis name — the one place an undeclared bias axis is allowed to size. */
 export const AXIS_DEFAULT_BIAS: ReadonlyMap<string, number> = new Map(

@@ -87,7 +87,7 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
   it('drops EVERY operating-point selector, not a hand-copied subset', () => {
     // The list is derived from the device module's own selectors; a selector left behind would
     // re-size the transistor at the range end, which is what a fixed-hardware check must not do.
-    for (const k of ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar', 'gm']) {
+    for (const k of ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar', 'vgs', 'gm']) {
       const out = pin({ L: 'L_p', [k]: '3', id: 'I_d' });
       expect(Object.keys(out!).sort(), k).toEqual(['L', 'W', 'id']);
     }

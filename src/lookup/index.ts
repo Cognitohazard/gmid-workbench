@@ -4,7 +4,7 @@
 // recovers vgs from a target value of any stored or derived quantity (gm/ID, fT,
 // intrinsic gain, …) along a fixed-L slice. Pure, deterministic, zero DOM imports.
 
-import { type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
+import { type Axis, type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
 import { BASE_KEYS } from '../namespace';
 import { CONSTANTS } from '../constants';
 import { interpolate, sliceGrid, orient, interp1 } from '../grid';
@@ -197,6 +197,41 @@ function sliceColumn(table: DeviceTable, slice: Grid, key: string): Float64Array
 }
 
 /**
+ * The shape a table must have before an operating point can be placed on it: an `l` axis
+ * to collapse, a `vgs` axis to place the point on, and every other axis degenerate. With
+ * a vds or vsb still live the interpolation would silently take that axis's first node
+ * instead of saying the operating point was never pinned.
+ *
+ * Checked on the UNSLICED grid, which is equivalent to checking the slice — `sliceGrid`
+ * carries the remaining axes' `values` by reference, so they are the same arrays — and
+ * lets a caller fail before paying for a slice it cannot use. Returns the vgs axis,
+ * which every caller needs next.
+ *
+ * Both halves of sizing share this: the inverse path here, and the forward read at a
+ * bound vgs in `sizeDevice`. They differ in what they do at the hull, not in what shape
+ * they require, so stating the rule twice would only let the two drift.
+ *
+ * `context` completes "cannot <context> with extra non-degenerate axis". The substring
+ * `non-degenerate axis` is load-bearing: sheet evaluation keys an author-facing hint on
+ * it, so reword the rest freely and leave those two words alone.
+ */
+export function operatingPointAxis(grid: Grid, prefix: string, context: string): Axis {
+  if (!grid.axes.some((a) => a.name === 'l')) {
+    throw new Error(`${prefix}: table has no "l" axis to slice`);
+  }
+  const vgsAxis = grid.axes.find((a) => a.name === 'vgs');
+  if (!vgsAxis || vgsAxis.values.length === 0) {
+    throw new Error(`${prefix}: table has no "vgs" axis to place an operating point on`);
+  }
+  for (const a of grid.axes) {
+    if (a.name !== 'l' && a.name !== 'vgs' && a.values.length > 1) {
+      throw new Error(`${prefix}: cannot ${context} with extra non-degenerate axis "${a.name}"`);
+    }
+  }
+  return vgsAxis;
+}
+
+/**
  * Shared inversion kernel: build the `key` curve over vgs on the L-slice and invert it
  * to a vgs coordinate. Fails closed on any uninvertible slice (uncomputable quantity,
  * missing columns, extra live axes, non-monotonic data, out-of-range target) rather
@@ -204,27 +239,10 @@ function sliceColumn(table: DeviceTable, slice: Grid, key: string): Float64Array
  */
 function invertOnSlice(table: DeviceTable, L: number, key: string, target: number): number {
   const grid = table.grid;
-  if (!grid.axes.some((a) => a.name === 'l')) {
-    throw new Error('inverse lookup: table has no "l" axis to slice');
-  }
+  const vgs = operatingPointAxis(grid, 'inverse lookup', `bracket ${key}`).values;
 
   // Collapse the l axis at L, leaving a slice grid whose remaining axes include vgs.
   const slice = sliceGrid(grid, { l: L });
-  const vgsAxis = slice.axes.find((a) => a.name === 'vgs');
-  if (!vgsAxis) {
-    throw new Error('inverse lookup: slice has no "vgs" axis');
-  }
-  const vgs = vgsAxis.values;
-
-  // The vgs axis must be the only non-degenerate remaining axis for the 1-D curve
-  // to be well defined (vds/vsb would otherwise break monotonic bracketing).
-  for (const a of slice.axes) {
-    if (a.name !== 'vgs' && a.values.length > 1) {
-      throw new Error(
-        `inverse lookup: cannot bracket ${key} with extra non-degenerate axis "${a.name}"`,
-      );
-    }
-  }
 
   // Every other axis is degenerate (the guard above), so the column IS the curve over the
   // vgs lattice — one value per node, in order.

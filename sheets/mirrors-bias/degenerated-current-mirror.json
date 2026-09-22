@@ -1,6 +1,6 @@
 {
   "title": "Degenerated current mirror",
-  "description": "A source-degenerated current mirror: each leg puts a resistor in series with the source. Degeneration does two things. It raises the output resistance by the local-feedback factor $(1 + (g_m + g_{mb})*R_s)$ — the resistor sits in the source, so the source-body generator feeds back through it exactly as $g_m$ does — so the output current holds steadier against the output node voltage. And it improves matching: a threshold mismatch now competes with the IR drop across $R_s$, so its effect on the current divides by $(1 + (g_m + g_{mb})*R_s)$; the threshold generator sits at the gate, so only $g_m$ converts it to a current — but the source lift it causes feeds back through both source-referred generators, so the same $(g_m + g_{mb})$ factor divides it. The price is headroom, the resistor drops $I*R_s$ that the output node must clear on top of the device saturation voltage. Both legs are arranged to drop the same $I_{in}*R_s$ (the K-times output leg uses $R_s/K$), so the degeneration voltage matches and the source-body bias $V_{SB} = I_{in}*R_s$ is common to both. The demo table has no $V_{SB}$ axis, so that declaration only warns. The matching-improvement formula is exact only where threshold mismatch dominates; the LUT $g_{ds}$ and Pelgrom spread are the ground truth these rows annotate.",
+  "description": "A source-degenerated current mirror: each leg puts a resistor in series with the source. Degeneration does two things. It raises the output resistance by the local-feedback factor $(1 + (g_m + g_{mb})*R_s)$ — the resistor sits in the source, so the source-body generator feeds back through it exactly as $g_m$ does — so the output current holds steadier against the output node voltage. And it improves matching: a threshold mismatch now competes with the IR drop across $R_s$, so its effect on the current divides by $(1 + (g_m + g_{mb})*R_s)$; the threshold generator sits at the gate, so only $g_m$ converts it to a current — but the source lift it causes feeds back through both source-referred generators, so the same $(g_m + g_{mb})$ factor divides it. The price is headroom, the resistor drops $I*R_s$ that the output node must clear on top of the device saturation voltage. Both legs are arranged to drop the same $I_{in}*R_s$ (the K-times output leg uses $R_s/K$), so the degeneration voltage matches and the source-body bias $V_{SB} = I_{in}*R_s$ is common to both. With both source nodes declared at that same potential and the gates on one wire, the output device binds the reference's own $V_{GS}$. Note that the arrangement is what the sheet declares rather than something the engine solves: it linearizes about $I_{out} = K*I_{in}$, so the degeneration feedback that would pull the output leg's source back toward that point is described by the matching rows, not by the systematic-error row. The demo table has no $V_{SB}$ axis, so that declaration only warns. The matching-improvement formula is exact only where threshold mismatch dominates; the LUT $g_{ds}$ and Pelgrom spread are the ground truth these rows annotate.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -120,7 +120,7 @@
   "bind": {
     "L": "L",
     "W": "K*ref__W",
-    "gm_id": "gm_id_m",
+    "vgs": "ref__vgs",
     "vds": "V_out - I_in*R_s",
     "vsb": "I_in*R_s"
   },
@@ -152,7 +152,12 @@
       "note": "output resistance boosted by local series feedback, with the resistor's own series contribution added back. Both source-referred generators feed back through R_s_out, so gmb belongs inside the factor; the trailing R_s_out adds about 1% at these defaults"
     },
     { "name": "irel_ref", "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)", "unit": "1" },
-    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
+    {
+      "name": "irel_out",
+      "expr": "pelgrom_irel(avt, abeta, W, L, gm_id)",
+      "unit": "1",
+      "note": "the OUTPUT device's own inversion level, read back from its operating point"
+    },
     {
       "name": "sigma_ratio_raw",
       "expr": "sqrt(irel_ref^2 + irel_out^2)",

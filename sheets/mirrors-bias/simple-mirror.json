@@ -1,6 +1,6 @@
 {
   "title": "Simple current mirror",
-  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its $V_{DS}$ is its own $V_{GS}$, so the bind declares the connection and the table is read along that diagonal), and the output device binds width-first at K times the reference width, evaluated at the served output node's $V_{DS}$. The systematic error is the $\\lambda$ mismatch between the two operating points; the random error is the Pelgrom spread of the ratio.",
+  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its $V_{DS}$ is its own $V_{GS}$, so the bind declares the connection and the table is read along that diagonal), and the output device binds width-first at K times the reference width, on the reference's own $V_{GS}$ — the gate wire the two share, stated as the sizing rather than approximated by typing one inversion level into both — evaluated at the served output node's $V_{DS}$. The systematic error is then the $\\lambda$ mismatch between the two drain voltages and nothing else; the random error is the Pelgrom spread of the ratio.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -38,7 +38,7 @@
       "max": 14,
       "unit": "1/V",
       "role": "choice",
-      "note": "mirror inversion: lower gm/ID (higher V*) tightens current matching but costs compliance headroom"
+      "note": "reference inversion: lower gm/ID (higher V*) tightens current matching but costs compliance headroom. The output device inherits it through the shared gate rather than being told it separately"
     },
     {
       "name": "avt",
@@ -101,7 +101,7 @@
       }
     }
   ],
-  "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "V_out" },
+  "bind": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "V_out" },
   "rows": [
     { "name": "I_out", "expr": "id", "unit": "A" },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
@@ -116,7 +116,12 @@
       "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)",
       "unit": "1"
     },
-    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
+    {
+      "name": "irel_out",
+      "expr": "pelgrom_irel(avt, abeta, W, L, gm_id)",
+      "unit": "1",
+      "note": "the OUTPUT device's own inversion level, read back from its operating point. It sits on the reference's gate but its own drain, so it is not the authored gm_id_m unless the two drains happen to agree"
+    },
     {
       "name": "sigma_ratio",
       "expr": "sqrt(irel_ref^2 + irel_out^2)",

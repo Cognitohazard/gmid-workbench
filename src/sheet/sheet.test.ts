@@ -3,7 +3,7 @@
 // degrades to warnings / 'na' chips instead of throwing.
 
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice, signedMirrorDemo, withoutColumns } from '../demo';
+import { generateDemoDevice, signedMirrorDemo, withoutColumns, VA_PER_L } from '../demo';
 import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { fixTable } from '../series';
 import { diodeGrid, makeGrid } from '../grid';
@@ -2844,5 +2844,293 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     });
     expect(s[0].error).toMatch(/does not validate/);
     expect(s[0].rules).toEqual([]);
+  });
+});
+
+describe('a bound gate-source voltage in a sheet', () => {
+  // The mirror needs a device whose current actually depends on the drain, so the vds-swept
+  // demo rather than the module's 2-D `dev`.
+  const devVds = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
+  /** Early voltage of the demo model at the length these sheets use. */
+  const VA = VA_PER_L * 1e-6;
+
+  /** A mirror reference: diode-connected, sized at a current, publishing its gate voltage. */
+  const reference = (): SheetDoc => ({
+    title: 'ref',
+    polarity: 'n',
+    params: [
+      { name: 'L_r', value: 1e-6 },
+      { name: 'I_r', value: 20e-6 },
+      { name: 'g_r', value: 10 },
+    ],
+    bind: { L: 'L_r', id: 'I_r', gm_id: 'g_r', diode: true },
+    rows: [],
+    rules: [],
+    provide: ['W', 'vgs'],
+  });
+
+  /** A K:1 mirror whose output device binds `partner` as its second quantity. */
+  const mirror = (partner: Record<string, string>): SheetDoc => ({
+    title: 'mirror',
+    polarity: 'n',
+    params: [
+      { name: 'L', value: 1e-6 },
+      { name: 'K', value: 3 },
+      { name: 'V_out', value: 0.9 },
+      { name: 'gm_id_m', value: 10 },
+    ],
+    bind: { L: 'L', W: 'K*ref__W', ...partner, vds: 'V_out' },
+    rows: [{ name: 'ratio', expr: 'id/(K*20e-6)' }],
+    rules: [],
+    uses: [{ name: 'ref', doc: reference() }],
+  });
+
+  it('sizes the output device at the reference gate voltage, not at a target it re-solves', () => {
+    const res = runSheet(mirror({ vgs: 'ref__vgs' }), devVds);
+
+    expect(res.bind?.ok).toBe(true);
+    // The two devices are on one wire: the sized gate voltage IS the reference's, exactly —
+    // not "within an inversion level of it".
+    expect(res.bind!.vgs).toBeCloseTo(res.values.ref__vgs, 15);
+    expect(res.bind!.W).toBeCloseTo(3 * res.values.ref__W, 15);
+    // vgs is a SELECTOR, never a bias axis: the bind must not have sliced the vgs axis away.
+    expect(Object.keys(res.bind?.bias ?? {})).not.toContain('vgs');
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+
+    // The demo device's channel-length modulation multiplies id by (1 + vds/VA), so two devices
+    // on one gate differ only by that factor: I_out/(K·I_in) = (1 + V_out/VA)/(1 + V_ref/VA),
+    // with VA = VA_PER_L·L. The reference is diode-connected, so its own drain sits at its gate
+    // voltage. `ratio` is already normalised by K, so K itself drops out.
+    const expected = (1 + 0.9 / VA) / (1 + res.values.ref__vgs / VA);
+    // Not exact, and the residual is the grid's, not the tie's: the reference's width is read
+    // off the diode diagonal, a column that is not linear in vgs, so a solved gate voltage
+    // between two nodes carries an interpolation error into the width — measured at ~2e-5 here,
+    // bounded an order above it. The correction itself is ~5%, so this holds the ratio to well
+    // under a thousandth of it.
+    //
+    // What this does NOT establish is that a shared gate differs from a shared gm/ID. The demo
+    // model's channel-length modulation multiplies id and gm alike, so it cancels out of the
+    // ratio and both forms land on one gate voltage; separating them needs a device whose gm/ID
+    // moves with the drain, which is device.test.ts's algebraic oracle. What is established
+    // here is the sheet plumbing and the mirror arithmetic standing on it.
+    expect(Math.abs(res.values.ratio / expected - 1)).toBeLessThan(1e-4);
+    expect(expected).toBeGreaterThan(1.04); // the check is not vacuous: a real 4%+ correction
+  });
+
+  it('reports a clamped gate voltage as the one it read AT, and says that it clamped', () => {
+    // The hazard the clamp is written against is a result whose vgs disagrees with the point
+    // every quantity beside it came from. The demo sweeps vgs to 1.2 V, so a request for 1.5 V
+    // must come back as 1.2 V everywhere it is reported — the bind report, the merged scope, and
+    // a row reading it — with the request surviving only in the warning. And the sheet must
+    // still size: a clamp is a note about where the data ends, not an infeasibility.
+    const doc: SheetDoc = {
+      title: 'c',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'W_o', value: 4e-6 },
+      ],
+      bind: { L: 'L', W: 'W_o', vgs: '1.5' },
+      rows: [{ name: 'v_read', expr: 'vgs' }],
+      rules: [],
+    };
+    const res = runSheet(doc, dev);
+
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind!.vgs).toBeCloseTo(1.2, 12);
+    expect(res.values.vgs).toBeCloseTo(1.2, 12);
+    expect(res.values.v_read).toBeCloseTo(1.2, 12);
+
+    const clamps = res.warnings.filter((w) => /vgs 1\.5 .*clamped/.test(w.message));
+    expect(clamps).toHaveLength(1);
+    expect(clamps[0].severity).toBe('warning');
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+  });
+
+  it('refuses a gate voltage paired with another operating-point quantity', () => {
+    // Two selectors over-determine the gate voltage, whichever two they are.
+    const both: SheetDoc = {
+      ...mirror({}),
+      bind: { L: 'L', vgs: 'ref__vgs', gm_id: 'gm_id_m' },
+    };
+    expect(validateSheet(both).some((w) => /both set the operating point/.test(w.message))).toBe(
+      true,
+    );
+    expect(runSheet(both, devVds).bind?.ok).toBe(false);
+
+    // And a gate voltage on top of an already-complete width-first bind is a third quantity.
+    const three = mirror({ vgs: 'ref__vgs', gm_id: 'gm_id_m' });
+    expect(validateSheet(three).some((w) => /EXACTLY two/.test(w.message))).toBe(true);
+    expect(runSheet(three, devVds).bind?.ok).toBe(false);
+  });
+
+  it('is legal alongside a diode connection: the connection picks the axis, the bind the point', () => {
+    // A diode connection collapses vds onto the vds = vgs diagonal; naming vgs then picks the
+    // point ON that diagonal. Two independent statements, both true — unlike a declared vds,
+    // which would name the same coordinate twice.
+    const doc: SheetDoc = {
+      title: 'd',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'v', value: 0.7 },
+        { name: 'W', value: 4e-6 },
+      ],
+      bind: { L: 'L', W: 'W', vgs: 'v', diode: true },
+      rows: [],
+      rules: [],
+    };
+    expect(validateSheet(doc)).toEqual([]);
+    const res = runSheet(doc, devVds);
+    expect(res.bind?.ok).toBe(true);
+    expect(res.bind!.vgs).toBeCloseTo(0.7, 12);
+
+    // The connection is not decorative here: it put the drain at 0.7 V, so the current carries
+    // the demo's (1 + vds/VA) factor with VA = VA_PER_L·0.5 µm = 2.5 V. Against the same device
+    // held at vds = 0 that is exactly 1 + 0.7/2.5 = 1.28x the current.
+    const atZero = runSheet({ ...doc, bind: { L: 'L', W: 'W', vgs: 'v', vds: '0' } }, devVds);
+    expect(res.bind!.id / atZero.bind!.id).toBeCloseTo(1 + 0.7 / (VA_PER_L * 0.5e-6), 9);
+
+    // A declared vds is still refused — the ruling is about vgs only.
+    expect(
+      validateSheet({ ...doc, bind: { ...doc.bind!, vds: '0.5' } }).some((w) =>
+        /both a diode connection and a vds/.test(w.message),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('validateSheet — gates declared on one wire but sized apart', () => {
+  const child = (bind: Record<string, unknown>): SheetDoc => ({
+    title: 'c',
+    polarity: 'n',
+    params: [
+      { name: 'L', value: 0.5e-6 },
+      { name: 'Ib', value: 20e-6 },
+      { name: 'g', value: 10 },
+      { name: 'vg', value: 0.7 },
+    ],
+    bind: { L: 'L', ...bind } as SheetDoc['bind'],
+    rows: [],
+    rules: [],
+    provide: ['vgs', 'W'],
+  });
+
+  const pair = (
+    a: { gate: string; source: string },
+    b: { gate: string; source: string },
+    bindB: Record<string, unknown> = { id: 'Ib', gm_id: 'g' },
+  ): SheetDoc => ({
+    title: 'p',
+    polarity: 'n',
+    params: [{ name: 'VDD', value: 1.8 }],
+    rows: [],
+    rules: [],
+    uses: [
+      { name: 'one', doc: child({ id: 'Ib', gm_id: 'g' }), wiring: a },
+      { name: 'two', doc: child(bindB), wiring: b },
+    ],
+  });
+
+  const ties = (d: SheetDoc): string[] =>
+    validateSheet(d)
+      .filter((w) => w.rule === 'sheet-gate-tie')
+      .map((w) => w.message);
+
+  it('names two blocks that declare one gate and one source yet size independently', () => {
+    const found = ties(pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' }));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('"one", "two"');
+    expect(found[0]).toContain('V_g');
+    expect(found[0]).toMatch(/each is sized at its own operating point/);
+    // It advises, it does not repair: the sheet still evaluates and stays feasible.
+    expect(
+      validateSheet(pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' })).every(
+        (w) => w.severity === 'warning',
+      ),
+    ).toBe(true);
+  });
+
+  /** Two on one node, the second sized on a gate voltage the parent supplies. */
+  const withPartner = (): SheetDoc =>
+    pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' }, { W: '2e-6', vgs: 'vg' });
+
+  it('says nothing once one of them is sized on the OTHER block gate voltage', () => {
+    // The fix, and the only thing that actually holds the two at one voltage.
+    const tied = withPartner();
+    tied.uses![1].params = { vg: 'one__vgs' };
+    expect(ties(tied)).toEqual([]);
+  });
+
+  it('is not silenced by a gate voltage that couples nothing', () => {
+    // A typed number, and a gate voltage read off a block that is NOT on this node, leave the
+    // two devices exactly as unconnected as no vgs at all. Accepting any bound vgs would turn
+    // the check off on the sheets that most look like they pass it.
+    expect(ties(withPartner())).toHaveLength(1); // vg is the child's own param, a literal 0.7
+
+    const elsewhere = withPartner();
+    elsewhere.uses!.push({ name: 'far', doc: child({ id: 'Ib', gm_id: 'g' }) });
+    elsewhere.uses![1].params = { vg: 'far__vgs' };
+    expect(ties(elsewhere)).toHaveLength(1);
+  });
+
+  it('needs two loose blocks, not one: something has to settle the voltage the rest follow', () => {
+    // Three on one node, the other two sized on the first: the first is the anchor, not a defect.
+    const three = withPartner();
+    three.uses![1].params = { vg: 'one__vgs' };
+    three.uses!.push({
+      name: 'third',
+      doc: child({ W: '3e-6', vgs: 'vg' }),
+      params: { vg: 'one__vgs' },
+      wiring: { gate: 'V_g', source: '0' },
+    });
+    expect(ties(three)).toEqual([]);
+
+    // Cut the third loose and it is named alongside the one it should have followed — and the
+    // one that IS tied stays out of the message.
+    three.uses![2] = {
+      name: 'third',
+      doc: child({ id: 'Ib', gm_id: 'g' }),
+      wiring: { gate: 'V_g', source: '0' },
+    };
+    const found = ties(three);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('"one", "third"');
+    expect(found[0]).not.toContain('"two"');
+  });
+
+  it('says nothing when the sources differ — a shared gate is not a shared vgs there', () => {
+    // A complementary pair on one input, and a Widlar source, both share a gate node while
+    // sitting on different sources, so their gate-source voltages are genuinely different
+    // numbers. Matching on the gate alone would report the library's own inverter stage.
+    expect(ties(pair({ gate: 'V_in', source: '0' }, { gate: 'V_in', source: 'VDD' }))).toEqual([]);
+    expect(ties(pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: 'I_out*R_s' }))).toEqual(
+      [],
+    );
+  });
+
+  it('matches how the nodes are written, ignoring only whitespace', () => {
+    expect(
+      ties(pair({ gate: 'VDD - v', source: '0' }, { gate: 'VDD-v', source: ' 0' })),
+    ).toHaveLength(1);
+  });
+
+  it('rules on nothing it cannot see, without letting it hide what it can', () => {
+    const unresolved = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
+    unresolved.uses![1] = {
+      name: 'two',
+      ref: 'somewhere/else',
+      wiring: { gate: 'V_g', source: '0' },
+    };
+    expect(ties(unresolved)).toEqual([]);
+
+    const unbound = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
+    delete unbound.uses![1].doc!.bind;
+    expect(ties(unbound)).toEqual([]);
+
+    // But a third block nobody can rule on must not suppress the real pair beside it.
+    const beside = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
+    beside.uses!.push({ name: 'ref_only', ref: 'x/y', wiring: { gate: 'V_g', source: '0' } });
+    expect(ties(beside)).toHaveLength(1);
   });
 });

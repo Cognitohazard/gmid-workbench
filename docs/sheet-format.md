@@ -128,19 +128,42 @@ The bindable quantities do two different jobs:
 
 | group | quantities | what it fixes |
 |-|-|-|
-| operating point | `gm_id`, `ft`, `gm_gds`, `av0`, `vstar` | where on the curve the device sits |
+| operating point | `gm_id`, `ft`, `gm_gds`, `av0`, `vstar`, `vgs` | where on the curve the device sits |
 | size | `gm`, `id`, `W` | how big it is |
 
-An **operating-point** quantity is a ratio of two per-width quantities, so it is
-width-invariant: any one of them pins `VGS` on the `L` slice by itself and says nothing about
-size. Binding `ft` or `gm_gds` is how a sheet states the spec it actually has — a transit
-frequency, an intrinsic gain — instead of solving by hand for the `gm/ID` that meets it. A
-**size** quantity then scales that point into a real device.
+An **operating-point** quantity pins `VGS` on the `L` slice by itself and says nothing about
+size; a **size** quantity then scales that point into a real device. The first five are ratios
+of two per-width quantities, hence width-invariant. Binding `ft` or `gm_gds` is how a sheet
+states the spec it actually has — a transit frequency, an intrinsic gain — instead of solving
+by hand for the `gm/ID` that meets it.
+
+`vgs` is the sixth, and the degenerate one: it *is* the coordinate the others are inverted to
+find, so binding it needs no inversion at all — the table is read forward at the gate voltage
+given. Its purpose is structural rather than a target. Two devices whose gates are one wire and
+whose sources are one node sit at one gate-source voltage, whatever the table, the corner or
+the temperature, and
+
+```json
+{ "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "V_out" }
+```
+
+is a current mirror written down exactly. Writing the same mirror as a `gm_id` shared with the
+reference is an approximation that holds only while both devices read the same table at the
+same bias; it drifts with the drain voltage on real data and breaks outright across a corner,
+and it understates the mirror's own systematic error when it does. `vgs` is **signed in the
+table's axis convention**, so on a signed PMOS export it is negative — the same convention
+`vds` and `vsb` use, and the one place a bound quantity may be zero or negative.
+
+A gate voltage outside the table's swept range is **clamped to the nearest characterized node
+and warned about**, the same treatment an out-of-range `L` gets: an axis coordinate has a real
+node to fall back to. (An unreachable `ft` or `gm/ID` throws instead — an inversion past the
+data has no answer to fall back to.)
 
 So a legal bind is:
 
-- one operating-point quantity + one size quantity — e.g. `ft` + `id`, or the classic
-  `gm_id` + `id`; the width is sized from the current density.
+- one operating-point quantity + one size quantity — e.g. `ft` + `id`, the classic
+  `gm_id` + `id` (the width is sized from the current density), or `W` + `vgs` (a gate tie:
+  the width is stated and the gate voltage is imposed).
 - two size quantities, which pin the operating point between them: `gm` + `id` fixes
   `gm/ID`, while `W` + `gm` or `W` + `id` inverts the matching characterization-width curve
   at a transconductance or current density (width-first flows: unit devices, mirror ratios,
@@ -199,11 +222,17 @@ loop, so declare it through a tearing variable (see [Closing a bias loop](#closi
 
 ### Gate wiring (`wiring`)
 
-A bind declares two of a device's three terminal voltages — `vds` and `vsb` — because those are
-table axes the sizing has to slice. The third, the gate, it never declares: `vgs` is an *output*
-of the bind, the answer to "what drive does this current at this inversion level need". So a
-sheet can name the node a gate is tied to, size the device, and never compare the two. That is
-how a design ends up sized at one voltage and wired at another with every rule still green.
+A bind slices two of a device's three terminal voltages as table axes — `vds` and `vsb`. The
+third, the gate, is usually an *output* of the bind: `vgs` is the answer to "what drive does
+this current at this inversion level need". So a sheet can name the node a gate is tied to, size
+the device, and never compare the two. That is how a design ends up sized at one voltage and
+wired at another with every rule still green.
+
+Binding `vgs` (see [The bind](#the-bind)) turns that around for one specific case — a gate on
+the same wire *and* the same source node as another device, which is what a current mirror is.
+There the gate voltage is an input, and the identity holds by construction rather than by
+agreement. `wiring` remains the general channel: a gate tied to a rail, or to a node no other
+sized device sits on, still has nothing to bind to and is declared and checked here.
 
 The declaration therefore lives on the **use**, not on the bind — it is a fact about how the
 parent wired the child in, which is knowledge only the parent has:
@@ -408,6 +437,11 @@ grid nodes, while the rest of the point is interpolated from the raw columns and
 Between nodes those two routes differ — by around 0.1% for a ratio on a 10 mV grid — so the
 sized device sits that far from the target, well inside the data's own resolution but not at
 it exactly. If that margin matters for your design, characterize on a finer `VGS` step.
+
+A bound `vgs` is the exception: it is read back as the coordinate the table was actually read
+at, which is the value you asked for unless it fell outside the swept range and was clamped —
+and then the clamped value is the honest one, since it is the point every other quantity beside
+it came from. There is no inversion residual to repair, because there was no inversion.
 
 The lesson is to **test a derived quantity, not the pinned input.** Binding `gm` from a target
 GBW and then checking `GBW >= GBW_target` is a tautology that always reads amber. Instead,
@@ -816,8 +850,11 @@ exactly — an author reading a green chip should know what it is and is not a s
 - **The geometry is pinned numerically, per bind.** A bind that names no width — the common
   `(gm/ID, I_D)` form the library is nearly all written in — becomes `(W, I_D)` for the range-end
   run, at the width and length the base run sized, keeping the authored current expression. A
-  bind that already names a width is left exactly as authored: its partner reproduces the true
-  gate tie under a drain-voltage move, which is the only move a range claim makes today. A bind
+  bind that already names a width is left exactly as authored, which is what makes a gate tie
+  survive: a `vgs` bound to another block's gate voltage re-reads that block's newly settled
+  voltage at the end, so the two devices stay on one wire. A width-first bind whose partner is
+  an operating-point TARGET instead holds a ratio rather than a wire, and reproduces the tie
+  only under a drain-voltage move. A bind
   that names neither a width nor a current has both pinned numerically, and the run lists those
   blocks in `assumedSource` — the sheet never said where their current comes from, so holding it
   is an ideal-source assumption, and the fix is to author the current.
@@ -832,21 +869,26 @@ exactly — an author reading a green chip should know what it is and is not a s
   out of scope here as everywhere else in this engine, and the sheet's authority ends where the
   lookup table's does. Comparison against fixed-netlist simulation put that divergence at ~10%
   at the far ends of the shipped range claims, without changing any of their verdicts.
-- **A device whose GATE is the fixed thing is outside these semantics.** `vgs` is not a bindable
-  quantity, so every device at a range end is current-driven by assumption. Two devices sharing
-  a gate node therefore stay at one voltage only while the range end moves `vds` alone — true of
-  every range claim in the library today. An end that moved body bias, supply or temperature
-  would need a `(W, vgs)` bind, which is an engine change and not an authoring one. Validation
-  warns when a width-first bind sits under a range end that reaches it through any other path,
-  and says so differently when the end reaches the bind's own `W` or `L`, because then the run is
-  sizing a different transistor rather than re-biasing this one. Both are advisory.
+- **A device whose GATE is the fixed thing has to say so.** Bind `(W, vgs)` and the gate tie
+  holds under any move a range end makes — drain, body bias, supply, temperature — because the
+  bind re-reads the gate voltage the partner settles to there. Written any other way, the device
+  is current-driven by assumption at a range end, and two devices sharing a gate node stay at one
+  voltage only while the end moves `vds` alone. Validation warns when a width-first bind sits
+  under a range end that reaches it through any other path, and says so differently when the end
+  reaches the bind's own `W` or `L`, because then the run is sizing a different transistor rather
+  than re-biasing this one. Both are advisory. Separately, `validateSheet` names two blocks whose
+  `wiring` puts them on one gate and one source while each is sized at its own operating point —
+  the declaration is never allowed to drive the bind, only to point out that nothing does.
 - **At a bind the transformation rewrites, the data-ceiling verdict carries no information.** For
   the same reason its `gm` drifts low, its operating point is read out of the table rather than
   requested, so `gm/ID` is at or below the data ceiling by construction — that data-trust signal,
   one of the things that gates an ordinary bind, is structurally absent there. The run's other
   diagnostics (bias clamps, an inverse lookup that runs out of table) are what carry the trust
-  question instead, which is why they ride the report verbatim. A width-first bind is different:
-  it keeps its authored operating-point spec, so the ceiling still gates it at a range end. The
+  question instead, which is why they ride the report verbatim. A width-first bind keeps its
+  authored operating-point spec, so the ceiling still gates it at a range end — unless that spec
+  is a bound `vgs`, which reads the point out of the table exactly as a rewritten bind does and
+  is under the ceiling by construction for the same reason. Do not author a ceiling rule on a
+  gate-tied device; it can only report a pass. The
   sheet's own ceiling RULE goes quiet in the same way and less visibly: it is authored against
   the `gm/ID` param (`gm_id_in <= ceiling`), and at a range end that param no longer binds the
   device, so the rule reports the base value unchanged and passes. A green ceiling chip on a
@@ -893,7 +935,13 @@ silently repairs one.
    while a rule asserts it equals that child's output.
 4. **Declare wiring identities instead of copying their consequence.** A diode-connected
    device is `diode: true` — resolved exactly on the table's `vds = vgs` diagonal — not a
-   hand-copied drop that goes stale when the operating point moves.
+   hand-copied drop that goes stale when the operating point moves. A device on another
+   device's gate wire, sharing its source node, binds `vgs` to that block's own gate voltage —
+   not the same inversion level typed into both, which agrees only at one table and one bias.
+   (`diode: true` and a bound `vgs` are independent and may both appear: the connection chooses
+   the diagonal, the bind chooses the point on it. A declared `vds` is what the connection
+   excludes.) Backstop: the `sheet-gate-tie` validation rule flags two blocks whose `wiring`
+   puts them on one gate and one source while each is sized at its own operating point.
 5. **Close a genuine loop explicitly, or do not close it at all.** `solveFor` is for a
    quantity defined in terms of the device's own answer; `pin` is for a typed specification
    an internal node must produce, with a bracket that must size at both ends (see *Closing a

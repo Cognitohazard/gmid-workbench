@@ -219,6 +219,101 @@ function wiringProblems(use: SheetUse): QAWarning[] {
   return out;
 }
 
+/** A node expression reduced to a comparison key. Whitespace only — no algebra: this compares
+ *  how two blocks NAME a node, not what the node evaluates to. */
+const nodeKey = (expr: string): string => expr.replace(/\s+/g, '');
+
+/**
+ * Two blocks that declare the same gate node AND the same source node are on one wire and one
+ * source, so their gate-source voltage is a single number — whatever the table, the corner or
+ * the temperature. A sheet that then sizes each of them at its OWN operating point has written
+ * that identity down and left the engine free to break it: each bind settles wherever its own
+ * target lands, and the two agree only while both read the same table at the same bias. Read
+ * the design at another condition and the gates drift apart with every rule still green.
+ *
+ * What makes them agree is binding one device's `vgs` to the other's — `{ W: "K*ref__W", vgs:
+ * "ref__vgs" }` — which states the shared wire AS the sizing instead of beside it. So the
+ * question here is whether each block on one (gate, source) pair is sized on a vgs that names
+ * ANOTHER BLOCK ON THAT SAME PAIR. A bound vgs alone is not enough: `vgs: "0.7"` is a typed
+ * number, and a vgs read off a block somewhere else on the schematic is a different claim; both
+ * would silence the finding while coupling nothing. One block must be left over — something has
+ * to settle the voltage the rest follow — so the finding is raised when TWO or more are not
+ * tied to a peer, and it names those.
+ *
+ * The reference can be written in either of the two places an author can put it: directly in
+ * the child's own bind, or as a child param the parent overrides at the use site (the usual
+ * shape, since only the parent knows what its children are wired to). Both are read.
+ *
+ * Scope worth knowing: `wiring` is declared on a USE, so this compares child to child. A sheet
+ * whose gate-tied pair is its OWN bind plus one child — which is how the library's mirrors are
+ * written — declares no gate node for the parent device and is out of this rule's reach. Giving
+ * the parent bind a node declaration is a schema change, not a check.
+ *
+ * Both halves of the pair are required, and the source half is what keeps the check honest. A
+ * complementary pair driven by one input (the library's CMOS inverter stage) shares a gate and
+ * sits on different rails, so its two gate-source voltages are genuinely different numbers; so
+ * does a Widlar source, whose whole design equation is the difference between them. Matching on
+ * the gate alone would report both as defects.
+ *
+ * A declaration is never allowed to DRIVE the bind, only to be checked against it. Re-sizing a
+ * device from its wiring would replace a coupling the author can see with one they cannot,
+ * which is the silence this mechanism exists to break — so this reports and repairs nothing.
+ *
+ * Nodes are matched on the expression TEXT, not on a value: a declaration names a node, and two
+ * blocks on one wire are written the same way. A node spelled two different ways is missed
+ * rather than misreported — the right direction for an advisory, the same trade reachedBinds
+ * makes.
+ */
+function untiedGates(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
+  const groups = new Map<string, { gate: string; source: string; uses: SheetUse[] }>();
+  for (const use of doc.uses ?? []) {
+    // `unknown`, as in wiringProblems: a persisted document arrives unverified. A half-written
+    // or unparseable declaration names no node pair, and wiringProblems already reports it.
+    const w = use.wiring as unknown as Record<string, unknown> | undefined;
+    if (!w || typeof w.gate !== 'string' || typeof w.source !== 'string') continue;
+    if (!w.gate.trim() || !w.source.trim()) continue;
+    const key = `${nodeKey(w.gate)}\u0000${nodeKey(w.source)}`;
+    const group = groups.get(key) ?? { gate: w.gate.trim(), source: w.source.trim(), uses: [] };
+    group.uses.push(use);
+    groups.set(key, group);
+  }
+  for (const { gate, source, uses } of groups.values()) {
+    // A block with no embedded doc has an unknown bind (a ref resolves later; runSheet
+    // revalidates the resolved doc), and one with no bind sizes no device. Neither can be ruled
+    // on, so drop it and rule on the rest — dropping the whole GROUP instead would let one
+    // unresolved sibling hide a real pair beside it.
+    const sized = uses.filter((u) => u.doc?.bind);
+    if (sized.length < 2) continue;
+    const untied = sized.filter((u) => !tiedToPeer(u, sized));
+    if (untied.length < 2) continue;
+    const named = untied.map((u) => `"${u.name}"`).join(', ');
+    out.push({
+      rule: 'sheet-gate-tie',
+      severity: 'warning',
+      message:
+        `${named} declare the same gate node (${gate}) on the same source node (${source}), so ` +
+        `their gate-source voltage is one number — but each is sized at its own operating ` +
+        `point, so nothing holds them at it. They agree only while every one of them reads the ` +
+        `same table at the same bias. Bind one block's vgs to another's (\`"vgs": ` +
+        `"<block>__vgs"\`, with that block providing vgs) to make the shared wire the sizing`,
+      location: untied[0].name,
+    });
+  }
+  return out;
+}
+
+/** Whether `use` is sized on a gate voltage that names one of its `peers` — the reference read
+ *  from the child's own bind and, when that bind names a child param, from the parent's override
+ *  of it, which is where the cross-block name normally lives. */
+function tiedToPeer(use: SheetUse, peers: readonly SheetUse[]): boolean {
+  const expr = use.doc?.bind?.vgs;
+  if (expr === undefined) return false;
+  const override = use.params?.[expr.trim()];
+  const names = [...namesOf(expr), ...(override === undefined ? [] : namesOf(override))];
+  return peers.some((p) => p !== use && names.includes(joinProvide(p.name, 'vgs')));
+}
+
 /** Scalars every evaluation seeds from the table's metadata, bind or no bind — so a sheet may
  *  name one in `provide` without declaring it. Read off metaScalars itself rather than listed
  *  again here. The probe must supply EVERY metadata field, because the key set follows the
@@ -681,6 +776,13 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
 
   // A diode connection already fixes vds; declaring both means one of them is a fiction, and
   // guessing which the author meant would be worse than saying so.
+  //
+  // `vgs` alongside a diode connection is a different case and is deliberately LEGAL — do not
+  // add a symmetric check. The connection says vds FOLLOWS vgs, collapsing the table onto its
+  // vds = vgs diagonal; a bound vgs then names the point on that diagonal. The two statements
+  // are independent and both hold, exactly as a diode connection plus a bound gm/ID already
+  // does. It is vds that cannot also be declared, because that one names the same coordinate
+  // twice with two different numbers.
   if (doc.bind?.diode && doc.bind.vds !== undefined) {
     out.push({
       rule: 'sheet-bind',
@@ -727,6 +829,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     }
 
     out.push(...standInEstimates(doc));
+    out.push(...untiedGates(doc));
 
     // Children evaluate in document order, and a use's param overrides may reference the
     // provides of EARLIER siblings only. A forward (or self) reference is statically

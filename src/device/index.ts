@@ -6,26 +6,26 @@
 // feasibility. Pure, deterministic, zero DOM imports.
 
 import { type DeviceTable, LookupRangeError } from '../types';
-import { lookupByGmId, lookupByQuantity } from '../lookup';
+import { lookup, lookupByGmId, lookupByQuantity, operatingPointAxis } from '../lookup';
 import { sliceGrid } from '../grid';
 import { scalarScope, registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
 import { compileExpr, metaScalars, DERIVED_COMPILED } from '../derive';
-import { DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
+import { AXIS_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two bound quantities.
  *
  * The two split into different jobs. An OPERATING-POINT SELECTOR (gm_id, ft, gm_gds,
- * av0, vstar) is a width-invariant ratio, so it pins vgs on the L-slice by itself and
- * says nothing about size; an EXTENSIVE quantity (gm, id, W) sets the scale. A legal
+ * av0, vstar, vgs) pins vgs on the L-slice by itself and says nothing about size; an
+ * EXTENSIVE quantity (gm, id, W) sets the scale. A legal
  * bind is therefore one selector plus one extensive quantity — or two extensive ones,
  * which pin the point between them (gm + id fixes gm/ID; W + gm or W + id fixes a
  * current/transconductance density). Two selectors over-determine vgs and are refused.
  *
  * Binding a selector other than gm/ID is what lets a designer state the spec they
- * actually have — "fT ≥ 5 GHz", "intrinsic gain ≥ 40 dB" — instead of hand-iterating
- * gm/ID until the reported fT lands.
+ * actually have — "fT ≥ 5 GHz", "intrinsic gain ≥ 40 dB", "this gate is on the same wire
+ * as that one" — instead of hand-iterating gm/ID until the reported fT lands.
  */
 export interface SizeQuery {
   table: DeviceTable;
@@ -38,6 +38,9 @@ export interface SizeQuery {
   gm_gds?: number;
   av0?: number;
   vstar?: number;
+  /** The gate-source voltage itself, in the table's own axis convention (signed: a
+   *  signed-export PMOS vgs is negative). See OP_SELECTORS for why it is a selector. */
+  vgs?: number;
 }
 
 /** A solved operating point with the sized width and feasibility against the slice ceiling. */
@@ -70,8 +73,8 @@ export interface SizeResult {
 /**
  * Operating-point selectors: quantities that pin vgs on the L-slice by themselves.
  *
- * Every one is a ratio of two per-width base quantities (gm/id, gm/(2π·cgg), gm/gds,
- * 2·id/gm), hence width-INVARIANT — which is exactly why it carries no size information and
+ * All but the last are a ratio of two per-width base quantities (gm/id, gm/(2π·cgg), gm/gds,
+ * 2·id/gm), hence width-INVARIANT — which is exactly why they carry no size information and
  * must be paired with an extensive quantity. A per-width key here would silently size wrong,
  * so a property test asserts the invariance of every member.
  *
@@ -80,8 +83,23 @@ export interface SizeResult {
  * width-invariant ratios and all deliberately absent. A member must also be monotonic in vgs
  * on real data (or the inversion fails closed, which is a poor headline feature) and be a
  * quantity designers actually state as a spec. Add one only when all three hold.
+ *
+ * `vgs` is the DEGENERATE member, and it meets all three:
+ *  - **width-invariant.** It is a terminal voltage, not a per-width quantity at all — two
+ *    devices of any widths on one gate wire share it exactly. The property test covers it
+ *    with the rest.
+ *  - **monotone in vgs.** It IS vgs, strictly increasing on the sweep axis by construction,
+ *    so the inversion is the identity and can never fail closed on a fold.
+ *  - **stated as a spec.** "These two gates are the same wire" is the most common structural
+ *    statement in analog bias design — every current mirror, every cascode rail. Until now
+ *    the sheets could only approximate it by typing one device's gm/ID into the other, an
+ *    equality that holds only while both sit on the same table at the same bias.
+ *
+ * Being degenerate, it needs no inverse lookup: the operating point IS the given value, read
+ * forward off the L-slice (see `atGateVoltage`). It is also the only member carried in the
+ * table's own axis convention rather than as a canonicalized magnitude — see checkBindPair.
  */
-export const OP_SELECTORS = ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar'] as const;
+export const OP_SELECTORS = ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar', 'vgs'] as const;
 
 /** Extensive quantities: these set the device's SCALE once the operating point is fixed. */
 export const EXTENSIVE = ['gm', 'id', 'W'] as const;
@@ -129,7 +147,11 @@ function checkBindPair(q: SizeQuery): void {
     if (!Number.isFinite(v)) {
       throw new Error(`sizeDevice: ${k} must be a finite number, got ${v}`);
     }
-    if (!(v > 0)) {
+    // Axis coordinates are exempt from the positivity rule; today vgs is the only bindable
+    // one. Import keeps a swept axis SIGNED (a signed PMOS export sweeps vgs negative) and
+    // vgs = 0 is a characterized node like any other. Every other bindable is a value column,
+    // canonicalized to a magnitude, where <= 0 can only be an author error.
+    if (!AXIS_KEYS.has(k) && !(v > 0)) {
       throw new Error(`sizeDevice: ${k} must be > 0, got ${v} — unphysical bind`);
     }
   }
@@ -153,6 +175,46 @@ function atDensity(
   } catch (e) {
     throw e instanceof LookupRangeError ? e.rescaled(scale) : e;
   }
+}
+
+/**
+ * Place the operating point at a GIVEN gate-source voltage — the degenerate selector.
+ *
+ * Every other selector inverts its curve over the L-slice to find a vgs; this one is handed
+ * the vgs, so the inversion is the identity and the point is a plain forward read — which is
+ * why it goes straight to `lookup` rather than through `lookupByQuantity`, whose kernel would
+ * build and orient a curve to invert a mapping already known to be the identity.
+ *
+ * The table still has to have the shape any operating point needs, so this shares
+ * `operatingPointAxis` with the inverse path rather than restating the rule.
+ *
+ * Off the hull this CLAMPS and warns rather than throwing, which is the treatment the sizer
+ * already gives an off-hull L and for the same reason: an axis coordinate has a nearest
+ * characterized node to fall back to, so the honest report is "read at a different point than
+ * you asked for". A selector past the data's range throws instead, because there the
+ * inversion has no answer at all. The clamped value is what the caller sees as `vgs`, so the
+ * report and the data agree; the requested value survives in the warning.
+ */
+function atGateVoltage(
+  table: DeviceTable,
+  vgs: number,
+  L: number,
+  warnings: string[],
+): Record<string, number> {
+  const vgsAxis = operatingPointAxis(
+    table.grid,
+    'sizeDevice',
+    'read the operating point at a bound vgs',
+  );
+  const lo = vgsAxis.values[0];
+  const hi = vgsAxis.values[vgsAxis.values.length - 1];
+  const used = vgs < lo ? lo : vgs > hi ? hi : vgs;
+  if (used !== vgs) {
+    warnings.push(
+      `requested vgs ${vgs} V is outside the table's vgs range [${lo}, ${hi}] V at L=${L} m; clamped to the nearest characterized gate voltage`,
+    );
+  }
+  return lookup(table, { l: L, vgs: used });
 }
 
 /**
@@ -181,7 +243,8 @@ function gmIdCeiling(table: DeviceTable, L: number): number {
  * chosen length L (see SizeQuery for which pairs are legal).
  *
  * A bound SELECTOR is inverted on the L-slice to a vgs — gm/ID, or a spec-level
- * quantity like fT or intrinsic gain — and the paired extensive quantity then scales
+ * quantity like fT or intrinsic gain, or vgs itself, which needs no inversion because it
+ * already IS the coordinate — and the paired extensive quantity then scales
  * the device: width from the current density W = id / (id_char/w0), or current from
  * the density at a given W. Two extensive quantities instead pin the point between
  * them: gm + ID fixes gm/ID, while W + gm / W + ID invert the matching
@@ -226,8 +289,12 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     // One selector pins the operating point; the single extensive quantity scales it. Each
     // selector inverts its OWN curve — including V*, which could be rewritten as the gm/ID
     // it names but must not be: the failure and the reported operating point would then
-    // come back in a quantity the caller never bound.
-    point = lookupByQuantity(q.table, selector, q[selector] as number, L);
+    // come back in a quantity the caller never bound. vgs is the degenerate case: nothing to
+    // invert, the point is read forward at the gate voltage given.
+    point =
+      selector === 'vgs'
+        ? atGateVoltage(q.table, q.vgs as number, L, warnings)
+        : lookupByQuantity(q.table, selector, q[selector] as number, L);
     // A bound gm/ID is honoured exactly: interpolating gm and id separately does not
     // preserve their ratio, so reading it back off the point would return a hair off what
     // the designer asked for — and a gm to match. Every other selector has no such closed
@@ -313,6 +380,11 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // ratio the two differ by ~0.1% between nodes, well inside the data's own resolution but
   // far outside the rule engine's pinned-spec tolerance. Without it, the most natural thing
   // an author writes — bind a gain spec, then require that gain — fails against its own bind.
+  //
+  // A bound `vgs` is the exception and must NOT be restored: it is the axis coordinate the
+  // point was read AT, so there is no inversion residual to repair, and after a hull clamp
+  // the requested value is a gate voltage the data never covered. Reporting it would put a
+  // number in the result that disagrees with every other quantity beside it.
   Object.assign(quantities, {
     id_w,
     gm,
@@ -320,7 +392,9 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     id,
     W,
     w0: Wchar,
-    ...(selector !== undefined ? { [selector]: q[selector] as number } : {}),
+    ...(selector !== undefined && !AXIS_KEYS.has(selector)
+      ? { [selector]: q[selector] as number }
+      : {}),
   });
 
   return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities, warnings };

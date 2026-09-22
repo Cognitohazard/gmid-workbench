@@ -18,3 +18,17 @@ export const va = (L: number): number => VA_PER_L * L;
  *  once bound, since gds/id = 1/(VA + vds) there. The one spelling of the demo's
  *  channel-length-modulation law; every output-node golden goes through it. */
 export const gdsOf = (id: number, L: number, vds: number): number => id / (va(L) + vds);
+
+/** Ratio of two devices' Pelgrom current spread, sigma(dI/I) = hypot(gm_id*A_VT, A_beta)/sqrt(W*L),
+ *  for an output device `K` times the reference width at the same length. Written out rather
+ *  than read back from `mismatch()` so the golden stays an independent closed form; the
+ *  matching constants come from the sheet under test, so retuning a sheet cannot leave a
+ *  hand-typed literal behind. The sqrt(K) is the area term; a gate-tied pair's two inversion
+ *  levels differ, and the hypot ratio is what carries that difference. */
+export const pelgromIrelRatio = (
+  gmIdOut: number,
+  gmIdRef: number,
+  K: number,
+  avt: number,
+  abeta: number,
+): number => Math.hypot(gmIdOut * avt, abeta) / Math.hypot(gmIdRef * avt, abeta) / Math.sqrt(K);

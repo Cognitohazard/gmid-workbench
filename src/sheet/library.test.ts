@@ -41,6 +41,7 @@ import {
   cggOf,
   roMirrored,
   stage2Rout,
+  pelgromIrelRatio,
 } from './library.fixtures';
 // Test-only reach across to the picker: the searchable set is that module's curation, and the
 // interface gate below is the library-side half of the same fact.
@@ -331,9 +332,17 @@ describe('exemplar goldens: simple current mirror', () => {
     );
   });
 
-  it('the K-times-larger output device carries half the reference current spread', () => {
-    // pelgrom_irel ∝ 1/sqrt(W·L): W_out = 4·W_ref at the same L ⇒ ratio exactly 1/2.
-    expect(relErr(res.values.irel_out / res.values.irel_ref, 0.5)).toBeLessThan(1e-9);
+  it('the K-times-larger output device halves the AREA term of the reference current spread', () => {
+    // W_out = 4*W_ref at the same L, so the AREA term contributes exactly 1/2 — but no longer
+    // the whole ratio. The output device is sized on the reference's GATE now, so its inversion
+    // level is read off the table instead of being the authored 8, and the threshold term
+    // carries the difference.
+    const expected = pelgromIrelRatio(res.values.gm_id, 8, 4, res.values.avt, res.values.abeta);
+    expect(relErr(res.values.irel_out / res.values.irel_ref, expected)).toBeLessThan(1e-12);
+    // On this table the two levels agree to the grid's own interpolation resolution, so the
+    // ratio still sits within 4e-4 of 1/2. A real drift between the two gate-source voltages
+    // would show up here as a far larger departure.
+    expect(relErr(res.values.irel_out / res.values.irel_ref, 0.5)).toBeLessThan(1e-3);
   });
 
   it('output resistance is the output device r_o, and the output vds cancels out of it', () => {

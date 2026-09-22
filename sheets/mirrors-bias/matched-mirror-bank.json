@@ -1,6 +1,6 @@
 {
   "title": "Matched mirror bank (current-steering unit)",
-  "description": "A bank of identical unit current sources, the building block of a current-steering DAC or a binary/thermometer bias array. One diode-connected unit device sets the reference; the bank is $N_{legs}$ copies of it, sized width-first as unit-device multiples (bank width = $N_{legs}$ times the unit), so every element is a faithful replica and the full-scale current is $N_{legs}$ times the unit current, give or take the channel-length-modulation gain error between the reference diode point and the shared output rail. Matching is what limits a current-steering converter's linearity: each unit element has a Pelgrom current spread, and across $N_{legs}$ elements the worst-case accumulated error grows as the square root of $N$ (a random-walk bound), which is the estimate this sheet reports and budgets. Compliance is a single saturation voltage, since the bank shares one output rail; a cascoded bank (see the cascode mirror) would trade headroom for a flatter output. The unit reference is diode-connected, so its drop is read off the table rather than estimated.",
+  "description": "A bank of identical unit current sources, the building block of a current-steering DAC or a binary/thermometer bias array. One diode-connected unit device sets the reference; the bank is $N_{legs}$ copies of it, sized width-first as unit-device multiples (bank width = $N_{legs}$ times the unit) on the unit device's own $V_{GS}$, which is the gate wire every leg shares, so every element is a faithful replica and the full-scale current is $N_{legs}$ times the unit current, give or take the channel-length-modulation gain error between the reference diode point and the shared output rail. Matching is what limits a current-steering converter's linearity: each unit element has a Pelgrom current spread, and across $N_{legs}$ elements the worst-case accumulated error grows as the square root of $N$ (a random-walk bound), which is the estimate this sheet reports and budgets. Compliance is a single saturation voltage, since the bank shares one output rail; a cascoded bank (see the cascode mirror) would trade headroom for a flatter output. The unit reference is diode-connected, so its drop is read off the table rather than estimated.",
   "polarity": "n",
   "params": [
     {
@@ -107,7 +107,7 @@
       }
     }
   ],
-  "bind": { "L": "L", "W": "N_legs*unit__W", "gm_id": "gm_id_m", "vds": "V_out" },
+  "bind": { "L": "L", "W": "N_legs*unit__W", "vgs": "unit__vgs", "vds": "V_out" },
   "rows": [
     {
       "name": "I_fs",

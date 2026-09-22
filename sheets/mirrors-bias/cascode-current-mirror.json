@@ -1,6 +1,6 @@
 {
   "title": "Cascode current mirror",
-  "description": "A K:1 cascode current mirror. Four unit devices: the bottom reference (diode-connected), the reference-branch cascode (diode-connected, stacked on it), the output mirror device, and the output cascode. The cascode devices force the two mirror devices to sit at the SAME low drain voltage, so the channel-length-modulation ($\\lambda$) mismatch between them is essentially zero and the systematic ratio error collapses. That matched bias is the whole point of cascoding a mirror: unlike the simple mirror, the output current no longer drifts with the output node voltage. The cost is output compliance: with the cascode gates riding the diode stack, the output cascode's source sits a full $V_{GS}$ up at the mirror node, so the output must clear $V_{GS} + V_{dsat}$ — roughly a threshold more than the two stacked $V_{dsat}$ a wide-swing bias achieves, and the reason the wide-swing variant exists. Both mirror devices bind width-first as unit-device multiples (output width = K times the reference). The two reference devices are diode-connected, so their drops are read off the table rather than estimated, and the output devices are biased from what the reference actually sits at. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
+  "description": "A K:1 cascode current mirror. Four unit devices: the bottom reference (diode-connected), the reference-branch cascode (diode-connected, stacked on it), the output mirror device, and the output cascode. The cascode devices force the two mirror devices to sit at the SAME low drain voltage, so the channel-length-modulation ($\\lambda$) mismatch between them is essentially zero and the systematic ratio error collapses. That matched bias is the whole point of cascoding a mirror: unlike the simple mirror, the output current no longer drifts with the output node voltage. The cost is output compliance: with the cascode gates riding the diode stack, the output cascode's source sits a full $V_{GS}$ up at the mirror node, so the output must clear $V_{GS} + V_{dsat}$ — roughly a threshold more than the two stacked $V_{dsat}$ a wide-swing bias achieves, and the reason the wide-swing variant exists. Both output devices bind width-first as unit-device multiples (output width = K times the matching reference device), each on the $V_{GS}$ of the reference device whose gate it shares — the two mirror devices sit on one gate wire above ground, and the two cascodes on one gate wire above a mirror node at the same potential. The two reference devices are diode-connected, so their drops are read off the table rather than estimated, and the output devices are biased from what the reference actually sits at. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -179,7 +179,13 @@
         "params": [
           { "name": "W_out", "value": 4e-6, "unit": "m", "role": "spec" },
           { "name": "L_oc", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_oc", "value": 8, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vgs_oc",
+            "value": 0.85,
+            "unit": "V",
+            "role": "spec",
+            "note": "the cascode gate rail, referred to this device's own source on the mirror node; the parent ties it to the reference cascode's gate-source voltage, which is the same wire"
+          },
           {
             "name": "vds_oc",
             "value": 0.4,
@@ -198,32 +204,24 @@
         "bind": {
           "L": "L_oc",
           "W": "W_out",
-          "gm_id": "gm_id_oc",
+          "vgs": "vgs_oc",
           "vds": "vds_oc",
           "vsb": "vsb_oc"
         },
         "rows": [],
-        "rules": [
-          {
-            "id": "feasible-inversion",
-            "kind": "invariant",
-            "lhs": "gm_id_oc",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
+        "rules": [],
         "provide": ["vdsat", "id", "W", "gm", "gmb", "gds"]
       },
       "params": {
         "W_out": "K*ref_casc__W",
         "L_oc": "L_c",
-        "gm_id_oc": "gm_id_c",
+        "vgs_oc": "ref_casc__vgs",
         "vds_oc": "V_out - ref__vgs",
         "vsb_oc": "ref__vgs"
       }
     }
   ],
-  "bind": { "L": "L", "W": "K*ref__W", "gm_id": "gm_id_m", "vds": "ref__vgs" },
+  "bind": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "ref__vgs" },
   "rows": [
     { "name": "I_out", "expr": "id", "unit": "A" },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
@@ -240,7 +238,7 @@
       "note": "the reference diode stack's top rail (two stacked vgs)"
     },
     { "name": "irel_ref", "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)", "unit": "1" },
-    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id_m)", "unit": "1" },
+    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id)", "unit": "1" },
     {
       "name": "sigma_ratio",
       "expr": "sqrt(irel_ref^2 + irel_out^2)",

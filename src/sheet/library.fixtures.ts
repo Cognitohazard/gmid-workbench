@@ -16,7 +16,7 @@ import type { SheetDoc } from './types';
 export { VA_PER_L };
 // The demo model's closed forms live in library.math.ts, which has no import-time work; they
 // are re-exported here so a suite already holding the fixtures needs no second import.
-export { relErr, par, va, gdsOf } from './library.math';
+export { relErr, par, va, gdsOf, pelgromIrelRatio } from './library.math';
 
 const SHEETS_DIR = fileURLToPath(new URL('../../sheets', import.meta.url));
 

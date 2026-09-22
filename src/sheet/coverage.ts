@@ -23,7 +23,16 @@ export const PINNED_AT_A_RANGE_END: ReadonlySet<string> = new Set(['W', 'L', 'id
  *  range-end run — one left behind would re-size the transistor there, which is exactly what a
  *  fixed-hardware check must not do. Subtracted from the device module's own list rather than
  *  written out, so a quantity added to the namespace is dropped here by default: surviving
- *  silently is the dangerous direction, and it is the one a hand-copied list takes. */
+ *  silently is the dangerous direction, and it is the one a hand-copied list takes.
+ *
+ *  `vgs` is in this set, and that is deliberate even though a bound vgs is the one thing that
+ *  DOES describe fixed hardware across a condition. The bind that says so is width-first —
+ *  `{ W: "K*ref__W", vgs: "ref__vgs" }` — and pinBind returns those untouched before this set
+ *  is consulted, so the gate tie survives a range end intact and re-reads the reference's newly
+ *  settled gate voltage there, which is the whole point of binding it. A vgs bound WITHOUT a
+ *  width is a different statement: pinning that device's geometry already fixes it, and keeping
+ *  a gate voltage beside a pinned W and a pinned or authored current would over-determine the
+ *  transistor with three constraints where the sizer takes two. */
 const OPERATING_POINT_KEYS: readonly (keyof SheetBind)[] = BINDABLE.filter(
   (k) => !PINNED_AT_A_RANGE_END.has(k),
 );
@@ -63,15 +72,15 @@ export interface PinnedHardware {
  * way into a different classification:
  *
  *  - **an authored `W`** ⇒ the bind is left ALONE. It is already width-first, and its partner
- *    (a gm/ID shared with the reference it mirrors, say) is how the sheet writes the gate tie.
- *    Under a move that shifts vds alone — every move the library's edges make today — this
- *    reproduces the tied device exactly on the demo model, where gm/ID does not depend on vds.
- *    On measured data it is close rather than exact: the tied device's true invariant is `vgs`,
- *    and holding a gm/ID instead differs by however much the data's gm/ID drifts with the drain.
- *    Under a move that shifts body bias it does not hold at all, and neither does any alternative
- *    the engine can express: `vgs` is not a bindable quantity, so a gate-tied device cannot be
- *    written down as one. That is the boundary of these semantics, and validateSheet warns where
- *    a sheet reaches it.
+ *    is how the sheet states the device's operating point. When that partner is `vgs` — the
+ *    form the library's mirrors use — the bind IS the gate tie, and leaving it alone is what
+ *    makes it hold: re-evaluating `ref__vgs` at the new condition reads the gate voltage the
+ *    reference settles to THERE, so the two devices stay on one wire under any move at all,
+ *    corner, temperature, supply or body bias.
+ *    A width-first bind whose partner is an operating-point TARGET instead (a gm/ID, an fT) is
+ *    left alone by the same rule and does not have that property: it holds a ratio rather than
+ *    a wire, so under a move it re-settles to whatever gate voltage that ratio now takes.
+ *    validateSheet warns where a sheet reaches that, and `vgs` is the fix.
  *  - **no `W`, an authored `id`** ⇒ pin the geometry (W and L) numerically, drop the operating-
  *    point spec, and KEEP the authored current. The current expression is the hardware in the
  *    sheet's own algebra — a mirror ratio, a tail split, a KCL difference — so re-evaluating it

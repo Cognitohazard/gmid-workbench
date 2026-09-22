@@ -47,8 +47,10 @@
   // handed to sizeDevice all speak the same names — one list to extend (the display labels
   // stay a hand-kept sibling; presentation only). This is
   // a deliberate SUBSET of the core's BINDABLE: av0 is the same expression as gm/gds, and
-  // V* is a hand conversion from gm/ID, so neither earns a seventh box. Sheets can still
-  // bind them.
+  // V* is a hand conversion from gm/ID, so neither earns a seventh box. vgs is left out for a
+  // different reason — it states that THIS gate is another device's gate, and this panel sizes
+  // one device with no other in view, so there is nothing here to tie it to. Sheets, which
+  // compose blocks, can bind all three.
   const BIND_FIELDS = ['gm_id', 'ft', 'gm_gds', 'id', 'gm', 'W'] as const;
   const bind: Record<string, string> = $state(
     // 'gmId' is the pre-rename name of this field; read it once so upgrading does not
