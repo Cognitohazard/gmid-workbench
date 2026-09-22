@@ -8,8 +8,8 @@ equations, and declare pass/fail rules with margins.
 
 A sheet is evaluated, never *solved*. It reads the device lookup tables and a few physical
 constants, evaluates the expressions you wrote, and compares the results. There is no nodal
-solver and no circuit traversal: the only operating-point solving is the explicit,
-designer-named bind. This document specifies the model precisely enough to author a sheet by
+solver — the engine never solves the node set simultaneously — and the only operating-point
+solving is the explicit, designer-named bind. This document specifies the model precisely enough to author a sheet by
 hand or generate one from code — see also [Scripting the core](../README.md#scripting-the-core).
 
 ## Two questions: closes, and covers
