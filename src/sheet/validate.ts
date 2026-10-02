@@ -10,7 +10,7 @@
 import type { QAWarning } from '../types';
 import { compileExpr, metaScalars } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
-import { BASE_KEYS, DERIVED_QUANTITIES } from '../namespace';
+import { BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
 import { PINNED_AT_A_RANGE_END } from './coverage';
 import {
   BIAS_AXES,
@@ -35,7 +35,9 @@ import {
   providedNames,
   prefixUseWarning,
   splitProvide,
+  type ParamClass,
   type SheetDoc,
+  type SheetRow,
   type SheetUse,
   type SheetVar,
 } from './types';
@@ -419,7 +421,7 @@ function solvedDeps(p: SheetVar): readonly string[] {
   return torn(p) ? [p.solveFor] : [];
 }
 
-/** One document of a composition tree as the DC-input walk sees it: the doc, the use path that
+/** One document of a composition tree as the dependency walks see it: the doc, the use path that
  *  reaches it (`''` at the top, `a.b.` below — the prefix a qualified name carries), the use in
  *  the parent that embeds it, and its own embedded children by use name. */
 interface Level {
@@ -429,6 +431,32 @@ interface Level {
   kids: Map<string, Level>;
 }
 
+/** The level `use` embeds below `lv`, with no children enrolled yet. */
+const childLevel = (lv: Level, use: SheetUse, doc: SheetDoc): Level => ({
+  doc,
+  path: `${lv.path}${use.name}${PATH_SEP}`,
+  parent: { level: lv, use },
+  kids: new Map(),
+});
+
+/** Every level of the tree under `doc` in preorder: the first embedded use of each name, down to
+ *  MAX_USE_DEPTH. */
+function levelsOf(doc: SheetDoc): Level[] {
+  const levels: Level[] = [];
+  const enroll = (lv: Level, depth: number): void => {
+    levels.push(lv);
+    if (depth >= MAX_USE_DEPTH) return;
+    for (const use of lv.doc.uses ?? []) {
+      if (!use.doc || lv.kids.has(use.name)) continue;
+      const kid = childLevel(lv, use, use.doc);
+      lv.kids.set(use.name, kid);
+      enroll(kid, depth + 1);
+    }
+  };
+  enroll({ doc, path: '', kids: new Map() }, 0);
+  return levels;
+}
+
 /** The names a bare identifier can take when it reads the doc's OWN sized device: the namespace
  *  quantities, the bindable selectors, and what the sizer adds beside them. A table's unknown
  *  pass-through columns are not enumerable and are left out, so a name the walk cannot place
@@ -436,10 +464,10 @@ interface Level {
  *  which would read as the device depending on itself. The table's metadata scalars
  *  (META_PUBLISHED) are taken out for the same reason: before the bind runs they are the
  *  table's, so a bind reading one does not read its own device. That holds ONLY before the
- *  bind: once a level is sized, its `w` is the sized width, so a row or solve relation of that
- *  level that reads `w` does depend on the device, and the walk misses that dependence. The cost
- *  is a loop reported by evaluation (which refuses it) rather than here — never a wrong verdict.
- *  Telling the two meanings apart needs evaluation order, which this walk does not model. */
+ *  bind: once a level is sized, its `w` is the sized width (SIZED_META). The provenance walk
+ *  reads `w` as the table's everywhere, so it misses a dependence through a row or solve relation
+ *  of a sized level that reads `w`; the cost is a loop reported by evaluation (which refuses it)
+ *  rather than here — never a wrong verdict. The residual walk resolves `w` by phase instead. */
 const DEVICE_QUANTITIES: ReadonlySet<string> = new Set(
   [
     ...BASE_KEYS,
@@ -450,6 +478,302 @@ const DEVICE_QUANTITIES: ReadonlySet<string> = new Set(
     'feasible',
   ].filter((k) => !META_PUBLISHED.has(k)),
 );
+
+/** The metadata scalars sizing writes over with the sized device's own — the per-width ones,
+ *  which is the width `w` (eval.ts, runBind). Read after a level's bind, such a name is that
+ *  level's device. */
+const SIZED_META: ReadonlySet<string> = new Set(
+  [...META_PUBLISHED].filter((k) => PER_WIDTH_KEYS.has(k)),
+);
+
+/**
+ * One dependency link of a sheet tree: the names something reads, the level they are read in, and
+ * the kind of link —
+ *  - `row`: a row's expression;
+ *  - `solved`: the relation of an engine-solved param `p` (both pin sides, or the name a solveFor
+ *    targets);
+ *  - `override`: a parent's override of a child param, read in the parent's scope;
+ *  - `set`: a containment edge's expression for the top-level param it replaces;
+ *  - `provide`: a child's provided scalar, read inside the child;
+ *  - `device`: the quantity `key` of a level's sized device, which reads that device's bind;
+ *  - `bind`: one bound expression, `key` the quantity it binds.
+ * `root` marks a param nothing above replaces and `meta` a table metadata scalar: neither reads
+ * anything further.
+ */
+type Edge =
+  | Reads
+  | { kind: 'solved'; lv: Level; names: readonly string[]; p: SheetVar }
+  | { kind: 'device'; lv: Level; key: string }
+  | { kind: 'root'; p: SheetVar }
+  | { kind: 'meta' };
+type Reads = {
+  kind: 'row' | 'override' | 'set' | 'provide' | 'bind';
+  lv: Level;
+  names: readonly string[];
+  key?: string;
+};
+
+/** How a traversal reads the edges. One set of edges answers three questions — the policies below
+ *  — and every way their answers differ is one of these fields; an absent one is off. */
+interface TraversalPolicy {
+  /** Follow a parent's override of a child param the engine solves. The engine discards it (a pin
+   *  chooses from its own bracket, a solveFor only seeds from it), so following it
+   *  over-approximates. */
+  solvedOverrides?: boolean;
+  /** Follow a containment edge's `set` from the top-level param it replaces. */
+  edgeSets?: boolean;
+  /** Read every provide of a sizing child as its device's too — its own param or row as well — so
+   *  that anything feeding the child's sizing moves it. */
+  sizingProvides?: boolean;
+  /** Bind quantities a range end holds fixed: a sizing child's provide of one does not move. */
+  held?: ReadonlySet<string>;
+  /** Follow a device quantity its bind names explicitly through that one expression. */
+  boundQuantities?: boolean;
+  /** Resolve a name in the phase it is evaluated in: after its level's bind, `w` is the sized
+   *  device's, not the table's. */
+  phased?: boolean;
+  /** Stop at a pinned param and record it, instead of following its relation. */
+  stopAtPins?: boolean;
+}
+
+/** What a device's sizing — or any expression — rests on: dcInputs, and exprRoots's
+ *  `provenance`. Overrides are read as the engine reads them, and a range end a containment edge
+ *  substitutes is an input exactly as the centre it replaces is. */
+const PROVENANCE: TraversalPolicy = { edgeSets: true };
+
+/** What moves when a containment edge moves its params: reachedBinds, asked forward from the
+ *  moved names in one document-order pass. Advisory, so it over-approximates where the engine
+ *  would not; a range end holds W, L and the authored current fixed. */
+const MOVEMENT: TraversalPolicy = {
+  solvedOverrides: true,
+  sizingProvides: true,
+  held: PINNED_AT_A_RANGE_END,
+};
+
+/** Which other pinned params a constraint's residual depends on — the order in which pins can be
+ *  solved one at a time. A device quantity its bind names (`in__id` with `id` bound to
+ *  `I_tail/2`) depends on that expression alone; a pinned param is a stop, while a torn one is
+ *  followed through the name it solves for. An edge's `set` is evaluated against a finished run,
+ *  never inside one, so it is not followed. */
+const RESIDUAL: TraversalPolicy = { boundQuantities: true, phased: true, stopAtPins: true };
+
+const rowEdge = (lv: Level, r: SheetRow): Edge => ({ kind: 'row', lv, names: namesOf(r.expr) });
+const solvedEdge = (lv: Level, p: SheetVar): Edge => ({
+  kind: 'solved',
+  lv,
+  names: solvedDeps(p),
+  p,
+});
+
+/** The parent's override of `name` at `lv`, read in the parent's scope — absent when it overrides
+ *  a param the engine solves and the policy reads overrides as the engine does. Any override
+ *  replaces the child's value whatever its shape; a literal (or malformed) one simply names
+ *  nothing. Own keys only, so a param named `constructor` is not read as overridden by every
+ *  override object. */
+function overrideEdge(lv: Level, name: string, policy: TraversalPolicy): Edge | undefined {
+  const given = lv.parent?.use.params;
+  if (!lv.parent || !given || !Object.prototype.hasOwnProperty.call(given, name)) return undefined;
+  const src: unknown = given[name];
+  const p = lv.doc.params.find((q) => q.name === name);
+  if (src === undefined || (p && engineSolved(p) && !policy.solvedOverrides)) return undefined;
+  const names = typeof src === 'string' ? namesOf(src) : [];
+  return { kind: 'override', lv: lv.parent.level, names };
+}
+
+/** What the scalar `key` a child provides reads, inside the child. A binding child publishes
+ *  everything its sizing put in scope, pass-through columns included, so a provided key that is
+ *  none of its params, rows or re-exports is its device's own — whether or not the name is one
+ *  DEVICE_QUANTITIES can list. Under `sizingProvides`, any provide of a sizing child reads its
+ *  device too, unless the key is `held`. */
+function provideEdges(kid: Level, key: string, policy: TraversalPolicy): Edge[] {
+  const inside: Edge = { kind: 'provide', lv: kid, names: [key] };
+  const device: Edge = { kind: 'device', lv: kid, key };
+  if (!kid.doc.bind) return [inside];
+  if (policy.sizingProvides) return policy.held?.has(key) ? [inside] : [inside, device];
+  const own =
+    key.includes(PROVIDE_SEP) ||
+    kid.doc.params.some((q) => q.name === key) ||
+    kid.doc.rows.some((r) => r.name === key);
+  return own ? [inside] : [device];
+}
+
+/** A device's own links: each bound expression, keyed by the quantity it binds. */
+const bindEdges = (lv: Level): Reads[] =>
+  Object.entries(lv.doc.bind ?? {}).flatMap(([k, v]): Reads[] =>
+    !BIND_FLAGS.has(k) && typeof v === 'string'
+      ? [{ kind: 'bind', lv, names: namesOf(v), key: k }]
+      : [],
+  );
+
+/**
+ * The names `name` reads at `lv`, each with its kind of edge — the one definition of a sheet's
+ * dependency links, which every traversal policy reads. A name means the first of: a param, a row,
+ * a scalar a child provides, a quantity of the level's own sized device, a table metadata scalar;
+ * anything else resolves to nothing (`[]`). A param continues into its parent's override when it
+ * has one; otherwise it is a root, which carries on through its relation when the engine solves
+ * it and — at the top, under `edgeSets` — through each containment edge's substitute for it. A
+ * solved param keeps its relation whatever the parent writes, so an override the policy follows
+ * is read beside it rather than instead. `sized` marks a SIZED_META name read after `lv`'s bind,
+ * which is then the device's.
+ */
+function edgesOf(lv: Level, name: string, sized: boolean, policy: TraversalPolicy): Edge[] {
+  const p = lv.doc.params.find((q) => q.name === name);
+  if (p) {
+    const override = overrideEdge(lv, name, policy);
+    if (override && !engineSolved(p)) return [override];
+    const out: Edge[] = override ? [override, { kind: 'root', p }] : [{ kind: 'root', p }];
+    if (engineSolved(p)) out.push(solvedEdge(lv, p));
+    // Containment edges are a top-of-tree feature; a composed child's are never run.
+    if (policy.edgeSets && lv.path === '')
+      for (const e of lv.doc.edges ?? []) {
+        const sub: unknown = e.set?.[name];
+        if (typeof sub === 'string') out.push({ kind: 'set', lv, names: namesOf(sub) });
+      }
+    return out;
+  }
+  const row = lv.doc.rows.find((r) => r.name === name);
+  if (row) return [rowEdge(lv, row)];
+  const split = splitProvide(name);
+  const kid = split && lv.kids.get(split[0]);
+  if (split && kid && (kid.doc.provide ?? []).includes(split[1]))
+    return provideEdges(kid, split[1], policy);
+  if (lv.doc.bind && (DEVICE_QUANTITIES.has(name) || sized))
+    return [{ kind: 'device', lv, key: name }];
+  return META_PUBLISHED.has(name) ? [{ kind: 'meta' }] : [];
+}
+
+/** The roots a walk reaches, by qualified name: the param, and the devices whose bind the paths
+ *  to it most recently left. */
+type Roots = Map<string, { p: SheetVar; devices: Set<string> }>;
+
+/**
+ * Walk the edges back under one policy from wherever the caller starts it — a device, or the names
+ * of an expression — recording each root reached in `roots` and everything else in `found`: names
+ * qualified by use path, devices named as warnings name them, and in `loop` the first open path
+ * back to `origin`, as the names on it.
+ *
+ * A path is CLOSED once it has crossed a solved relation or an edge's `set`: past a solve, the
+ * solve is what closes a loop, and a `set` is evaluated against the finished run, not inside it.
+ * Each name and device is entered once per mode, open or closed, so a loop on an open path is never
+ * hidden behind the same node reached closed first. Reaching a node already on the path is a
+ * cycle, recorded with whether a solved relation or `set` lies on it, and not followed; reaching
+ * `origin` again is a loop, kept only when the path is open. `self`, the constraint's own unknown,
+ * sets `selfRead` wherever it is reached in its own level — before any override of it is looked at
+ * — and is followed no further.
+ */
+function walkBack(
+  policy: TraversalPolicy,
+  roots: Roots,
+  origin?: Level,
+  self?: { lv: Level; name: string },
+) {
+  const found = {
+    unresolved: new Set<string>(),
+    device: new Set<string>(),
+    equation: new Set<string>(),
+    solved: new Set<string>(),
+    pins: new Set<string>(),
+    cycles: [] as { via: string[]; closed: boolean }[],
+    selfRead: false,
+    loop: undefined as string[] | undefined,
+  };
+  const seen = new Set<string>();
+  // One frame per name or device on the current path, plus a `crossed` marker while a solved
+  // relation or an edge's `set` is being followed.
+  const path: { key: string; name?: string; crossed?: boolean }[] = [];
+  const names = (frames: readonly { name?: string }[]): string[] =>
+    frames.flatMap((f) => (f.name ? [f.name] : []));
+
+  const enter = (node: string, closed: boolean, name?: string): boolean => {
+    const key = `${closed ? 1 : 0}|${node}`;
+    const at = path.findIndex((f) => f.key === key);
+    if (at >= 0) {
+      const via = names([...path.slice(at), { name }]);
+      found.cycles.push({ via, closed: path.slice(at).some((f) => f.crossed) });
+      return false;
+    }
+    if (seen.has(key)) return false;
+    seen.add(key);
+    path.push({ key, name });
+    return true;
+  };
+
+  // `post` is whether `name` is read after its level's bind: a bind, and a parent's override of a
+  // child, are evaluated before the bind they belong to; a row, a relation, an edge's `set` and a
+  // child's provided value after it. Under `phased`, a SIZED_META name read after the bind means
+  // the device, so it is a different node from the same name read before. `sizer` is the device
+  // whose bind the path most recently left — the one a root is reported against.
+  const visit = (lv: Level, name: string, closed: boolean, post: boolean, sizer: string): void => {
+    if (self && lv === self.lv && name === self.name) {
+      found.selfRead = true;
+      return;
+    }
+    const qualified = `${lv.path}${name}`;
+    const sized = !!policy.phased && post && SIZED_META.has(name);
+    if (!enter(`${sized ? 's' : 'n'}${qualified}`, closed, qualified)) return;
+    const edges = edgesOf(lv, name, sized, policy);
+    if (edges.length === 0) found.unresolved.add(qualified);
+    for (const e of edges) {
+      if (e.kind === 'meta') continue;
+      if (e.kind === 'root') {
+        const entry = roots.get(qualified) ?? { p: e.p, devices: new Set<string>() };
+        entry.devices.add(sizer);
+        roots.set(qualified, entry);
+      } else if (e.kind === 'device') {
+        device(e.lv, policy.boundQuantities ? e.key : undefined, closed);
+      } else if (e.kind === 'solved' && policy.stopAtPins && pinned(e.p)) {
+        found.pins.add(qualified);
+      } else {
+        const cross = e.kind === 'solved' || e.kind === 'set';
+        if (e.kind === 'row') found.equation.add(qualified);
+        if (cross) path.push({ key: '', crossed: true });
+        if (e.kind === 'solved') found.solved.add(qualified);
+        for (const n of e.names) visit(e.lv, n, closed || cross, e.kind !== 'override', sizer);
+        if (cross) path.pop();
+      }
+    }
+    path.pop();
+  };
+
+  // `key`, when the bind names that quantity, narrows the device to the one expression binding it.
+  const device = (lv: Level, key: string | undefined, closed: boolean): void => {
+    if (lv === origin && path.length > 0) {
+      if (!closed) found.loop ??= names(path);
+      return;
+    }
+    const all = bindEdges(lv);
+    const one = all.filter((e) => e.key === key);
+    if (!enter(one.length ? `d${lv.path}#${key}` : `d${lv.path}`, closed)) return;
+    const at = blockPath(lv.path);
+    found.device.add(at);
+    for (const e of one.length ? one : all)
+      for (const n of e.names) visit(lv, n, closed, false, at);
+    path.pop();
+  };
+
+  return { visit, device, found };
+}
+
+/** The class a root is reported under: `solved` when the engine solves it, else its authored
+ *  class, else `unclassified`. */
+export type RootClass = ParamClass | 'solved' | 'unclassified';
+
+const classOf = (p: SheetVar): RootClass =>
+  engineSolved(p)
+    ? 'solved'
+    : PARAM_CLASSES.has(p.class ?? '')
+      ? (p.class as ParamClass)
+      : 'unclassified';
+
+/** `roots` in document order: the tree in preorder, each doc's params as written. */
+const inDocumentOrder = (levels: readonly Level[], roots: Roots) =>
+  levels.flatMap((lv) =>
+    lv.doc.params.flatMap((p) => {
+      const name = `${lv.path}${p.name}`;
+      const r = roots.get(name);
+      return r ? [[name, r] as const] : [];
+    }),
+  );
 
 /**
  * A sheet's DC inputs: the root params its device biases and givens are built from, by class —
@@ -470,156 +794,113 @@ export interface DcInputs {
 
 /**
  * The DC-input walk — the reachability the `sheet-dc-inputs` rule, SheetResult.assumptions and
- * any later consumer of "which voltages does this design's sizing rest on" all read. From every
- * device's bind — its bias axes and every given, so a `vgs` tie is followed too — follow
- * expression references back to the params they come from, across the whole tree:
+ * any later consumer of "which voltages does this design's sizing rest on" all read. It is the
+ * PROVENANCE walk run back from every device's bind — its bias axes and every given, so a `vgs`
+ * tie is followed too — across the whole tree (edgesOf says what each name reads):
  *  - a child param the parent overrides continues into the override's names, in the parent's
- *    scope;
+ *    scope — unless the engine solves it: a pin ignores the override, a solveFor only seeds from
+ *    it, so it stays a root;
  *  - a `child__key` is an alias into that child, never a root: it continues into the child's
  *    row, its param, or — for a quantity its sizing publishes — its own bind;
  *  - a row continues into its expression;
  *  - an engine-solved param is a root classed solved, and the walk carries on through the
- *    relation that solves it (solvedDeps), so the spec on the far side of a pin is a DC input
- *    too;
+ *    relation that solves it, so the spec on the far side of a pin is a DC input too;
  *  - a top-level param a containment edge overrides continues into that edge's `set`
  *    expression, so a range end (`CM_lo`) is a DC input exactly as the centre it replaces is.
  * What is left are the ROOTS: params nobody overrides.
  *
  * A walk that comes back to the device it started from is a loop in the design's own bias. It is
- * legal only when an engine-solved param sits on it — the solve is what closes the loop — so the
- * walk marks everything past a solved param as closed and reports only the loops that are not. An
- * edge's `set` is evaluated against the finished base run, not inside it, so it cannot close a
- * loop in that run and is walked as closed too.
- *
- * Mirrors reachedBinds' closure (rows, solved relations, overrides, provides) run backwards rather
- * than calling it: that walk goes forward from a set of moved names, holds geometry fixed at a
- * range end, and cannot seed a child's own params — none of which fits this question.
+ * legal only when an engine-solved param sits on it — the solve is what closes the loop — so only
+ * the loops on an open path are reported. An edge's `set` is evaluated against the finished base
+ * run, not inside it, so it cannot close a loop in that run and is walked as closed too.
  *
  * Structural and table-free: a bare name that is no param, row or published child scalar is read
  * as the doc's own device quantity when the doc binds and the name is one a sized device carries
  * (DEVICE_QUANTITIES). Pure: it reads the doc and returns a report.
  */
 export function dcInputs(doc: SheetDoc): DcInputs {
-  const levels: Level[] = [];
-  const enroll = (lv: Level, depth: number): void => {
-    levels.push(lv);
-    if (depth >= MAX_USE_DEPTH) return;
-    for (const use of lv.doc.uses ?? []) {
-      if (!use.doc || lv.kids.has(use.name)) continue;
-      const kid: Level = {
-        doc: use.doc,
-        path: `${lv.path}${use.name}${PATH_SEP}`,
-        parent: { level: lv, use },
-        kids: new Map(),
-      };
-      lv.kids.set(use.name, kid);
-      enroll(kid, depth + 1);
-    }
-  };
-  enroll({ doc, path: '', kids: new Map() }, 0);
-
-  const roots = new Map<string, { p: SheetVar; devices: Set<string> }>();
+  const levels = levelsOf(doc);
+  const roots: Roots = new Map();
   const cycles: DcInputs['cycles'] = [];
-
   for (const start of levels) {
     if (!start.doc.bind) continue;
-    const seenDevice = new Set<string>();
-    const seenName = new Set<string>();
-    const trail: string[] = [];
-    let loop: string[] | undefined;
-
-    // `closed` is true once the path has passed through an engine-solved param.
-    const device = (lv: Level, closed: boolean): void => {
-      if (lv === start && trail.length > 0) {
-        if (!closed) loop ??= [...trail];
-        return;
-      }
-      const key = `${closed ? 1 : 0}|${lv.path}`;
-      if (seenDevice.has(key)) return;
-      seenDevice.add(key);
-      for (const [k, v] of Object.entries(lv.doc.bind ?? {}))
-        if (!BIND_FLAGS.has(k) && typeof v === 'string')
-          for (const n of namesOf(v)) visit(lv, n, closed, blockPath(lv.path));
-    };
-
-    // `sizer` is the device whose bind the path most recently left — the one a root is reported
-    // against.
-    const visit = (lv: Level, name: string, closed: boolean, sizer: string): void => {
-      const key = `${closed ? 1 : 0}|${lv.path}${name}`;
-      if (seenName.has(key)) return;
-      seenName.add(key);
-      trail.push(`${lv.path}${name}`);
-      const p = lv.doc.params.find((q) => q.name === name);
-      const row = p ? undefined : lv.doc.rows.find((r) => r.name === name);
-      const split = splitProvide(name);
-      const kid = split ? lv.kids.get(split[0]) : undefined;
-      const pubKey = split ? split[1] : '';
-      if (p) {
-        // Any override replaces the child's value, so the child's param is no root whatever
-        // the override's shape; a literal (or malformed) one simply names no param to follow.
-        // Except an engine-solved param: the engine solves it whatever the parent writes (a pin
-        // ignores the override, a solveFor only seeds from it), so it stays a root, classed
-        // solved, with its relation followed. Own keys only, so a param named `constructor` is
-        // not read as overridden by every override object.
-        const given = lv.parent?.use.params ?? {};
-        const override: unknown =
-          !engineSolved(p) && Object.prototype.hasOwnProperty.call(given, name)
-            ? given[name]
-            : undefined;
-        if (lv.parent && override !== undefined) {
-          if (typeof override === 'string')
-            for (const n of namesOf(override)) visit(lv.parent.level, n, closed, sizer);
-        } else {
-          const qualified = `${lv.path}${name}`;
-          const entry = roots.get(qualified) ?? { p, devices: new Set<string>() };
-          entry.devices.add(sizer);
-          roots.set(qualified, entry);
-          if (engineSolved(p)) for (const n of solvedDeps(p)) visit(lv, n, true, sizer);
-          // Containment edges are a top-of-tree feature; a composed child's are never run.
-          if (lv.path === '')
-            for (const e of doc.edges ?? []) {
-              const sub: unknown = e.set?.[name];
-              if (typeof sub === 'string') for (const n of namesOf(sub)) visit(lv, n, true, sizer);
-            }
-        }
-      } else if (row) {
-        for (const n of namesOf(row.expr)) visit(lv, n, closed, sizer);
-      } else if (kid && (kid.doc.provide ?? []).includes(pubKey)) {
-        // A binding child publishes everything its sizing put in scope, pass-through columns
-        // included, so a provided key that is none of its params, rows or re-exports is its
-        // device's own — whether or not the name is one DEVICE_QUANTITIES can list.
-        const own =
-          pubKey.includes(PROVIDE_SEP) ||
-          kid.doc.params.some((q) => q.name === pubKey) ||
-          kid.doc.rows.some((r) => r.name === pubKey);
-        if (kid.doc.bind && !own) device(kid, closed);
-        else visit(kid, pubKey, closed, sizer);
-      } else if (lv.doc.bind && DEVICE_QUANTITIES.has(name)) {
-        device(lv, closed);
-      }
-      trail.pop();
-    };
-
-    device(start, false);
-    if (loop) cycles.push({ device: blockPath(start.path), via: loop });
+    const { device, found } = walkBack(PROVENANCE, roots, start);
+    device(start, undefined, false);
+    if (found.loop) cycles.push({ device: blockPath(start.path), via: found.loop });
   }
 
-  // Document order: the tree in preorder, each doc's params as written.
-  const order = levels.flatMap((lv) => lv.doc.params.map((p) => `${lv.path}${p.name}`));
   const out: DcInputs = { independent: [], assumed: [], solved: [], unclassified: [], cycles };
-  for (const name of order) {
-    const r = roots.get(name);
-    if (!r) continue;
-    const cls = engineSolved(r.p)
-      ? 'solved'
-      : PARAM_CLASSES.has(r.p.class ?? '')
-        ? r.p.class
-        : undefined;
-    if (cls) out[cls].push(name);
+  for (const [name, r] of inDocumentOrder(levels, roots)) {
+    const cls = classOf(r.p);
+    if (cls !== 'unclassified') out[cls].push(name);
     // An invalid authored class is reported on the param itself, so it is not double-counted.
     else if (r.p.class === undefined && r.p.unit?.trim() === 'V')
       out.unclassified.push({ param: name, devices: [...r.devices] });
   }
+  return out;
+}
+
+/** The two readings exprRoots offers: the DC-input walk's, or the residual of a constraint on the
+ *  named param of the level the expression is read at. */
+export type RootsPolicy = 'provenance' | { residual: string };
+
+/** What an expression rests on (see exprRoots). Every name is qualified by use path; devices are
+ *  named as warnings name them. */
+export interface ExprRoots {
+  roots: Record<RootClass, string[]>;
+  unresolved: string[];
+  crossings: { device: string[]; equation: string[]; solved: string[] };
+  cycles: { via: string[]; closed: boolean }[];
+  pins: string[];
+  selfRead: boolean;
+}
+
+/**
+ * The roots an expression read at `level` (a use path, `''` for the top) transitively rests on,
+ * by class, under one policy: `provenance`, or `{ residual: X }` for the residual of a constraint
+ * on that level's param X. The expression is read where a residual is evaluated: after the level's
+ * bind. Also reported: the names that resolve to nothing, the devices, rows (`equation`) and
+ * solved relations crossed on the way, and each cycle reached, with whether a solved relation lies
+ * on it. Under `residual`, `pins` holds the OTHER pinned params reached — the constraint's ordering
+ * edges, never X — and `selfRead` whether X itself was reached in its own level. A name that
+ * resolves to nothing may be one only the live value set can place, such as a table's
+ * pass-through column, so it fails closed: `pins` then holds every other pinned param in the tree.
+ * Structural and table-free, like dcInputs.
+ */
+export function exprRoots(
+  doc: SheetDoc,
+  level: string,
+  expr: string,
+  policy: RootsPolicy,
+): ExprRoots {
+  const levels = levelsOf(doc);
+  const path = level === '' ? '' : `${level}${PATH_SEP}`;
+  const lv = levels.find((l) => l.path === path);
+  const roots: Roots = new Map();
+  const self = typeof policy === 'object' && lv ? { lv, name: policy.residual } : undefined;
+  const { visit, found } = walkBack(
+    policy === 'provenance' ? PROVENANCE : RESIDUAL,
+    roots,
+    undefined,
+    self,
+  );
+  for (const n of namesOf(expr)) {
+    if (lv) visit(lv, n, false, true, '');
+    else found.unresolved.add(`${path}${n}`);
+  }
+
+  const { unresolved, device, equation, solved, pins, cycles, selfRead } = found;
+  const every = levels.flatMap((l) => l.doc.params.filter(pinned).map((p) => `${l.path}${p.name}`));
+  const own = typeof policy === 'object' ? `${path}${policy.residual}` : undefined;
+  const out: ExprRoots = {
+    roots: { independent: [], assumed: [], solved: [], unclassified: [] },
+    unresolved: [...unresolved],
+    crossings: { device: [...device], equation: [...equation], solved: [...solved] },
+    cycles,
+    pins: own !== undefined && unresolved.size ? every.filter((q) => q !== own) : [...pins],
+    selfRead,
+  };
+  for (const [name, r] of inDocumentOrder(levels, roots)) out.roots[classOf(r.p)].push(name);
   return out;
 }
 
@@ -677,8 +958,9 @@ export interface ReachedBind {
  * plus everything the sheet derives from them: rows reading one, engine-solved params whose
  * defining relation reads one (a pinned node voltage is the case that matters — every containment
  * edge in the library moves one), child params a use overrides from a moved expression, and the
- * provides of a child whose own value moved. Closed to a fixed point within each document, and a
- * single in-document-order pass over the uses is that fixed point across the tree, because a use
+ * provides of a child whose own value moved. The MOVEMENT policy, asked forward over the same
+ * edges the backward walks read: closed to a fixed point within each document, and a single
+ * in-document-order pass over the uses is that fixed point across the tree, because a use
  * override may only reference EARLIER siblings' provides.
  *
  * A reachability question, not an evaluation: it says which authored expressions could read
@@ -699,16 +981,27 @@ export function reachedBinds(
   out: ReachedBind[],
   depth: number,
 ): ReadonlySet<string> {
+  return movedBy({ doc, path, kids: new Map() }, moved, out, depth);
+}
+
+function movedBy(
+  lv: Level,
+  moved: readonly string[],
+  out: ReachedBind[],
+  depth: number,
+): ReadonlySet<string> {
   const reached = new Set(moved);
-  const sources: readonly (readonly [string, readonly string[]])[] = [
-    ...doc.rows.map((r) => [r.name, namesOf(r.expr)] as const),
-    ...doc.params.filter(engineSolved).map((p) => [p.name, solvedDeps(p)] as const),
+  const reads = (e: Edge | undefined, from: ReadonlySet<string>): boolean =>
+    e !== undefined && 'names' in e && e.names.some((n) => from.has(n));
+  const sources: readonly (readonly [string, Edge])[] = [
+    ...lv.doc.rows.map((r) => [r.name, rowEdge(lv, r)] as const),
+    ...lv.doc.params.filter(engineSolved).map((p) => [p.name, solvedEdge(lv, p)] as const),
   ];
   const close = (): void => {
     for (let grew = true; grew;) {
       grew = false;
-      for (const [name, deps] of sources) {
-        if (!reached.has(name) && deps.some((n) => reached.has(n))) {
+      for (const [name, e] of sources) {
+        if (!reached.has(name) && reads(e, reached)) {
           reached.add(name);
           grew = true;
         }
@@ -716,33 +1009,34 @@ export function reachedBinds(
     }
   };
   close();
-  for (const use of doc.uses ?? []) {
+  for (const use of lv.doc.uses ?? []) {
     if (!use.doc || depth >= MAX_USE_DEPTH) continue;
-    const seed = Object.entries(use.params ?? {})
-      .filter(([, e]) => typeof e === 'string' && namesOf(e).some((n) => reached.has(n)))
-      .map(([k]) => k);
-    const inner = reachedBinds(use.doc, seed, `${path}${use.name}${PATH_SEP}`, out, depth + 1);
+    const kid = childLevel(lv, use, use.doc);
+    const seed = Object.keys(use.params ?? {}).filter((k) =>
+      reads(overrideEdge(kid, k, MOVEMENT), reached),
+    );
+    const inner = movedBy(kid, seed, out, depth + 1);
     // A block publishes two kinds of scalar, and the range end moves them for different reasons.
     // Its rows and params move when the closure above says they do. Its DEVICE quantities — the
     // vgs it settled at, the gm that came out — move whenever anything feeding its sizing moved,
     // whatever the inputs happened to be called; a sibling biased off one of those (`VDD -
     // ref__vgs`) is how the library writes a stack, so stopping at the block boundary would make
     // both checks below silent on the sheets they exist for. The geometry and the authored
-    // current are the exceptions: a range end holds W and L fixed by construction, and an
-    // authored `id` moves only when its own expression does, which the closure already covers.
-    const inputs = use.doc.bind;
-    const sizingMoved =
-      inputs !== undefined &&
-      Object.values(inputs).some(
-        (v) => typeof v === 'string' && namesOf(v).some((n) => inner.has(n)),
-      );
+    // current are the exceptions (MOVEMENT's `held`): a range end holds W and L fixed by
+    // construction, and an authored `id` moves only when its own expression does, which the
+    // closure already covers.
+    const sizingMoved = bindEdges(kid).some((e) => reads(e, inner));
     for (const key of use.doc.provide ?? [])
-      if (inner.has(key) || (sizingMoved && !PINNED_AT_A_RANGE_END.has(key)))
+      if (
+        provideEdges(kid, key, MOVEMENT).some((e) =>
+          e.kind === 'device' ? sizingMoved : reads(e, inner),
+        )
+      )
         reached.add(joinProvide(use.name, key));
     close();
   }
   // Pushed last, because a block's own bind evaluates after the children it composes.
-  if (doc.bind) out.push({ path: blockPath(path), bind: doc.bind, reached });
+  if (lv.doc.bind) out.push({ path: blockPath(lv.path), bind: lv.doc.bind, reached });
   return reached;
 }
 

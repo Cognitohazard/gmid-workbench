@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { compileExpr } from '../derive';
-import { dcInputs, EXAMPLES, runSheet, validateSheet } from './index';
+import { dcInputs, EXAMPLES, exprRoots, runSheet, validateSheet } from './index';
 import { reachedBinds, type ReachedBind } from './validate';
 import { BIND_FLAGS, type SheetBind, type SheetDoc, type SheetVar } from './types';
 import { loadLibrary, REFS, sheet, table } from './library.fixtures';
@@ -508,10 +508,10 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
   });
 });
 
-// dcInputs and reachedBinds encode the same dependency links — rows, solved relations, use
+// dcInputs and reachedBinds read the same dependency links — rows, solved relations, use
 // overrides, child provides — one walked backwards from each bind, the other forwards from a set
-// of moved names. Until they share one definition of those links, this holds them to the same
-// answer on the question both can ask: does a top-level param reach any device's sizing?
+// of moved names, each under its own policy. This holds them to the same answer on the question
+// both can ask: does a top-level param reach any device's sizing?
 
 /** Every `<bind path>.<bind key>:<name>` whose expression reads a name that moves with `moved`,
  *  by reachedBinds. */
@@ -680,5 +680,237 @@ describe('SheetResult.assumptions', () => {
     const r = dcInputs(doc);
     expect(r.independent).toEqual(['VDD', 'V_out']);
     expect([...r.independent, ...r.assumed, ...r.solved]).not.toContain('V_in');
+  });
+});
+
+// exprRoots under the residual reading: which OTHER pinned params a constraint's residual reads,
+// so pins can be solved one at a time in that order. Each expectation follows the fixture's own
+// expressions by hand. Some fixtures hold two pins at one level, which validation refuses
+// (MAX_PINNED_PARAMS); exprRoots is a structural query and reads a document as written.
+
+/** A drain-biased leaf whose source node P is pinned against the row rq, which reads the pinned
+ *  Q; Q's own relation reads R. */
+const pinPair = (): SheetDoc => ({
+  ...leaf({ vsb: 'P' }),
+  params: [
+    ...leaf().params,
+    { name: 'P', value: 0.2, min: 0, max: 0.8, unit: 'V', pin: { lhs: 'P + vgs', rhs: 'rq' } },
+    { name: 'Q', value: 0.5, min: 0, max: 1, unit: 'V', pin: { lhs: 'Q', rhs: 'R' } },
+    { name: 'R', value: 0.5, unit: 'V', class: 'independent' },
+  ],
+  rows: [{ name: 'rq', expr: 'Q + 0.1' }],
+});
+
+describe('exprRoots — the residual reading', () => {
+  const residual = (name: string) => ({ residual: name });
+
+  it('depends on another pinned param it reads, directly or through a row, and stops there', () => {
+    // P + vgs - Q names Q itself; P + vgs - rq reaches it through rq = Q + 0.1. Q is pinned, so
+    // the walk records it and does not cross its relation: R, on Q's far side, is never reached.
+    for (const expr of ['P + vgs - Q', 'P + vgs - rq']) {
+      const r = exprRoots(pinPair(), '', expr, residual('P'));
+      expect(r.pins).toEqual(['Q']);
+      expect(r.roots.independent).not.toContain('R');
+    }
+  });
+
+  it('sees the dependency through a parent override', () => {
+    // m's drain level vd is overridden by the parent as V_out - V_tail, and V_tail is the
+    // parent's pinned node.
+    expect(exprRoots(pinnedTail(), 'm', 'vd', residual('vs')).pins).toEqual(['V_tail']);
+  });
+
+  it('sees the dependency through a child provide, of the param or of the device', () => {
+    // k publishes its pinned source node V_s, and foo — none of k's params or rows, so a column of
+    // the table read at k's operating point, which rests on the whole of k's bind, whose vsb is V_s.
+    const doc = overriding({ ...pinnedSource(), provide: ['foo', 'V_s'] }, 'vd');
+    expect(exprRoots(doc, '', 'k__V_s', residual('V_p')).pins).toEqual(['k.V_s']);
+    const column = exprRoots(doc, '', 'k__foo', residual('V_p'));
+    expect(column.pins).toEqual(['k.V_s']);
+    expect(column.unresolved).toEqual([]);
+  });
+
+  it('follows a torn estimate through its target to the pinned param behind it', () => {
+    // P + V_x: V_x is torn against tgt = V_up - 0.1, and V_up is pinned. A walk that stopped at the
+    // torn V_x would see no pin at all.
+    const doc = tornDrain({ min: 0, max: 1, pin: { lhs: 'V_up', rhs: '0.7' } });
+    doc.params.push({
+      name: 'P',
+      value: 0.5,
+      min: 0,
+      max: 1,
+      unit: 'V',
+      pin: { lhs: 'P + V_x', rhs: '1' },
+    });
+    const r = exprRoots(doc, '', 'P + V_x', residual('P'));
+    expect(r.pins).toEqual(['V_up']);
+    expect(r.crossings.solved).toEqual(['V_x']);
+  });
+
+  it('follows a quantity the bind names through that expression alone: a branch current is not its tail node', () => {
+    // m binds id to its param I, which the parent sets to I_tail/2; neither reads the pinned
+    // V_tail, although m's drain (V_out - V_tail) and source (V_tail) biases do. m's vgs is not
+    // bound, so it rests on the whole bind, V_tail included.
+    const doc = pinnedTail();
+    doc.params.push(
+      { name: 'I_tail', value: 20e-6, unit: 'A', class: 'independent' },
+      { name: 'V_f', value: 0.9, unit: 'V', class: 'independent' },
+    );
+    doc.uses![0].params!.I = 'I_tail/2';
+    const viaId = exprRoots(doc, '', 'V_f - m__id', residual('V_f'));
+    expect(viaId.pins).toEqual([]);
+    expect(viaId.roots.independent).toEqual(['I_tail']);
+    expect(exprRoots(doc, '', 'V_f - m__vgs', residual('V_f')).pins).toEqual(['V_tail']);
+  });
+
+  it("reads a sized level's `w` as its device's, and a bind's `w` as the table's", () => {
+    // k's row wu = w*1e6 is evaluated after k is sized, so its w is k's width, sized from the
+    // current I, which the parent sets from the pinned Q.
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [
+        { name: 'Q', value: 1, min: 0.5, max: 2, unit: 'V', pin: { lhs: 'Q', rhs: '1' } },
+        { name: 'P', value: 1, unit: 'V' },
+      ],
+      rows: [],
+      rules: [],
+      uses: [
+        {
+          name: 'k',
+          doc: {
+            ...withVd({ class: 'independent' }),
+            rows: [{ name: 'wu', expr: 'w*1e6' }],
+            provide: ['wu'],
+          },
+          params: { I: 'Q*1e-5' },
+        },
+      ],
+    };
+    expect(exprRoots(doc, '', 'P - k__wu', residual('P')).pins).toEqual(['Q']);
+    // Here the top device is sized from the pinned Q. The override setting k's vd from w is
+    // evaluated before the top bind, so it reads the table's width; the row wu, after it, reads the
+    // device's — whichever of the two the walk meets first.
+    const top: SheetDoc = {
+      ...leaf({ id: 'Q*1e-5' }, [
+        { name: 'Q', value: 1, min: 0.5, max: 2, unit: 'V', pin: { lhs: 'Q', rhs: '1' } },
+        { name: 'P', value: 1, unit: 'V' },
+      ]),
+      rows: [{ name: 'wu', expr: 'w*1e6' }],
+      uses: [{ name: 'k', doc: { ...leaf(), provide: ['vd'] }, params: { vd: 'w*1e5' } }],
+    };
+    expect(exprRoots(top, '', 'P + k__vd', residual('P')).pins).toEqual([]);
+    for (const expr of ['P + wu', 'P + k__vd + wu', 'P + wu + k__vd'])
+      expect(exprRoots(top, '', expr, residual('P')).pins).toEqual(['Q']);
+    // A bind is evaluated before its device is sized: W = 4*w reads the table's width, so neither
+    // the device's vgs nor a row reading the sized w comes back to the device itself.
+    const unit: SheetDoc = {
+      ...withVd({ class: 'independent' }),
+      bind: { L: 'L', W: '4*w', gm_id: '10', vds: 'vd' },
+      rows: [{ name: 'wu', expr: 'w*1e6' }],
+    };
+    for (const expr of ['vgs + wu', 'wu + vgs'])
+      expect(exprRoots(unit, '', expr, residual('vd')).cycles).toEqual([]);
+  });
+
+  it("ignores what one evaluation ignores: an override of a solved child param, an edge's set", () => {
+    // A pin chooses V_s from its own bracket and a solveFor only seeds V_x from the override, so
+    // the parent's assumed V_p decides neither. The lo edge's V_lo replaces V_c only in a run of
+    // its own, evaluated against the finished base run; the provenance reading counts it as an
+    // input like the centre it replaces.
+    for (const [child, key] of [
+      [pinnedSource(), 'V_s'],
+      [tornDrain({}), 'V_x'],
+    ] as const) {
+      const doc = overriding({ ...child, provide: [key] }, key);
+      expect(exprRoots(doc, '', `k__${key}`, residual('P')).roots.assumed).toEqual([]);
+    }
+    expect(exprRoots(edgeRange({}), '', 'V_c', residual('vd')).roots.unclassified).toEqual([]);
+    expect(exprRoots(edgeRange({}), '', 'V_c', 'provenance').roots.unclassified).toEqual(['V_lo']);
+  });
+
+  it('flags a read of its own param without making it an ordering edge', () => {
+    // pinnedSource pins V_s with V_s + vgs, and its bias vsb is V_s: the residual reads V_s
+    // directly, and vgs alone reads it through the device.
+    const r = exprRoots(pinnedSource(), '', 'V_s + vgs', residual('V_s'));
+    expect(r.selfRead).toBe(true);
+    expect(r.pins).toEqual([]);
+    expect(exprRoots(pinnedSource(), '', 'vgs', residual('V_s')).selfRead).toBe(true);
+    // Here the device sits on Y: Y + vgs never reads X, and X + vgs does — still so when the
+    // parent overrides X, because the read is of the level's own X, taken before its override.
+    const onY = leaf({ vsb: 'Y' }, [
+      { name: 'X', value: 0.5, unit: 'V' },
+      { name: 'Y', value: 0.2, unit: 'V' },
+    ]);
+    expect(exprRoots(onY, '', 'Y + vgs', residual('X')).selfRead).toBe(false);
+    expect(exprRoots(onY, '', 'X + vgs', residual('X')).selfRead).toBe(true);
+    expect(exprRoots(overriding(onY, 'X'), 'k', 'X + vgs', residual('X')).selfRead).toBe(true);
+  });
+
+  it('reports a name that resolves to nothing, apart from a constant, and fails closed on it', () => {
+    // k pins its source node V_s and provides vgs and id, not vth; nope names nothing; pi is a
+    // constant, not a name. Nothing that resolves reaches V_s, but a name that resolves to nothing
+    // could stand for anything, so the residual depends on every other pin in the tree.
+    const doc = overriding(pinnedSource(), 'vd');
+    const r = exprRoots(doc, '', 'V_p + k__vth + nope + pi', residual('V_p'));
+    expect(r.unresolved).toEqual(['k__vth', 'nope']);
+    expect(r.pins).toEqual(['k.V_s']);
+    expect(exprRoots(doc, '', 'V_p + pi', residual('V_p')).pins).toEqual([]);
+    // Read from inside k against its own pinned V_s, the only pin in the tree is the constraint's
+    // own, so there is no other pin for the unresolved name to stand for.
+    expect(exprRoots(doc, 'k', 'V_s + vgs + nope', residual('V_s')).pins).toEqual([]);
+  });
+
+  it('reports a cycle and terminates', () => {
+    // a = b and b = a: the walk comes back to a through b, with no solve on the way.
+    const doc: SheetDoc = {
+      ...leaf({ vds: '0.6' }),
+      rows: [
+        { name: 'a', expr: 'b' },
+        { name: 'b', expr: 'a' },
+      ],
+    };
+    for (const policy of ['provenance', residual('vd')] as const)
+      expect(exprRoots(doc, '', 'a', policy).cycles).toEqual([
+        { via: ['a', 'b', 'a'], closed: false },
+      ]);
+  });
+});
+
+describe('exprRoots — the provenance reading', () => {
+  it('returns a param no bind reads by its class, unclassified when it has none', () => {
+    // V_spare feeds only a rule, so it is no DC input — but an expression that reads it rests on it.
+    const spare = (cls?: 'independent'): SheetDoc => ({
+      ...leaf({ vds: '0.6' }),
+      params: [
+        ...leaf().params,
+        { name: 'V_spare', value: 1, unit: 'V', ...(cls ? { class: cls } : {}) },
+      ],
+      rules: [{ id: 'r', kind: 'guardrail', lhs: 'vd', op: '<=', rhs: 'V_spare' }],
+    });
+    expect(dcInputs(spare()).unclassified).toEqual([]);
+    expect(exprRoots(spare(), '', 'V_spare', 'provenance').roots.unclassified).toEqual(['V_spare']);
+    expect(exprRoots(spare('independent'), '', 'V_spare', 'provenance').roots.independent).toEqual([
+      'V_spare',
+    ]);
+  });
+
+  it("crosses a child's device only when it reads a device quantity", () => {
+    // k publishes its stated drain level vd and its vgs. k__vd ends at vd; k__vgs comes out of k's
+    // sizing, which reads L, I and vd — the same independent root, reached through the device.
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      rows: [],
+      rules: [],
+      uses: [{ name: 'k', doc: { ...withVd({ class: 'independent' }), provide: ['vd', 'vgs'] } }],
+    };
+    const param = exprRoots(doc, '', 'k__vd', 'provenance');
+    const device = exprRoots(doc, '', 'k__vgs', 'provenance');
+    expect(param.roots.independent).toEqual(['k.vd']);
+    expect(device.roots.independent).toEqual(['k.vd']);
+    expect(param.crossings.device).toEqual([]);
+    expect(device.crossings.device).toEqual(['k']);
   });
 });

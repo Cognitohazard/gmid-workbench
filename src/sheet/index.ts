@@ -32,7 +32,15 @@ export * from './types';
 export * from './eval';
 // Named rather than `export *`: validate.ts also exports reachedBinds, for a test that holds it
 // and dcInputs to the same reach, and that is not public API.
-export { dcInputs, validateSheet, type DcInputs } from './validate';
+export {
+  dcInputs,
+  exprRoots,
+  validateSheet,
+  type DcInputs,
+  type ExprRoots,
+  type RootClass,
+  type RootsPolicy,
+} from './validate';
 export * from './resolve';
 export * from './sensitivity';
 export * from './examples';
