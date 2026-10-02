@@ -832,6 +832,47 @@ test('design sheet: a stored sheet from before DC-input classes is kept, and say
   expect(errors).toEqual([]);
 });
 
+test('design sheet: a stored sheet that fails validation is kept, opens with its error unevaluated, and can be removed', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // Two rules share an id, which validation refuses (`sheet-rule`): results are keyed by rule id.
+  // The stored sheet stays in the library across boots; the user, not the loader, removes it.
+  const doc = {
+    ...vdSheet('Stored with a duplicate rule id', 'independent'),
+    rules: [
+      { id: 'ib-range', kind: 'requirement', lhs: 'Ib', op: '>=', rhs: '1e-6' },
+      { id: 'ib-range', kind: 'requirement', lhs: 'Ib', op: '<=', rhs: '1e-4' },
+    ],
+  };
+  await page.evaluate(
+    (d) => localStorage.setItem('gmid.sheets', JSON.stringify([{ name: 'dup-rule', doc: d }])),
+    doc,
+  );
+  await page.reload();
+  await loadDemo(page);
+  const entry = page.locator('.usheets .dev', { hasText: 'dup-rule' });
+  await expect(entry).toBeVisible();
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Stored with a duplicate rule id');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet.locator('.svar[data-param="V_d"]')).toBeVisible();
+  await expect(sheet.locator('.feasb')).toHaveText('not evaluated');
+  await expect(sheet.locator('.sissue').first()).toContainText('duplicate rule id "ib-range"');
+
+  await entry.locator('.drm').click();
+  await expect(entry).toHaveCount(0);
+  const stored = await page.evaluate(() => localStorage.getItem('gmid.sheets'));
+  expect(JSON.parse(stored ?? '[]')).toEqual([]);
+
+  expect(errors).toEqual([]);
+});
+
 test('design sheet: imported sheets join the library — pickable, referenceable, removable, persistent', async ({
   page,
 }) => {
