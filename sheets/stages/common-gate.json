@@ -21,8 +21,8 @@
       "max": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input (source) DC level",
-      "class": "assumed"
+      "note": "input (source) DC level, stated by whatever drives the stage. The gate bias is not a parameter here: it is this level plus the device's vgs",
+      "class": "independent"
     },
     {
       "name": "R_load",

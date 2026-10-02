@@ -150,8 +150,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "choice",
-      "note": "stage-2 output common-mode DC, set by CMFB",
-      "class": "assumed"
+      "note": "stage-2 output common-mode DC level. A common-mode feedback loop, not drawn on this sheet, holds the outputs here; this is that loop's reference",
+      "class": "independent"
     },
     {
       "name": "ld_sign",
