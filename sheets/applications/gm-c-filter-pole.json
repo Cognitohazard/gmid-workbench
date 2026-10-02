@@ -48,8 +48,8 @@
       "value": 0.6,
       "unit": "V",
       "role": "spec",
-      "note": "transconductor drain bias, signed to the table axis",
-      "class": "assumed"
+      "note": "transconductor drain bias, signed to the table axis. Stated by the designer: the transconductor's input and output common-mode levels and the tail node that would set it are not on this sheet",
+      "class": "independent"
     },
     {
       "name": "vstar_floor",

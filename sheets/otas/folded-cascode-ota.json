@@ -53,8 +53,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; the NMOS-side nodes climb to it and the folding node descends to it",
-      "class": "assumed"
+      "note": "output DC level; the NMOS-side nodes climb to it and the folding node descends to it. The PMOS and NMOS cascodes meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here",
+      "class": "independent"
     },
     {
       "name": "V_tail",

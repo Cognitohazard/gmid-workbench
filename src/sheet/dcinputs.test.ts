@@ -459,13 +459,14 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     };
   };
 
-  it('5T OTA: the tail node is solved, the common mode and its range ends are stated', () => {
+  it('5T OTA: the tail node is solved; the supply, the common mode, its range ends and the output level are stated', () => {
     // The pin moves V_tail until the produced common mode equals CM_dc; the containment edges
-    // substitute CM_lo and CM_hi for CM_dc; the output level is set by the mirror balance and
-    // typed as V_out_dc.
+    // substitute CM_lo and CM_hi for CM_dc. The output is a high-impedance node that only the
+    // feedback the application closes around the amplifier holds, and that loop is not on the
+    // sheet, so V_out_dc is stated like the supply — nothing on this sheet is assumed.
     expect(classes('otas/five-transistor-ota.json')).toEqual({
-      independent: ['CM_dc', 'CM_hi', 'CM_lo', 'VDD'],
-      assumed: ['V_out_dc'],
+      independent: ['CM_dc', 'CM_hi', 'CM_lo', 'VDD', 'V_out_dc'],
+      assumed: [],
       solved: ['V_tail'],
     });
   });
@@ -644,15 +645,16 @@ describe('SheetResult.assumptions', () => {
     expect(runSheet(doc, table).assumptions).toEqual([]);
   });
 
-  it('the CMOS inverter is sized under its output level, and its input level is no DC input', () => {
-    // The output node is set by the balance of the two devices, which the sheet types as V_out;
-    // the supply is stated. The input level never enters either device's bias — gate levels are
-    // outputs of gm/ID sizing — so it is not among the DC inputs at all.
+  it('the CMOS inverter assumes nothing: its output level is stated, and its input level is no DC input', () => {
+    // The two drains meet at a high-impedance output held by the feedback that biases the
+    // inverter at its trip point, which is not on the sheet, so V_out is stated beside the
+    // supply. The input level never enters either device's bias — gate levels are outputs of
+    // gm/ID sizing — so it is not among the DC inputs at all.
     const doc = sheet('stages/cmos-inverter-amp.json');
     const res = runSheet(doc, table, undefined, REFS);
-    expect(res.assumptions).toEqual(['V_out']);
+    expect(res.assumptions).toEqual([]);
     const r = dcInputs(doc);
-    expect(r.independent).toEqual(['VDD']);
+    expect(r.independent).toEqual(['VDD', 'V_out']);
     expect([...r.independent, ...r.assumed, ...r.solved]).not.toContain('V_in');
   });
 });

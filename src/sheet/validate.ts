@@ -640,9 +640,11 @@ function dcInputProblems(doc: SheetDoc): QAWarning[] {
       severity: 'error',
       message:
         `voltage "${param}" feeds the sizing of ${devices.map(deviceName).join(', ')} but ` +
-        `carries no class — mark it "independent" (the designer states it: a supply, a ` +
-        `reference, an input common mode, an applied bias, a probe) or "assumed" (the circuit ` +
-        `determines it and this sheet types it instead of solving)`,
+        `carries no class — mark it "independent" (nothing on this sheet determines it, so the ` +
+        `designer states it: a supply, a reference, an input common mode, an applied bias, a ` +
+        `probe, an output held by a feedback loop outside the sheet, a voltage across a device ` +
+        `whose surroundings are not on the sheet) or "assumed" (this ` +
+        `sheet's own parts determine it, but it types a value for now instead of deriving it)`,
       location: param,
       symbol: param,
     })),

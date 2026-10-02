@@ -11,8 +11,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets both devices' operating vds",
-      "class": "assumed"
+      "note": "output DC level; sets both devices' operating vds. The input device and the current-source load meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the stage holds it here",
+      "class": "independent"
     },
     { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },

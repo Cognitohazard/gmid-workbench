@@ -11,8 +11,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the cascode and load drain-source voltages",
-      "class": "assumed"
+      "note": "output DC level; sets the cascode and load drain-source voltages. The cascode and the current-source load meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the stage holds it here",
+      "class": "independent"
     },
     {
       "name": "V_x",

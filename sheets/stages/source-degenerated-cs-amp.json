@@ -11,8 +11,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "drain DC level; the device vds is this minus the degenerated source level",
-      "class": "assumed"
+      "note": "drain DC level; the device vds is this minus the degenerated source level. Set outside this sheet, by whatever supplies I_bias at the drain and wherever R_load returns: the sheet uses R_load only as the small-signal load at the output, not as a pull-up from VDD",
+      "class": "independent"
     },
     {
       "name": "R_load",

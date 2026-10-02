@@ -6,7 +6,14 @@
     { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
     { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
     { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-    { "name": "vx", "value": 0.9, "unit": "V", "role": "spec", "class": "assumed" }
+    {
+      "name": "vx",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "output DC level at this load's drain; sets the load's vds. The load is a current source at a high-impedance amplifier output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it, and a parent amplifier passes its own output level in",
+      "class": "independent"
+    }
   ],
   "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
   "rows": [],

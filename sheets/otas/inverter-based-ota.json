@@ -27,8 +27,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level (mid-supply for symmetric swing); sets both devices' vds",
-      "class": "assumed"
+      "note": "output DC level (mid-supply for symmetric swing); sets both devices' vds. The two devices meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it (a common-mode feedback loop in a pseudo-differential build), and that loop is not on this sheet",
+      "class": "independent"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },

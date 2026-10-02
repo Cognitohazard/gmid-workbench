@@ -90,8 +90,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; the NMOS drops below it and the PMOS drops above it must each close the rail",
-      "class": "assumed"
+      "note": "output DC level; the NMOS drops below it and the PMOS drops above it must each close the rail. The NMOS and PMOS cascodes meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here",
+      "class": "independent"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },

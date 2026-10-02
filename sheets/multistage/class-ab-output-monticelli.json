@@ -11,8 +11,8 @@
       "max": 1.5,
       "unit": "V",
       "role": "spec",
-      "note": "quiescent output DC level; sets each output device's vds",
-      "class": "assumed"
+      "note": "quiescent output DC level; sets each output device's vds. The pull-up and pull-down drains meet at a high-impedance output that nothing on this sheet holds; the feedback of the amplifier this stage terminates holds it here",
+      "class": "independent"
     },
     {
       "name": "swing_target",

@@ -48,8 +48,8 @@
       "value": 0.6,
       "unit": "V",
       "role": "spec",
-      "note": "input-device drain bias during integration, signed to the table axis",
-      "class": "assumed"
+      "note": "input-device drain bias during integration, signed to the table axis. Stated by the designer: during integration the drain is a discharging node above a moving tail, not a settled DC level, and the precharge switches, the clocked tail switch and the latch that set it are not on this sheet",
+      "class": "independent"
     },
     {
       "name": "avt",

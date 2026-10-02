@@ -49,8 +49,10 @@ const NMOS_GMID_SIZING: SheetDoc = {
       value: 0.6,
       unit: 'V',
       role: 'spec',
-      note: 'drain bias the sizing slices at; body-grounded, so vsb = 0',
-      class: 'assumed',
+      note:
+        'drain bias the sizing slices at, stated by the designer: this sheet is one device and ' +
+        'nothing on it sets the drain; body-grounded, so vsb = 0',
+      class: 'independent',
     },
   ],
   // bind-any-2: gm from the spec, gm/ID the knob; ID is derived via gm = gm/ID · ID.
@@ -129,8 +131,10 @@ const NMOS_NOISE_MATCHING: SheetDoc = {
       value: 0.6,
       unit: 'V',
       role: 'spec',
-      note: 'drain bias the sizing slices at; body-grounded, so vsb = 0',
-      class: 'assumed',
+      note:
+        'drain bias the sizing slices at, stated by the designer: this sheet is one device and ' +
+        'nothing on it sets the drain; body-grounded, so vsb = 0',
+      class: 'independent',
     },
   ],
   // bind-any-2: fix ID (budget) and gm/ID (knob); gm is derived via gm = gm/ID · ID.

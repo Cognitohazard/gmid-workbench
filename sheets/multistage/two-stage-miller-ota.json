@@ -136,8 +136,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "choice",
-      "note": "stage-2 output DC level; sets both stage-2 devices' vds",
-      "class": "assumed"
+      "note": "stage-2 output DC level; sets both stage-2 devices' vds. The stage-2 device and its current-source load meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here",
+      "class": "independent"
     },
     {
       "name": "out_sign",

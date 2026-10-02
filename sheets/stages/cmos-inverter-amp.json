@@ -11,8 +11,8 @@
       "max": 1.5,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets both devices' drain-source voltages (ideally near mid-supply)",
-      "class": "assumed"
+      "note": "output DC level; sets both devices' drain-source voltages (ideally near mid-supply). The two drains meet at a high-impedance output that nothing on this sheet holds; the feedback that biases the inverter at its trip point holds it (a resistor from output to input, or an outer loop), and with that self-bias it equals V_in",
+      "class": "independent"
     },
     {
       "name": "V_in",

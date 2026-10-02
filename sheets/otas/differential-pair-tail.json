@@ -60,8 +60,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "drain DC level; sets the input device vds",
-      "class": "assumed"
+      "note": "drain DC level; sets the input device vds. Whatever terminates the drains sets it (a mirror diode drop, a resistor drop, a folded-cascode source), and that load is not on this sheet: only its conductance, gds_load_est, is",
+      "class": "independent"
     },
     {
       "name": "V_tail",

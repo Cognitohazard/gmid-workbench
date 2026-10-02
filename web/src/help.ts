@@ -72,7 +72,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   sheet:
     'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device.',
   assumptions:
-    'Voltages this design was sized under rather than solved for: the ones the sheet marks “assumed” — an output DC level, an internal stack node, an estimated gate drop — that feed at least one device’s sizing. The circuit determines each of them; the sheet types a value instead. The verdict holds only while those typed values are right, so they are listed with it.',
+    'Voltages this design was sized under rather than solved for: the ones the sheet marks “assumed” — an internal stack node, a guessed gate-source drop — that feed at least one device’s sizing. The sheet’s own parts determine each of them, but the sheet types a value for now instead of deriving it. The verdict holds only while those typed values are right, so they are listed with it. A voltage nothing on the sheet determines — a supply, an input level, an output held by a feedback loop outside the sheet, a voltage across a device whose surroundings are not on the sheet — is one you state, and is not listed here.',
   feasBadge:
     'Does the design close on the active device at the current variables? Feasible = every hard rule (invariant + requirement) passes; guardrails are advisory and never gate it. When it does not close, the badge names the binding constraint: the failing hard rule with the worst margin, anywhere in the composition (a child’s rule is shown by path).',
   sensitivity:

@@ -56,8 +56,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "spec",
-      "note": "NMOS input-device drain-source at the folding/summing node",
-      "class": "assumed"
+      "note": "NMOS input-device drain-source at the folding/summing node. Stated by the designer: the summing circuit the drain feeds and the input common mode that places the source are not on this sheet, and the source moves with the common mode by design",
+      "class": "independent"
     },
     {
       "name": "vds_p",
@@ -66,8 +66,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "spec",
-      "note": "PMOS input-device drain-source magnitude at the folding/summing node",
-      "class": "assumed"
+      "note": "PMOS input-device drain-source magnitude at the folding/summing node. Stated by the designer: the summing circuit the drain feeds and the input common mode that places the source are not on this sheet, and the source moves with the common mode by design",
+      "class": "independent"
     },
     {
       "name": "Vtail_n",

@@ -53,8 +53,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the mirror output device's vds and the top of the pair's own vds",
-      "class": "assumed"
+      "note": "output DC level; sets the mirror output device's vds and the top of the pair's own vds. The input device's drain and the mirror output device's drain meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here",
+      "class": "independent"
     },
     { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },

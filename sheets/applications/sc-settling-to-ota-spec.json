@@ -72,8 +72,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "input device drain bias (the output DC level), signed to the table axis",
-      "class": "assumed"
+      "note": "input device drain bias, signed to the table axis. Stated by the designer: the OTA this device sits in is not on this sheet (a downstream amplifier sheet designs it), so nothing here sets its drain or source level",
+      "class": "independent"
     },
     {
       "name": "ft_margin",

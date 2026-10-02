@@ -46,8 +46,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; the NMOS nodes climb to it and the PMOS nodes descend to it",
-      "class": "assumed"
+      "note": "output DC level; the NMOS nodes climb to it and the PMOS nodes descend to it. The two gain-boosted cascodes meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here",
+      "class": "independent"
     },
     {
       "name": "V_tail",
@@ -66,8 +66,8 @@
       "max": 1.0,
       "unit": "V",
       "role": "choice",
-      "note": "the NMOS-side internal node: input drain and NMOS-cascode source. The input vds is V_a - V_tail and the cascode's is V_out_dc - V_a, by construction",
-      "class": "assumed"
+      "note": "the NMOS-side internal node: input drain and NMOS-cascode source. The input vds is V_a - V_tail and the cascode's is V_out_dc - V_a, by construction. The NMOS-side booster holds this node: it is an amplifier with its own reference voltage, applied from outside this sheet, and this value is that reference",
+      "class": "independent"
     },
     {
       "name": "V_b",
@@ -76,8 +76,8 @@
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction",
-      "class": "assumed"
+      "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction. The PMOS-side booster holds this node: it is an amplifier with its own reference voltage, applied from outside this sheet, and this value is that reference",
+      "class": "independent"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -166,8 +166,8 @@
       "max": 1.1,
       "unit": "V",
       "role": "choice",
-      "note": "booster output-device vds",
-      "class": "assumed"
+      "note": "booster output-device vds. Stated by the designer: the one booster child stands for both regulating amplifiers, NMOS side and PMOS side, and of their circuits only one stand-in gain device is on this sheet",
+      "class": "independent"
     }
   ],
   "uses": [

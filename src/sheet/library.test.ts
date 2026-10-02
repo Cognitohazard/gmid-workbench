@@ -170,6 +170,41 @@ describe('sheet library: vetting lints', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it('the voltages a sheet still types although its own parts determine them are exactly these', () => {
+    // `assumed` marks a value the sheet has yet to derive from its own devices, and the target
+    // is none. A voltage the sheet cannot determine — a supply, an input level, an output held
+    // by a feedback loop outside the sheet, the bias of a device whose surroundings are not on
+    // the sheet — is `independent` instead. Naming every remaining assumed voltage keeps the
+    // list visible and makes a new one fail here; deriving one removes it from the list. The
+    // walk reads each file as authored (inline children included, refs not followed), so a
+    // referenced sheet's params are counted once, under its own file.
+    const assumed: string[] = [];
+    for (const { file, doc } of LIBRARY) {
+      walkDocs(doc, file, (d, path) => {
+        for (const p of d.params) if (p.class === 'assumed') assumed.push(`${path}: ${p.name}`);
+      });
+    }
+    expect(assumed.sort()).toEqual(
+      [
+        'multistage/fd-telescopic-ota.json: V_a',
+        'multistage/fd-telescopic-ota.json: V_b',
+        'multistage/fd-telescopic-ota.json: V_s',
+        'multistage/flipped-voltage-follower.json: V_out',
+        'multistage/super-source-follower.json: vds_fb',
+        'multistage/super-source-follower.json: vds_in',
+        'multistage/two-stage-cascode-comp-ota.json: V_casc',
+        'otas/folded-cascode-ota.json: V_c',
+        'otas/folded-cascode-ota.json: V_fold',
+        'otas/telescopic-cascode-ota.json: V_a',
+        'otas/telescopic-cascode-ota.json: V_b',
+        'stages/cascode-cs-amp.json: V_x',
+        'stages/common-gate.json: V_out',
+        'stages/cs-amp-resistive-load.json: V_out',
+        'stages/source-follower.json: vgs_est',
+      ].sort(),
+    );
+  });
 });
 
 // The interface a sheet publishes to a parent is a naming convention, not a schema field, so

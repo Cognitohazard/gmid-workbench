@@ -21,8 +21,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the output mirror devices' vds",
-      "class": "assumed"
+      "note": "output DC level; sets the output mirror devices' vds. The two mirror output devices push and pull against each other at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here",
+      "class": "independent"
     },
     {
       "name": "CM_lo",

@@ -65,13 +65,15 @@ export interface SheetVar {
   pin?: { lhs: string; rhs: string };
   /**
    * What kind of DC sizing input this param is, for a voltage that a device's bias or givens are
-   * built from. `independent` is a voltage the circuit does not determine and the designer
-   * states: a supply, a ground reference, an input common mode, a bias applied from off the
-   * sheet, a characterization probe. `assumed` is one the circuit DOES determine but the sheet
-   * types instead of solving: an output DC level, a stage's internal node, an estimated gate
-   * drop. The two read the same to the engine; the difference is what a result sized under them
-   * is worth, which is why an assumed input is listed with the result of a run
-   * (SheetResult.assumptions).
+   * built from. `independent` is a voltage nothing on the sheet determines, so the designer
+   * states it: a supply, a ground reference, an input common mode, a bias applied from off the
+   * sheet, a characterization probe, an output level held by a feedback loop outside the sheet,
+   * a voltage across a device whose surrounding circuit is not on the sheet. `assumed` is one
+   * the sheet's own parts DO determine but the sheet types a value for now instead of deriving
+   * it: an internal stack node, a guessed gate-source drop. It is not a permanent state — it
+   * marks a value the sheet still has to derive. The two read the same to the engine; the
+   * difference is what a result sized under them is worth, which is why an assumed input is
+   * listed with the result of a run (SheetResult.assumptions).
    *
    * A third class, solved, is DERIVED and never written (see dcInputs): the param that
    * carries a `pin` or a `solveFor` is solved by construction — the names its relation reads are
