@@ -21,7 +21,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "DC level of the node the mirror serves; the wide-swing floor lets this go low"
+      "note": "DC level of the node the mirror serves; the wide-swing floor lets this go low",
+      "class": "independent"
     },
     {
       "name": "L",
@@ -72,7 +73,8 @@
       "value": 0.05,
       "unit": "V",
       "role": "spec",
-      "note": "how far above the mirror devices' saturation knee the wide-swing bias parks the node — the customary 50-100 mV that keeps the mirror out of triode across corners"
+      "note": "how far above the mirror devices' saturation knee the wide-swing bias parks the node — the customary 50-100 mV that keeps the mirror out of triode across corners",
+      "class": "independent"
     },
     {
       "name": "avt",

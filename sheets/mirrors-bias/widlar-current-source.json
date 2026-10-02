@@ -44,7 +44,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "DC level of the node the source drives"
+      "note": "DC level of the node the source drives",
+      "class": "independent"
     },
     {
       "name": "L",

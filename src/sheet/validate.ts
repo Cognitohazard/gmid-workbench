@@ -10,9 +10,11 @@
 import type { QAWarning } from '../types';
 import { compileExpr, metaScalars } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
+import { BASE_KEYS, DERIVED_QUANTITIES } from '../namespace';
 import { PINNED_AT_A_RANGE_END } from './coverage';
 import {
   BIAS_AXES,
+  BIND_FLAGS,
   EDGE_SEP,
   PATH_SEP,
   blockPath,
@@ -24,6 +26,7 @@ import {
   pinned,
   torn,
   pinProblem,
+  PARAM_CLASSES,
   PROVIDE_SEP,
   RULE_KINDS,
   RULE_OPS,
@@ -31,6 +34,7 @@ import {
   joinProvide,
   providedNames,
   prefixUseWarning,
+  splitProvide,
   type SheetDoc,
   type SheetUse,
   type SheetVar,
@@ -109,7 +113,7 @@ const STANDIN_TARGETS: readonly string[] = ['vgs', 'vth'];
  */
 function standInEstimates(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
-  const paramNames = new Set(doc.params.map((p) => p.name));
+  const paramByName = new Map(doc.params.map((p) => [p.name, p]));
   const ruleNames = doc.rules.map((r) => ({
     id: r.id,
     absArgs: [...absArgNames(r.lhs), ...absArgNames(r.rhs)],
@@ -126,7 +130,7 @@ function standInEstimates(doc: SheetDoc): QAWarning[] {
       const expr = childParam === undefined ? undefined : use.params?.[childParam];
       if (expr === undefined) continue;
       const exprNames = namesOf(expr);
-      const standIns = exprNames.filter((n) => paramNames.has(n));
+      const standIns = exprNames.filter((n) => paramByName.has(n));
       if (standIns.length === 0) continue;
       // Both sides of the round trip must sit inside ONE absolute difference — the sheet
       // asserting they are the same number, not a guardrail that happens to mention both.
@@ -150,6 +154,12 @@ function standInEstimates(doc: SheetDoc): QAWarning[] {
         const pairwise = pair.size === 2;
         const diode =
           axis === 'vds' && sole && pairwise && tiedTo.includes(joinProvide(use.name, 'vgs'));
+        // A stand-in the author has already classed `assumed` is not news: the sheet says in
+        // its own words that it types this value instead of solving it, the rule that ties it
+        // back is how the assumption is checked, and the run lists it among the assumptions the
+        // design was sized under — except for a diode, where the estimate need not exist at all
+        // and the advice says how.
+        if (!diode && paramByName.get(hit)?.class === 'assumed') continue;
         const fix = diode
           ? `"${use.name}" is diode-connected — its vds IS its vgs, so bind the connection instead of estimating it`
           : axis === 'vsb'
@@ -359,9 +369,9 @@ function provideCoverage(doc: SheetDoc): QAWarning[] {
   const reported = new Set<string>();
   for (const expr of docExpressions(doc)) {
     for (const name of namesOf(expr)) {
-      const at = name.indexOf(PROVIDE_SEP);
-      if (at <= 0 || injected.has(name) || reported.has(name)) continue;
-      const block = name.slice(0, at);
+      const split = splitProvide(name);
+      if (!split || injected.has(name) || reported.has(name)) continue;
+      const [block] = split;
       const use = uses.get(block);
       if (use && !use.doc) continue; // ref-only: its provides are unknown until resolution
       reported.add(name);
@@ -409,13 +419,252 @@ function solvedDeps(p: SheetVar): readonly string[] {
   return torn(p) ? [p.solveFor] : [];
 }
 
+/** One document of a composition tree as the DC-input walk sees it: the doc, the use path that
+ *  reaches it (`''` at the top, `a.b.` below — the prefix a qualified name carries), the use in
+ *  the parent that embeds it, and its own embedded children by use name. */
+interface Level {
+  doc: SheetDoc;
+  path: string;
+  parent?: { level: Level; use: SheetUse };
+  kids: Map<string, Level>;
+}
+
+/** The names a bare identifier can take when it reads the doc's OWN sized device: the namespace
+ *  quantities, the bindable selectors, and what the sizer adds beside them. A table's unknown
+ *  pass-through columns are not enumerable and are left out, so a name the walk cannot place
+ *  (a typo, a column only some tables carry) resolves to nothing rather than to the device —
+ *  which would read as the device depending on itself. The table's metadata scalars
+ *  (META_PUBLISHED) are taken out for the same reason: before the bind runs they are the
+ *  table's, so a bind reading one does not read its own device. That holds ONLY before the
+ *  bind: once a level is sized, its `w` is the sized width, so a row or solve relation of that
+ *  level that reads `w` does depend on the device, and the walk misses that dependence. The cost
+ *  is a loop reported by evaluation (which refuses it) rather than here — never a wrong verdict.
+ *  Telling the two meanings apart needs evaluation order, which this walk does not model. */
+const DEVICE_QUANTITIES: ReadonlySet<string> = new Set(
+  [
+    ...BASE_KEYS,
+    ...DERIVED_QUANTITIES.map((d) => d.key),
+    ...BINDABLE,
+    'w0',
+    'ceiling',
+    'feasible',
+  ].filter((k) => !META_PUBLISHED.has(k)),
+);
+
+/**
+ * A sheet's DC inputs: the root params its device biases and givens are built from, by class —
+ * the two authored ones, plus `solved`, which is derived from the param's own pin or solveFor.
+ * Names are qualified by use path below the top sheet (`stage1.V_out`) and listed in document
+ * order. `unclassified` holds only the voltage roots (unit exactly `V`) that carry no class — the
+ * ones the `sheet-dc-inputs` rule refuses — each with the devices whose sizing reads it directly.
+ * `cycles` holds each device whose own sizing depends on its own operating point with no
+ * engine-solved param on the loop.
+ */
+export interface DcInputs {
+  independent: string[];
+  assumed: string[];
+  solved: string[];
+  unclassified: { param: string; devices: string[] }[];
+  cycles: { device: string; via: string[] }[];
+}
+
+/**
+ * The DC-input walk — the reachability the `sheet-dc-inputs` rule, SheetResult.assumptions and
+ * any later consumer of "which voltages does this design's sizing rest on" all read. From every
+ * device's bind — its bias axes and every given, so a `vgs` tie is followed too — follow
+ * expression references back to the params they come from, across the whole tree:
+ *  - a child param the parent overrides continues into the override's names, in the parent's
+ *    scope;
+ *  - a `child__key` is an alias into that child, never a root: it continues into the child's
+ *    row, its param, or — for a quantity its sizing publishes — its own bind;
+ *  - a row continues into its expression;
+ *  - an engine-solved param is a root classed solved, and the walk carries on through the
+ *    relation that solves it (solvedDeps), so the spec on the far side of a pin is a DC input
+ *    too;
+ *  - a top-level param a containment edge overrides continues into that edge's `set`
+ *    expression, so a range end (`CM_lo`) is a DC input exactly as the centre it replaces is.
+ * What is left are the ROOTS: params nobody overrides.
+ *
+ * A walk that comes back to the device it started from is a loop in the design's own bias. It is
+ * legal only when an engine-solved param sits on it — the solve is what closes the loop — so the
+ * walk marks everything past a solved param as closed and reports only the loops that are not. An
+ * edge's `set` is evaluated against the finished base run, not inside it, so it cannot close a
+ * loop in that run and is walked as closed too.
+ *
+ * Mirrors reachedBinds' closure (rows, solved relations, overrides, provides) run backwards rather
+ * than calling it: that walk goes forward from a set of moved names, holds geometry fixed at a
+ * range end, and cannot seed a child's own params — none of which fits this question.
+ *
+ * Structural and table-free: a bare name that is no param, row or published child scalar is read
+ * as the doc's own device quantity when the doc binds and the name is one a sized device carries
+ * (DEVICE_QUANTITIES). Pure: it reads the doc and returns a report.
+ */
+export function dcInputs(doc: SheetDoc): DcInputs {
+  const levels: Level[] = [];
+  const enroll = (lv: Level, depth: number): void => {
+    levels.push(lv);
+    if (depth >= MAX_USE_DEPTH) return;
+    for (const use of lv.doc.uses ?? []) {
+      if (!use.doc || lv.kids.has(use.name)) continue;
+      const kid: Level = {
+        doc: use.doc,
+        path: `${lv.path}${use.name}${PATH_SEP}`,
+        parent: { level: lv, use },
+        kids: new Map(),
+      };
+      lv.kids.set(use.name, kid);
+      enroll(kid, depth + 1);
+    }
+  };
+  enroll({ doc, path: '', kids: new Map() }, 0);
+
+  const roots = new Map<string, { p: SheetVar; devices: Set<string> }>();
+  const cycles: DcInputs['cycles'] = [];
+
+  for (const start of levels) {
+    if (!start.doc.bind) continue;
+    const seenDevice = new Set<string>();
+    const seenName = new Set<string>();
+    const trail: string[] = [];
+    let loop: string[] | undefined;
+
+    // `closed` is true once the path has passed through an engine-solved param.
+    const device = (lv: Level, closed: boolean): void => {
+      if (lv === start && trail.length > 0) {
+        if (!closed) loop ??= [...trail];
+        return;
+      }
+      const key = `${closed ? 1 : 0}|${lv.path}`;
+      if (seenDevice.has(key)) return;
+      seenDevice.add(key);
+      for (const [k, v] of Object.entries(lv.doc.bind ?? {}))
+        if (!BIND_FLAGS.has(k) && typeof v === 'string')
+          for (const n of namesOf(v)) visit(lv, n, closed, blockPath(lv.path));
+    };
+
+    // `sizer` is the device whose bind the path most recently left — the one a root is reported
+    // against.
+    const visit = (lv: Level, name: string, closed: boolean, sizer: string): void => {
+      const key = `${closed ? 1 : 0}|${lv.path}${name}`;
+      if (seenName.has(key)) return;
+      seenName.add(key);
+      trail.push(`${lv.path}${name}`);
+      const p = lv.doc.params.find((q) => q.name === name);
+      const row = p ? undefined : lv.doc.rows.find((r) => r.name === name);
+      const split = splitProvide(name);
+      const kid = split ? lv.kids.get(split[0]) : undefined;
+      const pubKey = split ? split[1] : '';
+      if (p) {
+        // Any override replaces the child's value, so the child's param is no root whatever
+        // the override's shape; a literal (or malformed) one simply names no param to follow.
+        // Except an engine-solved param: the engine solves it whatever the parent writes (a pin
+        // ignores the override, a solveFor only seeds from it), so it stays a root, classed
+        // solved, with its relation followed. Own keys only, so a param named `constructor` is
+        // not read as overridden by every override object.
+        const given = lv.parent?.use.params ?? {};
+        const override: unknown =
+          !engineSolved(p) && Object.prototype.hasOwnProperty.call(given, name)
+            ? given[name]
+            : undefined;
+        if (lv.parent && override !== undefined) {
+          if (typeof override === 'string')
+            for (const n of namesOf(override)) visit(lv.parent.level, n, closed, sizer);
+        } else {
+          const qualified = `${lv.path}${name}`;
+          const entry = roots.get(qualified) ?? { p, devices: new Set<string>() };
+          entry.devices.add(sizer);
+          roots.set(qualified, entry);
+          if (engineSolved(p)) for (const n of solvedDeps(p)) visit(lv, n, true, sizer);
+          // Containment edges are a top-of-tree feature; a composed child's are never run.
+          if (lv.path === '')
+            for (const e of doc.edges ?? []) {
+              const sub: unknown = e.set?.[name];
+              if (typeof sub === 'string') for (const n of namesOf(sub)) visit(lv, n, true, sizer);
+            }
+        }
+      } else if (row) {
+        for (const n of namesOf(row.expr)) visit(lv, n, closed, sizer);
+      } else if (kid && (kid.doc.provide ?? []).includes(pubKey)) {
+        // A binding child publishes everything its sizing put in scope, pass-through columns
+        // included, so a provided key that is none of its params, rows or re-exports is its
+        // device's own — whether or not the name is one DEVICE_QUANTITIES can list.
+        const own =
+          pubKey.includes(PROVIDE_SEP) ||
+          kid.doc.params.some((q) => q.name === pubKey) ||
+          kid.doc.rows.some((r) => r.name === pubKey);
+        if (kid.doc.bind && !own) device(kid, closed);
+        else visit(kid, pubKey, closed, sizer);
+      } else if (lv.doc.bind && DEVICE_QUANTITIES.has(name)) {
+        device(lv, closed);
+      }
+      trail.pop();
+    };
+
+    device(start, false);
+    if (loop) cycles.push({ device: blockPath(start.path), via: loop });
+  }
+
+  // Document order: the tree in preorder, each doc's params as written.
+  const order = levels.flatMap((lv) => lv.doc.params.map((p) => `${lv.path}${p.name}`));
+  const out: DcInputs = { independent: [], assumed: [], solved: [], unclassified: [], cycles };
+  for (const name of order) {
+    const r = roots.get(name);
+    if (!r) continue;
+    const cls = engineSolved(r.p)
+      ? 'solved'
+      : PARAM_CLASSES.has(r.p.class ?? '')
+        ? r.p.class
+        : undefined;
+    if (cls) out[cls].push(name);
+    // An invalid authored class is reported on the param itself, so it is not double-counted.
+    else if (r.p.class === undefined && r.p.unit?.trim() === 'V')
+      out.unclassified.push({ param: name, devices: [...r.devices] });
+  }
+  return out;
+}
+
+/** How a DC-input finding names a device: the sheet's own, or a child by use path. */
+const deviceName = (d: string): string => (d === 'bind' ? "this sheet's own device" : `"${d}"`);
+
+/**
+ * The `sheet-dc-inputs` rule over a whole tree: every voltage the design's sizing rests on must
+ * say whether the designer states it or the sheet assumes it, and no device may depend on its own
+ * operating point without a solve closing the loop. Run once, at the top — the walk spans the
+ * tree, so running it per level would report a child's overridden param as a root.
+ */
+function dcInputProblems(doc: SheetDoc): QAWarning[] {
+  const { unclassified, cycles } = dcInputs(doc);
+  return [
+    ...unclassified.map(({ param, devices }): QAWarning => ({
+      rule: 'sheet-dc-inputs',
+      severity: 'error',
+      message:
+        `voltage "${param}" feeds the sizing of ${devices.map(deviceName).join(', ')} but ` +
+        `carries no class — mark it "independent" (the designer states it: a supply, a ` +
+        `reference, an input common mode, an applied bias, a probe) or "assumed" (the circuit ` +
+        `determines it and this sheet types it instead of solving)`,
+      location: param,
+      symbol: param,
+    })),
+    ...cycles.map(({ device, via }): QAWarning => ({
+      rule: 'sheet-dc-inputs',
+      severity: 'error',
+      message:
+        `the sizing of ${deviceName(device)} depends on its own operating point ` +
+        `(${via.join(' → ')}) and nothing solves the loop — name the estimate as a param and ` +
+        `close it with solveFor`,
+      location: device,
+    })),
+  ];
+}
+
 /** A list of bind keys as a warning spells them. */
 const quoted = (ks: string[]): string => ks.map((k) => `"${k}"`).join(', ');
 
 /** One bind of a tree, with the names an edge's overrides can reach at the point that bind is
  *  evaluated. `path` spells the block the way warnings spell it: `bind` for the sheet's own
  *  device, the use path for anything below. */
-interface ReachedBind {
+export interface ReachedBind {
   path: string;
   bind: NonNullable<SheetDoc['bind']>;
   reached: ReadonlySet<string>;
@@ -437,8 +686,11 @@ interface ReachedBind {
  * composition nested past MAX_USE_DEPTH is skipped whole. An advisory check that says nothing
  * about a broken document is the right way round — a warning that fires on correct sheets is
  * worth less than no warning at all.
+ *
+ * Exported for the test that holds it and dcInputs to the same reach; not part of the public
+ * API (the package index does not re-export it).
  */
-function reachedBinds(
+export function reachedBinds(
   doc: SheetDoc,
   moved: readonly string[],
   path: string,
@@ -578,6 +830,30 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         rule: 'sheet-param',
         severity: 'error',
         message: `param "${p.name}" is not a finite number`,
+        location: p.name,
+      });
+    }
+    // `class` is the author's word on what kind of DC level the param is. `solved` is not theirs
+    // to give — the engine decides that from pin/solveFor — and a solved param carrying a class
+    // would say two different things about one value.
+    const cls: unknown = p.class;
+    if (cls !== undefined && (typeof cls !== 'string' || !PARAM_CLASSES.has(cls))) {
+      out.push({
+        rule: 'sheet-dc-inputs',
+        severity: 'error',
+        message:
+          cls === 'solved'
+            ? `param "${p.name}": class "solved" is derived, never authored — a param is solved ` +
+              `when a pin moves it or it carries solveFor`
+            : `param "${p.name}" has unknown class "${String(cls)}" — use one of ` +
+              quoted([...PARAM_CLASSES]),
+        location: p.name,
+      });
+    } else if (cls !== undefined && engineSolved(p)) {
+      out.push({
+        rule: 'sheet-dc-inputs',
+        severity: 'error',
+        message: `param "${p.name}" is solved by the engine, so its class is derived — drop class "${String(cls)}"`,
         location: p.name,
       });
     }
@@ -793,6 +1069,8 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       location: 'bind',
     });
   }
+
+  if (_depth === 0) out.push(...dcInputProblems(doc));
 
   // The composition interface, both ways: names read across a block boundary, and names this
   // sheet declares it exposes. Runs for every doc — a leaf with no children still publishes.

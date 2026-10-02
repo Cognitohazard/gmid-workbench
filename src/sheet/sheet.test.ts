@@ -1064,6 +1064,54 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
     expect(standins(withRule('abs(V_node - k__vdsat)', 'V_node'))).toEqual([]);
   });
 
+  it('an estimate already classed "assumed" raises no stand-in finding', () => {
+    // The author has said in the sheet's own words that this level is typed rather than solved,
+    // and the rule tying it back is how that assumption is checked — so there is no advice left
+    // to give. The run lists the param among its assumptions instead; no finding repeats it.
+    // A compound bias (a node written as a difference), so this is not the diode case below.
+    const doc = withRule('abs(k__vgs - guess)', 'V_node - guess');
+    doc.params[0] = { ...doc.params[0], class: 'assumed' };
+    expect(validateSheet(doc).filter((x) => x.symbol === 'guess')).toEqual([]);
+    // `guess` reaches k's drain through the override, so it is one of the run's assumptions.
+    expect(runSheet(doc, dev).assumptions).toEqual(['guess']);
+  });
+
+  it('a diode-connected estimate keeps its advice even when classed "assumed"', () => {
+    // The class says the value is typed; the diode advice says it need not exist at all — the
+    // connection can be declared and the table read on its diagonal. That fix outranks the label.
+    const doc = withRule('abs(k__vgs - guess)');
+    doc.params[0] = { ...doc.params[0], class: 'assumed' };
+    const w = standins(doc);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/diode-connected/);
+  });
+
+  it('the diode advice on an "assumed" estimate does not depend on which rule comes first', () => {
+    // The first rule sums three names in one abs — a loop of drops, not the diode identity — so on
+    // an assumed param it earns nothing. The second compares exactly the bare drain bias and the
+    // block's own vgs: the diode identity, whose advice the class does not suppress. One warning,
+    // naming the second rule.
+    const doc = withRule('abs(k__vgs - guess - V_node)');
+    doc.rules.push({
+      id: 'diode-check',
+      kind: 'guardrail',
+      lhs: 'abs(k__vgs - guess)',
+      op: '<=',
+      rhs: '0.05',
+    });
+    doc.params[0] = { ...doc.params[0], class: 'assumed' };
+    const w = standins(doc);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/rule "diode-check"/);
+    expect(w[0]).toMatch(/diode-connected/);
+  });
+
+  it('an estimate classed "independent" keeps the stand-in advice — the class contradicts it', () => {
+    const doc = withRule('abs(k__vgs - guess)', 'V_node - guess');
+    doc.params[0] = { ...doc.params[0], class: 'independent' };
+    expect(standins(doc)).toHaveLength(1);
+  });
+
   it('is advisory — a sheet carrying the pattern still validates without errors', () => {
     expect(validateSheet(withRule('abs(k__vgs - guess)')).some((w) => w.severity === 'error')).toBe(
       false,

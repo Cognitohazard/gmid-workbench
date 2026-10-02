@@ -34,14 +34,16 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95-1.19 V on sky130 tt). The edge checks the ENDPOINT; the interior is the sweep's to show"
+      "note": "input CM range, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95-1.19 V on sky130 tt). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "class": "independent"
     },
     {
       "name": "CM_hi",
       "value": 1.15,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, high edge — its ENDPOINT checked by the cm-hi edge"
+      "note": "input CM range, high edge — its ENDPOINT checked by the cm-hi edge",
+      "class": "independent"
     },
     {
       "name": "CM_dc",
@@ -50,14 +52,16 @@
       "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis",
+      "class": "independent"
     },
     {
       "name": "V_out_dc",
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "drain DC level; sets the input device vds"
+      "note": "drain DC level; sets the input device vds",
+      "class": "assumed"
     },
     {
       "name": "V_tail",

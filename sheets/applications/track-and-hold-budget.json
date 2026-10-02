@@ -31,7 +31,8 @@
       "value": 0.05,
       "unit": "V",
       "role": "spec",
-      "note": "small drain bias for the on-resistance estimate (triode); signed to the table axis"
+      "note": "small drain bias for the on-resistance estimate (triode); signed to the table axis",
+      "class": "independent"
     },
     {
       "name": "gm_id_on",

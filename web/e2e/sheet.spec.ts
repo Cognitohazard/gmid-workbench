@@ -744,6 +744,94 @@ test('design sheet: an imported pin survives import and reload (not silently str
   expect(errors).toEqual([]);
 });
 
+/** A one-device sheet whose drain bias is the voltage param `V_d`, given DC-level class `cls`
+ *  (none when omitted). */
+const vdSheet = (title: string, cls?: string) => ({
+  title,
+  polarity: 'n',
+  params: [
+    { name: 'L', value: 5e-7 },
+    { name: 'Ib', value: 1e-5 },
+    { name: 'V_d', value: 0.6, unit: 'V', ...(cls === undefined ? {} : { class: cls }) },
+  ],
+  bind: { L: 'L', id: 'Ib', gm_id: '10', vds: 'V_d' },
+  rows: [],
+  rules: [],
+});
+
+test('design sheet: a DC-level class survives import and reload, and the assumption is listed', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // `V_d` is a voltage the device is biased from, so it must carry a class. A sanitizer that
+  // drops the field turns it back into an unclassified DC input, which is a validation error —
+  // the verdict would flip to infeasible and the assumption line would vanish.
+  const load = (name: string, cls: string) =>
+    page.locator('.load input[type=file]').setInputFiles({
+      name,
+      mimeType: 'application/json',
+      buffer: Buffer.from(JSON.stringify(vdSheet(`Classed level ${cls}`, cls))),
+    });
+  await load('classed-level.json', 'assumed');
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Classed level assumed');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet.locator('.feasb')).toHaveText('feasible');
+  await expect(sheet.locator('.sassume')).toHaveText('sized under 1 assumption: V_d');
+
+  await page.reload();
+  const after = page.locator('.sheet').first();
+  await expect(after.locator('.feasb')).toHaveText('feasible');
+  await expect(after.locator('.sassume')).toHaveText('sized under 1 assumption: V_d');
+
+  // "solved" is derived from pin/solveFor, never written — an import carrying it is refused by
+  // name rather than silently losing the class.
+  await load('solved-level.json', 'solved');
+  await expect(page.locator('.qa.error')).toContainText(
+    'malformed sheet content at params[2].class',
+  );
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a stored sheet from before DC-input classes is kept, and says what it needs', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // A sheet persisted before classes existed: its voltage bias carries none. It must survive the
+  // boot that follows — dropping it would delete the user's work without a word — and the reason
+  // it no longer validates must show when it is opened: a sheet that does not validate is not
+  // evaluated, and the refusal names what is missing.
+  await page.evaluate(
+    (doc) => localStorage.setItem('gmid.sheets', JSON.stringify([{ name: 'old-sheet', doc }])),
+    vdSheet('Stored before classes'),
+  );
+  await page.reload();
+  await loadDemo(page);
+  await expect(page.locator('.usheets .dev', { hasText: 'old-sheet' })).toBeVisible();
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Stored before classes');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet.locator('.feasb')).toHaveText('not evaluated');
+  await expect(sheet.locator('.sissue', { hasText: '"V_d"' }).first()).toContainText(
+    'carries no class',
+  );
+
+  expect(errors).toEqual([]);
+});
+
 test('design sheet: imported sheets join the library — pickable, referenceable, removable, persistent', async ({
   page,
 }) => {

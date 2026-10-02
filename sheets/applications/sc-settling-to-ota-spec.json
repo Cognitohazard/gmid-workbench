@@ -72,7 +72,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "input device drain bias (the output DC level), signed to the table axis"
+      "note": "input device drain bias (the output DC level), signed to the table axis",
+      "class": "assumed"
     },
     {
       "name": "ft_margin",

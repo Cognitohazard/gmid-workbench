@@ -26,6 +26,7 @@ import type { DeviceTable, QAWarning, TableId } from '../types';
 import type { DeviceResolver, NamedBinding, SheetDoc, SheetRefIndex, SheetResult } from '../sheet';
 import {
   clampMargin,
+  dcInputs,
   edgeBroke,
   evaluateSheet,
   limitingConstraint,
@@ -494,6 +495,9 @@ interface PreparedRun {
   readonly warnings: readonly QAWarning[];
   readonly blockers: readonly VariantIssue[];
   readonly bindings: readonly NamedBinding[];
+  /** The assumed DC inputs of the resolved tree — a fact about the document, so it is the same
+   *  for every condition and attached to each result as `runSheet` attaches it. */
+  readonly assumptions: readonly string[];
 }
 
 function prepareRun(doc: SheetDoc, refs?: SheetRefIndex): PreparedRun {
@@ -506,6 +510,7 @@ function prepareRun(doc: SheetDoc, refs?: SheetRefIndex): PreparedRun {
     doc: resolved.doc,
     warnings,
     blockers,
+    assumptions: dcInputs(resolved.doc).assumed,
     // The tree is already resolved, so this walk adds no warnings of its own.
     bindings: blockers.length ? [] : namedBindings(resolved.doc).bindings,
   };
@@ -571,6 +576,7 @@ function runPrepared(
   const result: SheetResult = {
     ...evaluated,
     warnings: [...prepared.warnings, ...evaluated.warnings],
+    assumptions: [...prepared.assumptions],
   };
   // The gate is "did the base run complete", NOT `stands()`: stands() also folds in a broken
   // containment edge, whose failure is a COVERAGE non-answer — gating on it here would erase a

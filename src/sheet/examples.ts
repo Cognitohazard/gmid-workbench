@@ -50,6 +50,7 @@ const NMOS_GMID_SIZING: SheetDoc = {
       unit: 'V',
       role: 'spec',
       note: 'drain bias the sizing slices at; body-grounded, so vsb = 0',
+      class: 'assumed',
     },
   ],
   // bind-any-2: gm from the spec, gm/ID the knob; ID is derived via gm = gm/ID · ID.
@@ -129,6 +130,7 @@ const NMOS_NOISE_MATCHING: SheetDoc = {
       unit: 'V',
       role: 'spec',
       note: 'drain bias the sizing slices at; body-grounded, so vsb = 0',
+      class: 'assumed',
     },
   ],
   // bind-any-2: fix ID (budget) and gm/ID (knob); gm is derived via gm = gm/ID · ID.
@@ -172,7 +174,13 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
     { name: 'L', value: 0.5e-6, unit: 'm' },
     { name: 'gm_id', value: 12, unit: '1/V' },
     { name: 'I_bias', value: 20e-6, unit: 'A' },
-    { name: 'V_ds', value: 0.3, unit: 'V', note: 'the input device sits low in the stack' },
+    {
+      name: 'V_ds',
+      value: 0.3,
+      unit: 'V',
+      note: 'the input device sits low in the stack',
+      class: 'assumed',
+    },
   ],
   // vds pinned to the (low) input-device drain; body-grounded ⇒ vsb = 0.
   bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
@@ -241,6 +249,7 @@ const NMOS_CASCODE: SheetDoc = {
       unit: 'V',
       role: 'spec',
       note: 'cascode-device drain bias (higher than the input); body-grounded, so vsb = 0',
+      class: 'assumed',
     },
   ],
   uses: [

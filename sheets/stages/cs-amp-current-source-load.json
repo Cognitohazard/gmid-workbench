@@ -3,7 +3,7 @@
   "description": "Common-source stage with a current-source load: the canonical $g_m/I_D$ first sheet. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor), $g_m/I_D$ is the efficiency knob, and the load device is a composed child so its output conductance and noise enter the gain and noise budgets honestly. Pick the load child's device table to the opposite polarity (set load_sign to -1 for a signed-PMOS table).",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     {
       "name": "V_out",
       "value": 0.9,
@@ -11,7 +11,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets both devices' operating vds"
+      "note": "output DC level; sets both devices' operating vds",
+      "class": "assumed"
     },
     { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },

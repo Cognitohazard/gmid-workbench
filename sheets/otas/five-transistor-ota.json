@@ -3,7 +3,7 @@
   "description": "The five-transistor OTA, biased from the TAIL NODE and entered from the COMMON MODE. Internally the tail node is the one free bias variable: the pair's source sits at $V_{tail}$, so its body bias is $V_{tail}$, its drain-source voltage is $V_{out} - V_{tail}$, and every device is read straight out of the table with nothing iterated. Externally the designer types the common mode the application presents: $CM_{in} = V_{tail} + V_{GS}$ rises monotonically with the tail node, so the engine brackets $V_{tail}$ and bisects until the produced common mode equals $CM_{dc}$ — an inversion that cannot overshoot and owes nothing to a starting guess. Sweep $CM_{dc}$ to trace the common-mode axis. Gain falls as the common mode rises, because lifting the tail node squeezes the pair's own $v_{ds}$ — and it collapses well before the pair leaves saturation, which is why the gain rule, not a saturation edge, sets the usable ceiling.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
     { "name": "Av_target", "value": 15, "unit": "V/V", "role": "spec" },
     { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
@@ -27,14 +27,16 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge. The cm-lo edge re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (0.95-1.39 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show"
+      "note": "input CM range the application presents, low edge. The cm-lo edge re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (0.95-1.39 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "class": "independent"
     },
     {
       "name": "CM_hi",
       "value": 1.35,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way"
+      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "class": "independent"
     },
     {
       "name": "CM_dc",
@@ -43,14 +45,16 @@
       "max": 1.45,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis",
+      "class": "independent"
     },
     {
       "name": "V_out_dc",
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the mirror output device's vds and the top of the pair's own vds"
+      "note": "output DC level; sets the mirror output device's vds and the top of the pair's own vds",
+      "class": "assumed"
     },
     { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },

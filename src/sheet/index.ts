@@ -24,13 +24,15 @@ import type {
   SheetSweep2,
   SheetSweepRule,
 } from './types';
-import { validateSheet } from './validate';
+import { dcInputs, validateSheet } from './validate';
 import { evaluateSheet, type DeviceResolver } from './eval';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 
 export * from './types';
 export * from './eval';
-export * from './validate';
+// Named rather than `export *`: validate.ts also exports reachedBinds, for a test that holds it
+// and dcInputs to the same reach, and that is not public API.
+export { dcInputs, validateSheet, type DcInputs } from './validate';
 export * from './resolve';
 export * from './sensitivity';
 export * from './examples';
@@ -41,7 +43,8 @@ export * from './examples';
  *  sheet is never reported feasible. `validateSheet` and `evaluateSheet` both recurse into
  *  composed children, so the whole tree is covered. `refs` materializes by-reference
  *  children first (see resolveSheetRefs) — resolution failures block feasibility the
- *  same way validation errors do. */
+ *  same way validation errors do. The result also carries the assumed DC inputs the design
+ *  was sized under (SheetResult.assumptions). */
 export function runSheet(
   doc: SheetDoc,
   table?: DeviceTable,
@@ -58,6 +61,7 @@ export function runSheet(
     feasible: res.feasible && !blocked,
     closes: res.closes && !blocked,
     warnings: [...pre, ...res.warnings],
+    assumptions: dcInputs(r.doc).assumed,
   };
 }
 

@@ -3,7 +3,7 @@
   "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
     { "name": "Av_target", "value": 10000, "unit": "V/V", "role": "spec" },
     { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
@@ -20,14 +20,16 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.85-1.18 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show"
+      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.85-1.18 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "class": "independent"
     },
     {
       "name": "CM_hi",
       "value": 1.12,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way"
+      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "class": "independent"
     },
     {
       "name": "CM_dc",
@@ -36,14 +38,16 @@
       "max": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. The slider stops where the stack does: with V_a holding the pair's drain low, the tail node cannot climb past the bracket and the topology genuinely cannot take a higher CM — the telescopic's known input-range ceiling"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. The slider stops where the stack does: with V_a holding the pair's drain low, the tail node cannot climb past the bracket and the topology genuinely cannot take a higher CM — the telescopic's known input-range ceiling",
+      "class": "independent"
     },
     {
       "name": "V_out_dc",
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; the NMOS nodes climb to it and the PMOS nodes descend to it"
+      "note": "output DC level; the NMOS nodes climb to it and the PMOS nodes descend to it",
+      "class": "assumed"
     },
     {
       "name": "V_tail",
@@ -62,7 +66,8 @@
       "max": 1.0,
       "unit": "V",
       "role": "choice",
-      "note": "the NMOS-side internal node: input drain and NMOS-cascode source. The input vds is V_a - V_tail and the cascode's is V_out_dc - V_a, by construction"
+      "note": "the NMOS-side internal node: input drain and NMOS-cascode source. The input vds is V_a - V_tail and the cascode's is V_out_dc - V_a, by construction",
+      "class": "assumed"
     },
     {
       "name": "V_b",
@@ -71,7 +76,8 @@
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction"
+      "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction",
+      "class": "assumed"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -160,7 +166,8 @@
       "max": 1.1,
       "unit": "V",
       "role": "choice",
-      "note": "booster output-device vds"
+      "note": "booster output-device vds",
+      "class": "assumed"
     }
   ],
   "uses": [

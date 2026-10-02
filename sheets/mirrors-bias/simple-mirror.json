@@ -20,7 +20,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "DC level of the node the mirror serves"
+      "note": "DC level of the node the mirror serves",
+      "class": "independent"
     },
     {
       "name": "L",

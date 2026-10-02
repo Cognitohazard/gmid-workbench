@@ -6,7 +6,7 @@
     { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
     { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
     { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-    { "name": "vx", "value": 0.9, "unit": "V", "role": "spec" }
+    { "name": "vx", "value": 0.9, "unit": "V", "role": "spec", "class": "assumed" }
   ],
   "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
   "rows": [],

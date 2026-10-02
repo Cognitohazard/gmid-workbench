@@ -45,7 +45,13 @@ function parseUserSheets(raw: unknown): UserSheet[] {
     const o = e as Record<string, unknown>;
     if (typeof o.name !== 'string' || !validSheetName(o.name)) continue;
     const doc = sanitizeSheet(o.doc);
-    if (doc && !validateSheet(doc).some((w) => w.severity === 'error'))
+    // A sheet stored before the DC-input classes existed fails `sheet-dc-inputs` until its author
+    // classifies its voltages (in the JSON, then re-imported). That is no reason to delete retained
+    // work: the sheet stays in the library, and opening it names the voltages that need a class.
+    if (
+      doc &&
+      !validateSheet(doc).some((w) => w.severity === 'error' && w.rule !== 'sheet-dc-inputs')
+    )
       byName.set(o.name, { name: o.name, doc });
   }
   return [...byName.values()];

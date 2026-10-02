@@ -8,7 +8,8 @@
       "value": 0.2,
       "unit": "V",
       "role": "spec",
-      "note": "dropout voltage; this is the pass device's vds at max load, signed to the table axis"
+      "note": "dropout voltage; this is the pass device's vds at max load, signed to the table axis",
+      "class": "independent"
     },
     {
       "name": "I_load_max",

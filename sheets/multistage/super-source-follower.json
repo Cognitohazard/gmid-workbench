@@ -64,7 +64,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "spec",
-      "note": "input-device drain-source"
+      "note": "input-device drain-source",
+      "class": "assumed"
     },
     {
       "name": "vds_fb",
@@ -73,7 +74,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "spec",
-      "note": "feedback-device drain-source"
+      "note": "feedback-device drain-source",
+      "class": "assumed"
     }
   ],
   "uses": [

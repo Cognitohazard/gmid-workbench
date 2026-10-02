@@ -3,7 +3,7 @@
   "description": "The Ahuja (cascode) variant of the two-stage Miller OTA: the compensation cap $C_c$ returns to a low-impedance cascode node instead of directly across the second stage. Routing the compensation current through the common-gate cascode blocks the feedforward path, so the right-half-plane zero that plagues plain Miller compensation is removed and the pole-splitting is better damped — for the same GBW the phase margin comes almost entirely from the second pole. The stage structure mirrors the plain Miller OTA (stage-1 input pair + mirror load, stage-2 common source + load); the added cascode device carries the stage-1 branch current and provides the node $C_c$ returns through. The stage-1 mirror load is diode-bound: at DC balance its output side sits at exactly the diode drop (the zero-systematic-offset condition), so the stage-1 output DC is $VDD - |V_{GS,ld1}|$ by construction rather than a number to retune. Entered from the COMMON MODE like the 5T: the input pair's tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$. The pole and phase-margin rows are ESTIMATE-grade small-signal approximations; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     {
       "name": "CL",
       "value": 5e-12,
@@ -35,7 +35,8 @@
       "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis This sheet carries NO containment edges: stage 1 does not close on sky130-class supplies at these defaults, and a range claim that cannot be tuned honestly would be theater — see the single-stage OTAs for the pattern."
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis This sheet carries NO containment edges: stage 1 does not close on sky130-class supplies at these defaults, and a range claim that cannot be tuned honestly would be theater — see the single-stage OTAs for the pattern.",
+      "class": "independent"
     },
     {
       "name": "V_tail",
@@ -152,7 +153,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "choice",
-      "note": "stage-2 output DC level"
+      "note": "stage-2 output DC level",
+      "class": "assumed"
     },
     {
       "name": "V_casc",
@@ -161,7 +163,8 @@
       "max": 1.0,
       "unit": "V",
       "role": "choice",
-      "note": "cascode node vds (the low-impedance node Cc returns through)"
+      "note": "cascode node vds (the low-impedance node Cc returns through)",
+      "class": "assumed"
     },
     {
       "name": "out_sign",

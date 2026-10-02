@@ -48,7 +48,8 @@
       "value": 0.6,
       "unit": "V",
       "role": "spec",
-      "note": "transconductor drain bias, signed to the table axis"
+      "note": "transconductor drain bias, signed to the table axis",
+      "class": "assumed"
     },
     {
       "name": "vstar_floor",

@@ -3,7 +3,7 @@
   "description": "A complementary common-source (inverter) transconductor: an NMOS and a PMOS input device stacked between the rails share the same bias current, and their gates tie together as the input. Because both devices transconduct the input, the composite transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$ — current reuse buys roughly double the $g_m$ for the same current, so the effective $g_m/I_D$ is $(g_m/I_D)_n + (g_m/I_D)_p$. Gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$ and, for the same current, the input-referred thermal density is about $\\sqrt{2}$ lower than a single device. The cost is supply sensitivity: the bias current and hence $g_m$ depend directly on VDD, so the inverter needs a replica or common-mode bias loop and has poor native PSRR — sim owns the supply rejection. The PMOS device takes a sign param like the mirror-load convention so it binds against either an N-style or a signed-PMOS table.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
     { "name": "Av_target", "value": 30, "unit": "V/V", "role": "spec" },
     { "name": "GBW_target", "value": 20e6, "unit": "Hz", "role": "spec" },
@@ -27,7 +27,8 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level (mid-supply for symmetric swing); sets both devices' vds"
+      "note": "output DC level (mid-supply for symmetric swing); sets both devices' vds",
+      "class": "assumed"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },

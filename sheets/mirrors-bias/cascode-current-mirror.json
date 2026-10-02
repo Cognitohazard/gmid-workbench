@@ -27,7 +27,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "DC level of the node the mirror serves; a cascode mirror needs it high enough to clear two stacked saturation voltages"
+      "note": "DC level of the node the mirror serves; a cascode mirror needs it high enough to clear two stacked saturation voltages",
+      "class": "independent"
     },
     {
       "name": "L",

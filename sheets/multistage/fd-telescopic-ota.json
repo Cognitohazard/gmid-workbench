@@ -3,7 +3,7 @@
   "description": "A fully differential telescopic-cascode OTA. Each side stacks a tail source, an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails; the cascodes boost the output resistance so a single stage reaches high gain. $A_v = g_{m,in} * R_{out}$, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's $r_o$ by its intrinsic gain ($A_{v0,cascn}/g_{ds,in}$); looking up, the PMOS cascode multiplies the load's $r_o$ ($A_{v0,cascp}/g_{ds,load}$). Those branch expressions are the standard cascode approximation (they drop second-order $g_{mb}$ and finite-cascode-gain terms). Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item $I_{cmfb}$ added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Internal node levels are authored choice params with per-device saturation invariants. On the demo NMOS table every device sizes against the same data.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "Av_target", "value": 300, "unit": "V/V", "role": "spec" },
     {
       "name": "swing_target",
@@ -120,7 +120,8 @@
       "max": 0.8,
       "unit": "V",
       "role": "choice",
-      "note": "tail node (input-pair source) DC level"
+      "note": "tail node (input-pair source) DC level",
+      "class": "assumed"
     },
     {
       "name": "V_a",
@@ -129,7 +130,8 @@
       "max": 1.0,
       "unit": "V",
       "role": "choice",
-      "note": "input-device drain / NMOS-cascode source node"
+      "note": "input-device drain / NMOS-cascode source node",
+      "class": "assumed"
     },
     {
       "name": "V_out",
@@ -138,7 +140,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "choice",
-      "note": "output common-mode DC level"
+      "note": "output common-mode DC level",
+      "class": "assumed"
     },
     {
       "name": "V_b",
@@ -147,7 +150,8 @@
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "PMOS-cascode source / load-drain node"
+      "note": "PMOS-cascode source / load-drain node",
+      "class": "assumed"
     },
     {
       "name": "p_sign",

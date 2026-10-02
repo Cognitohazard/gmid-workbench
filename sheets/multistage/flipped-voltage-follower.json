@@ -11,7 +11,8 @@
       "max": 0.4,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level (also the input follower's source node, and the feedback device's drain). Both walls on this level belong to the CELL rather than to the tool, and both MOVE with the inversion knobs and with the process. The floor is the feedback device's own saturation voltage — its drain-source voltage IS the output level, so the output cannot sit below it; a weaker inversion on that device drops the floor. The ceiling is node X minus the input device's saturation voltage — node X is the feedback device's gate-source voltage, so the ceiling tracks it upward. On the demo table at the shipped inversions that window is roughly 0.24 V to 0.37 V"
+      "note": "output DC level (also the input follower's source node, and the feedback device's drain). Both walls on this level belong to the CELL rather than to the tool, and both MOVE with the inversion knobs and with the process. The floor is the feedback device's own saturation voltage — its drain-source voltage IS the output level, so the output cannot sit below it; a weaker inversion on that device drops the floor. The ceiling is node X minus the input device's saturation voltage — node X is the feedback device's gate-source voltage, so the ceiling tracks it upward. On the demo table at the shipped inversions that window is roughly 0.24 V to 0.37 V",
+      "class": "assumed"
     },
     {
       "name": "Rout_target",

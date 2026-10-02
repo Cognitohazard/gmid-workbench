@@ -3,7 +3,7 @@
   "description": "Common-source stage with a diode-connected transistor as the load. The load's low-impedance $\\approx 1/g_m$ sets a gain that is a ratio of transconductances, $A_v = g_{m,in}/(g_{m,load} + g_{ds,in} + g_{ds,load})$, which is well-controlled across process and temperature - the classic teaching load. The load is a composed child (pick its device table to the opposite polarity). Because it is diode-connected, its drain-source voltage equals its own gate-source voltage, so the bind declares the connection and the table is read along that diagonal - there is no drop to estimate, and no polarity knob to set, since the diagonal follows whichever sign convention the table itself uses. The output DC level sits one load $V_{GS}$ below the supply.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
     {

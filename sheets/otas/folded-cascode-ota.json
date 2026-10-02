@@ -3,7 +3,7 @@
   "description": "A folded cascode: the input pair steers current into a folding node, and a cascoded output branch carries it to a high-impedance output. It is the branch-current bookkeeping showcase. The input pair evaluates FIRST at half the tail current; each folding-branch current source is biased at $I_{branch}$, and the output cascode and mirror carry the fold current $I_{fold} = I_{branch} - I_{tail}/2$ — a later child reads the earlier input device's provided current to compute its own bias. The fold current is a real design knob: it must exceed the peak steered current ($I_{tail}/2$) so the branch never starves during slew, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is $g_{m,in}$ times the folded-cascode output resistance; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the folding node $V_{fold}$ and the mirror-drain node $V_c$ are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction. The retired per-device estimates could not even agree on where the folding node sat; the node form makes that inconsistency inexpressible.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
     { "name": "Av_target", "value": 300, "unit": "V/V", "role": "spec" },
     { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
@@ -27,14 +27,16 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95 up to the 1.55 probe ceiling V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show"
+      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95 up to the 1.55 probe ceiling V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "class": "independent"
     },
     {
       "name": "CM_hi",
       "value": 1.45,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way"
+      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "class": "independent"
     },
     {
       "name": "CM_dc",
@@ -43,14 +45,16 @@
       "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis"
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis",
+      "class": "independent"
     },
     {
       "name": "V_out_dc",
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; the NMOS-side nodes climb to it and the folding node descends to it"
+      "note": "output DC level; the NMOS-side nodes climb to it and the folding node descends to it",
+      "class": "assumed"
     },
     {
       "name": "V_tail",
@@ -69,7 +73,8 @@
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "the folding node: input-pair drains, folding-source drain, and PMOS-cascode source in one. The input vds is V_fold - V_tail, the folding source's is VDD - V_fold, and the PMOS cascode's is V_fold - V_out_dc — by construction"
+      "note": "the folding node: input-pair drains, folding-source drain, and PMOS-cascode source in one. The input vds is V_fold - V_tail, the folding source's is VDD - V_fold, and the PMOS cascode's is V_fold - V_out_dc — by construction",
+      "class": "assumed"
     },
     {
       "name": "V_c",
@@ -78,7 +83,8 @@
       "max": 0.6,
       "unit": "V",
       "role": "choice",
-      "note": "the NMOS-side internal node: mirror drain and NMOS-cascode source. The mirror vds is V_c and the cascode's is V_out_dc - V_c, by construction"
+      "note": "the NMOS-side internal node: mirror drain and NMOS-cascode source. The mirror vds is V_c and the cascode's is V_out_dc - V_c, by construction",
+      "class": "assumed"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },

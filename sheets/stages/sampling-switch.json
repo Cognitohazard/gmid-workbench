@@ -62,7 +62,8 @@
       "value": 0.05,
       "unit": "V",
       "role": "spec",
-      "note": "small drain-source probe voltage for the triode on-resistance"
+      "note": "small drain-source probe voltage for the triode on-resistance",
+      "class": "independent"
     },
     {
       "name": "L",

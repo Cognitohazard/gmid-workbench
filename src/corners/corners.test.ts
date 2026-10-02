@@ -10,7 +10,7 @@ import { generateDemoDevice, scaleQuantities, VA_PER_L } from '../demo';
 import { makeGrid } from '../grid';
 import { validateFamilies, validateFamily } from '../qa';
 import { loadLibrary } from '../sheet/library.fixtures';
-import { namedBindings, runSheet, buildSheetRefIndex } from '../sheet';
+import { evaluateSheet, namedBindings, runSheet, buildSheetRefIndex } from '../sheet';
 import type { RuleResult, SheetDoc, SheetResult } from '../sheet';
 import type { Axis, DeviceTable, TableMeta } from '../types';
 import {
@@ -807,6 +807,22 @@ describe('runVariant', () => {
     expect(many[0].result?.warnings).toEqual(
       runVariant(gainDoc(20), family, key('tt'), noFamilies).result?.warnings,
     );
+  });
+
+  it('lists the sheet’s assumed DC inputs on the result of every condition it runs', () => {
+    // The drain bias is V_d, a voltage classed assumed that feeds the one device's sizing, so
+    // each condition's result is sized under exactly [V_d]. A bare evaluation computes no list.
+    const withDrain = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
+    const family = soleFamily([retag(withDrain, 'tt', 27), retag(withDrain, 'tt', 85)]);
+    const doc: SheetDoc = {
+      ...gainDoc(20),
+      params: [...gainDoc(20).params, { name: 'V_d', value: 0.6, unit: 'V', class: 'assumed' }],
+      bind: { L: 'L', gm_id: '12', id: '2e-5', vds: 'V_d' },
+    };
+    const runs = runVariants(doc, family, [key('tt', 27), key('tt', 85)], noFamilies);
+    expect(runs.map((r) => r.state)).toEqual(['evaluated', 'evaluated']);
+    for (const r of runs) expect(r.result?.assumptions).toEqual(['V_d']);
+    expect(evaluateSheet(doc, withDrain).assumptions).toBeUndefined();
   });
 
   it('carries a curated library sheet across two conditions', () => {

@@ -63,7 +63,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "choice",
-      "note": "estimate of the output DC level, used as the device's vds; retune until the headroom-consistent guardrail is green"
+      "note": "estimate of the output DC level, used as the device's vds; retune until the headroom-consistent guardrail is green",
+      "class": "assumed"
     }
   ],
   "bind": {

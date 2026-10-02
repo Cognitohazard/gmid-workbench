@@ -3,7 +3,7 @@
   "description": "The fully differential version of the two-stage Miller OTA: a differential input stage with current-source loads driving a differential common-source second stage, Miller-compensated with $C_c$ on each side. The small-signal frequency plan is the same as the single-ended Miller OTA — GBW = $g_{m1}/(2*\\pi*C_c)$, an RHP zero $z = g_{m2}/C_c$ removed by the $R_z = 1/g_{m2}$ nulling resistor, a second-pole/phase-margin estimate, and SR = $min(I_1/C_c, I_2/C_L)$. Three things genuinely differ in the fully differential form: the stage-1 load is a current source rather than a current mirror, so there is no mirror pole or pole-zero doublet in the signal path (a cleaner frequency response); the differential output swing is twice the single-ended range; and a common-mode feedback loop is needed to set the output common mode, costing supply current. As in the telescopic sheet, the CMFB loop is out of scope (no loop solving) and appears only as the current line item $I_{cmfb}$. The stage-1 output common mode $V_1$ is the node the CMFB loop holds, but it is not a free number: that node is the stage-2 gate, so the loop must hold it exactly one stage-2 $V_{GS}$ from the supply, and the sheet derives it there rather than asking for it. The pole and phase-margin rows are ESTIMATE-grade; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     {
       "name": "CL",
       "value": 5e-12,
@@ -42,7 +42,8 @@
       "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis This sheet carries NO containment edges: stage 1 does not close on sky130-class supplies at these defaults, and a range claim that cannot be tuned honestly would be theater — see the single-stage OTAs for the pattern."
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis This sheet carries NO containment edges: stage 1 does not close on sky130-class supplies at these defaults, and a range claim that cannot be tuned honestly would be theater — see the single-stage OTAs for the pattern.",
+      "class": "independent"
     },
     {
       "name": "V_tail",
@@ -149,7 +150,8 @@
       "max": 1.2,
       "unit": "V",
       "role": "choice",
-      "note": "stage-2 output common-mode DC, set by CMFB"
+      "note": "stage-2 output common-mode DC, set by CMFB",
+      "class": "assumed"
     },
     {
       "name": "ld_sign",

@@ -78,6 +78,7 @@ Each entry in `params` is a named scalar input:
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
 | `solveFor` | string, optional | Makes this parameter a tearing variable and names the value it must agree with, closing a bias loop (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
+| `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: the designer states it and the circuit does not determine it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe). `assumed`: the circuit determines it but the sheet types it instead of solving (an output DC level, an internal stack node, an estimated gate drop). Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a containment edge's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `pin` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `pin` or `solveFor` is *solved*; that class is derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
 
 The `role` separates *what the sheet is for* from *how it gets there*:
 
@@ -932,7 +933,9 @@ silently repairs one.
 3. **Never bias a child with an estimate of that child's own answer.** A hand-tuned
    parameter standing in for a quantity the sheet itself computes is the retired pattern.
    Backstop: the `sheet-standin` validation rule flags a parameter that feeds a child's bias
-   while a rule asserts it equals that child's output.
+   while a rule asserts it equals that child's output. A parameter already classed `assumed`
+   is not flagged, unless the child is diode-connected: the sheet has said it types the level,
+   the rule is how the assumption is checked, and the result lists it among its assumptions.
 4. **Declare wiring identities instead of copying their consequence.** A diode-connected
    device is `diode: true` — resolved exactly on the table's `vds = vgs` diagonal — not a
    hand-copied drop that goes stale when the operating point moves. A device on another

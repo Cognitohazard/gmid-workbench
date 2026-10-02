@@ -44,7 +44,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "drain DC level of the resistor-side device (set by the top mirror)"
+      "note": "drain DC level of the resistor-side device (set by the top mirror)",
+      "class": "assumed"
     },
     {
       "name": "L",

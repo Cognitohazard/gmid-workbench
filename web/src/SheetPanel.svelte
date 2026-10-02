@@ -1147,6 +1147,16 @@
         >at {variantLabel(refKey)}</span
       >
     {/if}
+    <!-- What the verdict rests on: a doc-level fact carried on the result, so it costs nothing
+         here and reads the same whichever condition the reference run is. -->
+    {#if evaluated && result?.assumptions?.length}
+      <span class="sassume" title={CONTROL_HELP.assumptions}
+        >sized under {result.assumptions.length}
+        {result.assumptions.length === 1 ? 'assumption' : 'assumptions'}: {result.assumptions.join(
+          ', ',
+        )}</span
+      >
+    {/if}
     <!-- On demand only: each knob costs two full evaluations, so this never runs with the badge. -->
     <button
       class="sensb"
@@ -1629,6 +1639,12 @@
     font-family: ui-monospace, monospace;
     font-size: calc(0.72rem * var(--text-scale));
     opacity: 0.7;
+  }
+  /* The assumed levels the verdict rests on. Quiet like the condition stamp, but never hidden. */
+  .sassume {
+    font-size: calc(0.72rem * var(--text-scale));
+    opacity: 0.75;
+    font-style: italic;
   }
   .scorners {
     display: flex;

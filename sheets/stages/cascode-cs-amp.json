@@ -3,7 +3,7 @@
   "description": "A telescopic (non-boosted) cascode common-source stage: a common-source input device with a cascode device stacked in series on top, driving a current-source load. The cascode raises the stage output resistance to about $A_{v0,casc}/g_{ds,in}$, so the gain is no longer limited by the input device's own output resistance but by whatever the load presents - here a plain current source, so the load's $g_{ds}$ sets the ceiling. All three devices are composed children carrying the same branch current: the input and cascode in series (the parent cascode bind carries the input's drain current), and the current-source load in parallel at the output. Set load_sign to -1 for a signed-PMOS load table.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     {
       "name": "V_out",
       "value": 0.9,
@@ -11,7 +11,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the cascode and load drain-source voltages"
+      "note": "output DC level; sets the cascode and load drain-source voltages",
+      "class": "assumed"
     },
     {
       "name": "V_x",
@@ -20,7 +21,8 @@
       "max": 0.9,
       "unit": "V",
       "role": "choice",
-      "note": "cascode source (input drain) DC level: raise it for input-device headroom, lower it for cascode headroom"
+      "note": "cascode source (input drain) DC level: raise it for input-device headroom, lower it for cascode headroom",
+      "class": "assumed"
     },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
     { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },

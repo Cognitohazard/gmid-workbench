@@ -19,6 +19,8 @@ import {
   WIRING_KEYS,
   RULE_KINDS,
   RULE_OPS,
+  PARAM_CLASSES,
+  type ParamClass,
   type DeviceTable,
   type SheetDoc,
   type SheetVar,
@@ -397,6 +399,11 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         if (pin && typeof pin.lhs === 'string' && typeof pin.rhs === 'string')
           out.pin = { lhs: pin.lhs, rhs: pin.rhs };
         else dropField(pp.pin !== undefined, `params[${i}].pin`);
+        // A dropped class turns a declared DC input back into an unclassified one, which fails
+        // validation — so an unknown value (including the derived-only "solved") is named here.
+        if (typeof pp.class === 'string' && PARAM_CLASSES.has(pp.class))
+          out.class = pp.class as ParamClass;
+        else dropField(pp.class !== undefined, `params[${i}].class`);
         return [out];
       })
     : [];

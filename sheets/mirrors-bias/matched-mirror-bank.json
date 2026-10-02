@@ -26,7 +26,8 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "DC level of the shared output rail"
+      "note": "DC level of the shared output rail",
+      "class": "independent"
     },
     {
       "name": "L",

@@ -34,7 +34,8 @@
       "value": 0.6,
       "unit": "V",
       "role": "spec",
-      "note": "preamp drain bias, signed to the table axis"
+      "note": "preamp drain bias, signed to the table axis",
+      "class": "assumed"
     },
     {
       "name": "R_L",

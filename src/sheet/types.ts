@@ -63,7 +63,29 @@ export interface SheetVar {
    * MAX_PINNED_PARAMS may exist per sheet — bisection is a scalar method.
    */
   pin?: { lhs: string; rhs: string };
+  /**
+   * What kind of DC sizing input this param is, for a voltage that a device's bias or givens are
+   * built from. `independent` is a voltage the circuit does not determine and the designer
+   * states: a supply, a ground reference, an input common mode, a bias applied from off the
+   * sheet, a characterization probe. `assumed` is one the circuit DOES determine but the sheet
+   * types instead of solving: an output DC level, a stage's internal node, an estimated gate
+   * drop. The two read the same to the engine; the difference is what a result sized under them
+   * is worth, which is why an assumed input is listed with the result of a run
+   * (SheetResult.assumptions).
+   *
+   * A third class, solved, is DERIVED and never written (see dcInputs): the param that
+   * carries a `pin` or a `solveFor` is solved by construction — the names its relation reads are
+   * not thereby solved — and authoring it is a validation error. Absence is legal for a param
+   * that never reaches a device's sizing; a voltage param that does and carries no class is an
+   * error (the `sheet-dc-inputs` rule).
+   */
+  class?: ParamClass;
 }
+
+/** The authorable DC-level classes (see SheetVar.class). `solved` is deliberately absent: it is
+ *  derived from `pin`/`solveFor`, never written. */
+export type ParamClass = 'independent' | 'assumed';
+export const PARAM_CLASSES: ReadonlySet<string> = new Set<ParamClass>(['independent', 'assumed']);
 
 /** Type guard: a param the engine PINS via bracketed inversion (see SheetVar.pin). */
 export function pinned(p: SheetVar): p is SheetVar & { pin: { lhs: string; rhs: string } } {
@@ -381,6 +403,12 @@ export function choiceKnobs(doc: SheetDoc): SheetVar[] {
 export const PROVIDE_SEP = '__';
 export const joinProvide = (useName: string, key: string): string =>
   `${useName}${PROVIDE_SEP}${key}`;
+/** The inverse of joinProvide: `[useName, key]` for a name that reads a child's scalar, split at
+ *  the first separator, or undefined when the name carries none (or starts with one). */
+export const splitProvide = (name: string): [string, string] | undefined => {
+  const at = name.indexOf(PROVIDE_SEP);
+  return at > 0 ? [name.slice(0, at), name.slice(at + PROVIDE_SEP.length)] : undefined;
+};
 
 /** The flat names a child use injects into its parent's scope: exactly what its `provide` list
  *  declares, each joined to the use name. A ref-only use (no embedded doc yet) injects nothing
@@ -491,7 +519,7 @@ export interface SheetDoc {
  * new field belongs HERE, in the same edit that adds it to its interface.
  */
 export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
-  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'pin',
+  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'pin', 'class',
 ]); // prettier-ignore
 export const ROW_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
 export const RULE_KEYS: ReadonlySet<string> = new Set<string>([
@@ -704,6 +732,17 @@ export interface SheetResult {
    * aggregate meaning (this sheet's whole claim stands) and is unaffected by this field.
    */
   covers?: boolean;
+  /**
+   * The params classed `assumed` whose value reaches at least one device's sizing, anywhere in
+   * the tree — the levels this design was sized under rather than solved for. Qualified by use
+   * path below the top sheet (`stage1.V_out`) and in document order, so the list is stable across
+   * evaluations. Empty when the sheet assumes nothing. A doc-level fact from the same walk the
+   * `sheet-dc-inputs` rule makes (see dcInputs), attached where a whole sheet is run — runSheet
+   * and the condition runs — once per document rather than per evaluation. ABSENT on a bare
+   * evaluateSheet result and on every inner one (a child, a solver probe, an edge run): not
+   * computed there, which is not the same as assuming nothing.
+   */
+  assumptions?: string[];
 }
 
 /**
