@@ -1,4 +1,4 @@
-# gm/ID Workbench
+# gm/ID Workbench (Work In Progress)
 
 A browser-based, simulator-agnostic gm/ID characterization viewer, expression/lookup
 engine, and transistor-sizing tool. It runs entirely client-side and ships in two forms:
