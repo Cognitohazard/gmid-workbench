@@ -624,12 +624,15 @@ acyclic by construction. Real circuits are not — but before reaching for the s
 whether the loop is real. Most in this library were **parameterization artifacts**: the 5T OTA's
 famous cycle (the pair's `VGS` sets the tail node it stands on) vanishes entirely when the tail
 node is the declared variable, and a spec like the common mode enters through a `pin` instead.
-Every sheet in the library now closes its bias that way; none tears a node-voltage loop anymore.
+That is how a spec that drives an internal node is solved wherever the node's search range can be
+stated as fixed numbers, as a tail node's can. Not every voltage in the library is derived yet:
+some sheets still type a voltage that their own parts determine. Those voltages are labelled
+`assumed` and listed with each result until they are derived.
 
 `solveFor` remains for the loops that survive reparameterization: a quantity defined in terms of
-the device's *own* answer. The library's live example is the wide-swing mirror's node — a real
-wide-swing bias generator parks the mirror node at the mirror device's own `vdsat` plus a margin,
-and that `vdsat` is only known once the device is sized at that very node:
+the device's *own* answer. One live example is the wide-swing mirror's node — a real wide-swing
+bias generator parks the mirror node at the mirror device's own `vdsat` plus a margin, and that
+`vdsat` is only known once the device is sized at that very node:
 
 ```json
 { "name": "vds_lo", "value": 0.3, "unit": "V", "role": "choice",
@@ -639,21 +642,25 @@ and that `vdsat` is only known once the device is sized at that very node:
 
 The target is any name resolvable in this sheet's namespace once its body has run — a row (as
 here, `wideswing_node = ref__vdsat + node_margin`), a child's provided scalar, or the sheet's own
-sized operating point. `value` is only the starting guess: where the loop contracts to a single
-fixed point, every guess lands on the same answer. A guess still matters when it decides *which*
-fixed point you reach (contraction is local, so a loop can have more than one) or whether the
-iteration gets there at all, so keep it near the value you expect. Because the parameter is
-solved rather than set, the GUI shows it read-only, reporting what it converged to rather than
-what was authored — and there is no companion guardrail to retune, because there is no estimate
-left to drift.
+sized operating point. The source follower is the other live example: its drain-source voltage is
+`VDD - V_in + vgs_est`, and `vgs_est` solves for the device's own `vgs`. It does not pin its
+output node instead, because that node's valid range moves with the supply and a pin's bracket is
+fixed numbers that cannot follow it. `value` is only the starting guess: where the loop contracts
+to a single fixed point, every guess lands on the same answer. A guess still matters when it
+decides *which* fixed point you reach (contraction is local, so a loop can have more than one) or
+whether the iteration gets there at all, so keep it near the value you expect. Because the
+parameter is solved rather than set, the GUI shows it read-only, reporting what it converged to
+rather than what was authored — and there is no companion guardrail to retune, because there is
+no estimate left to drift.
 
 **Without `solveFor` the estimate is whatever the author last typed**, and nothing forces it to
 agree with the design. That is not a small error: an early revision of the library's 5T OTA
 shipped with a default that placed the input pair's drain 6 mV above its `vdsat`, so the sheet
 evaluated `gds` on a device in triode and reported a gain of **1.8 against a target of 15**. In a
 new sheet, prefer (in this order): a node parameterization that never creates the loop, a `pin`
-when a spec must drive an internal node, and `solveFor` only for a genuinely self-referential
-quantity.
+when a spec must drive an internal node whose search range can be stated as fixed numbers, and
+`solveFor` for a genuinely self-referential quantity — including a loop like the source
+follower's, where the node a pin would solve has a range that moves with the supply.
 
 ### What it does and does not guarantee
 

@@ -477,10 +477,34 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     expect(r.independent).toContain('node_margin');
   });
 
-  it('source follower: the estimated gate drop is an assumption, the input level is stated', () => {
-    const r = classes('stages/source-follower.json');
-    expect(r.assumed).toEqual(['vgs_est']);
-    expect(r.independent).toContain('V_in');
+  it('source follower: the gate drop is solved, the supply and the input level are stated', () => {
+    // The drain bias is VDD - V_in + vgs_est, and vgs_est is solved to the device's own vgs, so
+    // the supply and the input level are the voltages that reach the device.
+    expect(classes('stages/source-follower.json')).toEqual({
+      independent: ['VDD', 'V_in'],
+      assumed: [],
+      solved: ['vgs_est'],
+    });
+  });
+
+  it('CS amp, resistive load: the supply is the only voltage; the drain level is derived', () => {
+    // The drain bias is VDD - gm*R_load/gm_id: the supply is the one voltage it reads, and
+    // nothing typed stands in for the output level.
+    expect(classes('stages/cs-amp-resistive-load.json')).toEqual({
+      independent: ['VDD'],
+      assumed: [],
+      solved: [],
+    });
+  });
+
+  it('common gate: the supply and the input level are stated; the drain level is derived', () => {
+    // The drain bias is VDD - I_bias*R_load - V_in and the body bias is V_in, so those two
+    // voltages reach the device and nothing typed stands in for the output level.
+    expect(classes('stages/common-gate.json')).toEqual({
+      independent: ['VDD', 'V_in'],
+      assumed: [],
+      solved: [],
+    });
   });
 });
 

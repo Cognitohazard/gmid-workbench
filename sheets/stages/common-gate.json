@@ -1,19 +1,9 @@
 {
   "title": "Common gate",
-  "description": "A common-gate stage: the input drives the source, the gate is AC-grounded, and the output is taken at the drain. It presents a low input resistance (a current-mode input, so it is the classic input matching / current-buffer stage) and a non-inverting voltage gain $A_v = (g_m + g_{mb} + g_{ds})*par(R_{load}, 1/g_{ds})$ equal in magnitude to a common source. Its current transfer from source to drain is essentially unity, so it passes an input current to the load with a low input impedance. Both figures carry the source-body generator: the input drives the source, so $g_{mb}$ acts in parallel with $g_m$ rather than as a second-order correction. The input resistance is the DIVIDED form $R_{in} = (R_{load} + r_o)/(1 + (g_m + g_{mb})*r_o)$ — the drain load appears at the source divided by the device's own loop gain, which is why the popular $1/(g_m + g_{mb})$ shorthand reads low here. The device source sits at the input DC level $V_{in}$, so the bind declares $V_{SB} = V_{in}$ (body grounded); a table with no $g_{mb}$ column leaves these rows unresolved rather than quietly dropping the term.",
+  "description": "A common-gate stage: the input drives the source, the gate is AC-grounded, and the output is taken at the drain. It presents a low input resistance (a current-mode input, so it is the classic input matching / current-buffer stage) and a non-inverting voltage gain $A_v = (g_m + g_{mb} + g_{ds})*par(R_{load}, 1/g_{ds})$ equal in magnitude to a common source. Its current transfer from source to drain is essentially unity, so it passes an input current to the load with a low input impedance. Both figures carry the source-body generator: the input drives the source, so $g_{mb}$ acts in parallel with $g_m$ rather than as a second-order correction. The input resistance is the DIVIDED form $R_{in} = (R_{load} + r_o)/(1 + (g_m + g_{mb})*r_o)$ — the drain load appears at the source divided by the device's own loop gain, which is why the popular $1/(g_m + g_{mb})$ shorthand reads low here. The load resistor returns to $V_{DD}$ and carries the whole branch current, so the drain sits at $V_{out} = V_{DD} - I_{bias}*R_{load}$. The device source sits at the input DC level $V_{in}$, so the bind declares $V_{DS} = V_{out} - V_{in}$ and $V_{SB} = V_{in}$ (body grounded); a table with no $g_{mb}$ column leaves these rows unresolved rather than quietly dropping the term.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
-    {
-      "name": "V_out",
-      "value": 0.9,
-      "min": 0.2,
-      "max": 1.6,
-      "unit": "V",
-      "role": "spec",
-      "note": "output (drain) DC level",
-      "class": "assumed"
-    },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     {
       "name": "V_in",
       "value": 0.3,
@@ -31,7 +21,7 @@
       "max": 500e3,
       "unit": "ohm",
       "role": "choice",
-      "note": "load resistor at the drain: sets the gain"
+      "note": "load resistor from the drain to VDD: sets the gain, and with the branch current the drain DC level"
     },
     {
       "name": "Rin_target",
@@ -81,15 +71,21 @@
     "L": "L",
     "id": "I_bias",
     "gm_id": "gm_id",
-    "vds": "V_out - V_in",
+    "vds": "VDD - I_bias*R_load - V_in",
     "vsb": "V_in"
   },
   "rows": [
     {
+      "name": "V_out",
+      "expr": "VDD - id*R_load",
+      "unit": "V",
+      "note": "output (drain) DC level: the supply less the drop the branch current makes across the load. The bind writes the same level with I_bias for the current it is bound to, because a bind evaluates before any row"
+    },
+    {
       "name": "Rin",
       "expr": "(R_load + ro)/(1 + (gm + gmb)*ro)",
       "unit": "ohm",
-      "note": "low-frequency input resistance looking into the source, with the drain load carried through: (R_load + ro)/(1 + (gm + gmb)*ro). The finite ro couples the load back to the source, so a heavier R_load raises Rin — the 1/(gm + gmb) shorthand drops that and reads low (on a sky130 tt realization of this stage it gives 4.21 k against a measured 4.73 k)"
+      "note": "low-frequency input resistance looking into the source, with the drain load carried through: (R_load + ro)/(1 + (gm + gmb)*ro). The finite ro couples the load back to the source, so a heavier R_load raises Rin — the 1/(gm + gmb) shorthand drops that and reads low (on a sky130 tt realization of this stage, simulated at a 0.6 V drain-source bias, it gave 4.21 k against a measured 4.73 k)"
     },
     {
       "name": "Rout",

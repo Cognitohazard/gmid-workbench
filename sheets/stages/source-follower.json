@@ -1,6 +1,6 @@
 {
   "title": "Source follower",
-  "description": "A source follower (common-drain buffer): the drain sits at VDD, the source drives the load, and the output tracks the input one gate-source drop below it. The voltage gain $A_v = g_m/(g_m + g_{ds} + 1/R_L)$ is just under unity and the output resistance is about $1/g_m$, so this stage buffers a high-impedance node into a resistive load $R_L$ without voltage gain. The DC level shift is one $V_{GS}$: $V_{out} = V_{in} - V_{GS}$. $V_{GS}$ is not known before sizing, so vgs_est places the operating point and the level-shift-consistent guardrail checks it against the reported $V_{GS}$; retune vgs_est until green. The body is assumed tied to the source ($V_{SB} = 0$), so no body effect appears and $g_{mb}$ drops out of the gain. That is an assumption about the layout, not an algebraic convenience: it requires an isolated body — a deep-n-well NMOS, or the PMOS-in-its-own-well version of this stage. On a bulk-grounded device the source-body generator loads the source directly; measured on a sky130 tt realization at these defaults it is about 52 uS against a 240 uS $g_m$, which pulls the gain from 0.95 down to roughly 0.79 and misses the 0.85 target. In a shared well, this sheet does not describe the circuit.",
+  "description": "A source follower (common-drain buffer): the drain sits at VDD, the source drives the load, and the output tracks the input one gate-source drop below it. The voltage gain $A_v = g_m/(g_m + g_{ds} + 1/R_L)$ is just under unity and the output resistance is about $1/g_m$, so this stage buffers a high-impedance node into a resistive load $R_L$ without voltage gain. The DC level shift is one $V_{GS}$: $V_{out} = V_{in} - V_{GS}$. $V_{GS}$ is not known before sizing, yet the drain-source voltage $V_{DD} - V_{out}$ the device is sized at depends on it, so vgs_est is solved: the engine iterates it until it equals the sized device's own $V_{GS}$, and its stored value is only the starting guess. The body is assumed tied to the source ($V_{SB} = 0$), so no body effect appears and $g_{mb}$ drops out of the gain. That is an assumption about the layout, not an algebraic convenience: it requires an isolated body — a deep-n-well NMOS, or the PMOS-in-its-own-well version of this stage. On a bulk-grounded device the source-body generator loads the source directly; measured on a sky130 tt realization at these defaults it is about 52 uS against a 240 uS $g_m$, which pulls the gain from 0.95 down to roughly 0.79 and misses the 0.85 target. In a shared well, this sheet does not describe the circuit.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -66,8 +66,8 @@
       "value": 0.57,
       "unit": "V",
       "role": "choice",
-      "note": "estimate of the follower vgs, used to place the drain-source bias VDD - V_out; retune until the level-shift-consistent guardrail is green. The shipped value is self-consistent on the demo table; a table with a different threshold wants a different value — on a sky130 tt nfet at these defaults the guardrail lands near 0.77 — and reporting that gap is exactly what the guardrail is for",
-      "class": "assumed"
+      "solveFor": "vgs",
+      "note": "the follower's gate-source drop, which places its drain-source bias at VDD - V_in + vgs_est. Solved, not retuned: the engine iterates it until it equals the sized device's own vgs, so the stored value is only the starting guess, and a table with a different threshold lands somewhere else (near 0.77 V on a sky130 tt nfet at these defaults)"
     }
   ],
   "bind": {
@@ -147,14 +147,6 @@
       "op": ">=",
       "rhs": "10*Rout",
       "note": "the stage is actually buffering only while the load it drives is well above its own output resistance. Ten to one is the convention for that regime, not physics: at exactly ten to one the loaded gain still sits within about ten percent of what an unloaded follower would give, and below it the load, not the device, sets the gain"
-    },
-    {
-      "id": "level-shift-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(vgs - vgs_est)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the biasing vgs_est should match the reported vgs; retune it if this trips"
     }
   ],
   "provide": ["Rout", "cgg_in", "I_q"]

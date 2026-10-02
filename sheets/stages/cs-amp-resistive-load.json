@@ -1,9 +1,9 @@
 {
   "title": "CS amp, resistive load",
-  "description": "Common-source stage with a physical resistor as the load. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor) and $g_m/I_D$ is the efficiency knob; the load resistor $R_{load}$ sets both the gain and the DC drop that eats output headroom. This is the classic gain-vs-headroom trade made explicit: a bigger $R_{load}$ raises the gain but drops more of the supply, so the output DC level $V_{out}$ = VDD - $I*R_{load}$ sinks toward the device's saturation floor. $V_{out}$ is an estimate used to bias the device; the headroom-consistent guardrail checks it against the actual drop, so retune $V_{out}$ (or $R_{load}$) until it is green.",
+  "description": "Common-source stage with a physical resistor as the load. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor) and $g_m/I_D$ is the efficiency knob; the load resistor $R_{load}$ sets both the gain and the DC drop that eats output headroom. This is the classic gain-vs-headroom trade made explicit: a bigger $R_{load}$ raises the gain but drops more of the supply, so the output DC level $V_{out}$ = VDD - $I*R_{load}$ sinks toward the device's saturation floor. The device's drain sits at that level, so its $V_{DS}$ is $V_{out}$ and nothing is typed for it: with $g_m$ and $g_m/I_D$ both bound, the current is $g_m/(g_m/I_D)$, a closed form of the params, and the bind places the drain from it.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
     { "name": "Av_target", "value": 15, "unit": "V/V", "role": "spec" },
@@ -55,23 +55,13 @@
       "unit": "ohm",
       "role": "choice",
       "note": "load resistor: higher R raises the gain but drops more of the supply (less headroom)"
-    },
-    {
-      "name": "V_out",
-      "value": 0.9,
-      "min": 0.05,
-      "max": 1.6,
-      "unit": "V",
-      "role": "choice",
-      "note": "estimate of the output DC level, used as the device's vds; retune until the headroom-consistent guardrail is green",
-      "class": "assumed"
     }
   ],
   "bind": {
     "L": "L",
     "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
     "gm_id": "gm_id",
-    "vds": "V_out"
+    "vds": "VDD - 2*pi*GBW_target*CL*(1 + gbw_margin)*R_load/gm_id"
   },
   "rows": [
     {
@@ -93,10 +83,10 @@
       "note": "DC drop across the load resistor"
     },
     {
-      "name": "V_out_actual",
+      "name": "V_out",
       "expr": "VDD - V_drop",
       "unit": "V",
-      "note": "the output DC level the sized current actually produces"
+      "note": "the output DC level, which is also the device's drain-source voltage. The bind writes the same level with the current expanded as gm/gm_id, because a bind evaluates before any row"
     },
     { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
@@ -131,7 +121,7 @@
     {
       "id": "headroom",
       "kind": "invariant",
-      "lhs": "V_out_actual",
+      "lhs": "V_out",
       "op": ">=",
       "rhs": "vdsat",
       "note": "device saturated at the DC output level the load drop leaves"
@@ -152,14 +142,6 @@
       "op": ">=",
       "rhs": "GBW_target",
       "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
-    },
-    {
-      "id": "headroom-consistent",
-      "kind": "guardrail",
-      "lhs": "abs(V_out_actual - V_out)",
-      "op": "<=",
-      "rhs": "0.05",
-      "note": "the biasing V_out estimate should match the actual VDD - I*R_load; retune V_out or R_load if this trips"
     }
   ],
   "provide": ["Rout", "cgg_in", "I_q"]

@@ -199,9 +199,6 @@ describe('sheet library: vetting lints', () => {
         'otas/telescopic-cascode-ota.json: V_a',
         'otas/telescopic-cascode-ota.json: V_b',
         'stages/cascode-cs-amp.json: V_x',
-        'stages/common-gate.json: V_out',
-        'stages/cs-amp-resistive-load.json: V_out',
-        'stages/source-follower.json: vgs_est',
       ].sort(),
     );
   });

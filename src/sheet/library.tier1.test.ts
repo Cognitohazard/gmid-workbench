@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
-import { runSheet } from './index';
+import { runSheet, withParams, SOLVE_TOL_REL } from './index';
 import {
   table,
   relErr,
@@ -24,6 +24,7 @@ import {
   stage2Rout,
   sheet as libSheet,
   VGS_GMID8_L05,
+  VGS_GMID12_L05,
 } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`stages/${file}`);
@@ -31,9 +32,12 @@ const sheet = (file: string) => libSheet(`stages/${file}`);
 describe('tier1 goldens: CS amp, resistive load', () => {
   const res = runSheet(sheet('cs-amp-resistive-load.json'), table);
   // Defaults: GBW 10 MHz into 2 pF, 1.25 over-design, gm/ID 12, L 0.5 um, R_load
-  // 50 kohm, V_out 0.9 V. VA = 2.5, so gds = id/(2.5 + 0.9).
+  // 50 kohm, VDD 1.8. gm = 2*pi*10M*2p*1.25 = 157.08 uS and id = gm/12 = 13.090 uA, so the
+  // drain sits at VDD - id*R_load = 1.8 - 0.65450 = 1.14550 V, which is the device's vds.
+  // VA = 2.5, so gds = id/(2.5 + 1.14550).
   const gm = 2 * Math.PI * 10e6 * 2e-12 * 1.25;
   const id = gm / 12;
+  const vOut = 1.8 - id * 50e3;
 
   it('binds gm exactly from the spec and derives id', () => {
     expect(res.bind?.ok).toBe(true);
@@ -45,20 +49,59 @@ describe('tier1 goldens: CS amp, resistive load', () => {
   });
 
   it('gain is gm into the load resistor parallel with 1/gds', () => {
-    const gds = id / (VA_PER_L * 0.5e-6 + 0.9);
+    // gds = 13.090u/3.64550 = 3.5907 uS, so Av = 157.08u/(20u + 3.5907u) = 6.6585.
+    const gds = id / (VA_PER_L * 0.5e-6 + vOut);
     const av = gm / (1 / 50e3 + gds);
     expect(relErr(res.values.Av, av)).toBeLessThan(2e-3);
   });
 
-  it('output DC level is VDD minus the load drop', () => {
-    expect(relErr(res.values.V_out_actual, 1.8 - id * 50e3)).toBeLessThan(1e-9);
+  it('output DC level is VDD minus the load drop, and the device is sized there', () => {
+    expect(relErr(res.values.V_out, vOut)).toBeLessThan(1e-9);
+    // The bind writes the level with id expanded as gm/gm_id; the row reads the sized id. Both
+    // supplied quantities are exact, so the two agree to rounding.
+    expect(relErr(res.bind?.bias?.vds ?? NaN, res.values.V_out)).toBeLessThan(1e-9);
+  });
+
+  it('a different load moves the drain by exactly -id*dR, since nothing types it', () => {
+    // R_load 50k -> 60k leaves gm and id alone (both follow from the spec), so the drain falls
+    // by id*10k = 0.13090 V to 1.01460 V, and gds follows it to id/(2.5 + 1.01460).
+    const moved = runSheet(
+      withParams(sheet('cs-amp-resistive-load.json'), { R_load: 60e3 }),
+      table,
+    );
+    const dv = (moved.bind?.bias?.vds ?? NaN) - (res.bind?.bias?.vds ?? NaN);
+    expect(relErr(dv, -id * 10e3)).toBeLessThan(1e-9);
+    expect(relErr(moved.values.V_out, 1.8 - id * 60e3)).toBeLessThan(1e-9);
+    const gds = id / (VA_PER_L * 0.5e-6 + 1.8 - id * 60e3);
+    expect(relErr(moved.values.Rout, par(60e3, 1 / gds))).toBeLessThan(2e-3);
+  });
+
+  it('a different inversion level or over-design factor moves the drain with the current', () => {
+    // gm/ID 12 -> 10 at R_load 50k: gm stays 157.08 uS (the spec fixes it), so id = 157.08u/10 =
+    // 15.708 uA and the drain sits at 1.8 - 15.708u*50k = 1.8 - 0.78540 = 1.01460 V, with gds =
+    // id/(2.5 + 1.01460). A current typed into the bind would leave the drain where it was.
+    const moved = runSheet(withParams(sheet('cs-amp-resistive-load.json'), { gm_id: 10 }), table);
+    const id10 = gm / 10;
+    expect(relErr(moved.values.id, id10)).toBeLessThan(1e-9);
+    expect(relErr(moved.bind?.bias?.vds ?? NaN, 1.8 - id10 * 50e3)).toBeLessThan(1e-9);
+    expect(relErr(moved.values.V_out, 1.8 - id10 * 50e3)).toBeLessThan(1e-9);
+    const gds = id10 / (VA_PER_L * 0.5e-6 + 1.8 - id10 * 50e3);
+    expect(relErr(moved.values.Rout, par(50e3, 1 / gds))).toBeLessThan(2e-3);
+    // gbw_margin 0.25 -> 0.5 at gm/ID 12: gm = 2*pi*10M*2p*1.5 = 188.50 uS, id = 15.708 uA, the
+    // same drain as above. A transconductance typed as a number would leave it where it was.
+    const margin = runSheet(
+      withParams(sheet('cs-amp-resistive-load.json'), { gbw_margin: 0.5 }),
+      table,
+    );
+    const idM = (2 * Math.PI * 10e6 * 2e-12 * 1.5) / 12;
+    expect(relErr(margin.bind?.bias?.vds ?? NaN, 1.8 - idM * 50e3)).toBeLessThan(1e-9);
   });
 
   it('the interface rows are the load resistor paralleled with ro, and the gate capacitance', () => {
     // Rout is the inverse of the denominator the gain already used, so Av = gm*Rout is the same
     // number by construction; what this pins is that the row IS that output node. cgg = W*L*Cox
     // exactly in the demo model, at the width the bind landed on.
-    const gds = id / (VA_PER_L * 0.5e-6 + 0.9);
+    const gds = id / (VA_PER_L * 0.5e-6 + vOut);
     expect(relErr(res.values.Rout, par(50e3, 1 / gds))).toBeLessThan(2e-3);
     expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
     expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
@@ -173,10 +216,11 @@ describe('tier1 goldens: Cascode CS amp', () => {
 
 describe('tier1 goldens: Source follower', () => {
   const res = runSheet(sheet('source-follower.json'), table);
-  // Defaults: I_bias 20 uA, gm/ID 12, L 0.5 um, VDD 1.8, V_in 1.2, vgs_est 0.57,
-  // R_L 100 kohm. Declared vds = VDD - V_in + vgs_est = 1.17, inside the demo hull.
+  // Defaults: I_bias 20 uA, gm/ID 12, L 0.5 um, VDD 1.8, V_in 1.2, R_L 100 kohm. vgs_est is
+  // solved to the device's own vgs, which at gm/ID 12 is 0.567023 V on the demo device
+  // (VGS_GMID12_L05), so vds = VDD - V_in + vgs = 0.6 + 0.567023 = 1.167023, inside the hull.
   const gm = 20e-6 * 12;
-  const vds = 1.17;
+  const vds = 1.8 - 1.2 + VGS_GMID12_L05;
 
   it('binds gm exactly and the follower gain is below unity', () => {
     expect(res.bind?.ok).toBe(true);
@@ -190,14 +234,42 @@ describe('tier1 goldens: Source follower', () => {
     expect(relErr(res.values.Av, av)).toBeLessThan(2e-3);
   });
 
-  it('is self-consistent at defaults: the level-shift guardrail is green with no warnings', () => {
-    // The shipped vgs_est is tuned to the bundled demo device (a sky130-like table wants
-    // ~0.77 V — the param note records it); the guardrail is the retune loop's readout,
-    // so the shipped default must hold it green on the shipped table.
-    const g = res.rules.find((r) => r.id === 'level-shift-consistent');
-    expect(g?.status).toBe('pass');
+  it('the gate drop is solved to the sized vgs and places the drain, with no warnings', () => {
+    // The solve closes when the estimate equals what it names, to the engine's own tolerance
+    // (relative to the larger of the two); the authored 0.57 is only where it starts.
+    expect(Math.abs(res.values.vgs_est - res.values.vgs)).toBeLessThanOrEqual(
+      SOLVE_TOL_REL * Math.max(Math.abs(res.values.vgs_est), Math.abs(res.values.vgs)),
+    );
+    // The fixture vgs is the closed-form inversion; the table interpolates gm/ID on a 10 mV vgs
+    // grid, so the solved drop agrees with it to about 1e-4 relative, inside the 1e-3 used here.
+    expect(relErr(res.values.vgs_est, VGS_GMID12_L05)).toBeLessThan(1e-3);
+    // The gap below is vgs_est - vgs, which the solve closes to SOLVE_TOL_REL relative to the
+    // larger of the two; vds is larger than both, so relative to vds it is smaller still. It is
+    // zero to rounding on the demo device only because its vgs does not depend on vds.
+    expect(relErr(res.bind?.bias?.vds ?? NaN, 1.8 - 1.2 + res.values.vgs)).toBeLessThanOrEqual(
+      SOLVE_TOL_REL,
+    );
     expect(res.feasible).toBe(true);
     expect(res.warnings).toHaveLength(0);
+    expect(res.assumptions).toEqual([]);
+  });
+
+  it('the solved drop follows the device when its inversion level moves', () => {
+    // gm/ID 8 needs vgs = 0.668042 V (VGS_GMID8_L05). V_in moves to 1.3 V so the drain stays
+    // inside the table: vds = 1.8 - 1.3 + 0.668042 = 1.168042 V. A typed estimate would stay at
+    // 0.57 V, 98 mV off.
+    const moved = runSheet(
+      withParams(sheet('source-follower.json'), { gm_id: 8, V_in: 1.3 }),
+      table,
+    );
+    expect(relErr(moved.values.vgs_est, VGS_GMID8_L05)).toBeLessThan(1e-3);
+    expect(Math.abs(moved.values.vgs_est - moved.values.vgs)).toBeLessThanOrEqual(
+      SOLVE_TOL_REL * Math.max(Math.abs(moved.values.vgs_est), Math.abs(moved.values.vgs)),
+    );
+    expect(relErr(moved.bind?.bias?.vds ?? NaN, 1.8 - 1.3 + moved.values.vgs)).toBeLessThanOrEqual(
+      SOLVE_TOL_REL,
+    );
+    expect(moved.warnings).toHaveLength(0);
   });
 
   it('the ten-to-one loading guardrail is the buffering claim, and the load clears it', () => {
@@ -214,15 +286,41 @@ describe('tier1 goldens: Source follower', () => {
 
 describe('tier1 goldens: Common gate', () => {
   const res = runSheet(sheet('common-gate.json'), table);
-  // Defaults: I_bias 20 uA, gm/ID 10, L 0.5 um, V_out 0.9, V_in 0.3, R_load 50 kohm.
-  // gm = 200 uS, gmb = 40 uS, vds = 0.6, VA = 2.5.
+  // Defaults: I_bias 20 uA, gm/ID 10, L 0.5 um, VDD 1.8, V_in 0.3, R_load 50 kohm returned to
+  // VDD. The drain sits at VDD - I_bias*R_load = 1.8 - 1.0 = 0.8 V, so vds = 0.8 - 0.3 = 0.5.
+  // gm = 200 uS, gmb = 40 uS, VA = 2.5, gds = 20u/3.0 = 6.667 uS.
   const gm = 20e-6 * 10;
   const gmb = gmbOf(gm);
-  const gds = 20e-6 / (VA_PER_L * 0.5e-6 + 0.6);
+  const gds = 20e-6 / (VA_PER_L * 0.5e-6 + 0.5);
+
+  it('the drain sits at the supply less the load drop, and the device is sized there', () => {
+    expect(relErr(res.values.V_out, 0.8)).toBeLessThan(1e-9);
+    expect(relErr(res.bind?.bias?.vds ?? NaN, 0.5)).toBeLessThan(1e-9);
+  });
+
+  it('a different load moves the drain by exactly -I_bias*dR, since nothing types it', () => {
+    // R_load 50k -> 40k: the drain rises by 20u*10k = 0.2 V to 1.0 V, so vds = 0.7 and the
+    // drain-side node follows gds to 20u/3.2.
+    const moved = runSheet(withParams(sheet('common-gate.json'), { R_load: 40e3 }), table);
+    expect(relErr(moved.values.V_out - res.values.V_out, 0.2)).toBeLessThan(1e-9);
+    expect(relErr(moved.bind?.bias?.vds ?? NaN, 0.7)).toBeLessThan(1e-9);
+    expect(relErr(moved.values.Rout, 1 / (1 / 40e3 + 20e-6 / 3.2))).toBeLessThan(1e-9);
+  });
+
+  it('a different bias current moves the drain by exactly -dI*R_load', () => {
+    // I_bias 20u -> 16u: the drain rises by 4u*50k = 0.2 V to 1.0 V, so vds = 0.7, gds =
+    // 16u/3.2 = 5 uS, and Rout = 1/(20u + 5u) = 40 kohm. A current typed into the bind would
+    // leave the drain where it was.
+    const moved = runSheet(withParams(sheet('common-gate.json'), { I_bias: 16e-6 }), table);
+    expect(relErr(moved.values.V_out, 1.0)).toBeLessThan(1e-9);
+    expect(relErr(moved.bind?.bias?.vds ?? NaN, 0.7)).toBeLessThan(1e-9);
+    expect(relErr(moved.values.Rout, 40e3)).toBeLessThan(1e-9);
+  });
 
   it('binds gm exactly and Rin carries the drain load back to the source', () => {
     // The input looks into the source, so the finite ro couples R_load back: the resistance
     // is (R_load + ro) divided by the device's own loop gain, not the 1/(gm + gmb) shorthand.
+    // (50k + 150k)/(1 + 240u/6.667u) = 200k/37 = 5.405 kohm.
     expect(res.bind?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     const rin = (50e3 + 1 / gds) / (1 + (gm + gmb) / gds);
@@ -232,12 +330,14 @@ describe('tier1 goldens: Common gate', () => {
   });
 
   it('gain drives the load through gm, gmb, and gds together', () => {
+    // (200u + 40u + 6.667u)/(20u + 6.667u) = 9.25.
     const av = (gm + gmb + gds) / (1 / 50e3 + gds);
     expect(relErr(res.values.Av, av)).toBeLessThan(2e-3);
     // Adding gmb raises the gain by about a fifth. On a sky130 tt realization of this stage
     // that is what carries it past the 10 V/V target (10.57 measured against an 8.72 gm-only
-    // estimate); the demo's Early voltage is lower, so here it lands short and the gain rule
-    // still reads fail. Either way the binding constraint is the input match.
+    // estimate, simulated at a 0.6 V drain-source bias); the demo's Early voltage is lower, so
+    // here it lands short and the gain rule still reads fail. Either way the binding
+    // constraint is the input match.
     expect(res.rules.find((r) => r.id === 'gain-spec')?.status).toBe('fail');
     expect(res.rules.find((r) => r.id === 'input-match')?.status).toBe('fail');
   });
