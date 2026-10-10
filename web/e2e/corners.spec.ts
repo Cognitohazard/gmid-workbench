@@ -255,27 +255,54 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // condition keeps its own answer beside its own label.
   await sp.locator('[data-corner-mode]').selectOption('all');
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
-  await expect(sp.locator('[data-corner-row="tt"]')).toContainText(/closes|does not close/);
-  await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText(/closes|does not close/);
-  // One design across both: sized at the nominal condition, held at the other.
+  // One design across both: sized at the nominal condition, held at the other. The sized row
+  // answers feasibility; the held row answers whether that same design complies there.
   await expect(sp.locator('[data-corner-row="tt"] .cdes')).toHaveText('sized here');
   await expect(sp.locator('[data-corner-row="ss@-40"] .cdes')).toHaveText('held');
-  await expect(sp.locator('.feasb').first()).toContainText(
-    /closes at all 2|does not close —|closure unverified/,
+  await expect(sp.locator('[data-corner-row="tt"] .ccl')).toHaveText('✓ feasible');
+  // Held at ss, the cascode's drain sits past where that table was characterized: asked, and
+  // the data cannot answer — an open question, never a red or green one.
+  await expect(sp.locator('[data-corner-row="ss@-40"] .ccl')).toHaveText('? no answer');
+  await expect(sp.locator('[data-corner-row="ss@-40"]')).toHaveClass(/st-skip/);
+  await expect(sp.locator('[data-corner-row="ss@-40"] .ccd')).toContainText(
+    'the table does not reach this point',
+  );
+  // Two badges: feasibility stamped with where it was asked, compliance as a count of points.
+  await expect(sp.locator('.feasb')).toHaveText('feasible at tt');
+  await expect(sp.locator('[data-compliance]')).toHaveText(
+    'complies at 1 of 2 points · 1 no answer',
   );
 
   // A child bound to a device that is not characterized at every condition: that condition is
   // NOT EVALUATED and says which device is missing — never counted as a design that fails.
   const child = sp.locator('.suse', { hasText: 'cs' });
   await child.locator('.dsel').selectOption({ label: 'nch_lvt' });
-  await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText('not evaluated');
+  await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText('not run');
   await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText('nch_lvt');
-  await expect(sp.locator('[data-corner-row="ss@-40"]')).not.toContainText('does not close');
-  await expect(sp.locator('.feasb').first()).toContainText('not evaluated');
-  await expect(sp.locator('.feasb').first()).not.toContainText('closes at all');
+  await expect(sp.locator('[data-corner-row="ss@-40"]')).not.toContainText('does not comply');
+  // Feasibility is still asked at tt, where the design is sized, and nowhere else. With the
+  // child on that device the tt run starts and does not complete, so the badge says no answer —
+  // with no rule beside it, since nothing was measured — and the count keeps the point that
+  // could not be answered apart from the one that was never asked.
+  await expect(sp.locator('.feasb')).toHaveText('no answer at tt');
+  await expect(sp.locator('[data-compliance]')).toHaveText(
+    'complies at 0 of 2 points · 1 no answer · 1 not run',
+  );
 
   // The design plane and the knob ranking are statements about one point, so they wait for one.
   await expect(sp.locator('.sensb')).toBeDisabled();
+
+  // One condition is its own question, wherever it is: looking at the ss table alone sizes the
+  // design THERE — no table of conditions, the verdict stamped with ss, and the one-point tools
+  // back. Holding the nominal design is what asking about several conditions means.
+  await child.locator('.dsel').selectOption({ index: 0 });
+  await sp.locator('[data-corner-mode]').selectOption('active');
+  await variant(page, 'ss@-40', 'nmos_demo').locator('.dname').click();
+  await expect(sp.locator('.scorntab')).toHaveCount(0);
+  await expect(sp.locator('.scond')).toHaveText('at ss@-40');
+  await expect(sp.locator('.feasb')).toContainText('infeasible');
+  await expect(sp.locator('[data-compliance]')).toHaveCount(0);
+  await expect(sp.locator('.sensb')).toBeEnabled();
 
   await page.screenshot({ path: `${SCREENS}/corner-breakdown.png`, fullPage: true });
   expect(errors).toEqual([]);
@@ -299,12 +326,12 @@ test('sheet panel: a chosen condition that leaves is answered, not forgotten', a
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
 
   // Removing the table behind a chosen condition leaves the choice standing: it is reported as
-  // a condition that could not be evaluated, and it survives a reload that way.
+  // a condition that was not run, and it survives a reload that way.
   await variant(page, 'ss@-40').locator('.drm').click();
-  await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText('not evaluated');
+  await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText('not run');
   await page.reload();
   const sp2 = page.locator('.grid .panel').last();
-  await expect(sp2.locator('[data-corner-row="ss@-40"]')).toContainText('not evaluated');
+  await expect(sp2.locator('[data-corner-row="ss@-40"]')).toContainText('not run');
   await expect(sp2.locator('.ckey.absent', { hasText: 'ss@-40' })).toBeVisible();
 
   expect(errors).toEqual([]);

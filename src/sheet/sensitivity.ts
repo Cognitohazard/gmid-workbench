@@ -12,10 +12,12 @@ import type { DeviceTable } from '../types';
 import {
   choiceKnobs,
   EDGE_SEP,
+  edgeBroke,
   engineSolved,
   stands,
   sweepable,
   treeRuleResults,
+  withoutEdges,
   withParams,
 } from './types';
 import type {
@@ -91,13 +93,6 @@ function select(doc: SheetDoc, names?: readonly string[]): Selected[] {
       };
     return { name, param: p };
   });
-}
-
-/** The same doc with its containment edges dropped — see SensitivityOptions.rule for why a
- *  probe skips them. Structural, so `evaluateSheet` simply never enters the edge path. */
-function withoutEdges(doc: SheetDoc): SheetDoc {
-  const { operatingRange: _edges, ...rest } = doc;
-  return rest;
 }
 
 /** The authored slider span, or undefined when the param is not finitely bounded —
@@ -179,11 +174,27 @@ export function sheetSensitivities(
   const at = (over: Record<string, number>): SheetResult =>
     evaluateSheet(withParams(probeDoc, over), table, resolveDevice);
 
+  // A probe has to have completed wherever it is read. The probe doc carries range ends only
+  // when the rule in question lives on one, and then THAT end leaving no outcomes is a probe
+  // with nothing to difference, exactly like a base run that did not stand. Another range end
+  // having no answer is no obstacle: its rules are simply not among the ones read.
+  const end = opts.rule?.includes(EDGE_SEP)
+    ? opts.rule.slice(0, opts.rule.indexOf(EDGE_SEP))
+    : undefined;
+  const endBroke = (res: SheetResult): boolean =>
+    (res.edges ?? []).some((e) => e.name === end && edgeBroke(e));
+  const whole = (res: SheetResult): boolean => stands(res) && !endBroke(res);
   const base = at({});
   if (!stands(base)) {
     return dead(
       'the sheet does not evaluate at its own values, so there is no point to differentiate ' +
         'around — fix the evaluation first',
+    );
+  }
+  if (endBroke(base)) {
+    return dead(
+      `the range end "${end}" has no rule outcomes at these values, so there is nothing there ` +
+        `to differentiate`,
     );
   }
   const baseRules = treeRuleResults(base);
@@ -219,7 +230,7 @@ export function sheetSensitivities(
     const errors: string[] = [];
     const probes = offsets.map((dx) => {
       const res = at({ [p.name]: p.value + dx });
-      if (stands(res)) return treeRuleResults(res);
+      if (whole(res)) return treeRuleResults(res);
       errors.push(`the evaluation at ${p.name} = ${p.value + dx} did not stand`);
       return undefined;
     });

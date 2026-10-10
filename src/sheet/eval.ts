@@ -12,11 +12,12 @@ import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
-import { diodeGrid } from '../grid';
+import { diodeGrid, offHull } from '../grid';
 import {
   BIAS_AXES,
   MAX_USE_DEPTH,
   PATH_SEP,
+  clampedIn,
   engineSolved,
   holds,
   isHardRule,
@@ -28,8 +29,8 @@ import {
   torn,
   withParams,
 } from './types';
-import { pinHardware, type PinnedHardware } from './coverage';
-import { pinPlan } from './validate';
+import { assumedLevelRefusal, pinHardware, type PinnedHardware } from './coverage';
+import { dcInputs, pinPlan } from './validate';
 import type {
   BindReport,
   RuleResult,
@@ -39,6 +40,7 @@ import type {
   SheetDoc,
   SheetEdge,
   SheetEdgeReport,
+  SheetEdgeState,
   SheetResult,
   SheetVar,
   SheetUse,
@@ -86,6 +88,10 @@ export const MARGIN_SNAP_REL = 1e-5;
  * by hand were 41, 350 and 690 mV).
  */
 export const WIRING_TOL = 0.01;
+
+/** How far a diode-connected device's drain voltage may sit from its gate voltage, relative to
+ *  the gate voltage, before the difference is the table's hull rather than interpolation. */
+const HULL_SNAP = 1e-6;
 
 /** Passes a tearing loop may take and still be unremarkable. Above it the closure is weak or
  *  oscillatory — the designer's two-pass smell — which is worth a note even though the loop
@@ -239,12 +245,22 @@ function applyBindBias(
   scope: Scope,
   warn: (w: QAWarning) => void,
 ):
-  | { table: DeviceTable; bias: Record<string, number>; assumed: string[] }
+  | {
+      table: DeviceTable;
+      bias: Record<string, number>;
+      assumed: string[];
+      clamped: string[];
+      /** A diode connection folded the vds axis; `clamped` when the vgs sweep leaves the
+       *  characterized vds range somewhere, so part of the diagonal reads the table's edge. */
+      diode?: { clamped: boolean };
+    }
   | { error: string; needs?: string[] } {
   let t = table;
   const bias: Record<string, number> = {};
   const needs: string[] = [];
   const assumed: string[] = [];
+  const clamped: string[] = [];
+  let diode: { clamped: boolean } | undefined;
   const slice = (axis: string, live: { values: ArrayLike<number> }, v: number): number => {
     const lo = live.values[0];
     const hi = live.values[live.values.length - 1];
@@ -261,6 +277,7 @@ function applyBindBias(
     const live = t.grid.axes.find((a) => a.name === 'vds' && a.values.length > 1);
     if (live) {
       const fold = diodeTableCached(t);
+      diode = { clamped: fold.clamped };
       // Say it out loud when the diagonal cannot be followed everywhere: past the characterized
       // vds range the fold reads the table's edge, so a diode biased up there is reported at a
       // drop the data never measured. Silently clamping is exactly what this project does not do.
@@ -311,7 +328,10 @@ function applyBindBias(
       // agree — recording the requested value would show an operating point the sizing
       // never used. The requested value survives in the warning only.
       const applied = slice(axis, live, v);
-      if (applied !== v) {
+      // Beyond float rounding only: an expression landing a few ULP outside the axis reads the
+      // end node it was aiming at, which is not a clamp.
+      if (offHull(live.values, v)) {
+        clamped.push(axis);
         warn({
           rule: 'sheet-bind',
           severity: 'warning',
@@ -343,7 +363,7 @@ function applyBindBias(
       needs,
     };
   }
-  return { table: t, bias, assumed };
+  return { table: t, bias, assumed, clamped, ...(diode ? { diode } : {}) };
 }
 
 /** Resolve the bind, call sizeDevice, and merge its operating point into `values`. */
@@ -356,7 +376,7 @@ function runBind(
 ): BindReport {
   // Every bind failure surfaces an error warning AND an ok:false report, so the feasibility
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design).
-  const fail = (error: string, needs?: string[]): BindReport => {
+  const fail = (error: string, needs?: string[], clamped?: string[]): BindReport => {
     warn({ rule: 'sheet-bind', severity: 'error', message: error, location: 'bind' });
     return {
       ok: false,
@@ -366,6 +386,7 @@ function runBind(
       id: NaN,
       error,
       ...(needs?.length ? { needs } : {}),
+      ...(clamped?.length ? { clamped } : {}),
     };
   };
 
@@ -404,6 +425,18 @@ function runBind(
     const report: BindReport = { ok: true, W: res.W, L, vgs: res.vgs, id: res.id };
     if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
     if (sliced.assumed.length) report.assumed = sliced.assumed;
+    const clamped = [...sliced.clamped, ...res.clamped];
+    // A diode connection is read on the vds = vgs diagonal. Where the gate voltage this device
+    // landed on lies past the characterized vds range, the fold read the table's edge instead:
+    // the folded table's own `vds` column says which drain voltage the point was taken at.
+    const vdsRead = res.quantities.vds;
+    if (
+      sliced.diode?.clamped &&
+      Number.isFinite(vdsRead) &&
+      Math.abs(vdsRead - res.vgs) > HULL_SNAP * Math.max(1, Math.abs(res.vgs))
+    )
+      clamped.push('vds');
+    if (clamped.length) report.clamped = clamped;
     return report;
   } catch (e) {
     let m = msg(e);
@@ -411,7 +444,17 @@ function runBind(
     // sheet vocabulary — point the author at the fix.
     if (m.includes('non-degenerate axis'))
       m += ' — declare the operating point in the bind (vds/vsb) to collapse the axis';
-    return fail(`sizing failed: ${m}`);
+    // What the failed sizing was read from still matters to whoever asks what the failure
+    // means: a lookup that ran out of range on a table slice taken at its hull — a clamped
+    // bias axis, a length off the hull, a diode diagonal that leaves the vds range — failed on
+    // data from somewhere else, and says nothing certain about the point that was asked for.
+    const lAxis = sliced.table.grid.axes.find((a) => a.name === 'l');
+    const off = [
+      ...sliced.clamped,
+      ...(lAxis && lAxis.values.length > 0 && offHull(lAxis.values, L) ? ['l'] : []),
+      ...(sliced.diode?.clamped ? ['vds'] : []),
+    ];
+    return fail(`sizing failed: ${m}`, undefined, off);
   }
 }
 
@@ -864,14 +907,11 @@ function evaluateOnce(
     (children?.every((c) => c.feasible) ?? true) &&
     !warnings.some((w) => w.severity === 'error');
 
-  // `closes` starts life equal to `feasible` and is left alone by the edge fold below —
-  // that fold is the ONLY place the two are allowed to diverge.
   return {
     values,
     bind,
     rules,
     feasible,
-    closes: feasible,
     warnings,
     ...(children ? { children } : {}),
   };
@@ -975,7 +1015,6 @@ function solveFailed(res: SheetResult, message: string): SheetResult {
   return {
     ...res,
     feasible: false,
-    closes: false,
     warnings: [...res.warnings, { rule: 'sheet-solve', severity: 'error', message }],
   };
 }
@@ -1454,18 +1493,19 @@ function solvePin(
 }
 
 /**
- * Evaluate a doc that declares containment edges: the base run, then one more complete
- * evaluation per edge with that edge's params overridden. Every run — base and each edge —
+ * Evaluate a doc that declares an operating range: the base run, then one more complete
+ * evaluation per range end with that end's params overridden. Every run — base and each end —
  * takes the default budget of a fresh top-level call: each is a complete evaluation with its own
  * solves to close, and sharing one pool sized for a single solve would starve the later runs into
- * phantom infeasibility. Cost is therefore at most (1 + edge count) full evaluations everywhere the
- * sheet evaluates, sweep cells included — the price of a swept cell never disagreeing with the
- * same numbers evaluated alone. A base run that did not stand costs one, for the reason below.
+ * phantom failures. Cost is therefore at most (1 + range-end count) full evaluations, the price
+ * of a swept sample never disagreeing with the same numbers evaluated alone. A base run that did
+ * not stand costs one, for the reason below.
  *
- * The edge runs are the base run's DESIGN re-measured at another condition (see coverage.ts),
- * which makes them conditional on there being a design at all. When the base run did not stand,
- * every edge comes back `not-checked` rather than carrying a verdict about hardware the engine
- * never landed on — a failed pin leaves its last bisection probe in the result with every bind
+ * Two questions, answered apart. `feasible` is the base run's own verdict and nothing here
+ * touches it. `complies` is whether that design, HELD FIXED (see coverage.ts), still works at
+ * every range end — conditional on there being a design at all. When the base run did not stand,
+ * every end comes back `not-run` rather than carrying a verdict about hardware the engine never
+ * landed on — a failed pin leaves its last bisection probe in the result with every bind
  * reading `ok`, so "the binds sized" is nowhere near enough to have produced an instance. Rule
  * FAILURES do not gate: a center that misses its spec is still a design, and whether it holds
  * across its claimed range is still a real question.
@@ -1480,39 +1520,116 @@ function evaluateWithEdges(
   if (!stands(base)) {
     const reports = edges.map((e): SheetEdgeReport => ({
       name: e.name,
-      feasible: false,
-      state: 'not-checked',
+      state: 'not-run',
       // No `set`: the overrides resolve against the base VALUES, which here are wherever the
-      // failed solve stopped. Reporting the point that would have been proven from those is
-      // reporting a phantom, the same reason a bracket end is never reported as a landing.
+      // failed solve stopped. Reporting the point that would have been asked about from those
+      // is reporting a phantom, the same reason a bracket end is never reported as a landing.
       set: {},
       rules: [],
       solved: {},
       warnings: [],
     }));
-    // No `feasible` override: a base that does not stand carries an error-severity warning,
-    // which evaluateNode has already folded into the `feasible` the spread brings along.
     return { ...base, edges: reports };
+  }
+  // A design resting on an assumed voltage has no answer at a range end: holding a typed guess
+  // fixed while the range moves around it measures the guess. Asked, and declined with the
+  // reason — never run, so no outcome exists that could be mistaken for a finding.
+  const assumed = dcInputs(doc).assumed;
+  if (assumed.length) {
+    const error = assumedLevelRefusal(assumed);
+    const reports = edges.map((e): SheetEdgeReport => ({
+      name: e.name,
+      state: 'no-answer',
+      set: {},
+      rules: [],
+      solved: {},
+      warnings: [],
+      error,
+    }));
+    return { ...base, edges: reports, complies: false };
   }
   const pinned = pinHardware(doc, base);
   const reports = edges.map((e) => runEdge(e, pinned, base, table, resolveDevice));
-  // `closes` rides the spread untouched — it is the base verdict by definition, and this is
-  // the one fold that separates "the design closes" from "the whole claim stands".
-  return {
-    ...base,
-    edges: reports,
-    feasible: base.feasible && reports.every((r) => r.feasible),
-    covers: reports.every((r) => r.state === 'covers'),
-  };
+  return { ...base, edges: reports, complies: reports.every((r) => r.state === 'complies') };
 }
 
-/** One edge: resolve its `set` expressions against the base result, re-evaluate the
+/**
+ * What one evaluation of a HELD design amounts to, as an answer to "does it still work here":
+ * the classification every compliance point shares, whether "here" is a range end or another
+ * process condition.
+ *
+ * - it completed, every device read where it was asked for: `complies` when every hard rule
+ *   holds, else `does-not-comply` (the failures are in the run's rules);
+ * - a device held at its width cannot carry its current here: `does-not-comply`, with `error`;
+ * - it did not complete for any other reason, or completed on data read off the table's hull:
+ *   `no-answer`, with `error` — the solver's message verbatim where there is one.
+ *
+ * An `error` means the run's rule outcomes are not findings about this point.
+ */
+export function heldOutcome(res: SheetResult): {
+  state: Exclude<SheetEdgeState, 'not-run'>;
+  error?: string;
+} {
+  // The SOLVER's own message when one exists — a child's solve failure rolls up mid-evaluation
+  // and later diagnostics (a non-finite parent row) land after it, so "last error" alone reports
+  // the consequence instead of the cause. One reverse scan: remember the last error of any kind
+  // as the fallback, prefer the last sheet-solve. (Reverse loop: the target lib predates
+  // findLast, and a filter would copy the array to read one element.)
+  let err: string | undefined;
+  let lastError: string | undefined;
+  for (let i = res.warnings.length - 1; i >= 0 && err === undefined; i--) {
+    const w = res.warnings[i];
+    if (w.severity !== 'error') continue;
+    lastError ??= w.message;
+    if (w.rule === 'sheet-solve') err = w.message;
+  }
+  err ??= lastError;
+
+  // Before anything else: was every device read where it was asked for? A bias clamp fires
+  // exactly at a claim's extreme, and no verdict — green, red, or "this device cannot carry its
+  // current" — may rest on data taken at the table's edge instead. That holds for a run that
+  // completed and for one whose lookup then ran out of range on the clamped slice.
+  const off = clampedIn(res);
+  if (off.length)
+    return {
+      state: 'no-answer',
+      error:
+        `the table does not reach this point (${off.join(', ')}) — it was read at the nearest ` +
+        `characterized point, which is not the point asked about` +
+        (err === undefined ? '' : `; the run then stopped: ${err}`),
+    };
+  if (err !== undefined) {
+    // A device held at a fixed width can run out of table: the bias here moves the density its
+    // current (or transconductance) needs outside the swept vgs range, and the inverse lookup
+    // says so in its own accurate but width-domain words. Past the TOP of that range the device
+    // cannot carry what the design asks of it — a failure of the design, and the one way a run
+    // that did not complete is still a verdict. Lead with what it means for the question being
+    // asked and keep the lookup's message behind it, where its reach numbers stay quotable.
+    // Below the bottom of the range the device would simply sit at a gate voltage nobody
+    // characterized, which is no answer like any other gap in the data.
+    const reach = LOOKUP_RANGE_MESSAGE.exec(err);
+    if (reach && Number(reach[2]) > Number(reach[4]))
+      return {
+        state: 'does-not-comply',
+        error:
+          `this device cannot ${reach[1] === 'id' ? 'carry its current' : 'reach its transconductance'}` +
+          ` here — ${err}`,
+      };
+    return { state: 'no-answer', error: err };
+  }
+  return { state: res.feasible ? 'complies' : 'does-not-comply' };
+}
+
+/** One range end: resolve its `set` expressions against the base result, re-evaluate the
  *  FIXED-HARDWARE form of the doc with those values (through evaluateNode, so the run cannot
- *  recurse into edges), and report the outcome. An edge that cannot be evaluated at all — a
- *  `set` expression that does not resolve, a solve that fails — does not cover, with the
- *  underlying message VERBATIM in `error`, so a shared-budget starvation stays distinguishable
- *  from "the bracket cannot reach it". Rule-level failures are not errors: they live in `rules`,
- *  like anywhere else. */
+ *  recurse into range ends), and classify the outcome (see SheetEdgeReport.state):
+ *
+ *  - every hard rule holds: `complies`. One fails: `does-not-comply`, the failures in `rules`.
+ *  - a device held at its width cannot carry its current here: `does-not-comply`, with `error`.
+ *  - the run could not be completed — a `set` that does not resolve, a solve that does not
+ *    land — or it completed on data read off the table's hull: `no-answer`, the underlying
+ *    message VERBATIM in `error`, so a shared-budget starvation stays distinguishable from
+ *    "the bracket cannot reach it". */
 function runEdge(
   edge: SheetEdge,
   pinned: PinnedHardware,
@@ -1528,85 +1645,48 @@ function runEdge(
     : undefined;
   const scope = scalarScope(base.values);
   const over: Record<string, number> = {};
+  /** Asked, and nothing was evaluated that could answer. */
+  const unanswered = (error: string): SheetEdgeReport => ({
+    name: edge.name,
+    state: 'no-answer',
+    set: over,
+    rules: [],
+    solved: {},
+    warnings: [],
+    error,
+    ...assumed,
+  });
   // `?? {}`: a half-written edge (no set) is validation's error to name; evaluate never throws.
   for (const [param, expr] of Object.entries(edge.set ?? {})) {
     const v = evalScalar(expr, base.values, scope, NO_WARN, `edge ${edge.name}`);
-    if (v === undefined || !Number.isFinite(v)) {
-      return {
-        name: edge.name,
-        feasible: false,
-        state: 'does-not-cover',
-        set: over,
-        rules: [],
-        solved: {},
-        warnings: [],
-        error:
-          `edge "${edge.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
+    if (v === undefined || !Number.isFinite(v))
+      return unanswered(
+        `edge "${edge.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
           `number against the base result`,
-        ...assumed,
-      };
-    }
+      );
     over[param] = v;
   }
   // A hold with no recorded value has nothing to be held at. Unreachable while the base run
   // stands (a hold that does not evaluate fails it), so this is the closed door behind that.
   if (pinned.unheld.length)
-    return {
-      name: edge.name,
-      feasible: false,
-      state: 'does-not-cover',
-      set: over,
-      rules: [],
-      solved: {},
-      warnings: [],
-      error:
-        `edge "${edge.name}": no nominal value was recorded for the held expression of ` +
+    return unanswered(
+      `edge "${edge.name}": no nominal value was recorded for the held expression of ` +
         pinned.unheld.join(', '),
-      ...assumed,
-    };
+    );
   const res = evaluateTop(withParams(pinned.doc, over), table, resolveDevice);
-  // `error` promises the SOLVER's own message when one exists — a child's solve failure
-  // rolls up mid-evaluation and later diagnostics (a non-finite parent row) land after
-  // it, so "last error" alone reports the consequence instead of the cause. One reverse
-  // scan: remember the last error of any kind as the fallback, prefer the last
-  // sheet-solve. (Reverse loop: the target lib predates findLast, and a filter would
-  // copy the array to read one element.)
-  let err: string | undefined;
-  if (!res.feasible) {
-    let lastError: string | undefined;
-    for (let i = res.warnings.length - 1; i >= 0 && err === undefined; i--) {
-      const w = res.warnings[i];
-      if (w.severity !== 'error') continue;
-      lastError ??= w.message;
-      if (w.rule === 'sheet-solve') err = w.message;
-    }
-    err ??= lastError;
-    // A device held at a fixed width can run out of table: the endpoint bias moves the density
-    // its authored current (or transconductance) needs outside the swept vgs range, and the
-    // inverse lookup says so in its own accurate but width-domain words. That failure cannot
-    // arise while a range end is free to re-size the device — any gm/ID inside the ceiling lands
-    // — so it comes with no vocabulary of its own. Lead with what it MEANS for the question being
-    // asked and keep the lookup's message behind it, where its reach numbers stay quotable.
-    const reach = err === undefined ? null : LOOKUP_RANGE_MESSAGE.exec(err);
-    if (reach)
-      err =
-        `this device cannot ${reach[1] === 'id' ? 'carry its authored current' : 'reach its authored transconductance'}` +
-        ` at the endpoint bias — ${err}`;
-  }
-  // The solved map is "where the edge LANDED" — an errored run (a pin that never landed)
-  // leaves the values at the last probe, which must not be reported as a landing.
+  const { state, error: err } = heldOutcome(res);
+  // The solved map is "where the edge LANDED" — a run with an `error` (a pin that never landed,
+  // data read somewhere else) leaves values that must not be reported as a landing.
   const solved: Record<string, number> = {};
   if (err === undefined)
     for (const p of pinned.doc.params)
       if (engineSolved(p) && Number.isFinite(res.values[p.name]))
         solved[p.name] = res.values[p.name];
-  // The run's warnings ride the report VERBATIM (never merged into the parent's): a bias
-  // clamp fires exactly at a claim's extreme, and a green chip must not rest on silently
-  // clamped data — but the base result's warning contract stays untouched.
+  // The run's warnings ride the report VERBATIM (never merged into the parent's), so the base
+  // result's warning contract stays untouched.
   return {
     name: edge.name,
-    feasible: res.feasible,
-    state: res.feasible ? 'covers' : 'does-not-cover',
+    state,
     set: over,
     rules: res.rules,
     ...(res.children ? { children: res.children } : {}),

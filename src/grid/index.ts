@@ -440,6 +440,19 @@ export function orient(xs: Float64Array, ys: Float64Array): Oriented {
 const EDGE_SNAP_REL = 1e-9;
 
 /**
+ * Whether `v` lies outside an ascending axis's range by more than float rounding — the same
+ * tolerance `interp1` snaps in. An expression such as `0.3 - (0.1 + 0.2)` lands a few ULP below
+ * zero; reading the axis's first node for it is not reading the table somewhere else, and must
+ * not be reported as if it were.
+ */
+export function offHull(values: ArrayLike<number>, v: number): boolean {
+  const lo = values[0];
+  const hi = values[values.length - 1];
+  const tol = (hi - lo) * EDGE_SNAP_REL + Number.EPSILON;
+  return v < lo - tol || v > hi + tol;
+}
+
+/**
  * Linear interpolation of an ascending (nx, ny) curve at xq. Returns NaN outside the
  * native range — a gap, never an extrapolation. A query a few ULP past either end (from
  * float rounding in the X expression, which can differ curve-to-curve at a shared bias)

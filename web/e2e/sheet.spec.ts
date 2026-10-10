@@ -1146,7 +1146,7 @@ test('discoverability: device bar counts from the first import, child picker lab
   await expect(page.locator('header .device .prov')).toContainText('nmos_demo');
 });
 
-test('containment edges: chips report each range end; a dead edge names the solver reason', async ({
+test('operating range: chips report each range end; an end the solve cannot reach is no answer, with the reason', async ({
   page,
 }) => {
   await page.goto('/');
@@ -1164,25 +1164,41 @@ test('containment edges: chips report each range end; a dead edge names the solv
   await expect(chips.nth(1)).toContainText('cm-hi');
 
   // The strip and the sweep legend both name the QUESTION a range end answers. A chip says
-  // whether the design covers that end; the curve says by how much. Locked here because the
-  // two words are the whole point of keeping the questions apart, and prose drifts silently.
-  await expect(sp.locator('.sedges .glabel')).toHaveText('range coverage');
+  // whether the held design complies at that end; the curve says by how much. Locked here
+  // because the words are the whole point of keeping the two questions apart, and prose drifts
+  // silently.
+  await expect(sp.locator('.sedges .glabel')).toHaveText('operating range');
+  // The second question has its own badge, a count of points: the centre and the two ends.
+  // On the demo device the design misses its offset budget where it is sized and again at the
+  // low end; the high end sits past the table's drain range, so it is no answer.
+  await expect(sp.locator('[data-compliance]')).toHaveText(
+    'complies at 0 of 3 points · 2 fail · 1 no answer',
+  );
+  await expect(sp.locator('.feasb')).toContainText('infeasible');
+  await expect(sp.locator('.feasb i')).toContainText('offset-spec');
+  await expect(chips.nth(0)).toHaveClass(/\bno\b/);
+  await expect(chips.nth(1)).toHaveClass(/skip/);
   await sp.locator('.swsel select').selectOption('CM_dc');
   await expect(sp.locator('.pchart canvas')).toBeVisible();
-  await expect(sp.locator('.skey')).toContainText('covers cm-lo');
-  await expect(sp.locator('.scap')).toContainText('each sample checks its OWN design');
+  await expect(sp.locator('.skey')).toContainText('complies at cm-lo');
+  await expect(sp.locator('.scap')).toContainText('each sample holds its OWN design');
 
-  // Make the low edge unreachable: no tail-node position produces CM_in = 0.3 (the demo
-  // table's diode drop alone exceeds it) — the chip must carry the solver's reason, not a
-  // generic red.
+  // Make the low end unreachable: no tail-node position produces CM_in = 0.3 (the demo
+  // table's diode drop alone exceeds it). Nothing was measured there, so the chip is neither
+  // red nor green — it is an open question, and it carries the solver's reason.
   const lo = sp.locator('.svar[data-param="CM_lo"] .num');
   await lo.fill('0.3');
   await lo.blur();
-  await expect(chips.nth(0)).toHaveClass(/no/);
-  await expect(chips.nth(0)).toContainText(/does not change sign/);
+  await expect(chips.nth(0)).toHaveClass(/skip/);
+  await expect(chips.nth(0)).not.toHaveClass(/\bno\b/);
+  await expect(chips.nth(0)).toContainText('?');
+  await expect(chips.nth(0)).toContainText(/no answer — .*does not change sign/);
+  await expect(sp.locator('[data-compliance]')).toHaveText(
+    'complies at 0 of 3 points · 1 fail · 2 no answer',
+  );
 });
 
-test('containment edges: an unchecked range end reads as a question nobody asked, not a failure', async ({
+test('operating range: a range end that was not run reads as a question nobody asked, not a failure', async ({
   page,
 }) => {
   await page.goto('/');
@@ -1195,12 +1211,12 @@ test('containment edges: an unchecked range end reads as a question nobody asked
 
   // Push the CENTRE past what the tail node can produce (still inside CM_dc's own slider, so
   // this is a point the sweep and the picker both visit). There is now no design at all here,
-  // so neither range end can be checked against one — and the whole reason the engine reports
-  // that as its own outcome is that showing it as a failure would answer a question it never
-  // asked. A red "cm-lo infeasible" beside an empty design is a statement about the claimed
-  // range that nothing measured.
-  // At the default centre both ends ARE checked and read red, so the strip starting from a
-  // state this test would fail on is what makes the transition below mean something.
+  // so neither range end has a design to hold — and the whole reason the engine reports that as
+  // its own outcome is that showing it as a failure would answer a question it never asked. A
+  // red "cm-lo" beside an empty design is a statement about the claimed range that nothing
+  // measured.
+  // At the default centre the low end IS run and reads red, so the strip starting from a state
+  // this test would fail on is what makes the transition below mean something.
   await expect(chips.nth(0)).toHaveClass(/no/);
 
   const cm = sp.locator('.svar[data-param="CM_dc"] .num');
@@ -1210,10 +1226,18 @@ test('containment edges: an unchecked range end reads as a question nobody asked
   for (const i of [0, 1]) {
     await expect(chips.nth(i)).toHaveClass(/skip/);
     await expect(chips.nth(i)).not.toHaveClass(/\bno\b/);
-    await expect(chips.nth(i)).toContainText('not checked');
+    await expect(chips.nth(i)).toContainText('not run');
     await expect(chips.nth(i)).not.toContainText('infeasible');
     await expect(chips.nth(i)).not.toContainText('✗');
   }
+  // The centre's own solve did not land: feasibility has no answer, and the badge names no
+  // rule — a margin read where the solve stopped is not a cause. The count keeps the centre
+  // (asked, unanswered) apart from the two ends (never asked).
+  await expect(sp.locator('.feasb')).toHaveText('no answer');
+  await expect(sp.locator('[data-compliance]')).toHaveText(
+    'complies at 0 of 3 points · 1 no answer · 2 not run',
+  );
+  await expect(sp.locator('[data-not-evaluated] b').first()).toHaveText('no answer at tt');
 
   // Recentre: the same two ends go back to being answerable, so the neutral state is a
   // property of the point and not a latch.

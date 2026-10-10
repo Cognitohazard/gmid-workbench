@@ -202,14 +202,16 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     const margin = (id: string): number => lo!.rules.find((r) => r.id === id)!.marginPct;
     expect(margin('gain-spec')).toBeCloseTo(-0.185759, 6);
     expect(margin('offset-spec')).toBeCloseTo(-0.4126382, 6);
+    expect(lo?.state).toBe('does-not-comply'); // measured, and two specs fail there
     // cm-hi is the case where the pin never LANDS (cm-lo landed and merely fails its rules), and
     // the only honest assertions about it are the three the engine actually vouches for. Its
-    // tail-node pin finds no sign change anywhere in the bracket, so there is no design at that
-    // end to measure at all. Whatever the bisection was holding when it gave up is the last
-    // PROBE, not a landing — locking those numbers would be asserting an operating point the run
-    // never reached, and `solved` is left empty precisely so no consumer can go looking for one.
+    // tail-node pin finds no sign change anywhere in the bracket, so nothing was measured at that
+    // end: it is no answer, not a failure. Whatever the bisection was holding when it gave up is
+    // the last PROBE, not a landing — locking those numbers would be asserting an operating point
+    // the run never reached, and `solved` is left empty precisely so no consumer can go looking
+    // for one.
     const hi = res.edges?.find((e) => e.name === 'cm-hi');
-    expect(hi?.state).toBe('does-not-cover');
+    expect(hi?.state).toBe('no-answer');
     expect(hi?.error).toMatch(/does not change sign/);
     expect(hi?.solved).toEqual({});
   });
@@ -361,23 +363,22 @@ describe('tier-3 goldens: inverter-based OTA', () => {
   });
 });
 
-describe('containment honesty on the demo table', () => {
+describe('operating-range honesty on the demo table', () => {
   // The claimed CM ranges are tuned against real sky130 data. On the demo device the
-  // current-mirror OTA's CM_hi (1.35 V) is genuinely unreachable — the tail bracket plus
-  // the demo diode drop cap the producible common mode near 1.1 V — so the cm-hi edge
-  // must FAIL and the sheet must read infeasible on this table. That is the kit working,
-  // not a regression: before edges, the identical false claim simply went unchecked and
-  // the sheet read feasible. Locked as a golden so the flip stays ASSERTED intent.
+  // current-mirror OTA's CM_hi (1.35 V) is unreachable — the tail bracket plus the demo diode
+  // drop cap the producible common mode near 1.1 V — so the tail-node solve finds no landing at
+  // cm-hi. The design is feasible where it is sized; what it cannot be given on this table is a
+  // compliance answer at that end. Locked as a golden so neither half is lost: the range end
+  // must never read as complying, and must never drag feasibility down with it.
   const res = runSheet(sheet('current-mirror-ota.json'), table);
 
-  it('the unreachable cm-hi edge fails with the solver reason and gates the verdict', () => {
-    expect(res.feasible).toBe(false);
+  it('the unreachable cm-hi end is no answer, with the solver reason, and feasibility stands', () => {
+    expect(res.feasible).toBe(true);
     const hi = res.edges?.find((e) => e.name === 'cm-hi');
-    expect(hi?.feasible).toBe(false);
-    expect(hi?.state).toBe('does-not-cover'); // checked, and it broke — not "never checked"
+    expect(hi?.state).toBe('no-answer'); // asked, and nothing landed — not "never asked"
     expect(hi?.error).toMatch(/does not change sign/);
     expect(hi?.solved).toEqual({}); // a bracket end is never reported as a landing
-    expect(res.covers).toBe(false);
+    expect(res.complies).toBe(false);
   });
 
   it('the reachable cm-lo end lands the tail node where the fixed design puts it', () => {
@@ -385,7 +386,7 @@ describe('containment honesty on the demo table', () => {
     // produce settles the tail 0.65% higher than it did when the endpoint was free to re-size
     // the devices around it (0.38292 → 0.38542). Locked as intent, not as a regression.
     const lo = res.edges?.find((e) => e.name === 'cm-lo');
-    expect(lo?.state).toBe('covers');
+    expect(lo?.state).toBe('complies');
     expect(lo?.solved.V_tail).toBeCloseTo(0.385423, 6);
   });
 });

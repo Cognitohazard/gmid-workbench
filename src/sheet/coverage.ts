@@ -7,9 +7,10 @@
 // Pure and structural: no expression is introspected, and nothing here evaluates. The mechanism
 // is entirely "rewrite the bind, then let the existing machinery run" — the pin bisection, the
 // vds subtractions and the (W, id) inversion all already re-settle a fixed device at a new bias,
-// so no new solver appears anywhere in this file. Internal to the sheet engine (eval.ts is the
-// only caller); it is not on the public barrel because a caller outside the engine has no doc to
-// hand it that the engine has not already produced a base result for.
+// so no new solver appears anywhere in this file. Internal to the engine — the range-end runs in
+// eval.ts and the condition runs in corners/ are the callers — and not on the public barrel,
+// because a caller outside them has no doc to hand it that the engine has not already produced
+// a base result for.
 
 import { BINDABLE } from '../device';
 import { blockPath, holdAsPin, holds, PATH_SEP } from './types';
@@ -67,6 +68,40 @@ export interface PinnedHardware {
    *  caller must not report a run of this document as fixed hardware while any are listed. */
   unheld: string[];
 }
+
+/**
+ * A held design with its claimed operating range pinned to the numbers the base run resolved it
+ * to. The range describes the APPLICATION — the input levels and loads the circuit is promised
+ * to work across — which does not move with the silicon, so an end written as an expression
+ * (`V_out - 0.2`) is the same voltage at every process condition, not re-read from each
+ * condition's own operating point. An end the base run could not resolve keeps its expression
+ * and fails to resolve the same way everywhere.
+ */
+export function withNominalRange(
+  held: PinnedHardware,
+  base: { edges?: readonly { set: Record<string, number> }[] },
+): PinnedHardware {
+  const ends = held.doc.operatingRange;
+  if (!Array.isArray(ends) || !base.edges) return held;
+  const operatingRange = ends.map((e, i) => {
+    const at = base.edges?.[i]?.set ?? {};
+    const set = Object.fromEntries(
+      Object.entries(e.set ?? {}).map(([k, expr]) => [k, k in at ? numExpr(at[k]) : expr]),
+    );
+    return { ...e, set };
+  });
+  return { ...held, doc: { ...held.doc, operatingRange } };
+}
+
+/** Why a design sized under assumed voltages is not asked whether it still works anywhere else.
+ *  An `assumed` level is one the sheet's own parts determine and the author typed instead: held
+ *  fixed while the conditions around it move, it stops being even an estimate, so every answer
+ *  that rests on it is declined rather than given. One wording, for a range end and for another
+ *  process condition alike. */
+export const assumedLevelRefusal = (assumed: readonly string[]): string =>
+  `the design is sized under assumed ${assumed.length === 1 ? 'level' : 'levels'} ` +
+  `${assumed.join(', ')} — a typed value held fixed says nothing about the hardware. Derive ` +
+  `it, or class it independent if nothing on the sheet sets it`;
 
 /**
  * Rewrite every bind in `doc` to the fixed-hardware form of the design `base` reports, so a

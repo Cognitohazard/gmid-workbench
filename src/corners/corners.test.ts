@@ -9,9 +9,9 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice, scaleQuantities, VA_PER_L } from '../demo';
 import { makeGrid } from '../grid';
 import { validateFamilies, validateFamily } from '../qa';
-import { loadLibrary } from '../sheet/library.fixtures';
-import { evaluateSheet, namedBindings, runSheet, buildSheetRefIndex } from '../sheet';
-import type { RuleResult, SheetDoc, SheetResult } from '../sheet';
+import { loadLibrary, REFS, table as libTable } from '../sheet/library.fixtures';
+import { clampedIn, evaluateSheet, namedBindings, buildSheetRefIndex } from '../sheet';
+import type { RuleResult, SheetDoc, SheetEdgeReport, SheetResult } from '../sheet';
 import type { Axis, DeviceTable, TableMeta } from '../types';
 import {
   aggregateVariantRuns,
@@ -555,52 +555,6 @@ describe('namedBindings', () => {
   });
 });
 
-// --- the additive closes field ----------------------------------------------
-
-describe('SheetResult.closes', () => {
-  const edgeless = (over: Partial<SheetDoc> = {}): SheetDoc => ({
-    title: 'c',
-    polarity: 'n',
-    params: [{ name: 'L', value: 0.5e-6 }],
-    givens: { L: 'L', gm_id: '12', id: '2e-5' },
-    equations: [],
-    checks: [],
-    ...over,
-  });
-
-  it('equals feasible on every sheet that claims no range', () => {
-    const cases: Record<string, SheetDoc> = {
-      closing: edgeless(),
-      failing: edgeless({
-        checks: [{ id: 'no', kind: 'physical', lhs: '0', op: '>=', rhs: '1' }],
-      }),
-      // Two operating-point selectors: a validation error, which blocks both verdicts.
-      'structurally broken': edgeless({ givens: { L: 'L', gm_id: '12', ft: '2e9' } }),
-      // A pin whose relation never reaches its target: the solver marks the run infeasible
-      // from inside, which must carry `closes` down with it.
-      'unsolvable pin': edgeless({
-        params: [
-          {
-            name: 'x',
-            value: 1,
-            min: 0,
-            max: 10,
-            designConstraint: { lhs: '2*x + 1', rhs: '0.5' },
-          },
-          { name: 'L', value: 0.5e-6 },
-        ],
-      }),
-    };
-    for (const [name, doc] of Object.entries(cases)) {
-      const res = runSheet(doc, dev);
-      expect(res.closes, name).toBe(res.feasible);
-    }
-    expect(runSheet(cases.closing, dev).closes).toBe(true);
-    expect(runSheet(cases.failing, dev).closes).toBe(false);
-    expect(runSheet(cases['structurally broken'], dev).closes).toBe(false);
-  });
-});
-
 // --- one run, one condition --------------------------------------------------
 
 /** The pinned-node idiom the library writes: y = 2x + 1 solved to the typed spec T, with the
@@ -661,14 +615,15 @@ describe('runVariant', () => {
   const tailFamily = (...tables: DeviceTable[]): CornerFamily =>
     soleFamily(tables.map((t) => ({ ...t, id: { ...t.id, device: 'nch_tail' } })));
 
-  it('evaluates at the requested condition and reports both verdicts', () => {
+  it('evaluates at the requested condition and reports feasibility and its points', () => {
     const run = runVariant(gainDoc(20), primary, key('tt', 85), noFamilies);
     expect(run.state).toBe('evaluated');
     if (run.state !== 'evaluated') return;
     expect(run.key).toEqual(key('tt', 85));
-    expect(run.closes).toBe('pass');
-    // No containment edges: coverage was never asked, which is not a gap.
-    expect(run.covers).toBe('unchecked');
+    expect(run.design).toBe('sized');
+    expect(run.feasible).toBe(true);
+    // No operating range declared: the one compliance point is the design's own centre.
+    expect(run.points).toEqual([{ state: 'complies' }]);
   });
 
   it('reports the two conditions differently when the characterizations differ', () => {
@@ -685,13 +640,10 @@ describe('runVariant', () => {
     const cold = runVariant(doc, family, key('ss', -40), noFamilies);
     expect([fast.state, cold.state]).toEqual(['evaluated', 'evaluated']);
     if (fast.state !== 'evaluated' || cold.state !== 'evaluated') return;
-    expect(fast.closes).toBe('pass');
-    expect(cold.closes).toBe('fail');
+    expect(fast.feasible).toBe(true);
+    expect(cold.feasible).toBe(false);
+    expect(cold.points).toEqual([{ state: 'does-not-comply' }]);
     expect(fast.result.values.A / cold.result.values.A).toBeCloseTo(2, 6);
-
-    const agg = aggregateVariantRuns([fast, cold], false);
-    expect(agg.closes).toBe('fails');
-    expect(agg.counts).toEqual({ pass: 1, fail: 1, unavailable: 0 });
   });
 
   it('refuses a condition the primary device is not characterized at', () => {
@@ -800,7 +752,9 @@ describe('runVariant', () => {
   const twoCorners = (): CornerFamily => soleFamily([retag(dev, 'tt', 27), weak()]);
   /** A run's whole answer apart from the numbers: state, verdicts, and any refusals. */
   const verdict = (r: VariantRun): unknown =>
-    r.state === 'evaluated' ? [r.state, r.key, r.closes, r.covers] : [r.state, r.key, r.issues];
+    r.state === 'evaluated'
+      ? [r.state, r.key, r.feasible, r.points]
+      : [r.state, r.key, r.issues, r.points];
 
   it('sizes the design at the base condition exactly as a single run does', () => {
     // The set shares the single run's state machine for the condition the design is sized at;
@@ -851,13 +805,19 @@ describe('runVariant', () => {
     expect(ss.result.values.eff).toBeLessThan(12);
   });
 
-  it('sizes at the base even when the base is not one of the conditions asked about', () => {
+  it('answers at the base first, even when the base is not one of the conditions asked about', () => {
+    // Feasibility is the base condition's verdict, so its run is part of every answer: asked
+    // about ss alone with tt as the base, the set is tt (sized) and then ss (held).
     const family = twoCorners();
     const doc = gainDoc(0);
-    const [ss] = runVariants(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'));
+    const runs = runVariants(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'));
+    expect(runs.map((r) => [r.key, r.design])).toEqual([
+      [key('tt'), 'sized'],
+      [key('ss', -40), 'held'],
+    ]);
     const tt = runVariant(doc, family, key('tt'), noFamilies);
-    expect(ss.state === 'evaluated' && ss.design).toBe('held');
-    expect(ss.result?.bind?.W).toBe(tt.result?.bind?.W);
+    expect(runs[0]).toEqual(tt);
+    expect(runs[1].result?.bind?.W).toBe(tt.result?.bind?.W);
   });
 
   it('takes a single condition as its own base', () => {
@@ -894,7 +854,7 @@ describe('runVariant', () => {
     // The base (ff) is not characterized, so nothing can be held anywhere. But xx is not
     // characterized either, and that is the more useful thing to say about xx: importing the
     // missing table is its fix, whatever happens at the base.
-    const [ss, xx] = runVariants(
+    const [ff, ss, xx] = runVariants(
       gainDoc(20),
       twoCorners(),
       [key('ss', -40), key('xx')],
@@ -902,9 +862,19 @@ describe('runVariant', () => {
       undefined,
       key('ff'),
     );
+    expect(ff.design).toBe('sized');
+    expect(ff.state === 'not-evaluated' && ff.issues.map((i) => i.kind)).toEqual([
+      'absent-variant',
+    ]);
     expect(ss.state === 'not-evaluated' && ss.issues.map((i) => i.kind)).toEqual(['no-design']);
     expect(xx.state === 'not-evaluated' && xx.issues.map((i) => i.kind)).toEqual([
       'absent-variant',
+    ]);
+    // None of the three was asked anything: no table, or no design to hold.
+    expect([ff, ss, xx].flatMap((r) => r.points.map((p) => p.state))).toEqual([
+      'not-run',
+      'not-run',
+      'not-run',
     ]);
   });
 
@@ -917,7 +887,7 @@ describe('runVariant', () => {
       givens: { L: 'L', gm_id: '12', gm: '2.4e-4' },
     };
     const run = (doc: SheetDoc): VariantRun =>
-      runVariants(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'))[0];
+      runVariants(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'))[1];
     const a = run(derived);
     const b = run(gainDoc(0));
     expect(a.state === 'evaluated' && a.assumedSource).toEqual(['bind']);
@@ -953,11 +923,262 @@ describe('runVariant', () => {
     ]);
     expect(other.state === 'not-evaluated' && other.issues[0].message).toContain('V_d');
 
+    // Feasibility holds nothing fixed, so it still reports. Compliance has no answer anywhere —
+    // asked and declined, which is not the same as never asked.
+    const fenced = aggregateVariantRuns([base, other]);
+    expect(fenced.feasibility).toBe('feasible');
+    expect(fenced.compliance).toEqual({
+      complies: 0,
+      doesNotComply: 0,
+      noAnswer: 2,
+      notRun: 0,
+      total: 2,
+    });
+    expect(base.points[0].error).toContain('V_d');
+
     expect(ask('independent').map((r) => r.state === 'evaluated' && r.design)).toEqual([
       'sized',
       'held',
     ]);
     expect(evaluateSheet(drained('assumed'), withDrain).assumptions).toBeUndefined();
+  });
+
+  it('calls a held device that cannot carry its current a failure, not a missing answer', () => {
+    // Sized at gm/ID = 4 for 20 µA, the device sits near the top of its swept gate-voltage
+    // range. At a condition where every gate voltage carries a quarter of the current, no
+    // characterized gate voltage reaches 20 µA at that width (the table tops out near 12 µA):
+    // the built transistor cannot do its job there. That is a verdict about the design.
+    const quarter = retag(scaleQuantities(dev, { id: 0.25, gm: 0.25 }), 'ss', -40);
+    const doc: SheetDoc = { ...gainDoc(0), givens: { L: 'L', gm_id: '4', id: '2e-5' } };
+    const [tt, ss] = runVariants(
+      doc,
+      soleFamily([retag(dev, 'tt', 27), quarter]),
+      [key('tt'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('tt'),
+    );
+    expect(tt.state).toBe('evaluated');
+    // The run produced no usable numbers, so it is not shown as evaluated — and its one point
+    // still carries the verdict.
+    expect(ss.state).toBe('not-evaluated');
+    expect(ss.points).toHaveLength(1);
+    expect(ss.points[0].state).toBe('does-not-comply');
+    expect(ss.points[0].error).toMatch(/^this device cannot carry its current here/);
+    expect(aggregateVariantRuns([tt, ss]).compliance).toEqual({
+      complies: 1,
+      doesNotComply: 1,
+      noAnswer: 0,
+      notRun: 0,
+      total: 2,
+    });
+  });
+
+  it('gives no answer at a condition whose table does not reach the bias the design sits at', () => {
+    // The design is biased at vds = 1.0 V. The second condition was characterized only to
+    // 0.8 V, so the held device is read 0.2 V away from where it sits. The run completes and
+    // every rule passes — on the wrong data — so the point is neither a pass nor a failure.
+    const wide = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
+    const narrow = generateDemoDevice({ vds: { min: 0, max: 0.8, step: 0.05 } });
+    const doc: SheetDoc = {
+      ...gainDoc(0),
+      givens: { L: 'L', gm_id: '12', id: '2e-5', vds: '1.0' },
+    };
+    const runs = runVariants(
+      doc,
+      soleFamily([retag(wide, 'tt', 27), retag(narrow, 'ss', -40)]),
+      [key('tt'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('tt'),
+    );
+    const ss = runs[1];
+    expect(ss.state === 'evaluated' && ss.feasible).toBe(true); // what the clamped data says
+    expect(ss.points[0].state).toBe('no-answer');
+    expect(ss.points[0].error).toMatch(/^the table does not reach this point \(bind vds\)/);
+    const agg = aggregateVariantRuns(runs);
+    expect(agg.compliance).toEqual({
+      complies: 1,
+      doesNotComply: 0,
+      noAnswer: 1,
+      notRun: 0,
+      total: 2,
+    });
+    // And its margin is not quoted: the only measured point is the base's.
+    expect(agg.worst?.key).toEqual(key('tt'));
+  });
+
+  it('asks every condition about the same range, resolved once at the base', () => {
+    // The range end is written against the design's own gain: "a floor 10 below A". At the base
+    // A = 30, so that end is Floor = 20. The second condition halves the gain to 15 — and the
+    // end it is asked about is still Floor = 20, the application's number, not 15 - 10 = 5.
+    // There the held design has A = 15 against a floor of 20 and does not comply; re-reading the
+    // expression per condition would have asked 15 >= 5 and passed.
+    const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
+    const doc: SheetDoc = {
+      ...gainDoc(0),
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'Floor', value: 0 },
+      ],
+      checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'Floor' }],
+      operatingRange: [{ name: 'tight', set: { Floor: 'A - 10' } }],
+    };
+    const [tt, ss] = runVariants(
+      doc,
+      soleFamily([retag(dev, 'tt', 27), slow]),
+      [key('tt'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('tt'),
+    );
+    const at = (r: VariantRun): number | undefined => r.result?.edges?.[0].set.Floor;
+    expect(at(tt)).toBeCloseTo(VA_PER_L * 0.5e-6 * 12 - 10, 1); // 30 - 10
+    expect(at(ss)).toBe(at(tt));
+    expect(ss.result?.values.A).toBeCloseTo(15, 1);
+    expect(tt.points.map((p) => p.state)).toEqual(['complies', 'complies']);
+    expect(ss.points.map((p) => p.state)).toEqual(['complies', 'does-not-comply']);
+  });
+
+  it('answers the same at a condition identical to the one the design was sized at', () => {
+    // The whole library, each sheet asked about two conditions whose tables are the SAME table
+    // under two labels. A design held at a condition identical to its base is the same circuit
+    // on the same silicon, so anything that differs between the two rows is a defect in the
+    // holding, not a property of the design: every transistor keeps its width to the last bit,
+    // feasibility reads the same, and every point lands in the same state.
+    const family = soleFamily([retag(libTable, 'tt', 27), retag(libTable, 'ss', -40)]);
+    const widths = (r: VariantRun): unknown => {
+      const walk = (n: { bind?: { W: number }; children?: readonly unknown[] }): unknown => [
+        n.bind?.W,
+        (n.children ?? []).map((c) => walk(c as never)),
+      ];
+      return r.result ? walk(r.result as never) : undefined;
+    };
+    let held = 0;
+    for (const { file, doc } of loadLibrary()) {
+      const [sized, other] = runVariants(
+        doc,
+        family,
+        [key('tt'), key('ss', -40)],
+        noFamilies,
+        REFS,
+        key('tt'),
+      );
+      expect([sized.design, other.design], file).toEqual(['sized', 'held']);
+      if (sized.state !== 'evaluated') {
+        // Nothing was sized, so nothing was asked of the other condition.
+        expect(
+          other.points.map((p) => p.state),
+          file,
+        ).toEqual(other.points.map(() => 'not-run'));
+        continue;
+      }
+      held++;
+      expect(other.state, file).toBe('evaluated');
+      if (other.state !== 'evaluated') continue;
+      expect(widths(other), file).toEqual(widths(sized));
+      expect(other.feasible, file).toBe(sized.feasible);
+      // One difference is by design: a bias the table does not reach is an advisory where the
+      // design is sized and no answer where it is held. No shipped sheet sits off this table at
+      // its own centre, and this is where that would show.
+      expect(clampedIn(sized.result), file).toEqual([]);
+      expect(other.points, file).toEqual(sized.points);
+    }
+    // Not vacuous: the library does evaluate on this table.
+    expect(held).toBeGreaterThan(30);
+  });
+
+  it('pins every range end to the base, not only the first', () => {
+    // Two ends, both written against the design's own gain (30 at the base, 15 at the slow
+    // condition). Each must be asked at the base's number at both conditions: 25 and 10.
+    const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
+    const doc: SheetDoc = {
+      ...gainDoc(0),
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'Floor', value: 0 },
+      ],
+      checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'Floor' }],
+      operatingRange: [
+        { name: 'near', set: { Floor: 'A - 5' } },
+        { name: 'far', set: { Floor: 'A - 20' } },
+      ],
+    };
+    const runs = runVariants(
+      doc,
+      soleFamily([retag(dev, 'tt', 27), slow]),
+      [key('tt'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('tt'),
+    );
+    const asked = (r: VariantRun): (number | undefined)[] =>
+      (r.result?.edges ?? []).map((e) => e.set.Floor);
+    expect(asked(runs[0])[0]).toBeCloseTo(25, 1);
+    expect(asked(runs[0])[1]).toBeCloseTo(10, 1);
+    expect(asked(runs[1])).toEqual(asked(runs[0]));
+    // Held at the slow condition the gain is 15: short of the near end's 25, clear of the far
+    // end's 10 — and the aggregate names the end that owns the tightest margin.
+    expect(runs[1].points.map((p) => [p.limit, p.state])).toEqual([
+      [undefined, 'complies'],
+      ['near', 'does-not-comply'],
+      ['far', 'complies'],
+    ]);
+    const worst = aggregateVariantRuns(runs).worst;
+    expect(worst).toMatchObject({ id: 'gain', key: key('ss', -40), limit: 'near' });
+    expect(worst?.marginPct).toBeCloseTo((15 - 25) / 25, 2);
+  });
+
+  it('leaves the range ends of a held condition unasked when its own centre does not settle', () => {
+    // A solved node whose relation reads the device: y = A + x must equal 35, with A the
+    // intrinsic gain. At the base A = 30, so x lands at 5. The slow condition halves the gain to
+    // 15, the held design then needs x = 20, and the search range [0, 10] does not contain it:
+    // the held centre has no answer, and a centre that did not settle leaves nothing to ask at
+    // the range end.
+    const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
+    const doc: SheetDoc = {
+      title: 'unsettled-held',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: '35' } },
+        { name: 'Spec', value: 1 },
+        { name: 'Spec_hi', value: 2 },
+      ],
+      givens: { L: 'L', gm_id: '12', id: '2e-5' },
+      equations: [
+        { name: 'A', expr: 'gm_gds' },
+        { name: 'y', expr: 'A + x' },
+      ],
+      checks: [],
+      operatingRange: [{ name: 'hi', set: { Spec: 'Spec_hi' } }],
+    };
+    const [tt, ss] = runVariants(
+      doc,
+      soleFamily([retag(dev, 'tt', 27), slow]),
+      [key('tt'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('tt'),
+    );
+    expect(tt.points.map((p) => p.state)).toEqual(['complies', 'complies']);
+    expect(tt.result?.values.x).toBeCloseTo(5, 1);
+    expect(ss.state).toBe('not-evaluated');
+    expect(ss.points.map((p) => [p.limit, p.state])).toEqual([
+      [undefined, 'no-answer'],
+      ['hi', 'not-run'],
+    ]);
+    expect(ss.points[0].error).toMatch(/does not change sign/);
+  });
+
+  it('says what is wrong with a condition even when no condition is the base', () => {
+    // Several conditions and no nominal: nothing is sized, so every row is declined. A row
+    // whose own table is missing still says THAT, since importing it is a different fix.
+    const [tt, xx] = runVariants(gainDoc(20), twoCorners(), [key('tt'), key('xx')], noFamilies);
+    expect(tt.state === 'not-evaluated' && tt.issues.map((i) => i.kind)).toEqual(['no-design']);
+    expect(xx.state === 'not-evaluated' && xx.issues.map((i) => i.kind)).toEqual([
+      'absent-variant',
+    ]);
   });
 
   it('carries a curated library sheet across two conditions', () => {
@@ -1106,12 +1327,16 @@ describe('runVariant', () => {
     expect(run.issues.map((i) => i.kind)).toEqual(['runtime-evaluation']);
     expect(run.result?.rules.find((r) => r.id === 'impossible')?.status).toBe('fail');
     expect(run.result?.feasible).toBe(false);
+    // Asked, and it could not be answered — with the solver's reason, never the failing rule's.
+    expect(run.points).toHaveLength(1);
+    expect(run.points[0].state).toBe('no-answer');
+    expect(run.points[0].error).toMatch(/does not change sign/);
   });
 
-  it('separates a design that closes from a range end it does not cover', () => {
-    // Base T = 5 lands x = 2, clearing a 1.6 floor; the lo edge holds the same hardware at
-    // T = 3, landing x = 1, which does not. The design closes; the claimed range is not
-    // covered — and the two must never be reported as one failure.
+  it('separates a design that is feasible from a range end it does not comply at', () => {
+    // Base T = 5 lands x = 2, clearing a 1.6 floor; the lo end holds the same hardware at
+    // T = 3, landing x = 1, which does not. The design is feasible; it does not comply at one
+    // end of its claimed range — and the two must never be reported as one failure.
     const doc = pinnedDoc({
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
@@ -1124,16 +1349,16 @@ describe('runVariant', () => {
     const run = runVariant(doc, primary, key('tt'), noFamilies);
     expect(run.state).toBe('evaluated');
     if (run.state !== 'evaluated') return;
-    expect(run.closes).toBe('pass');
-    expect(run.covers).toBe('gap');
-    expect(run.result.feasible).toBe(false); // the whole claim, closure AND coverage
+    expect(run.feasible).toBe(true);
+    expect(run.result.feasible).toBe(true);
+    expect(run.points).toEqual([{ state: 'complies' }, { limit: 'lo', state: 'does-not-comply' }]);
   });
 
-  it('keeps a measured closure verdict when only a range end breaks', () => {
-    // Base T = 5 lands x = 2 and the floor passes; the lo edge asks for T = 0.5, which
-    // y = 2x + 1 cannot reach over the bracket, so the range CHECK breaks — a coverage
-    // non-answer, not a closure event. Closure was measured and must stay reported; coverage
-    // reads unchecked — never a measured gap, and never an erased run.
+  it('keeps feasibility when a range end cannot be answered', () => {
+    // Base T = 5 lands x = 2 and the floor passes; the lo end asks for T = 0.5, which
+    // y = 2x + 1 cannot reach over the bracket, so nothing is measured there. Feasibility was
+    // measured and stays reported; the end is no answer — never a failure, never a pass, and
+    // never a reason to drop the run.
     const doc = pinnedDoc({
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
@@ -1146,10 +1371,32 @@ describe('runVariant', () => {
     const run = runVariant(doc, primary, key('tt'), noFamilies);
     expect(run.state).toBe('evaluated');
     if (run.state !== 'evaluated') return;
-    expect(run.closes).toBe('pass');
-    expect(run.covers).toBe('unchecked');
-    // The end's own failure stays visible in its report.
-    expect(run.result.edges?.[0].error).toBeDefined();
+    expect(run.feasible).toBe(true);
+    expect(run.points.map((p) => [p.limit, p.state])).toEqual([
+      [undefined, 'complies'],
+      ['lo', 'no-answer'],
+    ]);
+    // The end's own reason travels with its point.
+    expect(run.points[1].error).toMatch(/does not change sign/);
+  });
+
+  it('gives a refused condition one not-run point per point it was not asked at', () => {
+    const doc = pinnedDoc({
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
+        { name: 'T', value: 5 },
+        { name: 'T_lo', value: 3 },
+        { name: 'x_floor', value: 0.5 },
+      ],
+      operatingRange: [{ name: 'lo', set: { T: 'T_lo' } }],
+    });
+    const run = runVariant(doc, primary, key('ff'), noFamilies);
+    expect(run.state).toBe('not-evaluated');
+    expect(run.points.map((p) => [p.limit, p.state])).toEqual([
+      [undefined, 'not-run'],
+      ['lo', 'not-run'],
+    ]);
+    expect(run.points[0].error).toBe(run.state === 'not-evaluated' ? run.issues[0].message : '');
   });
 
   it('does not report the primary twice when a child binds its own family', () => {
@@ -1162,11 +1409,11 @@ describe('runVariant', () => {
 
 // --- aggregation -------------------------------------------------------------
 
-const hardRule = (marginPct: number): RuleResult => ({
-  id: 'r',
+const hardRule = (marginPct: number, id = 'r'): RuleResult => ({
+  id,
   kind: 'physical',
   op: '>=',
-  text: 'r',
+  text: id,
   lhsValue: 0,
   rhsValue: 0,
   // The SI distance is a different quantity from the relative margin; keeping them distinct
@@ -1177,179 +1424,180 @@ const hardRule = (marginPct: number): RuleResult => ({
   status: marginPct >= 0 ? 'pass' : 'fail',
 });
 
-/** A minimal evaluated result carrying one hard rule at `marginPct` — enough for the margin
- *  and verdict folds, which read nothing else. */
-function resultWith(marginPct: number, closes = true): SheetResult {
-  return { values: {}, rules: [hardRule(marginPct)], feasible: closes, closes, warnings: [] };
-}
-
-/** The same result plus one range end that stood and covered, carrying its own rule margin. */
-function withCoveredEdge(res: SheetResult, edgeMarginPct: number): SheetResult {
-  return {
-    ...res,
-    covers: true,
-    edges: [
-      {
-        name: 'lo',
-        feasible: true,
-        state: 'covers',
-        set: {},
-        rules: [hardRule(edgeMarginPct)],
-        solved: {},
-        warnings: [],
-      },
-    ],
-  };
-}
-
-const evaluated = (
-  corner: string,
-  closes: 'pass' | 'fail',
-  covers: 'covers' | 'gap' | 'unchecked' = 'unchecked',
+/** One range end's report: measured (a rule at `marginPct`), or — given an `error` — not. */
+const end = (
+  name: string,
+  state: SheetEdgeReport['state'],
   marginPct = 0.5,
+  error?: string,
+): SheetEdgeReport => ({
+  name,
+  state,
+  set: {},
+  rules: [hardRule(marginPct, 'e')],
+  solved: {},
+  warnings: [],
+  ...(error === undefined ? {} : { error }),
+});
+
+/** A run built the way the runner builds one: the centre first, then a point per range end,
+ *  each mirroring its report. `centre` is the centre point's state; the run's own rule sits at
+ *  `marginPct`. */
+const ran = (
+  corner: string,
+  design: 'sized' | 'held',
+  centre: SheetEdgeReport['state'],
+  marginPct = 0.5,
+  ends: SheetEdgeReport[] = [],
+  centreError?: string,
 ): VariantRun => ({
   state: 'evaluated',
   key: key(corner),
-  design: 'sized',
-  closes,
-  covers,
-  result: resultWith(marginPct, closes === 'pass'),
+  design,
+  feasible: marginPct >= 0,
+  points: [
+    { state: centre, ...(centreError === undefined ? {} : { error: centreError }) },
+    ...ends.map((e) => ({
+      limit: e.name,
+      state: e.state,
+      ...(e.error === undefined ? {} : { error: e.error }),
+    })),
+  ],
+  result: {
+    values: {},
+    rules: [hardRule(marginPct)],
+    feasible: marginPct >= 0,
+    warnings: [],
+    ...(ends.length ? { edges: ends } : {}),
+  },
 });
 
-const refused = (corner: string, result?: SheetResult): VariantRun => ({
+/** A condition nothing was evaluated at, with `points` points all in one state. */
+const refusedAt = (
+  corner: string,
+  state: 'not-run' | 'no-answer',
+  points = 1,
+  design: 'sized' | 'held' = 'held',
+  result?: SheetResult,
+): VariantRun => ({
   state: 'not-evaluated',
   key: key(corner),
+  design,
   issues: [{ kind: 'absent-variant', message: 'not characterized' }],
+  points: Array.from({ length: points }, () => ({ state, error: 'not characterized' })),
   ...(result ? { result } : {}),
 });
 
-describe('aggregateVariantRuns — closure', () => {
-  it('reaches each of the four states from the counts that define it', () => {
-    const cases: [
-      string,
-      VariantRun[],
-      string,
-      { pass: number; fail: number; unavailable: number },
-    ][] = [
-      [
-        'every condition evaluated and closing',
-        [evaluated('tt', 'pass'), evaluated('ss', 'pass')],
-        'all',
-        { pass: 2, fail: 0, unavailable: 0 },
-      ],
-      [
-        'one evaluated failure among passes',
-        [evaluated('tt', 'pass'), evaluated('ss', 'fail'), refused('ff')],
-        'fails',
-        { pass: 1, fail: 1, unavailable: 1 },
-      ],
-      [
-        'no failure, but a condition went unevaluated',
-        [evaluated('tt', 'pass'), refused('ss')],
-        'unverified',
-        { pass: 1, fail: 0, unavailable: 1 },
-      ],
-      [
-        'nothing evaluated at all',
-        [refused('tt'), refused('ss')],
-        'none-evaluated',
-        { pass: 0, fail: 0, unavailable: 2 },
-      ],
-    ];
-    for (const [name, runs, closes, counts] of cases) {
-      const agg = aggregateVariantRuns(runs, false);
-      expect(agg.closes, name).toBe(closes);
-      expect(agg.counts, name).toEqual(counts);
-    }
-  });
-
-  it('counts conditions, not runs, when a caller repeats one', () => {
-    const agg = aggregateVariantRuns([evaluated('tt', 'pass'), evaluated('tt', 'pass')], false);
-    expect(agg.counts.pass).toBe(1);
-  });
-
-  it('takes the worst margin over the evaluated runs only', () => {
-    // The refused run carries a retained result with a far worse margin. Folding it in would
-    // quote a headroom number for a condition nobody measured.
-    const agg = aggregateVariantRuns(
-      [
-        evaluated('tt', 'pass', 'unchecked', 0.4),
-        evaluated('ss', 'pass', 'unchecked', 0.12),
-        refused('ff', resultWith(-0.9, false)),
-      ],
-      false,
+describe('aggregateVariantRuns — feasibility', () => {
+  it('is the sized run and nothing else', () => {
+    // One answer, read off the condition the design was sized at. A held condition failing
+    // every rule it has is a compliance finding and cannot move it.
+    const agg = aggregateVariantRuns([
+      ran('tt', 'sized', 'complies', 0.4),
+      ran('ss', 'held', 'does-not-comply', -0.3),
+    ]);
+    expect(agg.feasibility).toBe('feasible');
+    expect(agg.base).toEqual(key('tt'));
+    expect(aggregateVariantRuns([ran('tt', 'sized', 'does-not-comply', -0.1)]).feasibility).toBe(
+      'infeasible',
     );
-    expect(agg.worstMargin).toBeCloseTo(0.12, 12);
   });
 
-  it('reports no margin when nothing measurable was evaluated', () => {
-    expect(aggregateVariantRuns([refused('tt')], false).worstMargin).toBeNull();
-  });
-
-  it('never quotes a range end’s headroom as the closure margin', () => {
-    // The tt run covers its range end, and that end has far less headroom (0.05) than the
-    // design's own worst rule (0.4 at tt, 0.12 at ss). A range end's margin answers coverage;
-    // the closure margin must come from the base designs alone.
-    const tt: VariantRun = {
-      state: 'evaluated',
-      key: key('tt'),
-      design: 'sized',
-      closes: 'pass',
-      covers: 'covers',
-      result: withCoveredEdge(resultWith(0.4), 0.05),
-    };
-    const agg = aggregateVariantRuns([tt, evaluated('ss', 'pass', 'unchecked', 0.12)], true);
-    expect(agg.worstMargin).toBeCloseTo(0.12, 12);
+  it('tells a base that was never run from one that ran and did not complete', () => {
+    const empty: SheetResult = { values: {}, rules: [], feasible: false, warnings: [] };
+    expect(aggregateVariantRuns([refusedAt('tt', 'not-run', 1, 'sized')]).feasibility).toBe(
+      'not-run',
+    );
+    expect(
+      aggregateVariantRuns([refusedAt('tt', 'no-answer', 1, 'sized', empty)]).feasibility,
+    ).toBe('no-answer');
+    // Nothing was sized anywhere: several conditions, none of them the base.
+    const none = aggregateVariantRuns([refusedAt('tt', 'not-run'), refusedAt('ss', 'not-run')]);
+    expect(none.feasibility).toBe('not-run');
+    expect(none.base).toBeUndefined();
   });
 });
 
-describe('aggregateVariantRuns — coverage', () => {
-  const covers = (runs: VariantRun[], hasEdges = true): unknown =>
-    aggregateVariantRuns(runs, hasEdges).covers;
-
-  it('is absent when the sheet claims no range at all', () => {
-    // A sheet with no edges leaves every evaluated run `unchecked`. Including when nothing was
-    // evaluated: "no range claimed" and "range claimed, none checked" are different answers,
-    // and only the doc can tell them apart.
-    expect(covers([evaluated('tt', 'pass', 'unchecked')], false)).toBeUndefined();
-    expect(covers([refused('tt')], false)).toBeUndefined();
+describe('aggregateVariantRuns — compliance', () => {
+  it('counts every point once, in exactly one bucket', () => {
+    // Three conditions × (the centre + two range ends) = nine points.
+    const agg = aggregateVariantRuns([
+      ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies'), end('hi', 'complies')]),
+      ran('ss', 'held', 'complies', 0.2, [
+        end('lo', 'does-not-comply', -0.1),
+        end('hi', 'no-answer', 0.5, 'did not land'),
+      ]),
+      refusedAt('ff', 'not-run', 3),
+    ]);
+    expect(agg.compliance).toEqual({
+      complies: 4,
+      doesNotComply: 1,
+      noAnswer: 1,
+      notRun: 3,
+      total: 9,
+    });
   });
 
-  it('never drops a gap a run actually measured, whatever the caller says about edges', () => {
-    expect(aggregateVariantRuns([evaluated('tt', 'fail', 'gap')], false).covers?.state).toBe('gap');
+  it('never counts a point that was not run or not answered as complying or failing', () => {
+    const agg = aggregateVariantRuns([
+      ran('tt', 'sized', 'complies'),
+      refusedAt('ss', 'no-answer'),
+      refusedAt('ff', 'not-run'),
+    ]);
+    expect(agg.compliance).toEqual({
+      complies: 1,
+      doesNotComply: 0,
+      noAnswer: 1,
+      notRun: 1,
+      total: 3,
+    });
   });
 
-  it('maps every mixture of the four per-run states', () => {
-    const cases: [string, VariantRun[], string][] = [
-      [
-        'all covered',
-        [evaluated('tt', 'pass', 'covers'), evaluated('ss', 'pass', 'covers')],
-        'all',
-      ],
-      [
-        'one measured gap decides it',
-        [evaluated('tt', 'pass', 'covers'), evaluated('ss', 'fail', 'gap')],
-        'gap',
-      ],
-      [
-        'a gap outranks an unevaluated condition',
-        [evaluated('tt', 'fail', 'gap'), refused('ss')],
-        'gap',
-      ],
-      [
-        'covered where it ran, and it did not run everywhere',
-        [evaluated('tt', 'pass', 'covers'), refused('ss')],
-        'unverified',
-      ],
-      ['edges claimed, nothing evaluated', [refused('tt'), refused('ss')], 'unchecked'],
-    ];
-    for (const [name, runs, state] of cases) {
-      expect(aggregateVariantRuns(runs, true).covers?.state, name).toBe(state);
-    }
+  it('denominates in unique conditions, not in runs handed over', () => {
+    const agg = aggregateVariantRuns([
+      ran('tt', 'sized', 'complies'),
+      ran('tt', 'sized', 'complies'),
+    ]);
+    expect(agg.compliance.total).toBe(1);
+  });
+});
+
+describe('aggregateVariantRuns — the worst margin, and where', () => {
+  it('names the rule, the condition and the range end that own it', () => {
+    // The tightest point anywhere is the ss corner's lo end, at -0.1.
+    const agg = aggregateVariantRuns([
+      ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.05)]),
+      ran('ss', 'held', 'complies', 0.12, [end('lo', 'does-not-comply', -0.1)]),
+    ]);
+    expect(agg.worst).toEqual({ id: 'e', marginPct: -0.1, key: key('ss'), limit: 'lo' });
   });
 
-  it('always shows the counts behind the state', () => {
-    const agg = aggregateVariantRuns([evaluated('tt', 'pass', 'covers'), refused('ss')], true);
-    expect(agg.covers?.counts).toEqual({ covers: 1, gap: 0, unchecked: 0, unavailable: 1 });
+  it('names no range end when the centre owns it', () => {
+    const agg = aggregateVariantRuns([
+      ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.3)]),
+      ran('ss', 'held', 'complies', 0.12, [end('lo', 'complies', 0.3)]),
+    ]);
+    expect(agg.worst).toEqual({ id: 'r', marginPct: 0.12, key: key('ss') });
+  });
+
+  it('reads no margin from a point whose rules were not measured there', () => {
+    // The ss centre was read off the table's hull and its lo end did not land: both carry rule
+    // outcomes that are tighter than anything real, and neither may be quoted.
+    const agg = aggregateVariantRuns([
+      ran('tt', 'sized', 'complies', 0.4),
+      ran(
+        'ss',
+        'held',
+        'no-answer',
+        -0.9,
+        [end('lo', 'no-answer', -0.8, 'did not land')],
+        'off-hull',
+      ),
+    ]);
+    expect(agg.worst).toEqual({ id: 'r', marginPct: 0.4, key: key('tt') });
+  });
+
+  it('is null when nothing was measured anywhere', () => {
+    expect(aggregateVariantRuns([refusedAt('tt', 'not-run', 1, 'sized')]).worst).toBeNull();
   });
 });

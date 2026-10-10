@@ -22,6 +22,8 @@
     engineSolved,
     bindingConstraint,
     limitingConstraint,
+    rangeEndConstraint,
+    withoutEdges,
     sheetSensitivities,
     SENSITIVITY_REL_STEP,
     resolveSheetRefs,
@@ -50,6 +52,7 @@
     type RuleResult,
     type RuleStatus,
     type SheetResult,
+    type VariantAggregate,
     type VariantKey,
     type VariantRun,
   } from '@gmid/mostab-core';
@@ -188,8 +191,8 @@
   const rr = $derived(resolveSheetRefs(cfg, refs));
 
   // ── Conditions. Corners do not add a third question to this panel: it still answers whether
-  // the design CLOSES and whether it COVERS the range it claims — once per characterization
-  // condition, each answer stamped with the condition it was measured at. Every run fixes ONE
+  // the design is FEASIBLE where it is sized and whether that one design COMPLIES everywhere it
+  // is promised to work — each answer stamped with the condition it belongs to. Every run fixes ONE
   // (corner, temperature) key and projects the primary and every named child to it, because a
   // verdict assembled from a tt input pair and an ss tail describes a chip that does not exist.
   const primary = $derived(bench.primary);
@@ -215,43 +218,41 @@
     if (!primary) return 'no-device';
     return cornerMode === 'chosen' ? 'none-chosen' : 'undesignated';
   });
-  /** The conditions actually run: the ones asked about, and — whenever the family has a nominal —
-   *  the nominal first even if it was not asked for. The design is SIZED there and HELD
-   *  everywhere else, so its home is always on the page: a held row beside no sized one would
-   *  show an operating point with no way to see the design it belongs to. */
-  const askKeys = $derived.by((): readonly VariantKey[] => {
-    const nk = nominalKey;
-    if (!nk || !keys.length || keys.some((k) => sameVariant(k, nk))) return keys;
-    return [nk, ...keys];
-  });
-  const multi = $derived(askKeys.length > 1);
   // ONE run per condition, through the core's single transition: it preflights the families,
   // refuses before the engine ever sees a missing or ambiguous table, and only calls a run
-  // evaluated when it stands. The plural form is that transition per key, with the sheet
-  // resolved and validated once for the set rather than once per condition.
+  // evaluated when it stands. The sheet is resolved and validated once for the set.
   //
-  // One DESIGN across the set: sized at the nominal condition (or at the single condition asked
-  // about, when the family designates none) and held at every other — same widths, lengths,
-  // currents and gate biases, operating point re-settled.
+  // One DESIGN across a set. A single condition is its own question: the design is sized there,
+  // whichever condition it is, and every one-condition tool below works on it. Several
+  // conditions are asked about one design — sized at the nominal condition and held at every
+  // other, same widths, lengths, currents and gate biases, operating point re-settled — and the
+  // nominal condition's run comes back first even when it was not asked for: the design is
+  // sized there, so its home is always on the page, and feasibility is its verdict.
   const runs = $derived(
-    primary ? runVariants(cfg, primary, askKeys, bench.familyOf, refs, nominalKey) : [],
+    primary
+      ? runVariants(
+          cfg,
+          primary,
+          keys,
+          bench.familyOf,
+          refs,
+          keys.length > 1 ? nominalKey : undefined,
+        )
+      : [],
   );
-  // Whether coverage is a question about this design AT ALL — read from the doc, because when
-  // nothing was evaluated the runs cannot tell "claims no range" from "claims went unchecked".
-  const hasEdges = $derived((rr.doc.operatingRange ?? []).length > 0);
-  const agg = $derived(aggregateVariantRuns(runs, hasEdges));
+  const multi = $derived(runs.length > 1);
+  // Two questions, answered apart: is the design feasible where it is sized, and at how many of
+  // the points it is promised to work at does that one design comply.
+  const agg = $derived(aggregateVariantRuns(runs));
 
-  // The run whose numbers the detail below belongs to: the nominal condition when it is in the
-  // set, else the first that was evaluated, else the first asked about. In multi-condition mode
-  // the detail is explicitly stamped with it, so no number on screen is unattributed.
-  const refRun = $derived.by((): VariantRun | undefined => {
-    const nk = nominalKey;
-    return (
-      runs.find((r) => r.state === 'evaluated' && nk !== undefined && sameVariant(r.key, nk)) ??
-      runs.find((r) => r.state === 'evaluated') ??
-      runs[0]
-    );
-  });
+  // The run whose numbers the detail below belongs to: the one that SIZED the design — the
+  // run feasibility is read from, evaluated or not, so its diagnostics are the ones on screen
+  // when it did not complete. Only a set with nowhere to size (several conditions, none
+  // nominal) has no such run, and then the first row stands in. In multi-condition mode the
+  // detail is explicitly stamped with it, so no number on screen is unattributed.
+  const refRun = $derived.by(
+    (): VariantRun | undefined => runs.find((r) => r.design === 'sized') ?? runs[0],
+  );
   const refKey = $derived(refRun?.key);
   const evaluated = $derived(refRun?.state === 'evaluated');
   /** The reference run's numbers. Absent when a condition was refused before the engine ran —
@@ -266,72 +267,105 @@
    *  it did not. */
   const resolveDevice = $derived(refKey ? projectingResolver(bench.familyOf, refKey) : undefined);
 
-  // ── What the aggregate may say. Closure and coverage are folded separately and neither is
-  // inferred from the other, so a design that closes everywhere while one range end fails reads
-  // as a coverage gap and not as a failure to close. Conditions that were not evaluated are
-  // never counted as passing them — they are counted, and named, as not evaluated.
-  const AGG_CLASS: Record<string, string> = {
-    all: 'ok',
-    fails: 'no',
-    unverified: 'skip',
-    'none-evaluated': 'skip',
+  // ── What the header may say. FEASIBILITY is one answer about the design where it was sized;
+  // COMPLIANCE is a count of points. Neither is inferred from the other, and a point that was
+  // not run or could not be answered is counted as exactly that — never as a pass, never as a
+  // failure.
+  const FEAS_TEXT: Record<VariantAggregate['feasibility'], string> = {
+    feasible: 'feasible',
+    infeasible: 'infeasible',
+    'no-answer': 'no answer',
+    'not-run': 'not evaluated',
   };
-  const aggregateText = $derived.by(() => {
-    const { pass, fail, unavailable } = agg.counts;
-    const n = pass + fail + unavailable;
-    if (agg.closes === 'all') return `closes at all ${n}`;
-    if (agg.closes === 'fails')
-      return `does not close — ${pass} pass / ${fail} fail / ${unavailable} not evaluated`;
-    if (agg.closes === 'unverified')
-      return `closure unverified — ${pass} pass, ${unavailable} not evaluated`;
-    return 'not evaluated';
-  });
-  const COVERS_CLASS: Record<string, string> = {
-    all: 'ok',
-    gap: 'no',
-    unchecked: 'skip',
-    unverified: 'skip',
+  const FEAS_CLASS: Record<VariantAggregate['feasibility'], string> = {
+    feasible: 'ok',
+    infeasible: 'no',
+    'no-answer': 'skip',
+    'not-run': 'skip',
   };
-  const coversText = $derived.by(() => {
-    const c = agg.covers;
-    if (!c) return '';
-    const { covers, gap, unchecked, unavailable } = c.counts;
-    if (c.state === 'all') return `covers at all ${covers}`;
-    if (c.state === 'gap')
-      return `coverage gap — ${gap} of ${covers + gap + unchecked + unavailable}`;
-    // "not checked" and "nothing could be evaluated to check it" are different answers, and the
-    // closure chip beside this one already says which of the two happened.
-    if (c.state === 'unchecked')
-      return unavailable
-        ? `coverage not measured — ${unavailable} not evaluated`
-        : 'range coverage not checked';
-    return `coverage unverified — ${covers} cover, ${unchecked} not checked, ${unavailable} not evaluated`;
+  /** The feasibility badge's words — stamped with the condition it was asked at whenever more
+   *  than one condition is on the page, so no verdict there is unattributed. */
+  const feasText = $derived(
+    FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${variantLabel(agg.base)}` : ''),
+  );
+  /** Whether the sheet claims an operating range at all — read from the doc, so the range
+   *  column is there even when no condition could be evaluated. */
+  const hasRange = $derived((rr.doc.operatingRange ?? []).length > 0);
+  /** Compliance is a question only once there is more than one point to ask it at: several
+   *  conditions, or a declared operating range. A lone centre is feasibility under another name. */
+  const hasCompliance = $derived(agg.compliance.total > 1);
+  const complianceClass = $derived(
+    agg.compliance.doesNotComply > 0
+      ? 'no'
+      : agg.compliance.complies === agg.compliance.total
+        ? 'ok'
+        : 'skip',
+  );
+  const complianceText = $derived.by(() => {
+    const { complies, doesNotComply, noAnswer, notRun, total } = agg.compliance;
+    const rest = [
+      doesNotComply ? `${doesNotComply} fail` : '',
+      noAnswer ? `${noAnswer} no answer` : '',
+      notRun ? `${notRun} not run` : '',
+    ].filter(Boolean);
+    return [`complies at ${complies} of ${total} points`, ...rest].join(' · ');
   });
 
   /** One condition's own answers, for the breakdown. Each is the run's own verdict beside its
-   *  own label — the aggregate above never stands in for one of these, and none of them ever
-   *  stands in for the aggregate. */
+   *  own label — the header never stands in for one of these, and none of them ever stands in
+   *  for the header. */
   /** Whose hardware the row measured: the run that sized the design, or that design held. */
   const designCell = (r: VariantRun): string =>
     r.state !== 'evaluated' ? '' : r.design === 'sized' ? 'sized here' : 'held';
-  const closesCell = (r: VariantRun): string =>
-    r.state === 'evaluated'
-      ? r.closes === 'pass'
-        ? '✓ closes'
-        : '✗ does not close'
-      : '– not evaluated';
-  const coversCell = (r: VariantRun): string => {
-    if (r.state !== 'evaluated') return '–';
-    return r.covers === 'covers' ? '✓ covers' : r.covers === 'gap' ? '✗ gap' : '– not checked';
+  const POINT_MARK: Record<SheetEdgeState, string> = {
+    complies: '✓',
+    'does-not-comply': '✗',
+    'no-answer': '?',
+    'not-run': '–',
   };
-  const runClass = (r: VariantRun): string =>
-    r.state !== 'evaluated' ? 'skip' : r.closes === 'pass' ? 'ok' : 'no';
-  /** The one-line reason: what stopped a refused condition, else what binds (or is closest to
-   *  binding) at one that ran. */
+  const POINT_TEXT: Record<SheetEdgeState, string> = {
+    complies: 'complies',
+    'does-not-comply': 'does not comply',
+    'no-answer': 'no answer',
+    'not-run': 'not run',
+  };
+  const POINT_CLASS: Record<SheetEdgeState, string> = {
+    complies: 'ok',
+    'does-not-comply': 'no',
+    'no-answer': 'skip',
+    'not-run': 'skip',
+  };
+  /** The centre: the sized run answers feasibility in its own words, a held one compliance. */
+  const centreCell = (r: VariantRun): string => {
+    const at = r.points[0].state;
+    if (r.state === 'evaluated' && r.design === 'sized' && at !== 'no-answer')
+      return r.feasible ? '✓ feasible' : '✗ infeasible';
+    return `${POINT_MARK[at]} ${POINT_TEXT[at]}`;
+  };
+  /** The range ends, as a count with the worst outcome's mark — the chips below carry each one. */
+  const rangeCell = (r: VariantRun): string => {
+    const ends = r.points.slice(1);
+    if (!ends.length) return '';
+    const worst = (['does-not-comply', 'no-answer', 'not-run', 'complies'] as const).find((st) =>
+      ends.some((e) => e.state === st),
+    )!;
+    const ok = ends.filter((e) => e.state === 'complies').length;
+    return `${POINT_MARK[worst]} range ${ok}/${ends.length}`;
+  };
+  const runClass = (r: VariantRun): string => POINT_CLASS[r.points[0].state];
+  /** The one-line reason: what stopped a refused condition, else why its centre has no rule to
+   *  read, else what binds (or is closest to binding) there, else the first range end that is
+   *  not complying. */
   const runDetail = (r: VariantRun): string => {
-    if (r.state === 'not-evaluated') return r.issues.map((i) => i.message).join(' · ');
-    const b = bindingConstraint(r.result) ?? limitingConstraint(r.result);
-    return b ? `${b.id} ${pct(b.marginPct)}` : '';
+    if (r.state === 'not-evaluated' && r.points[0].state !== 'does-not-comply')
+      return r.issues.map((i) => i.message).join(' · ');
+    if (r.points[0].error) return r.points[0].error;
+    const b = r.result && (bindingConstraint(r.result) ?? limitingConstraint(r.result));
+    const centre = b ? `${b.id} ${pct(b.marginPct)}` : '';
+    const end = r.points.find((pt) => pt.limit !== undefined && pt.state !== 'complies');
+    return [centre, end ? `${end.limit}: ${end.error ?? POINT_TEXT[end.state]}` : '']
+      .filter(Boolean)
+      .join(' · ');
   };
 
   // The conditions the "chosen" mode offers: everything the family holds, plus any stored
@@ -394,9 +428,10 @@
     if (snap && snap !== shot) snap = null;
   });
 
-  // The rule the readout points at: the one that broke the design when something did, else the
-  // one closest to breaking. Both are core definitions over the whole composition, so the knobs
-  // are ranked against the same rule the badge names. Taken WITH the snapshot, not derived
+  // The rule the readout points at: the one that broke the design when something did; else, on
+  // a feasible design that fails a range end, the rule failing there; else the one closest to
+  // breaking. All are core definitions over the whole composition, so the knobs are ranked
+  // against the same rule the badge or the chip names. Taken WITH the snapshot, not derived
   // reactively: the tree walk behind the limiting constraint would otherwise run on every slider
   // frame to answer a question only this readout asks, and any design change that could move the
   // answer retires the snapshot anyway.
@@ -410,14 +445,13 @@
       return;
     }
     if (!sensReady || !result || !refTable) return;
-    const focus = binding ?? limitingConstraint(result);
+    const focus = binding ?? rangeEndConstraint(result) ?? limitingConstraint(result);
     snap = {
       doc: cfg,
       dev: refTable,
       focus,
-      // Naming the rule keeps the probes off the containment-edge path unless the rule in
-      // question lives on an edge — the difference between 2 and 2*(1 + edges) evaluations per
-      // knob.
+      // Naming the rule keeps the probes off the range-end runs unless the rule in question
+      // lives on one — the difference between 2 and 2*(1 + range ends) evaluations per knob.
       rows: sheetSensitivities(cfg, refTable, resolveDevice, {
         refs,
         ...(focus ? { rule: focus.id } : {}),
@@ -466,16 +500,17 @@
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
   const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
   // `evaluated`, not merely "there is a table": a condition refused for want of a child device
-  // has no design to sweep, and sweeping it anyway would print a feasibility window — a closure
-  // statement — under a header that just said the condition was not evaluated.
+  // has no design to sweep, and sweeping it anyway would print a feasibility window — a verdict —
+  // under a header that just said the condition was not evaluated.
   const swept = $derived(
     active && !multi && evaluated && refTable
       ? sweepSheet(rr.doc, active, refTable, SWEEP_POINTS, resolveDevice)
       : null,
   );
-  /** The same sweep at every EVALUATED condition — the multi-condition chart. A condition that
-   *  was refused has no design to sweep, so it contributes no curve and stays visible as its
-   *  breakdown row instead. */
+  /** The same sweep at every EVALUATED condition — the multi-condition chart. Each curve is that
+   *  condition's own FEASIBILITY across the knob (the design re-sized there at every sample), so
+   *  the operating range is left out. A condition that was refused has no design to sweep, so it
+   *  contributes no curve and stays visible as its breakdown row instead. */
   const sweptByKey = $derived.by(() => {
     if (!active || !multi || !primary) return [];
     const out: { key: VariantKey; sweep: ReturnType<typeof sweepSheet> }[] = [];
@@ -486,7 +521,7 @@
       out.push({
         key: r.key,
         sweep: sweepSheet(
-          rr.doc,
+          withoutEdges(rr.doc),
           active,
           table,
           SWEEP_POINTS,
@@ -538,8 +573,8 @@
    *  constraint gives a point, and the one the core already takes for a range end's aggregate
    *  curve. `measurable` is core's own predicate for a rule outcome that carries headroom
    *  (hardness included, so a future advisory kind cannot slip in here), and the clamp is the
-   *  one every margin comparison applies. An edge curve is coverage, not closure, so it stays
-   *  out. `null` where no hard rule produced a number. */
+   *  one every margin comparison applies. A range-end curve is compliance, not feasibility, so
+   *  it stays out. `null` where no hard rule produced a number. */
   function worstHardMargin(s: SheetSweep, i: number): number | null {
     let worst: number | null = null;
     for (const r of s.rules) {
@@ -552,7 +587,7 @@
   }
   const chartData = $derived.by((): ChartData | null => {
     // Several conditions: one curve each, of the worst hard-rule margin, so the chart answers
-    // "where does this design close, and which condition takes it out first" instead of
+    // "where is this design type feasible, and which condition takes it out first" instead of
     // stacking one rule set per condition into an unreadable wall.
     if (multi) {
       const set = sweptByKey.filter((e) => e.sweep.x.length > 0);
@@ -579,7 +614,7 @@
     };
   });
 
-  // The contiguous span of the swept param where the whole design closes (the feasibility window).
+  // The contiguous span of the swept param where the design is feasible (the feasibility window).
   const feasWindow = $derived.by(() => {
     if (!swept || swept.feasible.length === 0) return null;
     const idx = swept.feasible.flatMap((f, i) => (f ? [i] : []));
@@ -767,29 +802,18 @@
     Object.entries(e.solved)
       .map(([k, v]) => `${k} ${fmt(v)}`)
       .join(' · ');
-  /** The one-line detail beside an edge chip, one wording per outcome. A range end that is
-   *  covered shows where its bias landed; one that is not shows why — the solver's own message
-   *  when the run could not stand at all, else its worst failing hard rule (same definition the
-   *  badge uses, scoped to the edge's own tree). An UNCHECKED end must never borrow either: it
-   *  is not a verdict about the range but the absence of one, so it says what is missing. */
+  /** The one-line detail beside a range-end chip, one wording per outcome. An end the held
+   *  design complies at shows where its bias landed; one it does not shows why — its worst
+   *  failing hard rule (the same definition the badge uses, asked of that end's own run), or the
+   *  reason a held device cannot work there. An end with NO ANSWER says what stopped the
+   *  question, and one that was NOT RUN says what is missing: neither is a verdict about the
+   *  range, and neither may borrow one's words. */
   const edgeDetail = (e: SheetEdgeReport): string => {
-    if (e.state === 'not-checked') return 'not checked — these settings produce no design';
-    if (e.state === 'covers') return edgeSolved(e);
-    if (e.error) return e.error;
+    if (e.state === 'not-run') return 'not run — these settings produce no design';
+    if (e.state === 'complies') return edgeSolved(e);
+    if (e.error) return e.state === 'no-answer' ? `no answer — ${e.error}` : e.error;
     const b = bindingConstraint(e);
-    return b ? `${b.id} ${pct(b.marginPct)}` : 'does not cover';
-  };
-  // Three outcomes, three appearances — a range end that was never checked must not borrow the
-  // failure's mark or colour, because "we did not ask" is not "the answer is no".
-  const EDGE_MARK: Record<SheetEdgeState, string> = {
-    covers: '✓',
-    'does-not-cover': '✗',
-    'not-checked': '–',
-  };
-  const EDGE_CLASS: Record<SheetEdgeState, string> = {
-    covers: 'ok',
-    'does-not-cover': 'no',
-    'not-checked': 'skip',
+    return b ? `${b.id} ${pct(b.marginPct)}` : POINT_TEXT[e.state];
   };
   const edgeNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
   /** The run's own non-info diagnostics — a bias clamp fires exactly at a claim's extreme,
@@ -797,7 +821,7 @@
   const edgeWarns = (e: SheetEdgeReport): QAWarning[] =>
     e.warnings.filter((w) => w.severity !== 'info');
   // The tooltip carries WHICH point was checked (the resolved overrides), the authored note,
-  // any run diagnostics, and — whenever the range end is not covered — the full detail, because
+  // any run diagnostics, and — whenever the held design does not comply there — the full detail, because
   // the chip clamps long solver messages with an ellipsis. The concept-level help lives on the
   // group label.
   const edgeTitle = (e: SheetEdgeReport, detail: string): string => {
@@ -807,15 +831,15 @@
     const warns = edgeWarns(e)
       .map((w) => `⚠ ${w.message}`)
       .join('\n');
-    return [at, edgeNote.get(e.name), warns, e.state === 'covers' ? '' : detail]
+    return [at, edgeNote.get(e.name), warns, e.state === 'complies' ? '' : detail]
       .filter(Boolean)
       .join('\n\n');
   };
-  /** One label for an edge's aggregate sweep curve, shared by the legend and the chart
-   *  series — consumers read the field, never parse the id's trailing separator. The verb
-   *  is the reading: above zero the design covers that range end, below zero it does not. */
+  /** One label for a range end's aggregate sweep curve, shared by the legend and the chart
+   *  series — consumers read the field, never parse the id's trailing separator. The words are
+   *  the reading: above zero the held design complies at that range end, below zero it does not. */
   const ruleLabel = (r: { id: string; edge?: string }): string =>
-    r.edge ? `covers ${r.edge}` : r.id;
+    r.edge ? `complies at ${r.edge}` : r.id;
   const CHIP: Record<RuleStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author rule notes by id (a RuleResult carries no note — the physical-meaning note lives on the
@@ -1144,28 +1168,20 @@
       {/each}
     </select>
     <strong>{cfg.title}</strong>
-    <!-- The headline verdict. With several conditions selected it is the AGGREGATE, never one
-         condition's answer wearing no label: a bare verdict cannot render here. -->
-    {#if multi}
-      <span class="feasb {AGG_CLASS[agg.closes]}" title={CONTROL_HELP.cornerAggregate}
-        >{aggregateText}</span
+    <!-- Two answers, never one. FEASIBILITY: the design where it was sized — stamped with that
+         condition whenever more than one is on the page. COMPLIANCE: how many of the points the
+         design is promised to work at it was found to comply at, with the ones that failed, the
+         ones that could not be answered and the ones never run each counted apart. -->
+    <span class="feasb {FEAS_CLASS[agg.feasibility]}" title={CONTROL_HELP.feasBadge}>
+      {feasText}{#if binding && agg.feasibility === 'infeasible'}<i
+          >{binding.id} {pct(binding.marginPct)}</i
+        >{/if}
+    </span>
+    {#if hasCompliance}
+      <span class="compb {complianceClass}" title={CONTROL_HELP.compliance} data-compliance
+        >{complianceText}</span
       >
-      {#if agg.covers}
-        <span class="feasb {COVERS_CLASS[agg.covers.state]}" title={CONTROL_HELP.edges}
-          >{coversText}</span
-        >
-      {/if}
-    {:else if evaluated && result}
-      <span class="feasb {result.feasible ? 'ok' : 'no'}" title={CONTROL_HELP.feasBadge}>
-        {result.feasible ? 'feasible' : 'infeasible'}{#if binding}<i
-            >{binding.id} {pct(binding.marginPct)}</i
-          >{/if}
-      </span>
-    {:else}
-      <span class="feasb skip" title={CONTROL_HELP.cornerNotEvaluated}>not evaluated</span>
     {/if}
-    <!-- Which condition the verdict belongs to. It is never omitted: an unstamped verdict is a
-         claim about a chip that was never characterized. -->
     {#if refKey && !multi}
       <span class="scond" data-condition={variantLabel(refKey)} title={CONTROL_HELP.cornerMode}
         >at {variantLabel(refKey)}</span
@@ -1318,17 +1334,14 @@
   <!-- Every selected condition, each with its own two answers and its own label. The aggregate
        in the header is a fold of exactly these rows, and never replaces them. -->
   {#if multi}
-    <!-- The worst reading over the conditions that RAN, labelled as such: it is a display fold,
-         and it must never be read as a margin over the set when part of the set went
-         unevaluated. -->
-    {#if agg.worstMargin !== null}
-      <p class="scap" title={CONTROL_HELP.cornerAggregate}>
-        worst hard-rule margin among the {agg.counts.pass + agg.counts.fail} condition{agg.counts
-          .pass +
-          agg.counts.fail ===
-        1
-          ? ''
-          : 's'} evaluated: {pct(agg.worstMargin)}
+    <!-- The tightest reading over the points that were MEASURED, labelled as such and naming
+         where it was read: it is a display fold, and it must never be read as a margin over
+         points that were not run or returned no answer. -->
+    {#if agg.worst}
+      <p class="scap" title={CONTROL_HELP.compliance} data-worst>
+        tightest hard rule over every point measured: {agg.worst.id}
+        {pct(agg.worst.marginPct)} at {variantLabel(agg.worst.key)}{#if agg.worst.limit}
+          · {agg.worst.limit}{/if}
       </p>
     {/if}
     <table class="scorntab">
@@ -1338,8 +1351,8 @@
           <tr class="st-{runClass(r)}" data-corner-row={variantLabel(r.key)}>
             <td class="ccond">{variantLabel(r.key)}</td>
             <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
-            <td class="ccl">{closesCell(r)}</td>
-            {#if agg.covers}<td class="ccv">{coversCell(r)}</td>{/if}
+            <td class="ccl">{centreCell(r)}</td>
+            {#if hasRange}<td class="ccv">{rangeCell(r)}</td>{/if}
             <td class="ccd" title={detail}>{detail}</td>
           </tr>
         {/each}
@@ -1347,11 +1360,12 @@
     </table>
   {/if}
 
-  <!-- A condition that was refused: the engine never ran there, so there is no verdict — only
-       the named reason, which is a different thing from a design that does not close. -->
+  <!-- A condition with no verdict — refused before the engine ran, or started and not completed:
+       only the named reason, which is a different thing from a design that is infeasible. The
+       words match the badge: "no answer" when a run started, "not evaluated" when none did. -->
   {#if refRun && refRun.state === 'not-evaluated'}
     <div class="snotev" data-not-evaluated={variantLabel(refRun.key)}>
-      <p><b>not evaluated at {variantLabel(refRun.key)}</b></p>
+      <p><b>{refRun.result ? 'no answer' : 'not evaluated'} at {variantLabel(refRun.key)}</b></p>
       {#each refRun.issues as issue}
         <p class="sissue">{issue.message}</p>
       {/each}
@@ -1366,7 +1380,7 @@
 
   {#if multi && result && refKey}
     <p class="scap sstamp">
-      detail below is <b>{variantLabel(refKey)}</b> — one of {askKeys.length} conditions
+      detail below is <b>{variantLabel(refKey)}</b> — one of {runs.length} conditions
     </p>
   {/if}
 
@@ -1487,11 +1501,11 @@
 
     {#if res.edges?.length}
       <div class="sedges">
-        <span class="glabel" title={CONTROL_HELP.edges}>range coverage</span>
+        <span class="glabel" title={CONTROL_HELP.edges}>operating range</span>
         {#each res.edges as e (e.name)}
           {@const detail = edgeDetail(e)}
-          <span class="sedge {EDGE_CLASS[e.state]}" title={edgeTitle(e, detail)}>
-            {EDGE_MARK[e.state]}
+          <span class="sedge {POINT_CLASS[e.state]}" title={edgeTitle(e, detail)}>
+            {POINT_MARK[e.state]}
             {e.name}{#if edgeWarns(e).length}&nbsp;⚠{/if}
             {#if detail}<i>{detail}</i>{/if}
           </span>
@@ -1502,8 +1516,8 @@
 
   {#if twoD && swept2 && swept2.x.length}
     <div class="scap">
-      feasibility · <b>{active}</b> × <b>{active2}</b> — green closes, red fails a hard rule (X → right,
-      Y ↑)
+      feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard rule (X →
+      right, Y ↑)
     </div>
     <div class="smap">
       <div class="smy">
@@ -1527,15 +1541,16 @@
     <div class="scap">
       {#if multi}
         worst hard-rule margin (%) vs <b>{active}</b>{#if sweptUnit}
-          ({sweptUnit}){/if} — one curve per condition that was evaluated; the 0 line is the constraint
-        boundary, clipped at ±{MARGIN_CLIP}%. A condition that could not be evaluated draws no curve
-        and stays in the table above.
+          ({sweptUnit}){/if} — one curve per condition that was evaluated, each re-sizing the design at
+        that condition as the knob moves: where the design type is feasible there, not the held design.
+        The 0 line is the constraint boundary, clipped at ±{MARGIN_CLIP}%. A condition that could
+        not be evaluated draws no curve and stays in the table above.
       {:else}
         margin (%) vs <b>{active}</b>{#if sweptUnit}
           ({sweptUnit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory); clipped
         at ±{MARGIN_CLIP}%{#if (cfg.operatingRange ?? []).length}
-          · each sample checks its OWN design at the claimed range ends, so the coverage curves move
-          with the sweep{/if}
+          · each sample holds its OWN design at the range ends, so the range-end curves move with
+          the sweep and never change what is feasible{/if}
       {/if}
     </div>
     <div class="pchart" bind:this={el}></div>
@@ -1615,17 +1630,19 @@
     font-family: ui-monospace, monospace;
     opacity: 0.8;
   }
-  /* Overall feasibility badge: the design's headline verdict, so a red advisory guardrail below
-     it is never mistaken for the whole design failing. */
-  /* One pill shell for the verdict badge and the edge chips; each keeps only its own
-     text treatment. */
+  /* The two headline badges — feasibility, and compliance beside it — so a red advisory
+     guardrail below them is never mistaken for the whole design failing. */
+  /* One pill shell for the badges and the range-end chips; each keeps only its own text
+     treatment. */
   .feasb,
+  .compb,
   .sedge {
     padding: 0.04rem 0.4rem;
     border-radius: 999px;
     border: 1px solid currentColor;
   }
-  .feasb {
+  .feasb,
+  .compb {
     font-size: calc(0.66rem * var(--text-scale));
     font-weight: 700;
     text-transform: uppercase;
@@ -1649,17 +1666,20 @@
     opacity: 0.85;
   }
   .feasb.ok,
+  .compb.ok,
   .sedge.ok {
     color: var(--ok);
   }
   .feasb.no,
+  .compb.no,
   .sedge.no {
     color: var(--err);
   }
-  /* A range end nobody checked, and a condition nobody could evaluate: the body text colour,
-     dimmed. Deliberately neither status colour — both have to read as an open question, and
-     green or red would each answer it. */
+  /* A point that was not run, or that could not be answered: the body text colour, dimmed.
+     Deliberately neither status colour — both have to read as an open question, and green or
+     red would each answer it. */
   .sedge.skip,
+  .compb.skip,
   .feasb.skip {
     color: var(--fg);
     opacity: 0.55;
@@ -2008,7 +2028,7 @@
     border-radius: 4px;
     font-size: calc(0.8rem * var(--text-scale));
   }
-  /* the left rail tints to the block's verdict — green closes, red doesn't, and neither
+  /* the left rail tints to the block's verdict — green is feasible, red is not, and neither
      colour is borrowed by a block whose condition was never evaluated */
   .suse.st-pass {
     border-left-color: var(--ok);

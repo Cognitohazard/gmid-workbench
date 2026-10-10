@@ -12,49 +12,72 @@ solver — the engine never solves the node set simultaneously — and the only 
 solving is the explicit, designer-named bind. This document specifies the model precisely enough to author a sheet by
 hand or generate one from code — see also [Scripting the core](../README.md#scripting-the-core).
 
-## Two questions: closes, and covers
+## Two questions: feasibility, and compliance
 
 A sheet answers two questions, and keeping them apart is what makes its verdicts readable.
 
-- **Closes** — *does this design TYPE meet the spec at all?* A type-level question, so the
+- **Feasibility** — *can this design TYPE meet the spec at all?* A type-level question, so the
   evaluation is free to re-derive the design: move a knob and every device re-sizes around it.
-  The base run, the sweeps and the topology picker's search all work this way.
-- **Covers** — *does the design this run just produced still hold at the ends of the range it
-  claims?* An instance-level question, so nothing is rebuilt: each device is held at the
-  geometry this run sized it to and only the bias re-settles.
-  [Containment edges](#containment-edges-operatingrange) ask this one.
+  The sheet's own run, the sweeps and the topology picker's search all work this way. It is
+  asked once, where the design is sized, and it has one answer.
+- **Compliance** — *does the ONE design that run produced still work everywhere it is promised
+  to?* An instance-level question, so nothing is rebuilt: each device is held at the geometry
+  the run sized it to and only the bias re-settles. It is asked at **points**: the design's own
+  operating point (the centre) and each end of the range the sheet claims (its
+  [operating range](#the-operating-range-operatingrange)), at every process condition selected.
 
 Rebuilding is the whole point of the first question and the whole error of the second. The
-instance a coverage check is about is simply whatever the current settings produce — never a
-frozen reference design: turn a knob and a different instance is checked, and each cell of a
-sweep checks its own cell's design.
+instance a compliance point is about is simply whatever the current settings produce — never a
+frozen reference design: turn a knob and a different instance is held, and each sample of a
+sweep holds its own sample's design.
 
-The sheet's single feasibility verdict FOLDS both answers — a design that does not cover its
-claimed range is not feasible, so the badge can go red with every rule green (see
-[Feasibility](#feasibility)). `covers`, reported per range end, is where the second answer reads
-on its own. In results, `closes` carries the first answer before that fold, so a coverage gap
-never reads as a failure to close.
+**The two answers are never folded into one.** A design that meets every spec where it is sized
+and fails at one end of its range is *feasible* and *does not comply there* — two facts, shown
+in two places. Feasibility is not lowered by anything that happens at a range end or at another
+condition, and compliance is not implied by feasibility. In results, `feasible` carries the
+first answer; `complies` and the per-range-end `state` carry the second.
 
-**Process corners parameterize both questions; they do not add a third.** The same sheet can be
-evaluated at any (corner, temperature) condition its device tables are loaded for, and every
-verdict is then stamped with the condition it was measured at — "closes at tt" and "closes at
-all five loaded conditions" are different claims. Which conditions to evaluate is a property of
-the viewer's bench (which tables are loaded, which one is designated nominal), **never of this
-document**: nothing corner-related appears in the sheet JSON, and a sheet file is portable
-across benches with different corner sets.
+**A compliance point has four possible outcomes, and only two of them are verdicts.**
+
+| outcome | meaning |
+|---|---|
+| `complies` | the held design was measured at that point and every hard rule holds |
+| `does-not-comply` | it was measured there and a hard rule fails — or a device held at its width cannot carry its current there at all |
+| `no-answer` | the question was asked and could not be answered: a solve did not land, the table does not reach the bias the design sits at, or the design rests on a voltage classed `assumed` |
+| `not-run` | the question was never asked: there is no design to hold, or no table loaded at that condition |
+
+`no-answer` and `not-run` are never shown as a pass and never as a failure. A summary over many
+points is therefore a count, not a word — "complies at 5 of 9 points · 1 fail · 2 no answer · 1
+not run" — so it always says what happened to the points that did not comply.
+
+**Process corners add points; they do not add a third question.** The same sheet can be
+evaluated at any (corner, temperature) condition its device tables are loaded for. Which
+conditions to evaluate is a property of the viewer's bench (which tables are loaded, which one
+is designated nominal), **never of this document**: nothing corner-related appears in the sheet
+JSON, and a sheet file is portable across benches with different corner sets.
 
 **One design across the conditions.** A set of conditions is asked about one design, not one
 design per corner. The design is sized once — at the device's nominal condition, or at the only
-condition asked about when the bench designates none — and every other condition is then asked
-about that same hardware: the widths and lengths that run produced, the currents the sheet
-authors, and the gate biases its held nodes needed, with only the operating point re-settled on
-that condition's tables. This is the same fixed-hardware reading a range end uses (see [What "the
-same design" means at a range end](#what-the-same-design-means-at-a-range-end)), applied across
-corners. A design re-sized at each corner would report on a different chip each time; one is
-built. Three things decline the question at a condition instead of answering it: several
-conditions with no nominal among the loaded tables to size at; a nominal that did not evaluate;
-and a design that rests on a voltage classed `assumed`, since a typed guess held across corners
-says nothing about the hardware.
+condition asked about when the bench designates none — and that run answers feasibility. Every
+other condition is then asked about that same hardware: the widths and lengths that run
+produced, the currents the sheet authors, and the gate biases its held nodes needed, with only
+the operating point re-settled on that condition's tables. This is the same fixed-hardware
+reading a range end uses (see [What "the same design" means at a range
+end](#what-the-same-design-means-at-a-range-end)), applied across corners. A design re-sized at
+each corner would report on a different chip each time; one is built. The nominal condition is
+always part of the answer, whether or not it was asked for, because the design is sized there.
+
+The operating range describes the **application** — the input levels and loads the circuit is
+promised to work across — and the application does not move with the silicon. A range end
+written as an expression (`V_out - 0.2`) is therefore resolved once, against the nominal run,
+and every condition is asked about that same number.
+
+Three things leave a condition's points without a verdict: several conditions with no nominal
+among the loaded tables to size at, or a nominal that did not evaluate (`not-run`: there is no
+design to hold); and a design that rests on a voltage classed `assumed` (`no-answer`: a typed
+guess held fixed while the conditions move says nothing about the hardware). The last applies
+to range ends too: a sheet with an assumed voltage reaching a device has no compliance answer
+at any point, though its feasibility still reports.
 
 ## The document model
 
@@ -71,7 +94,7 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | `checks` | array | Named comparisons the design must satisfy (see [Rules](#rules-checks)). |
 | `blocks` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
 | `provides` | array of string, optional | The names this sheet exposes to a parent. Inert to the engine at the top level, but load-bearing there as the sheet's declared interface (see [Port contracts](#port-contracts)). |
-| `operatingRange` | array, optional | Containment edges: the claimed range's ends, re-checked on the design this run produced; their hard verdicts gate the sheet (see [Containment edges](#containment-edges-operatingrange)). |
+| `operatingRange` | array, optional | The ends of the range the sheet claims to work across. The design this run produced is held fixed and asked at each one; the outcomes are its compliance, reported beside feasibility and never folded into it (see [The operating range](#the-operating-range-operatingrange)). |
 
 Evaluation runs in one pass: seed the params, compose any children, size the device, evaluate
 the rows in order, then check the rules. Everything a rule or row can reference — params,
@@ -91,7 +114,7 @@ names:
 | `checks`, of kind `physical` / `spec` / `advisory` | rules, of kind invariant / requirement / guardrail |
 | `blocks` | uses, children |
 | `provides` | the provide list |
-| `operatingRange` | containment edges, range ends |
+| `operatingRange` | range ends |
 | `designConstraint` | a pin |
 
 A file written with the earlier key names — `bind`, `rows`, `rules` with kinds `invariant`,
@@ -461,7 +484,7 @@ operator, `==` included: an equality sitting a hair outside its tolerance band m
 surface as a near-miss, not silently read full pass. Two mechanisms park a rule ON its own boundary by construction. First, a rule that
 tests the very quantity the bind pinned: bind `gm = 2*pi*GBW_target*CL` and then write
 `GBW_target*CL*2*pi <= gm`, and the two sides are algebraically identical, landing within
-floating-point rounding of the boundary. Second, a containment edge evaluated AT a claimed
+floating-point rounding of the boundary. Second, a range end evaluated AT a claimed
 range end: the pin lands `CM_in` within its landing tolerance (10⁻⁶ of the bracket span,
 stretched by the relation's slope — microvolts on a volt-scale node) of the very value
 `cm-not-below` compares it against. Without the snap either verdict would coin-flip; with it,
@@ -503,14 +526,12 @@ A sheet is **feasible** only when all of the following hold (it fails closed oth
   data `ceiling`) held;
 - every **hard** rule (invariant and requirement) is `pass` or `amber`;
 - every composed child is feasible;
-- every declared containment edge covers — a claimed range is part of the spec, so a design
-  that misses its own claim fails (see [Containment edges](#containment-edges-operatingrange)). A range
-  end that was not CHECKED never fails the sheet on its own account: that happens only where the
-  run already failed the last condition below;
 - no error-severity warning was raised (including structural validation errors).
 
 Guardrails are excluded from this aggregate. A sheet with no bind and no children is feasible
-whenever its hard rules hold.
+whenever its hard rules hold. Nothing that happens at an end of the sheet's operating range
+enters it: that is compliance, a separate answer (see [The operating
+range](#the-operating-range-operatingrange)).
 
 ## The width contract
 
@@ -841,7 +862,7 @@ and add a `hold`:
 
 At the design point nothing is solved. The parameter keeps its value, it can be edited and swept,
 and the result reports what the held expression came to (`held`: here the cascode gate bias the
-design needs). Wherever the design is **held fixed and re-checked** — a containment edge's
+design needs). Wherever the design is **held fixed and re-checked** — a range end's
 fixed-hardware run — the roles swap: the expression is held at that value and the node is
 re-solved between `min` and `max`, by the same bisection a `designConstraint` uses. That is what the circuit
 does: a bias line holds the gate, and the node under it moves with the condition. Without the
@@ -857,18 +878,18 @@ parameter's own term is there to read. Any other relation is a `designConstraint
 | the parameter appears twice, inside a function, divided, or not at all | validation error — write the relation as a `designConstraint` |
 | the parameter also carries `designConstraint`, `solveFor` or `class` | validation error — a parameter takes one of the three solvers, and a held node's class is derived |
 | `min`/`max` missing or inverted | validation error — the bracket is required |
-| a containment edge sets the parameter | validation error — the range end re-solves it, so the override would be discarded |
+| a range end sets the parameter | validation error — the range end re-solves it, so the override would be discarded |
 | a parent wires a value into a node its child holds | warning — the value is used at the design point, but a range end re-solves the node inside the child and the parent's own value does not follow. Hold the node on the parent |
 | the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at); validation says the solve order cannot be established and names the name |
 | the held expression does not evaluate at the design point | infeasible — there is nothing to hold it at |
-| at a range end, the expression barely moves across the bracket | that end does not cover, "numerically unresolved" — the rest of the expression cancels the node's own term, so no node voltage is singled out |
-| at a range end, the node cannot be bracketed | that end does not cover, with the bisection's own message |
+| at a range end, the expression barely moves across the bracket | that end is `no-answer`, "numerically unresolved" — the rest of the expression cancels the node's own term, so no node voltage is singled out |
+| at a range end, the node cannot be bracketed | that end is `no-answer`, with the bisection's own message |
 
 A `hold` keeps the **design point's** gate voltage. A gate bias that itself moves with the
 condition — a replica that tracks the device — is a provided bias: write it as an expression and
 pin the node to it with a `designConstraint`.
 
-## Containment edges (`operatingRange`)
+## The operating range (`operatingRange`)
 
 A sheet that claims a RANGE — "this amplifier accepts any input common mode in
 `[CM_lo, CM_hi]`" — used to check the claim with linearized guardrails, which could only
@@ -881,71 +902,93 @@ estimate the ends from the evaluated point. `operatingRange` checks them directl
 ]
 ```
 
-Each edge re-evaluates the WHOLE sheet once more with the named params' values overridden —
-each `set` expression is evaluated against the base result, so it may reference params, rows,
-or provided scalars. It is a coverage check, so the run is not free to build a new design at
-the range end: every device in the tree is held at the width and length the base run sized it
-to, and what re-settles is the bias. That re-settling is the machinery the engine already has —
-the pin solve runs again from the full authored bracket, `vds` subtractions re-evaluate against
-the moved nodes, each transformed device's `vgs` comes back out of the lookup at its held width —
-with its
-own children and its own solver budget. Every hard rule must hold there, and a solve that fails
-at an edge — the bracket cannot reach `CM_lo` because no tail-node position produces it — is
-itself the honest verdict that the design does not cover that end, reported with the solver's
-own message. The badge names an edge failure through the same binding-constraint definition as
-everything else, with the edge name prefixed: `cm-lo@tail-saturated`. Both tree-key separators
-are reserved: rule ids, edge names, AND use names may contain neither `@` nor `.` — every one of
-them becomes part of a key in the single map rule outcomes share, and a name carrying a
-separator could silently shadow another rule's result (validation refuses them).
+Each range end re-evaluates the WHOLE sheet once more with the named params' values overridden
+— each `set` expression is evaluated against the base result, so it may reference params, rows,
+or provided scalars. It is a compliance point, so the run is not free to build a new design
+there: every device in the tree is held at the width and length the base run sized it to, and
+what re-settles is the bias. That re-settling is the machinery the engine already has — the pin
+solve runs again from the full authored bracket, `vds` subtractions re-evaluate against the
+moved nodes, each transformed device's `vgs` comes back out of the lookup at its held width —
+with its own children and its own solver budget. Both tree-key separators are reserved: rule
+ids, range-end names, AND use names may contain neither `@` nor `.` — every one of them becomes
+part of a key in the single map rule outcomes share (a range end's rule is named
+`cm-lo@tail-saturated`), and a name carrying a separator could silently shadow another rule's
+result (validation refuses them).
 
-**Three outcomes, never two.** Each edge reports `covers`, `does-not-cover`, or `not-checked`.
-Coverage is a question about an instance, so it can only be asked where the run produced one:
-when the base evaluation raised an error-severity warning — a bind that did not size, a pin that
-never landed — the ends are not checked at all, and saying so is the answer. It is not a
-failure and must never be displayed as one. The distinction is load-bearing rather than
-cosmetic: a pin that fails leaves its last bisection probe behind in the result with every bind
-still reading `ok`, so a verdict computed from that point would describe hardware the engine
-never landed on. A rule FAILURE does not stop the check — a design that misses a spec is still a
-design, and whether it holds across its claimed range is still a real question. The result's
-aggregate `covers` is true when every edge reports `covers`, absent when nothing was checked.
+**Four outcomes, two of them verdicts.** Each range end reports a `state`:
 
-What edges do and do not check: they check the **endpoints**, exactly. The interior follows
-only where feasibility is monotone toward the ends — true of the saturation mechanisms that
-end a CM range, not a theorem about arbitrary rules — so the sweep remains the authority on
+- `complies` — the held design was measured there and every hard rule holds.
+- `does-not-comply` — it was measured there and a hard rule fails; the failing rules are in
+  the end's own `rules`. One failure leaves no rule outcomes: a device held at its width whose
+  required current density runs past the top of the swept `vgs` range cannot carry its current
+  there at all ("this device cannot carry its current here" — or, for a device bound by its
+  transconductance, "cannot reach its transconductance here"), with the lookup's own message
+  and reach numbers kept behind it in `error`.
+- `no-answer` — the question was asked and could not be answered, and `error` says why:
+  - a solve did not land at that end — the bracket cannot reach `CM_lo` because no tail-node
+    position inside it produces it. Nothing was measured, so this is not a failure of the
+    design; widen the bracket, or read it as the tool's limit rather than the circuit's;
+  - a `set` expression did not resolve to a number;
+  - the table does not reach the bias the held design sits at. A `vds`, `vsb`, length or
+    supplied gate voltage off the table's hull is read at the nearest characterized value, and
+    a diode-connected device whose gate voltage lies past the characterized `vds` range is read
+    at that range's edge — an advisory at the design's own operating point, but at a range end
+    an answer read somewhere else is no answer, however its rules came out and even when the
+    lookup then failed on the clamped data. (Float rounding is not a clamp: a value within
+    10⁻⁹ of the axis span of an end node reads that node.) One case is NOT covered: a bias
+    declared on an axis the table does not have at all — a `vsb` on a table swept at one body
+    bias. The table is then used as it is, at the centre and at every range end alike, with a
+    warning on each run; a range end that moves such a bias is answered from data that cannot
+    show the move, so read its warning before trusting the chip;
+  - a held device's current density falls below the bottom of the swept `vgs` range: it would
+    sit at a gate voltage nobody characterized;
+  - the design rests on a voltage classed `assumed`. Then every range end is declined without
+    being evaluated.
+- `not-run` — the question was never asked, because the base run produced no design to hold:
+  it raised an error-severity warning — a bind that did not size, a pin that never landed. The
+  distinction from a failure is load-bearing rather than cosmetic: a pin that fails leaves its
+  last bisection probe behind in the result with every bind still reading `ok`, so a verdict
+  computed from that point would describe hardware the engine never landed on.
+
+A rule FAILURE at the centre does not stop the range ends being run — a design that misses a
+spec is still a design, and whether it holds across its claimed range is still a real question.
+The result's `complies` is true when every range end reports `complies`, false when any does
+not — one with no answer included — and absent when the ends were not run because there was no
+design to hold. None of this moves `feasible`.
+
+What the range ends do and do not establish: they are the **endpoints**, exactly. The interior
+follows only where the outcome is monotone toward the ends — true of the saturation mechanisms
+that end a CM range, not a theorem about arbitrary rules — so the sweep remains the authority on
 the full landscape. Costs and semantics to know:
 
-- Cost is `(1 + edge count)` full evaluations everywhere the sheet evaluates — sweep cells
-  included, because a swept cell must never disagree with the same numbers evaluated alone —
-  except where the base run did not stand, which costs one. A pinned sheet's 21-point sweep goes
-  from ~0.6 s to ~1.8 s with two edges.
+- Cost is `(1 + range-end count)` full evaluations wherever the sheet is evaluated with its
+  range — the sheet's own run and each sample of a one-parameter sweep — except where the base
+  run did not stand, which costs one. A pinned sheet's 21-point sweep goes from ~0.6 s to
+  ~1.8 s with two ends. The two-parameter feasibility map and the topology picker answer
+  feasibility only, so they never evaluate a range end.
 - A composed child's `operatingRange` is **not evaluated** (validation warns): in composition the
   parent typically drives the child's spec params, which would make the child's own range
-  claim a fiction. Re-declare the claim on the parent if it should gate there.
+  claim a fiction. Re-declare the claim on the parent if it should be asked there.
 - `set` may not target an engine-solved param (`designConstraint`/`solveFor`) — the solve would discard
   the override; validation refuses it.
-- The report carries the full story per edge: `state` (the three-way outcome above), `set`
-  (the NUMERIC point that was checked — the authored side may be an expression), `rules` and
-  `children` (path-attributable outcomes), `solved` (where the engine-solved params landed;
-  EMPTY when the run did not stand, so a bracket end is never reported as a landing),
-  `warnings` (the run's own diagnostics, verbatim — a bias clamp fires exactly at a claim's
-  extreme, and a green verdict must not rest on silently clamped data), `error` (the solver's
-  message when the run could not be evaluated at all), and `assumedSource` (see the fidelity
-  notes below). A `not-checked` edge carries no outcomes: nothing ran.
-- A range end can push a device's required current density outside the swept `vgs` range —
-  its width is no longer free to grow to meet the current, so the inverse lookup can run out
-  of table. That is a failure to cover, and it is reported in those terms ("this device cannot
-  carry its authored current at the endpoint bias") with the lookup's own message and reach
-  numbers kept behind it.
-- In the 1-D sweep each edge rides as one aggregate curve (legended `covers cm-lo`): its
-  worst hard-rule margin per sample, SKIPPING margins that sit exactly on zero — the
-  edge's own range rule is parked there by construction (the snap) and carries no
-  headroom information. An end that was checked and does not cover draws at the bottom clip
-  rather than vanishing, so an edge-driven feasibility flip always has an on-chart cause; a
-  sample whose ends were never checked leaves a GAP in the curve, because there is no
-  margin to draw and the bottom clip would read as a failure.
-- Edge curves move along EVERY sweep, including a sweep of a param an edge overrides (the
-  canonical kit sweeps `CM_dc`, which both ends pin). Each sample checks its own sample's
-  design, so what the curve traces is how the coverage margin of a changing design varies —
+- The report carries the full story per range end: `state` (the four-way outcome above), `set`
+  (the NUMERIC point that was asked about — the authored side may be an expression), `rules`
+  and `children` (path-attributable outcomes), `solved` (where the engine-solved params landed;
+  EMPTY whenever `error` is set, so a bracket end is never reported as a landing), `warnings`
+  (the run's own diagnostics, verbatim), `error` (present whenever the end's rule outcomes are
+  not findings about that point: the solver's message, the table's reach, the refusal), and
+  `assumedSource` (see the fidelity notes below). A `not-run` end carries no outcomes: nothing
+  ran.
+- In the 1-D sweep each range end rides as one aggregate curve (legended `complies at cm-lo`):
+  the held design's worst hard-rule margin there, per sample, SKIPPING margins that sit exactly
+  on zero — the end's own range rule is parked there by construction (the snap) and carries no
+  headroom information. It is a compliance curve and never changes which samples are feasible.
+  An end the design measurably fails without leaving a margin draws at the bottom clip; a
+  sample whose end was not run, or returned no answer, leaves a GAP in the curve, because there
+  is no margin to draw and the bottom clip would read as a failure.
+- Range-end curves move along EVERY sweep, including a sweep of a param a range end overrides
+  (the canonical kit sweeps `CM_dc`, which both ends pin). Each sample holds its own sample's
+  design, so what the curve traces is how the range-end margin of a changing design varies —
   not a constant redrawn. The caption on the chart says so.
 
 ### What "the same design" means at a range end
@@ -1012,7 +1055,7 @@ Two views trace a sheet across parameter ranges (both need finitely-bounded slid
 - **One-parameter sweep** — walk one sweepable param across its `[min, max]` and, at each
   sample, plot every rule's relative margin plus the overall feasibility. This is the classic
   feasibility-region view: wherever every hard rule's curve sits at or above zero, the design
-  closes. In a composed sweep, each descendant block's hard rules ride along with path-prefixed
+  is feasible. In a composed sweep, each descendant block's hard rules ride along with path-prefixed
   ids (`cs.headroom`), so the constraint that actually binds is on the chart wherever it lives.
 - **Two-parameter sweep** — the design-plane map over two params' ranges (the `gm_id × L` plane
   is the classic), answering questions a 1-D cut cannot: "what is the minimum `L` that stays
@@ -1064,8 +1107,9 @@ silently repairs one.
 6. **A claimed operating range is a claim to check.** Declare `operatingRange` so both ends are
    re-checked on every run — on the design that run produced, with its devices held — and say
    in the note that the ends are checked exactly while the sweep owns the interior (see
-   *Containment edges*). Backstop: an end the design does not cover fails the sheet hard under
-   an edge-qualified rule id.
+   *The operating range*). Backstop: an end the design does not comply at is reported as
+   exactly that — beside feasibility, under a rule id qualified with the end's name — and an
+   end that could not be answered is never counted as complying.
 7. **Pick each rule's kind for its verdict semantics.** Requirements and invariants gate
    feasibility; guardrails advise and never block; `==` fixed points carry a tolerance (see
    *Rule kinds*). A hard rule whose side cannot compute reads `na` and fails closed — so

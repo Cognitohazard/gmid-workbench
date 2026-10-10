@@ -17,6 +17,7 @@ import {
   sweepable,
   bindingConstraint,
   limitingConstraint,
+  rangeEndConstraint,
   sheetSensitivities,
   withParams,
   isHardRule,
@@ -2165,7 +2166,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     // A range claim sends the base run down a different path; the refusal has to be on it.
     const doc: SheetDoc = { ...nested('P'), operatingRange: [{ name: 'e', set: { A0: '0.9' } }] };
     const res = evaluateSheet(doc, dev);
-    expect(res.closes).toBe(false);
+    expect(res.feasible).toBe(false);
     expect(
       res.warnings.some(
         (w) => w.severity === 'error' && /pinned params depend on each other/.test(w.message),
@@ -2219,7 +2220,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
   });
 });
 
-describe('containment edges — exact range checks folded into the verdict', () => {
+describe('operating range — the held design asked at each range end, apart from feasibility', () => {
   // Mirrors the library's CM idiom: x is the internal node the pin solves, y = 2x + 1 the
   // produced output, T the typed spec, [T_lo, T_hi] the claimed range the edges check.
   const mk = (over: Partial<SheetDoc> = {}): SheetDoc => ({
@@ -2248,7 +2249,8 @@ describe('containment edges — exact range checks folded into the verdict', () 
     expect(res.feasible).toBe(true);
     expect(res.values.x).toBeCloseTo(2, 4); // base: y = 5 → x = 2
     expect(res.edges?.map((e) => e.name)).toEqual(['lo', 'hi']);
-    expect(res.edges?.[0].feasible).toBe(true);
+    expect(res.edges?.map((e) => e.state)).toEqual(['complies', 'complies']);
+    expect(res.complies).toBe(true);
     expect(res.edges?.[0].solved.x).toBeCloseTo(1, 4); // y = 3 → x = 1
     expect(res.edges?.[1].solved.x).toBeCloseTo(3, 4); // y = 7 → x = 3
   });
@@ -2274,24 +2276,36 @@ describe('containment edges — exact range checks folded into the verdict', () 
     expect(bad.edges?.[0].solved).toEqual({}); // a bracket end is not a landing
   });
 
-  it('a rule failing ONLY at an edge fails the sheet, and the binding id names the edge', () => {
+  it('a rule failing ONLY at a range end leaves the design feasible, and is named with its end', () => {
     const doc = mk();
-    doc.params.find((p) => p.name === 'x_floor')!.value = 1.5; // base x=2 passes; lo edge x=1 fails
+    doc.params.find((p) => p.name === 'x_floor')!.value = 1.5; // base x=2 passes; lo end x=1 fails
     const res = evaluateSheet(doc, dev);
     expect(res.rules.every((r) => r.status === 'pass' || r.status === 'amber')).toBe(true);
-    expect(res.feasible).toBe(false);
-    expect(res.edges?.[0].feasible).toBe(false);
-    expect(bindingConstraint(res)?.id).toBe('lo@node-floor');
+    // Two questions, two answers: the design meets its spec where it was sized, and does not
+    // hold at one end of the range it claims.
+    expect(res.feasible).toBe(true);
+    expect(res.complies).toBe(false);
+    expect(res.edges?.map((e) => e.state)).toEqual(['does-not-comply', 'complies']);
+    // Nothing binds where the design was sized, so the feasibility question names no rule...
+    expect(bindingConstraint(res)).toBeUndefined();
+    // ...and the range end's failure is named with its end, or by asking that run itself.
+    expect(rangeEndConstraint(res)?.id).toBe('lo@node-floor');
+    expect(bindingConstraint(res.edges![0])?.id).toBe('node-floor');
   });
 
-  it('an edge the bracket cannot reach fails with the solver reason, verbatim', () => {
+  it('a range end the bracket cannot reach is no answer, with the solver reason verbatim', () => {
     const doc = mk();
     doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // y spans [1, 21]: unreachable
     const res = evaluateSheet(doc, dev);
-    expect(res.feasible).toBe(false);
+    // The solve did not land, so nothing was measured at that end: not a failure of the design,
+    // and never a pass. The design itself is untouched by it.
+    expect(res.feasible).toBe(true);
+    expect(res.edges?.[0].state).toBe('no-answer');
+    expect(res.complies).toBe(false);
     expect(res.edges?.[0].error).toMatch(/does not change sign/);
     // no failing RULE anywhere — the cause is the solve, so there is no rule to name
     expect(bindingConstraint(res)).toBeUndefined();
+    expect(rangeEndConstraint(res)).toBeUndefined();
     // the failed edge does not leak error warnings into the base result
     expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
   });
@@ -2304,18 +2318,19 @@ describe('containment edges — exact range checks folded into the verdict', () 
     expect(res.edges?.[0].solved.x).toBeCloseTo(1, 4);
   });
 
-  it('a set expression that does not resolve fails that edge closed, by name', () => {
+  it('a set expression that does not resolve is no answer at that end, by name', () => {
     const doc = mk({ operatingRange: [{ name: 'lo', set: { T: 'nonsense_name' } }] });
     const res = evaluateSheet(doc, dev);
-    expect(res.feasible).toBe(false);
+    expect(res.feasible).toBe(true);
+    expect(res.edges?.[0].state).toBe('no-answer');
+    expect(res.complies).toBe(false);
     expect(res.edges?.[0].error).toMatch(/did not evaluate to a finite number/);
   });
 
-  it('an infeasible edge can NEVER chart non-negative — na fails it closed, on-chart', () => {
-    // Hard `na` fails an edge closed while contributing no margin; without the floor a
-    // passing sibling rule painted the broken edge at +margin — a feasibility flip with
-    // no on-chart cause. sqrt(6 - T) is finite at the base (T=5) and lo edge (T=3), na
-    // at the hi edge (T=7).
+  it('a range end that does not comply can NEVER chart non-negative — na fails it closed, on-chart', () => {
+    // Hard `na` fails a range end closed while contributing no margin; without the floor a
+    // passing sibling rule painted the failing end at +margin. sqrt(6 - T) is finite at the
+    // base (T=5) and lo end (T=3), na at the hi end (T=7).
     const doc = mk({
       checks: [
         { id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor' },
@@ -2323,8 +2338,8 @@ describe('containment edges — exact range checks folded into the verdict', () 
       ],
     });
     const res = evaluateSheet(doc, dev);
-    expect(res.feasible).toBe(false);
-    expect(res.edges?.[1].feasible).toBe(false);
+    expect(res.feasible).toBe(true);
+    expect(res.edges?.[1].state).toBe('does-not-comply');
     const sw = sweepSheet(doc, 'x_floor', dev, 2);
     const hiCurve = sw.rules.find((r) => r.id === 'hi@');
     expect(hiCurve!.marginPct.every((m) => m !== null && m < 0)).toBe(true);
@@ -2357,7 +2372,7 @@ describe('containment edges — exact range checks folded into the verdict', () 
       operatingRange: [{ name: 'hi', set: { T: 'T_hi' } }],
     };
     const res = evaluateSheet(parent, dev);
-    expect(res.edges?.[0].feasible).toBe(false);
+    expect(res.edges?.[0].state).toBe('no-answer');
     expect(res.edges?.[0].error).toMatch(/pinned param|does not change sign/);
   });
 
@@ -2403,16 +2418,53 @@ describe('containment edges — exact range checks folded into the verdict', () 
     expect(res.warnings.some((w) => /not evaluated in composition/.test(w.message))).toBe(true);
   });
 
-  it('a swept cell agrees with the same values evaluated alone, and the edge curve shows why', () => {
+  it('a swept sample agrees with the same values evaluated alone, and a range end never moves feasibility', () => {
     const doc = mk();
     const sw = sweepSheet(doc, 'x_floor', dev, 3); // samples 0, 0.8, 1.6
-    expect(sw.feasible).toEqual([true, true, false]); // at 1.6: lo edge x=1 < 1.6
+    // Base x = 2 clears every floor swept, so every sample is feasible — including 1.6, where the
+    // lo end (x = 1) falls below it. That is a compliance finding and has its own curve.
+    expect(sw.feasible).toEqual([true, true, true]);
+    expect(sw.stands).toEqual([true, true, true]);
     const alone = evaluateSheet(withParams(doc, { x_floor: 1.6 }), dev);
-    expect(alone.feasible).toBe(false);
+    expect(alone.feasible).toBe(true);
+    expect(alone.complies).toBe(false);
     const loCurve = sw.rules.find((r) => r.id === 'lo@');
     expect(loCurve).toBeDefined();
-    expect(loCurve!.marginPct[2]).toBeLessThan(0); // the on-chart cause of the flip
+    expect(loCurve!.marginPct[2]).toBeLessThan(0); // where the held design stops complying there
     expect(loCurve!.marginPct[0]).toBeGreaterThan(0);
+  });
+
+  it('the 2-D map is a feasibility map: a range end cannot turn a cell, and a broken range still blocks', () => {
+    const doc = mk();
+    doc.params.push({ name: 'slack', value: 0, min: 0, max: 1 });
+    // x_floor up to 1.6 fails the lo end (x = 1) and never the centre (x = 2).
+    const map = sweepSheet2(doc, 'x_floor', 'slack', dev, 3);
+    expect(map.feasible.flat()).toEqual(Array(9).fill(true));
+    expect(map.binding.flat()).toEqual(Array(9).fill(null));
+    // A range the validator refuses makes the sheet a broken sheet here as everywhere else.
+    const broken = mk({ operatingRange: [{ name: 'bad@name', set: { T: 'T_lo' } }] });
+    broken.params.push({ name: 'slack', value: 0, min: 0, max: 1 });
+    expect(sweepSheet2(broken, 'x_floor', 'slack', dev, 3).feasible.flat()).toEqual(
+      Array(9).fill(false),
+    );
+  });
+
+  it('a structurally broken sheet has no design at any swept sample', () => {
+    // The evaluator tolerates a rule id the validator refuses, so the sample itself completes.
+    // The sweep must still say there is no design, as runSheet does for the same document.
+    const doc = mk({
+      checks: [{ id: 'node.floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor' }],
+    });
+    const sw = sweepSheet(doc, 'x_floor', dev, 3);
+    expect(sw.feasible).toEqual([false, false, false]);
+    expect(sw.stands).toEqual([false, false, false]);
+  });
+
+  it('a range end with no answer leaves a gap in its curve, never a failure', () => {
+    const doc = mk();
+    doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // unreachable: the solve cannot land
+    const sw = sweepSheet(doc, 'x_floor', dev, 2);
+    expect(sw.rules.find((r) => r.id === 'lo@')!.marginPct).toEqual([null, null]);
   });
 
   it('use names reserve the rule-path separators — a collision would shadow rule results', () => {
@@ -2805,10 +2857,10 @@ describe('limitingConstraint — the rule closest to breaking', () => {
     expect(limitingConstraint(res)?.id).toBe('loose');
   });
 
-  it('looks past the boundary tautology a containment edge parks on', () => {
-    // An edge lands the design exactly on the range end its own rule compares against, so that
-    // rule reads margin 0 by construction. Naming it as the limiter would be true and useless —
-    // it would be the answer forever, hiding every rule that can actually move.
+  it('looks past the boundary tautology a range end parks on', () => {
+    // A range end lands the design exactly on the limit its own rule compares against, so that
+    // rule reads margin 0 by construction. Naming it as the limiter there would be true and
+    // useless — it would be the answer forever, hiding every rule that can actually move.
     const res = evaluateSheet({
       title: 'edge',
       polarity: 'n',
@@ -2825,16 +2877,18 @@ describe('limitingConstraint — the rule closest to breaking', () => {
     });
     expect(res.feasible).toBe(true);
     expect(res.edges![0].rules.find((r) => r.id === 'range')!.margin).toBe(0);
-    const lim = limitingConstraint(res)!;
-    expect(lim.id).toBe('lo@tight');
+    // Asked of the range end's own run. The base run is a different question with its own
+    // answer: there `range` (1 vs 0.5, 100%) is tighter than `tight` (1 vs 0.49, 104%).
+    const lim = limitingConstraint(res.edges![0])!;
+    expect(lim.id).toBe('tight');
     expect(lim.marginPct).toBeCloseTo(0.01 / 0.49, 9);
+    expect(limitingConstraint(res)?.id).toBe('range');
   });
 
-  it('ignores a containment edge whose solve never landed', () => {
-    // A failed edge's rules were evaluated wherever its bisection stopped — a design point the
+  it('never names a rule from a range end whose solve never landed', () => {
+    // Such an end's rules were evaluated wherever its bisection stopped — a design point the
     // engine never landed on. Naming a constraint measured there points the designer at a
-    // phantom, and here the phantom is TIGHTER than anything real, so it would win the minimum.
-    // The edge's own `error` is the finding; its rules are not outcomes.
+    // phantom. The end's own `error` is the finding; its rules are not outcomes.
     const doc: SheetDoc = {
       title: 'edge',
       polarity: 'n',
@@ -2852,6 +2906,7 @@ describe('limitingConstraint — the rule closest to breaking', () => {
     expect(res.edges![0].rules[0].marginPct).toBeLessThan(res.rules[0].marginPct);
     expect(limitingConstraint(res)?.id).toBe('ceiling');
     expect(bindingConstraint(res)).toBeUndefined();
+    expect(rangeEndConstraint(res)).toBeUndefined();
   });
 
   it('has nothing to name when every hard rule is na', () => {
@@ -2979,6 +3034,41 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     expect(byId.get('r')!.dMarginPerUnit).toBeCloseTo(2, 9);
     // The edge pins `a` to its own value, so the knob cannot move that run at all.
     expect(byId.get('lo@r')!.dMarginPerUnit).toBeCloseTo(0, 12);
+  });
+
+  it('answers for a rule at one range end while another range end has no answer', () => {
+    // y = k*x + 1 is pinned to T, so x = (T - 1)/k. At the lo end T = 3: x = 2/k, and the floor
+    // rule's margin there is 2/k - 1.5, whose slope in k at k = 2 is -2/k^2 = -0.5. The hi end
+    // asks T = 100, which x in [0, 10] cannot produce: no answer there. That is no reason to
+    // refuse the readout about lo — its rules were measured.
+    const doc: SheetDoc = {
+      title: 'two-ends',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
+        { name: 'T', value: 5 },
+        { name: 'T_lo', value: 3 },
+        { name: 'T_hi', value: 100 },
+        { name: 'k', value: 2, min: 1, max: 4, role: 'choice' },
+      ],
+      equations: [{ name: 'y', expr: 'k*x + 1' }],
+      checks: [{ id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: '1.5' }],
+      operatingRange: [
+        { name: 'lo', set: { T: 'T_lo' } },
+        { name: 'hi', set: { T: 'T_hi' } },
+      ],
+    };
+    const res = evaluateSheet(doc);
+    expect(res.feasible).toBe(true);
+    expect(res.edges?.map((e) => e.state)).toEqual(['does-not-comply', 'no-answer']);
+
+    const [lo] = sheetSensitivities(doc, undefined, undefined, { rule: 'lo@node-floor' });
+    expect(lo.error).toBeUndefined();
+    expect(lo.rules.find((r) => r.id === 'lo@node-floor')!.dMarginPerUnit).toBeCloseTo(-0.5, 3);
+    // Pointed at the end that has no answer, it says so in those words — the sheet itself
+    // evaluates, so "the sheet does not evaluate" would be false.
+    const [hi] = sheetSensitivities(doc, undefined, undefined, { rule: 'hi@node-floor' });
+    expect(hi.error).toMatch(/the range end "hi" has no rule outcomes/);
   });
 
   it('probes the author choices by default and never a param the engine solves', () => {

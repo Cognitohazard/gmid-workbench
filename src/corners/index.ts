@@ -25,22 +25,41 @@
 // needed — with only the operating point re-settled (see pinHardware). A run that re-sized the
 // design at each condition would describe one chip per corner; only one of them is built.
 //
+// Two questions, never one. FEASIBILITY is asked once, where the design is sized: can this
+// design type meet its spec. COMPLIANCE is asked of that one design at every point it is
+// promised to work — each condition, at its centre and at each end of the sheet's operating
+// range — and is reported as a count of points, with the ones that were not run or could not
+// be answered counted apart from the ones that fail.
+//
 // Pure; zero DOM. Corner is categorical: nothing here interpolates, resamples, clips, or
 // merges tables across corners.
 
 import type { DeviceTable, QAWarning, TableId } from '../types';
-import type { DeviceResolver, NamedBinding, SheetDoc, SheetRefIndex, SheetResult } from '../sheet';
+import type {
+  DeviceResolver,
+  NamedBinding,
+  SheetDoc,
+  SheetEdgeState,
+  SheetRefIndex,
+  SheetResult,
+} from '../sheet';
 import {
   clampMargin,
   dcInputs,
-  edgeBroke,
   evaluateSheet,
+  heldOutcome,
   limitingConstraint,
   namedBindings,
   resolvedSheet,
+  stands,
   validateSheet,
 } from '../sheet';
-import { pinHardware, type PinnedHardware } from '../sheet/coverage';
+import {
+  assumedLevelRefusal,
+  pinHardware,
+  withNominalRange,
+  type PinnedHardware,
+} from '../sheet/coverage';
 
 // --- variant identity --------------------------------------------------------
 
@@ -399,9 +418,23 @@ export interface VariantIssue {
   readonly message: string;
 }
 
-/** One run's coverage answer. `unavailable` is not a coverage verdict — it says the run did
- *  not happen, and it exists so an aggregate can never quietly count it as either. */
-export type PerRunCovers = 'covers' | 'gap' | 'unchecked' | 'unavailable';
+/**
+ * One compliance point: one condition, at the design's own operating point (the centre) or at
+ * one end of the sheet's claimed operating range. The states are the range-end vocabulary (see
+ * SheetEdgeReport.state), because it is the same question — does this one design, held fixed,
+ * still work here — and the two that are not verdicts are kept apart for the same reason:
+ * `not-run` was never asked (no design to hold, no table loaded at the condition), `no-answer`
+ * was asked and could not be answered (the run did not complete, the data does not reach).
+ */
+export interface CompliancePoint {
+  /** The range end's name. Absent at the centre. */
+  readonly limit?: string;
+  readonly state: SheetEdgeState;
+  /** Why the point has no rule outcomes to read, when it has none: the refusal, the solver's
+   *  message, the table's reach. Absent where the point's rules were measured — a point that
+   *  does not comply because a rule fails names the rule in its run's result instead. */
+  readonly error?: string;
+}
 
 export type VariantRun =
   | {
@@ -414,17 +447,23 @@ export type VariantRun =
       /** On a `held` run: the blocks whose current the base run did not author, so it is held
        *  here as an ideal source (see PinnedHardware.assumedSource). */
       readonly assumedSource?: readonly string[];
-      readonly closes: 'pass' | 'fail';
-      /** Narrower than PerRunCovers: a run that happened has a coverage answer, and letting it
-       *  claim `unavailable` would put one condition in the closure counts and the coverage
-       *  unavailable count at once. */
-      readonly covers: Exclude<PerRunCovers, 'unavailable'>;
+      /** This run's own verdict on its hard rules. On the `sized` run that is FEASIBILITY — the
+       *  one answer to "can this design type meet the spec". On a `held` run it is the same
+       *  reading of a design that was not free to change, which the centre point restates as
+       *  compliance. */
+      readonly feasible: boolean;
+      /** The centre first, then one point per range end the sheet declares, in document order. */
+      readonly points: readonly CompliancePoint[];
       readonly result: SheetResult;
     }
   | {
       readonly state: 'not-evaluated';
       readonly key: VariantKey;
+      /** `sized` on the base condition's own attempt, `held` everywhere else. */
+      readonly design: 'sized' | 'held';
       readonly issues: readonly VariantIssue[];
+      /** The same points an evaluated run carries, none of them `complies`. */
+      readonly points: readonly CompliancePoint[];
       /** Kept when an evaluation ran and did not stand, so its diagnostics survive the
        *  refusal — the numbers are how an author finds out why. */
       readonly result?: SheetResult;
@@ -547,10 +586,9 @@ function prepareRun(doc: SheetDoc, refs?: SheetRefIndex): PreparedRun {
  *    ambiguous table refuses BEFORE the engine sees it, since an unresolved device inside the
  *    engine is an ordinary infeasibility and would read as "does not close",
  * 3. evaluate, projecting every named binding to `key` through one resolver,
- * 4. require the base run to COMPLETE (no error-severity diagnostics): a run that produced no
- *    usable numbers is not evaluated either, with its result kept for diagnostics. A broken
- *    containment edge alone does not refuse — closure was measured; the break is a coverage
- *    non-answer (see coversOf).
+ * 4. require the run to COMPLETE (no error-severity diagnostics): a run that produced no usable
+ *    numbers is not evaluated either, with its result kept for diagnostics. What happened at a
+ *    range end never refuses the run — it is that end's own compliance point.
  *
  * Children that name no device inherit the already-projected parent table, so the whole tree
  * evaluates at one condition without the resolver being consulted for them.
@@ -571,7 +609,10 @@ export function runVariant(
  * makes. Every other condition is then asked about THAT hardware: its binds rewritten to the
  * widths, lengths and currents the base run produced and its held nodes pinned to the gate
  * biases it needed (pinHardware), evaluated on that condition's tables with the operating point
- * free to re-settle. So a run at the base reads `design: 'sized'` and every other `'held'`.
+ * free to re-settle. So the run at the base reads `design: 'sized'` and every other `'held'`.
+ *
+ * The base condition is part of every answer — feasibility is its verdict — so its run is
+ * returned first when `keys` does not ask for it.
  *
  * Refusals, each answered per condition and never folded into a verdict:
  *  - several conditions and no base: nothing says where the design is sized (`no-design`);
@@ -592,52 +633,92 @@ export function runVariants(
   base?: VariantKey,
 ): VariantRun[] {
   const prepared = prepareRun(doc, refs);
-  const at = base ?? (keys.length === 1 ? keys[0] : undefined);
-  const declined = (kind: VariantIssueKind, message: string): VariantRun[] =>
-    keys.map((key) => ({ state: 'not-evaluated', key, issues: [{ kind, message }] }));
   if (keys.length === 0) return [];
-  if (at === undefined)
-    return declined(
-      'no-design',
-      'several conditions are asked about and none is designated nominal — the design has to be ' +
-        'sized at one condition before it can be held at the others',
-    );
-
-  const sized = runPrepared(prepared, primaryFamily, at, familyOf);
-  const others = keys.filter((k) => !sameVariant(k, at));
-  if (others.length === 0) return keys.map(() => sized);
-
-  let held: PinnedHardware | undefined;
-  let refusal: VariantIssue | undefined;
-  if (sized.state !== 'evaluated')
-    refusal = {
-      kind: 'no-design',
-      message: `the design was not evaluated at ${variantLabel(at)}, where it is sized, so there is nothing to hold here`,
-    };
-  else if (prepared.assumptions.length)
-    refusal = {
-      kind: 'assumed-level',
-      message:
-        `the design is sized under assumed ${prepared.assumptions.length === 1 ? 'level' : 'levels'} ` +
-        `${prepared.assumptions.join(', ')} — a typed value held across conditions says nothing ` +
-        `about the hardware. Derive it, or class it independent if nothing on the sheet sets it`,
-    };
-  else held = pinHardware(prepared.doc, sized.result);
-
-  return keys.map((key): VariantRun => {
-    if (sameVariant(key, at)) return sized;
-    if (!refusal) return runPrepared(prepared, primaryFamily, key, familyOf, held);
-    // What is wrong with THIS condition comes first: a table missing here is a fact about the
-    // bench that stays true whatever happens to the design, and the fix is a different one.
+  /** A condition that cannot be asked about the held design: what is wrong with THIS condition
+   *  comes first — a table missing here, or a sheet that does not validate, is a fact about the
+   *  bench that stays true whatever happens to the design, and the fix is a different one. */
+  const declined = (
+    key: VariantKey,
+    state: 'not-run' | 'no-answer',
+    issue: VariantIssue,
+  ): VariantRun => {
     const here = prepared.blockers.length
       ? prepared.blockers
       : preflightBindings(prepared.bindings, primaryFamily, key, familyOf).issues;
-    return { state: 'not-evaluated', key, issues: here.length ? here : [refusal] };
+    return here.length
+      ? refused(prepared, key, 'held', 'not-run', here)
+      : refused(prepared, key, 'held', state, [issue]);
+  };
+  const at = base ?? (keys.length === 1 ? keys[0] : undefined);
+  if (at === undefined)
+    return keys.map((key) =>
+      declined(key, 'not-run', {
+        kind: 'no-design',
+        message:
+          'several conditions are asked about and none is designated nominal — the design ' +
+          'has to be sized at one condition before it can be held at the others',
+      }),
+    );
+
+  const sized = runPrepared(prepared, primaryFamily, at, familyOf);
+  const asked = keys.some((k) => sameVariant(k, at)) ? keys : [at, ...keys];
+  if (asked.length === 1) return [sized];
+
+  // What stops the design being held anywhere else, when something does. A design that was not
+  // sized was never asked about (`not-run`); one resting on an assumed level was asked and is
+  // declined (`no-answer`).
+  let held: PinnedHardware | undefined;
+  let refusal: { state: 'not-run' | 'no-answer'; issue: VariantIssue } | undefined;
+  if (sized.state !== 'evaluated')
+    refusal = {
+      state: 'not-run',
+      issue: {
+        kind: 'no-design',
+        message: `the design was not evaluated at ${variantLabel(at)}, where it is sized, so there is nothing to hold here`,
+      },
+    };
+  else if (prepared.assumptions.length)
+    refusal = {
+      state: 'no-answer',
+      issue: { kind: 'assumed-level', message: assumedLevelRefusal(prepared.assumptions) },
+    };
+  else held = withNominalRange(pinHardware(prepared.doc, sized.result), sized.result);
+
+  return asked.map((key): VariantRun => {
+    if (sameVariant(key, at)) return sized;
+    if (!refusal) return runPrepared(prepared, primaryFamily, key, familyOf, held);
+    return declined(key, refusal.state, refusal.issue);
   });
 }
 
+/** A condition nothing was evaluated at: every one of its points in the one `state`, for the
+ *  first reason given. */
+function refused(
+  prepared: PreparedRun,
+  key: VariantKey,
+  design: 'sized' | 'held',
+  state: 'not-run' | 'no-answer',
+  issues: readonly VariantIssue[],
+): VariantRun {
+  const error = issues[0]?.message;
+  const point = (limit?: string): CompliancePoint => ({
+    ...(limit === undefined ? {} : { limit }),
+    state,
+    ...(error === undefined ? {} : { error }),
+  });
+  const ends = Array.isArray(prepared.doc.operatingRange) ? prepared.doc.operatingRange : [];
+  return {
+    state: 'not-evaluated',
+    key,
+    design,
+    issues,
+    points: [point(), ...ends.map((e) => point(e.name))],
+  };
+}
+
 /** One condition of a prepared sheet: sized here, or — given `held` — the held design re-biased
- *  here. The two differ only in which document the engine sees and what the run is stamped. */
+ *  here. The two differ in which document the engine sees and in how the centre point is read:
+ *  a sized design answers for itself, a held one is classified like a range end (heldOutcome). */
 function runPrepared(
   prepared: PreparedRun,
   primaryFamily: CornerFamily,
@@ -645,22 +726,20 @@ function runPrepared(
   familyOf: FamilyResolver,
   held?: PinnedHardware,
 ): VariantRun {
-  if (prepared.blockers.length) return { state: 'not-evaluated', key, issues: prepared.blockers };
+  const design = held ? 'held' : 'sized';
+  if (prepared.blockers.length) return refused(prepared, key, design, 'not-run', prepared.blockers);
 
   const { primary, issues } = preflightBindings(prepared.bindings, primaryFamily, key, familyOf);
-  if (issues.length || primary === undefined) return { state: 'not-evaluated', key, issues };
+  if (issues.length || primary === undefined)
+    return refused(prepared, key, design, 'not-run', issues);
   // A hold the base run recorded no value for has nothing to be held at (see pinHardware).
   if (held?.unheld.length)
-    return {
-      state: 'not-evaluated',
-      key,
-      issues: [
-        {
-          kind: 'runtime-evaluation',
-          message: `no gate bias was recorded for the held ${held.unheld.join(', ')}`,
-        },
-      ],
-    };
+    return refused(prepared, key, design, 'no-answer', [
+      {
+        kind: 'runtime-evaluation',
+        message: `no gate bias was recorded for the held ${held.unheld.join(', ')}`,
+      },
+    ]);
 
   // `runSheet`'s two halves, with its validation pass already in hand: the doc is resolved and
   // validated above, so this is exactly what it would return — an error-free validation neither
@@ -675,19 +754,42 @@ function runPrepared(
     warnings: [...prepared.warnings, ...evaluated.warnings],
     assumptions: [...prepared.assumptions],
   };
-  // The gate is "did the base run complete", NOT `stands()`: stands() also folds in a broken
-  // containment edge, whose failure is a COVERAGE non-answer — gating on it here would erase a
-  // measured closure verdict (five library sheets on the demo device hit exactly that). The
-  // broken edge lands in the coverage dimension instead (see coversOf).
-  if (result.warnings.some((w) => w.severity === 'error'))
-    return { state: 'not-evaluated', key, issues: runtimeIssues(result), result };
+  const completed = stands(result);
+
+  // The centre. A design resting on an assumed level has no compliance answer anywhere (the
+  // engine has already declined its range ends for the same reason). A held design is read like
+  // a range end. The sized design answers for itself: it complies where it is feasible.
+  let centre: CompliancePoint;
+  if (prepared.assumptions.length)
+    centre = { state: 'no-answer', error: assumedLevelRefusal(prepared.assumptions) };
+  else if (held) centre = heldOutcome(result);
+  else if (completed) centre = { state: result.feasible ? 'complies' : 'does-not-comply' };
+  else centre = { state: 'no-answer', error: runtimeIssues(result)[0].message };
+  const points: CompliancePoint[] = [
+    centre,
+    ...(result.edges ?? []).map((e): CompliancePoint => ({
+      limit: e.name,
+      state: e.state,
+      ...(e.error === undefined ? {} : { error: e.error }),
+    })),
+  ];
+
+  if (!completed)
+    return {
+      state: 'not-evaluated',
+      key,
+      design,
+      issues: runtimeIssues(result),
+      points,
+      result,
+    };
   return {
     state: 'evaluated',
     key,
-    design: held ? 'held' : 'sized',
+    design,
     ...(held?.assumedSource.length ? { assumedSource: [...held.assumedSource] } : {}),
-    closes: result.closes ? 'pass' : 'fail',
-    covers: coversOf(result),
+    feasible: result.feasible,
+    points,
     result,
   };
 }
@@ -738,75 +840,61 @@ function memberFor(
   return variantAt(family, key);
 }
 
-/** Why an evaluation did not stand, from the result itself: its error diagnostics, plus any
- *  range end that was checked and could not be evaluated (an edge's failure is reported in its
- *  own report and never merged upward, so it needs its own pass). */
+/** Why an evaluation did not complete, from the result itself: its error diagnostics. */
 function runtimeIssues(res: SheetResult): VariantIssue[] {
   const issues: VariantIssue[] = res.warnings
     .filter((w) => w.severity === 'error')
     .map((w) => ({ kind: 'runtime-evaluation' as const, message: w.message }));
-  for (const e of res.edges ?? []) {
-    if (edgeBroke(e)) issues.push({ kind: 'runtime-evaluation', message: `${e.name}: ${e.error}` });
-  }
   // A refusal with no reason is indistinguishable from a verdict, so this list is never empty.
   if (!issues.length)
     issues.push({ kind: 'runtime-evaluation', message: 'the evaluation did not complete' });
   return issues;
 }
 
-/** One evaluated run's coverage answer. An absent `covers` means the question was not asked —
- *  the sheet claims no range, or its edges were not checked — which is `unchecked`, never a
- *  gap. */
-function coversOf(res: SheetResult): Exclude<PerRunCovers, 'unavailable'> {
-  // A range end that BROKE (its pin never landed) produced no coverage answer at all, so the
-  // run's coverage is unchecked — never `covers` (some end went unproven) and never `gap`
-  // (nothing measured a miss; the folded `res.covers === false` cannot tell the two apart).
-  // The end's own error stays visible in its edge report.
-  if ((res.edges ?? []).some(edgeBroke)) return 'unchecked';
-  return res.covers === undefined ? 'unchecked' : res.covers ? 'covers' : 'gap';
-}
-
 // --- aggregation -------------------------------------------------------------
 
 export interface VariantAggregate {
-  /** `all`: every selected condition was evaluated and closes. `fails`: at least one evaluated
-   *  condition does not close. `unverified`: nothing failed, but conditions went unevaluated —
-   *  the design is not shown to close across the set. `none-evaluated`: nothing ran. */
-  readonly closes: 'all' | 'fails' | 'unverified' | 'none-evaluated';
-  /** Denominated in unique conditions, never in tables. */
-  readonly counts: { readonly pass: number; readonly fail: number; readonly unavailable: number };
-  /** The smallest hard-rule relative margin over the EVALUATED runs only — never over the set,
-   *  which is why `counts` travels with it. `null` when no evaluated run produced a measurable
-   *  margin. Clamped like every other margin comparison (see clampMargin); the clamp is
-   *  monotone, so clamping the minimum is the minimum of the clamped. */
-  readonly worstMargin: number | null;
-  /** Absent when the sheet declares no containment edges at all — coverage is then not a
-   *  question about this design, which is different from a question nothing answered. */
-  readonly covers?: {
-    readonly state: 'all' | 'gap' | 'unchecked' | 'unverified';
-    readonly counts: {
-      readonly covers: number;
-      readonly gap: number;
-      readonly unchecked: number;
-      readonly unavailable: number;
-    };
+  /**
+   * FEASIBILITY — one answer, about the design where it was sized: can this design type meet
+   * its spec at the base condition. Never a count and never moved by another condition or a
+   * range end. `no-answer`: the base run started and did not complete. `not-run`: nothing was
+   * sized — no base condition, or its tables are not there.
+   */
+  readonly feasibility: 'feasible' | 'infeasible' | 'no-answer' | 'not-run';
+  /** The condition feasibility was asked at. Absent when the design was sized nowhere. */
+  readonly base?: VariantKey;
+  /**
+   * COMPLIANCE — a count over points, never a single word: `total` is conditions × (the centre
+   * + every declared range end), and each point lands in exactly one bucket. Not-run and
+   * no-answer are counted apart and folded into neither verdict, so "complies at 5 of 9" can
+   * never hide whether the other four failed or were simply not answered.
+   */
+  readonly compliance: {
+    readonly complies: number;
+    readonly doesNotComply: number;
+    readonly noAnswer: number;
+    readonly notRun: number;
+    readonly total: number;
   };
+  /** The smallest hard-rule relative margin over every point whose rules were measured, with
+   *  the rule and the point that own it — where the held design is closest to failing, or
+   *  failing worst. `null` when no point produced a measurable margin. Clamped like every other
+   *  margin comparison (see clampMargin); the clamp is monotone, so clamping the minimum is the
+   *  minimum of the clamped. */
+  readonly worst: {
+    readonly id: string;
+    readonly marginPct: number;
+    readonly key: VariantKey;
+    readonly limit?: string;
+  } | null;
 }
 
 /**
- * Fold per-condition runs into what a header can honestly say. Closure and coverage aggregate
- * SEPARATELY and neither is inferred from the other: a design that closes everywhere while one
- * range end fails is a coverage gap, not a closure failure, and a set with unevaluated
- * conditions is never reported as passing them.
- *
- * `hasEdges` comes from the resolved doc rather than from the runs, because when nothing was
- * evaluated the runs cannot distinguish a sheet that claims no range from one whose range
- * claims went unchecked.
+ * Fold per-condition runs into what a header can honestly say: feasibility and compliance,
+ * answered apart, neither inferred from the other. A design that is feasible and loses a range
+ * end at one corner is feasible and does not comply there — two facts, two places.
  */
-export function aggregateVariantRuns(
-  runs: readonly VariantRun[],
-  hasEdges: boolean,
-): VariantAggregate {
+export function aggregateVariantRuns(runs: readonly VariantRun[]): VariantAggregate {
   // One run per condition: the denominator is unique conditions, so a caller that passed the
   // same key twice must not double-count it. First-wins here is a de-dup of identical
   // repeats, not a merge policy — producing at most one run per condition is the caller's job.
@@ -817,52 +905,46 @@ export function aggregateVariantRuns(
   }
   const unique = [...byKey.values()];
 
-  const evaluated = unique.filter((r) => r.state === 'evaluated');
-  const pass = evaluated.filter((r) => r.closes === 'pass').length;
-  const fail = evaluated.length - pass;
-  const unavailable = unique.length - evaluated.length;
+  const sized = unique.find((r) => r.design === 'sized');
+  const feasibility: VariantAggregate['feasibility'] = !sized
+    ? 'not-run'
+    : sized.state === 'evaluated'
+      ? sized.feasible
+        ? 'feasible'
+        : 'infeasible'
+      : sized.result
+        ? 'no-answer'
+        : 'not-run';
 
-  let worstMargin: number | null = null;
-  for (const r of evaluated) {
-    // The base design's own rules and children only. `limitingConstraint` walks a standing
-    // run's containment-edge outcomes too, and a range end's headroom is a coverage answer —
-    // quoting it here would attribute a coverage number to closure, beside closure counts.
-    const limiting = limitingConstraint({ rules: r.result.rules, children: r.result.children });
-    if (limiting === undefined) continue;
-    const m = clampMargin(limiting.marginPct);
-    if (worstMargin === null || m < worstMargin) worstMargin = m;
+  const compliance = { complies: 0, doesNotComply: 0, noAnswer: 0, notRun: 0, total: 0 };
+  const BUCKET = {
+    complies: 'complies',
+    'does-not-comply': 'doesNotComply',
+    'no-answer': 'noAnswer',
+    'not-run': 'notRun',
+  } as const;
+  let worst: VariantAggregate['worst'] = null;
+  for (const r of unique) {
+    r.points.forEach((pt, i) => {
+      compliance[BUCKET[pt.state]]++;
+      compliance.total++;
+      // Only a point whose rules were measured has a margin to quote: an `error` means its
+      // outcomes were read somewhere other than the point asked about, or not at all.
+      if (pt.error !== undefined || (pt.state !== 'complies' && pt.state !== 'does-not-comply'))
+        return;
+      // points[0] is the run's own tree; points[i] mirrors result.edges[i - 1].
+      const at = i === 0 ? r.result : r.result?.edges?.[i - 1];
+      const limiting = at && limitingConstraint(at);
+      if (!limiting) return;
+      const marginPct = clampMargin(limiting.marginPct);
+      if (worst === null || marginPct < worst.marginPct)
+        worst = {
+          id: limiting.id,
+          marginPct,
+          key: r.key,
+          ...(pt.limit === undefined ? {} : { limit: pt.limit }),
+        };
+    });
   }
-
-  const closes =
-    evaluated.length === 0
-      ? 'none-evaluated'
-      : fail > 0
-        ? 'fails'
-        : unavailable > 0
-          ? 'unverified'
-          : 'all';
-
-  const aggregate: VariantAggregate = {
-    closes,
-    counts: { pass, fail, unavailable },
-    worstMargin,
-  };
-  // `hasEdges` is the doc's answer to "is coverage a question here at all", which the runs
-  // alone cannot give when none of them was evaluated. It does not get to suppress an answer
-  // a run actually measured: a coverage gap in hand outranks a flag saying there was nothing
-  // to look for.
-  const measured = unique.some((r) => r.state === 'evaluated' && r.covers !== 'unchecked');
-  if (!hasEdges && !measured) return aggregate;
-
-  const counts = { covers: 0, gap: 0, unchecked: 0, unavailable: 0 };
-  for (const r of unique) counts[r.state === 'evaluated' ? r.covers : 'unavailable']++;
-  const state =
-    counts.gap > 0
-      ? 'gap' // one measured gap decides it; the rest cannot argue it away
-      : counts.covers > 0 && counts.unavailable === 0 && counts.unchecked === 0
-        ? 'all'
-        : counts.covers === 0
-          ? 'unchecked' // edges are claimed, nothing measured one
-          : 'unverified'; // covered where it answered; elsewhere unrun, or a check that broke
-  return { ...aggregate, covers: { state, counts } };
+  return { feasibility, ...(sized ? { base: sized.key } : {}), compliance, worst };
 }

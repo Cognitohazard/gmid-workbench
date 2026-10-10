@@ -8,7 +8,9 @@ import {
   indexTreeResults,
   isHardRule,
   sweepable,
+  stands,
   treeRuleResults,
+  withoutEdges,
   withParams,
 } from './types';
 export { sweepable } from './types';
@@ -64,11 +66,9 @@ export function runSheet(
   const pre = [...r.warnings, ...validateSheet(r.doc)];
   const res = evaluateSheet(r.doc, table, resolveDevice);
   const blocked = pre.some((w) => w.severity === 'error');
-  // `closes` takes the same block as `feasible`: a structurally broken sheet closes nothing.
   return {
     ...res,
     feasible: res.feasible && !blocked,
-    closes: res.closes && !blocked,
     warnings: [...pre, ...res.warnings],
     assumptions: dcInputs(r.doc).assumed,
   };
@@ -143,74 +143,89 @@ function worstBy(
 }
 
 /**
- * One number for "how close is this containment edge to closing": the WORST measurable hard-rule
- * margin anywhere in the edge run's tree, clamped to the informative range (see `clampMargin`).
- * An edge that did not stand at all (solve failure, unresolvable set) reads -MARGIN_PCT_CAP, not
- * null: the chart clips it at the bottom, so an edge-driven feasibility flip ALWAYS has an
- * on-chart cause. A standing edge with nothing left to measure reads its verdict as
+ * One number for "how much room does the held design have at this range end": the WORST
+ * measurable hard-rule margin anywhere in the range-end run's tree, clamped to the informative
+ * range (see `clampMargin`). An end the design measurably fails without leaving rule outcomes —
+ * a held device that cannot carry its current there — reads -MARGIN_PCT_CAP, which the chart
+ * clips at the bottom. An end with nothing left to measure reads its verdict as
  * 0 / -MARGIN_PCT_CAP.
  *
- * An edge that was NOT CHECKED reads null — a gap in the curve, the same shape a rule that could
- * not be computed takes. It is not a bottom clip, because nothing about the claimed range was
- * measured there: a sample only skips its range checks when its own evaluation did not complete,
- * which is not an edge finding, and painting one would put a cause on the chart the engine never
- * established. Such a sample is infeasible with no curve to explain it, exactly as a sample whose
- * solve fails on a sheet claiming no range at all has always been. The gap also stays out of the
- * picker's objective, which would otherwise flatten to the floor across the whole region a search
- * exists to climb out of.
+ * An end that was NOT RUN, or that returned NO ANSWER, reads null — a gap in the curve, the same
+ * shape a rule that could not be computed takes. Nothing about the range was measured there, and
+ * a bottom clip would put a failure on the chart that the engine never established.
  */
 function edgeMargin(e: SheetEdgeReport): number | null {
-  if (e.state === 'not-checked') return null;
+  if (e.state === 'not-run' || e.state === 'no-answer') return null;
   if (e.error !== undefined) return -MARGIN_PCT_CAP;
   const found = worstBy(treeRuleResults(e), isMeasurable);
   const worst = found === undefined ? null : clampMargin(found.marginPct);
-  // An INFEASIBLE edge must never chart non-negative: hard `na` fails the run closed
-  // while contributing no margin, so without this floor a passing sibling rule could
-  // paint a broken edge at +margin — a feasibility flip with no on-chart cause, the
-  // exact defect this curve exists to prevent.
-  if (!e.feasible && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
+  // An end that DOES NOT COMPLY must never chart non-negative: hard `na` fails the run closed
+  // while contributing no margin, so without this floor a passing sibling rule could paint a
+  // failing range end at +margin.
+  if (e.state !== 'complies' && (worst === null || worst >= 0)) return -MARGIN_PCT_CAP;
   return worst ?? 0;
 }
 
+/** A failing hard rule — what "binds". */
+const isFailing = (rr: RuleResult): boolean => isHardRule(rr.kind) && rr.status === 'fail';
+
+/** One run's own rule outcomes: its rules and its children's, and nothing from a range end.
+ *  The binding and limiting constraints answer about ONE run — the design where it was sized,
+ *  or one range end handed in by itself — so a range end's failure is never named as the
+ *  reason a feasible design is infeasible. */
+const ownRules = (res: {
+  rules: readonly RuleResult[];
+  children?: readonly SheetChildReport[];
+}): Map<string, RuleResult> => treeRuleResults({ rules: res.rules, children: res.children });
+
 /**
- * The BINDING CONSTRAINT of one evaluation: the failing HARD rule with the worst relative margin
+ * The BINDING CONSTRAINT of one run: the failing HARD rule with the worst relative margin
  * anywhere in the composition, its id carrying the use path (`amp.s1.pm-spec`) so a child's rule
- * is attributable — and across the containment-edge runs, their ids carrying the edge name
- * (`cm-lo@tail-saturated`). `undefined` when no hard rule fails — including when the design is
- * infeasible for a reason that is not a failing rule (a bind error, a child's structural error,
- * an edge whose solve failed), which is why callers must treat "no binding constraint" as "no
- * rule to name", never as "feasible".
+ * is attributable. `undefined` when no hard rule fails — including when the design is infeasible
+ * for a reason that is not a failing rule (a bind error, a child's structural error), which is
+ * why callers must treat "no binding constraint" as "no rule to name", never as "feasible".
  *
  * One definition, so the 2-D map's per-cell cause and a caller naming the cause of a single
- * verdict can never disagree about which rule binds.
+ * verdict can never disagree about which rule binds. A range end's report is a run too: pass
+ * the report to ask what binds there.
  */
 export function bindingConstraint(res: {
-  rules: RuleResult[];
-  children?: SheetChildReport[];
-  edges?: SheetEdgeReport[];
+  rules: readonly RuleResult[];
+  children?: readonly SheetChildReport[];
 }): { id: string; marginPct: number } | undefined {
-  return worstBy(treeRuleResults(res), (rr) => isHardRule(rr.kind) && rr.status === 'fail');
+  return worstBy(ownRules(res), isFailing);
 }
 
 /**
- * The LIMITING constraint of one evaluation: the hard rule with the smallest finite relative
- * margin anywhere in the composition, whatever its status — the same walk and the same tree-keyed
- * ids as bindingConstraint, over a wider net. The two answer different questions and are kept
- * apart on purpose. "Which rule broke the design" only exists when something failed, so
- * bindingConstraint stays failing-only and a caller reading it can never mistake a comfortable
- * pass for a cause. "Which rule is closest to breaking" is the question a FEASIBLE design poses —
- * the one to point a sensitivity readout at — and it has an answer whether or not anything is
- * failing. `undefined` when no hard rule produced a finite margin at all (an all-`na` tree).
+ * The LIMITING constraint of one run: the hard rule with the smallest finite relative margin
+ * anywhere in the composition, whatever its status — the same walk and the same tree-keyed ids as
+ * bindingConstraint, over a wider net. The two answer different questions and are kept apart on
+ * purpose. "Which rule broke the design" only exists when something failed, so bindingConstraint
+ * stays failing-only and a caller reading it can never mistake a comfortable pass for a cause.
+ * "Which rule is closest to breaking" is the question a FEASIBLE design poses — the one to point
+ * a sensitivity readout at — and it has an answer whether or not anything is failing. `undefined`
+ * when no hard rule produced a finite margin at all (an all-`na` tree).
  *
  * The admissible set is `measurable` above — which skips the boundary tautologies, the reason
  * that predicate exists. bindingConstraint never had to care: a snapped zero is never `fail`.
  */
 export function limitingConstraint(res: {
-  rules: RuleResult[];
-  children?: SheetChildReport[];
-  edges?: SheetEdgeReport[];
+  rules: readonly RuleResult[];
+  children?: readonly SheetChildReport[];
 }): { id: string; marginPct: number } | undefined {
-  return worstBy(treeRuleResults(res), isMeasurable);
+  return worstBy(ownRules(res), isMeasurable);
+}
+
+/**
+ * The worst failing hard rule among the range-end runs, named with its range end
+ * (`cm-lo@tail-saturated`) — what keeps a feasible design from complying, in the id form the
+ * sensitivity readout takes. `undefined` when no range end has a failing rule, which includes
+ * every end that was not run or returned no answer: those carry no rule outcomes to name.
+ */
+export function rangeEndConstraint(res: {
+  edges?: readonly SheetEdgeReport[];
+}): { id: string; marginPct: number } | undefined {
+  return worstBy(treeRuleResults({ rules: [], edges: res.edges }), isFailing);
 }
 
 /**
@@ -230,7 +245,7 @@ export function sweepSheet(
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
-    return { param, unit: v?.unit ?? '', x: [], rules: [], feasible: [] };
+    return { param, unit: v?.unit ?? '', x: [], rules: [], feasible: [], stands: [] };
   }
 
   const pts = Math.max(2, Math.min(401, Math.floor(n)));
@@ -246,9 +261,9 @@ export function sweepSheet(
     validateSheet(withParams(r.doc, { [param]: v.min })).some((w) => w.severity === 'error');
   const rules: SheetSweepRule[] = [];
   collectTreeRules(r.doc, '', rules);
-  // Each containment edge rides the sweep as ONE aggregate curve: its worst hard-rule
-  // margin per sample. Without it a cell can flip infeasible with no on-chart cause — the
-  // same gap collectTreeRules closes for descendant rules. Held in a parallel array
+  // Each range end rides the sweep as ONE aggregate curve: the held design's worst hard-rule
+  // margin there, per sample — where along this knob the design stops complying at that end. It
+  // is a compliance curve and never moves `feasible`. Held in a parallel array
   // (res.edges mirrors doc.operatingRange by index), so the sample loop needs no id matching.
   // Array.isArray, not truthiness, for the reason evaluateSheet's edges guard gives (eval.ts) — a
   // malformed persisted doc must degrade to a sweep with no coverage curves, not throw out of .map.
@@ -262,10 +277,7 @@ export function sweepSheet(
   }));
   const x: number[] = [];
   const feasible: boolean[] = [];
-  // Each sample's coverage answer, carried through as data. Built only for a sheet that claims a
-  // range: on one that claims none, "no design here" is not a fact the sweep can state, and an
-  // array of nulls would say the opposite (see SheetSweep.covers).
-  const covers: (boolean | null)[] | undefined = edgeRules.length ? [] : undefined;
+  const stood: boolean[] = [];
 
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
@@ -284,16 +296,11 @@ export function sweepSheet(
       const rep = res.edges?.[j];
       edgeRules[j].marginPct.push(rep ? edgeMargin(rep) : null);
     }
-    covers?.push(res.covers ?? null);
+    // `blocked` too: a structurally broken doc has no design at any sample, exactly as
+    // `runSheet` reports it.
+    stood.push(!blocked && stands(res));
   }
-  return {
-    param,
-    unit: v.unit ?? '',
-    x,
-    rules: [...rules, ...edgeRules],
-    feasible,
-    ...(covers ? { covers } : {}),
-  };
+  return { param, unit: v.unit ?? '', x, rules: [...rules, ...edgeRules], feasible, stands: stood };
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */
@@ -309,9 +316,10 @@ export const SWEEP2_POINTS = 21;
  * pin (~20 probes, each a full tree evaluation) AND lands on biases the slice cache has not
  * seen. Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~50-60
  * ms/cell once a pin and both declared bias axes are in play, i.e. ~21-27 s for the default
- * 21x21 — and containment edges multiply every cell by (1 + edge count) on top, so the
- * library's two-edge OTAs sit near three times that. This runs synchronously; a caller
- * driving it from a UI should expect to block for that long. Each declared axis costs another slice per pass, so the cheap figure is cheap
+ * 21x21. The map is a FEASIBILITY map, so the sheet's operating range is never evaluated here:
+ * a range end is a compliance question and cannot move a cell. This runs synchronously; a caller
+ * driving it from a UI should expect to block for that long. Each declared axis costs another
+ * slice per pass, so the cheap figure is cheap
  * only because a frozen estimate re-slices at the same handful of biases; the honest
  * computation is the slower one.
  *
@@ -348,11 +356,16 @@ export function sweepSheet2(
 
   const pts = Math.max(2, Math.min(101, Math.floor(n)));
   const r = resolvedSheet(doc, refs); // once — constant tree, only the two params move
+  const swept = withoutEdges(r.doc);
   const overrideTwo = (vx: number, vy: number): SheetDoc =>
-    withParams(r.doc, { [paramX]: vx, [paramY]: vy });
+    withParams(swept, { [paramX]: vx, [paramY]: vy });
+  // Validated WITH its range: the map does not evaluate the range ends, but a sheet whose range
+  // is structurally broken is a broken sheet, and every other entry point refuses it.
   const blocked =
     r.warnings.some((w) => w.severity === 'error') ||
-    validateSheet(overrideTwo(px.min, py.min)).some((w) => w.severity === 'error');
+    validateSheet(withParams(r.doc, { [paramX]: px.min, [paramY]: py.min })).some(
+      (w) => w.severity === 'error',
+    );
 
   const x = Array.from({ length: pts }, (_, i) => px.min + ((px.max - px.min) * i) / (pts - 1));
   const y = Array.from({ length: pts }, (_, i) => py.min + ((py.max - py.min) * i) / (pts - 1));

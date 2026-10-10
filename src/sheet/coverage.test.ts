@@ -18,12 +18,20 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice, BODY_FACTOR } from '../demo';
 import { compileExpr } from '../derive';
 import { scalarScope } from '../expr';
-import { runSheet, evaluateSheet, sweepSheet, sheetSensitivities, validateSheet } from './index';
+import {
+  runSheet,
+  evaluateSheet,
+  heldOutcome,
+  rangeEndConstraint,
+  sweepSheet,
+  sheetSensitivities,
+  validateSheet,
+} from './index';
 import { pinHardware } from './coverage';
 // The closed forms, from the module the library goldens share — not the fixtures that re-export
 // them, whose import walks sheets/ off disk and builds a demo table this suite does not use.
 import { gdsOf, relErr } from './library.math';
-import { stands, treeRuleResults } from './types';
+import { clampedIn, stands, treeRuleResults } from './types';
 import type { BindReport, SheetChildReport, SheetDoc } from './types';
 
 /** A four-dimensional [l, vds, vsb, vgs] table — the shape a real PDK export has. The 0.05 V
@@ -227,7 +235,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       mk({ operatingRange: [{ name: 'body-lo', set: { VSB: 'VSB_lo' } }] }),
       dev,
     );
-    expect(res.covers).toBe(true);
+    expect(res.complies).toBe(true);
     const base = bindAt(res.children?.[0]);
     const end = bindAt(res.edges?.[0].children?.[0]);
     expect(end.W).toBe(base.W); // to the last bit: this is the same transistor
@@ -245,7 +253,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // A range end free to re-size would instead give the device 88.57% of its width
     // and read gm/ID = 10 exactly at an unchanged vgs — which is what these numbers rule out.
     const res = runSheet(mk({ operatingRange: [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }] }), dev);
-    expect(res.covers).toBe(true);
+    expect(res.complies).toBe(true);
     const base = bindAt(res.children?.[0]);
     const end = bindAt(res.edges?.[0].children?.[0]);
     expect(end.W).toBe(base.W);
@@ -275,7 +283,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       }),
       dev,
     );
-    expect(res.covers).toBe(true);
+    expect(res.complies).toBe(true);
     const [rBase, mBase] = (res.children ?? []).map(bindAt);
     const [rEnd, mEnd] = (res.edges?.[0].children ?? []).map(bindAt);
     expect(rEnd.vgs - rBase.vgs).toBeCloseTo(-BODY_FACTOR * 0.4, 9);
@@ -317,7 +325,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       }),
       dev,
     );
-    expect(res.covers).toBe(true);
+    expect(res.complies).toBe(true);
     const base = bindAt(res.children?.[0]);
     const end = bindAt(res.edges?.[0].children?.[0]);
     expect(end.W).toBe(base.W);
@@ -365,7 +373,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     expect(d).toBeGreaterThan(5e-3); // the drain really moved the device
 
     const res = runSheet(underGate(held, drainHi), dev);
-    expect(res.covers).toBe(true);
+    expect(res.complies).toBe(true);
     const base = bindAt(res.children?.[0]);
     const end = bindAt(res.edges?.[0].children?.[0]);
     expect(end.W).toBe(base.W); // the same transistor
@@ -384,8 +392,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     const doc = underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: 'X + R' }, drainHi);
     doc.equations = [{ name: 'R', expr: '0 - X' }];
     const res = runSheet(doc, dev);
-    expect(res.closes).toBe(true);
-    expect(res.covers).toBe(false);
+    expect(res.feasible).toBe(true);
+    expect(res.complies).toBe(false);
     expect(res.edges?.[0].error).toMatch(/held param "X".*numerically unresolved/);
     expect(res.edges?.[0].solved).toEqual({});
   });
@@ -397,7 +405,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: '1e-9*X' }, drainHi),
       dev,
     );
-    expect(res.covers).toBe(true);
+    expect(res.complies).toBe(true);
     expect(res.edges![0].solved.X).toBeCloseTo(X0, 5);
   });
 
@@ -470,10 +478,10 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     const res = runSheet(doc, dev);
     expect(res.bind?.ok).toBe(true); // the center sized; it is the range end that cannot
     const e = res.edges?.[0];
-    expect(e?.state).toBe('does-not-cover');
-    expect(e?.error).toMatch(/^this device cannot carry its authored current at the endpoint bias/);
+    expect(e?.state).toBe('does-not-comply');
+    expect(e?.error).toMatch(/^this device cannot carry its current here/);
     expect(e?.error).toMatch(/inverse lookup: id .* out of range/); // the reach, verbatim
-    expect(res.covers).toBe(false);
+    expect(res.complies).toBe(false);
   });
 
   it('names the transconductance instead when that is what the endpoint cannot reach', () => {
@@ -493,10 +501,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       operatingRange: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
     };
     const e = runSheet(doc, dev).edges?.[0];
-    expect(e?.state).toBe('does-not-cover');
-    expect(e?.error).toMatch(
-      /^this device cannot reach its authored transconductance at the endpoint bias/,
-    );
+    expect(e?.state).toBe('does-not-comply');
+    expect(e?.error).toMatch(/^this device cannot reach its transconductance here/);
     expect(e?.error).toMatch(/inverse lookup: gm .* out of range/);
   });
 });
@@ -530,10 +536,10 @@ describe('coverage is only asked of a design that exists', () => {
     const res = evaluateSheet(unreachable(0.5), dev);
     expect(res.bind?.ok).toBe(true);
     expect(stands(res)).toBe(false);
-    expect(res.edges?.[0].state).toBe('not-checked');
+    expect(res.edges?.[0].state).toBe('not-run');
     expect(res.edges?.[0].error).toBeUndefined(); // "we did not check" is not "it broke"
     expect(res.edges?.[0].set).toEqual({}); // no point was proven, so none is reported
-    expect(res.covers).toBeUndefined(); // absent: the question has no answer here, not a false one
+    expect(res.complies).toBeUndefined(); // absent: the question has no answer here, not a false one
     expect(res.feasible).toBe(false);
   });
 
@@ -543,8 +549,8 @@ describe('coverage is only asked of a design that exists', () => {
     const res = evaluateSheet(doc, dev);
     expect(stands(res)).toBe(true);
     expect(res.rules[0].status).toBe('fail');
-    expect(res.edges?.[0].state).toBe('does-not-cover'); // checked, and the floor fails there too
-    expect(res.covers).toBe(false);
+    expect(res.edges?.[0].state).toBe('does-not-comply'); // checked, and the floor fails there too
+    expect(res.complies).toBe(false);
   });
 
   it('leaves a skipped edge out of the rules a caller can name', () => {
@@ -573,10 +579,10 @@ describe('coverage is only asked of a design that exists', () => {
 });
 
 // ---------------------------------------------------------------------------------------
-// covers, beside feasible
+// complies, beside feasible
 // ---------------------------------------------------------------------------------------
 
-describe('covers — the sub-verdict that names which question was answered', () => {
+describe('complies — the second question, answered apart from feasibility', () => {
   const mk = (over: Partial<SheetDoc> = {}): SheetDoc => ({
     title: 'c',
     polarity: 'n',
@@ -597,27 +603,337 @@ describe('covers — the sub-verdict that names which question was answered', ()
 
   it('is true only when every claimed end holds', () => {
     const res = evaluateSheet(mk(), dev);
-    expect(res.edges?.map((e) => e.state)).toEqual(['covers', 'covers']);
-    expect(res.covers).toBe(true);
+    expect(res.edges?.map((e) => e.state)).toEqual(['complies', 'complies']);
+    expect(res.complies).toBe(true);
     expect(res.feasible).toBe(true);
   });
 
-  it('separates a design that closes from one that holds across its range', () => {
-    // The two questions, visibly apart: this design closes at its center (y = 10 ≤ 12) and stops
-    // covering at the high end (y = 14). `feasible` keeps its aggregate meaning — the sheet's
-    // whole claim, range included — while `covers` names which half gave way.
+  it('separates a design that is feasible from one that holds across its range', () => {
+    // The two questions, visibly apart: this design meets its spec where it is sized
+    // (y = 10 ≤ 12) and stops complying at the high end (y = 14). Neither answer moves the other.
     const res = evaluateSheet(
       mk({ params: [...mk().params.slice(0, 3), { name: 'cap', value: 12 }] }),
       dev,
     );
     expect(res.rules[0].status).toBe('pass');
-    expect(res.edges?.map((e) => e.state)).toEqual(['covers', 'does-not-cover']);
-    expect(res.covers).toBe(false);
-    expect(res.feasible).toBe(false);
+    expect(res.edges?.map((e) => e.state)).toEqual(['complies', 'does-not-comply']);
+    expect(res.complies).toBe(false);
+    expect(res.feasible).toBe(true);
   });
 
   it('is absent on a sheet that claims no range at all', () => {
-    expect(evaluateSheet(mk({ operatingRange: undefined }), dev).covers).toBeUndefined();
+    expect(evaluateSheet(mk({ operatingRange: undefined }), dev).complies).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// No answer: asked, and nothing was measured at the point asked about
+// ---------------------------------------------------------------------------------------
+
+describe('no answer — a range end the data or the sheet cannot speak for', () => {
+  // The demo table characterizes vds up to 1.2 V. A range end at 1.5 V is read at 1.2 V instead.
+  const offHull = (over: Partial<SheetDoc> = {}): SheetDoc => ({
+    title: 'off-hull',
+    polarity: 'n',
+    params: [
+      { name: 'VD', value: 0.6, unit: 'V', min: 0.2, max: 1.2 },
+      { name: 'VD_hi', value: 1.5, unit: 'V' },
+    ],
+    equations: [],
+    checks: [{ id: 'vd-cap', kind: 'spec', lhs: 'VD', op: '<=', rhs: '1.4' }],
+    givens: { L: '0.5u', gm_id: '12', id: '20u', vds: 'VD', vsb: '0' },
+    operatingRange: [{ name: 'vd-hi', set: { VD: 'VD_hi' } }],
+    ...over,
+  });
+
+  it('declines a range end the table does not reach, instead of answering from its edge', () => {
+    const res = evaluateSheet(offHull(), dev);
+    expect(res.feasible).toBe(true);
+    const e = res.edges![0];
+    expect(e.set).toEqual({ VD: 1.5 });
+    // The run completed — on data taken 0.3 V away. Its `vd-cap` rule even fails there
+    // (1.5 > 1.4), and that still is not a finding: the device numbers beside it are not this
+    // point's, so the end is no answer rather than a failure, and no rule of it is named.
+    expect(e.state).toBe('no-answer');
+    expect(e.error).toMatch(/^the table does not reach this point \(bind vds\)/);
+    expect(e.solved).toEqual({});
+    expect(e.warnings.some((w) => /clamped to 1.2/.test(w.message))).toBe(true);
+    expect(rangeEndConstraint(res)).toBeUndefined();
+    expect(res.complies).toBe(false);
+  });
+
+  it('keeps the same clamp advisory where the design is sized', () => {
+    // At the design's own operating point a clamp is the author's to see and judge, as it always
+    // was: a warning beside a verdict, not a refusal.
+    const doc = offHull({ operatingRange: undefined });
+    doc.params[0].value = 1.3;
+    doc.params[0].max = 1.5;
+    const res = evaluateSheet(doc, dev);
+    expect(res.bind?.clamped).toEqual(['vds']);
+    expect(res.bind?.bias?.vds).toBeCloseTo(1.2, 12); // the table's last vds node
+    expect(res.feasible).toBe(true);
+    expect(clampedIn(res)).toEqual(['bind vds']);
+  });
+
+  it('names a clamped child by its use path', () => {
+    const parent: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      equations: [],
+      checks: [],
+      blocks: [
+        { name: 'load', doc: offHull({ operatingRange: undefined }), params: { VD: '1.3' } },
+      ],
+    };
+    expect(clampedIn(evaluateSheet(parent, dev))).toEqual(['load vds']);
+  });
+
+  it('declines a range end read off the hull on any coordinate, not only vds', () => {
+    // The body bias, the length and a supplied gate voltage each have a nearest characterized
+    // node to fall back to, exactly as vds does — and each fallback is a different point.
+    const end = (
+      givens: SheetDoc['givens'],
+      params: SheetDoc['params'],
+      set: Record<string, string>,
+    ): { state?: string; error?: string } => {
+      const e = evaluateSheet(
+        {
+          title: 'off',
+          polarity: 'n',
+          params,
+          equations: [],
+          checks: [],
+          givens,
+          operatingRange: [{ name: 'end', set }],
+        },
+        dev,
+      ).edges![0];
+      return { state: e.state, error: e.error };
+    };
+    // vsb is characterized to 0.4 V; the end asks 0.6 V.
+    const vsb = end(
+      { L: '0.5u', gm_id: '12', id: '20u', vds: '0.6', vsb: 'VB' },
+      [
+        { name: 'VB', value: 0, unit: 'V', class: 'independent' },
+        { name: 'VB_hi', value: 0.6, unit: 'V', class: 'independent' },
+      ],
+      { VB: 'VB_hi' },
+    );
+    expect(vsb.state).toBe('no-answer');
+    expect(vsb.error).toMatch(/\(bind vsb\)/);
+    // A width-first bind keeps its length as an authored expression, so an end can move it:
+    // 5 µm against a table that stops at 2 µm.
+    const len = end(
+      { L: 'Lp', W: '10u', id: '20u', vds: '0.6', vsb: '0' },
+      [
+        { name: 'Lp', value: 0.5e-6 },
+        { name: 'Lp_hi', value: 5e-6 },
+      ],
+      { Lp: 'Lp_hi' },
+    );
+    expect(len.state).toBe('no-answer');
+    expect(len.error).toMatch(/\(bind l\)/);
+    // A supplied gate voltage of 1.5 V against a sweep that ends at 1.2 V.
+    const vgs = end(
+      { L: '0.5u', W: '10u', vgs: 'VG', vds: '0.6', vsb: '0' },
+      [
+        { name: 'VG', value: 0.6, unit: 'V', class: 'independent' },
+        { name: 'VG_hi', value: 1.5, unit: 'V', class: 'independent' },
+      ],
+      { VG: 'VG_hi' },
+    );
+    expect(vgs.state).toBe('no-answer');
+    expect(vgs.error).toMatch(/\(bind vgs\)/);
+  });
+
+  it('does not call it a failure when the lookup runs out of range on clamped data', () => {
+    // The trap behind the clamp: at vds = 1.5 V the device carries the current asked of it, but
+    // this table stops at 1.2 V, and at 1.2 V it does not. The inverse lookup then fails on the
+    // clamped slice with the very message that otherwise means "this device cannot carry its
+    // current". That would be a verdict about a point nobody measured. A table that reaches
+    // 1.5 V gives the true one.
+    const wide = generateDemoDevice({
+      vds: { min: 0, max: 1.6, step: 0.05 },
+      vsb: { min: 0, max: 0.4, step: 0.05 },
+    });
+    // The most current a 10 µm device carries on the narrow table at vds = 0.6 V.
+    const top = evaluateSheet(
+      {
+        title: 'top',
+        polarity: 'n',
+        params: [],
+        equations: [],
+        checks: [],
+        givens: { L: '0.5u', W: '10u', vgs: '1.2', vds: '0.6', vsb: '0' },
+      },
+      dev,
+    ).bind!.id;
+    const doc: SheetDoc = {
+      title: 'trap',
+      polarity: 'n',
+      params: [
+        { name: 'VD', value: 0.6, unit: 'V', class: 'independent' },
+        { name: 'VD_hi', value: 1.5, unit: 'V', class: 'independent' },
+        { name: 'K', value: 0.95 },
+        { name: 'K_hi', value: 1.22 },
+      ],
+      equations: [],
+      checks: [],
+      givens: { L: '0.5u', W: '10u', id: `K*${top}`, vds: 'VD', vsb: '0' },
+      operatingRange: [{ name: 'hi', set: { VD: 'VD_hi', K: 'K_hi' } }],
+    };
+    const narrowEnd = evaluateSheet(doc, dev).edges![0];
+    expect(narrowEnd.state).toBe('no-answer');
+    expect(narrowEnd.error).toMatch(/^the table does not reach this point \(bind vds\)/);
+    expect(narrowEnd.error).toMatch(/the run then stopped: sizing failed: inverse lookup: id/);
+    expect(evaluateSheet(doc, wide).edges![0].state).toBe('complies');
+  });
+
+  it('declines a diode-connected device whose gate voltage lies past the characterized drain range', () => {
+    // A diode connection is read where vds = vgs. Raise the current and the gate voltage climbs
+    // to about 0.97 V; a table swept only to vds = 0.6 V reads that point at 0.6 V instead and
+    // reports a gate voltage 30 mV away from the real one — enough to flip a rule either way.
+    const mk = (vdsMax: number) => generateDemoDevice({ vds: { min: 0, max: vdsMax, step: 0.05 } });
+    const doc: SheetDoc = {
+      title: 'diode',
+      polarity: 'n',
+      params: [
+        { name: 'I', value: 2e-5, unit: 'A' },
+        { name: 'I_hi', value: 3e-4, unit: 'A' },
+      ],
+      equations: [],
+      checks: [{ id: 'drop', kind: 'spec', lhs: 'vgs', op: '<=', rhs: '0.975' }],
+      givens: { L: '0.5u', gm_id: '12', id: 'I', diode: true },
+      operatingRange: [{ name: 'hi', set: { I: 'I_hi' } }],
+    };
+    const reached = evaluateSheet(doc, mk(1.2));
+    expect(reached.edges![0].state).toBe('complies'); // 0.967 V against the 0.975 V cap
+    const short = evaluateSheet(doc, mk(0.6));
+    // At the centre the gate sits near 0.57 V, inside the drain range: read where it was asked.
+    expect(short.bind?.clamped).toBeUndefined();
+    expect(short.edges![0].state).toBe('no-answer');
+    expect(short.edges![0].error).toMatch(/\(bind vds\)/);
+  });
+
+  it('does not mistake float rounding at the hull for a clamp', () => {
+    // 0.3 - (0.1 + 0.2) is -5.6e-17, a hair below the body-bias axis's first node at 0. Reading
+    // that node is reading the table where it was asked.
+    const doc: SheetDoc = {
+      title: 'ulp',
+      polarity: 'n',
+      params: [
+        { name: 'Spec', value: 1 },
+        { name: 'Spec_hi', value: 2 },
+      ],
+      equations: [],
+      checks: [],
+      givens: { L: '0.5u', gm_id: '12', id: '20u', vds: '0.6', vsb: '0.3 - (0.1 + 0.2)' },
+      operatingRange: [{ name: 'hi', set: { Spec: 'Spec_hi' } }],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(0.3 - (0.1 + 0.2)).toBeLessThan(0);
+    expect(res.bind?.clamped).toBeUndefined();
+    expect(res.warnings.filter((w) => /clamped/.test(w.message))).toEqual([]);
+    expect(res.edges![0].state).toBe('complies');
+  });
+
+  it('reads a held current from the table: too much is a failure, too little is no answer', () => {
+    // The same device at its sized width, asked for an absurd current either way. One ampere is
+    // more than any characterized gate voltage carries: the device cannot do it. A femtoampere
+    // is less than the sweep's lowest point carries: the device would sit below anything
+    // measured, and the data cannot say how it behaves there.
+    const doc: SheetDoc = {
+      title: 'reach',
+      polarity: 'n',
+      params: [
+        { name: 'I', value: 2e-5, unit: 'A' },
+        { name: 'I_lo', value: 1e-15, unit: 'A' },
+        { name: 'I_hi', value: 1, unit: 'A' },
+      ],
+      equations: [],
+      checks: [],
+      givens: { L: '0.5u', gm_id: '12', id: 'I', vds: '0.6', vsb: '0' },
+      operatingRange: [
+        { name: 'lo', set: { I: 'I_lo' } },
+        { name: 'hi', set: { I: 'I_hi' } },
+      ],
+    };
+    const [lo, hi] = evaluateSheet(doc, dev).edges!;
+    expect(lo.state).toBe('no-answer');
+    expect(lo.error).toMatch(/^sizing failed: inverse lookup: id 1e-15 out of range/);
+    expect(hi.state).toBe('does-not-comply');
+    expect(hi.error).toMatch(/^this device cannot carry its current here/);
+  });
+
+  it('declines every range end of a design sized under an assumed voltage', () => {
+    // V_d is typed, and classed as something the sheet's own parts would set. Held fixed while
+    // the body bias moves, it is a guess about a different circuit — so the range end is not
+    // run at all, and says why. Feasibility, which holds nothing fixed, still reports.
+    const doc = (cls: 'assumed' | 'independent'): SheetDoc => ({
+      title: 'fenced',
+      polarity: 'n',
+      params: [
+        { name: 'V_d', value: 0.6, unit: 'V', class: cls },
+        { name: 'VB', value: 0, unit: 'V', min: 0, max: 0.4, class: 'independent' },
+        { name: 'VB_hi', value: 0.2, unit: 'V', class: 'independent' },
+      ],
+      equations: [],
+      checks: [],
+      givens: { L: '0.5u', gm_id: '12', id: '20u', vds: 'V_d', vsb: 'VB' },
+      operatingRange: [{ name: 'body-hi', set: { VB: 'VB_hi' } }],
+    });
+    const fenced = evaluateSheet(doc('assumed'), dev);
+    expect(fenced.feasible).toBe(true);
+    expect(fenced.edges![0].state).toBe('no-answer');
+    expect(fenced.edges![0].error).toMatch(/sized under assumed level V_d/);
+    expect(fenced.edges![0].rules).toEqual([]);
+    expect(fenced.complies).toBe(false);
+    // The same sheet with the voltage classed as an outside input is asked, and answers.
+    const free = evaluateSheet(doc('independent'), dev);
+    expect(free.edges![0].state).toBe('complies');
+    expect(free.complies).toBe(true);
+  });
+});
+
+describe('heldOutcome — what one run of a held design amounts to', () => {
+  const run = (message?: string, feasible = true): Parameters<typeof heldOutcome>[0] => ({
+    values: {},
+    rules: [],
+    feasible: feasible && message === undefined,
+    warnings: message === undefined ? [] : [{ rule: 'sheet-bind', severity: 'error', message }],
+  });
+
+  it('reads a completed run by its hard rules', () => {
+    expect(heldOutcome(run())).toEqual({ state: 'complies' });
+    expect(heldOutcome(run(undefined, false))).toEqual({ state: 'does-not-comply' });
+  });
+
+  it('calls a current past the TOP of the swept range a failure of the design', () => {
+    // The device is asked for 2 mA and the table tops out at 1 mA: no gate voltage it was
+    // characterized at carries that, so the held design does not work here.
+    const out = heldOutcome(
+      run('sizing failed: inverse lookup: id 0.002 out of range [1e-9, 0.001] for L=5e-7'),
+    );
+    expect(out.state).toBe('does-not-comply');
+    expect(out.error).toMatch(/^this device cannot carry its current here — sizing failed/);
+  });
+
+  it('calls a current below the BOTTOM of the swept range no answer', () => {
+    // 1 pA against a sweep that starts at 1 nA: the device would sit at a gate voltage below
+    // anything characterized. It may well work there; the data cannot say.
+    const out = heldOutcome(
+      run('sizing failed: inverse lookup: id 1e-12 out of range [1e-9, 0.001] for L=5e-7'),
+    );
+    expect(out.state).toBe('no-answer');
+    expect(out.error).toMatch(/^sizing failed: inverse lookup/);
+  });
+
+  it('calls any other run that did not complete no answer, with its message', () => {
+    expect(heldOutcome(run('pinned param x: does not change sign'))).toEqual({
+      state: 'no-answer',
+      error: 'pinned param x: does not change sign',
+    });
   });
 });
 
@@ -769,6 +1085,6 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     const doc = withK({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, { I_c: '20u * CM_dc' });
     const res = runSheet(doc, dev);
     expect(res.warnings.every((w) => w.severity !== 'error')).toBe(true);
-    expect(res.edges?.[0].state).toBe('covers');
+    expect(res.edges?.[0].state).toBe('complies');
   });
 });

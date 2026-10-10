@@ -84,12 +84,12 @@ test('topology picker: search streams, sorts, partitions, and hands off to a she
   // A sheet the queue could not evaluate at all is named, not silently missing from the count.
   await expect(pk.locator('.fail')).toHaveCount(0);
 
-  // Every verdict renders as its own chip, and no cause cell comes out visually empty. That the
-  // three verdicts are all REACHABLE, and that the core never composes a blank cause, is pinned
-  // in vitest across the whole library; what is checked here is that the panel shows them.
+  // Each verdict renders as its own chip, and no cause cell comes out visually empty. That the
+  // core never composes a blank cause is pinned in vitest across the whole library; what is
+  // checked here is that the panel shows the verdicts this library produces. (The third,
+  // "not searched", needs a sheet whose own evaluation does not settle; none ships.)
   await expect(pk.locator('tr.v-closed .chip').first()).toHaveText('closed');
   await expect(pk.locator('tr.v-did-not-close .chip').first()).toHaveText('did not close');
-  await expect(pk.locator('tr.v-could-not-be-searched .chip').first()).toHaveText('not searched');
   const whys = await pk.locator('tr.row td.why').allInnerTexts();
   expect(whys).toHaveLength(SEARCHABLE);
   expect(whys.filter((t) => t.trim() === '')).toEqual([]);

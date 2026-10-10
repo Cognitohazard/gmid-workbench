@@ -19,15 +19,18 @@ import {
   choiceKnobs,
   clampMargin,
   cloneDoc,
-  edgeBroke,
   engineSolved,
   limitingConstraint,
   MARGIN_PCT_CAP,
   measurable,
+  resolvedSheet,
   runSheet,
   sheetSensitivities,
+  stands,
   sweepSheet,
   sweepable,
+  validateSheet,
+  withoutEdges,
   withParams,
 } from '../sheet';
 import type {
@@ -156,8 +159,8 @@ export interface SpecMismatch {
  *   to be a common outcome there. `cause` always leads with what stopped the search, and any
  *   margin it quotes is labelled as belonging to the last point reached.
  * - `could-not-be-searched` — the search never got traction: the sheet is infeasible for a
- *   reason that is not a failing rule (an edge whose solve could not bracket, a structural
- *   error), so there is no margin to descend on. Reporting this as "did not close within N
+ *   reason that is not a failing rule (a solve that could not bracket, a structural error), so
+ *   there is no margin to descend on. Reporting this as "did not close within N
  *   evaluations" would be the misleading half of an honest-sounding message.
  */
 export type PickerVerdict = 'closed' | 'did-not-close' | 'could-not-be-searched';
@@ -186,21 +189,15 @@ export interface PickerCandidate {
   currentAtRangeFloor: boolean;
   /** The worst hard-rule margin among the rules that COULD BE EVALUATED at the reported point,
    *  with the rule that owns it — defined whether or not anything fails, so a closed candidate
-   *  still says how much room it has. A containment edge that did not run contributes no rules
-   *  at all, so this number can look like a near miss on a point that cannot close; `cause` is
-   *  where that is said. */
+   *  still says how much room it has. */
   worstMargin?: { id: string; marginPct: number };
   /** The worst FAILING hard rule at the reported point. Undefined on a closed candidate, and
    *  also on an infeasible one whose failure is not a rule — which is why `cause` exists. */
   bindingConstraint?: { id: string; marginPct: number };
   /** Why this candidate is not closed, in words, always present when it is not. It carries
-   *  every fact that applies, joined by `; `: the binding constraint, any range end the design
-   *  does not cover (named), the claimed range going unchecked because there was no design to
-   *  check it against, any error-severity warning, and — when the search stopped rather than the
-   *  design failing — what stopped it. These are ADDITIVE, not a first-match chain: a point with
-   *  a failing rule AND a range end it does not cover cannot close no matter how much margin the
-   *  rule is given, so naming only the rule sends the designer after the wrong thing. Never left
-   *  blank next to a red verdict. */
+   *  every fact that applies, joined by `; `: the binding constraint, any error-severity
+   *  warning, and — when the search stopped rather than the design failing — what stopped it.
+   *  Never left blank next to a red verdict. */
   cause?: string;
   /** Quiescent supply current at the reported point, resolved by name from the evaluation —
    *  the sheet's `I_q` interface row, or its `I_q` param on the one topology that publishes the
@@ -214,9 +211,7 @@ export interface PickerCandidate {
    *  consumed 1 of 9 supplied fields is not comparable with one that consumed 9, and a
    *  consumer must not rank them against each other on that basis. */
   specCoverage: { consumed: number; supplied: number };
-  /** Full sheet evaluations charged to this candidate. On a sheet with containment edges one
-   *  charged evaluation is (1 + edges) tree passes, so the wall clock, not this count, is the
-   *  honest measure of effort there. It can exceed `budget.evalBudget` by one: the screening
+  /** Full sheet evaluations charged to this candidate. It can exceed `budget.evalBudget` by one: the screening
    *  evaluation is not optional — a candidate the picker never evaluated has nothing to say —
    *  so it is charged rather than gated. */
   evals: number;
@@ -236,7 +231,7 @@ export interface PickerCandidate {
 
 /**
  * Per-sheet wall-clock cap for the interactive default. Chosen against the measured cost
- * spread rather than a round number: one evaluation of a solved, edge-bearing OTA costs
+ * spread rather than a round number: one evaluation of a solved OTA costs
  * ~0.1 ms on a small table and ~180 ms on a real PDK table, a spread wide enough that any
  * fixed evaluation count is either wasteful on the cheap sheets or an eleven-second stall on
  * the expensive ones. A time cap equalizes effort instead of equalizing counts.
@@ -324,60 +319,32 @@ function afford(m: Meter, n: number): boolean {
 // ---------------------------------------------------------------------------------------
 
 /**
- * The search's objective: the WORST hard-rule relative margin anywhere in the tree, including
- * the containment edges. Bigger is better; feasible points land at or above zero.
+ * The search's objective: the WORST hard-rule relative margin anywhere in the tree. Bigger is
+ * better; feasible points land at or above zero.
  *
- * Descending on the currently-binding rule alone is what makes a multi-rule search chase its
- * own tail, and descending on the top sheet's rules alone is worse than that — the measured
- * case is an OTA whose interior rules all pass while the failure sits in an edge, where a
- * search reading only the interior improves a number that was never the problem and looks
- * like it is succeeding.
+ * Descending on the currently-binding rule alone is what makes a multi-rule search chase its own
+ * tail, so the objective is the minimum over every hard rule the evaluation could measure.
  *
- * An edge that was CHECKED and could not run reads the floor rather than being skipped, for the
- * same reason: a point whose claimed range check broke down is not a good point, whatever the
- * rules that did evaluate say about it. That has a consequence worth stating, because it looks
- * wrong from outside: on a sheet whose edge cannot bracket, EVERY such point reads the same
- * floor, so the search will trade a named margin away to reach a point where the edge stands —
- * and the candidate can end up worse on the rule it names than the sheet's own defaults were.
- * It is still the right trade: a range end that cannot be checked gates the sheet, so a point
- * carrying one can never close, however comfortable its other margins look.
+ * It is a FEASIBILITY objective and nothing else. Whether a design, once found, still works at
+ * the ends of its claimed operating range is a question about that one design held fixed; it is
+ * asked of the design a designer picks, not searched for here — the sheet's operating range is
+ * dropped before anything is evaluated (see pickTopology), so no range end can move this number.
  *
- * An edge that was never checked is a different case and must not read the floor. Coverage is
- * skipped exactly where the evaluation produced no design to check, so flooring it would flatten
- * the objective across the whole region whose centres fail — on `current-mirror-ota` that is
- * every `CM_dc` above about 1.12 of an authored [0.7, 1.3], a third of one slider, and the same
- * ceiling sits on the telescopic, folded and gain-boosted sheets — and the descent would have no
- * gradient to follow out of precisely the region it exists to escape.
- *
- * So a point with no design is still ordered by its own worst margin, but inside a BAND of its
- * own, strictly below every score a real design can reach (see `noDesign`). Both halves matter.
- * Without the ordering the search cannot climb out; without the band it climbs the wrong way — a
- * margin read off a bracket-end probe is not smaller than a real design's worst margin, so a bare
- * score lets the search trade a design it has for one that does not exist, and then report the
- * phantom's numbers. Nothing else distinguishes the two: `beats` compares feasibility first, and
- * neither kind of point is feasible.
- *
- * The objective therefore has three tiers, in this order: a design, however badly it scores; a
- * design whose claimed range check broke down (the floor, -MARGIN_PCT_CAP); and no design (the
- * band below that, ordered within itself). The middle tier outranking the bottom one is
- * deliberate — a design that exists but could not have its range checked is still something a
- * designer can work with, and a point that evaluated to nothing is not.
- *
- * "No design here" is read from the SKIPPED RANGE CHECK, not from the standing predicate, and the
- * difference is load-bearing rather than a shortcut. The two readings of this objective are
- * compared against each other, and a sweep sample carries no standing flag — only what the
- * evaluation reported. A skipped range check is the one form of "this did not evaluate" both
- * readings can see, so keeping them on that fact is what stops them disagreeing: here it is an
- * absent `covers`, and in a sweep the same absence per sample. On a sheet claiming no range
- * neither can see anything, and both leave the score alone, exactly as before.
+ * A point where the evaluation did not complete — a solve that never landed — has NO DESIGN, and
+ * its rule margins were read wherever the solve stopped. It is still ordered by its own worst
+ * margin, but inside a BAND of its own, strictly below every score a real design can reach (see
+ * `noDesign`). Both halves matter. Without the ordering the search cannot climb out of a region
+ * where nothing evaluates; without the band it climbs the wrong way — a margin read off a
+ * bracket-end probe is not smaller than a real design's worst margin, so a bare score lets the
+ * search trade a design it has for one that does not exist, and then report the phantom's
+ * numbers. Nothing else distinguishes the two: `beats` compares feasibility first, and neither
+ * kind of point is feasible.
  */
 function scoreResult(res: SheetResult): number {
-  const edges = res.edges ?? [];
-  if (edges.some(edgeBroke)) return -MARGIN_PCT_CAP;
   const worst = limitingConstraint(res);
   const s =
     worst === undefined ? (res.feasible ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst.marginPct);
-  return edges.length > 0 && res.covers === undefined ? noDesign(s) : s;
+  return stands(res) ? s : noDesign(s);
 }
 
 /** One score demoted into the no-design band: ordered among its own kind, and below everything
@@ -389,24 +356,14 @@ function noDesign(s: number): number {
 
 /**
  * The same objective read off one sample of a sweep. The sweep carries every hard rule in the
- * tree plus one aggregate curve per containment edge (which already reads the floor when the
- * edge could not run), so the minimum over those is the same number `scoreResult` computes
- * from a full result — deliberately, since the search compares the two against each other.
+ * tree, so the minimum over those is the same number `scoreResult` computes from a full result
+ * — deliberately, since the search compares the two against each other: an incumbent scored
+ * from a full result against a move scored from a sweep. "This sample produced no design" is
+ * the sweep's own per-sample `stands`, the same predicate `scoreResult` reads.
  *
  * Admissibility is the core's own `measurable`, read off the two fields a sweep row carries: a
  * rule parked on its own boundary by construction reads zero forever and would otherwise be the
  * minimum forever, hiding every rule that can actually move.
- *
- * Taking a MINIMUM over the whole sweep, rather than looking one rule up in it, is also what
- * keeps the search clear of the two id namespaces: a sweep names containment edges by the edge
- * alone (`cm-lo@`) while a result names them per rule (`cm-lo@offset-spec`), so an id carried
- * from one to the other would silently miss. Every id the picker REPORTS comes from a full
- * result, never from a sweep.
- *
- * "This sample produced no design" is not inferred from the curves: the sweep forwards each
- * sample's own coverage answer (`SheetSweep.covers`), so both readings key off the one field the
- * evaluation produced. They have to agree, because the search compares one against the other — an
- * incumbent scored from a full result against a move scored from a sweep.
  */
 function scoreSample(sw: SheetSweep, i: number): number {
   let worst = Infinity;
@@ -417,7 +374,7 @@ function scoreSample(sw: SheetSweep, i: number): number {
     if (m < worst) worst = m;
   }
   const s = worst === Infinity ? (sw.feasible[i] ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst);
-  return sw.covers?.[i] === null ? noDesign(s) : s;
+  return sw.stands[i] ? s : noDesign(s);
 }
 
 /** Whether `(feasible, score)` beats the incumbent, feasibility first. Strict, so the first
@@ -433,51 +390,14 @@ function beats(f: boolean, s: number, bf: boolean, bs: number): boolean {
 
 /**
  * Why this evaluation is not feasible, in words — EVERY reason that applies, not the first one
- * found. A failing rule names itself; a containment edge that could not run is named too; so is
- * an error-severity warning; and when none of them applies the last resort states the situation
- * rather than inventing a cause. Never returns a blank — an empty cause beside a red verdict
- * reads as a defect in the tool.
- *
- * Additive rather than first-match, because the combination is the case that misleads. A point
- * carrying a failing rule AND a range end it does not cover reports, under a first-match chain,
- * a rule missing by some tractable-looking percentage — and a designer who goes and buys that
- * margin still cannot close, because the range end gates the sheet whatever the rules say. The
- * engine knows that (the search scores such a point at the floor); the candidate has to say it.
+ * found. A failing rule names itself; so does an error-severity warning; and when neither
+ * applies the last resort states the situation rather than inventing a cause. Never returns a
+ * blank — an empty cause beside a red verdict reads as a defect in the tool.
  */
 function causeOf(res: SheetResult): string {
   const parts: string[] = [];
   const b = bindingConstraint(res);
   if (b) parts.push(`${b.id} fails by ${(b.marginPct * 100).toFixed(1)}%`);
-  const skipped: string[] = [];
-  for (const e of res.edges ?? []) {
-    if (e.state === 'not-checked') skipped.push(`"${e.name}"`);
-    else if (e.error !== undefined)
-      // A checked range end fails in two quite different ways, and only one of them is a verdict
-      // about the design. Usually the endpoint run itself failed — the design was measured and
-      // could not hold there — which deserves saying so plainly, because "the edge could not be
-      // evaluated" reads as a gap in the tool and sends a designer looking for a setting to fix.
-      // But an edge whose OVERRIDE never resolved (a name that is not in scope) measured nothing
-      // at all, and claiming the design misses its range there would be inventing a result. That
-      // case is told apart by the run's own warnings being empty: an endpoint failure draws its
-      // message out of an error-severity warning, so it always leaves one behind, while the
-      // override failure returns before anything is evaluated. Its message already names the
-      // edge and says what did not resolve, so it stands alone rather than being wrapped.
-      parts.push(
-        e.rules.length === 0 && e.warnings.length === 0
-          ? e.error
-          : `the design stops covering its claimed range at "${e.name}": ${e.error}`,
-      );
-  }
-  // One clause for all the skipped edges, not one apiece: they are skipped for a single shared
-  // reason, and repeating it per edge would read as several findings where there is one. Said at
-  // all — rather than left as a silence — because a reader who sees no edge finding beside a red
-  // verdict would take the claimed range as checked and holding, which is the one thing it is
-  // not.
-  if (skipped.length)
-    parts.push(
-      `the claimed range was not checked (${skipped.join(', ')}): there is no design at this ` +
-        `point to check it against`,
-    );
   const w = res.warnings.find((x) => x.severity === 'error');
   if (w) parts.push(w.message);
   return parts.length > 0 ? parts.join('; ') : 'infeasible with no failing rule';
@@ -579,8 +499,8 @@ type Knob = SheetVar & { min: number; max: number };
  * equal relative move than the one the step-based statistic picks.
  *
  * No signal is a normal outcome, not an error: the readout refuses to differentiate around a
- * point where some containment edge did not stand, which is exactly the sheet class the repair
- * stage exists for. The caller falls back to scanning every knob — sensitivity is an
+ * point where the evaluation did not stand, which is exactly the sheet class the repair stage
+ * exists for. The caller falls back to scanning every knob — sensitivity is an
  * accelerator here, never a dependency.
  *
  * The returned list holds ONLY the knobs that were scored, never the unscored ones sorted to the
@@ -601,8 +521,6 @@ function rankKnobs(
   const sens = sheetSensitivities(doc, table, resolveDevice, {
     refs,
     params: knobs.map((k) => k.name),
-    // Containment edges are re-run per probe only when the rule in question lives on one;
-    // passing the id through is what keeps an edge-keyed target measurable at all.
     rule: target,
   });
   // Charge what was spent, not what was reserved: a knob the readout refused (its step reads
@@ -879,8 +797,14 @@ export function pickTopology(
   const refs = opts.refs;
 
   // Clone before overriding: a library doc is shared by every candidate in the run, and the
-  // search must not leave a mark on it.
-  const base = cloneDoc(sheet.doc);
+  // search must not leave a mark on it. The operating range is dropped: the picker answers
+  // which design types are FEASIBLE on this spec, and whether a chosen design then holds across
+  // its range is a question for that design, on its own sheet. A sheet that does not validate
+  // keeps its range, so that a defect IN the range still stops the candidate the way it stops
+  // the sheet everywhere else, instead of vanishing with the part that carried it.
+  const whole = cloneDoc(sheet.doc);
+  const valid = !validateSheet(resolvedSheet(whole, refs).doc).some((w) => w.severity === 'error');
+  const base = valid ? withoutEdges(whole) : whole;
   const { ignored, over } = applySpec(base, spec);
   const applied = Object.keys(over);
   const supplied = SPEC_FIELDS.filter((f) => {
@@ -996,9 +920,9 @@ export type PickerSortKey = 'margin' | 'current';
 /**
  * Whether `worstMargin` speaks for this candidate, or is a comfortable-looking number on a
  * design that cannot close. The field covers the rules that COULD be evaluated at the reported
- * point, so on a sheet made infeasible by something no rule measures — a containment edge whose
- * solve could not bracket — it reads as a pass on a point that gates the sheet. That class is
- * exactly the one with no binding constraint.
+ * point, so on a sheet made infeasible by something no rule measures — a solve that could not
+ * bracket — it reads as a pass on a point that cannot be built. That class is exactly the one
+ * with no binding constraint.
  *
  * The predicate ships beside the hazard its doc comment describes, rather than being
  * re-derived from two other fields by every surface that shows the number.

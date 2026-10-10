@@ -210,9 +210,10 @@ export class LookupRangeError extends LookupError {
   }
 }
 
-/** The wording of `LookupRangeError`'s message, with the failing quantity as capture 1 — for a
- *  caller that can only see the message, because the typed error was flattened into a string
- *  before reaching it. Lives beside the constructor above so the two are edited together: a
- *  reworded message that left this behind would silently stop matching. Anyone holding the error
- *  itself should read its fields instead. */
-export const LOOKUP_RANGE_MESSAGE = /inverse lookup: (id|gm) .* out of range/;
+/** The wording of `LookupRangeError`'s message, with the failing quantity as capture 1 and the
+ *  target and the reachable [min, max] as captures 2-4 — for a caller that can only see the
+ *  message, because the typed error was flattened into a string before reaching it. Lives beside
+ *  the constructor above so the two are edited together: a reworded message that left this
+ *  behind would silently stop matching. Anyone holding the error itself should read its fields
+ *  instead. */
+export const LOOKUP_RANGE_MESSAGE = /inverse lookup: (id|gm) (\S+) out of range \[(\S+), (\S+)\]/;
