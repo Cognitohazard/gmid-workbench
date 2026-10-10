@@ -163,8 +163,8 @@
       "max": 1.0,
       "unit": "V",
       "role": "choice",
-      "note": "cascode node vds (the low-impedance node Cc returns through)",
-      "class": "assumed"
+      "note": "cascode node vds (the low-impedance node Cc returns through). Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V1 - V_casc + casc__vgs"
     },
     {
       "name": "out_sign",
@@ -271,7 +271,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vdsat"]
+        "provide": ["gm", "vdsat", "vgs"]
       },
       "params": {
         "Ix": "I1/2",

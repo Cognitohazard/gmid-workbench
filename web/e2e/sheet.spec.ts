@@ -703,6 +703,49 @@ test('design sheet: an imported diode connection survives import and reload (not
   expect(errors).toEqual([]);
 });
 
+test('design sheet: an imported hold survives import and reload, and its gate bias is shown', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // A hold changes nothing at the design point, so a loader that dropped it would leave every
+  // rule and value as they were. The readout is what shows it is still there: the held
+  // expression and what it came to, X + B = 0.2 + 0.1.
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'held-node.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Held node',
+        polarity: 'n',
+        params: [
+          { name: 'X', value: 0.2, min: 0, max: 1, hold: 'X + B' },
+          { name: 'B', value: 0.1 },
+        ],
+        rows: [],
+        rules: [{ id: 'ok', kind: 'invariant', lhs: 'X', op: '>=', rhs: '0' }],
+      }),
+    ),
+  });
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Held node');
+  const held = page.locator('.sheet').first().locator('[data-held]');
+  await expect(held).toContainText('holds X + B at 300m');
+
+  await page.reload();
+  await expect(page.locator('.sheet').first().locator('[data-held]')).toContainText(
+    'holds X + B at 300m',
+  );
+
+  expect(errors).toEqual([]);
+});
+
 test('design sheet: an imported pin survives import and reload (not silently stripped)', async ({
   page,
 }) => {

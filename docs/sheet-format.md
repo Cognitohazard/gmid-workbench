@@ -78,7 +78,8 @@ Each entry in `params` is a named scalar input:
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
 | `solveFor` | string, optional | Makes this parameter a tearing variable and names the value it must agree with, closing a bias loop (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
-| `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: nothing on the sheet determines it, so the designer states it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe, an output level that a feedback loop outside the sheet holds, a voltage across a device whose surrounding circuit is not on the sheet). `assumed`: the sheet's own parts determine it, but the sheet types a value for now instead of deriving it (an internal stack node, a guessed gate-source drop). An assumed voltage is not a permanent state: it marks a value the sheet still has to derive, and deriving it removes the assumption. Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a containment edge's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `pin` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `pin` or `solveFor` is *solved*; that class is derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
+| `hold` | string, optional | Marks a node voltage that hangs under a transistor's gate and names the quantity that stays fixed where the design is held: the gate voltage, written as the node plus the device's gate-source voltage (see [A node under a gate](#a-node-under-a-gate-hold)). The parameter stays an ordinary, sweepable input at the design point. |
+| `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: nothing on the sheet determines it, so the designer states it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe, an output level that a feedback loop outside the sheet holds, a voltage across a device whose surrounding circuit is not on the sheet). `assumed`: the sheet's own parts determine it, but the sheet types a value for now instead of deriving it (an internal stack node, a guessed gate-source drop). An assumed voltage is not a permanent state: it marks a value the sheet still has to derive, and deriving it removes the assumption. Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a containment edge's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `pin` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `pin` or `solveFor` is *solved*, and one that carries `hold` is *held*; those classes are derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
 
 The `role` separates *what the sheet is for* from *how it gets there*:
 
@@ -625,9 +626,10 @@ whether the loop is real. Most in this library were **parameterization artifacts
 famous cycle (the pair's `VGS` sets the tail node it stands on) vanishes entirely when the tail
 node is the declared variable, and a spec like the common mode enters through a `pin` instead.
 That is how a spec that drives an internal node is solved wherever the node's search range can be
-stated as fixed numbers, as a tail node's can. Not every voltage in the library is derived yet:
-some sheets still type a voltage that their own parts determine. Those voltages are labelled
-`assumed` and listed with each result until they are derived.
+stated as fixed numbers, as a tail node's can. A node that hangs under a gate whose bias the sheet
+does not provide is stated at the design point and re-solved wherever the design is held, with a
+`hold` (below). No sheet in the library types a voltage that its own parts determine; a sheet of
+your own that still does labels it `assumed`, and it is listed with each result.
 
 `solveFor` remains for the loops that survive reparameterization: a quantity defined in terms of
 the device's *own* answer. One live example is the wide-swing mirror's node — a real wide-swing
@@ -754,7 +756,7 @@ closed with the reason:
 | the shared iteration budget runs out first | infeasible — spent by the loops each probe re-closes or by an expensive sibling; the pin itself was not shown unsolvable |
 | the probe backstop (200) is hit | infeasible — cannot occur before the width tolerance on a finite bracket; a backstop, not a tuning knob |
 | the parameter also carries `solveFor` | validation error — one solver per parameter |
-| more than one parameter carries `pin` | validation error — bisection is a scalar method |
+| two pinned parameters whose relations read each other, on one sheet or across a parent and a child | validation error, and infeasible if evaluated — a coupled system, which is not solved |
 | `pin` missing `lhs` or `rhs` | validation error — a half-written pin would freeze the parameter without solving it |
 | `min`/`max` missing or inverted | validation error — the bracket is required |
 
@@ -769,6 +771,65 @@ A pinned parameter is solved rather than set: the GUI shows it read-only with th
 on, and it is not sweepable — sweep the spec on the other side of the pin instead. The library's
 5T OTA is the worked example: the tail node is pinned so the produced common mode equals `CM_dc`,
 which makes the common-mode axis a sweep of `CM_dc` with one bisection per point.
+
+
+### Several pins on one sheet
+
+A sheet may pin more than one parameter when they can be solved **one after another**: the
+engine orders them so that each relation reads only parameters solved before it, solves the first
+on its bracket, holds it, and moves to the next. The telescopic OTA at a range end is the
+example — its tail node is solved after the cascode node its relation reads; the other cascode
+node, which nothing else reads, can fall anywhere in the order. Document order does not matter. Because no relation reads a parameter solved after it,
+nothing is revisited and the result is exact; the cost is one bisection per pin.
+
+Two pins that each read the other have no such order. That is a coupled system, and the engine
+does not solve one: the sheet fails validation naming the parameters on the loop, and evaluating
+it anyway returns infeasible with the same message. The same holds between a parent's pin and a
+child's — a child solves its own pins inside each of its parent's probes, which is exact only
+while the child's relations do not read the parent's pin.
+
+## A node under a gate (`hold`)
+
+A cascode's source, a pair's tail, a follower's output: each sits one gate-source voltage below
+a gate. Two things can be stated about such a node — where it sits, or where its gate is — and
+they are the same single choice. When the sheet provides the gate bias, write a `pin`: the node is
+solved so that node plus gate-source voltage equals the bias. When it does not, state the node
+and add a `hold`:
+
+```json
+{ "name": "V_a", "value": 0.55, "min": 0.46, "max": 0.85, "unit": "V", "role": "choice",
+  "hold": "V_a + casc_n__vgs",
+  "note": "the input drain and the cascode source" }
+```
+
+At the design point nothing is solved. The parameter keeps its value, it can be edited and swept,
+and the result reports what the held expression came to (`held`: here the cascode gate bias the
+design needs). Wherever the design is **held fixed and re-checked** — a containment edge's
+fixed-hardware run — the roles swap: the expression is held at that value and the node is
+re-solved between `min` and `max`, by the same bisection a `pin` uses. That is what the circuit
+does: a bias line holds the gate, and the node under it moves with the condition. Without the
+`hold`, a range end would keep the node and let the gate voltage drift.
+
+The expression must be a sum of terms in which the parameter appears **exactly once**, on its own
+or multiplied by a number: `V_a + casc_n__vgs`, `V_b - abs(casc_p__vgs)`,
+`V1 - V_casc + casc__vgs`. The check is on the shape, with no algebra attempted, so the
+parameter's own term is there to read. Any other relation is a `pin`.
+
+| situation | result |
+|-|-|
+| the parameter appears twice, inside a function, divided, or not at all | validation error — write the relation as a `pin` |
+| the parameter also carries `pin`, `solveFor` or `class` | validation error — a parameter takes one of the three solvers, and a held node's class is derived |
+| `min`/`max` missing or inverted | validation error — the bracket is required |
+| a containment edge sets the parameter | validation error — the range end re-solves it, so the override would be discarded |
+| a parent wires a value into a node its child holds | warning — the value is used at the design point, but a range end re-solves the node inside the child and the parent's own value does not follow. Hold the node on the parent |
+| the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at); validation says the solve order cannot be established and names the name |
+| the held expression does not evaluate at the design point | infeasible — there is nothing to hold it at |
+| at a range end, the expression barely moves across the bracket | that end does not cover, "numerically unresolved" — the rest of the expression cancels the node's own term, so no node voltage is singled out |
+| at a range end, the node cannot be bracketed | that end does not cover, with the bisection's own message |
+
+A `hold` keeps the **design point's** gate voltage. A gate bias that itself moves with the
+condition — a replica that tracks the device — is a provided bias: write it as an expression and
+`pin` the node to it.
 
 ## Containment edges (`edges`)
 
@@ -866,6 +927,11 @@ exactly — an author reading a green chip should know what it is and is not a s
   that names neither a width nor a current has both pinned numerically, and the run lists those
   blocks in `assumedSource` — the sheet never said where their current comes from, so holding it
   is an ideal-source assumption, and the fix is to author the current.
+- **A node under a gate is re-solved, and the gate is what is held.** A parameter that carries
+  `hold` is not kept at its design-point value: the expression it names — the gate voltage — is,
+  and the node is solved again under it (see [A node under a gate](#a-node-under-a-gate-hold)).
+  A node typed as a plain parameter is kept as typed, which holds the node and lets the gate
+  voltage drift.
 - **The geometry is exact; the small-signal numbers read off it are not.** A rewritten bind
   re-reads `gm` from the table at the pinned width instead of honouring the ratio the author
   wrote, so a range-end `gm` — and every quantity derived from it — sits an interpolation

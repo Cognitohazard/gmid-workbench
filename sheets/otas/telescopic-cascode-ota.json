@@ -68,22 +68,22 @@
     {
       "name": "V_a",
       "value": 0.55,
-      "min": 0.2,
-      "max": 1.0,
+      "min": 0.46,
+      "max": 0.85,
       "unit": "V",
       "role": "choice",
-      "note": "the NMOS-side internal node: input drain and input-cascode source. Set by the cascode gate bias in silicon; here a direct choice — the input vds is V_a - V_tail and the cascode's is V_out_dc - V_a, by construction",
-      "class": "assumed"
+      "note": "the NMOS-side internal node: input drain and input-cascode source. Set by the cascode gate bias in silicon; here a direct choice — the input vds is V_a - V_tail and the cascode's is V_out_dc - V_a, by construction. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_a + casc_n__vgs"
     },
     {
       "name": "V_b",
       "value": 1.35,
-      "min": 0.8,
+      "min": 1.0,
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "the PMOS-side internal node: mirror drain and load-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction",
-      "class": "assumed"
+      "note": "the PMOS-side internal node: mirror drain and load-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_b - abs(casc_p__vgs)"
     },
     {
       "name": "V_out_dc",
@@ -214,7 +214,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat", "gm"]
+        "provide": ["av0", "gds", "vdsat", "gm", "vgs"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -248,7 +248,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat"]
+        "provide": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
         "I_half": "I_tail/2",

@@ -69,12 +69,12 @@
     {
       "name": "V_fold",
       "value": 1.4,
-      "min": 0.9,
+      "min": 1.0,
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "the folding node: input-pair drains, folding-source drain, and PMOS-cascode source in one. The input vds is V_fold - V_tail, the folding source's is VDD - V_fold, and the PMOS cascode's is V_fold - V_out_dc — by construction",
-      "class": "assumed"
+      "note": "the folding node: input-pair drains, folding-source drain, and PMOS-cascode source in one. The input vds is V_fold - V_tail, the folding source's is VDD - V_fold, and the PMOS cascode's is V_fold - V_out_dc — by construction. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_fold - abs(pcasc__vgs)"
     },
     {
       "name": "V_c",
@@ -83,8 +83,8 @@
       "max": 0.6,
       "unit": "V",
       "role": "choice",
-      "note": "the NMOS-side internal node: mirror drain and NMOS-cascode source. The mirror vds is V_c and the cascode's is V_out_dc - V_c, by construction",
-      "class": "assumed"
+      "note": "the NMOS-side internal node: mirror drain and NMOS-cascode source. The mirror vds is V_c and the cascode's is V_out_dc - V_c, by construction. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_c + ncasc__vgs"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -274,7 +274,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat"]
+        "provide": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
         "I_f": "I_branch - in__id",
@@ -308,7 +308,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat"]
+        "provide": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
         "I_f": "I_branch - in__id",

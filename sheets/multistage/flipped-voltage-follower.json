@@ -10,9 +10,9 @@
       "min": 0.1,
       "max": 0.4,
       "unit": "V",
-      "role": "spec",
-      "note": "output DC level (also the input follower's source node, and the feedback device's drain). Both walls on this level belong to the CELL rather than to the tool, and both MOVE with the inversion knobs and with the process. The floor is the feedback device's own saturation voltage — its drain-source voltage IS the output level, so the output cannot sit below it; a weaker inversion on that device drops the floor. The ceiling is node X minus the input device's saturation voltage — node X is the feedback device's gate-source voltage, so the ceiling tracks it upward. On the demo table at the shipped inversions that window is roughly 0.24 V to 0.37 V",
-      "class": "assumed"
+      "role": "choice",
+      "note": "output DC level (also the input follower's source node, and the feedback device's drain). Both walls on this level belong to the CELL rather than to the tool, and both MOVE with the inversion knobs and with the process. The floor is the feedback device's own saturation voltage — its drain-source voltage IS the output level, so the output cannot sit below it; a weaker inversion on that device drops the floor. The ceiling is node X minus the input device's saturation voltage — node X is the feedback device's gate-source voltage, so the ceiling tracks it upward. On the demo table at the shipped inversions that window is roughly 0.24 V to 0.37 V. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_out + in__vgs"
     },
     {
       "name": "Rout_target",
@@ -99,9 +99,10 @@
           { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
+          { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" },
+          { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
         "rows": [],
         "rules": [
           {
@@ -114,7 +115,13 @@
         ],
         "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W"]
       },
-      "params": { "Ix": "I_in", "Lx": "L_in", "gx": "gm_id_in", "vx": "fb__vgs - V_out" }
+      "params": {
+        "Ix": "I_in",
+        "Lx": "L_in",
+        "gx": "gm_id_in",
+        "vx": "fb__vgs - V_out",
+        "vsbx": "V_out"
+      }
     }
   ],
   "rows": [

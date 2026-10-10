@@ -1157,6 +1157,16 @@
         )}</span
       >
     {/if}
+    <!-- The gate biases the design needs: what each held expression came to at this run. -->
+    {#if evaluated && result?.held && Object.keys(result.held).length}
+      <span class="sassume" data-held title={CONTROL_HELP.held}
+        >holds {Object.entries(result.held)
+          .map(
+            ([name, v]) => `${cfg.params.find((p) => p.name === name)?.hold ?? name} at ${fmt(v)}`,
+          )
+          .join(' · ')}</span
+      >
+    {/if}
     <!-- On demand only: each knob costs two full evaluations, so this never runs with the badge. -->
     <button
       class="sensb"

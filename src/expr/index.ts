@@ -405,6 +405,73 @@ export function createEngine(constants: Record<string, number> = { ...CONSTANTS 
 }
 
 /**
+ * The coefficient of `name` when `src` is a chain of top-level `+` / `-` terms in which `name`
+ * appears EXACTLY ONCE in the whole expression, as one of those terms: bare, or multiplied by a
+ * numeric literal. Undefined for any other shape — a second occurrence anywhere (a function
+ * argument included), the name under `/`, `^` or a call, a non-literal coefficient, a zero
+ * coefficient, or an expression that does not parse. Parentheses and unary signs around terms are
+ * transparent, so `a - (X - b)` reads -1 and `-(2*X) + a` reads -2.
+ *
+ * A purely syntactic test, on purpose: it promises that the expression has an explicit linear
+ * term in `name`, which is all a caller needs to scale a slope by, and it attempts no algebra.
+ */
+export function additiveCoefficient(src: string, name: string): number | undefined {
+  let ast: Node;
+  try {
+    ast = jsep(preprocess(src)) as unknown as Node;
+  } catch {
+    return undefined;
+  }
+  const isName = (n: Node): boolean => n.type === 'Identifier' && n.name === name;
+  // NaN poisons the count for anything the engine does not evaluate — a member access, a call
+  // through an expression, a string literal — so such a source is refused, not half-read.
+  const occurrences = (n: Node): number => {
+    switch (n.type) {
+      case 'Identifier':
+        return n.name === name ? 1 : 0;
+      case 'Literal':
+        return typeof n.value === 'number' ? 0 : NaN;
+      case 'UnaryExpression':
+        return occurrences(n.argument);
+      case 'BinaryExpression':
+        return occurrences(n.left) + occurrences(n.right);
+      case 'CallExpression':
+        return n.callee.type === 'Identifier'
+          ? n.arguments.reduce((sum, a) => sum + occurrences(a), 0)
+          : NaN;
+      case 'ConditionalExpression':
+        return occurrences(n.test) + occurrences(n.consequent) + occurrences(n.alternate);
+      default:
+        return NaN;
+    }
+  };
+  const literal = (n: Node): number | undefined => {
+    if (n.type === 'Literal') return typeof n.value === 'number' ? n.value : undefined;
+    if (n.type === 'UnaryExpression' && (n.operator === '-' || n.operator === '+')) {
+      const v = literal(n.argument);
+      return v === undefined ? undefined : n.operator === '-' ? -v : v;
+    }
+    return undefined;
+  };
+  /** The signed coefficient of `name` among the additive terms under `n`, if it is one of them. */
+  const term = (n: Node, sign: number): number | undefined => {
+    if (n.type === 'UnaryExpression' && (n.operator === '-' || n.operator === '+'))
+      return term(n.argument, n.operator === '-' ? -sign : sign);
+    if (n.type === 'BinaryExpression' && (n.operator === '+' || n.operator === '-'))
+      return term(n.left, sign) ?? term(n.right, n.operator === '-' ? -sign : sign);
+    if (isName(n)) return sign;
+    if (n.type === 'BinaryExpression' && n.operator === '*') {
+      const k = isName(n.left) ? literal(n.right) : isName(n.right) ? literal(n.left) : undefined;
+      if (k !== undefined) return sign * k;
+    }
+    return undefined;
+  };
+  if (occurrences(ast) !== 1) return undefined;
+  const coef = term(ast, 1);
+  return coef !== undefined && Number.isFinite(coef) && coef !== 0 ? coef : undefined;
+}
+
+/**
  * A Scope over a flat record of named scalars. Unknown names return undefined and
  * fall through to the engine's constant map. Resolves against the LIVE record — it
  * closes over `values`, so entries written after construction are visible (sheet

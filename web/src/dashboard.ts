@@ -399,6 +399,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         if (pin && typeof pin.lhs === 'string' && typeof pin.rhs === 'string')
           out.pin = { lhs: pin.lhs, rhs: pin.rhs };
         else dropField(pp.pin !== undefined, `params[${i}].pin`);
+        // Same stakes again: a dropped hold leaves the node typed, and a range end would then
+        // hold the node where the design holds the gate.
+        if (typeof pp.hold === 'string' && pp.hold !== '') out.hold = pp.hold;
+        else dropField(pp.hold !== undefined, `params[${i}].hold`);
         // A dropped class turns a declared DC input back into an unclassified one, which fails
         // validation — so an unknown value (including the derived-only "solved") is named here.
         if (typeof pp.class === 'string' && PARAM_CLASSES.has(pp.class))

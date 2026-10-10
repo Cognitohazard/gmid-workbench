@@ -182,11 +182,13 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
       name: 'V_ds',
       value: 0.3,
       unit: 'V',
-      note: 'the input device sits low in the stack',
-      class: 'assumed',
+      note:
+        'drain bias, stated: on its own this block has nothing above it to set the drain. A ' +
+        'parent that stacks a device on it wires its own node in',
+      class: 'independent',
     },
   ],
-  // vds pinned to the (low) input-device drain; body-grounded ⇒ vsb = 0.
+  // vds is the (low) input-device drain; body-grounded ⇒ vsb = 0.
   bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
   rows: [],
   rules: [{ id: 'feasible-inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
@@ -248,26 +250,41 @@ const NMOS_CASCODE: SheetDoc = {
       note: 'per-stage saturation floor',
     },
     {
-      name: 'V_ds_casc',
-      value: 0.9,
+      name: 'V_out',
+      value: 1.2,
       unit: 'V',
       role: 'spec',
-      note: 'cascode-device drain bias (higher than the input); body-grounded, so vsb = 0',
-      class: 'assumed',
+      note: 'output DC level, stated: whatever loads the cascode sets it, and that is not on this sheet',
+      class: 'independent',
+    },
+    {
+      name: 'V_x',
+      value: 0.3,
+      min: 0.1,
+      max: 0.8,
+      unit: 'V',
+      role: 'choice',
+      note:
+        'the node between the two devices: the input drain and the cascode source. Stated at ' +
+        'this design point; the cascode gate bias (this node plus its gate-source voltage) is ' +
+        'what stays put where the design is held, and the node is re-solved under it',
+      hold: 'V_x + vgs',
     },
   ],
   uses: [
     {
       name: 'cs',
       doc: COMMON_SOURCE_INPUT,
-      // Share the design knobs with the input device (param overrides resolve in this scope).
-      params: { L: 'L', gm_id: 'gm_id', I_bias: 'I_bias' },
+      // Share the design knobs with the input device (param overrides resolve in this scope),
+      // and put its drain on the node the cascode's source sits on.
+      params: { L: 'L', gm_id: 'gm_id', I_bias: 'I_bias', V_ds: 'V_x' },
     },
   ],
   // The cascode device sits in series with the input device, so it carries the same drain
   // current cs__id (a child-provided scalar referenced right here in the parent's bind). Its
-  // own drain sits higher in the stack; body-grounded ⇒ vsb = 0.
-  bind: { L: 'L', id: 'cs__id', gm_id: 'gm_id', vds: 'V_ds_casc', vsb: '0' },
+  // It sits between the output and that node, with its body grounded, so its source — and
+  // with it its body bias — is the node voltage.
+  bind: { L: 'L', id: 'cs__id', gm_id: 'gm_id', vds: 'V_out - V_x', vsb: 'V_x' },
   rows: [
     // Cascode gain ≈ product of the two stages' intrinsic gains (av0 is width-independent).
     { name: 'Av', expr: 'av0 * cs__av0', unit: 'V/V' },

@@ -5,8 +5,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { compileExpr } from '../derive';
+import { additiveCoefficient } from '../expr';
 import { dcInputs, EXAMPLES, exprRoots, runSheet, validateSheet } from './index';
-import { reachedBinds, type ReachedBind } from './validate';
+import { pinPlan, reachedBinds, type ReachedBind } from './validate';
 import { BIND_FLAGS, type SheetBind, type SheetDoc, type SheetVar } from './types';
 import { loadLibrary, REFS, sheet, table } from './library.fixtures';
 import { resolveSheetRefs } from './resolve';
@@ -394,6 +395,232 @@ describe('sheet-dc-inputs — solved is derived, never authored', () => {
   });
 });
 
+describe('hold — a node under a gate is stated at the nominal run and re-solved where held', () => {
+  /** The leaf with its drain on node X: `vds = vd - X`, body on X, and X carrying `patch`. */
+  const onNode = (patch: Partial<SheetVar>): SheetDoc =>
+    leaf({ vds: 'vd - X', vsb: 'X' }, [
+      { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, ...patch },
+    ]);
+  const errors = (doc: SheetDoc): string[] =>
+    validateSheet(doc)
+      .filter((w) => w.severity === 'error')
+      .map((w) => w.message);
+
+  it('classes a held node `held`: no authored class is asked for, and it is no assumption', () => {
+    // X feeds the bind, so it is a DC input; the hold is what says where it comes from.
+    const doc = onNode({ hold: 'X + vgs' });
+    doc.params = doc.params.map((p) => (p.name === 'vd' ? { ...p, class: 'independent' } : p));
+    expect(errors(doc)).toEqual([]);
+    const r = dcInputs(doc);
+    expect(r.held).toEqual(['X']);
+    expect(r.unclassified).toEqual([]);
+    expect(r.assumed).toEqual([]);
+  });
+
+  it('refuses a class on a held node, and a hold beside a pin or a solveFor', () => {
+    expect(errors(onNode({ hold: 'X + vgs', class: 'assumed' }))).toContainEqual(
+      expect.stringMatching(/param "X" carries hold, so its class is derived/),
+    );
+    const three = /param "X" carries hold and is also pinned or a tearing variable/;
+    expect(errors(onNode({ hold: 'X + vgs', pin: { lhs: 'X', rhs: 'vd' } }))).toContainEqual(
+      expect.stringMatching(three),
+    );
+    expect(errors(onNode({ hold: 'X + vgs', solveFor: 'vgs' }))).toContainEqual(
+      expect.stringMatching(three),
+    );
+  });
+
+  it('needs a bracket to re-solve the node in', () => {
+    expect(errors(onNode({ hold: 'X + vgs', min: undefined }))).toContainEqual(
+      expect.stringMatching(/held param "X" needs finite min < max/),
+    );
+  });
+
+  it('accepts only a sum in which the node appears once, bare or times a number', () => {
+    // The node's own term has to be there to read: once, at the top of the sum.
+    const shape = /hold ".*" must be a sum of terms in which X appears exactly once/;
+    for (const ok of ['X + vgs', 'vd - X + vgs', '-(2*X) + vgs', '1e-9*X'])
+      expect(errors(onNode({ hold: ok })).filter((m) => shape.test(m))).toEqual([]);
+    for (const bad of [
+      'vgs', // the node is absent
+      '(0.7 + X) - 0.7 - X', // twice, and they cancel
+      'X*vgs/vgs - X', // twice
+      'X + abs(X)', // once as a term, once inside a call
+      'X^2', // not a term of the sum
+      'min(X, 2)',
+      'X/2 + vgs', // divided, not multiplied by a number
+      'vd*X + vgs', // the coefficient is a param
+    ])
+      expect(errors(onNode({ hold: bad }))).toContainEqual(expect.stringMatching(shape));
+  });
+
+  it('refuses a range end that sets a held node', () => {
+    // A range end re-solves the node; an override there would be thrown away.
+    const doc = onNode({ hold: 'X + vgs' });
+    doc.edges = [{ name: 'hi', set: { X: '0.3' } }];
+    expect(errors(doc)).toContainEqual(
+      expect.stringMatching(/edge "hi" sets "X", which carries hold/),
+    );
+  });
+
+  it('checks the order the held nodes will be solved in before any run exists', () => {
+    // Two nodes each held through the other's device: X through a quantity biased from Y, Y
+    // through a row that reads X. Typed, the sheet evaluates; held, the two form a coupled pair.
+    const doc = leaf({ vds: 'vd - X', vsb: 'Y' }, [
+      { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, hold: 'X + vgs' },
+      { name: 'Y', value: 0.1, unit: 'V', min: 0, max: 0.4, hold: 'Y + r' },
+    ]);
+    doc.rows = [{ name: 'r', expr: '2*X' }];
+    expect(errors(doc)).toContainEqual(
+      expect.stringMatching(/pinned params depend on each other \((X → Y → X|Y → X → Y)\)/),
+    );
+  });
+});
+
+describe('hold — the solve order is checked on the document a range end really runs', () => {
+  const errors = (doc: SheetDoc): string[] =>
+    validateSheet(doc)
+      .filter((w) => w.severity === 'error')
+      .map((w) => w.message);
+  const dev = (bind: SheetBind, provide: string[]): SheetDoc => ({
+    title: 'dev',
+    polarity: 'n',
+    params: [
+      { name: 'L', value: 0.5e-6, unit: 'm' },
+      { name: 'I', value: 10e-6, unit: 'A' },
+      { name: 'gmT', value: 1e-4, unit: 'S' },
+      { name: 'vd', value: 0.3, unit: 'V' },
+      { name: 'vs', value: 0, unit: 'V' },
+    ],
+    bind,
+    rows: [],
+    rules: [],
+    provide,
+  });
+  /** A pair device under a cascode. The pair is bound by gm and gm/ID, so its current is a result
+   *  of its sizing; the cascode carries that current. The tail is pinned to the common mode and
+   *  the cascode node carries `node`. */
+  const stack = (node: Partial<SheetVar>): SheetDoc => ({
+    title: 'stack',
+    polarity: 'n',
+    params: [
+      { name: 'CM', value: 0.9, unit: 'V', class: 'independent' },
+      { name: 'CM_hi', value: 1.0, unit: 'V', class: 'independent' },
+      { name: 'V_out', value: 0.9, unit: 'V', class: 'independent' },
+      {
+        name: 'V_tail',
+        value: 0.3,
+        unit: 'V',
+        min: 0.1,
+        max: 0.45,
+        pin: { lhs: 'V_tail + in__vgs', rhs: 'CM' },
+      },
+      { name: 'V_a', value: 0.55, unit: 'V', min: 0.46, max: 0.85, ...node },
+    ],
+    rows: [],
+    rules: [],
+    uses: [
+      {
+        name: 'in',
+        doc: dev({ L: 'L', gm: 'gmT', gm_id: '10', vds: 'vd', vsb: 'vs' }, ['vgs', 'id']),
+        params: { vd: 'V_a - V_tail', vs: 'V_tail' },
+      },
+      {
+        name: 'casc',
+        doc: dev({ L: 'L', id: 'I', gm_id: '10', vds: 'vd', vsb: 'vs' }, ['vgs']),
+        params: { I: 'in__id', vd: 'V_out - V_a', vs: 'V_a' },
+      },
+    ],
+    edges: [{ name: 'hi', set: { CM: 'CM_hi' } }],
+  });
+
+  it('reads the binds as a range end rewrites them, not as authored', () => {
+    // As authored, the pair's current comes out of its sizing, which reads the tail; the cascode
+    // carries that current, so its gate-source voltage would wait on the tail while the tail
+    // waits on the cascode node: a loop. A range end holds the pair's width and current as
+    // numbers, so there the cascode reads no tail at all and the order is node, then tail.
+    expect(errors(stack({ hold: 'V_a + casc__vgs' }))).toEqual([]);
+    expect(pinPlan(stack({ hold: 'V_a + casc__vgs' }), { held: true })).toEqual({
+      order: ['V_a', 'V_tail'],
+    });
+  });
+
+  it('checks the sheet as authored as well: the two views are different documents', () => {
+    // The parent pins P against the child's Q; the child pins Q against X/2; the parent wires
+    // X = P. As authored that is a coupled pair across the two levels. Held, X becomes a pin of
+    // its own and the override that closed the loop is no longer read — so the fixed-hardware
+    // view alone would pass a sheet whose design-point solve is coupled.
+    const doc: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [{ name: 'P', value: 0.5, min: 0, max: 1, pin: { lhs: 'P + c__Q', rhs: '1' } }],
+      rows: [],
+      rules: [],
+      uses: [
+        {
+          name: 'c',
+          params: { X: 'P' },
+          doc: {
+            title: 'child',
+            polarity: 'n',
+            provide: ['Q'],
+            params: [
+              { name: 'Q', value: 0.5, min: 0, max: 1, pin: { lhs: 'Q', rhs: 'X/2' } },
+              { name: 'X', value: 0, min: 0, max: 1, hold: 'X + B' },
+              { name: 'B', value: 0.1 },
+            ],
+            rows: [],
+            rules: [],
+          },
+        },
+      ],
+    };
+    expect(errors(doc)).toContainEqual(expect.stringMatching(/pinned params depend on each other/));
+  });
+
+  it('counts a held expression among the expressions a sheet reads', () => {
+    // The cascode does not publish vgs here, so the hold names a scalar nothing provides. The
+    // sheet says so the way it does for a row or a pin.
+    const doc = stack({ hold: 'V_a + casc__vgs' });
+    doc.uses![1].doc!.provide = [];
+    expect(validateSheet(doc).map((w) => w.message)).toContainEqual(
+      expect.stringMatching(/casc__vgs/),
+    );
+  });
+
+  it('warns where a parent wires a value into a node its child holds', () => {
+    // The wired value is honoured at the design point; a range end re-solves the node inside the
+    // child, and the parent goes on reading its own number for it.
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [{ name: 'Xp', value: 0.25, unit: 'V', class: 'independent' }],
+      rows: [],
+      rules: [],
+      uses: [
+        {
+          name: 'k',
+          params: { X: 'Xp' },
+          doc: leaf({ vds: 'vd - X', vsb: 'X' }, [
+            { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, hold: 'X + vgs' },
+          ]),
+        },
+      ],
+    };
+    expect(
+      validateSheet(doc)
+        .filter((w) => w.severity === 'warning')
+        .map((w) => w.message),
+    ).toContainEqual(expect.stringMatching(/use "k" override "X" sets a node the child holds/));
+  });
+
+  it('reads no coefficient out of a source the engine cannot evaluate', () => {
+    for (const src of ['X + foo[X]', 'X + "X"', 'X + (a + b)(2)'])
+      expect(additiveCoefficient(src, 'X')).toBeUndefined();
+    expect(additiveCoefficient('X + 100m', 'X')).toBe(1);
+  });
+});
+
 describe('sheet-dc-inputs — a device may not depend on its own operating point unsolved', () => {
   // The top device's drain bias is read through a child's published row, and that child is fed
   // back the top device's own gate voltage — a loop through a child's provide.
@@ -550,6 +777,7 @@ const backward = (doc: SheetDoc, p: string): boolean => {
     ...r.independent,
     ...r.assumed,
     ...r.solved,
+    ...r.held,
     ...r.unclassified.map((u) => u.param),
   ].includes(p);
 };

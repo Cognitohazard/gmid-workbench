@@ -12,7 +12,7 @@
 // hand it that the engine has not already produced a base result for.
 
 import { BINDABLE } from '../device';
-import { blockPath, PATH_SEP } from './types';
+import { blockPath, holdAsPin, holds, PATH_SEP } from './types';
 import type { BindReport, SheetBind, SheetChildReport, SheetDoc, SheetUse } from './types';
 
 /** The three quantities a range end holds fixed: the geometry, and a current the author wrote. */
@@ -53,6 +53,7 @@ function numExpr(v: number): string {
 interface BindTree {
   bind?: BindReport;
   children?: readonly SheetChildReport[];
+  held?: Record<string, number>;
 }
 
 /** The transformed document plus the blocks whose current the transformation had to ASSUME (see
@@ -62,6 +63,9 @@ interface BindTree {
 export interface PinnedHardware {
   doc: SheetDoc;
   assumedSource: string[];
+  /** The `hold` params (by use path) the base run recorded no value for, left as authored. A
+   *  caller must not report a run of this document as fixed hardware while any are listed. */
+  unheld: string[];
 }
 
 /**
@@ -105,15 +109,48 @@ export interface PinnedHardware {
  * document that reached the engine without validation.
  */
 export function pinHardware(doc: SheetDoc, base: BindTree): PinnedHardware {
-  const assumedSource: string[] = [];
-  return { doc: pinNode(doc, base, '', assumedSource), assumedSource };
+  const out: PinnedHardware = { doc, assumedSource: [], unheld: [] };
+  out.doc = pinNode(doc, base, '', out);
+  return out;
 }
 
-function pinNode(doc: SheetDoc, base: BindTree, path: string, assumedSource: string[]): SheetDoc {
-  const bind = doc.bind ? pinBind(doc.bind, base.bind, path, assumedSource) : undefined;
-  const uses = doc.uses?.map((use, i) => pinUse(use, base.children?.[i], path, assumedSource));
+/**
+ * The document a fixed-hardware run of `doc` would evaluate, in SHAPE only: every bind and every
+ * `hold` rewritten exactly as pinHardware rewrites them, against placeholder numbers. For asking
+ * a structural question of that document — which params its pins read — before any run exists.
+ * Not for evaluation.
+ */
+export function heldShape(doc: SheetDoc): SheetDoc {
+  const shape = (d: SheetDoc | undefined, name = ''): SheetChildReport => ({
+    name,
+    title: '',
+    feasible: true,
+    provides: {},
+    rules: [],
+    ...(d?.bind ? { bind: { ok: true, W: 1, L: 1, vgs: 0, id: 1 } } : {}),
+    held: Object.fromEntries((d?.params ?? []).filter(holds).map((p) => [p.name, 0])),
+    children: (d?.uses ?? []).map((u) => shape(u.doc, u.name)),
+  });
+  return pinHardware(doc, shape(doc)).doc;
+}
+
+function pinNode(doc: SheetDoc, base: BindTree, path: string, out: PinnedHardware): SheetDoc {
+  const bind = doc.bind ? pinBind(doc.bind, base.bind, path, out.assumedSource) : undefined;
+  const uses = doc.uses?.map((use, i) => pinUse(use, base.children?.[i], path, out));
+  // A node under a gate: the gate voltage the base run needed is part of the hardware, so the
+  // held expression becomes a pin against that value and the node is re-solved (SheetVar.hold).
+  const params = doc.params.map((p) => {
+    if (!holds(p)) return p;
+    const v = base.held?.[p.name];
+    if (v === undefined || !Number.isFinite(v)) {
+      out.unheld.push(`${path}${p.name}`);
+      return p;
+    }
+    return holdAsPin(p, numExpr(v));
+  });
   return {
     ...doc,
+    params,
     ...(bind ? { bind } : {}),
     ...(uses ? { uses } : {}),
   };
@@ -123,14 +160,14 @@ function pinUse(
   use: SheetUse,
   child: SheetChildReport | undefined,
   path: string,
-  assumedSource: string[],
+  out: PinnedHardware,
 ): SheetUse {
   // A use with no embedded doc never sized (validation names it); there is nothing to pin and
   // no report to pin it from.
   if (!use.doc) return use;
   return {
     ...use,
-    doc: pinNode(use.doc, child ?? {}, `${path}${use.name}${PATH_SEP}`, assumedSource),
+    doc: pinNode(use.doc, child ?? {}, `${path}${use.name}${PATH_SEP}`, out),
   };
 }
 

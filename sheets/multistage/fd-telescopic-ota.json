@@ -120,8 +120,8 @@
       "max": 0.8,
       "unit": "V",
       "role": "choice",
-      "note": "tail node (input-pair source) DC level",
-      "class": "assumed"
+      "note": "tail node (input-pair source) DC level. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_s + in__vgs"
     },
     {
       "name": "V_a",
@@ -130,8 +130,8 @@
       "max": 1.0,
       "unit": "V",
       "role": "choice",
-      "note": "input-device drain / NMOS-cascode source node",
-      "class": "assumed"
+      "note": "input-device drain / NMOS-cascode source node. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_a + cascn__vgs"
     },
     {
       "name": "V_out",
@@ -150,8 +150,8 @@
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "PMOS-cascode source / load-drain node",
-      "class": "assumed"
+      "note": "PMOS-cascode source / load-drain node. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_b - abs(cascp__vgs)"
     },
     {
       "name": "p_sign",
@@ -172,9 +172,10 @@
           { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.23, "unit": "V", "role": "spec" }
+          { "name": "vx", "value": 0.23, "unit": "V", "role": "spec" },
+          { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
         "rows": [],
         "rules": [
           {
@@ -187,7 +188,13 @@
         ],
         "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
       },
-      "params": { "Ix": "I_tail/2", "Lx": "L_in", "gx": "gm_id_in", "vx": "V_a - V_s" }
+      "params": {
+        "Ix": "I_tail/2",
+        "Lx": "L_in",
+        "gx": "gm_id_in",
+        "vx": "V_a - V_s",
+        "vsbx": "V_s"
+      }
     },
     {
       "name": "cascn",
@@ -199,9 +206,10 @@
           { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.4, "unit": "V", "role": "spec" }
+          { "name": "vx", "value": 0.4, "unit": "V", "role": "spec" },
+          { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
         "rows": [],
         "rules": [
           {
@@ -212,9 +220,15 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat"]
+        "provide": ["av0", "gds", "vdsat", "vgs"]
       },
-      "params": { "Ix": "I_tail/2", "Lx": "L_cascn", "gx": "gm_id_cascn", "vx": "V_out - V_a" }
+      "params": {
+        "Ix": "I_tail/2",
+        "Lx": "L_cascn",
+        "gx": "gm_id_cascn",
+        "vx": "V_out - V_a",
+        "vsbx": "V_a"
+      }
     },
     {
       "name": "cascp",
@@ -232,9 +246,10 @@
             "unit": "V",
             "role": "spec",
             "note": "signed to this table's axis convention"
-          }
+          },
+          { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
         "rows": [],
         "rules": [
           {
@@ -245,13 +260,14 @@
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat"]
+        "provide": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
         "Ix": "I_tail/2",
         "Lx": "L_cascp",
         "gx": "gm_id_cascp",
-        "vx": "p_sign*(V_b - V_out)"
+        "vx": "p_sign*(V_b - V_out)",
+        "vsbx": "VDD - V_b"
       }
     },
     {

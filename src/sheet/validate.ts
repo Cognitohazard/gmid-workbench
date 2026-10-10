@@ -11,7 +11,7 @@ import type { QAWarning } from '../types';
 import { compileExpr, metaScalars } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
 import { BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
-import { PINNED_AT_A_RANGE_END } from './coverage';
+import { PINNED_AT_A_RANGE_END, heldShape } from './coverage';
 import {
   BIAS_AXES,
   BIND_FLAGS,
@@ -23,6 +23,7 @@ import {
   MAX_USE_DEPTH,
   docExpressions,
   engineSolved,
+  holds,
   pinned,
   torn,
   pinProblem,
@@ -754,16 +755,19 @@ function walkBack(
   return { visit, device, found };
 }
 
-/** The class a root is reported under: `solved` when the engine solves it, else its authored
+/** The class a root is reported under: `solved` when the engine solves it, `held` when it carries
+ *  a `hold` (stated at the nominal run, re-solved where the hardware is held), else its authored
  *  class, else `unclassified`. */
-export type RootClass = ParamClass | 'solved' | 'unclassified';
+export type RootClass = ParamClass | 'solved' | 'held' | 'unclassified';
 
 const classOf = (p: SheetVar): RootClass =>
   engineSolved(p)
     ? 'solved'
-    : PARAM_CLASSES.has(p.class ?? '')
-      ? (p.class as ParamClass)
-      : 'unclassified';
+    : holds(p)
+      ? 'held'
+      : PARAM_CLASSES.has(p.class ?? '')
+        ? (p.class as ParamClass)
+        : 'unclassified';
 
 /** `roots` in document order: the tree in preorder, each doc's params as written. */
 const inDocumentOrder = (levels: readonly Level[], roots: Roots) =>
@@ -788,6 +792,7 @@ export interface DcInputs {
   independent: string[];
   assumed: string[];
   solved: string[];
+  held: string[];
   unclassified: { param: string; devices: string[] }[];
   cycles: { device: string; via: string[] }[];
 }
@@ -829,7 +834,14 @@ export function dcInputs(doc: SheetDoc): DcInputs {
     if (found.loop) cycles.push({ device: blockPath(start.path), via: found.loop });
   }
 
-  const out: DcInputs = { independent: [], assumed: [], solved: [], unclassified: [], cycles };
+  const out: DcInputs = {
+    independent: [],
+    assumed: [],
+    solved: [],
+    held: [],
+    unclassified: [],
+    cycles,
+  };
   for (const [name, r] of inDocumentOrder(levels, roots)) {
     const cls = classOf(r.p);
     if (cls !== 'unclassified') out[cls].push(name);
@@ -893,7 +905,7 @@ export function exprRoots(
   const every = levels.flatMap((l) => l.doc.params.filter(pinned).map((p) => `${l.path}${p.name}`));
   const own = typeof policy === 'object' ? `${path}${policy.residual}` : undefined;
   const out: ExprRoots = {
-    roots: { independent: [], assumed: [], solved: [], unclassified: [] },
+    roots: { independent: [], assumed: [], solved: [], held: [], unclassified: [] },
     unresolved: [...unresolved],
     crossings: { device: [...device], equation: [...equation], solved: [...solved] },
     cycles,
@@ -902,6 +914,70 @@ export function exprRoots(
   };
   for (const [name, r] of inDocumentOrder(levels, roots)) out.roots[classOf(r.p)].push(name);
   return out;
+}
+
+/**
+ * The order in which a tree's pinned params can be solved one at a time: each after every other
+ * pinned param its relation reads (the RESIDUAL policy's edges), names qualified by use path.
+ * Solving in that order is exact — a relation never reads a param solved after it, so nothing has
+ * to be revisited. When no such order exists, two or more pins depend on each other: a coupled
+ * system, which this engine reports and does not solve, at one level or across levels alike. The
+ * `problem` names the params on the loop.
+ *
+ * `held: true` reads the document as a fixed-hardware run will (heldShape) — every `hold` a pin
+ * and every bind in its fixed-width form — so that run's order can be checked before any run
+ * exists. It is a different document from the authored one, not a superset of it, so a caller
+ * checking a sheet asks about both.
+ *
+ * A relation that reads a name nothing on the sheet provides cannot be placed in the order at
+ * all (exprRoots fails closed on it); the problem then names that name, not the loop it would
+ * otherwise be reported as.
+ */
+export function pinPlan(
+  doc: SheetDoc,
+  opts: { held?: boolean } = {},
+): { order: string[] } | { problem: string } {
+  const tree = opts.held ? heldShape(doc) : doc;
+  const reads = new Map<string, string[]>();
+  const unplaced = new Map<string, string[]>();
+  for (const lv of levelsOf(tree)) {
+    for (const p of lv.doc.params.filter(pinned)) {
+      const level = lv.path.endsWith(PATH_SEP) ? lv.path.slice(0, -PATH_SEP.length) : lv.path;
+      const { pins, unresolved } = exprRoots(tree, level, `(${p.pin.lhs}) - (${p.pin.rhs})`, {
+        residual: p.name,
+      });
+      reads.set(`${lv.path}${p.name}`, pins);
+      if (unresolved.length) unplaced.set(`${lv.path}${p.name}`, unresolved);
+    }
+  }
+  const order: string[] = [];
+  const state = new Map<string, 'open' | 'done'>();
+  const visit = (name: string, trail: string[]): string[] | undefined => {
+    if (state.get(name) === 'done') return undefined;
+    if (state.get(name) === 'open') return [...trail.slice(trail.indexOf(name)), name];
+    state.set(name, 'open');
+    for (const dep of reads.get(name) ?? []) {
+      const loop = visit(dep, [...trail, name]);
+      if (loop) return loop;
+    }
+    state.set(name, 'done');
+    order.push(name);
+    return undefined;
+  };
+  for (const name of reads.keys()) {
+    const loop = visit(name, []);
+    if (!loop) continue;
+    const lost = loop.find((n) => unplaced.has(n));
+    return {
+      problem: lost
+        ? `the relation that solves "${lost}" reads ${quoted(unplaced.get(lost) ?? [])}, which ` +
+          `nothing on the sheet provides — so the order to solve its pinned params in cannot ` +
+          `be established`
+        : `pinned params depend on each other (${loop.join(' → ')}) — a coupled system, which ` +
+          `is not solved; give one of them a value the other does not read`,
+    };
+  }
+  return { order };
 }
 
 /** How a DC-input finding names a device: the sheet's own, or a child by use path. */
@@ -996,6 +1072,11 @@ function movedBy(
   const sources: readonly (readonly [string, Edge])[] = [
     ...lv.doc.rows.map((r) => [r.name, rowEdge(lv, r)] as const),
     ...lv.doc.params.filter(engineSolved).map((p) => [p.name, solvedEdge(lv, p)] as const),
+    // A held node is re-solved at a range end from the expression it holds, so it moves with
+    // whatever that expression reads.
+    ...lv.doc.params
+      .filter(holds)
+      .map((p) => [p.name, { kind: 'row', lv, names: namesOf(p.hold) } as Edge] as const),
   ];
   const close = (): void => {
     for (let grew = true; grew;) {
@@ -1145,11 +1226,13 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
               quoted([...PARAM_CLASSES]),
         location: p.name,
       });
-    } else if (cls !== undefined && engineSolved(p)) {
+    } else if (cls !== undefined && (engineSolved(p) || holds(p))) {
       out.push({
         rule: 'sheet-dc-inputs',
         severity: 'error',
-        message: `param "${p.name}" is solved by the engine, so its class is derived — drop class "${String(cls)}"`,
+        message: engineSolved(p)
+          ? `param "${p.name}" is solved by the engine, so its class is derived — drop class "${String(cls)}"`
+          : `param "${p.name}" carries hold, so its class is derived — drop class "${String(cls)}"`,
         location: p.name,
       });
     }
@@ -1325,11 +1408,13 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
             message: `edge "${name}" sets "${k}", which is not a param of this sheet`,
             location: name,
           });
-        } else if (engineSolved(p)) {
+        } else if (engineSolved(p) || holds(p)) {
           out.push({
             rule: 'sheet-edge',
             severity: 'error',
-            message: `edge "${name}" sets "${k}", which the engine solves — the override would be discarded by the solve`,
+            message: engineSolved(p)
+              ? `edge "${name}" sets "${k}", which the engine solves — the override would be discarded by the solve`
+              : `edge "${name}" sets "${k}", which carries hold — a range end re-solves it, so the override would be discarded`,
             location: name,
           });
         }
@@ -1366,7 +1451,17 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     });
   }
 
-  if (_depth === 0) out.push(...dcInputProblems(doc));
+  if (_depth === 0) {
+    out.push(...dcInputProblems(doc));
+    // Tree-wide like the rule above, and for the same reason: a pin's relation can read a pin of
+    // another level. Asked of the sheet as authored and as a fixed-hardware run will see it —
+    // two documents, each with its own pins and binds.
+    const problems = new Set<string>();
+    for (const plan of [pinPlan(doc), pinPlan(doc, { held: true })])
+      if ('problem' in plan) problems.add(plan.problem);
+    for (const message of problems)
+      out.push({ rule: 'sheet-param', severity: 'error', message, location: 'params' });
+  }
 
   // The composition interface, both ways: names read across a block boundary, and names this
   // sheet declares it exposes. Runs for every doc — a leaf with no children still publishes.
@@ -1413,6 +1508,17 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       if (!use.params) continue;
       const later = new Set(doc.uses.slice(i).flatMap(providedNames));
       for (const [k, expr] of Object.entries(use.params)) {
+        // The child re-solves a held node wherever the hardware is held, so the value wired in
+        // here is honoured at the design point and dropped at a range end — while this sheet
+        // goes on reading its own.
+        if (use.doc?.params.some((p) => p.name === k && holds(p))) {
+          out.push({
+            rule: 'sheet-use-param',
+            severity: 'warning',
+            message: `use "${use.name}" override "${k}" sets a node the child holds under a gate — a range end re-solves it inside the child, and this sheet's own value for it will not follow. Hold the node on this sheet instead`,
+            location: use.name,
+          });
+        }
         for (const n of namesOf(expr)) {
           if (later.has(n)) {
             out.push({

@@ -18,11 +18,11 @@
       "name": "V_x",
       "value": 0.4,
       "min": 0.1,
-      "max": 0.9,
+      "max": 0.85,
       "unit": "V",
       "role": "choice",
-      "note": "cascode source (input drain) DC level: raise it for input-device headroom, lower it for cascode headroom",
-      "class": "assumed"
+      "note": "cascode source (input drain) DC level: raise it for input-device headroom, lower it for cascode headroom. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_x + vgs"
     },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
     { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
@@ -177,7 +177,8 @@
     "L": "L",
     "id": "in__id",
     "gm_id": "gm_id_casc",
-    "vds": "V_out - V_x"
+    "vds": "V_out - V_x",
+    "vsb": "V_x"
   },
   "rows": [
     {

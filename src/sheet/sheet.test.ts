@@ -2031,23 +2031,12 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(sweepable(p)).toBe(false);
   });
 
-  it('validation refuses a missing bracket, a second pin, and a pin that is also torn', () => {
+  it('validation refuses a missing bracket and a pin that is also torn', () => {
     const noBracket = mk('2*x + 1', { lhs: 'y', rhs: 'T' }, {});
     expect(
       validateSheet(noBracket).some(
         (w) => w.severity === 'error' && /bisection bracket/.test(w.message),
       ),
-    ).toBe(true);
-    const two: SheetDoc = {
-      ...noBracket,
-      params: [
-        { name: 'x', value: 1, min: 0, max: 1, pin: { lhs: 'y', rhs: 'T' } },
-        { name: 'z', value: 1, min: 0, max: 1, pin: { lhs: 'y', rhs: 'T' } },
-        { name: 'T', value: 5 },
-      ],
-    };
-    expect(
-      validateSheet(two).some((w) => w.severity === 'error' && /scalar method/.test(w.message)),
     ).toBe(true);
     const both: SheetDoc = {
       ...noBracket,
@@ -2059,6 +2048,131 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(
       validateSheet(both).some((w) => w.severity === 'error' && /keep one solver/.test(w.message)),
     ).toBe(true);
+  });
+
+  /** Two pins on one sheet. `z` is written first, so document order is the wrong solve order. */
+  const pair = (zPin: { lhs: string; rhs: string }): SheetDoc => ({
+    title: 'pair',
+    polarity: 'n',
+    params: [
+      { name: 'z', value: 1, min: 0, max: 10, pin: zPin },
+      { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'a', rhs: 'T' } },
+      { name: 'T', value: 5 },
+    ],
+    rows: [
+      { name: 'a', expr: '2*x + 1' },
+      { name: 'b', expr: 'a + z' },
+      { name: 'c', expr: 'x - z' },
+    ],
+    rules: [],
+  });
+
+  it('solves two pins one after the other when one relation reads the other pin', () => {
+    // a = 2x + 1 = T = 5 gives x = 2. b = a + z = 8 then gives z = 3. The second relation reads
+    // x through a, the first reads no z, so x is solved first whatever the document order. Solved
+    // the other way round, z would be fitted against the unsolved a = 3 and land on 5, leaving
+    // b = 10.
+    const doc = pair({ lhs: 'b', rhs: '8' });
+    expect(validateSheet(doc).filter((w) => w.severity === 'error')).toEqual([]);
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(2, 4);
+    expect(res.values.z).toBeCloseTo(3, 4);
+    expect(res.values.b).toBeCloseTo(8, 4);
+  });
+
+  it('refuses two pins whose relations read each other, in validation and in evaluation', () => {
+    // x is fitted through a (which reads x) against T; make z's relation c = x - z and x's
+    // relation read z as well, and each needs the other's answer first: a coupled pair.
+    const doc = pair({ lhs: 'c', rhs: '1' });
+    doc.params[1] = { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'b', rhs: 'T' } };
+    const coupled = /pinned params depend on each other \((x → z → x|z → x → z)\)/;
+    expect(validateSheet(doc).some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(
+      true,
+    );
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(true);
+  });
+
+  /** A parent pin over a child pin: P + c__Q = 1 above, Q = A/2 below, A wired by the parent. */
+  const nested = (wireA: string): SheetDoc => ({
+    title: 'parent',
+    polarity: 'n',
+    params: [
+      { name: 'P', value: 0.5, min: 0, max: 1, pin: { lhs: 'P + c__Q', rhs: '1' } },
+      { name: 'A0', value: 0.8 },
+    ],
+    rows: [],
+    rules: [],
+    uses: [
+      {
+        name: 'c',
+        params: { A: wireA },
+        doc: {
+          title: 'child',
+          polarity: 'n',
+          provide: ['Q'],
+          params: [
+            { name: 'Q', value: 0.5, min: 0, max: 1, pin: { lhs: 'Q', rhs: 'A/2' } },
+            { name: 'A', value: 0 },
+          ],
+          rows: [],
+          rules: [],
+        },
+      },
+    ],
+  });
+
+  it('solves a child pin inside its parent pin when the child does not read the parent', () => {
+    // A = 0.8 is fixed, so Q = 0.4 whatever P is, and P = 1 - Q = 0.6: a triangular pair.
+    const res = evaluateSheet(nested('A0'), dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.c__Q).toBeCloseTo(0.4, 4);
+    expect(res.values.P).toBeCloseTo(0.6, 4);
+  });
+
+  it('refuses a parent pin and a child pin that depend on each other', () => {
+    // Wire A = P and the child's Q = P/2 reads the parent's unknown while the parent's
+    // P = 1 - Q reads the child's. Nested bisection would close it (P = 2/3, Q = 1/3) by
+    // iterating a coupled system, which is what the engine does not do.
+    const doc = nested('P');
+    const coupled = /pinned params depend on each other \((P → c\.Q → P|c\.Q → P → c\.Q)\)/;
+    expect(validateSheet(doc).some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(
+      true,
+    );
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(true);
+  });
+
+  it('refuses the coupled parent and child on a sheet that claims a range, too', () => {
+    // A range claim sends the base run down a different path; the refusal has to be on it.
+    const doc: SheetDoc = { ...nested('P'), edges: [{ name: 'e', set: { A0: '0.9' } }] };
+    const res = evaluateSheet(doc, dev);
+    expect(res.closes).toBe(false);
+    expect(
+      res.warnings.some(
+        (w) => w.severity === 'error' && /pinned params depend on each other/.test(w.message),
+      ),
+    ).toBe(true);
+  });
+
+  it('names the missing name when a pin cannot be placed in the order at all', () => {
+    // x is fitted through b = a + z, so it really does wait on z. z's relation reads a name
+    // nothing provides, so what z waits on is unknown — the report is about that name, not about
+    // a loop between two params that only one of them created.
+    const doc = pair({ lhs: 'z + nope', rhs: '1' });
+    doc.params[1] = { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'b', rhs: 'T' } };
+    const messages = validateSheet(doc)
+      .filter((w) => w.severity === 'error')
+      .map((w) => w.message);
+    expect(messages).toContainEqual(
+      expect.stringMatching(
+        /the relation that solves "z" reads "nope", which nothing on the sheet provides/,
+      ),
+    );
+    expect(messages.filter((m) => /depend on each other/.test(m))).toEqual([]);
   });
 
   it('solves the pin AND an inner torn loop together, off one budget', () => {

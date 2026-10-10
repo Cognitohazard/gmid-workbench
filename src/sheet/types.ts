@@ -8,6 +8,7 @@
 import type { QAWarning } from '../types';
 import { BASE_QUANTITIES } from '../namespace';
 import { BINDABLE } from '../device';
+import { additiveCoefficient } from '../expr';
 
 /**
  * A named scalar design input. `min`/`max` bound the GUI slider only. `role`
@@ -59,10 +60,33 @@ export interface SheetVar {
    * bracket the root found is determined by the authored bracket alone — never by history.
    *
    * `value` is only the displayed default; the solved value replaces it. A pinned param is not
-   * sweepable (sweep the spec on the other side of the pin instead), and at most
-   * MAX_PINNED_PARAMS may exist per sheet — bisection is a scalar method.
+   * sweepable (sweep the spec on the other side of the pin instead). A sheet may pin several
+   * params when they can be solved one after another — each one's relation reading only params
+   * solved before it (see pinPlan); two that depend on each other are a coupled system, which
+   * is refused.
+   *
+   * `held` is set by the engine, never authored: it marks the pin a fixed-hardware run generates
+   * from a `hold` (see below).
    */
-  pin?: { lhs: string; rhs: string };
+  pin?: { lhs: string; rhs: string; held?: boolean };
+  /**
+   * Marks this param as a node voltage that hangs under a transistor's gate — a cascode's source,
+   * a pair's tail — and names the quantity that stays FIXED when the hardware does: the gate
+   * voltage, written as the node plus the device's gate-source voltage (`V_a + casc__vgs`).
+   *
+   * At the nominal run the param is an ordinary input: it keeps its typed value, it can be edited
+   * and swept, and the engine reports what the held expression evaluates to (the gate bias the
+   * design needs; see SheetResult.held). Wherever the hardware is held — a containment edge's
+   * fixed-hardware run — the roles swap: the expression is held at that nominal value and the
+   * param is re-solved, by the same bisection a `pin` uses on [min, max]. That is what silicon
+   * does: a bias line holds the gate, and the node under it moves with the condition.
+   *
+   * The expression must be a sum of terms in which this param appears exactly once, bare or
+   * times a numeric literal (see additiveCoefficient) — so its dependence on the node is there
+   * to read, not inferred. A relation of any other shape, or a gate bias the sheet provides, is a
+   * `pin`, which is solved at the nominal run as well.
+   */
+  hold?: string;
   /**
    * What kind of DC sizing input this param is, for a voltage that a device's bias or givens are
    * built from. `independent` is a voltage nothing on the sheet determines, so the designer
@@ -94,9 +118,18 @@ export function pinned(p: SheetVar): p is SheetVar & { pin: { lhs: string; rhs: 
   return typeof p.pin?.lhs === 'string' && typeof p.pin?.rhs === 'string';
 }
 
-/** At most this many pinned params per sheet: bisection is a scalar method, and a second
- *  unknown would need simultaneous root-finding this engine deliberately does not do. */
-export const MAX_PINNED_PARAMS = 1;
+/** Type guard: a param whose named expression is held where the hardware is (see SheetVar.hold). */
+export function holds(p: SheetVar): p is SheetVar & { hold: string } {
+  return typeof p.hold === 'string' && p.hold !== '';
+}
+
+/** A `hold` param as the pin a fixed-hardware run solves: the held expression against `rhs`, the
+ *  value it took at the nominal run. The one spelling of that rewrite, shared by the run that
+ *  performs it and the validator that checks the solve order it will need. */
+export function holdAsPin(p: SheetVar & { hold: string }, rhs: string): SheetVar {
+  const { hold, ...rest } = p;
+  return { ...rest, pin: { lhs: hold, rhs, held: true } };
+}
 
 /**
  * The structural problems that make a document's pins unsolvable, stated ONCE — evaluation
@@ -113,25 +146,39 @@ export function pinProblem(params: readonly SheetVar[]): string | null {
       `param without solving it`
     );
   const pins = params.filter(pinned);
-  if (pins.length > MAX_PINNED_PARAMS)
-    return (
-      `${pins.length} pinned params — bisection is a scalar method, so at most ` +
-      `${MAX_PINNED_PARAMS} may be pinned per sheet`
-    );
   const both = pins.find((p) => torn(p));
   if (both)
     return (
       `param "${both.name}" is both pinned and a tearing variable — the two would fight over ` +
       `it; keep one solver`
     );
-  const unbracketed = pins.find(
-    (p) =>
-      !(Number.isFinite(p.min) && Number.isFinite(p.max) && (p.min as number) < (p.max as number)),
-  );
+  const bracketed = (p: SheetVar): boolean =>
+    Number.isFinite(p.min) && Number.isFinite(p.max) && (p.min as number) < (p.max as number);
+  const unbracketed = pins.find((p) => !bracketed(p));
   if (unbracketed)
     return (
       `pinned param "${unbracketed.name}" needs finite min < max — they are the bisection ` +
       `bracket, not slider bounds`
+    );
+  const held = params.filter(holds);
+  const twice = held.find((p) => p.pin !== undefined || torn(p));
+  if (twice)
+    return (
+      `param "${twice.name}" carries hold and is also pinned or a tearing variable — a param ` +
+      `takes one of the three`
+    );
+  const loose = held.find((p) => !bracketed(p));
+  if (loose)
+    return (
+      `held param "${loose.name}" needs finite min < max — the bracket it is re-solved in ` +
+      `where the hardware is held`
+    );
+  const shapeless = held.find((p) => additiveCoefficient(p.hold, p.name) === undefined);
+  if (shapeless)
+    return (
+      `param "${shapeless.name}": hold "${shapeless.hold}" must be a sum of terms in which ` +
+      `${shapeless.name} appears exactly once, bare or times a number — write any other ` +
+      `relation as a pin`
     );
   return null;
 }
@@ -521,7 +568,7 @@ export interface SheetDoc {
  * new field belongs HERE, in the same edit that adds it to its interface.
  */
 export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
-  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'pin', 'class',
+  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'pin', 'hold', 'class',
 ]); // prettier-ignore
 export const ROW_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
 export const RULE_KEYS: ReadonlySet<string> = new Set<string>([
@@ -553,6 +600,7 @@ export function docExpressions(doc: SheetDoc): string[] {
   for (const p of doc.params) {
     if (pinned(p)) out.push(p.pin.lhs, p.pin.rhs);
     if (torn(p)) out.push(p.solveFor);
+    if (holds(p)) out.push(p.hold);
   }
   for (const r of doc.rows) out.push(r.expr);
   for (const r of doc.rules) out.push(r.lhs, r.rhs);
@@ -580,6 +628,8 @@ export interface SheetChildReport {
   provides: Record<string, number>;
   rules: RuleResult[];
   children?: SheetChildReport[];
+  /** This block's own held expressions at this run (see SheetResult.held). */
+  held?: Record<string, number>;
 }
 
 /**
@@ -745,6 +795,13 @@ export interface SheetResult {
    * computed there, which is not the same as assuming nothing.
    */
   assumptions?: string[];
+  /**
+   * What each of THIS sheet's `hold` expressions evaluated to, by param name — for a node under a
+   * cascode's gate, the gate bias the design needs. Read from the finished run, after every
+   * override and solve. A fixed-hardware run holds each expression at this value. Absent when the
+   * sheet holds nothing; a child's own are on its report.
+   */
+  held?: Record<string, number>;
 }
 
 /**

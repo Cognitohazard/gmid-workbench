@@ -9,7 +9,7 @@ import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, metaScalars } from '../derive';
 import { AXIS_DEFAULT_BIAS } from '../namespace';
-import { scalarScope } from '../expr';
+import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
 import { diodeGrid } from '../grid';
@@ -18,6 +18,7 @@ import {
   MAX_USE_DEPTH,
   PATH_SEP,
   engineSolved,
+  holds,
   isHardRule,
   joinProvide,
   pinProblem,
@@ -28,6 +29,7 @@ import {
   withParams,
 } from './types';
 import { pinHardware, type PinnedHardware } from './coverage';
+import { pinPlan } from './validate';
 import type {
   BindReport,
   RuleResult,
@@ -38,6 +40,7 @@ import type {
   SheetEdge,
   SheetEdgeReport,
   SheetResult,
+  SheetVar,
   SheetUse,
 } from './types';
 
@@ -540,7 +543,9 @@ function applyUseParams(
       warn({
         rule: 'sheet-use-param',
         severity: 'warning',
-        message: `use "${use.name}": override "${k}" sets a param the child PINS — the engine chooses it from the pin's own bracket, so the override is ignored entirely`,
+        message: child.pin.held
+          ? `use "${use.name}": override "${k}" sets a node the child holds under a gate — here the hardware is held, so the child re-solves it and the override is ignored`
+          : `use "${use.name}": override "${k}" sets a param the child PINS — the engine chooses it from the pin's own bracket, so the override is ignored entirely`,
         location: use.name,
       });
     }
@@ -670,6 +675,7 @@ function evalChildren(
       provides,
       rules: res.rules,
       ...(res.children ? { children: res.children } : {}),
+      ...(res.held ? { held: res.held } : {}),
     });
   }
   return reports;
@@ -934,8 +940,8 @@ interface SolveBudget {
  */
 function tornSheets(doc: SheetDoc, depth = 0): number {
   if (depth >= MAX_USE_DEPTH) return 0;
-  // A pinned sheet runs a solver too (bisection probes are passes); count each mechanism.
-  let n = (doc.params.some(torn) ? 1 : 0) + (doc.params.some(pinned) ? 1 : 0);
+  // Each pinned param runs a solver too (bisection probes are passes), one per pin.
+  let n = (doc.params.some(torn) ? 1 : 0) + doc.params.filter(pinned).length;
   for (const u of doc.uses ?? []) if (u.doc) n += tornSheets(u.doc, depth + 1);
   return n;
 }
@@ -1173,6 +1179,12 @@ const PIN_TOL_REL = 1e-6;
  *  JUMP leaves a fixed fraction of it. */
 const PIN_RESIDUAL_REL = 1e-5;
 
+/** The least a held expression may move across its bracket, as a fraction of what its own param's
+ *  term moves. For a node under a gate the rest of the expression is a gate-source voltage, which
+ *  moves the same way as the node, so the true ratio is at least one; a cancelled or unresponsive
+ *  relation leaves rounding error, some ten orders below this. */
+const HOLD_SLOPE_MIN = 1e-6;
+
 /**
  * Evaluate a sheet document — the single public entry. A doc that declares containment
  * edges dispatches to the edge wrapper; everything else, and every step the engine takes
@@ -1190,7 +1202,38 @@ export function evaluateSheet(
   // TypeError out of .map.
   return Array.isArray(doc.edges) && doc.edges.length
     ? evaluateWithEdges(doc, table, resolveDevice)
-    : evaluateNode(doc, table, resolveDevice, 0);
+    : evaluateTop(doc, table, resolveDevice);
+}
+
+/** How many params the tree pins — each one a bisection of its own. */
+function pinCount(doc: SheetDoc, depth = 0): number {
+  if (depth >= MAX_USE_DEPTH) return 0;
+  let n = doc.params.filter(pinned).length;
+  for (const u of doc.uses ?? []) if (u.doc) n += pinCount(u.doc, depth + 1);
+  return n;
+}
+
+/**
+ * evaluateNode for the top of a tree, refusing a tree whose pins depend on each other ACROSS
+ * levels. A child solves its own pins inside each of its parent's probes, which is exact while
+ * the child's relations do not read the parent's pin; when they do, the nesting would close a
+ * coupled system by iteration, which this engine does not do. One level's own pins are ordered
+ * (or refused) where they are solved; this is the same question asked of the whole tree, in the
+ * words validation raises. Two pins are the fewest that can depend on each other.
+ */
+function evaluateTop(
+  doc: SheetDoc,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+): SheetResult {
+  const res = evaluateNode(doc, table, resolveDevice, 0);
+  if (pinCount(doc) < 2) return res;
+  const plan = pinPlan(doc);
+  // A pair on the top level itself was already refused, in these words, where it would have
+  // been solved.
+  return 'problem' in plan && !res.warnings.some((w) => w.message === plan.problem)
+    ? solveFailed(res, plan.problem)
+    : res;
 }
 
 /**
@@ -1205,7 +1248,28 @@ function evaluateNode(
   _depth: number,
   budget: SolveBudget = { left: SOLVE_PASSES_PER_LOOP * tornSheets(doc) },
 ): SheetResult {
-  return checkWiring(doc, solveNode(doc, table, resolveDevice, _depth, budget));
+  return checkWiring(doc, withHeld(doc, solveNode(doc, table, resolveDevice, _depth, budget)));
+}
+
+/** The finished run with each of the doc's `hold` expressions evaluated against it (see
+ *  SheetResult.held). One that does not evaluate fails the run: a fixed-hardware run would have
+ *  nothing to hold it at. */
+function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
+  const params = doc.params.filter(holds);
+  if (params.length === 0) return res;
+  const scope = scalarScope(res.values);
+  const held: Record<string, number> = {};
+  let out = res;
+  for (const p of params) {
+    const v = evalScalar(p.hold, res.values, scope, NO_WARN, `hold ${p.name}`);
+    if (v !== undefined && Number.isFinite(v)) held[p.name] = v;
+    else
+      out = solveFailed(
+        out,
+        `param "${p.name}": hold "${p.hold}" did not evaluate to a finite number`,
+      );
+  }
+  return { ...out, held };
 }
 
 /**
@@ -1241,11 +1305,53 @@ function solveNode(
   const pins = doc.params.filter(pinned);
   if (pins.length === 0) return solveTorn(doc, table, resolveDevice, _depth, budget);
 
-  const p = pins[0];
+  // Several pins at one level are solved one at a time, each after the pins its relation reads
+  // and with those held at the values they landed on. pinPlan proves that order exists; when it
+  // does not, the pins form a coupled system and nothing is solved.
+  let order = pins;
+  if (pins.length > 1) {
+    const plan = pinPlan(doc);
+    if ('problem' in plan)
+      return solveFailed(solveTorn(doc, table, resolveDevice, _depth, budget), plan.problem);
+    const rank = new Map(plan.order.map((name, at) => [name, at]));
+    const at = (p: SheetVar): number => rank.get(p.name) ?? Infinity;
+    order = [...pins].sort((a, b) => at(a) - at(b));
+  }
+  const landed: Record<string, number> = {};
+  let last: SheetResult | undefined;
+  for (const p of order) {
+    const { res, ok } = solvePin(doc, p, landed, table, resolveDevice, _depth, budget);
+    if (!ok) return res;
+    landed[p.name] = res.values[p.name];
+    last = res;
+  }
+  return last as SheetResult;
+}
+
+/**
+ * Bisect one pinned param on its bracket, with the pins solved before it (`landed`) held at their
+ * values. `ok` is false for every way the solve can fail — each returns the last evaluation
+ * marked infeasible with the reason — and true only for a root that was actually reached.
+ */
+function solvePin(
+  doc: SheetDoc,
+  p: SheetVar & { pin: { lhs: string; rhs: string; held?: boolean } },
+  landed: Record<string, number>,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+  _depth: number,
+  budget: SolveBudget,
+): { res: SheetResult; ok: boolean } {
   const { lhs, rhs } = p.pin;
+  // A pin generated from a hold is named as the author wrote it.
+  const what = `${p.pin.held ? 'held' : 'pinned'} param "${p.name}"`;
+  const failed = (res: SheetResult, message: string) => ({
+    res: solveFailed(res, message),
+    ok: false,
+  });
   const probeAt = (x: number): SheetResult => {
     budget.left--;
-    return solveTorn(doc, table, resolveDevice, _depth, budget, { [p.name]: x });
+    return solveTorn(doc, table, resolveDevice, _depth, budget, { ...landed, [p.name]: x });
   };
 
   /** lhs - rhs at an already-evaluated probe; undefined when either side does not resolve.
@@ -1260,88 +1366,91 @@ function solveNode(
     const r = at(rhs);
     return l === undefined || r === undefined ? undefined : l - r;
   };
-  const atEnd = (x: number, which: string): { res: SheetResult; g?: number } => {
-    const res = probeAt(x);
-    const g = gap(res);
-    return g === undefined
-      ? {
-          res: solveFailed(
-            res,
-            `pinned param "${p.name}": ${lhs} - ${rhs} did not evaluate at the ${which} of ` +
-              `its bracket (${p.name} = ${x}) — tighten min/max to where the design sizes`,
-          ),
-        }
-      : { res, g };
-  };
+  const unevaluated = (res: SheetResult, x: number, which: string) =>
+    failed(
+      res,
+      `${what}: ${lhs} - ${rhs} did not evaluate at the ${which} of ` +
+        `its bracket (${p.name} = ${x}) — tighten min/max to where the design sizes`,
+    );
 
   let lo = p.min!;
   let hi = p.max!;
   const span = hi - lo;
-  const first = atEnd(lo, 'low end');
-  if (first.g === undefined) return first.res;
-  const second = atEnd(hi, 'high end');
-  if (second.g === undefined) return second.res;
-  let gLo = first.g;
-  const gHi = second.g;
-  if (gLo === 0) return first.res;
-  if (gHi === 0) return second.res;
+  const first = probeAt(lo);
+  let gLo = gap(first);
+  if (gLo === undefined) return unevaluated(first, lo, 'low end');
+  const second = probeAt(hi);
+  const gHi = gap(second);
+  if (gHi === undefined) return unevaluated(second, hi, 'high end');
+  // A held expression is its own param's term plus the rest (see SheetVar.hold), so across the
+  // bracket it has to move about as far as that term does. When it does not, the rest cancels the
+  // term — on a table that does not respond, or by rounding alone — and no value of the param is
+  // singled out. Checked before either end can be taken as a root, because a cancelled relation
+  // reads zero-to-rounding everywhere.
+  if (p.pin.held) {
+    const own = Math.abs(additiveCoefficient(lhs, p.name) ?? 0) * span;
+    if (!(Math.abs(gHi - gLo) >= HOLD_SLOPE_MIN * own))
+      return failed(
+        second,
+        `${what}: ${lhs} moves by ${Math.abs(gHi - gLo).toExponential(3)} across ` +
+          `[${lo}, ${hi}] where ${p.name} alone accounts for ${own.toExponential(3)} — holding ` +
+          `it does not determine ${p.name} here (numerically unresolved)`,
+      );
+  }
+  if (gLo === 0) return { res: first, ok: true };
+  if (gHi === 0) return { res: second, ok: true };
   if (gLo > 0 === gHi > 0) {
-    return solveFailed(
-      second.res,
-      `pinned param "${p.name}": ${lhs} - ${rhs} does not change sign across ` +
+    return failed(
+      second,
+      `${what}: ${lhs} - ${rhs} does not change sign across ` +
         `[${lo}, ${hi}] (${gLo.toExponential(3)} at both … ${gHi.toExponential(3)}) — the ` +
         `bracket does not straddle the target. Widen min/max, or the relation cannot reach it ` +
         `on this table`,
     );
   }
-  // The residual scale for acceptRoot: the relation's range over the authored bracket,
-  // captured before the loop shrinks it. Nonzero here — a zero end already returned above.
+  // The residual scale for the acceptance test below: the relation's range over the authored
+  // bracket, captured before the loop shrinks it. Nonzero here — a zero end already returned.
   const gScale = Math.max(Math.abs(gLo), Math.abs(gHi));
 
-  let res = second.res;
+  let res = second;
   for (let probes = 0; probes < PIN_MAX_PROBES && budget.left > 0; probes++) {
     const mid = (lo + hi) / 2;
     res = probeAt(mid);
     const g = gap(res);
     if (g === undefined)
-      return solveFailed(
+      return failed(
         res,
-        `pinned param "${p.name}": ${lhs} - ${rhs} stopped evaluating inside the bracket ` +
+        `${what}: ${lhs} - ${rhs} stopped evaluating inside the bracket ` +
           `(${p.name} = ${mid}) — the relation is not defined everywhere between min and max`,
       );
-    if (g === 0) return res; // an exact root needs no residual argument
+    if (g === 0) return { res, ok: true }; // an exact root needs no residual argument
     if (g > 0 === gLo > 0) {
       lo = mid;
       gLo = g;
     } else hi = mid;
-    // Accept only a genuine crossing (see acceptRoot): a relation that JUMPS across the target
-    // brings the bracket to nothing while the residual stays macroscopic.
+    // Accept only a genuine crossing: a relation that JUMPS across the target brings the bracket
+    // to nothing while the residual stays macroscopic.
     if (hi - lo <= PIN_TOL_REL * span) {
-      return acceptRoot(res, g);
+      if (Math.abs(g) > PIN_RESIDUAL_REL * gScale)
+        return failed(
+          res,
+          `${what}: the bracket closed but ${lhs} - ${rhs} still reads ` +
+            `${g.toExponential(3)} — the relation steps across the target without touching it ` +
+            `(a table edge or a fold), so no ${p.name} in [${p.min}, ${p.max}] produces it`,
+        );
+      return { res, ok: true };
     }
   }
 
-  return solveFailed(
+  return failed(
     res,
     budget.left <= 0
-      ? `pinned param "${p.name}" stopped before its bracket closed because the design's ` +
+      ? `${what} stopped before its bracket closed because the design's ` +
           `shared iteration budget ran out — spent by the loops this pin re-closes on every ` +
           `probe, or by an expensive sibling elsewhere in the tree. This pin was not shown ` +
           `to be unsolvable`
-      : `pinned param "${p.name}": the bracket did not close in ${PIN_MAX_PROBES} probes`,
+      : `${what}: the bracket did not close in ${PIN_MAX_PROBES} probes`,
   );
-
-  function acceptRoot(at: SheetResult, g: number): SheetResult {
-    if (Math.abs(g) > PIN_RESIDUAL_REL * gScale) {
-      return solveFailed(
-        at,
-        `pinned param "${p.name}": the bracket closed but ${lhs} - ${rhs} still reads ` +
-          `${g.toExponential(3)} — the relation steps across the target without touching it ` +
-          `(a table edge or a fold), so no ${p.name} in [${p.min}, ${p.max}] produces it`,
-      );
-    }
-    return at;
-  }
 }
 
 /**
@@ -1366,7 +1475,7 @@ function evaluateWithEdges(
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
 ): SheetResult {
-  const base = evaluateNode(doc, table, resolveDevice, 0);
+  const base = evaluateTop(doc, table, resolveDevice);
   const edges = doc.edges ?? [];
   if (!stands(base)) {
     const reports = edges.map((e): SheetEdgeReport => ({
@@ -1439,7 +1548,23 @@ function runEdge(
     }
     over[param] = v;
   }
-  const res = evaluateNode(withParams(pinned.doc, over), table, resolveDevice, 0);
+  // A hold with no recorded value has nothing to be held at. Unreachable while the base run
+  // stands (a hold that does not evaluate fails it), so this is the closed door behind that.
+  if (pinned.unheld.length)
+    return {
+      name: edge.name,
+      feasible: false,
+      state: 'does-not-cover',
+      set: over,
+      rules: [],
+      solved: {},
+      warnings: [],
+      error:
+        `edge "${edge.name}": no nominal value was recorded for the held expression of ` +
+        pinned.unheld.join(', '),
+      ...assumed,
+    };
+  const res = evaluateTop(withParams(pinned.doc, over), table, resolveDevice);
   // `error` promises the SOLVER's own message when one exists — a child's solve failure
   // rolls up mid-evaluation and later diagnostics (a non-finite parent row) land after
   // it, so "last error" alone reports the consequence instead of the cause. One reverse

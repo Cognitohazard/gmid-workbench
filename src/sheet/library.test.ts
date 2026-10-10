@@ -19,6 +19,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { createEngine } from '../expr';
+import { generateDemoDevice } from '../demo';
 import { runSheet, validateSheet, WIRING_TOL } from './index';
 import { resolveSheetRefs } from './resolve';
 import {
@@ -171,36 +172,80 @@ describe('sheet library: vetting lints', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the voltages a sheet still types although its own parts determine them are exactly these', () => {
-    // `assumed` marks a value the sheet has yet to derive from its own devices, and the target
-    // is none. A voltage the sheet cannot determine — a supply, an input level, an output held
-    // by a feedback loop outside the sheet, the bias of a device whose surroundings are not on
-    // the sheet — is `independent` instead. Naming every remaining assumed voltage keeps the
-    // list visible and makes a new one fail here; deriving one removes it from the list. The
-    // walk reads each file as authored (inline children included, refs not followed), so a
-    // referenced sheet's params are counted once, under its own file.
+  it('a range end holds each cascode gate where the design put it', () => {
+    // The two cascoded OTAs claim an input common-mode range. At a range end every device keeps
+    // its size and the tail node is re-solved for the new common mode; the cascode nodes are
+    // re-solved too, each under its own gate. The check is the definition: node plus (for an
+    // N cascode) or minus (for a P one) the cascode's gate-source voltage at the range end
+    // equals what that expression came to at the design point.
+    const cases: [string, Record<string, [string, 1 | -1]>][] = [
+      ['otas/telescopic-cascode-ota.json', { V_a: ['casc_n', 1], V_b: ['casc_p', -1] }],
+      ['otas/folded-cascode-ota.json', { V_c: ['ncasc', 1], V_fold: ['pcasc', -1] }],
+    ];
+    for (const [file, gates] of cases) {
+      const res = runSheet(sheet(file), table, undefined, REFS);
+      const end = res.edges?.find((e) => e.name === 'cm-lo');
+      expect(Object.keys(end?.solved ?? {}).sort()).toEqual(
+        [...Object.keys(gates), 'V_tail'].sort(),
+      );
+      for (const [node, [device, sign]] of Object.entries(gates)) {
+        const vgs = Math.abs(end!.children!.find((c) => c.name === device)!.bind!.vgs);
+        expect(end!.solved[node] + sign * vgs).toBeCloseTo(res.held![node], 5);
+      }
+    }
+  });
+
+  it('every held expression is the gate of the device whose source is that node', () => {
+    // Written down from each schematic, not read off the sheets: the node, and the device it is
+    // the source of ('' for the sheet's own device). On a table with a body axis the device
+    // reports the body bias it was sized at, which places its source without reading the held
+    // expression at all: an N device with its body at ground has its source at vsb, a P device
+    // with its body at the supply has it at VDD - vsb. The gate is one gate-source voltage above
+    // an N source and one below a P source. A hold on the wrong device, or with the wrong sign,
+    // misses that number.
+    const HELD_UNDER: Record<string, Record<string, string>> = {
+      'otas/telescopic-cascode-ota.json': { V_a: 'casc_n', V_b: 'casc_p' },
+      'otas/folded-cascode-ota.json': { V_c: 'ncasc', V_fold: 'pcasc' },
+      'stages/cascode-cs-amp.json': { V_x: '' },
+      'multistage/fd-telescopic-ota.json': { V_s: 'in', V_a: 'cascn', V_b: 'cascp' },
+      'multistage/flipped-voltage-follower.json': { V_out: 'in' },
+      'multistage/super-source-follower.json': { vds_fb: 'in' },
+      'multistage/two-stage-cascode-comp-ota.json': { V_casc: 'casc' },
+    };
+    const withBody = generateDemoDevice({
+      vds: { min: 0, max: 1.8, step: 0.05 },
+      vsb: { min: 0, max: 1.2, step: 0.05 },
+    });
+    for (const { file, doc } of LIBRARY) {
+      const holds = doc.params.filter((p) => p.hold !== undefined).map((p) => p.name);
+      expect([file, holds.sort()]).toEqual([file, Object.keys(HELD_UNDER[file] ?? {}).sort()]);
+      if (!holds.length) continue;
+      const res = runSheet(doc, withBody, undefined, REFS);
+      for (const [node, device] of Object.entries(HELD_UNDER[file])) {
+        const use = doc.uses?.find((u) => u.name === device);
+        const bind = device ? res.children?.find((c) => c.name === device)?.bind : res.bind;
+        const pType = (use?.doc ?? doc).polarity === 'p';
+        const vsb = bind!.bias!.vsb;
+        const vgs = Math.abs(bind!.vgs);
+        const gate = pType ? res.values.VDD - vsb - vgs : vsb + vgs;
+        expect([file, node, relErr(res.held![node], gate) < 1e-9]).toEqual([file, node, true]);
+      }
+    }
+  });
+
+  it('no sheet types a voltage that its own parts determine', () => {
+    // `assumed` marks a value a sheet has yet to derive from its own devices; the library has
+    // none. A voltage the sheet cannot determine — a supply, an input level, an output held by a
+    // feedback loop outside the sheet, the bias of a device whose surroundings are not on the
+    // sheet — is `independent`; one its own parts determine is computed, solved, or held under
+    // the gate that sets it. The walk reads each file as authored, inline children included.
     const assumed: string[] = [];
     for (const { file, doc } of LIBRARY) {
       walkDocs(doc, file, (d, path) => {
         for (const p of d.params) if (p.class === 'assumed') assumed.push(`${path}: ${p.name}`);
       });
     }
-    expect(assumed.sort()).toEqual(
-      [
-        'multistage/fd-telescopic-ota.json: V_a',
-        'multistage/fd-telescopic-ota.json: V_b',
-        'multistage/fd-telescopic-ota.json: V_s',
-        'multistage/flipped-voltage-follower.json: V_out',
-        'multistage/super-source-follower.json: vds_fb',
-        'multistage/super-source-follower.json: vds_in',
-        'multistage/two-stage-cascode-comp-ota.json: V_casc',
-        'otas/folded-cascode-ota.json: V_c',
-        'otas/folded-cascode-ota.json: V_fold',
-        'otas/telescopic-cascode-ota.json: V_a',
-        'otas/telescopic-cascode-ota.json: V_b',
-        'stages/cascode-cs-amp.json: V_x',
-      ].sort(),
-    );
+    expect(assumed).toEqual([]);
   });
 });
 

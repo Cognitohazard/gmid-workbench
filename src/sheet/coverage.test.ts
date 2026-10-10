@@ -327,6 +327,124 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     expect(drift).toBeLessThan(2e-3);
   });
 
+  /** The device with its source on node X: the drain is moved by the range end, the body bias is
+   *  X. `hold` says the gate — X plus the device's gate-source voltage — is what stays put. */
+  const underGate = (x: SheetDoc['params'][number], edges?: SheetDoc['edges']): SheetDoc =>
+    mk({
+      params: [...mk({}).params, x],
+      uses: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'X' } }],
+      ...(edges ? { edges } : {}),
+    });
+  const drainHi = [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }];
+  const X0 = 0.2;
+  const held = { name: 'X', value: X0, min: 0, max: 0.4, hold: 'X + m__vgs' };
+
+  it('reports the gate voltage a held node needs, and leaves the node where it was typed', () => {
+    // At the nominal run a hold changes nothing: the node keeps its typed value and the engine
+    // only says what the held expression came to.
+    const res = runSheet(underGate(held), dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.X).toBe(X0);
+    expect(res.held).toEqual({ X: X0 + bindAt(res.children?.[0]).vgs });
+  });
+
+  it('holds the gate at a range end and lets the node under it move', () => {
+    // The drain rises 0.6 → 1.0 V. With the node typed, the fixed transistor needs less gate
+    // drive at the higher drain, so its gate-source voltage falls by some d and the gate voltage
+    // X + vgs falls with it: the gate floats. With the gate held, the node has to rise instead.
+    // On this model the body effect is a pure threshold translation, so raising the node by D
+    // raises vgs by BODY_FACTOR·D on top of the same drain-driven fall d:
+    //   (X + D) + (vgs - d + BODY_FACTOR·D) = X + vgs   gives   D = d/(1 + BODY_FACTOR).
+    const typed = runSheet(underGate({ name: 'X', value: X0 }, drainHi), dev);
+    const d = bindAt(typed.children?.[0]).vgs - bindAt(typed.edges?.[0].children?.[0]).vgs;
+    expect(d).toBeGreaterThan(5e-3); // the drain really moved the device
+
+    const res = runSheet(underGate(held, drainHi), dev);
+    expect(res.covers).toBe(true);
+    const base = bindAt(res.children?.[0]);
+    const end = bindAt(res.edges?.[0].children?.[0]);
+    expect(end.W).toBe(base.W); // the same transistor
+    const landed = res.edges![0].solved.X;
+    expect(end.bias!.vsb).toBeCloseTo(landed, 12); // the node the device actually sat on
+    // The gate is where it was, to the bisection's landing tolerance on a 0.4 V bracket.
+    expect(landed + end.vgs).toBeCloseTo(res.held!.X, 5);
+    // And the node moved by the law above; the slack is interpolation between vsb nodes.
+    expect(relErr(landed - X0, d / (1 + BODY_FACTOR))).toBeLessThan(5e-3);
+  });
+
+  it('refuses a held expression that its own param does not move', () => {
+    // In the required form, yet the row cancels the param: R is -X, so X + R is zero everywhere
+    // and no value of X is singled out. The relation reads exactly zero at the low end of the
+    // bracket, which a bisection takes for a root — it would report the node at 0 V and cover.
+    const doc = underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: 'X + R' }, drainHi);
+    doc.rows = [{ name: 'R', expr: '0 - X' }];
+    const res = runSheet(doc, dev);
+    expect(res.closes).toBe(true);
+    expect(res.covers).toBe(false);
+    expect(res.edges?.[0].error).toMatch(/held param "X".*numerically unresolved/);
+    expect(res.edges?.[0].solved).toEqual({});
+  });
+
+  it('still solves a held expression whose own term is tiny', () => {
+    // 1e-9·X moves by 4e-10 across the bracket — all of it the param's own term, so the node is
+    // determined however small the numbers are: X stays 0.2 because nothing else moved.
+    const res = runSheet(
+      underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: '1e-9*X' }, drainHi),
+      dev,
+    );
+    expect(res.covers).toBe(true);
+    expect(res.edges![0].solved.X).toBeCloseTo(X0, 5);
+  });
+
+  it('fails the run when a held expression does not evaluate', () => {
+    // Nothing to hold the node at: a range end would have no value to solve against.
+    const res = runSheet(
+      underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: 'X + missing' }),
+      dev,
+    );
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.map((w) => w.message)).toContainEqual(
+      expect.stringMatching(/param "X": hold "X \+ missing" did not evaluate/),
+    );
+  });
+
+  it('holds a node inside a child at the value its parent wired in', () => {
+    // The hold lives in the child, on its own source node, with 0.2 V as the embedded default;
+    // the parent wires 0.25 V in. What is held is the gate at the WIRED node, so the range end
+    // moves the node by the same law as before, starting from 0.25 V.
+    const inner: SheetDoc = {
+      ...device('V_d', 'X'),
+      params: [...device('V_d', 'X').params, { name: 'X', value: 0.2, min: 0, max: 0.4 }],
+    };
+    const held = (hold?: string): SheetDoc => {
+      const doc = mk({
+        params: [...mk({}).params, { name: 'Xp', value: 0.25 }],
+        uses: [
+          {
+            name: 'm',
+            doc: {
+              ...inner,
+              params: inner.params.map((p) => (p.name === 'X' && hold ? { ...p, hold } : p)),
+            },
+            params: { V_d: 'V_o', X: 'Xp' },
+          },
+        ],
+        edges: drainHi,
+      });
+      return doc;
+    };
+    const typed = runSheet(held(), dev);
+    const d = bindAt(typed.children?.[0]).vgs - bindAt(typed.edges?.[0].children?.[0]).vgs;
+
+    const res = runSheet(held('X + vgs'), dev);
+    const base = res.children![0];
+    expect(base.held).toEqual({ X: 0.25 + bindAt(base).vgs });
+    const end = bindAt(res.edges?.[0].children?.[0]);
+    expect(end.W).toBe(bindAt(base).W);
+    expect(relErr(end.bias!.vsb - 0.25, d / (1 + BODY_FACTOR))).toBeLessThan(5e-3);
+    expect(end.bias!.vsb + end.vgs).toBeCloseTo(base.held!.X, 5);
+  });
+
   it('says a device cannot carry its current at the endpoint in the vocabulary of the question', () => {
     // A failure mode a re-sizing range end could not produce: at a fixed width the authored current
     // needs a density the swept vgs range no longer reaches once the body bias raises vth. The
@@ -559,6 +677,28 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     const w = warnings(
       withK({ L: '0.5u', W: '10u', gm_id: '10', vds: '0.6', vsb: 'V_x' }, { V_x: 'V_t' }),
     );
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/edge "hi" reaches the bind at "k", which fixes a width, through "vsb"/);
+  });
+
+  it('follows a range end through a node held under a gate', () => {
+    // The node is re-solved at the range end from the expression it holds, which reads the
+    // pinned V_t the edge moves. So a width-first device with its body on that node is reached
+    // exactly as it is when the node is pinned.
+    const doc = parent({
+      params: [
+        ...parent({}).params,
+        { name: 'V_n', value: 0.2, min: 0, max: 0.4, hold: 'V_n + V_t' },
+      ],
+      uses: [
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', W: '10u', gm_id: '10', vds: '0.6', vsb: 'V_x' }),
+          params: { V_x: 'V_n' },
+        },
+      ],
+    });
+    const w = warnings(doc);
     expect(w).toHaveLength(1);
     expect(w[0]).toMatch(/edge "hi" reaches the bind at "k", which fixes a width, through "vsb"/);
   });

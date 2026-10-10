@@ -21,6 +21,7 @@
 import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
 import { runSheet } from './index';
+import { withParams } from './types';
 import {
   table,
   relErr,
@@ -170,8 +171,13 @@ describe('tier4 goldens: Class-AB output stage (Monticelli)', () => {
 
 describe('tier4 goldens: Super source follower', () => {
   const res = runSheet(sheet('super-source-follower'), table);
-  // Defaults: in and fb both 50 µA, gm/ID 10, L 0.5 µm, vds 0.6 V.
+  // Defaults: in and fb both 50 µA, gm/ID 10, L 0.5 µm; the output node (the feedback device's
+  // drain-source voltage) is stated at 0.3 V.
   const gmIn = 10 * 50e-6;
+  // The input device's drain sits on the feedback device's gate, one feedback gate-source voltage
+  // above ground: vgs(10) = 0.610 V. Its source is the output, so its drain-source voltage is the
+  // difference — nothing here is typed.
+  const vdsIn = VGS_GMID10_L05 - 0.3;
 
   it('input transconductance is exact', () => {
     expect(relErr(res.values.gm_in, gmIn)).toBeLessThan(1e-9);
@@ -180,11 +186,23 @@ describe('tier4 goldens: Super source follower', () => {
   it('output resistance is the input device gds divided by both transconductances', () => {
     // The loop senses the INPUT device's drain current, so its gds is the numerator, and the
     // output node is that device's source, so gmb adds to its gm. gds = ID/(VA + vds) is exact.
-    const gdsIn = 50e-6 / (VA_PER_L * 0.5e-6 + 0.6);
+    const gdsIn = 50e-6 / (VA_PER_L * 0.5e-6 + vdsIn);
     const gmFb = 10 * 50e-6;
     expect(relErr(res.values.Rout, gdsIn / ((gmIn + gmbOf(gmIn)) * gmFb))).toBeLessThan(1e-3);
     // Well below the plain follower it replaces — that reduction is the point of the stage.
     expect(res.values.Rout).toBeLessThan(res.values.Rout_plain / 10);
+  });
+
+  it('the input device sits between the feedback device’s gate and the output', () => {
+    expect(relErr(res.values.vds_in, vdsIn)).toBeLessThan(1e-3);
+    // Raising the output by 50 mV takes the same 50 mV off the input device: one branch.
+    const up = runSheet(withParams(sheet('super-source-follower'), { vds_fb: 0.35 }), table);
+    expect(up.values.vds_in - res.values.vds_in).toBeCloseTo(-0.05, 6);
+  });
+
+  it('reports the input level the output node hangs under', () => {
+    // The input device's gate is its source (the output, 0.3 V) plus its gate-source voltage.
+    expect(relErr(res.held!.vds_fb, 0.3 + VGS_GMID10_L05)).toBeLessThan(1e-3);
   });
 
   it('the DC level shift is the input follower vgs', () => {
