@@ -189,7 +189,7 @@
         "provides": ["vgs", "vdsat", "W", "gm", "gmb", "gds"]
       },
       "params": {
-        "I_c": "I_in",
+        "I_c": "ref__id",
         "L_cc": "L_c",
         "gm_id_cc": "gm_id_c",
         "vds_cc": "V_out - vds_lo",

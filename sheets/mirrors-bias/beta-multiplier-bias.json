@@ -100,7 +100,7 @@
   "givens": {
     "L": "L",
     "W": "K_bm*m1__W",
-    "id": "I_bias",
+    "id": "m1__id",
     "vds": "V_dm2 - I_bias*R_bias",
     "vsb": "I_bias*R_bias"
   },

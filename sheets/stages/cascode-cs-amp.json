@@ -166,7 +166,7 @@
         "provides": ["gm", "gds", "vdsat", "vnth_m"]
       },
       "params": {
-        "I_load": "I_bias",
+        "I_load": "in__id",
         "L_l": "L_load",
         "gm_id_l": "gm_id_load",
         "vds_l": "load_sign*(VDD - V_out)"

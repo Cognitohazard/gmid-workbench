@@ -126,7 +126,7 @@
         ],
         "provides": ["gm", "id", "vgs", "vdsat", "gds"]
       },
-      "params": { "Ix": "I_q", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*(VDD - V_out)" }
+      "params": { "Ix": "mn__id", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*(VDD - V_out)" }
     }
   ],
   "equations": [

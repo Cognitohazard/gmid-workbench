@@ -155,7 +155,7 @@
         "provides": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m", "cgg"]
       },
       "params": {
-        "I_d": "I_bias",
+        "I_d": "n__id",
         "L_d": "L_p",
         "gm_id_d": "gm_id_p",
         "vds_d": "p_sign*(VDD - V_out)"

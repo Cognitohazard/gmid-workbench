@@ -171,7 +171,7 @@
         "provides": ["W", "vgs", "vdsat"]
       },
       "params": {
-        "I_ref": "I_in",
+        "I_ref": "ref__id",
         "L_rc": "L_c",
         "gm_id_rc": "gm_id_c",
         "vsb_rc": "ref__vgs"

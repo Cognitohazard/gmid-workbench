@@ -306,10 +306,6 @@ describe('sheet library: vetting lints', () => {
     // equality, so it fails both ways: on a sheet that starts doing it, and on a listed sheet
     // that has stopped and is still listed.
     const TYPED_INTO_SEVERAL: readonly string[] = [
-      'mirrors-bias/beta-multiplier-bias.json',
-      'mirrors-bias/cascode-current-mirror.json',
-      'mirrors-bias/wide-swing-cascode-mirror.json',
-      'multistage/class-ab-output-monticelli.json',
       'multistage/fd-telescopic-ota.json',
       'multistage/fd-two-stage-ota.json',
       'multistage/two-stage-cascode-comp-ota.json',
@@ -318,11 +314,8 @@ describe('sheet library: vetting lints', () => {
       'otas/differential-pair-tail.json',
       'otas/folded-cascode-ota.json',
       'otas/gain-boosted-cascode-ota.json',
-      'otas/inverter-based-ota.json',
       'otas/symmetrical-ota.json',
       'otas/telescopic-cascode-ota.json',
-      'stages/cascode-cs-amp.json',
-      'stages/cmos-inverter-amp.json',
     ];
     const found = RESOLVED.map(({ file, doc }) => ({ file, typed: programs(doc) })).filter(
       ({ typed }) => typed.length > 0,
