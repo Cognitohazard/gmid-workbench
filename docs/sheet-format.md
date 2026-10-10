@@ -1026,9 +1026,14 @@ exactly — an author reading a green chip should know what it is and is not a s
   givens re-read the gate voltage the partner settles to there. Written any other way, the device
   is current-driven by assumption at a range end, and two devices sharing a gate node stay at one
   voltage only while the end moves `vds` alone. Validation warns when width-first givens sit
-  under a range end that reaches them through any other path, and says so differently when the end
-  reaches the givens' own `W` or `L`, because then the run is sizing a different transistor rather
-  than re-biasing this one. Both are advisory. Separately, `validateSheet` names two blocks whose
+  under a range end that reaches them through any other path — a given gate voltage excepted,
+  since that is the tie itself — and says so differently when the end reaches the givens' own
+  `W` or `L`, because then the run is sizing a different transistor rather than re-biasing this
+  one. Both are advisory. Where a range end changes a device's CURRENT, validation says that
+  too, as a note and not a warning: a device given a width and no current reads its current from
+  the table, so it carries a different one once the end moves its drain or its gate, and so does
+  every device whose current is written as a share of it. That is the circuit behaving as drawn;
+  the note is there because a claim about the range rests on it. Separately, `validateSheet` names two blocks whose
   `wiring` puts them on one gate and one source while each is sized at its own operating point —
   the declaration is never allowed to drive the sizing, only to point out that nothing does.
 - **Where the transformation rewrites a device's givens, the data-ceiling verdict carries no

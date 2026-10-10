@@ -953,6 +953,11 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     validateSheet(doc)
       .filter((w) => w.severity === 'warning' && /^range end "/.test(w.message))
       .map((w) => w.message);
+  /** The notes: what an author should know and has nothing to fix. */
+  const notes = (doc: SheetDoc): string[] =>
+    validateSheet(doc)
+      .filter((w) => w.severity === 'info' && w.rule === 'sheet-range')
+      .map((w) => w.message);
 
   /** A device driven by the parent, so a range end can reach its givens through the wiring. */
   const child = (givens: SheetDoc['givens'], provide = ['id']): SheetDoc => ({
@@ -1042,14 +1047,140 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     );
   });
 
-  it('marks a current that tracks the condition being swept', () => {
-    // A current authored to follow the input common mode is the tail-source non-ideality the
-    // fidelity statement puts out of scope — not hardware wearing the shape of hardware.
-    const w = warnings(
-      withK({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, { I_c: '20u * CM_dc' }),
+  it('notes, without warning, a current that follows something the range end moves', () => {
+    // A current authored as an expression is the hardware description at a range end — a mirror
+    // ratio, a share of another device's current — so it is re-evaluated there on purpose and the
+    // held device carries the new value. Nothing to fix; the author of a range claim should
+    // still see that the current is not the one the design was sized at.
+    const doc = withK({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, { I_c: '20u * CM_dc' });
+    expect(warnings(doc)).toEqual([]);
+    expect(notes(doc)).toEqual([
+      'range end "hi" changes the current in the givens at "k": its expression reads "I_c", ' +
+        'which moves there, so the device is held at its width and carries a different current',
+    ]);
+  });
+
+  it('notes a device whose current is read from the table when the range end moves its drain', () => {
+    // A width and no current: a mirror's output device. Its current is whatever the table says
+    // at its operating point, so a range end that moves its drain changes it. A drain move draws
+    // no WARNING (the device is still the same device); it does draw this note.
+    const tied = withK({ L: '0.5u', W: '10u', vgs: '0.6', vds: 'V_x' }, { V_x: 'V_t' });
+    expect(warnings(tied)).toEqual([]);
+    expect(notes(tied)).toEqual([
+      'range end "hi" moves the "vds" of the givens at "k", whose current is read from the table ' +
+        'rather than given — that current is different there, and so is any current derived from it',
+    ]);
+    // Given its current as well, the same device's current is the authored one: no note.
+    expect(notes(withK({ L: '0.5u', W: '10u', id: '20u', vds: 'V_x' }, { V_x: 'V_t' }))).toEqual(
+      [],
     );
-    expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/range end "hi" reaches the current expression of the givens at "k"/);
+  });
+
+  it("does not warn when a tied device follows its partner's gate to a new voltage", () => {
+    // The mirror shape: `r` is diode-connected and carries a current the range end changes, so
+    // its gate settles somewhere else; `k` is given r's width and r's gate voltage. That reach
+    // through `vgs` is the tie doing its job — the device is read at exactly the voltage its
+    // partner sits at — so it draws no warning, only the note that k's current changed.
+    const doc = parent({
+      blocks: [
+        {
+          name: 'r',
+          doc: child({ L: '0.5u', gm_id: '10', id: 'I_c', diode: true }, ['W', 'vgs']),
+          params: { I_c: '20u * CM_dc' },
+        },
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', W: '10u', vgs: 'V_x', vds: '0.6' }),
+          params: { V_x: 'r__vgs' },
+        },
+      ],
+    });
+    expect(warnings(doc)).toEqual([]);
+    expect(notes(doc)).toEqual([
+      expect.stringMatching(/^range end "hi" changes the current in the givens at "r"/),
+      expect.stringMatching(/^range end "hi" moves the "vgs" of the givens at "k"/),
+    ]);
+  });
+
+  it('follows a table-read current into the device that takes its share', () => {
+    // The tail-and-pair shape: `t` is tied to a gate and reads its current off the table at the
+    // node the range end moves; `k` is given half of it. `k` has nothing else the range end
+    // reaches, so its note exists only if the walk knows `t`'s current moved.
+    const doc = parent({
+      blocks: [
+        {
+          name: 't',
+          doc: child({ L: '0.5u', W: '10u', vgs: '0.6', vds: 'V_x' }),
+          params: { V_x: 'V_t' },
+        },
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, ['gm']),
+          params: { I_c: 't__id/2' },
+        },
+      ],
+    });
+    expect(notes(doc)).toEqual([
+      expect.stringMatching(/^range end "hi" moves the "vds" of the givens at "t"/),
+      expect.stringMatching(/^range end "hi" changes the current in the givens at "k"/),
+    ]);
+    // With `t` given its current instead, that current is held and `k` is not reached.
+    const typed = parent({
+      blocks: [
+        {
+          name: 't',
+          doc: child({ L: '0.5u', gm_id: '10', id: '20u', vds: 'V_x' }),
+          params: { V_x: 'V_t' },
+        },
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, ['gm']),
+          params: { I_c: 't__id/2' },
+        },
+      ],
+    });
+    expect(notes(typed)).toEqual([]);
+  });
+
+  it('reaches an earlier block through a node solved from a later one', () => {
+    // The block order a tail-first sheet has: `t` is listed first and sits at the solved node;
+    // the node is solved from `k`'s gate voltage, and `k` is listed second. A range end that
+    // moves only `k`'s drain reaches `t` the long way round — k's operating point, the solved
+    // node, t's drain — which one pass in document order would miss.
+    const doc: SheetDoc = {
+      title: 'p',
+      polarity: 'n',
+      params: [
+        { name: 'V_o', value: 0.9 },
+        { name: 'V_o_hi', value: 1.1 },
+        { name: 'CM', value: 1.0 },
+        {
+          name: 'V_t',
+          value: 0.4,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'V_t + k__vgs', rhs: 'CM' },
+        },
+      ],
+      equations: [],
+      checks: [],
+      blocks: [
+        {
+          name: 't',
+          doc: child({ L: '0.5u', W: '10u', vgs: '0.6', vds: 'V_x' }),
+          params: { V_x: 'V_t' },
+        },
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', gm_id: '10', id: '20u', vds: 'V_x' }, ['vgs']),
+          params: { V_x: 'V_o - V_t' },
+        },
+      ],
+      operatingRange: [{ name: 'hi', set: { V_o: 'V_o_hi' } }],
+    };
+    expect(notes(doc)).toEqual([
+      expect.stringMatching(/^range end "hi" moves the "vds" of the givens at "t"/),
+    ]);
   });
 
   it('follows a range end through a sibling device onto the block it biases', () => {

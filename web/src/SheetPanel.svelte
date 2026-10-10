@@ -148,8 +148,16 @@
   // so it must not sit among the things that went wrong — but a loop that needed that many
   // substitutions is contracting weakly, which is worth knowing before the sheet is trusted at
   // another operating point. Its own quiet line, in the core's words.
+  //
+  // The range-end notes ride the same line for the same reason: a mirrored current that is
+  // different at a range end is the circuit behaving as drawn, not a fault — and an author
+  // claiming that range should still see it.
   const solveNotes = $derived(
-    allWarn.filter((w) => w.severity === 'info' && w.rule === 'sheet-solve').map((w) => w.message),
+    allWarn
+      .filter(
+        (w) => w.severity === 'info' && (w.rule === 'sheet-solve' || w.rule === 'sheet-range'),
+      )
+      .map((w) => w.message),
   );
 
   // Onboarding hints lead the same list the diagnostics land in — they are the likeliest cause of

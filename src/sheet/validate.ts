@@ -600,7 +600,14 @@ function provideEdges(kid: Level, key: string, policy: TraversalPolicy): Edge[] 
   const inside: Edge = { kind: 'provide', lv: kid, names: [key] };
   const device: Edge = { kind: 'device', lv: kid, key };
   if (!kid.doc.givens) return [inside];
-  if (policy.sizingProvides) return policy.held?.has(key) ? [inside] : [inside, device];
+  if (policy.sizingProvides) {
+    // A quantity a range end holds does not move — with one exception. A device given its width
+    // and no current (one tied to another's gate) has its current READ from the table, so that
+    // current moves with whatever moves its operating point, and everything derived from it too.
+    const givens = kid.doc.givens;
+    const readCurrent = key === 'id' && givens.W !== undefined && givens.id === undefined;
+    return policy.held?.has(key) && !readCurrent ? [inside] : [inside, device];
+  }
   const own =
     key.includes(PROVIDE_SEP) ||
     kid.doc.params.some((q) => q.name === key) ||
@@ -1054,13 +1061,12 @@ export interface ReachedGivens {
  * that matters — every range end in the library moves one), child params a block overrides from a
  * moved expression, and the provides of a child whose own value moved. The MOVEMENT policy, asked
  * forward over the same edges the backward walks read: closed to a fixed point within each
- * document, and a single in-document-order pass over the blocks is that fixed point across the
- * tree, because a block's override may only reference EARLIER siblings' provides.
+ * document and, by repeating the pass over the blocks until nothing more is reached, across the
+ * tree.
  *
  * A reachability question, not an evaluation: it says which authored expressions could read
  * something different at the range end, which is all the range-end checks below need. It
- * UNDER-approximates in two known places, both of them on documents that are already errors
- * here: the in-order argument holds because evaluation refuses a forward reference, and a
+ * UNDER-approximates in one known place, on documents that are already errors here: a
  * composition nested past MAX_BLOCK_DEPTH is skipped whole. An advisory check that says nothing
  * about a broken document is the right way round — a warning that fires on correct sheets is
  * worth less than no warning at all.
@@ -1108,43 +1114,59 @@ function movedBy(
     }
   };
   close();
-  for (const block of lv.doc.blocks ?? []) {
-    if (!block.doc || depth >= MAX_BLOCK_DEPTH) continue;
-    const kid = childLevel(lv, block, block.doc);
-    const seed = Object.keys(block.params ?? {}).filter((k) =>
-      reads(overrideEdge(kid, k, MOVEMENT), reached),
-    );
-    const inner = movedBy(kid, seed, out, depth + 1);
-    // A block publishes two kinds of scalar, and the range end moves them for different reasons.
-    // Its equations and params move when the closure above says they do. Its DEVICE quantities —
-    // the vgs it settled at, the gm that came out — move whenever anything feeding its sizing
-    // moved, whatever the inputs happened to be called; a sibling biased off one of those (`VDD -
-    // ref__vgs`) is how the library writes a stack, so stopping at the block boundary would make
-    // both checks below silent on the sheets they exist for. The geometry and the authored
-    // current are the exceptions (MOVEMENT's `held`): a range end holds W and L fixed by
-    // construction, and an authored `id` moves only when its own expression does, which the
-    // closure already covers.
-    const sizingMoved = givensEdges(kid).some((e) => reads(e, inner));
-    for (const key of block.doc.provides ?? [])
-      if (
-        provideEdges(kid, key, MOVEMENT).some((e) =>
-          e.kind === 'device' ? sizingMoved : reads(e, inner),
+  // The blocks, repeated until nothing more is reached. One pass in document order is enough
+  // while every link runs forward — a block's override may only read EARLIER siblings' provides.
+  // A solved or held param of this sheet is the link that runs backward: its relation can read a
+  // LATER block's provide (a tail node solved from the pair's gate voltage) and feed an EARLIER
+  // block (the tail device's drain). Each pass re-collects the blocks' own entries, and the last
+  // pass's are the ones kept.
+  let below: ReachedGivens[] = [];
+  for (let grew = true; grew;) {
+    const before = reached.size;
+    below = [];
+    for (const block of lv.doc.blocks ?? []) {
+      if (!block.doc || depth >= MAX_BLOCK_DEPTH) continue;
+      const kid = childLevel(lv, block, block.doc);
+      const seed = Object.keys(block.params ?? {}).filter((k) =>
+        reads(overrideEdge(kid, k, MOVEMENT), reached),
+      );
+      const inner = movedBy(kid, seed, below, depth + 1);
+      // A block publishes two kinds of scalar, and the range end moves them for different
+      // reasons. Its equations and params move when the closure above says they do. Its DEVICE
+      // quantities — the vgs it settled at, the gm that came out — move whenever anything feeding
+      // its sizing moved, whatever the inputs happened to be called; a sibling biased off one of
+      // those (`VDD - ref__vgs`) is how the library writes a stack, so stopping at the block
+      // boundary would make the checks below silent on the sheets they exist for. The geometry
+      // and an authored current are the exceptions (MOVEMENT's `held`): a range end holds W and L
+      // fixed by construction, and an authored `id` moves only when its own expression does,
+      // which the closure already covers. A current nobody authored is not an exception (see
+      // provideEdges).
+      const sizingMoved = givensEdges(kid).some((e) => reads(e, inner));
+      for (const key of block.doc.provides ?? [])
+        if (
+          provideEdges(kid, key, MOVEMENT).some((e) =>
+            e.kind === 'device' ? sizingMoved : reads(e, inner),
+          )
         )
-      )
-        reached.add(joinProvide(block.name, key));
-    close();
+          reached.add(joinProvide(block.name, key));
+      close();
+    }
+    grew = reached.size > before;
   }
+  out.push(...below);
   // Pushed last, because a block's own givens evaluate after the children it composes.
   if (lv.doc.givens) out.push({ path: blockPath(lv.path), givens: lv.doc.givens, reached });
   return reached;
 }
 
 /**
- * What a range end cannot honestly claim about the design it re-measures. A range-end run
- * holds the hardware the base run sized and re-settles the bias; these two warnings mark the
- * places where an authored sheet takes that outside where it holds. Both are advisory: what
- * the author wrote is legal, and which of the reading and the writing is wrong is theirs to
- * decide.
+ * What an author should know about how a range end reads the design it re-measures. A range-end
+ * run holds the hardware the base run sized and re-settles the bias. Two WARNINGS mark the places
+ * where an authored sheet takes that outside where it holds — what the author wrote is legal, and
+ * which of the reading and the writing is wrong is theirs to decide. Two NOTES (severity `info`)
+ * say where a device's CURRENT is different at the range end. That is the circuit behaving as
+ * drawn — a mirrored current follows its drain, and whatever is derived from it follows that —
+ * so it is nothing to fix, and still something the author of a claim about the range should see.
  */
 function complianceReach(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
@@ -1170,8 +1192,13 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
         // gm/ID across a drain move is exact on the demo model and close on measured data (see the
         // width-first case in holdHardware), close enough that warning on every range claim in the
         // library would say nothing an author could act on.
+        //
+        // A given GATE voltage is excluded for the opposite reason: it is the tie itself. A device
+        // given its width and its partner's gate voltage is read at exactly that voltage, so a
+        // partner that settles somewhere else at the range end is the mirror working, and the
+        // note below says what follows from it.
         const via = Object.keys(givens).filter(
-          (k) => k !== 'vds' && readsMoved(givens[k as never]),
+          (k) => k !== 'vds' && k !== 'vgs' && readsMoved(givens[k as never]),
         );
         const geometry = via.filter((k) => k === 'W' || k === 'L');
         if (geometry.length)
@@ -1195,18 +1222,35 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
               `holds the same device only when the end moves vds alone`,
             location: name,
           });
+        // Given a width and no current, the device's current is whatever the table says at its
+        // operating point — a mirror's output device. Where the range end moves that point, the
+        // current is different there. `vds` counts here: a drain move is exactly how a tail's
+        // current follows the tail node.
+        const point = Object.keys(givens).filter(
+          (k) => k !== 'W' && k !== 'L' && readsMoved(givens[k as never]),
+        );
+        if (givens.id === undefined && point.length && !geometry.length)
+          out.push({
+            rule: 'sheet-range',
+            severity: 'info',
+            message:
+              `range end "${name}" moves the ${quoted(point)} of ${where}, whose current is read ` +
+              `from the table rather than given — that current is different there, and so is any ` +
+              `current derived from it`,
+            location: name,
+          });
       } else if (readsMoved(givens.id)) {
         // The authored current IS the hardware description at a range end (a mirror ratio, a
-        // tail split, a KCL difference), so it is re-evaluated there on purpose. A current that
-        // tracks the condition being swept is a different thing wearing that shape: it re-designs
-        // the device at the end instead of re-biasing it.
+        // tail split, a share of another device's current), so it is re-evaluated there on
+        // purpose, and the held device is re-biased to carry the new value.
+        const through = namesOf(givens.id as string).filter((n) => reached.has(n));
         out.push({
           rule: 'sheet-range',
-          severity: 'warning',
+          severity: 'info',
           message:
-            `range end "${name}" reaches the current expression of ${where} — it ` +
-            `re-evaluates that current as the design's own wiring, so a current that tracks the ` +
-            `swept condition re-sizes the device there instead of re-biasing it`,
+            `range end "${name}" changes the current in ${where}: its expression reads ` +
+            `${quoted(through)}, which ${through.length > 1 ? 'move' : 'moves'} there, so the ` +
+            `device is held at its width and carries a different current`,
           location: name,
         });
       }
