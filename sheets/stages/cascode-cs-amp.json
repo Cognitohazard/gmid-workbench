@@ -101,7 +101,7 @@
       "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "in",
       "doc": {
@@ -114,18 +114,18 @@
           { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vds_i", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_i", "id": "I_in", "gm_id": "gm_id_i", "vds": "vds_i" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_i", "id": "I_in", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_i",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "id", "vdsat", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "id", "vdsat", "vnth_m", "cgg"]
       },
       "params": {
         "I_in": "I_bias",
@@ -152,18 +152,18 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "bind": { "L": "L_l", "id": "I_load", "gm_id": "gm_id_l", "vds": "vds_l" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_l", "id": "I_load", "gm_id": "gm_id_l", "vds": "vds_l" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_l",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "vnth_m"]
+        "provides": ["gm", "gds", "vdsat", "vnth_m"]
       },
       "params": {
         "I_load": "I_bias",
@@ -173,14 +173,14 @@
       }
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "id": "in__id",
     "gm_id": "gm_id_casc",
     "vds": "V_out - V_x",
     "vsb": "V_x"
   },
-  "rows": [
+  "equations": [
     {
       "name": "Rout_casc",
       "expr": "(1/in__gds)*(1 + av0) + 1/gds",
@@ -219,10 +219,10 @@
       "note": "estimate: quiescent supply current — the one branch these rows model; the cascode and the load sit in it and carry the same current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_casc",
       "op": "<=",
       "rhs": "ceiling",
@@ -230,7 +230,7 @@
     },
     {
       "id": "input-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_x",
       "op": ">=",
       "rhs": "in__vdsat",
@@ -238,7 +238,7 @@
     },
     {
       "id": "cascode-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out - V_x",
       "op": ">=",
       "rhs": "vdsat",
@@ -246,16 +246,16 @@
     },
     {
       "id": "load-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "VDD - V_out",
       "op": ">=",
       "rhs": "load__vdsat",
       "note": "load device saturated: its headroom is the supply minus the output level"
     },
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
@@ -263,12 +263,12 @@
     },
     {
       "id": "gbw-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "GBW",
       "op": ">=",
       "rhs": "GBW_target",
       "note": "input gm over the load capacitance"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

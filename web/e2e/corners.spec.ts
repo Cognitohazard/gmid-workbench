@@ -209,9 +209,9 @@ test('staged import: one selection is one transaction — superseded, duplicated
           title: 'Mixed block',
           polarity: 'n',
           params: [{ name: 'x', value: 2 }],
-          rows: [{ name: 'y', expr: '2*x' }],
-          rules: [],
-          provide: ['y'],
+          equations: [{ name: 'y', expr: '2*x' }],
+          checks: [],
+          provides: ['y'],
         }),
       ),
     },
@@ -358,13 +358,13 @@ test('legacy binding: a device literally named "family:demo" still resolves', as
     const reg = JSON.parse(localStorage.getItem('gmid.devreg') ?? '{}') as { order?: string[] };
     const uid = (reg.order ?? []).find((u) => u.startsWith('family:demo'));
     if (!uid) return null;
-    const dash = JSON.parse(localStorage.getItem('gmid.dash.v2') ?? '{}') as {
-      tabs: { panels: { render: string; sheet?: { uses?: { device?: string }[] } }[] }[];
+    const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{}') as {
+      tabs: { panels: { render: string; sheet?: { blocks?: { device?: string }[] } }[] }[];
     };
     for (const tab of dash.tabs)
       for (const p of tab.panels)
-        if (p.render === 'sheet' && p.sheet?.uses?.[0]) p.sheet.uses[0].device = uid;
-    localStorage.setItem('gmid.dash.v2', JSON.stringify(dash));
+        if (p.render === 'sheet' && p.sheet?.blocks?.[0]) p.sheet.blocks[0].device = uid;
+    localStorage.setItem('gmid.dash.v3', JSON.stringify(dash));
     return uid;
   });
   expect(patched).toContain('family:demo');

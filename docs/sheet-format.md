@@ -22,7 +22,7 @@ A sheet answers two questions, and keeping them apart is what makes its verdicts
 - **Covers** — *does the design this run just produced still hold at the ends of the range it
   claims?* An instance-level question, so nothing is rebuilt: each device is held at the
   geometry this run sized it to and only the bias re-settles.
-  [Containment edges](#containment-edges-edges) ask this one.
+  [Containment edges](#containment-edges-operatingrange) ask this one.
 
 Rebuilding is the whole point of the first question and the whole error of the second. The
 instance a coverage check is about is simply whatever the current settings produce — never a
@@ -53,17 +53,41 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | `description` | string, optional | A few sentences on what the sheet designs, its assumptions, and how to use it — the note a designer inheriting the sheet reads first. Supports inline math in `$…$` (see [Inline math](#inline-math-in-prose)), e.g. `$g_m/I_D$`. |
 | `polarity` | `"n"` \| `"p"` | A self-description label only; no contract is enforced at a leaf. |
 | `params` | array | Named scalar design inputs (see [Parameters](#parameters)). |
-| `bind` | object, optional | The bind-any-2 device declaration (see [The bind](#the-bind)). Omit for a sheet that only does author math. |
-| `rows` | array | Named intermediate/output expressions, evaluated in document order (see [Rows](#rows)). |
-| `rules` | array | Named comparisons the design must satisfy (see [Rules](#rules)). |
-| `uses` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
-| `provide` | array of string, optional | The names this sheet exposes to a parent. Inert to the engine at the top level, but load-bearing there as the sheet's declared interface (see [Port contracts](#port-contracts)). |
-| `edges` | array, optional | Containment edges: the claimed range's ends, re-checked on the design this run produced; their hard verdicts gate the sheet (see [Containment edges](#containment-edges-edges)). |
+| `givens` | object, optional | The bind-any-2 device declaration (see [The bind](#the-bind-givens)). Omit for a sheet that only does author math. |
+| `equations` | array | Named intermediate/output expressions, evaluated in document order (see [Rows](#rows-equations)). |
+| `checks` | array | Named comparisons the design must satisfy (see [Rules](#rules-checks)). |
+| `blocks` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
+| `provides` | array of string, optional | The names this sheet exposes to a parent. Inert to the engine at the top level, but load-bearing there as the sheet's declared interface (see [Port contracts](#port-contracts)). |
+| `operatingRange` | array, optional | Containment edges: the claimed range's ends, re-checked on the design this run produced; their hard verdicts gate the sheet (see [Containment edges](#containment-edges-operatingrange)). |
 
 Evaluation runs in one pass: seed the params, compose any children, size the device, evaluate
 the rows in order, then check the rules. Everything a rule or row can reference — params,
 child provides, the sized operating point, derived quantities, and physical constants — is a
 flat scalar in one shared namespace.
+
+## Words and keys
+
+The keys in a sheet file and the words this document and the engine's messages use for them are
+not yet the same. The file says what a thing is for; the prose still uses the shorter working
+names:
+
+| key in the file | called here |
+|-|-|
+| `givens` | the bind — the quantities a device is sized from |
+| `equations` | rows |
+| `checks`, of kind `physical` / `spec` / `advisory` | rules, of kind invariant / requirement / guardrail |
+| `blocks` | uses, children |
+| `provides` | the provide list |
+| `operatingRange` | containment edges, range ends |
+| `designConstraint` | a pin |
+
+A file written with the earlier key names — `bind`, `rows`, `rules` with kinds `invariant`,
+`requirement`, `guardrail`, `uses`, `provide`, `edges`, `pin` — still loads: the loader rewrites
+them to the current ones, and what it keeps and exports carries the current keys only. A file
+that writes one key in both spellings is refused, since the loader cannot know which was meant.
+That rewrite belongs to the app's loader: a program that calls the core directly passes an older
+document through `inCurrentKeys` first, at each level, and the core itself reads the current
+keys alone.
 
 ## Parameters
 
@@ -79,7 +103,7 @@ Each entry in `params` is a named scalar input:
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
 | `solveFor` | string, optional | Makes this parameter a tearing variable and names the value it must agree with, closing a bias loop (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
 | `hold` | string, optional | Marks a node voltage that hangs under a transistor's gate and names the quantity that stays fixed where the design is held: the gate voltage, written as the node plus the device's gate-source voltage (see [A node under a gate](#a-node-under-a-gate-hold)). The parameter stays an ordinary, sweepable input at the design point. |
-| `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: nothing on the sheet determines it, so the designer states it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe, an output level that a feedback loop outside the sheet holds, a voltage across a device whose surrounding circuit is not on the sheet). `assumed`: the sheet's own parts determine it, but the sheet types a value for now instead of deriving it (an internal stack node, a guessed gate-source drop). An assumed voltage is not a permanent state: it marks a value the sheet still has to derive, and deriving it removes the assumption. Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a containment edge's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `pin` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `pin` or `solveFor` is *solved*, and one that carries `hold` is *held*; those classes are derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
+| `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: nothing on the sheet determines it, so the designer states it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe, an output level that a feedback loop outside the sheet holds, a voltage across a device whose surrounding circuit is not on the sheet). `assumed`: the sheet's own parts determine it, but the sheet types a value for now instead of deriving it (an internal stack node, a guessed gate-source drop). An assumed voltage is not a permanent state: it marks a value the sheet still has to derive, and deriving it removes the assumption. Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a containment edge's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `designConstraint` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `designConstraint` or `solveFor` is *solved*, and one that carries `hold` is *held*; those classes are derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
 
 The `role` separates *what the sheet is for* from *how it gets there*:
 
@@ -112,9 +136,9 @@ doubled** (`$\\gamma$`, `$\\geq$`). Text outside `$…$` is plain prose. Example
 "description": "Raises the output resistance to about $A_{v0,casc}/g_{ds,in}$, so the load's $g_{ds}$ sets the ceiling."
 ```
 
-## The bind
+## The bind (`givens`)
 
-The optional `bind` sizes one device by fixing **exactly two** bound quantities at a chosen
+The optional `givens` sizes one device by fixing **exactly two** bound quantities at a chosen
 length `L`, and inverting the lookup table for the rest. Every field is an **expression
 string**, so a bound quantity can be computed from the params:
 
@@ -230,7 +254,7 @@ this current at this inversion level need". So a sheet can name the node a gate 
 the device, and never compare the two. That is how a design ends up sized at one voltage and
 wired at another with every rule still green.
 
-Binding `vgs` (see [The bind](#the-bind)) turns that around for one specific case — a gate on
+Binding `vgs` (see [The bind](#the-bind-givens)) turns that around for one specific case — a gate on
 the same wire *and* the same source node as another device, which is what a current mirror is.
 There the gate voltage is an input, and the identity holds by construction rather than by
 agreement. `wiring` remains the general channel: a gate tied to a rail, or to a node no other
@@ -266,7 +290,7 @@ wrong one would silently invert the identity and report agreement on a design wi
 and the polarity the block already declares carries the same information with nothing to mistype.
 
 Because the voltage compared against is the **bind**, not a scalar the child publishes, no
-`provide` list stands between the declaration and the number: a block that sizes can always be
+`provides` list stands between the declaration and the number: a block that sizes can always be
 checked. A block with no bind has no sized gate-source voltage, and the evaluation says so
 rather than reading silently clean.
 
@@ -283,7 +307,7 @@ expression that does not parse — none of these state an identity, and a sheet 
 wiring-checked when nothing was checked is exactly the silence this mechanism exists to break.
 Structural problems are the *only* route by which wiring reaches a verdict.
 
-A sheet may declare `wiring` on a child *and* claim operating ranges through `edges`. The
+A sheet may declare `wiring` on a child *and* claim operating ranges through `operatingRange`. The
 disagreement is then reported once per run — the base evaluation plus each edge — and that is
 intended, not a duplicate: a range end re-settles the SAME hardware at a different bias, so its
 residual is a measurement of the same identity under different conditions.
@@ -292,9 +316,9 @@ The check is local to each node of the tree: a child sheet's own uses are checke
 child evaluates. There is no cross-tree wiring graph and no KCL — this declares one identity
 per gate and checks it, nothing more.
 
-## Rows
+## Rows (`equations`)
 
-Each entry in `rows` is a named author expression — an intermediate `let` or an output —
+Each entry in `equations` is a named author expression — an intermediate `let` or an output —
 evaluated in **document order** against the params, the sized operating point, earlier rows,
 and constants:
 
@@ -369,9 +393,9 @@ cannot):
 `avt` is the Pelgrom threshold coefficient [V·m] and `abeta` the current-factor coefficient
 [m]. These σ scale as 1/√(W·L), so pass the **sized** `W` and `L`.
 
-## Rules
+## Rules (`checks`)
 
-Each entry in `rules` is a named comparison `lhs op rhs`, where `lhs` and `rhs` are expression
+Each entry in `checks` is a named comparison `lhs op rhs`, where `lhs` and `rhs` are expression
 strings and `op` is `>=`, `<=`, or `==`. The comparison is structured — it is never parsed out
 of a string — and each rule is evaluated into a **signed margin**: the SI distance to the
 bound, positive when the rule holds. A relative margin (margin over the bound) lets rules of
@@ -380,7 +404,7 @@ different units share one axis on a sweep chart.
 | Field | Type | Meaning |
 |-|-|-|
 | `id` | string | Rule identifier (shown in reports and sweeps). |
-| `kind` | `"invariant"` \| `"requirement"` \| `"guardrail"` | See below. |
+| `kind` | `"physical"` \| `"spec"` \| `"advisory"` | See below. |
 | `lhs`, `rhs` | string | The two expression sides. |
 | `op` | `">="` \| `"<="` \| `"=="` | The comparison. |
 | `tolPct` | number, optional | Relative tolerance for `==` only (percent of \|rhs\|). |
@@ -391,11 +415,11 @@ different units share one axis on a sweep chart.
 
 The `kind` decides whether a rule **gates feasibility**:
 
-- **`invariant`** — a hard physical floor (the design is unphysical if it fails), e.g.
+- **`physical`** — a hard physical floor (the design is unphysical if it fails), e.g.
   `gm_id <= ceiling` or a saturation-headroom floor. Gates feasibility.
-- **`requirement`** — a hard application spec (the design misses its purpose if it fails), e.g.
+- **`spec`** — a hard application spec (the design misses its purpose if it fails), e.g.
   an input-noise or offset budget. Gates feasibility.
-- **`guardrail`** — a soft advisory (a near-miss heads-up). It is shown but **never blocks
+- **`advisory`** — a soft advisory (a near-miss heads-up). It is shown but **never blocks
   feasibility**. A red guardrail on an otherwise-green sheet is by design: the sheet is
   feasible and the guardrail is telling you a soft target is close or missed.
 
@@ -467,7 +491,7 @@ A sheet is **feasible** only when all of the following hold (it fails closed oth
 - every **hard** rule (invariant and requirement) is `pass` or `amber`;
 - every composed child is feasible;
 - every declared containment edge covers — a claimed range is part of the spec, so a design
-  that misses its own claim fails (see [Containment edges](#containment-edges-edges)). A range
+  that misses its own claim fails (see [Containment edges](#containment-edges-operatingrange)). A range
   end that was not CHECKED never fails the sheet on its own account: that happens only where the
   run already failed the last condition below;
 - no error-severity warning was raised (including structural validation errors).
@@ -492,9 +516,9 @@ sized width you can scale it yourself with `w0/W` (or `W/w0`).
 
 ## Composition
 
-A sheet composes children through `uses`. Each child is either a full sheet embedded inline
+A sheet composes children through `blocks`. Each child is either a full sheet embedded inline
 (`doc`) or a **reference** to a library sheet (`ref` — see [References](#references)), and it
-exposes named scalars to the parent through its `provide` list.
+exposes named scalars to the parent through its `provides` list.
 
 | Field | Type | Meaning |
 |-|-|-|
@@ -516,7 +540,7 @@ machinery.
 **Document-order evaluation.** Children evaluate in the order they are listed, and each is
 evaluated *before* the parent's own bind. Two consequences:
 
-- A parent can reference a child's provides anywhere — including in its own `bind` (e.g. a
+- A parent can reference a child's provides anywhere — including in its own `givens` (e.g. a
   cascode device carrying the input pair's `cs__id`).
 - A child's param override can reference the provides of **earlier** siblings (a later branch
   carrying a current an earlier branch derived), but a forward reference — to a later sibling,
@@ -572,7 +596,7 @@ per-child form when authoring.
 
 A library sheet declares its interface the way a datasheet does: the small-signal quantities
 a neighboring stage would need are ordinary rows with reserved names, and the sheet's
-top-level `provide` lists them. There is no schema field and no engine machinery — the
+top-level `provides` lists them. There is no schema field and no engine machinery — the
 contract is a naming convention plus the declaration.
 
 - **`Rout`** — the output resistance at the sheet's output node, written as the inverse of
@@ -608,12 +632,12 @@ both sides of a port: the interstage pole `1/(2*pi*s1__Rout*s2__cgg_in)` is one
 author-written row away, and `s2__Rin >= 10*s1__Rout` one guardrail.
 
 The `sheet-provide-coverage` warning polices both directions of the contract. Upward, every
-`child__key` an expression reads must appear in that child's `provide` list — a missing
+`child__key` an expression reads must appear in that child's `provides` list — a missing
 entry degrades at runtime exactly like absent data, so the validator names the slip
 statically, and a prefix naming no child at all is reported as the typo it is. A
 reference-only child is skipped (its provides are unknown until resolution, and the
-resolved document is validated again). Downward, a `provide` key on any block without its
-own `bind` — the top level or an embedded child alike — must name a param or a row of that
+resolved document is validated again). Downward, a `provides` key on any block without its
+own `givens` — the top level or an embedded child alike — must name a param or a row of that
 block; a bound block is instead taken at its word, because a bind publishes every table
 quantity including pass-through columns no table-independent check can enumerate.
 Re-export keys carry the `__` separator and are ruled on at the use site instead.
@@ -624,7 +648,7 @@ Children evaluate in document order and may only read *earlier* siblings, so the
 acyclic by construction. Real circuits are not — but before reaching for the solver, check
 whether the loop is real. Most in this library were **parameterization artifacts**: the 5T OTA's
 famous cycle (the pair's `VGS` sets the tail node it stands on) vanishes entirely when the tail
-node is the declared variable, and a spec like the common mode enters through a `pin` instead.
+node is the declared variable, and a spec like the common mode enters through a `designConstraint` instead.
 That is how a spec that drives an internal node is solved wherever the node's search range can be
 stated as fixed numbers, as a tail node's can. A node that hangs under a gate whose bias the sheet
 does not provide is stated at the design point and re-solved wherever the design is held, with a
@@ -659,7 +683,7 @@ no estimate left to drift.
 agree with the design. That is not a small error: an early revision of the library's 5T OTA
 shipped with a default that placed the input pair's drain 6 mV above its `vdsat`, so the sheet
 evaluated `gds` on a device in triode and reported a gain of **1.8 against a target of 15**. In a
-new sheet, prefer (in this order): a node parameterization that never creates the loop, a `pin`
+new sheet, prefer (in this order): a node parameterization that never creates the loop, a `designConstraint`
 when a spec must drive an internal node whose search range can be stated as fixed numbers, and
 `solveFor` for a genuinely self-referential quantity — including a loop like the source
 follower's, where the node a pin would solve has a range that moves with the supply.
@@ -728,15 +752,15 @@ costs real time — about 25 ms per sample for a three-child sheet that solves a
 both bias axes on a real PDK table, so roughly 11 s for a 21×21 map, run synchronously. Each
 declared bias axis adds a slice per pass, so most of that is the cost of not assuming.
 
-## Entering from a spec (`pin`)
+## Entering from a spec (`designConstraint`)
 
-`solveFor` closes a loop the author could not avoid. `pin` is the opposite move: the sheet is
+`solveFor` closes a loop the author could not avoid. `designConstraint` is the opposite move: the sheet is
 already loop-free because its bias variable is an internal node the tables are indexed by — and
 the designer still gets to type the external quantity the application hands them.
 
 ```json
 { "name": "V_tail", "value": 0.4, "min": 0.15, "max": 0.8, "role": "choice",
-  "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+  "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
   "note": "the tail node, chosen so the produced common mode equals CM_dc" }
 ```
 
@@ -757,7 +781,7 @@ closed with the reason:
 | the probe backstop (200) is hit | infeasible — cannot occur before the width tolerance on a finite bracket; a backstop, not a tuning knob |
 | the parameter also carries `solveFor` | validation error — one solver per parameter |
 | two pinned parameters whose relations read each other, on one sheet or across a parent and a child | validation error, and infeasible if evaluated — a coupled system, which is not solved |
-| `pin` missing `lhs` or `rhs` | validation error — a half-written pin would freeze the parameter without solving it |
+| `designConstraint` missing `lhs` or `rhs` | validation error — a half-written pin would freeze the parameter without solving it |
 | `min`/`max` missing or inverted | validation error — the bracket is required |
 
 The residual test is **form-invariant**: it is scaled by the relation's range over the authored
@@ -792,7 +816,7 @@ while the child's relations do not read the parent's pin.
 
 A cascode's source, a pair's tail, a follower's output: each sits one gate-source voltage below
 a gate. Two things can be stated about such a node — where it sits, or where its gate is — and
-they are the same single choice. When the sheet provides the gate bias, write a `pin`: the node is
+they are the same single choice. When the sheet provides the gate bias, write a `designConstraint`: the node is
 solved so that node plus gate-source voltage equals the bias. When it does not, state the node
 and add a `hold`:
 
@@ -806,19 +830,19 @@ At the design point nothing is solved. The parameter keeps its value, it can be 
 and the result reports what the held expression came to (`held`: here the cascode gate bias the
 design needs). Wherever the design is **held fixed and re-checked** — a containment edge's
 fixed-hardware run — the roles swap: the expression is held at that value and the node is
-re-solved between `min` and `max`, by the same bisection a `pin` uses. That is what the circuit
+re-solved between `min` and `max`, by the same bisection a `designConstraint` uses. That is what the circuit
 does: a bias line holds the gate, and the node under it moves with the condition. Without the
 `hold`, a range end would keep the node and let the gate voltage drift.
 
 The expression must be a sum of terms in which the parameter appears **exactly once**, on its own
 or multiplied by a number: `V_a + casc_n__vgs`, `V_b - abs(casc_p__vgs)`,
 `V1 - V_casc + casc__vgs`. The check is on the shape, with no algebra attempted, so the
-parameter's own term is there to read. Any other relation is a `pin`.
+parameter's own term is there to read. Any other relation is a `designConstraint`.
 
 | situation | result |
 |-|-|
-| the parameter appears twice, inside a function, divided, or not at all | validation error — write the relation as a `pin` |
-| the parameter also carries `pin`, `solveFor` or `class` | validation error — a parameter takes one of the three solvers, and a held node's class is derived |
+| the parameter appears twice, inside a function, divided, or not at all | validation error — write the relation as a `designConstraint` |
+| the parameter also carries `designConstraint`, `solveFor` or `class` | validation error — a parameter takes one of the three solvers, and a held node's class is derived |
 | `min`/`max` missing or inverted | validation error — the bracket is required |
 | a containment edge sets the parameter | validation error — the range end re-solves it, so the override would be discarded |
 | a parent wires a value into a node its child holds | warning — the value is used at the design point, but a range end re-solves the node inside the child and the parent's own value does not follow. Hold the node on the parent |
@@ -829,16 +853,16 @@ parameter's own term is there to read. Any other relation is a `pin`.
 
 A `hold` keeps the **design point's** gate voltage. A gate bias that itself moves with the
 condition — a replica that tracks the device — is a provided bias: write it as an expression and
-`pin` the node to it.
+pin the node to it with a `designConstraint`.
 
-## Containment edges (`edges`)
+## Containment edges (`operatingRange`)
 
 A sheet that claims a RANGE — "this amplifier accepts any input common mode in
 `[CM_lo, CM_hi]`" — used to check the claim with linearized guardrails, which could only
-estimate the ends from the evaluated point. `edges` checks them directly:
+estimate the ends from the evaluated point. `operatingRange` checks them directly:
 
 ```json
-"edges": [
+"operatingRange": [
   { "name": "cm-lo", "set": { "CM_dc": "CM_lo" } },
   { "name": "cm-hi", "set": { "CM_dc": "CM_hi" } }
 ]
@@ -881,10 +905,10 @@ the full landscape. Costs and semantics to know:
   included, because a swept cell must never disagree with the same numbers evaluated alone —
   except where the base run did not stand, which costs one. A pinned sheet's 21-point sweep goes
   from ~0.6 s to ~1.8 s with two edges.
-- A composed child's `edges` are **not evaluated** (validation warns): in composition the
+- A composed child's `operatingRange` is **not evaluated** (validation warns): in composition the
   parent typically drives the child's spec params, which would make the child's own range
   claim a fiction. Re-declare the claim on the parent if it should gate there.
-- `set` may not target an engine-solved param (`pin`/`solveFor`) — the solve would discard
+- `set` may not target an engine-solved param (`designConstraint`/`solveFor`) — the solve would discard
   the override; validation refuses it.
 - The report carries the full story per edge: `state` (the three-way outcome above), `set`
   (the NUMERIC point that was checked — the authored side may be an expression), `rules` and
@@ -1019,12 +1043,12 @@ silently repairs one.
    excludes.) Backstop: the `sheet-gate-tie` validation rule flags two blocks whose `wiring`
    puts them on one gate and one source while each is sized at its own operating point.
 5. **Close a genuine loop explicitly, or do not close it at all.** `solveFor` is for a
-   quantity defined in terms of the device's own answer; `pin` is for a typed specification
+   quantity defined in terms of the device's own answer; `designConstraint` is for a typed specification
    an internal node must produce, with a bracket that must size at both ends (see *Closing a
    bias loop* and *Entering from a spec*). Backstop: both solvers fail closed with named
    reasons — divergence, overshoot, a bracket that never straddles, a residual that never
    reaches zero — and a failed solve is never reported as a sized design.
-6. **A claimed operating range is a claim to check.** Declare `edges` so both ends are
+6. **A claimed operating range is a claim to check.** Declare `operatingRange` so both ends are
    re-checked on every run — on the design that run produced, with its devices held — and say
    in the note that the ends are checked exactly while the sweep owns the interior (see
    *Containment edges*). Backstop: an end the design does not cover fails the sheet hard under
@@ -1038,7 +1062,7 @@ silently repairs one.
    dynamics, and anything a simulator owns is labeled estimate-grade in its note. The sheet's
    authority ends where the lookup table's does. The standing case is noise: a rule computed
    from the γ-model thermal floor, on a table carrying no measured noise, ships as a
-   `guardrail` with a note saying why — it advises until the table carries measured noise
+   `advisory` with a note saying why — it advises until the table carries measured noise
    density, at which point the rule may be promoted back to a requirement. The exception
    proves the rule: a kT/C noise bound is thermodynamics, not a γ-model estimate, and stays
    a hard requirement.
@@ -1080,21 +1104,21 @@ it is not a pinned tautology):
     { "name": "vstar_floor", "value": 0.2, "unit": "V", "role": "spec",
       "note": "saturation-headroom budget" },
     { "name": "vn_target", "value": 20e-9, "unit": "V/sqrt(Hz)", "role": "spec" },
-    { "name": "V_ds", "value": 0.6, "unit": "V", "role": "spec",
+    { "name": "V_ds", "value": 0.6, "unit": "V", "role": "spec", "class": "independent",
       "note": "drain bias the sizing slices at; body-grounded, so vsb = 0" }
   ],
-  "bind": { "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id", "vds": "V_ds", "vsb": "0" },
-  "rows": [
+  "givens": { "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id", "vds": "V_ds", "vsb": "0" },
+  "equations": [
     { "name": "Cout", "expr": "cgg + CL", "unit": "F" },
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
     { "name": "vn_in", "expr": "vnth_m", "unit": "V/sqrt(Hz)" }
   ],
-  "rules": [
-    { "id": "feasible-inversion", "kind": "invariant", "lhs": "gm_id", "op": "<=", "rhs": "ceiling",
+  "checks": [
+    { "id": "feasible-inversion", "kind": "physical", "lhs": "gm_id", "op": "<=", "rhs": "ceiling",
       "note": "gm/ID cannot exceed the weak-inversion ceiling of the data" },
-    { "id": "headroom", "kind": "invariant", "lhs": "vstar", "op": ">=", "rhs": "vstar_floor" },
-    { "id": "gbw-margin", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
-    { "id": "noise-spec", "kind": "requirement", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" }
+    { "id": "headroom", "kind": "physical", "lhs": "vstar", "op": ">=", "rhs": "vstar_floor" },
+    { "id": "gbw-margin", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "noise-spec", "kind": "spec", "lhs": "vn_in", "op": "<=", "rhs": "vn_target" }
   ]
 }
 ```

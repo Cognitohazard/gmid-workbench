@@ -52,7 +52,7 @@
       "max": 0.8,
       "unit": "V",
       "role": "choice",
-      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
       "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke"
     },
     {
@@ -168,7 +168,7 @@
       "note": "vds sign of the stage-2 device table: +1 N-style, -1 signed-PMOS"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "s2",
       "doc": {
@@ -187,18 +187,18 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "cgg", "vgs", "vdsat"]
+        "provides": ["gm", "gds", "cgg", "vgs", "vdsat"]
       },
       "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" },
       "wiring": { "gate": "V1", "source": "VDD" }
@@ -221,18 +221,18 @@
             "note": "signed to this table's axis convention. The parent drives it from the supply minus the stage-1 output level, which is the V1 row's expression written out — use params are evaluated before rows, so the level is restated here rather than referenced"
           }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat"]
+        "provides": ["gds", "vdsat"]
       },
       "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1", "vx": "ld_sign*abs(s2__vgs)" }
     },
@@ -255,18 +255,18 @@
           },
           { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
       },
       "params": {
         "Ix": "I1/2",
@@ -288,23 +288,23 @@
           { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat"]
+        "provides": ["gds", "vdsat"]
       },
       "params": { "Ix": "I2", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "V1",
       "expr": "VDD - abs(s2__vgs)",
@@ -420,10 +420,10 @@
       "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "gain-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "Av",
       "op": ">=",
       "rhs": "Av_target",
@@ -431,7 +431,7 @@
     },
     {
       "id": "sr-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "SR",
       "op": ">=",
       "rhs": "SR_target",
@@ -439,7 +439,7 @@
     },
     {
       "id": "swing-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "swing_diff",
       "op": ">=",
       "rhs": "swing_target",
@@ -447,7 +447,7 @@
     },
     {
       "id": "gbw-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "GBW",
       "op": ">=",
       "rhs": "GBW_target",
@@ -455,7 +455,7 @@
     },
     {
       "id": "pm-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "PM",
       "op": ">=",
       "rhs": "PM_target",
@@ -463,7 +463,7 @@
     },
     {
       "id": "stage2-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "VDD - V_out2",
       "op": ">=",
       "rhs": "s2__vdsat",
@@ -471,7 +471,7 @@
     },
     {
       "id": "load2-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out2",
       "op": ">=",
       "rhs": "ld2__vdsat",
@@ -479,12 +479,12 @@
     },
     {
       "id": "input-sat-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "V1 - V_tail - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the stage-1 output level V1 that the stage-2 gate sets"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

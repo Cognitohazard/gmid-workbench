@@ -102,7 +102,7 @@
       "note": "1-sigma random ratio-error budget"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "ref",
       "doc": {
@@ -114,18 +114,18 @@
           { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_r",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+        "provides": ["W", "vgs", "vdsat", "gm", "id"]
       },
       "params": {
         "I_ref": "I_in",
@@ -151,18 +151,24 @@
             "note": "the source sits on the mirror node, not the bulk"
           }
         ],
-        "bind": { "L": "L_rc", "id": "I_ref", "gm_id": "gm_id_rc", "diode": true, "vsb": "vsb_rc" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_rc",
+          "id": "I_ref",
+          "gm_id": "gm_id_rc",
+          "diode": true,
+          "vsb": "vsb_rc"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_rc",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["W", "vgs", "vdsat"]
+        "provides": ["W", "vgs", "vdsat"]
       },
       "params": {
         "I_ref": "I_in",
@@ -202,16 +208,16 @@
             "note": "the source sits on the mirror node, not the bulk"
           }
         ],
-        "bind": {
+        "givens": {
           "L": "L_oc",
           "W": "W_out",
           "vgs": "vgs_oc",
           "vds": "vds_oc",
           "vsb": "vsb_oc"
         },
-        "rows": [],
-        "rules": [],
-        "provide": ["vdsat", "id", "W", "gm", "gmb", "gds"]
+        "equations": [],
+        "checks": [],
+        "provides": ["vdsat", "id", "W", "gm", "gmb", "gds"]
       },
       "params": {
         "W_out": "K*ref_casc__W",
@@ -222,8 +228,8 @@
       }
     }
   ],
-  "bind": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "ref__vgs" },
-  "rows": [
+  "givens": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "ref__vgs" },
+  "equations": [
     { "name": "I_out", "expr": "id", "unit": "A" },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
     {
@@ -253,17 +259,17 @@
       "note": "output resistance of the cascoded leg. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series. Both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. This is the number a stage loading the mirror sees"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_m",
       "op": "<=",
       "rhs": "ceiling"
     },
     {
       "id": "compliance",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "ref__vgs + out_casc__vdsat + v_margin",
@@ -271,7 +277,7 @@
     },
     {
       "id": "systematic-error",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "abs(sys_err)",
       "op": "<=",
       "rhs": "err_target",
@@ -279,19 +285,19 @@
     },
     {
       "id": "random-matching",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "sigma_ratio",
       "op": "<=",
       "rhs": "match_target"
     },
     {
       "id": "ref-stack-headroom",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "v_in_ref",
       "op": "<=",
       "rhs": "VDD",
       "note": "the two stacked diode drops of the reference branch must fit under the supply"
     }
   ],
-  "provide": ["Rout"]
+  "provides": ["Rout"]
 }

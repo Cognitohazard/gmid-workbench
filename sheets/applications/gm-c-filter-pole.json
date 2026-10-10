@@ -110,8 +110,8 @@
       "note": "how many times faster than f_c the transconductor must be"
     }
   ],
-  "bind": { "L": "L", "gm": "2*pi*f_c*C_int*(1 + od_factor)", "gm_id": "gm_id", "vds": "vds" },
-  "rows": [
+  "givens": { "L": "L", "gm": "2*pi*f_c*C_int*(1 + od_factor)", "gm_id": "gm_id", "vds": "vds" },
+  "equations": [
     {
       "name": "V_lin",
       "expr": "vstar",
@@ -149,10 +149,10 @@
       "note": "transconductor transit frequency from its own gate cap"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -160,7 +160,7 @@
     },
     {
       "id": "headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "vstar",
       "op": ">=",
       "rhs": "vstar_floor",
@@ -168,7 +168,7 @@
     },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_int",
       "op": "<=",
       "rhs": "vn_target",
@@ -176,7 +176,7 @@
     },
     {
       "id": "dynamic-range",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "DR_dB",
       "op": ">=",
       "rhs": "DR_target",
@@ -184,7 +184,7 @@
     },
     {
       "id": "device-fast-enough",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "ft_dev",
       "op": ">=",
       "rhs": "ft_margin*f_c",

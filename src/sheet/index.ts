@@ -29,6 +29,7 @@ import { evaluateSheet, type DeviceResolver } from './eval';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 
 export * from './types';
+export * from './legacy';
 export * from './eval';
 // Named rather than `export *`: validate.ts also exports reachedBinds, for a test that holds it
 // and dcInputs to the same reach, and that is not public API.
@@ -85,13 +86,13 @@ export const SWEEP_POINTS = 41;
  * below the top sheet.
  */
 function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepRule[]): void {
-  for (const r of doc.rules) {
+  for (const r of doc.checks) {
     if (prefix === '' || isHardRule(r.kind))
       into.push({ id: prefix + r.id, kind: r.kind, marginPct: [] });
   }
   // A docless (unresolved-ref) use has no visible rules; the sweep is all-infeasible
   // there anyway via eval's fail-closed guard.
-  for (const u of doc.uses ?? []) {
+  for (const u of doc.blocks ?? []) {
     if (u.doc) collectTreeRules(u.doc, `${prefix}${u.name}.`, into);
   }
 }
@@ -248,12 +249,14 @@ export function sweepSheet(
   // Each containment edge rides the sweep as ONE aggregate curve: its worst hard-rule
   // margin per sample. Without it a cell can flip infeasible with no on-chart cause — the
   // same gap collectTreeRules closes for descendant rules. Held in a parallel array
-  // (res.edges mirrors doc.edges by index), so the sample loop needs no id matching.
+  // (res.edges mirrors doc.operatingRange by index), so the sample loop needs no id matching.
   // Array.isArray, not truthiness, for the reason evaluateSheet's edges guard gives (eval.ts) — a
   // malformed persisted doc must degrade to a sweep with no coverage curves, not throw out of .map.
-  const edgeRules: SheetSweepRule[] = (Array.isArray(r.doc.edges) ? r.doc.edges : []).map((e) => ({
+  const edgeRules: SheetSweepRule[] = (
+    Array.isArray(r.doc.operatingRange) ? r.doc.operatingRange : []
+  ).map((e) => ({
     id: e.name + EDGE_SEP,
-    kind: 'requirement',
+    kind: 'spec',
     marginPct: [],
     edge: e.name,
   }));

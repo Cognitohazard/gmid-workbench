@@ -68,7 +68,7 @@ export interface SheetVar {
    * `held` is set by the engine, never authored: it marks the pin a fixed-hardware run generates
    * from a `hold` (see below).
    */
-  pin?: { lhs: string; rhs: string; held?: boolean };
+  designConstraint?: { lhs: string; rhs: string; held?: boolean };
   /**
    * Marks this param as a node voltage that hangs under a transistor's gate — a cascode's source,
    * a pair's tail — and names the quantity that stays FIXED when the hardware does: the gate
@@ -113,9 +113,11 @@ export interface SheetVar {
 export type ParamClass = 'independent' | 'assumed';
 export const PARAM_CLASSES: ReadonlySet<string> = new Set<ParamClass>(['independent', 'assumed']);
 
-/** Type guard: a param the engine PINS via bracketed inversion (see SheetVar.pin). */
-export function pinned(p: SheetVar): p is SheetVar & { pin: { lhs: string; rhs: string } } {
-  return typeof p.pin?.lhs === 'string' && typeof p.pin?.rhs === 'string';
+/** Type guard: a param the engine PINS via bracketed inversion (see SheetVar.designConstraint). */
+export function pinned(
+  p: SheetVar,
+): p is SheetVar & { designConstraint: { lhs: string; rhs: string; held?: boolean } } {
+  return typeof p.designConstraint?.lhs === 'string' && typeof p.designConstraint?.rhs === 'string';
 }
 
 /** Type guard: a param whose named expression is held where the hardware is (see SheetVar.hold). */
@@ -128,7 +130,7 @@ export function holds(p: SheetVar): p is SheetVar & { hold: string } {
  *  performs it and the validator that checks the solve order it will need. */
 export function holdAsPin(p: SheetVar & { hold: string }, rhs: string): SheetVar {
   const { hold, ...rest } = p;
-  return { ...rest, pin: { lhs: hold, rhs, held: true } };
+  return { ...rest, designConstraint: { lhs: hold, rhs, held: true } };
 }
 
 /**
@@ -139,7 +141,7 @@ export function holdAsPin(p: SheetVar & { hold: string }, rhs: string): SheetVar
  * authored value with no warning, and the sheet reported feasible on a design never solved.
  */
 export function pinProblem(params: readonly SheetVar[]): string | null {
-  const half = params.find((p) => p.pin !== undefined && !pinned(p));
+  const half = params.find((p) => p.designConstraint !== undefined && !pinned(p));
   if (half)
     return (
       `param "${half.name}": pin needs both lhs and rhs — half-written, it would freeze the ` +
@@ -161,7 +163,7 @@ export function pinProblem(params: readonly SheetVar[]): string | null {
       `bracket, not slider bounds`
     );
   const held = params.filter(holds);
-  const twice = held.find((p) => p.pin !== undefined || torn(p));
+  const twice = held.find((p) => p.designConstraint !== undefined || torn(p));
   if (twice)
     return (
       `param "${twice.name}" carries hold and is also pinned or a tearing variable — a param ` +
@@ -286,23 +288,18 @@ export const BIND_FLAGS: ReadonlySet<string> = new Set<string>(['diode']);
 // invariant = a hard physical floor (must hold or the design is unphysical); requirement = a
 // hard application spec (must hold or the design misses its purpose) — both gate feasibility.
 // guardrail = a soft advisory (a near-miss heads-up) that is shown but never blocks feasibility.
-export type RuleKind = 'invariant' | 'guardrail' | 'requirement';
+export type RuleKind = 'physical' | 'advisory' | 'spec';
 
 /** True for the kinds that GATE feasibility. The one home for "hardness" — the leaf
  *  verdict, the sweep rule collection, and binding-rule attribution all consult this
  *  whitelist, so a future advisory kind cannot be silently promoted to hard by a
- *  `!== 'guardrail'` blacklist somewhere. */
-export const isHardRule = (kind: RuleKind): boolean =>
-  kind === 'invariant' || kind === 'requirement';
+ *  `!== 'advisory'` blacklist somewhere. */
+export const isHardRule = (kind: RuleKind): boolean => kind === 'physical' || kind === 'spec';
 export type RuleOp = '>=' | '<=' | '==';
 
 /** Runtime membership sets mirroring the RuleKind/RuleOp unions — one place to coerce untrusted
  *  input (saved layouts, raw core callers). Typed ReadonlySet<string> so `.has(rawString)` works. */
-export const RULE_KINDS: ReadonlySet<string> = new Set<RuleKind>([
-  'invariant',
-  'guardrail',
-  'requirement',
-]);
+export const RULE_KINDS: ReadonlySet<string> = new Set<RuleKind>(['physical', 'advisory', 'spec']);
 export const RULE_OPS: ReadonlySet<string> = new Set<RuleOp>(['>=', '<=', '==']);
 
 /**
@@ -421,12 +418,12 @@ export function engineSolved(p: SheetVar): boolean {
  *  under `solveFor` or `pin` is solved by the engine, not set by anyone — and a pinned param's
  *  min/max are its bisection bracket, not slider bounds — so both are excluded. */
 export function sweepable(
-  v: { min?: number; max?: number; solveFor?: string; pin?: unknown } | undefined,
+  v: { min?: number; max?: number; solveFor?: string; designConstraint?: unknown } | undefined,
 ): v is { min: number; max: number } {
   return (
     !!v &&
     !v.solveFor &&
-    !v.pin &&
+    !v.designConstraint &&
     v.min !== undefined &&
     v.max !== undefined &&
     Number.isFinite(v.min) &&
@@ -463,7 +460,7 @@ export const splitProvide = (name: string): [string, string] | undefined => {
  *  declares, each joined to the use name. A ref-only use (no embedded doc yet) injects nothing
  *  — its list arrives at resolution. One spelling of "a block exposes only what it provides". */
 export const providedNames = (u: SheetUse): string[] =>
-  (u.doc?.provide ?? []).map((k) => joinProvide(u.name, k));
+  (u.doc?.provides ?? []).map((k) => joinProvide(u.name, k));
 
 /**
  * A private deep copy of a sheet document — the one clone every caller uses before editing a
@@ -551,12 +548,12 @@ export interface SheetDoc {
   description?: string;
   polarity: 'n' | 'p'; // a self-description label only; no contract enforced at leaf
   params: SheetVar[];
-  bind?: SheetBind;
-  rows: SheetRow[];
-  rules: SheetRule[];
-  uses?: SheetUse[];
-  provide?: string[];
-  edges?: SheetEdge[];
+  givens?: SheetBind;
+  equations: SheetRow[];
+  checks: SheetRule[];
+  blocks?: SheetUse[];
+  provides?: string[];
+  operatingRange?: SheetEdge[];
 }
 
 /**
@@ -568,7 +565,7 @@ export interface SheetDoc {
  * new field belongs HERE, in the same edit that adds it to its interface.
  */
 export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
-  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'pin', 'hold', 'class',
+  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'designConstraint', 'hold', 'class',
 ]); // prettier-ignore
 export const ROW_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
 export const RULE_KEYS: ReadonlySet<string> = new Set<string>([
@@ -579,7 +576,8 @@ export const USE_KEYS: ReadonlySet<string> = new Set<string>([
 ]); // prettier-ignore
 export const EDGE_KEYS: ReadonlySet<string> = new Set<string>(['name', 'set', 'note']);
 export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
-  'title', 'description', 'polarity', 'params', 'bind', 'rows', 'rules', 'uses', 'provide', 'edges',
+  'title', 'description', 'polarity', 'params', 'givens', 'equations', 'checks', 'blocks',
+  'provides', 'operatingRange',
 ]); // prettier-ignore
 
 /**
@@ -592,23 +590,23 @@ export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
  */
 export function docExpressions(doc: SheetDoc): string[] {
   const out: string[] = [];
-  if (doc.bind) {
-    for (const [k, v] of Object.entries(doc.bind)) {
+  if (doc.givens) {
+    for (const [k, v] of Object.entries(doc.givens)) {
       if (!BIND_FLAGS.has(k) && typeof v === 'string') out.push(v);
     }
   }
   for (const p of doc.params) {
-    if (pinned(p)) out.push(p.pin.lhs, p.pin.rhs);
+    if (pinned(p)) out.push(p.designConstraint.lhs, p.designConstraint.rhs);
     if (torn(p)) out.push(p.solveFor);
     if (holds(p)) out.push(p.hold);
   }
-  for (const r of doc.rows) out.push(r.expr);
-  for (const r of doc.rules) out.push(r.lhs, r.rhs);
-  for (const u of doc.uses ?? []) {
+  for (const r of doc.equations) out.push(r.expr);
+  for (const r of doc.checks) out.push(r.lhs, r.rhs);
+  for (const u of doc.blocks ?? []) {
     out.push(...Object.values(u.params ?? {}));
     if (u.wiring) out.push(u.wiring.gate, u.wiring.source);
   }
-  for (const e of doc.edges ?? []) out.push(...Object.values(e.set));
+  for (const e of doc.operatingRange ?? []) out.push(...Object.values(e.set));
   return out;
 }
 

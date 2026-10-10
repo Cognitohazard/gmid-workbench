@@ -108,8 +108,8 @@
       "note": "input-device saturation-headroom floor"
     }
   ],
-  "bind": { "L": "L_in", "id": "I_int", "gm_id": "gm_id_in", "vds": "vds_in" },
-  "rows": [
+  "givens": { "L": "L_in", "id": "I_int", "gm_id": "gm_id_in", "vds": "vds_in" },
+  "equations": [
     {
       "name": "t_int",
       "expr": "C_int*dV_int/I_int",
@@ -141,10 +141,10 @@
       "note": "integration plus exponential regeneration from dV_int to the logic level; estimate"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_in",
       "op": "<=",
       "rhs": "ceiling",
@@ -152,7 +152,7 @@
     },
     {
       "id": "headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "vstar",
       "op": ">=",
       "rhs": "vstar_floor",
@@ -160,7 +160,7 @@
     },
     {
       "id": "offset-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "vos",
       "op": "<=",
       "rhs": "vos_target",
@@ -168,7 +168,7 @@
     },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "sigma_n",
       "op": "<=",
       "rhs": "noise_target",
@@ -176,7 +176,7 @@
     },
     {
       "id": "decision-time",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "t_decide",
       "op": "<=",
       "rhs": "T_clk_half",

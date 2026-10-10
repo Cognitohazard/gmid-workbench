@@ -162,7 +162,7 @@
   // cause as a hint; never auto-flip (sign params are author math, not app state).
   const signHints = $derived.by(() => {
     const out: string[] = [];
-    for (const u of rr.doc.uses ?? []) {
+    for (const u of rr.doc.blocks ?? []) {
       if (!u.device || !resolveDevice) continue;
       const t = resolveDevice(u.device);
       if (!t) continue;
@@ -223,7 +223,7 @@
   const runs = $derived(primary ? runVariants(cfg, primary, keys, bench.familyOf, refs) : []);
   // Whether coverage is a question about this design AT ALL — read from the doc, because when
   // nothing was evaluated the runs cannot tell "claims no range" from "claims went unchecked".
-  const hasEdges = $derived((rr.doc.edges ?? []).length > 0);
+  const hasEdges = $derived((rr.doc.operatingRange ?? []).length > 0);
   const agg = $derived(aggregateVariantRuns(runs, hasEdges));
 
   // The run whose numbers the detail below belongs to: the nominal condition when it is in the
@@ -556,7 +556,7 @@
       x: swept.x,
       lines: swept.rules.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
       lineLabels: swept.rules.map(ruleLabel),
-      lineDash: swept.rules.map((r) => (r.kind === 'guardrail' ? [4, 3] : null)),
+      lineDash: swept.rules.map((r) => (r.kind === 'advisory' ? [4, 3] : null)),
       yRange: [-MARGIN_CLIP, MARGIN_CLIP],
     };
   });
@@ -611,12 +611,12 @@
   // Point a composed child at a specific loaded device (a family binding), or '' to inherit the
   // parent.
   function setUseDevice(i: number, uid: string): void {
-    const uses = (cfg.uses ?? []).map((u, j) => {
+    const uses = (cfg.blocks ?? []).map((u, j) => {
       if (j !== i) return u;
       const { device: _drop, ...rest } = u;
       return uid ? { ...rest, device: uid } : rest;
     });
-    onChange({ ...cfg, uses });
+    onChange({ ...cfg, blocks: uses });
   }
 
   // ── Per-block operating point. A sheet sizes one device per bind at its OWN vds/vsb; a
@@ -639,19 +639,19 @@
   function setBias(path: number[], axis: string, value: number | null): void {
     const edit = (doc: SheetDoc, depth: number): SheetDoc => {
       if (depth === path.length) {
-        if (!doc.bind) return doc;
-        const bind = { ...doc.bind } as SheetBind & Record<string, string | undefined>;
+        if (!doc.givens) return doc;
+        const bind = { ...doc.givens } as SheetBind & Record<string, string | undefined>;
         if (value == null || !Number.isFinite(value)) delete bind[axis];
         else bind[axis] = String(value);
-        return { ...doc, bind };
+        return { ...doc, givens: bind };
       }
       const i = path[depth];
       // A docless (by-reference) use has nothing local to write into — the control is
       // not rendered for those, so this is just the fail-safe.
-      const uses = (doc.uses ?? []).map((u, j) =>
+      const uses = (doc.blocks ?? []).map((u, j) =>
         j === i && u.doc ? { ...u, doc: edit(u.doc, depth + 1) } : u,
       );
-      return { ...doc, uses };
+      return { ...doc, blocks: uses };
     };
     onChange(edit(cfg, 0));
   }
@@ -668,7 +668,7 @@
     const inline = cloneDoc(hit.doc);
     const edit = (doc: SheetDoc, depth: number): SheetDoc => ({
       ...doc,
-      uses: (doc.uses ?? []).map((c, j) => {
+      blocks: (doc.blocks ?? []).map((c, j) => {
         if (j !== path[depth]) return c;
         if (depth === path.length - 1) {
           const { ref: _drop, ...rest } = c;
@@ -682,7 +682,7 @@
 
   // Any by-reference use anywhere in the authored tree? Gates the flatten button.
   const docHasRefs = (d: SheetDoc): boolean =>
-    (d.uses ?? []).some((u) => u.ref !== undefined || (u.doc ? docHasRefs(u.doc) : false));
+    (d.blocks ?? []).some((u) => u.ref !== undefined || (u.doc ? docHasRefs(u.doc) : false));
   const hasRefs = $derived(docHasRefs(cfg));
 
   // The AUTHORED use at `path` (childCard renders the resolved tree, which cannot tell
@@ -692,7 +692,7 @@
     let u: SheetUse | undefined;
     let d: SheetDoc | undefined = cfg;
     for (const i of path) {
-      u = d?.uses?.[i];
+      u = d?.blocks?.[i];
       d = u?.doc;
     }
     return u;
@@ -732,6 +732,12 @@
     download(`${name}.json`, href, true);
   }
 
+  /** The words the rule table and its help use for the three check kinds. */
+  const KIND_LABEL: Record<SheetRule['kind'], string> = {
+    physical: 'invariant',
+    spec: 'requirement',
+    advisory: 'guardrail · advisory',
+  };
   const fmt = (v: number | undefined): string =>
     v == null || !Number.isFinite(v) ? '—' : formatSI(v);
   /** A signed change, for the sensitivity readout: an explicit '+' so the direction reads at a
@@ -767,7 +773,7 @@
     'does-not-cover': 'no',
     'not-checked': 'skip',
   };
-  const edgeNote = $derived(new Map((cfg.edges ?? []).map((e) => [e.name, e.note])));
+  const edgeNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
   /** The run's own non-info diagnostics — a bias clamp fires exactly at a claim's extreme,
    *  and a green chip must not hide that it rests on clamped data. */
   const edgeWarns = (e: SheetEdgeReport): QAWarning[] =>
@@ -795,9 +801,9 @@
   const CHIP: Record<RuleStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author rule notes by id (a RuleResult carries no note — the physical-meaning note lives on the
-  // authored SheetRule). Top-level result.rules mirror cfg.rules 1:1, so the id lookup is exact.
-  const ruleNote = $derived(new Map(cfg.rules.map((r) => [r.id, r.note])));
-  const ruleWhy = $derived(new Map(cfg.rules.map((r) => [r.id, r.justification])));
+  // authored SheetRule). Top-level result.rules mirror cfg.checks 1:1, so the id lookup is exact.
+  const ruleNote = $derived(new Map(cfg.checks.map((r) => [r.id, r.note])));
+  const ruleWhy = $derived(new Map(cfg.checks.map((r) => [r.id, r.justification])));
   // A rule row's tooltip carries the rule-SPECIFIC bits (its authored physical-meaning note and any
   // eval detail); the generic kind/amber/na explanations live on their own elements via CONTROL_HELP.
   // A rule's authored prose for the row tooltip. `justification` is the author's stated reason
@@ -834,7 +840,7 @@
   // An infeasible child's failing HARD rules (advisory guardrails excluded) — so the cause of a
   // red child block is on screen, not just its ✗.
   const childFails = (c: SheetChildReport | undefined): RuleResult[] =>
-    c && !c.feasible ? c.rules.filter((r) => r.kind !== 'guardrail' && r.status === 'fail') : [];
+    c && !c.feasible ? c.rules.filter((r) => r.kind !== 'advisory' && r.status === 'fail') : [];
 
   // A pin whose bisection never landed leaves `values[name]` at the last PROBE — a bracket end,
   // not a solved node — so the field must not present it as the value the design used. The solver
@@ -1081,7 +1087,7 @@
     <!-- A referenced block's bind belongs to the library sheet — no in-place bias editor
          (the applied operating point still shows in the sizing line; params remain the
          customization channel, and detach makes the internals local). -->
-    {#if !isRef}{@render biasCtl(use?.doc?.bind, c?.bind, path)}{/if}
+    {#if !isRef}{@render biasCtl(use?.doc?.givens, c?.bind, path)}{/if}
     {#if c && Object.keys(c.provides).length}
       <div class="prov" title={CONTROL_HELP.provide}>
         {#each Object.entries(c.provides) as [k, v]}<code
@@ -1091,7 +1097,7 @@
     {/if}
     {#if childFails(c).length}
       <div class="cfails">
-        {#each childFails(c) as r}<span class="cfail" title={ruleTitle(r, use?.doc?.rules ?? [])}
+        {#each childFails(c) as r}<span class="cfail" title={ruleTitle(r, use?.doc?.checks ?? [])}
             >✗ {r.id} {pct(r.marginPct)}</span
           >{/each}
       </div>
@@ -1100,7 +1106,7 @@
       <div class="skids">
         {#each c.children as gc, k}{@render childCard(
             gc,
-            use?.doc?.uses?.[k],
+            use?.doc?.blocks?.[k],
             [...path, k],
             isRef,
           )}{/each}
@@ -1188,7 +1194,7 @@
       {:else}
         <span class="perr" title={result.bind.error}>sizing: {result.bind.error}</span>
       {/if}
-      {@render biasCtl(cfg.bind, result.bind, [])}
+      {@render biasCtl(cfg.givens, result.bind, [])}
     {/if}
     {#if sweepable.length}
       <label class="swsel" title={CONTROL_HELP.sheetSweep}>
@@ -1408,20 +1414,20 @@
        refused before the engine ran has none, and nothing here invents them. -->
   <!-- Outside the evaluated gate: these carry each block's device choice, which is exactly what
        a designer reaches for when a condition was refused for want of one. -->
-  {#if cfg.uses?.length}
+  {#if cfg.blocks?.length}
     <div class="suses">
       <span class="glabel" title={CONTROL_HELP.provide}>composed blocks</span>
-      {#each cfg.uses as _u, i}
-        {@render childCard(result?.children?.[i], rr.doc.uses?.[i], [i], false)}
+      {#each cfg.blocks as _u, i}
+        {@render childCard(result?.children?.[i], rr.doc.blocks?.[i], [i], false)}
       {/each}
     </div>
   {/if}
 
   {#if result}
     {@const res = result}
-    {#if cfg.rows.length}
+    {#if cfg.equations.length}
       <div class="srows">
-        {#each cfg.rows as row}
+        {#each cfg.equations as row}
           <div class="srow">
             <span class="seq"
               ><b>{@html qLabel(row.name)}</b> = {@html qFormula(row.expr)} =
@@ -1436,7 +1442,7 @@
     <table class="srules">
       <tbody>
         {#each res.rules as r}
-          <tr class="st-{r.status}" class:advisory={r.kind === 'guardrail'} title={ruleTitle(r)}>
+          <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={ruleTitle(r)}>
             <td
               class="chip"
               title={r.status === 'amber'
@@ -1445,11 +1451,7 @@
                   ? CONTROL_HELP.ruleNa
                   : undefined}>{CHIP[r.status]}</td
             >
-            <td class="rid"
-              >{r.id}<i title={CONTROL_HELP.ruleKind}
-                >{r.kind === 'guardrail' ? 'guardrail · advisory' : r.kind}</i
-              ></td
-            >
+            <td class="rid">{r.id}<i title={CONTROL_HELP.ruleKind}>{KIND_LABEL[r.kind]}</i></td>
             <td class="rtext">
               <span class="req">{@html qFormula(r.text)}</span>
               {#if ruleNote.get(r.id)}<span class="snote"
@@ -1512,7 +1514,7 @@
       {:else}
         margin (%) vs <b>{active}</b>{#if sweptUnit}
           ({sweptUnit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory); clipped
-        at ±{MARGIN_CLIP}%{#if (cfg.edges ?? []).length}
+        at ±{MARGIN_CLIP}%{#if (cfg.operatingRange ?? []).length}
           · each sample checks its OWN design at the claimed range ends, so the coverage curves move
           with the sweep{/if}
       {/if}
@@ -1532,7 +1534,7 @@
           <span class="kitem"
             ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{ruleLabel(
               r,
-            )}{#if r.kind === 'guardrail'}&nbsp;·&nbsp;adv{/if}</span
+            )}{#if r.kind === 'advisory'}&nbsp;·&nbsp;adv{/if}</span
           >
         {/each}
       {/if}

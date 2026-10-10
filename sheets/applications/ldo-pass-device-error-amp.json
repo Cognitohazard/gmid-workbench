@@ -74,8 +74,8 @@
       "note": "minimum DC loop gain for regulation accuracy"
     }
   ],
-  "bind": { "L": "L_pass", "id": "I_load_max", "gm_id": "gm_id_pass", "vds": "V_dropout" },
-  "rows": [
+  "givens": { "L": "L_pass", "id": "I_load_max", "gm_id": "gm_id_pass", "vds": "V_dropout" },
+  "equations": [
     {
       "name": "gm_pass",
       "expr": "gm",
@@ -101,10 +101,10 @@
       "note": "low-frequency PSRR ~ the DC loop gain; estimate, sim signs off"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_pass",
       "op": "<=",
       "rhs": "ceiling",
@@ -112,7 +112,7 @@
     },
     {
       "id": "dropout",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "vdsat",
       "op": "<=",
       "rhs": "V_dropout",
@@ -120,7 +120,7 @@
     },
     {
       "id": "quiescent-budget",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "I_q_ea",
       "op": "<=",
       "rhs": "I_q_budget",
@@ -128,7 +128,7 @@
     },
     {
       "id": "load-regulation",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "dVout_dI",
       "op": "<=",
       "rhs": "loadreg_target",
@@ -136,7 +136,7 @@
     },
     {
       "id": "loop-gain",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "A_loop",
       "op": ">=",
       "rhs": "A_loop_min",

@@ -117,13 +117,13 @@ const STANDIN_TARGETS: readonly string[] = ['vgs', 'vth'];
 function standInEstimates(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
   const paramByName = new Map(doc.params.map((p) => [p.name, p]));
-  const ruleNames = doc.rules.map((r) => ({
+  const ruleNames = doc.checks.map((r) => ({
     id: r.id,
     absArgs: [...absArgNames(r.lhs), ...absArgNames(r.rhs)],
   }));
 
-  for (const use of doc.uses ?? []) {
-    const bind = use.doc?.bind;
+  for (const use of doc.blocks ?? []) {
+    const bind = use.doc?.givens;
     if (!bind) continue;
     const provided = new Set(providedNames(use));
     for (const axis of BIAS_AXES) {
@@ -280,7 +280,7 @@ const nodeKey = (expr: string): string => expr.replace(/\s+/g, '');
 function untiedGates(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
   const groups = new Map<string, { gate: string; source: string; uses: SheetUse[] }>();
-  for (const use of doc.uses ?? []) {
+  for (const use of doc.blocks ?? []) {
     // `unknown`, as in wiringProblems: a persisted document arrives unverified. A half-written
     // or unparseable declaration names no node pair, and wiringProblems already reports it.
     const w = use.wiring as unknown as Record<string, unknown> | undefined;
@@ -296,7 +296,7 @@ function untiedGates(doc: SheetDoc): QAWarning[] {
     // revalidates the resolved doc), and one with no bind sizes no device. Neither can be ruled
     // on, so drop it and rule on the rest — dropping the whole GROUP instead would let one
     // unresolved sibling hide a real pair beside it.
-    const sized = uses.filter((u) => u.doc?.bind);
+    const sized = uses.filter((u) => u.doc?.givens);
     if (sized.length < 2) continue;
     const untied = sized.filter((u) => !tiedToPeer(u, sized));
     if (untied.length < 2) continue;
@@ -320,7 +320,7 @@ function untiedGates(doc: SheetDoc): QAWarning[] {
  *  from the child's own bind and, when that bind names a child param, from the parent's override
  *  of it, which is where the cross-block name normally lives. */
 function tiedToPeer(use: SheetUse, peers: readonly SheetUse[]): boolean {
-  const expr = use.doc?.bind?.vgs;
+  const expr = use.doc?.givens?.vgs;
   if (expr === undefined) return false;
   const override = use.params?.[expr.trim()];
   const names = [...namesOf(expr), ...(override === undefined ? [] : namesOf(override))];
@@ -366,8 +366,8 @@ const META_PUBLISHED: ReadonlySet<string> = new Set(Object.keys(metaScalars({ W:
  */
 function provideCoverage(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
-  const uses = new Map((doc.uses ?? []).map((u) => [u.name, u]));
-  const injected = new Set((doc.uses ?? []).flatMap(providedNames));
+  const uses = new Map((doc.blocks ?? []).map((u) => [u.name, u]));
+  const injected = new Set((doc.blocks ?? []).flatMap(providedNames));
 
   const reported = new Set<string>();
   for (const expr of docExpressions(doc)) {
@@ -394,10 +394,13 @@ function provideCoverage(doc: SheetDoc): QAWarning[] {
 
   // A sheet that sizes a device publishes the whole table at the operating point, which no
   // static list can enumerate — so the downward half does not run for it.
-  if (doc.bind) return out;
+  if (doc.givens) return out;
 
-  const own = new Set<string>([...doc.params.map((p) => p.name), ...doc.rows.map((r) => r.name)]);
-  for (const key of doc.provide ?? []) {
+  const own = new Set<string>([
+    ...doc.params.map((p) => p.name),
+    ...doc.equations.map((r) => r.name),
+  ]);
+  for (const key of doc.provides ?? []) {
     // A separator-bearing key is the re-export idiom, and `sheet-provide` already rules on
     // whether it names a real grandchild — from the USE site, so a child's bad re-export is
     // reported once there rather than twice.
@@ -418,7 +421,7 @@ function provideCoverage(doc: SheetDoc): QAWarning[] {
 /** The names an engine-solved param's own defining relation reads: a pinned param depends on
  *  both sides of its relation, a torn one on the name it solves for. */
 function solvedDeps(p: SheetVar): readonly string[] {
-  if (pinned(p)) return [...namesOf(p.pin.lhs), ...namesOf(p.pin.rhs)];
+  if (pinned(p)) return [...namesOf(p.designConstraint.lhs), ...namesOf(p.designConstraint.rhs)];
   return torn(p) ? [p.solveFor] : [];
 }
 
@@ -447,7 +450,7 @@ function levelsOf(doc: SheetDoc): Level[] {
   const enroll = (lv: Level, depth: number): void => {
     levels.push(lv);
     if (depth >= MAX_USE_DEPTH) return;
-    for (const use of lv.doc.uses ?? []) {
+    for (const use of lv.doc.blocks ?? []) {
       if (!use.doc || lv.kids.has(use.name)) continue;
       const kid = childLevel(lv, use, use.doc);
       lv.kids.set(use.name, kid);
@@ -589,18 +592,18 @@ function overrideEdge(lv: Level, name: string, policy: TraversalPolicy): Edge | 
 function provideEdges(kid: Level, key: string, policy: TraversalPolicy): Edge[] {
   const inside: Edge = { kind: 'provide', lv: kid, names: [key] };
   const device: Edge = { kind: 'device', lv: kid, key };
-  if (!kid.doc.bind) return [inside];
+  if (!kid.doc.givens) return [inside];
   if (policy.sizingProvides) return policy.held?.has(key) ? [inside] : [inside, device];
   const own =
     key.includes(PROVIDE_SEP) ||
     kid.doc.params.some((q) => q.name === key) ||
-    kid.doc.rows.some((r) => r.name === key);
+    kid.doc.equations.some((r) => r.name === key);
   return own ? [inside] : [device];
 }
 
 /** A device's own links: each bound expression, keyed by the quantity it binds. */
 const bindEdges = (lv: Level): Reads[] =>
-  Object.entries(lv.doc.bind ?? {}).flatMap(([k, v]): Reads[] =>
+  Object.entries(lv.doc.givens ?? {}).flatMap(([k, v]): Reads[] =>
     !BIND_FLAGS.has(k) && typeof v === 'string'
       ? [{ kind: 'bind', lv, names: namesOf(v), key: k }]
       : [],
@@ -626,19 +629,19 @@ function edgesOf(lv: Level, name: string, sized: boolean, policy: TraversalPolic
     if (engineSolved(p)) out.push(solvedEdge(lv, p));
     // Containment edges are a top-of-tree feature; a composed child's are never run.
     if (policy.edgeSets && lv.path === '')
-      for (const e of lv.doc.edges ?? []) {
+      for (const e of lv.doc.operatingRange ?? []) {
         const sub: unknown = e.set?.[name];
         if (typeof sub === 'string') out.push({ kind: 'set', lv, names: namesOf(sub) });
       }
     return out;
   }
-  const row = lv.doc.rows.find((r) => r.name === name);
+  const row = lv.doc.equations.find((r) => r.name === name);
   if (row) return [rowEdge(lv, row)];
   const split = splitProvide(name);
   const kid = split && lv.kids.get(split[0]);
-  if (split && kid && (kid.doc.provide ?? []).includes(split[1]))
+  if (split && kid && (kid.doc.provides ?? []).includes(split[1]))
     return provideEdges(kid, split[1], policy);
-  if (lv.doc.bind && (DEVICE_QUANTITIES.has(name) || sized))
+  if (lv.doc.givens && (DEVICE_QUANTITIES.has(name) || sized))
     return [{ kind: 'device', lv, key: name }];
   return META_PUBLISHED.has(name) ? [{ kind: 'meta' }] : [];
 }
@@ -828,7 +831,7 @@ export function dcInputs(doc: SheetDoc): DcInputs {
   const roots: Roots = new Map();
   const cycles: DcInputs['cycles'] = [];
   for (const start of levels) {
-    if (!start.doc.bind) continue;
+    if (!start.doc.givens) continue;
     const { device, found } = walkBack(PROVENANCE, roots, start);
     device(start, undefined, false);
     if (found.loop) cycles.push({ device: blockPath(start.path), via: found.loop });
@@ -943,9 +946,14 @@ export function pinPlan(
   for (const lv of levelsOf(tree)) {
     for (const p of lv.doc.params.filter(pinned)) {
       const level = lv.path.endsWith(PATH_SEP) ? lv.path.slice(0, -PATH_SEP.length) : lv.path;
-      const { pins, unresolved } = exprRoots(tree, level, `(${p.pin.lhs}) - (${p.pin.rhs})`, {
-        residual: p.name,
-      });
+      const { pins, unresolved } = exprRoots(
+        tree,
+        level,
+        `(${p.designConstraint.lhs}) - (${p.designConstraint.rhs})`,
+        {
+          residual: p.name,
+        },
+      );
       reads.set(`${lv.path}${p.name}`, pins);
       if (unresolved.length) unplaced.set(`${lv.path}${p.name}`, unresolved);
     }
@@ -1025,7 +1033,7 @@ const quoted = (ks: string[]): string => ks.map((k) => `"${k}"`).join(', ');
  *  device, the use path for anything below. */
 export interface ReachedBind {
   path: string;
-  bind: NonNullable<SheetDoc['bind']>;
+  bind: NonNullable<SheetDoc['givens']>;
   reached: ReadonlySet<string>;
 }
 
@@ -1070,7 +1078,7 @@ function movedBy(
   const reads = (e: Edge | undefined, from: ReadonlySet<string>): boolean =>
     e !== undefined && 'names' in e && e.names.some((n) => from.has(n));
   const sources: readonly (readonly [string, Edge])[] = [
-    ...lv.doc.rows.map((r) => [r.name, rowEdge(lv, r)] as const),
+    ...lv.doc.equations.map((r) => [r.name, rowEdge(lv, r)] as const),
     ...lv.doc.params.filter(engineSolved).map((p) => [p.name, solvedEdge(lv, p)] as const),
     // A held node is re-solved at a range end from the expression it holds, so it moves with
     // whatever that expression reads.
@@ -1090,7 +1098,7 @@ function movedBy(
     }
   };
   close();
-  for (const use of lv.doc.uses ?? []) {
+  for (const use of lv.doc.blocks ?? []) {
     if (!use.doc || depth >= MAX_USE_DEPTH) continue;
     const kid = childLevel(lv, use, use.doc);
     const seed = Object.keys(use.params ?? {}).filter((k) =>
@@ -1107,7 +1115,7 @@ function movedBy(
     // construction, and an authored `id` moves only when its own expression does, which the
     // closure already covers.
     const sizingMoved = bindEdges(kid).some((e) => reads(e, inner));
-    for (const key of use.doc.provide ?? [])
+    for (const key of use.doc.provides ?? [])
       if (
         provideEdges(kid, key, MOVEMENT).some((e) =>
           e.kind === 'device' ? sizingMoved : reads(e, inner),
@@ -1117,7 +1125,7 @@ function movedBy(
     close();
   }
   // Pushed last, because a block's own bind evaluates after the children it composes.
-  if (lv.doc.bind) out.push({ path: blockPath(lv.path), bind: lv.doc.bind, reached });
+  if (lv.doc.givens) out.push({ path: blockPath(lv.path), bind: lv.doc.givens, reached });
   return reached;
 }
 
@@ -1130,7 +1138,7 @@ function movedBy(
  */
 function coverageReach(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
-  for (const e of doc.edges ?? []) {
+  for (const e of doc.operatingRange ?? []) {
     const name = e.name?.trim();
     if (!name) continue; // shape errors are named above; this check needs a usable name
     const binds: ReachedBind[] = [];
@@ -1280,8 +1288,8 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     });
   }
 
-  if (doc.bind) {
-    const problem = bindProblem(BINDABLE.filter((k) => doc.bind?.[k] !== undefined));
+  if (doc.givens) {
+    const problem = bindProblem(BINDABLE.filter((k) => doc.givens?.[k] !== undefined));
     if (problem) {
       out.push({
         rule: 'sheet-bind',
@@ -1296,7 +1304,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   // the sweep charts one curve where two rules exist and bindingConstraint can name the WRONG
   // worst rule. (A child reusing a parent's id is fine — paths disambiguate across levels.)
   const ruleIds = new Set<string>();
-  for (const r of doc.rules) {
+  for (const r of doc.checks) {
     if (ruleIds.has(r.id)) {
       out.push({
         rule: 'sheet-rule',
@@ -1308,7 +1316,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     ruleIds.add(r.id);
   }
 
-  for (const r of doc.rules) {
+  for (const r of doc.checks) {
     // Reserved so a tree-keyed id (`cs.headroom`, `cm-lo@rule`) can never collide with an
     // authored one — the same silent-shadowing hazard the duplicate-id check above exists for.
     const idSep = idSepProblem(r.id);
@@ -1320,11 +1328,13 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         location: r.id,
       });
     }
+    // An error, not a warning: only the kinds the verdict knows as hard can gate it, so a rule
+    // under any other spelling — an earlier name included — would otherwise sit out silently.
     if (!RULE_KINDS.has(r.kind)) {
       out.push({
         rule: 'sheet-rule',
-        severity: 'warning',
-        message: `rule "${r.id}" has unknown kind "${r.kind}"`,
+        severity: 'error',
+        message: `rule "${r.id}" has unknown kind "${r.kind}" — use one of ${quoted([...RULE_KINDS])}`,
         location: r.id,
       });
     }
@@ -1358,10 +1368,10 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
 
   // Containment edges: structural checks only — whether the overridden evaluation closes
   // is eval's verdict, not a shape question.
-  if (doc.edges?.length) {
+  if (doc.operatingRange?.length) {
     const edgeNames = new Set<string>();
     const paramByName = new Map(doc.params.map((p) => [p.name, p]));
-    for (const e of doc.edges) {
+    for (const e of doc.operatingRange) {
       const name = e.name?.trim();
       if (!name) {
         out.push({
@@ -1440,7 +1450,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   // are independent and both hold, exactly as a diode connection plus a bound gm/ID already
   // does. It is vds that cannot also be declared, because that one names the same coordinate
   // twice with two different numbers.
-  if (doc.bind?.diode && doc.bind.vds !== undefined) {
+  if (doc.givens?.diode && doc.givens.vds !== undefined) {
     out.push({
       rule: 'sheet-bind',
       severity: 'error',
@@ -1468,14 +1478,14 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   out.push(...provideCoverage(doc));
 
   // Composition: validate each child block and attribute its findings to the use site.
-  if (doc.uses) {
+  if (doc.blocks) {
     // Collision guard: a child exposes scalars into the parent scope as `name__key`. If a
     // parent param or row is named identically, the child injection silently overwrites it
     // (or the row shadows the injection) — surface it rather than resolve it by overwrite.
     // A ref-only use's provides are unknown until resolution, so these structural
     // checks cover embedded children only — run validation on the RESOLVED doc (as
     // runSheet does when given a ref index) for full coverage.
-    const injected = new Set(doc.uses.flatMap(providedNames));
+    const injected = new Set(doc.blocks.flatMap(providedNames));
     for (const p of doc.params) {
       if (injected.has(p.name)) {
         out.push({
@@ -1486,7 +1496,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         });
       }
     }
-    for (const r of doc.rows) {
+    for (const r of doc.equations) {
       if (injected.has(r.name)) {
         out.push({
           rule: 'sheet-collision',
@@ -1503,10 +1513,10 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     // Children evaluate in document order, and a use's param overrides may reference the
     // provides of EARLIER siblings only. A forward (or self) reference is statically
     // detectable here: the joined name can never be in scope when the override resolves.
-    for (let i = 0; i < doc.uses.length; i++) {
-      const use = doc.uses[i];
+    for (let i = 0; i < doc.blocks.length; i++) {
+      const use = doc.blocks[i];
       if (!use.params) continue;
-      const later = new Set(doc.uses.slice(i).flatMap(providedNames));
+      const later = new Set(doc.blocks.slice(i).flatMap(providedNames));
       for (const [k, expr] of Object.entries(use.params)) {
         // The child re-solves a held node wherever the hardware is held, so the value wired in
         // here is honoured at the design point and dropped at a range end — while this sheet
@@ -1533,7 +1543,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     }
 
     const seen = new Set<string>();
-    for (const use of doc.uses) {
+    for (const use of doc.blocks) {
       // Exactly one content source: an embedded doc, or a non-blank ref to resolve. A
       // use with neither can never evaluate; a blank ref can never match a library id.
       if (!use.doc && use.ref === undefined) {
@@ -1592,8 +1602,8 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       // scalar the child itself received from ITS children (`grand__key`): re-exporting a
       // grandchild value up the tree is the ratified idiom for surfacing a deep quantity,
       // so only a separator-bearing key that matches nothing injectable is flagged.
-      const childInjected = new Set((use.doc?.uses ?? []).flatMap(providedNames));
-      for (const key of use.doc?.provide ?? []) {
+      const childInjected = new Set((use.doc?.blocks ?? []).flatMap(providedNames));
+      for (const key of use.doc?.provides ?? []) {
         if (key.includes(PROVIDE_SEP) && !childInjected.has(key)) {
           out.push({
             rule: 'sheet-provide',
@@ -1636,7 +1646,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         // child's spec params, which would make the child's own range claim a fiction —
         // so the engine ignores them, and this says so rather than letting the author
         // believe the child's containment still gates.
-        if (use.doc.edges?.length) {
+        if (use.doc.operatingRange?.length) {
           out.push({
             rule: 'sheet-edge',
             severity: 'warning',

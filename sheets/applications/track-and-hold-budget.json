@@ -83,8 +83,8 @@
       "note": "charge-injection error budget on C_s"
     }
   ],
-  "bind": { "L": "L", "W": "W_sw", "gm_id": "gm_id_on", "vds": "vds_test" },
-  "rows": [
+  "givens": { "L": "L", "W": "W_sw", "gm_id": "gm_id_on", "vds": "vds_test" },
+  "equations": [
     {
       "name": "C_s_min",
       "expr": "k*T/vn_kTC_target^2",
@@ -111,10 +111,10 @@
       "note": "charge-injection step: half the channel inversion charge (cgg*Vov, with Vov ~ V*) onto C_s; estimate, sim owns the clock edge"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_on",
       "op": "<=",
       "rhs": "ceiling",
@@ -122,7 +122,7 @@
     },
     {
       "id": "ktc-noise",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "C_s",
       "op": ">=",
       "rhs": "C_s_min",
@@ -130,7 +130,7 @@
     },
     {
       "id": "track-settling",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "T_track",
       "op": ">=",
       "rhs": "N_tau_req*tau_track",
@@ -138,7 +138,7 @@
     },
     {
       "id": "switch-on",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "abs(vgs - VDD)",
       "op": "<=",
       "rhs": "0.05",
@@ -146,7 +146,7 @@
     },
     {
       "id": "charge-injection",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "dV_qinj",
       "op": "<=",
       "rhs": "qinj_target",

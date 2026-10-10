@@ -95,7 +95,7 @@ describe('sheet library: generic contract', () => {
         expect(error).toBeUndefined();
         const r = res!;
         expect(r.warnings.filter((w) => w.severity === 'error')).toEqual([]);
-        if (doc.bind) {
+        if (doc.givens) {
           expect(r.bind?.ok, r.bind?.error).toBe(true);
         }
         expect(hardNaRules(r)).toEqual([]);
@@ -122,7 +122,7 @@ function exprNames(expr: string): readonly string[] {
 /** Walk a doc and every embedded child, calling `visit` with each doc and its path. */
 function walkDocs(doc: SheetDoc, path: string, visit: (d: SheetDoc, p: string) => void): void {
   visit(doc, path);
-  for (const u of doc.uses ?? []) {
+  for (const u of doc.blocks ?? []) {
     if (u.doc) walkDocs(u.doc, `${path}.${u.name}`, visit);
   }
 }
@@ -222,7 +222,7 @@ describe('sheet library: vetting lints', () => {
       if (!holds.length) continue;
       const res = runSheet(doc, withBody, undefined, REFS);
       for (const [node, device] of Object.entries(HELD_UNDER[file])) {
-        const use = doc.uses?.find((u) => u.name === device);
+        const use = doc.blocks?.find((u) => u.name === device);
         const bind = device ? res.children?.find((c) => c.name === device)?.bind : res.bind;
         const pType = (use?.doc ?? doc).polarity === 'p';
         const vsb = bind!.bias!.vsb;
@@ -287,12 +287,12 @@ describe('sheet library: the published interface', () => {
     const actual: Record<string, string[]> = {};
     const expected: Record<string, string[]> = {};
     for (const { file, doc } of LIBRARY) {
-      actual[file] = sorted(doc.provide ?? []);
+      actual[file] = sorted(doc.provides ?? []);
       // Union, not override: a sheet in the hand map still owes its reserved-name rows, so
       // one that later grows a real Rout row is required to publish it like everyone else.
       const reserved = file.startsWith(CONSUMER_GROUP)
         ? []
-        : [...doc.rows.map((r) => r.name), ...doc.params.map((p) => p.name)].filter((n) =>
+        : [...doc.equations.map((r) => r.name), ...doc.params.map((p) => p.name)].filter((n) =>
             RESERVED_PORTS.includes(n),
           );
       expected[file] = sorted(new Set([...(NAMED_INTERFACE[file] ?? []), ...reserved]));
@@ -308,7 +308,7 @@ describe('sheet library: the published interface', () => {
     const dangling: string[] = [];
     for (const { file, doc, res } of EVALUATED) {
       if (!res) continue; // an evaluation that threw already fails its own contract test
-      for (const key of doc.provide ?? []) {
+      for (const key of doc.provides ?? []) {
         if (!Number.isFinite(res.values[key])) dangling.push(`${file}: ${key}`);
       }
     }
@@ -327,7 +327,7 @@ describe('sheet library: the published interface', () => {
     expect(searched).toHaveLength(25);
     const missing: string[] = [];
     for (const { file, doc, res } of searched) {
-      if (!(doc.provide ?? []).includes('I_q')) missing.push(`${file}: not published`);
+      if (!(doc.provides ?? []).includes('I_q')) missing.push(`${file}: not published`);
       else if (!Number.isFinite(res?.values.I_q)) missing.push(`${file}: does not resolve`);
     }
     expect(missing).toEqual([]);
@@ -404,7 +404,7 @@ describe('exemplar goldens: simple current mirror', () => {
     expect(sheet('mirrors-bias/simple-mirror.json').params.map((p) => p.name)).not.toContain(
       'vgs_est',
     );
-    expect(sheet('mirrors-bias/simple-mirror.json').rules.map((r) => r.id)).not.toContain(
+    expect(sheet('mirrors-bias/simple-mirror.json').checks.map((r) => r.id)).not.toContain(
       'diode-bias-consistent',
     );
   });
@@ -494,7 +494,7 @@ describe('exemplar goldens: 5T OTA', () => {
     const [lo, hi] = res.edges!;
     expect(lo.solved.V_tail).toBeLessThan(res.values.V_tail);
     expect(hi.solved.V_tail).toBeGreaterThan(res.values.V_tail);
-    const ids = sheet('otas/five-transistor-ota.json').rules.map((r) => r.id);
+    const ids = sheet('otas/five-transistor-ota.json').checks.map((r) => r.id);
     expect(ids).not.toContain('cm-lo-reach');
     expect(ids).not.toContain('cm-hi-reach');
   });

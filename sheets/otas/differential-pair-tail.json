@@ -70,7 +70,7 @@
       "max": 0.8,
       "unit": "V",
       "role": "choice",
-      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
       "note": "the tail node — the one free bias variable, solved rather than set: the engine bisects between min and max (the BRACKET, not slider bounds) until the produced common mode equals CM_dc. The shown value is where it landed"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
@@ -111,7 +111,7 @@
       "role": "choice"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "in",
       "doc": {
@@ -125,18 +125,24 @@
           { "name": "vds_i", "value": 0.57, "unit": "V", "role": "spec" },
           { "name": "vsb_i", "value": 0.33, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_i",
+          "id": "I_half",
+          "gm_id": "gm_id_i",
+          "vds": "vds_i",
+          "vsb": "vsb_i"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_i",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -164,18 +170,18 @@
             "note": "the tail node"
           }
         ],
-        "bind": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_t",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat"]
+        "provides": ["gm", "gds", "vdsat"]
       },
       "params": {
         "I_t": "I_tail",
@@ -185,7 +191,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
@@ -255,22 +261,22 @@
       "note": "estimate: quiescent supply current — the tail is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
-    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+  "checks": [
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "spec", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
       "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
     },
-    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "tail-saturated",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "tail_headroom",
       "op": ">=",
       "rhs": "0",
@@ -278,7 +284,7 @@
     },
     {
       "id": "cm-not-below",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_in",
       "op": ">=",
       "rhs": "CM_lo",
@@ -286,7 +292,7 @@
     },
     {
       "id": "cm-not-above",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
@@ -294,7 +300,7 @@
     },
     {
       "id": "input-sat-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "V_out_dc - V_tail - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
@@ -302,14 +308,14 @@
     },
     {
       "id": "cmrr-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "CMRR",
       "op": ">=",
       "rhs": "1000",
       "note": "estimate: a longer tail L (lower tail gds) lifts CMRR; sim owns the real number"
     }
   ],
-  "edges": [
+  "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
@@ -321,5 +327,5 @@
       "note": "the claimed high edge, checked the same way; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

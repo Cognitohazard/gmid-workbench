@@ -161,7 +161,7 @@
       "note": "vds sign of the PMOS device tables: +1 N-style, -1 signed-PMOS"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "in",
       "doc": {
@@ -175,18 +175,18 @@
           { "name": "vx", "value": 0.23, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
       },
       "params": {
         "Ix": "I_tail/2",
@@ -209,18 +209,18 @@
           { "name": "vx", "value": 0.4, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat", "vgs"]
+        "provides": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
         "Ix": "I_tail/2",
@@ -249,18 +249,18 @@
           },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat", "vgs"]
+        "provides": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
         "Ix": "I_tail/2",
@@ -288,18 +288,18 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat"]
+        "provides": ["gds", "vdsat"]
       },
       "params": { "Ix": "I_tail/2", "Lx": "L_load", "gx": "gm_id_load", "vx": "p_sign*(VDD - V_b)" }
     },
@@ -315,23 +315,23 @@
           { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.32, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat"]
+        "provides": ["gds", "vdsat"]
       },
       "params": { "Ix": "I_tail", "Lx": "L_tail", "gx": "gm_id_tail", "vx": "V_s" }
     }
   ],
-  "rows": [
+  "equations": [
     { "name": "gm_in", "expr": "in__gm", "unit": "S", "note": "input-pair transconductance" },
     {
       "name": "Rdown",
@@ -382,10 +382,10 @@
       "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "gain-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "Av",
       "op": ">=",
       "rhs": "Av_target",
@@ -393,7 +393,7 @@
     },
     {
       "id": "swing-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "swing_diff",
       "op": ">=",
       "rhs": "swing_target",
@@ -401,7 +401,7 @@
     },
     {
       "id": "tail-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_s",
       "op": ">=",
       "rhs": "tail__vdsat",
@@ -409,7 +409,7 @@
     },
     {
       "id": "in-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_a - V_s",
       "op": ">=",
       "rhs": "in__vdsat",
@@ -417,7 +417,7 @@
     },
     {
       "id": "cascn-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out - V_a",
       "op": ">=",
       "rhs": "cascn__vdsat",
@@ -425,7 +425,7 @@
     },
     {
       "id": "cascp-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_b - V_out",
       "op": ">=",
       "rhs": "cascp__vdsat",
@@ -433,12 +433,12 @@
     },
     {
       "id": "load-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "VDD - V_b",
       "op": ">=",
       "rhs": "load__vdsat",
       "note": "PMOS load saturated across its node drop"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

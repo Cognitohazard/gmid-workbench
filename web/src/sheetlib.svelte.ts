@@ -20,7 +20,11 @@ export interface UserSheet {
   doc: SheetDoc;
 }
 
-const KEY = 'gmid.sheets';
+// `.v2` since the document's keys were renamed: a build from before the rename reads a sheet
+// in the new keys as an empty one, so it must not find them in its own slot. The earlier slot
+// is read once, when this one is empty, and then left alone for that earlier build.
+const KEY = 'gmid.sheets.v2';
+const KEY_BEFORE = 'gmid.sheets';
 
 /** A sheet document is KBs; this cap (on the raw JSON text) refuses a multi-MB import
  *  before it is parsed or persisted — the resolver's expansion budget bounds ref
@@ -55,7 +59,12 @@ function parseUserSheets(raw: unknown): UserSheet[] {
 const store = $state({
   // 4× the per-sheet cap bounds the whole persisted blob BEFORE parse (loadJSON maxLen)
   // — past it the store is treated as corrupt and reset, never re-parsed on every boot.
-  sheets: loadJSON(KEY, parseUserSheets, (): UserSheet[] => [], 4 * MAX_SHEET_JSON_BYTES),
+  sheets: loadJSON(
+    KEY,
+    parseUserSheets,
+    () => loadJSON(KEY_BEFORE, parseUserSheets, (): UserSheet[] => [], 4 * MAX_SHEET_JSON_BYTES),
+    4 * MAX_SHEET_JSON_BYTES,
+  ),
 });
 
 export function userSheets(): readonly UserSheet[] {
@@ -79,7 +88,9 @@ export function importSheetJSON(filename: string, text: string): string | null {
   }
   const lost: string[] = [];
   const doc = sanitizeSheet(parsed, 0, lost);
-  if (!doc) return 'not a sheet document';
+  // A document refused outright still says why when the loader knows — a key written in two
+  // spellings, most likely.
+  if (!doc) return lost.length ? `not a sheet document: ${lost[0]}` : 'not a sheet document';
   // Sanitization DROPS malformed pieces — tolerable when rescuing our own persisted
   // state, but at the import door a dropped rule would let the sheet validate cleanly
   // and read feasible WITHOUT that requirement. Fail closed instead.

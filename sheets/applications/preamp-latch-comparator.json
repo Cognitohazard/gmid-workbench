@@ -96,8 +96,8 @@
       "note": "preamp settling/overdrive-recovery time budget"
     }
   ],
-  "bind": { "L": "L_pre", "id": "I_pre", "gm_id": "gm_id_pre", "vds": "vds_pre" },
-  "rows": [
+  "givens": { "L": "L_pre", "id": "I_pre", "gm_id": "gm_id_pre", "vds": "vds_pre" },
+  "equations": [
     { "name": "ro", "expr": "1/gds", "unit": "ohm", "note": "preamp intrinsic output resistance" },
     {
       "name": "Rout",
@@ -130,10 +130,10 @@
       "note": "preamp output time constant: the same Rout that gave the gain costs recovery delay (the price); estimate"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_pre",
       "op": "<=",
       "rhs": "ceiling",
@@ -141,7 +141,7 @@
     },
     {
       "id": "offset-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "vos_total",
       "op": "<=",
       "rhs": "vos_target",
@@ -149,7 +149,7 @@
     },
     {
       "id": "preamp-gain",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "A_pre",
       "op": ">=",
       "rhs": "A_pre_min",
@@ -157,7 +157,7 @@
     },
     {
       "id": "recovery-delay",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "tau_pre",
       "op": "<=",
       "rhs": "tau_budget",

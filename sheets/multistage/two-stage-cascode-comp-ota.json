@@ -45,7 +45,7 @@
       "max": 0.5,
       "unit": "V",
       "role": "choice",
-      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
       "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke. Both bracket ends must leave the pair drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail, the pin will say so. This variant stacks the cascode node in the same budget, so raising gm_id_ld1 for a smaller diode drop is the right direction but does not get there alone: on a sky130 tt realization it closes only past the knob's own maximum. Lowering V_casc toward its floor is the second knob, and the two together are what reopen the budget"
     },
     {
@@ -174,7 +174,7 @@
       "note": "vds sign of the stage-2 device table: +1 N-style, -1 signed-PMOS"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "ld1",
       "doc": {
@@ -186,18 +186,18 @@
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat"]
+        "provides": ["gm", "gds", "vgs", "vdsat"]
       },
       "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1" }
     },
@@ -214,18 +214,18 @@
           { "name": "vx", "value": 0.7, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
       },
       "params": {
         "Ix": "I1/2",
@@ -260,18 +260,18 @@
             "note": "the source stands on the input device's drain node, not the bulk"
           }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vdsat", "vgs"]
+        "provides": ["gm", "vdsat", "vgs"]
       },
       "params": {
         "Ix": "I1/2",
@@ -299,18 +299,18 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "cgg", "vgs", "vdsat"]
+        "provides": ["gm", "gds", "cgg", "vgs", "vdsat"]
       },
       "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" }
     },
@@ -320,7 +320,7 @@
       "params": { "Ix": "I2", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
@@ -424,10 +424,10 @@
       "note": "estimate: quiescent supply current — the first-stage tail plus the output branch. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "gain-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "Av",
       "op": ">=",
       "rhs": "Av_target",
@@ -435,7 +435,7 @@
     },
     {
       "id": "sr-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "SR",
       "op": ">=",
       "rhs": "SR_target",
@@ -443,7 +443,7 @@
     },
     {
       "id": "gbw-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "GBW",
       "op": ">=",
       "rhs": "GBW_target",
@@ -451,7 +451,7 @@
     },
     {
       "id": "pm-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "PM",
       "op": ">=",
       "rhs": "PM_target",
@@ -459,7 +459,7 @@
     },
     {
       "id": "stage2-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "VDD - V_out2",
       "op": ">=",
       "rhs": "s2__vdsat",
@@ -467,7 +467,7 @@
     },
     {
       "id": "load2-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out2",
       "op": ">=",
       "rhs": "ld2__vdsat",
@@ -475,7 +475,7 @@
     },
     {
       "id": "cascode-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_casc",
       "op": ">=",
       "rhs": "casc__vdsat",
@@ -483,7 +483,7 @@
     },
     {
       "id": "input-sat-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "V1 - V_casc - V_tail - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
@@ -491,12 +491,12 @@
     },
     {
       "id": "systematic-offset",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "abs(abs(s2__vgs) - abs(ld1__vgs))",
       "op": "<=",
       "rhs": "0.05",
       "note": "the stage-2 gate sits at V1 = VDD - |vgs_ld1|, so stage 2 carries its intended current only when its own |vgs| at (I2, gm_id_s2) matches the mirror diode drop — the classic W/L-ratio condition. Retune gm_id_s2 or I2 until these agree, or the second stage sits at a different current than the sheet assumes"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

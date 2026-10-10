@@ -585,9 +585,9 @@ test('design sheet: an imported fT bind survives import and reload (not silently
           { name: 'ft_target', value: 2e9 },
           { name: 'Ib', value: 2e-5 },
         ],
-        bind: { L: 'L', ft: 'ft_target', id: 'Ib', vds: '0.9' },
-        rows: [{ name: 'speed', expr: 'ft' }],
-        rules: [],
+        givens: { L: 'L', ft: 'ft_target', id: 'Ib', vds: '0.9' },
+        equations: [{ name: 'speed', expr: 'ft' }],
+        checks: [],
       }),
     ),
   });
@@ -634,9 +634,9 @@ test('design sheet: an imported solveFor survives import and reload (not silentl
           { name: 'Ib', value: 1e-5 },
           { name: 'vstar_est', value: 0.3, solveFor: 'vstar_actual' },
         ],
-        bind: { L: 'L', id: 'Ib', gm_id: '8 + 5*vstar_est', vds: '0.9' },
-        rows: [{ name: 'vstar_actual', expr: 'vstar' }],
-        rules: [{ id: 'loop-closed', kind: 'invariant', lhs: 'vstar_est', op: '<=', rhs: '0.25' }],
+        givens: { L: 'L', id: 'Ib', gm_id: '8 + 5*vstar_est', vds: '0.9' },
+        equations: [{ name: 'vstar_actual', expr: 'vstar' }],
+        checks: [{ id: 'loop-closed', kind: 'physical', lhs: 'vstar_est', op: '<=', rhs: '0.25' }],
       }),
     ),
   });
@@ -682,9 +682,9 @@ test('design sheet: an imported diode connection survives import and reload (not
           { name: 'L', value: 5e-7 },
           { name: 'Ib', value: 1e-5 },
         ],
-        bind: { L: 'L', id: 'Ib', gm_id: '10', diode: true },
-        rows: [{ name: 'drop', expr: 'vgs' }],
-        rules: [{ id: 'diode-drop', kind: 'invariant', lhs: 'drop', op: '>=', rhs: '0.2' }],
+        givens: { L: 'L', id: 'Ib', gm_id: '10', diode: true },
+        equations: [{ name: 'drop', expr: 'vgs' }],
+        checks: [{ id: 'diode-drop', kind: 'physical', lhs: 'drop', op: '>=', rhs: '0.2' }],
       }),
     ),
   });
@@ -699,6 +699,82 @@ test('design sheet: an imported diode connection survives import and reload (not
   const after = page.locator('.sheet').first();
   await expect(after.locator('.srules tr.st-pass')).toHaveCount(1);
   await expect(after.locator('.srules tr.st-fail')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a sheet written with the earlier key names still imports and runs', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // Every renamed key at once: rows, rules and their kinds, a pin, and a child under uses that
+  // publishes through provide. The rule passes only at the pinned root (x = 0.25, so y = 0.5 and
+  // z = c__w + y = 1.5), so a key dropped on the way in would show as a missing or failing rule.
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'earlier-keys.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Earlier keys',
+        polarity: 'n',
+        params: [{ name: 'x', value: 0.3, min: 0, max: 1, pin: { lhs: 'y', rhs: '0.5' } }],
+        uses: [
+          {
+            name: 'c',
+            doc: {
+              title: 'child',
+              polarity: 'n',
+              params: [{ name: 'k', value: 1 }],
+              rows: [{ name: 'w', expr: 'k' }],
+              rules: [],
+              provide: ['w'],
+            },
+          },
+        ],
+        rows: [
+          { name: 'y', expr: '2*x' },
+          { name: 'z', expr: 'c__w + y' },
+        ],
+        rules: [{ id: 'at-root', kind: 'invariant', lhs: 'abs(z - 1.5)', op: '<=', rhs: '0.001' }],
+      }),
+    ),
+  });
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Earlier keys');
+  const sheet = page.locator('.sheet').first();
+  await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
+
+  // What is kept is the current spelling only: the stored copy carries no earlier key.
+  const stored = await page.evaluate(() => localStorage.getItem('gmid.sheets.v2') ?? '');
+  expect(stored).toContain('"equations"');
+  expect(stored).toContain('"designConstraint"');
+  expect(stored).toContain('"physical"');
+  for (const old of ['"rows"', '"rules"', '"uses"', '"provide"', '"pin"', '"invariant"'])
+    expect(stored).not.toContain(old);
+
+  // A key written in both spellings is ambiguous, and is refused rather than merged.
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'two-spellings.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Two spellings',
+        polarity: 'n',
+        params: [],
+        rows: [{ name: 'y', expr: '1' }],
+        equations: [{ name: 'y', expr: '2' }],
+        checks: [],
+      }),
+    ),
+  });
+  await expect(page.locator('.qa.error')).toContainText('rows and equations');
 
   expect(errors).toEqual([]);
 });
@@ -727,8 +803,8 @@ test('design sheet: an imported hold survives import and reload, and its gate bi
           { name: 'X', value: 0.2, min: 0, max: 1, hold: 'X + B' },
           { name: 'B', value: 0.1 },
         ],
-        rows: [],
-        rules: [{ id: 'ok', kind: 'invariant', lhs: 'X', op: '>=', rhs: '0' }],
+        equations: [],
+        checks: [{ id: 'ok', kind: 'physical', lhs: 'X', op: '>=', rhs: '0' }],
       }),
     ),
   });
@@ -766,9 +842,11 @@ test('design sheet: an imported pin survives import and reload (not silently str
       JSON.stringify({
         title: 'Pinned node',
         polarity: 'n',
-        params: [{ name: 'x', value: 0.3, min: 0, max: 1, pin: { lhs: 'y', rhs: '0.5' } }],
-        rows: [{ name: 'y', expr: '2*x' }],
-        rules: [{ id: 'at-root', kind: 'invariant', lhs: 'abs(x - 0.25)', op: '<=', rhs: '0.001' }],
+        params: [
+          { name: 'x', value: 0.3, min: 0, max: 1, designConstraint: { lhs: 'y', rhs: '0.5' } },
+        ],
+        equations: [{ name: 'y', expr: '2*x' }],
+        checks: [{ id: 'at-root', kind: 'physical', lhs: 'abs(x - 0.25)', op: '<=', rhs: '0.001' }],
       }),
     ),
   });
@@ -797,9 +875,9 @@ const vdSheet = (title: string, cls?: string) => ({
     { name: 'Ib', value: 1e-5 },
     { name: 'V_d', value: 0.6, unit: 'V', ...(cls === undefined ? {} : { class: cls }) },
   ],
-  bind: { L: 'L', id: 'Ib', gm_id: '10', vds: 'V_d' },
-  rows: [],
-  rules: [],
+  givens: { L: 'L', id: 'Ib', gm_id: '10', vds: 'V_d' },
+  equations: [],
+  checks: [],
 });
 
 test('design sheet: a DC-level class survives import and reload, and the assumption is listed', async ({
@@ -887,13 +965,13 @@ test('design sheet: a stored sheet that fails validation is kept, opens with its
   // The stored sheet stays in the library across boots; the user, not the loader, removes it.
   const doc = {
     ...vdSheet('Stored with a duplicate rule id', 'independent'),
-    rules: [
-      { id: 'ib-range', kind: 'requirement', lhs: 'Ib', op: '>=', rhs: '1e-6' },
-      { id: 'ib-range', kind: 'requirement', lhs: 'Ib', op: '<=', rhs: '1e-4' },
+    checks: [
+      { id: 'ib-range', kind: 'spec', lhs: 'Ib', op: '>=', rhs: '1e-6' },
+      { id: 'ib-range', kind: 'spec', lhs: 'Ib', op: '<=', rhs: '1e-4' },
     ],
   };
   await page.evaluate(
-    (d) => localStorage.setItem('gmid.sheets', JSON.stringify([{ name: 'dup-rule', doc: d }])),
+    (d) => localStorage.setItem('gmid.sheets.v2', JSON.stringify([{ name: 'dup-rule', doc: d }])),
     doc,
   );
   await page.reload();
@@ -910,7 +988,7 @@ test('design sheet: a stored sheet that fails validation is kept, opens with its
 
   await entry.locator('.drm').click();
   await expect(entry).toHaveCount(0);
-  const stored = await page.evaluate(() => localStorage.getItem('gmid.sheets'));
+  const stored = await page.evaluate(() => localStorage.getItem('gmid.sheets.v2'));
   expect(JSON.parse(stored ?? '[]')).toEqual([]);
 
   expect(errors).toEqual([]);
@@ -939,9 +1017,9 @@ test('design sheet: imported sheets join the library — pickable, referenceable
       title: 'My block',
       polarity: 'n',
       params: [{ name: 'x', value: 2 }],
-      rows: [{ name: 'y', expr: '2*x' }],
-      rules: [],
-      provide: ['y'],
+      equations: [{ name: 'y', expr: '2*x' }],
+      checks: [],
+      provides: ['y'],
     }),
   );
   await expect(page.locator('.usheets .dev', { hasText: 'my-block' })).toBeVisible();
@@ -963,11 +1041,11 @@ test('design sheet: imported sheets join the library — pickable, referenceable
       title: 'Bad rule',
       polarity: 'n',
       params: [{ name: 'x', value: 2 }],
-      rows: [{ name: 'y', expr: '2*x' }],
-      rules: [{ id: 'y-max', kind: 'requirement', lhs: 'y', op: '=<', rhs: '10' }],
+      equations: [{ name: 'y', expr: '2*x' }],
+      checks: [{ id: 'y-max', kind: 'spec', lhs: 'y', op: '=<', rhs: '10' }],
     }),
   );
-  await expect(page.locator('.qa.error')).toContainText('malformed sheet content at rules[0]');
+  await expect(page.locator('.qa.error')).toContainText('malformed sheet content at checks[0]');
   await expect(page.locator('.usheets .dev', { hasText: 'bad-rule' })).toHaveCount(0);
 
   // Same for a malformed FIELD inside a kept entry: a non-string device binding
@@ -977,13 +1055,13 @@ test('design sheet: imported sheets join the library — pickable, referenceable
       title: 'Bad device',
       polarity: 'n',
       params: [{ name: 'x', value: 2 }],
-      rows: [{ name: 'y', expr: '2*x' }],
-      rules: [],
-      uses: [{ name: 'b', ref: 'my-block', device: 7 }],
+      equations: [{ name: 'y', expr: '2*x' }],
+      checks: [],
+      blocks: [{ name: 'b', ref: 'my-block', device: 7 }],
     }),
   );
   await expect(page.locator('.qa.error')).toContainText(
-    'malformed sheet content at uses[0].device',
+    'malformed sheet content at blocks[0].device',
   );
   await expect(page.locator('.usheets .dev', { hasText: 'bad-device' })).toHaveCount(0);
 
@@ -995,8 +1073,8 @@ test('design sheet: imported sheets join the library — pickable, referenceable
       title: 'Unknown key',
       polarity: 'n',
       params: [{ name: 'x', value: 2, sweep: true }],
-      rows: [{ name: 'y', expr: '2*x' }],
-      rules: [],
+      equations: [{ name: 'y', expr: '2*x' }],
+      checks: [],
     }),
   );
   await expect(page.locator('.qa.error')).toContainText(
@@ -1009,9 +1087,9 @@ test('design sheet: imported sheets join the library — pickable, referenceable
       title: 'My top',
       polarity: 'n',
       params: [{ name: 'x_top', value: 3 }],
-      rows: [{ name: 'z', expr: 'b__y + 1' }],
-      rules: [{ id: 'z-min', kind: 'requirement', lhs: 'z', op: '>=', rhs: '1' }],
-      uses: [{ name: 'b', ref: 'my-block', params: { x: 'x_top' } }],
+      equations: [{ name: 'z', expr: 'b__y + 1' }],
+      checks: [{ id: 'z-min', kind: 'spec', lhs: 'z', op: '>=', rhs: '1' }],
+      blocks: [{ name: 'b', ref: 'my-block', params: { x: 'x_top' } }],
     }),
   );
 
@@ -1206,9 +1284,9 @@ test('design sheet: an imported gate-wiring declaration survives import and relo
       title: 'Wired gate',
       polarity: 'n',
       params: [{ name: 'V_g', value: 0 }],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         {
           name: 'n1',
           wiring,
@@ -1219,9 +1297,9 @@ test('design sheet: an imported gate-wiring declaration survives import and relo
               { name: 'L', value: 5e-7 },
               { name: 'Ib', value: 1e-5 },
             ],
-            bind: { L: 'L', id: 'Ib', gm_id: '10', vds: '0.9' },
-            rows: [],
-            rules: [],
+            givens: { L: 'L', id: 'Ib', gm_id: '10', vds: '0.9' },
+            equations: [],
+            checks: [],
           },
         },
       ],
@@ -1255,7 +1333,7 @@ test('design sheet: an imported gate-wiring declaration survives import and relo
     buffer: Buffer.from(wiredSheet({})),
   });
   await expect(page.locator('.qa.error')).toContainText(
-    'malformed sheet content at uses[0].wiring',
+    'malformed sheet content at blocks[0].wiring',
   );
   await expect(page.locator('.usheets .dev', { hasText: 'empty-wiring' })).toHaveCount(0);
 

@@ -78,7 +78,7 @@
       "note": "1-sigma random ratio-error budget"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "ref",
       "doc": {
@@ -97,18 +97,18 @@
             "note": "source above ground by the reference-leg IR drop (body grounded)"
           }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true, "vsb": "vsb_r" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true, "vsb": "vsb_r" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_r",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["W", "vgs", "vdsat", "gm", "id", "gds"]
+        "provides": ["W", "vgs", "vdsat", "gm", "id", "gds"]
       },
       "params": {
         "I_ref": "I_in",
@@ -118,14 +118,14 @@
       }
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "W": "K*ref__W",
     "vgs": "ref__vgs",
     "vds": "V_out - I_in*R_s",
     "vsb": "I_in*R_s"
   },
-  "rows": [
+  "equations": [
     { "name": "I_out", "expr": "id", "unit": "A" },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
     {
@@ -172,17 +172,17 @@
       "note": "degeneration divides the current spread by the local-feedback factor; estimate, exact only where threshold mismatch dominates"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_m",
       "op": "<=",
       "rhs": "ceiling"
     },
     {
       "id": "compliance",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "vdsat + V_deg",
@@ -190,18 +190,18 @@
     },
     {
       "id": "systematic-error",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "abs(sys_err)",
       "op": "<=",
       "rhs": "err_target"
     },
     {
       "id": "random-matching",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "sigma_ratio",
       "op": "<=",
       "rhs": "match_target"
     }
   ],
-  "provide": ["Rout"]
+  "provides": ["Rout"]
 }

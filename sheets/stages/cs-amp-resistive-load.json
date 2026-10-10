@@ -57,13 +57,13 @@
       "note": "load resistor: higher R raises the gain but drops more of the supply (less headroom)"
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
     "gm_id": "gm_id",
     "vds": "VDD - 2*pi*GBW_target*CL*(1 + gbw_margin)*R_load/gm_id"
   },
-  "rows": [
+  "equations": [
     {
       "name": "Rout",
       "expr": "par(R_load, 1/gds)",
@@ -109,10 +109,10 @@
       "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -120,16 +120,16 @@
     },
     {
       "id": "headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "vdsat",
       "note": "device saturated at the DC output level the load drop leaves"
     },
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
@@ -137,12 +137,12 @@
     },
     {
       "id": "gbw-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "GBW",
       "op": ">=",
       "rhs": "GBW_target",
       "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

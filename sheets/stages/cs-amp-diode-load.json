@@ -71,7 +71,7 @@
       "note": "load inversion: lower gm/ID gives a higher gain (smaller load gm) but costs the output more headroom and adds noise"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "load",
       "doc": {
@@ -83,18 +83,18 @@
           { "name": "L_ld", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_ld", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_ld", "id": "I_load", "gm_id": "gm_id_ld", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_ld", "id": "I_load", "gm_id": "gm_id_ld", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_ld",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "id", "vnth_m"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "id", "vnth_m"]
       },
       "params": {
         "I_load": "2*pi*GBW_target*CL*(1 + gbw_margin)/gm_id",
@@ -103,13 +103,13 @@
       }
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
     "gm_id": "gm_id",
     "vds": "VDD - abs(load__vgs)"
   },
-  "rows": [
+  "equations": [
     {
       "name": "V_out",
       "expr": "VDD - abs(load__vgs)",
@@ -154,10 +154,10 @@
       "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -165,16 +165,16 @@
     },
     {
       "id": "input-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "vdsat",
       "note": "input device saturated at the output DC level"
     },
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
@@ -182,12 +182,12 @@
     },
     {
       "id": "gbw-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "GBW",
       "op": ">=",
       "rhs": "GBW_target",
       "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

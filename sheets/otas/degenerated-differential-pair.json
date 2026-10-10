@@ -89,7 +89,7 @@
       "max": 0.8,
       "unit": "V",
       "role": "choice",
-      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
       "note": "the input device's source node — its full elevation above the bulk, tail lift plus the resistor drop. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
@@ -122,7 +122,7 @@
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "in",
       "doc": {
@@ -142,18 +142,24 @@
             "note": "the source node — the device's full elevation above the bulk"
           }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_i",
+          "id": "I_half",
+          "gm_id": "gm_id_i",
+          "vds": "vds_i",
+          "vsb": "vsb_i"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_i",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gmb", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gmb", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -164,7 +170,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "CM_in",
       "expr": "V_s + in__vgs",
@@ -234,13 +240,13 @@
       "note": "estimate: quiescent supply current — the tail is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
-    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+  "checks": [
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "spec", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
       "id": "linrange-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "linrange",
       "op": ">=",
       "rhs": "linrange_target",
@@ -248,16 +254,16 @@
     },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
       "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
     },
-    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "input-sat-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "V_out_dc - V_s - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
@@ -265,7 +271,7 @@
     },
     {
       "id": "cm-not-below",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_in",
       "op": ">=",
       "rhs": "CM_lo",
@@ -273,14 +279,14 @@
     },
     {
       "id": "cm-not-above",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
       "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
     }
   ],
-  "edges": [
+  "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
@@ -292,5 +298,5 @@
       "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

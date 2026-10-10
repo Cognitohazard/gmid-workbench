@@ -76,7 +76,7 @@
       "note": "worst-case accumulated 1-sigma matching budget across the bank"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "unit",
       "doc": {
@@ -88,18 +88,18 @@
           { "name": "L_u", "value": 1e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_u", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_u", "id": "I_u", "gm_id": "gm_id_u", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_u", "id": "I_u", "gm_id": "gm_id_u", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_u",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+        "provides": ["W", "vgs", "vdsat", "gm", "id"]
       },
       "params": {
         "I_u": "I_unit",
@@ -108,8 +108,8 @@
       }
     }
   ],
-  "bind": { "L": "L", "W": "N_legs*unit__W", "vgs": "unit__vgs", "vds": "V_out" },
-  "rows": [
+  "givens": { "L": "L", "W": "N_legs*unit__W", "vgs": "unit__vgs", "vds": "V_out" },
+  "equations": [
     {
       "name": "I_fs",
       "expr": "id",
@@ -136,17 +136,17 @@
       "note": "worst-case accumulated matching across N_legs unit elements (a square-root-of-N random-walk bound); estimate"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_m",
       "op": "<=",
       "rhs": "ceiling"
     },
     {
       "id": "compliance",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "vdsat",
@@ -154,7 +154,7 @@
     },
     {
       "id": "accumulated-matching",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "sigma_bank",
       "op": "<=",
       "rhs": "match_target",
@@ -162,7 +162,7 @@
     },
     {
       "id": "gain-error",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "abs(gain_err)",
       "op": "<=",
       "rhs": "err_target",

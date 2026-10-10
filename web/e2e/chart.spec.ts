@@ -576,7 +576,7 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   await expect(page.locator('.grid .panel').first().locator('table')).toBeVisible();
 
   // A corrupt saved layout falls back to the canonical preset rather than crashing.
-  await page.evaluate(() => localStorage.setItem('gmid.dash.v2', '{not valid json'));
+  await page.evaluate(() => localStorage.setItem('gmid.dash.v3', '{not valid json'));
   await page.reload();
   await loadDemo(page);
   await expect(page.locator('.grid .panel')).toHaveCount(5);

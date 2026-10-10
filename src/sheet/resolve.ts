@@ -108,9 +108,9 @@ function resolveDoc(
   warnings: QAWarning[],
   budget: { left: number },
 ): SheetDoc {
-  if (!doc.uses?.length) return doc;
+  if (!doc.blocks?.length) return doc;
   let changed = false;
-  const uses = doc.uses.map((use) => {
+  const uses = doc.blocks.map((use) => {
     const at = `${where}${use.name}`;
     // An embedded doc is authoritative — a use carrying both is an already-resolved (or
     // deliberately pinned) snapshot, and refreshing it here would silently re-size a
@@ -162,7 +162,7 @@ function resolveDoc(
       doc: resolveDoc(hit.doc, refs, [...chain, use.ref], `${at}.`, warnings, budget),
     };
   });
-  return changed ? { ...doc, uses } : doc;
+  return changed ? { ...doc, blocks: uses } : doc;
 }
 
 /** One composed block that names its own device, and the binding string it names. `path` is
@@ -200,8 +200,8 @@ export function namedBindings(
 function collectBindings(doc: SheetDoc, prefix: string, depth: number, into: NamedBinding[]): void {
   // Shape-guarded like the evaluator's own walk: a persisted doc reaches here unverified, and
   // this must degrade to "nothing named", never throw.
-  if (depth >= MAX_USE_DEPTH || !Array.isArray(doc.uses)) return;
-  for (const use of doc.uses) {
+  if (depth >= MAX_USE_DEPTH || !Array.isArray(doc.blocks)) return;
+  for (const use of doc.blocks) {
     if (typeof use?.name !== 'string') continue;
     const path = prefix + use.name;
     // Every binding the evaluator will try to resolve, on its predicate (a declared `device`,
@@ -214,10 +214,10 @@ function collectBindings(doc: SheetDoc, prefix: string, depth: number, into: Nam
 
 /** Strip provenance `ref` fields from a resolved tree, leaving embedded docs only. */
 function stripRefs(doc: SheetDoc): SheetDoc {
-  if (!doc.uses?.length) return doc;
+  if (!doc.blocks?.length) return doc;
   return {
     ...doc,
-    uses: doc.uses.map((use): SheetUse => {
+    blocks: doc.blocks.map((use): SheetUse => {
       if (!use.doc) return use; // unresolved — nothing to inline; the ref is the content
       const { ref: _ref, ...rest } = use;
       return { ...rest, doc: stripRefs(use.doc) };

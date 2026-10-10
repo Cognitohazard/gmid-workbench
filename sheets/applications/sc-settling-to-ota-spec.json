@@ -85,7 +85,7 @@
       "note": "how many times faster than GBW_req the sized device must be"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "in",
       "doc": {
@@ -99,19 +99,19 @@
           { "name": "L_c", "value": 5e-7, "unit": "m", "role": "choice" },
           { "name": "vds_c", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_c", "gm": "2*pi*GBW_c*CLeff_c", "gm_id": "gm_id_c", "vds": "vds_c" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_c", "gm": "2*pi*GBW_c*CLeff_c", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_c",
             "op": "<=",
             "rhs": "ceiling",
             "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
           }
         ],
-        "provide": ["gm", "gm_id", "vstar", "W", "cgg"]
+        "provides": ["gm", "gm_id", "vstar", "W", "cgg"]
       },
       "params": {
         "GBW_c": "1/(2*pi*beta*(T_s/(2*log(1/eps_d))))",
@@ -122,7 +122,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "N_tau",
       "expr": "log(1/eps_d)",
@@ -174,15 +174,15 @@
       "note": "sized device transit frequency from its own gate cap"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "device-fast-enough",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "ft_in",
       "op": ">=",
       "rhs": "ft_margin*GBW_req",
       "note": "the sized device's fT must clear GBW_req with margin; a real derived check (the pinned gm hid the gate cap), estimate-grade, sim signs off"
     }
   ],
-  "provide": ["GBW_req", "A_req", "SR_req", "CL_eff"]
+  "provides": ["GBW_req", "A_req", "SR_req", "CL_eff"]
 }

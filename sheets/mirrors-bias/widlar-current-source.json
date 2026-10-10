@@ -72,7 +72,7 @@
       "note": "how tightly the Widlar fixed point must close"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "ref",
       "doc": {
@@ -84,18 +84,18 @@
           { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_r2", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r2", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r2", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_r2",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+        "provides": ["W", "vgs", "vdsat", "gm", "id"]
       },
       "params": {
         "I_ref": "I_in",
@@ -104,14 +104,14 @@
       }
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "W": "M_ratio*ref__W",
     "id": "I_out",
     "vds": "V_out - I_out*R_s",
     "vsb": "I_out*R_s"
   },
-  "rows": [
+  "equations": [
     {
       "name": "delta_vgs",
       "expr": "ref__vgs - vgs",
@@ -131,10 +131,10 @@
       "note": "output resistance boosted by the local series feedback of the source resistor, with the resistor's own series contribution added back. Both source-referred generators drive current through R_s, so gmb belongs inside the factor — the same form the degenerated mirror uses. This is the number a stage loading the source sees"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -142,7 +142,7 @@
     },
     {
       "id": "widlar-fixed-point",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "delta_vgs",
       "op": "==",
       "rhs": "vgs_drop",
@@ -151,7 +151,7 @@
     },
     {
       "id": "compliance",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "vdsat + I_out*R_s",
@@ -159,12 +159,12 @@
     },
     {
       "id": "widlar-steps-down",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "I_out",
       "op": "<=",
       "rhs": "I_in",
       "note": "a Widlar source produces a fraction of the reference current; a positive gate-source step needs I_out < I_in"
     }
   ],
-  "provide": ["Rout"]
+  "provides": ["Rout"]
 }

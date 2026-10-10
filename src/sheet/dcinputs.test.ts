@@ -22,10 +22,10 @@ const leaf = (bind: Partial<SheetBind> = {}, params: SheetVar[] = []): SheetDoc 
     { name: 'vd', value: 0.6, unit: 'V' },
     ...params,
   ],
-  bind: { L: 'L', id: 'I', gm_id: '10', vds: 'vd', ...bind },
-  rows: [],
-  rules: [],
-  provide: ['vgs', 'id'],
+  givens: { L: 'L', id: 'I', gm_id: '10', vds: 'vd', ...bind },
+  equations: [],
+  checks: [],
+  provides: ['vgs', 'id'],
 });
 
 /** The leaf with its drain-bias param `vd` amended. */
@@ -40,18 +40,18 @@ const overrideChain = (cls?: 'independent'): SheetDoc => ({
   title: 'top',
   polarity: 'n',
   params: [{ name: 'VDD', value: 1.8, unit: 'V', ...(cls ? { class: cls } : {}) }],
-  rows: [],
-  rules: [],
-  uses: [
+  equations: [],
+  checks: [],
+  blocks: [
     {
       name: 'mid',
       doc: {
         title: 'mid',
         polarity: 'n',
         params: [{ name: 'V_m', value: 1, unit: 'V' }],
-        rows: [],
-        rules: [],
-        uses: [{ name: 'leaf', doc: leaf(), params: { vd: 'V_m - 0.2' } }],
+        equations: [],
+        checks: [],
+        blocks: [{ name: 'leaf', doc: leaf(), params: { vd: 'V_m - 0.2' } }],
       },
       params: { V_m: 'VDD' },
     },
@@ -65,21 +65,21 @@ const reExport = (fed = false): SheetDoc => {
     title: 'g',
     polarity: 'n',
     params: [{ name: 'V_g', value: 0.5, unit: 'V' }],
-    rows: [{ name: 'lvl', expr: 'V_g + 0.1' }],
-    rules: [],
-    provide: ['lvl'],
+    equations: [{ name: 'lvl', expr: 'V_g + 0.1' }],
+    checks: [],
+    provides: ['lvl'],
   };
   const c: SheetDoc = {
     title: 'c',
     polarity: 'n',
     params: fed ? [{ name: 'V_c', value: 0.5, unit: 'V' }] : [],
-    rows: [],
-    rules: [],
-    uses: [{ name: 'g', doc: g, ...(fed ? { params: { V_g: 'V_c' } } : {}) }],
-    provide: ['g__lvl'],
+    equations: [],
+    checks: [],
+    blocks: [{ name: 'g', doc: g, ...(fed ? { params: { V_g: 'V_c' } } : {}) }],
+    provides: ['g__lvl'],
   };
   const top = leaf({ vds: 'c__g__lvl' }, fed ? [{ name: 'V_top', value: 0.4, unit: 'V' }] : []);
-  return { ...top, uses: [{ name: 'c', doc: c, ...(fed ? { params: { V_c: 'V_top' } } : {}) }] };
+  return { ...top, blocks: [{ name: 'c', doc: c, ...(fed ? { params: { V_c: 'V_top' } } : {}) }] };
 };
 
 /** A drain biased from V_c, with a containment edge substituting the range end V_lo for it. */
@@ -90,7 +90,7 @@ const edgeRange = (lo: Partial<SheetVar>): SheetDoc => ({
     { name: 'V_c', value: 0.6, unit: 'V', class: 'independent' },
     { name: 'V_lo', value: 0.3, unit: 'V', ...lo },
   ],
-  edges: [{ name: 'lo', set: { V_c: 'V_lo' } }],
+  operatingRange: [{ name: 'lo', set: { V_c: 'V_lo' } }],
 });
 
 /** A pair device standing on a tail node that the engine pins so the common mode lands on CM. */
@@ -106,13 +106,13 @@ const pinnedTail = (tail: Partial<SheetVar> = {}): SheetDoc => ({
       min: 0.05,
       max: 0.8,
       unit: 'V',
-      pin: { lhs: 'V_tail + m__vgs', rhs: 'CM' },
+      designConstraint: { lhs: 'V_tail + m__vgs', rhs: 'CM' },
       ...tail,
     },
   ],
-  rows: [],
-  rules: [],
-  uses: [
+  equations: [],
+  checks: [],
+  blocks: [
     {
       name: 'm',
       doc: leaf({ vsb: 'vs' }, [{ name: 'vs', value: 0, unit: 'V' }]),
@@ -131,7 +131,7 @@ const pinnedSource = (): SheetDoc => {
       min: 0,
       max: 0.8,
       unit: 'V',
-      pin: { lhs: 'V_s + vgs', rhs: 'CM_k' },
+      designConstraint: { lhs: 'V_s + vgs', rhs: 'CM_k' },
     },
     { name: 'CM_k', value: 0.9, unit: 'V' },
   ]);
@@ -147,7 +147,7 @@ const tornDrain = (up: Partial<SheetVar>): SheetDoc => ({
     { name: 'V_x', value: 0.5, unit: 'V', solveFor: 'tgt' },
     { name: 'V_up', value: 0.7, unit: 'V', ...up },
   ],
-  rows: [{ name: 'tgt', expr: 'V_up - 0.1' }],
+  equations: [{ name: 'tgt', expr: 'V_up - 0.1' }],
 });
 
 /** A parent embedding `child` as `k` and overriding `name` with the assumed parent voltage `V_p`. */
@@ -155,9 +155,9 @@ const overriding = (child: SheetDoc, name: string): SheetDoc => ({
   title: 'p',
   polarity: 'n',
   params: [{ name: 'V_p', value: 0.3, unit: 'V', class: 'assumed' }],
-  rows: [],
-  rules: [],
-  uses: [{ name: 'k', doc: child, params: { [name]: 'V_p' } }],
+  equations: [],
+  checks: [],
+  blocks: [{ name: 'k', doc: child, params: { [name]: 'V_p' } }],
 });
 
 const dcFindings = (doc: SheetDoc) =>
@@ -169,9 +169,9 @@ describe('sheet-dc-inputs — every voltage a device is biased from carries a cl
       title: 't',
       polarity: 'n',
       params: [{ name: 'V_node', value: 0.9, unit: 'V' }],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'm', doc: leaf(), params: { vd: 'V_node - 0.1' } }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'm', doc: leaf(), params: { vd: 'V_node - 0.1' } }],
     };
     const errs = dcFindings(doc);
     expect(errs).toHaveLength(1);
@@ -195,9 +195,9 @@ describe('sheet-dc-inputs — every voltage a device is biased from carries a cl
         { name: 'VDD', value: 1.8, unit: 'V', class: 'independent' },
         { name: 'V_out', value: 0.9, unit: 'V', class: 'assumed' },
       ],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         { name: 'lo', doc: leaf(), params: { vd: 'V_out' } },
         { name: 'hi', doc: leaf(), params: { vd: 'VDD - V_out' } },
       ],
@@ -214,7 +214,7 @@ describe('sheet-dc-inputs — every voltage a device is biased from carries a cl
       ...leaf({ vds: '0.6' }),
       // One unused, one read only by a rule: neither is part of any device's bias.
       params: [...leaf().params, { name: 'V_spare', value: 1, unit: 'V' }],
-      rules: [{ id: 'r', kind: 'guardrail', lhs: 'vd', op: '<=', rhs: 'V_spare' }],
+      checks: [{ id: 'r', kind: 'advisory', lhs: 'vd', op: '<=', rhs: 'V_spare' }],
     };
     expect(dcFindings(doc)).toEqual([]);
     expect(dcInputs(doc).unclassified).toEqual([]);
@@ -236,9 +236,9 @@ describe('sheet-dc-inputs — every voltage a device is biased from carries a cl
       title: 't',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'k', doc: leaf() }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'k', doc: leaf() }],
     };
     expect(dcFindings(doc).map((w) => w.symbol)).toEqual(['k.vd']);
   });
@@ -251,9 +251,9 @@ describe('sheet-dc-inputs — every voltage a device is biased from carries a cl
       title: 't',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'k', doc: child, params: { I: '2e-5' } }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'k', doc: child, params: { I: '2e-5' } }],
     };
     expect(dcFindings(child).map((w) => w.symbol)).toEqual(['constructor']);
     expect(dcFindings(doc).map((w) => w.symbol)).toEqual(['k.constructor']);
@@ -280,11 +280,11 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
     // none of them is the top device's own quantity, so none of them is a loop through it.
     const refOnly: SheetDoc = {
       ...leaf({ vds: 'vd - c__vgs' }),
-      uses: [{ name: 'c', ref: 'somewhere/else' }],
+      blocks: [{ name: 'c', ref: 'somewhere/else' }],
     };
     const unprovided: SheetDoc = {
       ...leaf({ vds: 'vd - c__vth' }),
-      uses: [{ name: 'c', doc: leaf() }],
+      blocks: [{ name: 'c', doc: leaf() }],
     };
     const typo: SheetDoc = leaf({ vds: 'vd - vdd_typo' });
     for (const doc of [refOnly, unprovided, typo]) {
@@ -299,7 +299,7 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
     // The sheet validates clean and sizes to exactly four table widths.
     const doc: SheetDoc = {
       ...withVd({ class: 'independent' }),
-      bind: { L: 'L', W: '4*w', gm_id: '10', vds: 'vd' },
+      givens: { L: 'L', W: '4*w', gm_id: '10', vds: 'vd' },
     };
     expect(validateSheet(doc).filter((w) => w.severity === 'error')).toEqual([]);
     const res = runSheet(doc, table);
@@ -315,7 +315,7 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
     // so both are reported.
     const doc: SheetDoc = {
       ...leaf({ vds: 'c__foo' }),
-      uses: [{ name: 'c', doc: { ...leaf(), provide: ['foo'] }, params: { vd: 'vgs' } }],
+      blocks: [{ name: 'c', doc: { ...leaf(), provides: ['foo'] }, params: { vd: 'vgs' } }],
     };
     expect(dcInputs(doc).cycles.map((c) => c.device)).toEqual(['bind', 'c']);
   });
@@ -325,12 +325,12 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
     // drain reads V_r through c — by a row `lvl = V_r + 0.1`, or by the param itself — so V_r is a
     // DC input of the top device alone, and it carries no class. Reading either key as c's device
     // would follow c's bind instead, which never reaches V_r.
-    const viaChild = (key: string, rows: SheetDoc['rows']): SheetDoc => {
+    const viaChild = (key: string, rows: SheetDoc['equations']): SheetDoc => {
       const c = withVd({ class: 'independent' });
       c.params.push({ name: 'V_r', value: 0.5, unit: 'V' });
       return {
         ...leaf({ vds: `c__${key}` }),
-        uses: [{ name: 'c', doc: { ...c, rows, provide: [key] } }],
+        blocks: [{ name: 'c', doc: { ...c, equations: rows, provides: [key] } }],
       };
     };
     const expected = [{ param: 'c.V_r', devices: ['bind'] }];
@@ -422,9 +422,9 @@ describe('hold — a node under a gate is stated at the nominal run and re-solve
       expect.stringMatching(/param "X" carries hold, so its class is derived/),
     );
     const three = /param "X" carries hold and is also pinned or a tearing variable/;
-    expect(errors(onNode({ hold: 'X + vgs', pin: { lhs: 'X', rhs: 'vd' } }))).toContainEqual(
-      expect.stringMatching(three),
-    );
+    expect(
+      errors(onNode({ hold: 'X + vgs', designConstraint: { lhs: 'X', rhs: 'vd' } })),
+    ).toContainEqual(expect.stringMatching(three));
     expect(errors(onNode({ hold: 'X + vgs', solveFor: 'vgs' }))).toContainEqual(
       expect.stringMatching(three),
     );
@@ -457,7 +457,7 @@ describe('hold — a node under a gate is stated at the nominal run and re-solve
   it('refuses a range end that sets a held node', () => {
     // A range end re-solves the node; an override there would be thrown away.
     const doc = onNode({ hold: 'X + vgs' });
-    doc.edges = [{ name: 'hi', set: { X: '0.3' } }];
+    doc.operatingRange = [{ name: 'hi', set: { X: '0.3' } }];
     expect(errors(doc)).toContainEqual(
       expect.stringMatching(/edge "hi" sets "X", which carries hold/),
     );
@@ -470,7 +470,7 @@ describe('hold — a node under a gate is stated at the nominal run and re-solve
       { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, hold: 'X + vgs' },
       { name: 'Y', value: 0.1, unit: 'V', min: 0, max: 0.4, hold: 'Y + r' },
     ]);
-    doc.rows = [{ name: 'r', expr: '2*X' }];
+    doc.equations = [{ name: 'r', expr: '2*X' }];
     expect(errors(doc)).toContainEqual(
       expect.stringMatching(/pinned params depend on each other \((X → Y → X|Y → X → Y)\)/),
     );
@@ -492,10 +492,10 @@ describe('hold — the solve order is checked on the document a range end really
       { name: 'vd', value: 0.3, unit: 'V' },
       { name: 'vs', value: 0, unit: 'V' },
     ],
-    bind,
-    rows: [],
-    rules: [],
-    provide,
+    givens: bind,
+    equations: [],
+    checks: [],
+    provides: provide,
   });
   /** A pair device under a cascode. The pair is bound by gm and gm/ID, so its current is a result
    *  of its sizing; the cascode carries that current. The tail is pinned to the common mode and
@@ -513,13 +513,13 @@ describe('hold — the solve order is checked on the document a range end really
         unit: 'V',
         min: 0.1,
         max: 0.45,
-        pin: { lhs: 'V_tail + in__vgs', rhs: 'CM' },
+        designConstraint: { lhs: 'V_tail + in__vgs', rhs: 'CM' },
       },
       { name: 'V_a', value: 0.55, unit: 'V', min: 0.46, max: 0.85, ...node },
     ],
-    rows: [],
-    rules: [],
-    uses: [
+    equations: [],
+    checks: [],
+    blocks: [
       {
         name: 'in',
         doc: dev({ L: 'L', gm: 'gmT', gm_id: '10', vds: 'vd', vsb: 'vs' }, ['vgs', 'id']),
@@ -531,7 +531,7 @@ describe('hold — the solve order is checked on the document a range end really
         params: { I: 'in__id', vd: 'V_out - V_a', vs: 'V_a' },
       },
     ],
-    edges: [{ name: 'hi', set: { CM: 'CM_hi' } }],
+    operatingRange: [{ name: 'hi', set: { CM: 'CM_hi' } }],
   });
 
   it('reads the binds as a range end rewrites them, not as authored', () => {
@@ -553,24 +553,26 @@ describe('hold — the solve order is checked on the document a range end really
     const doc: SheetDoc = {
       title: 'parent',
       polarity: 'n',
-      params: [{ name: 'P', value: 0.5, min: 0, max: 1, pin: { lhs: 'P + c__Q', rhs: '1' } }],
-      rows: [],
-      rules: [],
-      uses: [
+      params: [
+        { name: 'P', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'P + c__Q', rhs: '1' } },
+      ],
+      equations: [],
+      checks: [],
+      blocks: [
         {
           name: 'c',
           params: { X: 'P' },
           doc: {
             title: 'child',
             polarity: 'n',
-            provide: ['Q'],
+            provides: ['Q'],
             params: [
-              { name: 'Q', value: 0.5, min: 0, max: 1, pin: { lhs: 'Q', rhs: 'X/2' } },
+              { name: 'Q', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'Q', rhs: 'X/2' } },
               { name: 'X', value: 0, min: 0, max: 1, hold: 'X + B' },
               { name: 'B', value: 0.1 },
             ],
-            rows: [],
-            rules: [],
+            equations: [],
+            checks: [],
           },
         },
       ],
@@ -582,7 +584,7 @@ describe('hold — the solve order is checked on the document a range end really
     // The cascode does not publish vgs here, so the hold names a scalar nothing provides. The
     // sheet says so the way it does for a row or a pin.
     const doc = stack({ hold: 'V_a + casc__vgs' });
-    doc.uses![1].doc!.provide = [];
+    doc.blocks![1].doc!.provides = [];
     expect(validateSheet(doc).map((w) => w.message)).toContainEqual(
       expect.stringMatching(/casc__vgs/),
     );
@@ -595,9 +597,9 @@ describe('hold — the solve order is checked on the document a range end really
       title: 'p',
       polarity: 'n',
       params: [{ name: 'Xp', value: 0.25, unit: 'V', class: 'independent' }],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         {
           name: 'k',
           params: { X: 'Xp' },
@@ -632,19 +634,19 @@ describe('sheet-dc-inputs — a device may not depend on its own operating point
       { name: 'I', value: 10e-6, unit: 'A' },
       ...(viaEstimate ? [{ name: 'vgs_est', value: 0.6, unit: 'V', solveFor: 'vgs' }] : []),
     ],
-    bind: { L: 'L', id: 'I', gm_id: '10', vds: 'c__x' },
-    rows: [],
-    rules: [],
-    uses: [
+    givens: { L: 'L', id: 'I', gm_id: '10', vds: 'c__x' },
+    equations: [],
+    checks: [],
+    blocks: [
       {
         name: 'c',
         doc: {
           title: 'c',
           polarity: 'n',
           params: [{ name: 'p', value: 0.6 }],
-          rows: [{ name: 'x', expr: '1.5*p' }],
-          rules: [],
-          provide: ['x'],
+          equations: [{ name: 'x', expr: '1.5*p' }],
+          checks: [],
+          provides: ['x'],
         },
         params: { p: viaEstimate ? 'vgs_est' : 'vgs' },
       },
@@ -763,7 +765,7 @@ const forwardHits = (doc: SheetDoc, moved: string): string[] => {
  *  edge sets does. */
 const forward = (doc: SheetDoc, p: string): boolean =>
   forwardHits(doc, p).length > 0 ||
-  (doc.edges ?? []).some((e) =>
+  (doc.operatingRange ?? []).some((e) =>
     Object.entries(e.set ?? {}).some(
       ([q, x]) =>
         typeof x === 'string' && compileExpr(x).names.includes(p) && forwardHits(doc, q).length > 0,
@@ -880,9 +882,9 @@ describe('SheetResult.assumptions', () => {
         { name: 'V_idle', value: 0.4, unit: 'V', class: 'assumed' }, // reaches nothing
         { name: 'V_a', value: 0.6, unit: 'V', class: 'assumed' },
       ],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         // The parent does not override the child's drain level: the child's own assumption.
         { name: 'k', doc: withVd({ class: 'assumed' }) },
         { name: 'n', doc: leaf(), params: { vd: 'VDD - V_a' } },
@@ -922,11 +924,18 @@ const pinPair = (): SheetDoc => ({
   ...leaf({ vsb: 'P' }),
   params: [
     ...leaf().params,
-    { name: 'P', value: 0.2, min: 0, max: 0.8, unit: 'V', pin: { lhs: 'P + vgs', rhs: 'rq' } },
-    { name: 'Q', value: 0.5, min: 0, max: 1, unit: 'V', pin: { lhs: 'Q', rhs: 'R' } },
+    {
+      name: 'P',
+      value: 0.2,
+      min: 0,
+      max: 0.8,
+      unit: 'V',
+      designConstraint: { lhs: 'P + vgs', rhs: 'rq' },
+    },
+    { name: 'Q', value: 0.5, min: 0, max: 1, unit: 'V', designConstraint: { lhs: 'Q', rhs: 'R' } },
     { name: 'R', value: 0.5, unit: 'V', class: 'independent' },
   ],
-  rows: [{ name: 'rq', expr: 'Q + 0.1' }],
+  equations: [{ name: 'rq', expr: 'Q + 0.1' }],
 });
 
 describe('exprRoots — the residual reading', () => {
@@ -951,7 +960,7 @@ describe('exprRoots — the residual reading', () => {
   it('sees the dependency through a child provide, of the param or of the device', () => {
     // k publishes its pinned source node V_s, and foo — none of k's params or rows, so a column of
     // the table read at k's operating point, which rests on the whole of k's bind, whose vsb is V_s.
-    const doc = overriding({ ...pinnedSource(), provide: ['foo', 'V_s'] }, 'vd');
+    const doc = overriding({ ...pinnedSource(), provides: ['foo', 'V_s'] }, 'vd');
     expect(exprRoots(doc, '', 'k__V_s', residual('V_p')).pins).toEqual(['k.V_s']);
     const column = exprRoots(doc, '', 'k__foo', residual('V_p'));
     expect(column.pins).toEqual(['k.V_s']);
@@ -961,14 +970,14 @@ describe('exprRoots — the residual reading', () => {
   it('follows a torn estimate through its target to the pinned param behind it', () => {
     // P + V_x: V_x is torn against tgt = V_up - 0.1, and V_up is pinned. A walk that stopped at the
     // torn V_x would see no pin at all.
-    const doc = tornDrain({ min: 0, max: 1, pin: { lhs: 'V_up', rhs: '0.7' } });
+    const doc = tornDrain({ min: 0, max: 1, designConstraint: { lhs: 'V_up', rhs: '0.7' } });
     doc.params.push({
       name: 'P',
       value: 0.5,
       min: 0,
       max: 1,
       unit: 'V',
-      pin: { lhs: 'P + V_x', rhs: '1' },
+      designConstraint: { lhs: 'P + V_x', rhs: '1' },
     });
     const r = exprRoots(doc, '', 'P + V_x', residual('P'));
     expect(r.pins).toEqual(['V_up']);
@@ -984,7 +993,7 @@ describe('exprRoots — the residual reading', () => {
       { name: 'I_tail', value: 20e-6, unit: 'A', class: 'independent' },
       { name: 'V_f', value: 0.9, unit: 'V', class: 'independent' },
     );
-    doc.uses![0].params!.I = 'I_tail/2';
+    doc.blocks![0].params!.I = 'I_tail/2';
     const viaId = exprRoots(doc, '', 'V_f - m__id', residual('V_f'));
     expect(viaId.pins).toEqual([]);
     expect(viaId.roots.independent).toEqual(['I_tail']);
@@ -998,18 +1007,25 @@ describe('exprRoots — the residual reading', () => {
       title: 'p',
       polarity: 'n',
       params: [
-        { name: 'Q', value: 1, min: 0.5, max: 2, unit: 'V', pin: { lhs: 'Q', rhs: '1' } },
+        {
+          name: 'Q',
+          value: 1,
+          min: 0.5,
+          max: 2,
+          unit: 'V',
+          designConstraint: { lhs: 'Q', rhs: '1' },
+        },
         { name: 'P', value: 1, unit: 'V' },
       ],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         {
           name: 'k',
           doc: {
             ...withVd({ class: 'independent' }),
-            rows: [{ name: 'wu', expr: 'w*1e6' }],
-            provide: ['wu'],
+            equations: [{ name: 'wu', expr: 'w*1e6' }],
+            provides: ['wu'],
           },
           params: { I: 'Q*1e-5' },
         },
@@ -1021,11 +1037,18 @@ describe('exprRoots — the residual reading', () => {
     // device's — whichever of the two the walk meets first.
     const top: SheetDoc = {
       ...leaf({ id: 'Q*1e-5' }, [
-        { name: 'Q', value: 1, min: 0.5, max: 2, unit: 'V', pin: { lhs: 'Q', rhs: '1' } },
+        {
+          name: 'Q',
+          value: 1,
+          min: 0.5,
+          max: 2,
+          unit: 'V',
+          designConstraint: { lhs: 'Q', rhs: '1' },
+        },
         { name: 'P', value: 1, unit: 'V' },
       ]),
-      rows: [{ name: 'wu', expr: 'w*1e6' }],
-      uses: [{ name: 'k', doc: { ...leaf(), provide: ['vd'] }, params: { vd: 'w*1e5' } }],
+      equations: [{ name: 'wu', expr: 'w*1e6' }],
+      blocks: [{ name: 'k', doc: { ...leaf(), provides: ['vd'] }, params: { vd: 'w*1e5' } }],
     };
     expect(exprRoots(top, '', 'P + k__vd', residual('P')).pins).toEqual([]);
     for (const expr of ['P + wu', 'P + k__vd + wu', 'P + wu + k__vd'])
@@ -1034,8 +1057,8 @@ describe('exprRoots — the residual reading', () => {
     // the device's vgs nor a row reading the sized w comes back to the device itself.
     const unit: SheetDoc = {
       ...withVd({ class: 'independent' }),
-      bind: { L: 'L', W: '4*w', gm_id: '10', vds: 'vd' },
-      rows: [{ name: 'wu', expr: 'w*1e6' }],
+      givens: { L: 'L', W: '4*w', gm_id: '10', vds: 'vd' },
+      equations: [{ name: 'wu', expr: 'w*1e6' }],
     };
     for (const expr of ['vgs + wu', 'wu + vgs'])
       expect(exprRoots(unit, '', expr, residual('vd')).cycles).toEqual([]);
@@ -1050,7 +1073,7 @@ describe('exprRoots — the residual reading', () => {
       [pinnedSource(), 'V_s'],
       [tornDrain({}), 'V_x'],
     ] as const) {
-      const doc = overriding({ ...child, provide: [key] }, key);
+      const doc = overriding({ ...child, provides: [key] }, key);
       expect(exprRoots(doc, '', `k__${key}`, residual('P')).roots.assumed).toEqual([]);
     }
     expect(exprRoots(edgeRange({}), '', 'V_c', residual('vd')).roots.unclassified).toEqual([]);
@@ -1093,7 +1116,7 @@ describe('exprRoots — the residual reading', () => {
     // a = b and b = a: the walk comes back to a through b, with no solve on the way.
     const doc: SheetDoc = {
       ...leaf({ vds: '0.6' }),
-      rows: [
+      equations: [
         { name: 'a', expr: 'b' },
         { name: 'b', expr: 'a' },
       ],
@@ -1114,7 +1137,7 @@ describe('exprRoots — the provenance reading', () => {
         ...leaf().params,
         { name: 'V_spare', value: 1, unit: 'V', ...(cls ? { class: cls } : {}) },
       ],
-      rules: [{ id: 'r', kind: 'guardrail', lhs: 'vd', op: '<=', rhs: 'V_spare' }],
+      checks: [{ id: 'r', kind: 'advisory', lhs: 'vd', op: '<=', rhs: 'V_spare' }],
     });
     expect(dcInputs(spare()).unclassified).toEqual([]);
     expect(exprRoots(spare(), '', 'V_spare', 'provenance').roots.unclassified).toEqual(['V_spare']);
@@ -1130,9 +1153,11 @@ describe('exprRoots — the provenance reading', () => {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'k', doc: { ...withVd({ class: 'independent' }), provide: ['vd', 'vgs'] } }],
+      equations: [],
+      checks: [],
+      blocks: [
+        { name: 'k', doc: { ...withVd({ class: 'independent' }), provides: ['vd', 'vgs'] } },
+      ],
     };
     const param = exprRoots(doc, '', 'k__vd', 'provenance');
     const device = exprRoots(doc, '', 'k__vgs', 'provenance');

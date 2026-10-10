@@ -60,7 +60,7 @@
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     { "name": "L_fb", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "fb",
       "doc": {
@@ -73,18 +73,18 @@
           { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vgs", "vdsat"]
+        "provides": ["gm", "vgs", "vdsat"]
       },
       "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "V_out" },
       "wiring": { "gate": "V_x", "source": "0" }
@@ -102,18 +102,18 @@
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "W"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "cgg", "W"]
       },
       "params": {
         "Ix": "I_in",
@@ -124,7 +124,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "V_x",
       "expr": "fb__vgs",
@@ -169,10 +169,10 @@
       "note": "estimate: quiescent supply current — ONE stacked branch: the feedback device reuses the input device's current rather than drawing its own, so the supply pays for it once. A realization that biases the output node with a source of its own adds that current on top. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "rout-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "Rout",
       "op": "<=",
       "rhs": "Rout_target",
@@ -180,7 +180,7 @@
     },
     {
       "id": "branch-headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "VDD",
       "op": ">=",
       "rhs": "headroom + V_out",
@@ -188,7 +188,7 @@
     },
     {
       "id": "in-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_x - V_out",
       "op": ">=",
       "rhs": "in__vdsat",
@@ -196,12 +196,12 @@
     },
     {
       "id": "fb-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "fb__vdsat",
       "note": "the feedback device stays saturated: its drain is the output node and its source is at ground, so the output level IS its drain-source voltage"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

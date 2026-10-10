@@ -105,7 +105,7 @@
       "note": "1-sigma random ratio-error budget"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "ref",
       "doc": {
@@ -124,18 +124,18 @@
             "note": "the wide-swing mirror node voltage"
           }
         ],
-        "bind": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_r",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["W", "vgs", "vdsat", "gm", "id"]
+        "provides": ["W", "vgs", "vdsat", "gm", "id"]
       },
       "params": {
         "I_ref": "I_in",
@@ -169,18 +169,24 @@
             "note": "the source stands on the wide-swing mirror node, not the bulk"
           }
         ],
-        "bind": { "L": "L_cc", "id": "I_c", "gm_id": "gm_id_cc", "vds": "vds_cc", "vsb": "vsb_cc" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_cc",
+          "id": "I_c",
+          "gm_id": "gm_id_cc",
+          "vds": "vds_cc",
+          "vsb": "vsb_cc"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_cc",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["vgs", "vdsat", "W", "gm", "gmb", "gds"]
+        "provides": ["vgs", "vdsat", "W", "gm", "gmb", "gds"]
       },
       "params": {
         "I_c": "I_in",
@@ -191,8 +197,8 @@
       }
     }
   ],
-  "bind": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "vds_lo" },
-  "rows": [
+  "givens": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "vds_lo" },
+  "equations": [
     {
       "name": "wideswing_node",
       "expr": "ref__vdsat + node_margin",
@@ -228,17 +234,17 @@
       "note": "output resistance of the OUTPUT branch. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series; both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. The K factors are what make this the OUTPUT leg rather than the reference one: casc is a representative device carried at the reference current, and the leg described here runs K times that through a K-times-wider device. At a fixed gm/ID, K times the current is exactly K times the transconductance and exactly K times the output conductance, so the scaling is an identity of the sizing rather than an approximation, and no separate output-branch device has to be sized to state it. This is the number a stage loading the mirror sees"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_m",
       "op": "<=",
       "rhs": "ceiling"
     },
     {
       "id": "compliance",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out",
       "op": ">=",
       "rhs": "vds_lo + casc__vdsat",
@@ -246,7 +252,7 @@
     },
     {
       "id": "vbias-realizable",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "V_bias",
       "op": "<=",
       "rhs": "VDD",
@@ -254,18 +260,18 @@
     },
     {
       "id": "systematic-error",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "abs(sys_err)",
       "op": "<=",
       "rhs": "err_target"
     },
     {
       "id": "random-matching",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "sigma_ratio",
       "op": "<=",
       "rhs": "match_target"
     }
   ],
-  "provide": ["Rout"]
+  "provides": ["Rout"]
 }

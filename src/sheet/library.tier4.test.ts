@@ -348,7 +348,7 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
     // the way a hand-typed V1 used to be, and it is reported at once, on the block that owns
     // the gate.
     const doc = sheet('fd-two-stage-ota');
-    const v1 = doc.rows.find((r) => r.name === 'V1');
+    const v1 = doc.equations.find((r) => r.name === 'V1');
     expect(v1).toBeDefined();
     (v1 as { expr: string }).expr = 'VDD - abs(s2__vgs) + 0.1';
     const off = runSheet(doc, table, undefined, REFS);

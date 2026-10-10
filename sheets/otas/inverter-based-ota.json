@@ -69,7 +69,7 @@
     { "name": "L_n", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     { "name": "L_p", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "n",
       "doc": {
@@ -82,18 +82,18 @@
           { "name": "gm_id_d", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vds_d", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_d",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m", "cgg"]
       },
       "params": {
         "I_d": "I_bias",
@@ -114,18 +114,18 @@
           { "name": "gm_id_d", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vds_d", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_d",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "W", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vdsat", "W", "vnth_m", "cgg"]
       },
       "params": {
         "I_d": "I_bias",
@@ -135,7 +135,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "gm_tot",
       "expr": "n__gm + p__gm",
@@ -187,22 +187,22 @@
       "note": "estimate: quiescent supply current — a single inverter leg as these rows model it; a pseudo-differential realization doubles it. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
-    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+  "checks": [
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "spec", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
       "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
     },
-    { "id": "offset-spec", "kind": "requirement", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
+    { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
       "id": "stacked-headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "VDD",
       "op": ">=",
       "rhs": "n__vdsat + p__vdsat + 2*0.05",
@@ -210,12 +210,12 @@
     },
     {
       "id": "supply-sensitivity",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "gm_id_eff",
       "op": "<=",
       "rhs": "40",
       "note": "estimate: very high composite gm/ID means weak inversion and strong VDD dependence of the bias — budget a common-mode bias loop; sim owns PSRR"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

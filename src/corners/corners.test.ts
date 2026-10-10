@@ -512,18 +512,18 @@ describe('namedBindings', () => {
     title,
     polarity: 'n',
     params: [],
-    rows: [],
-    rules: [],
+    equations: [],
+    checks: [],
   });
 
   it('collects only the children that name a device, with their use paths', () => {
     const doc: SheetDoc = {
       ...leaf('top'),
-      uses: [
+      blocks: [
         { name: 'inherits', doc: leaf('a') },
         {
           name: 'tail',
-          doc: { ...leaf('b'), uses: [{ name: 'inner', doc: leaf('c'), device: 'deep' }] },
+          doc: { ...leaf('b'), blocks: [{ name: 'inner', doc: leaf('c'), device: 'deep' }] },
           device: 'mid',
         },
       ],
@@ -538,17 +538,17 @@ describe('namedBindings', () => {
     const refs = buildSheetRefIndex([
       {
         path: 'lib/mirror',
-        doc: { ...leaf('mirror'), uses: [{ name: 'out', doc: leaf('o'), device: 'ref-dev' }] },
+        doc: { ...leaf('mirror'), blocks: [{ name: 'out', doc: leaf('o'), device: 'ref-dev' }] },
       },
     ]);
-    const doc: SheetDoc = { ...leaf('top'), uses: [{ name: 'cm', ref: 'lib/mirror' }] };
+    const doc: SheetDoc = { ...leaf('top'), blocks: [{ name: 'cm', ref: 'lib/mirror' }] };
     const got = namedBindings(doc, refs);
     expect(got.warnings).toEqual([]);
     expect(got.bindings).toEqual([{ path: 'cm.out', binding: 'ref-dev' }]);
   });
 
   it('returns the resolution failure that makes the binding list incomplete', () => {
-    const doc: SheetDoc = { ...leaf('top'), uses: [{ name: 'cm', ref: 'lib/absent' }] };
+    const doc: SheetDoc = { ...leaf('top'), blocks: [{ name: 'cm', ref: 'lib/absent' }] };
     const got = namedBindings(doc, buildSheetRefIndex([]));
     expect(got.bindings).toEqual([]);
     expect(got.warnings.map((w) => w.severity)).toEqual(['error']);
@@ -562,9 +562,9 @@ describe('SheetResult.closes', () => {
     title: 'c',
     polarity: 'n',
     params: [{ name: 'L', value: 0.5e-6 }],
-    bind: { L: 'L', gm_id: '12', id: '2e-5' },
-    rows: [],
-    rules: [],
+    givens: { L: 'L', gm_id: '12', id: '2e-5' },
+    equations: [],
+    checks: [],
     ...over,
   });
 
@@ -572,15 +572,21 @@ describe('SheetResult.closes', () => {
     const cases: Record<string, SheetDoc> = {
       closing: edgeless(),
       failing: edgeless({
-        rules: [{ id: 'no', kind: 'invariant', lhs: '0', op: '>=', rhs: '1' }],
+        checks: [{ id: 'no', kind: 'physical', lhs: '0', op: '>=', rhs: '1' }],
       }),
       // Two operating-point selectors: a validation error, which blocks both verdicts.
-      'structurally broken': edgeless({ bind: { L: 'L', gm_id: '12', ft: '2e9' } }),
+      'structurally broken': edgeless({ givens: { L: 'L', gm_id: '12', ft: '2e9' } }),
       // A pin whose relation never reaches its target: the solver marks the run infeasible
       // from inside, which must carry `closes` down with it.
       'unsolvable pin': edgeless({
         params: [
-          { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: '2*x + 1', rhs: '0.5' } },
+          {
+            name: 'x',
+            value: 1,
+            min: 0,
+            max: 10,
+            designConstraint: { lhs: '2*x + 1', rhs: '0.5' },
+          },
           { name: 'L', value: 0.5e-6 },
         ],
       }),
@@ -604,14 +610,14 @@ const pinnedDoc = (over: Partial<SheetDoc> = {}): SheetDoc => ({
   title: 'pinned',
   polarity: 'n',
   params: [
-    { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+    { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
     { name: 'T', value: 5 },
     { name: 'T_lo', value: 3 },
     { name: 'T_hi', value: 7 },
     { name: 'x_floor', value: 0.5 },
   ],
-  rows: [{ name: 'y', expr: '2*x + 1' }],
-  rules: [{ id: 'floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: 'x_floor' }],
+  equations: [{ name: 'y', expr: '2*x + 1' }],
+  checks: [{ id: 'floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor' }],
   ...over,
 });
 
@@ -626,16 +632,16 @@ describe('runVariant', () => {
       { name: 'L', value: 0.5e-6 },
       { name: 'A_min', value: aMin },
     ],
-    bind: { L: 'L', gm_id: '12', id: '2e-5' },
-    rows: [{ name: 'A', expr: 'gm_gds' }],
-    rules: [{ id: 'gain', kind: 'requirement', lhs: 'A', op: '>=', rhs: 'A_min' }],
+    givens: { L: 'L', gm_id: '12', id: '2e-5' },
+    equations: [{ name: 'A', expr: 'gm_gds' }],
+    checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'A_min' }],
   });
 
   /** gainDoc plus one composed child bound by name — the shape the child-projection tests
    *  share. */
   const withTail = (binding: string): SheetDoc => ({
     ...gainDoc(20),
-    uses: [
+    blocks: [
       {
         name: 'tailblk',
         device: binding,
@@ -643,9 +649,9 @@ describe('runVariant', () => {
           title: 'tail',
           polarity: 'n',
           params: [],
-          bind: { L: '5e-7', gm_id: '10', id: '2e-5' },
-          rows: [],
-          rules: [],
+          givens: { L: '5e-7', gm_id: '10', id: '2e-5' },
+          equations: [],
+          checks: [],
         },
       },
     ],
@@ -817,7 +823,7 @@ describe('runVariant', () => {
     const doc: SheetDoc = {
       ...gainDoc(20),
       params: [...gainDoc(20).params, { name: 'V_d', value: 0.6, unit: 'V', class: 'assumed' }],
-      bind: { L: 'L', gm_id: '12', id: '2e-5', vds: 'V_d' },
+      givens: { L: 'L', gm_id: '12', id: '2e-5', vds: 'V_d' },
     };
     const runs = runVariants(doc, family, [key('tt', 27), key('tt', 85)], noFamilies);
     expect(runs.map((r) => r.state)).toEqual(['evaluated', 'evaluated']);
@@ -856,22 +862,22 @@ describe('runVariant', () => {
       title: 'inner',
       polarity: 'n',
       params: [],
-      bind: sizing,
-      rows: [],
-      rules: [],
+      givens: sizing,
+      equations: [],
+      checks: [],
     };
     const nested: SheetDoc = {
       ...gainDoc(20),
-      uses: [
+      blocks: [
         {
           name: 'mid',
           doc: {
             title: 'mid',
             polarity: 'n',
             params: [],
-            rows: [],
-            rules: [],
-            uses: [{ name: 'deep', doc: inner, device: 'deep-binding' }],
+            equations: [],
+            checks: [],
+            blocks: [{ name: 'deep', doc: inner, device: 'deep-binding' }],
           },
         },
       ],
@@ -884,10 +890,10 @@ describe('runVariant', () => {
     const refs = buildSheetRefIndex([
       {
         path: 'lib/blk',
-        doc: { ...inner, uses: [{ name: 'ref-child', doc: inner, device: 'deep-binding' }] },
+        doc: { ...inner, blocks: [{ name: 'ref-child', doc: inner, device: 'deep-binding' }] },
       },
     ]);
-    const byRef: SheetDoc = { ...gainDoc(20), uses: [{ name: 'cm', ref: 'lib/blk' }] };
+    const byRef: SheetDoc = { ...gainDoc(20), blocks: [{ name: 'cm', ref: 'lib/blk' }] };
     const viaRef = runVariant(byRef, primary, key('tt'), noFamilies, refs);
     expect(viaRef.state).toBe('not-evaluated');
     if (viaRef.state !== 'not-evaluated') return;
@@ -896,7 +902,7 @@ describe('runVariant', () => {
   });
 
   it('refuses a sheet whose reference does not resolve, before any device is projected', () => {
-    const doc: SheetDoc = { ...gainDoc(20), uses: [{ name: 'cm', ref: 'lib/absent' }] };
+    const doc: SheetDoc = { ...gainDoc(20), blocks: [{ name: 'cm', ref: 'lib/absent' }] };
     const run = runVariant(doc, primary, key('tt'), noFamilies, buildSheetRefIndex([]));
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
@@ -907,11 +913,11 @@ describe('runVariant', () => {
   it('names a binding that no loaded device answers to', () => {
     const doc: SheetDoc = {
       ...gainDoc(20),
-      uses: [
+      blocks: [
         {
           name: 'blk',
           device: 'nothing-loaded',
-          doc: { title: 'x', polarity: 'n', params: [], rows: [], rules: [] },
+          doc: { title: 'x', polarity: 'n', params: [], equations: [], checks: [] },
         },
       ],
     };
@@ -924,16 +930,16 @@ describe('runVariant', () => {
   it('never consults the resolver for a child that inherits its parent’s device', () => {
     const doc: SheetDoc = {
       ...gainDoc(20),
-      uses: [
+      blocks: [
         {
           name: 'inherits',
           doc: {
             title: 'x',
             polarity: 'n',
             params: [],
-            bind: { L: '5e-7', gm_id: '10', id: '2e-5' },
-            rows: [],
-            rules: [],
+            givens: { L: '5e-7', gm_id: '10', id: '2e-5' },
+            equations: [],
+            checks: [],
           },
         },
       ],
@@ -943,7 +949,7 @@ describe('runVariant', () => {
 
   it('refuses a structurally broken sheet before any device is projected', () => {
     const run = runVariant(
-      { ...gainDoc(20), bind: { L: 'L', gm_id: '12', ft: '2e9' } },
+      { ...gainDoc(20), givens: { L: 'L', gm_id: '12', ft: '2e9' } },
       primary,
       key('tt'),
       noFamilies,
@@ -960,10 +966,10 @@ describe('runVariant', () => {
     // verdict — while its diagnostics stay reachable.
     const doc = pinnedDoc({
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 0.5 },
       ],
-      rules: [{ id: 'impossible', kind: 'invariant', lhs: '0', op: '>=', rhs: '1' }],
+      checks: [{ id: 'impossible', kind: 'physical', lhs: '0', op: '>=', rhs: '1' }],
     });
     const run = runVariant(doc, primary, key('tt'), noFamilies);
     expect(run.state).toBe('not-evaluated');
@@ -979,12 +985,12 @@ describe('runVariant', () => {
     // covered — and the two must never be reported as one failure.
     const doc = pinnedDoc({
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
         { name: 'T_lo', value: 3 },
         { name: 'x_floor', value: 1.6 },
       ],
-      edges: [{ name: 'lo', set: { T: 'T_lo' } }],
+      operatingRange: [{ name: 'lo', set: { T: 'T_lo' } }],
     });
     const run = runVariant(doc, primary, key('tt'), noFamilies);
     expect(run.state).toBe('evaluated');
@@ -1001,12 +1007,12 @@ describe('runVariant', () => {
     // reads unchecked — never a measured gap, and never an erased run.
     const doc = pinnedDoc({
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
         { name: 'T_bad', value: 0.5 },
         { name: 'x_floor', value: 0.5 },
       ],
-      edges: [{ name: 'lo', set: { T: 'T_bad' } }],
+      operatingRange: [{ name: 'lo', set: { T: 'T_bad' } }],
     });
     const run = runVariant(doc, primary, key('tt'), noFamilies);
     expect(run.state).toBe('evaluated');
@@ -1029,7 +1035,7 @@ describe('runVariant', () => {
 
 const hardRule = (marginPct: number): RuleResult => ({
   id: 'r',
-  kind: 'invariant',
+  kind: 'physical',
   op: '>=',
   text: 'r',
   lhsValue: 0,

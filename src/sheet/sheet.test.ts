@@ -45,9 +45,9 @@ function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
       { name: 'gm_id', value: 12 },
       { name: 'vstar_floor', value: 0.15 },
     ],
-    bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' },
-    rows: [],
-    rules: [],
+    givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' },
+    equations: [],
+    checks: [],
     ...overrides,
   };
 }
@@ -63,8 +63,8 @@ describe('evaluateSheet — spec-first binds', () => {
         { name: 'ft_target', value: ft },
         { name: 'Ib', value: 20e-6 },
       ],
-      bind: { L: 'L', ft: 'ft_target', id: 'Ib' },
-      rows: [{ name: 'speed', expr: 'ft' }],
+      givens: { L: 'L', ft: 'ft_target', id: 'Ib' },
+      equations: [{ name: 'speed', expr: 'ft' }],
     });
     const res = evaluateSheet(doc, dev);
 
@@ -80,7 +80,7 @@ describe('evaluateSheet — spec-first binds', () => {
     // same words, or an author gets contradictory advice from the two.
     const doc = boundDoc({
       params: [{ name: 'L', value: 0.5e-6 }],
-      bind: { L: 'L', ft: '2e9', gm_id: '12' },
+      givens: { L: 'L', ft: '2e9', gm_id: '12' },
     });
 
     const problems = validateSheet(doc);
@@ -112,8 +112,8 @@ describe('evaluateSheet — spec-first binds', () => {
         { name: 'Av', value: target },
         { name: 'Ib', value: 2e-5 },
       ],
-      bind: { L: 'L', gm_gds: 'Av', id: 'Ib' },
-      rules: [{ id: 'gain', kind: 'requirement', lhs: 'gm_gds', op: '>=', rhs: 'Av' }],
+      givens: { L: 'L', gm_gds: 'Av', id: 'Ib' },
+      checks: [{ id: 'gain', kind: 'spec', lhs: 'gm_gds', op: '>=', rhs: 'Av' }],
     });
     const res = evaluateSheet(doc, dev);
 
@@ -125,7 +125,7 @@ describe('evaluateSheet — spec-first binds', () => {
     const noCgg = withoutColumns(dev, ['cgg']);
     const doc = boundDoc({
       params: [{ name: 'L', value: 0.5e-6 }],
-      bind: { L: 'L', ft: '2e9', id: '20e-6' },
+      givens: { L: 'L', ft: '2e9', id: '20e-6' },
     });
     const res = evaluateSheet(doc, noCgg);
 
@@ -154,17 +154,17 @@ describe('evaluateSheet — rules', () => {
   it('flips an invariant pass<->fail across its boundary', () => {
     const rule = {
       id: 'headroom',
-      kind: 'invariant' as const,
+      kind: 'physical' as const,
       lhs: 'vstar',
       op: '>=' as const,
       rhs: 'vstar_floor',
     };
     // vstar = 2/12 ≈ 0.1667
-    const passDoc = boundDoc({ params: [...boundDoc().params], rules: [rule] });
+    const passDoc = boundDoc({ params: [...boundDoc().params], checks: [rule] });
     passDoc.params.find((p) => p.name === 'vstar_floor')!.value = 0.15;
     expect(evaluateSheet(passDoc, dev).rules[0].status).toBe('pass');
 
-    const failDoc = boundDoc({ rules: [rule] });
+    const failDoc = boundDoc({ checks: [rule] });
     failDoc.params.find((p) => p.name === 'vstar_floor')!.value = 0.2;
     const failed = evaluateSheet(failDoc, dev).rules[0];
     expect(failed.status).toBe('fail');
@@ -177,11 +177,11 @@ describe('evaluateSheet — rules', () => {
         { name: 'a', value: 10 },
         { name: 'b', value: 8 },
       ],
-      bind: undefined,
-      rules: [
-        { id: 'ge', kind: 'guardrail', lhs: 'a', op: '>=', rhs: 'b' }, // 10>=8  margin +2
-        { id: 'le', kind: 'guardrail', lhs: 'a', op: '<=', rhs: 'b' }, // 10<=8  margin -2
-        { id: 'eq', kind: 'guardrail', lhs: 'a', op: '==', rhs: 'b', tolPct: 10 }, // |2|>0.8 -> fail
+      givens: undefined,
+      checks: [
+        { id: 'ge', kind: 'advisory', lhs: 'a', op: '>=', rhs: 'b' }, // 10>=8  margin +2
+        { id: 'le', kind: 'advisory', lhs: 'a', op: '<=', rhs: 'b' }, // 10<=8  margin -2
+        { id: 'eq', kind: 'advisory', lhs: 'a', op: '==', rhs: 'b', tolPct: 10 }, // |2|>0.8 -> fail
       ],
     });
     const [ge, le, eq] = evaluateSheet(doc, dev).rules;
@@ -200,8 +200,8 @@ describe('evaluateSheet — rules', () => {
         { name: 'a', value: 10.3 },
         { name: 'b', value: 10 },
       ],
-      bind: undefined,
-      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=0.3 ≤ 0.5
+      givens: undefined,
+      checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=0.3 ≤ 0.5
     });
     const pass = evaluateSheet(within, dev).rules[0];
     expect(pass.status).toBe('pass');
@@ -212,8 +212,8 @@ describe('evaluateSheet — rules', () => {
         { name: 'a', value: 11 },
         { name: 'b', value: 10 },
       ],
-      bind: undefined,
-      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=1 > 0.5
+      givens: undefined,
+      checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=1 > 0.5
     });
     const fail = evaluateSheet(outside, dev).rules[0];
     expect(fail.status).toBe('fail');
@@ -226,8 +226,8 @@ describe('evaluateSheet — rules', () => {
         { name: 'z', value: 0 },
         { name: 'lim', value: 1 },
       ],
-      bind: undefined,
-      rules: [{ id: 'div0', kind: 'guardrail', lhs: '1/z', op: '<=', rhs: 'lim' }], // 1/0 = Inf
+      givens: undefined,
+      checks: [{ id: 'div0', kind: 'advisory', lhs: '1/z', op: '<=', rhs: 'lim' }], // 1/0 = Inf
     });
     expect(evaluateSheet(doc, dev).rules[0].status).toBe('na');
   });
@@ -249,7 +249,7 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
 
   it('does not mark a bias axis the bind declares', () => {
     const doc = boundDoc();
-    const res = evaluateSheet({ ...doc, bind: { ...doc.bind!, vsb: '0.2' } }, bodySwept);
+    const res = evaluateSheet({ ...doc, givens: { ...doc.givens!, vsb: '0.2' } }, bodySwept);
     expect(res.bind?.bias?.vsb).toBeCloseTo(0.2, 12);
     expect(res.bind?.assumed ?? []).not.toContain('vsb');
   });
@@ -257,7 +257,7 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
   it('sizes a body-biased device differently — which is why the assumption has to be visible', () => {
     const doc = boundDoc();
     const at = (vsb: string): number =>
-      evaluateSheet({ ...doc, bind: { ...doc.bind!, vsb } }, bodySwept).bind?.vgs ?? NaN;
+      evaluateSheet({ ...doc, givens: { ...doc.givens!, vsb } }, bodySwept).bind?.vgs ?? NaN;
     // Same gm/ID, same L: body bias moves the gate drive it takes to get there.
     expect(Math.abs(at('0.6') - at('0'))).toBeGreaterThan(1e-3);
   });
@@ -282,9 +282,9 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
         { name: 'id', value: 10e-6 },
         { name: 'vstar_est', value: 0.3, solveFor: 'vstar_actual' },
       ],
-      bind: { L: 'L', id: 'id', gm_id: '8 + 5*vstar_est' },
-      rows: [{ name: 'vstar_actual', expr: 'vstar' }],
-      rules: [],
+      givens: { L: 'L', id: 'id', gm_id: '8 + 5*vstar_est' },
+      equations: [{ name: 'vstar_actual', expr: 'vstar' }],
+      checks: [],
       ...overrides,
     };
   }
@@ -358,8 +358,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
           { name: 'id', value: 10e-6 },
           { name: 'run', value: 1, solveFor: 'onward' },
         ],
-        bind: undefined,
-        rows: [{ name: 'onward', expr: 'run + 1' }],
+        givens: undefined,
+        equations: [{ name: 'onward', expr: 'run + 1' }],
       }),
       dev,
     );
@@ -382,8 +382,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
           { name: 'id', value: 10e-6 },
           { name: 'osc', value: 5, solveFor: 'flip' },
         ],
-        bind: undefined,
-        rows: [{ name: 'flip', expr: '-2*osc + 3' }],
+        givens: undefined,
+        equations: [{ name: 'flip', expr: '-2*osc + 3' }],
       }),
       dev,
     );
@@ -402,8 +402,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     const w = validateSheet(
       loopDoc({
         params: [{ name: 'x', value: 1, solveFor: 'x' }],
-        bind: undefined,
-        rows: [],
+        givens: undefined,
+        equations: [],
       }),
     );
     expect(w.some((v) => v.rule === 'sheet-param' && /solves for itself/.test(v.message))).toBe(
@@ -418,9 +418,9 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       title: 'parent',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'c', doc: { ...loopDoc(), provide: ['vstar_actual'] } }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'c', doc: { ...loopDoc(), provides: ['vstar_actual'] } }],
     };
     const res = evaluateSheet(parent, dev);
     const child = res.children?.[0];
@@ -440,8 +440,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       title: 'tiny',
       polarity: 'n',
       params: [{ name: 'c_est', value: 0.5e-15, solveFor: 'c_actual' }],
-      rows: [{ name: 'c_actual', expr: '2e-15 - 0.5*c_est' }],
-      rules: [],
+      equations: [{ name: 'c_actual', expr: '2e-15 - 0.5*c_est' }],
+      checks: [],
     };
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(true);
@@ -457,13 +457,13 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       polarity: 'n',
       // |f'| = 0.995: converges in principle, far too slowly to finish inside the budget.
       params: [{ name: 'x', value: 1, solveFor: 'y' }],
-      rows: [{ name: 'y', expr: '1 + 0.995*x' }],
-      rules: [],
-      provide: ['y'],
+      equations: [{ name: 'y', expr: '1 + 0.995*x' }],
+      checks: [],
+      provides: ['y'],
     });
     let doc = leaf();
     for (let i = 0; i < 4; i++) {
-      doc = { ...leaf(), uses: [{ name: `c${i}`, doc }] };
+      doc = { ...leaf(), blocks: [{ name: `c${i}`, doc }] };
     }
     const t0 = performance.now();
     const res = evaluateSheet(doc, dev);
@@ -482,8 +482,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     const res = evaluateSheet(
       loopDoc({
         params: [{ name: 'flip', value: 1, solveFor: 'negated' }],
-        bind: undefined,
-        rows: [{ name: 'negated', expr: '-flip' }],
+        givens: undefined,
+        equations: [{ name: 'negated', expr: '-flip' }],
       }),
       dev,
     );
@@ -498,8 +498,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     const res = evaluateSheet(
       loopDoc({
         params: [{ name: 'osc', value: 1, solveFor: 'flip' }],
-        bind: undefined,
-        rows: [{ name: 'flip', expr: '-2*osc' }],
+        givens: undefined,
+        equations: [{ name: 'flip', expr: '-2*osc' }],
       }),
       dev,
     );
@@ -526,11 +526,11 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
           { name: 'x', value: 3, solveFor: 'fx' },
           { name: 'y', value: -2, solveFor: 'fy' },
         ],
-        rows: [
+        equations: [
           { name: 'fx', expr: `${c}*x - ${s}*y + 1` },
           { name: 'fy', expr: `${s}*x + ${c}*y + 1` },
         ],
-        rules: [],
+        checks: [],
       },
       dev,
     );
@@ -553,9 +553,9 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     title: `contract ${k}`,
     polarity: 'n',
     params: [{ name: 'x', value: 5, solveFor: 'fx' }],
-    rows: [{ name: 'fx', expr: `${k}*x + ${1 - k}` }],
-    rules: [],
-    provide: ['fx'],
+    equations: [{ name: 'fx', expr: `${k}*x + ${1 - k}` }],
+    checks: [],
+    provides: ['fx'],
   });
 
   it('converges a weak contraction that needs many passes', () => {
@@ -584,9 +584,9 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
         title: 'eight',
         polarity: 'n',
         params: [],
-        rows: [],
-        rules: [],
-        uses: Array.from({ length: 8 }, (_, i) => ({ name: `c${i}`, doc: geometric(0.9) })),
+        equations: [],
+        checks: [],
+        blocks: Array.from({ length: 8 }, (_, i) => ({ name: `c${i}`, doc: geometric(0.9) })),
       },
       dev,
     );
@@ -602,9 +602,9 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
         title: 'wired',
         polarity: 'n',
         params: [],
-        rows: [],
-        rules: [],
-        uses: [{ name: 'c', doc: geometric(0.5), params: { x: '42' } }],
+        equations: [],
+        checks: [],
+        blocks: [{ name: 'c', doc: geometric(0.5), params: { x: '42' } }],
       },
       dev,
     );
@@ -621,8 +621,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
         value: 1,
         solveFor: `t${i}`,
       })),
-      rows: [],
-      rules: [],
+      equations: [],
+      checks: [],
     };
     const w = validateSheet(doc);
     expect(w.some((v) => v.severity === 'error' && /not a circuit solver/.test(v.message))).toBe(
@@ -649,7 +649,7 @@ describe('evaluateSheet — degrades instead of throwing', () => {
   });
 
   it('skips a row with an undeclared name and warns', () => {
-    const doc = boundDoc({ rows: [{ name: 'oops', expr: 'no_such_name * 2' }] });
+    const doc = boundDoc({ equations: [{ name: 'oops', expr: 'no_such_name * 2' }] });
     const res = evaluateSheet(doc, dev);
     expect('oops' in res.values).toBe(false);
     expect(res.warnings.some((w) => w.rule === 'sheet-undeclared')).toBe(true);
@@ -657,7 +657,7 @@ describe('evaluateSheet — degrades instead of throwing', () => {
 
   it('evaluates without a device: bound rows go na, param rules still check', () => {
     const doc = boundDoc({
-      rules: [{ id: 'ok', kind: 'guardrail', lhs: 'gm_id', op: '<=', rhs: '20' }],
+      checks: [{ id: 'ok', kind: 'advisory', lhs: 'gm_id', op: '<=', rhs: '20' }],
     });
     const res = evaluateSheet(doc); // no table
     expect(res.bind?.ok).toBe(false);
@@ -670,8 +670,8 @@ describe('evaluateSheet — degrades instead of throwing', () => {
 describe('feasibility is fail-closed', () => {
   it('a non-finite bind expression is infeasible even when a param-only invariant passes', () => {
     const doc = boundDoc({
-      bind: { L: '1/0', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' }, // L = Infinity → bind fails
-      rules: [{ id: 'param-inv', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: '20' }], // 12<=20 would pass
+      givens: { L: '1/0', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' }, // L = Infinity → bind fails
+      checks: [{ id: 'param-inv', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: '20' }], // 12<=20 would pass
     });
     const res = evaluateSheet(doc, dev);
     expect(res.bind?.ok).toBe(false);
@@ -685,16 +685,16 @@ describe('feasibility is fail-closed', () => {
         { name: 'a', value: 10 },
         { name: 'lim', value: 5 },
       ],
-      bind: undefined,
+      givens: undefined,
     });
     const req = evaluateSheet(
-      { ...base, rules: [{ id: 'spec', kind: 'requirement', lhs: 'a', op: '<=', rhs: 'lim' }] },
+      { ...base, checks: [{ id: 'spec', kind: 'spec', lhs: 'a', op: '<=', rhs: 'lim' }] },
       dev,
     );
     expect(req.rules[0].status).toBe('fail');
     expect(req.feasible).toBe(false);
     const soft = evaluateSheet(
-      { ...base, rules: [{ id: 'soft', kind: 'guardrail', lhs: 'a', op: '<=', rhs: 'lim' }] },
+      { ...base, checks: [{ id: 'soft', kind: 'advisory', lhs: 'a', op: '<=', rhs: 'lim' }] },
       dev,
     );
     expect(soft.rules[0].status).toBe('fail');
@@ -704,8 +704,8 @@ describe('feasibility is fail-closed', () => {
   it('runSheet folds a validation error (non-finite param) into feasibility', () => {
     const doc = boundDoc({
       params: [{ name: 'x', value: Number.NaN }],
-      bind: undefined,
-      rules: [],
+      givens: undefined,
+      checks: [],
     });
     const res = runSheet(doc, dev);
     expect(res.warnings.some((w) => w.rule === 'sheet-param')).toBe(true);
@@ -717,7 +717,7 @@ describe('validateSheet', () => {
   it('flags a non-finite param and a wrong bind arity', () => {
     const doc = boundDoc({
       params: [{ name: 'x', value: Number.NaN }],
-      bind: { L: 'L', gm: '1', gm_id: '1', id: '1' }, // three of three
+      givens: { L: 'L', gm: '1', gm_id: '1', id: '1' }, // three of three
     });
     const w = validateSheet(doc);
     expect(w.some((x) => x.rule === 'sheet-param')).toBe(true);
@@ -795,7 +795,7 @@ describe('sweepSheet — feasibility curve', () => {
     expect(sw.x.length).toBe(21);
     expect(sw.x[0]).toBeCloseTo(6, 9); // the example's gm/ID slider spans 6..18
     expect(sw.x[20]).toBeCloseTo(18, 9);
-    expect(sw.rules.map((r) => r.id)).toEqual(doc.rules.map((r) => r.id)); // parallel, in order
+    expect(sw.rules.map((r) => r.id)).toEqual(doc.checks.map((r) => r.id)); // parallel, in order
 
     // V* ≈ 2/(gm/ID) falls as gm/ID rises, so the headroom margin shrinks monotonically and
     // crosses zero — the whole point of the view (the efficiency↔headroom trade made visible).
@@ -850,18 +850,18 @@ describe('composition — scalar provide/use', () => {
         { name: 'gm_id', value: 999 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, // gm/ID 999 ≫ ceiling ⇒ the child cannot size
-      rows: [],
-      rules: [],
-      provide: ['id'],
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, // gm/ID 999 ≫ ceiling ⇒ the child cannot size
+      equations: [],
+      checks: [],
+      provides: ['id'],
     };
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'c', doc: badChild }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'c', doc: badChild }],
     };
     const res = runSheet(parent, dev);
     expect(res.children![0].feasible).toBe(false);
@@ -889,18 +889,18 @@ describe('composition — scalar provide/use', () => {
         { name: 'gm_id', value: 10 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
-      rows: [],
-      rules: [],
-      provide: ['id'],
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      equations: [],
+      checks: [],
+      provides: ['id'],
     };
     const parent = (device?: string): SheetDoc => ({
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'k', doc: child, ...(device ? { device } : {}) }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'k', doc: child, ...(device ? { device } : {}) }],
     });
     const resolve = (id: string) => (id === 'wide' ? generateDemoDevice({ W: 40e-6 }) : undefined);
     expect(runSheet(parent('wide'), dev, resolve).children![0].feasible).toBe(true); // resolved
@@ -926,17 +926,17 @@ describe('composition — scalar provide/use', () => {
       title: 'k0',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      provide: [],
+      equations: [],
+      checks: [],
+      provides: [],
     };
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'k', doc: bindless, device: 'missing' }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'k', doc: bindless, device: 'missing' }],
     };
     const res = runSheet(parent, dev, () => undefined);
     expect(res.children![0].feasible).toBe(false);
@@ -953,18 +953,18 @@ describe('composition — scalar provide/use', () => {
         { name: 'gm_id', value: 12 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
-      rows: [],
-      rules: [],
-      provide: ['id'],
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      equations: [],
+      checks: [],
+      provides: ['id'],
     };
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
       params: [{ name: 'I_budget', value: 30e-6 }],
-      rows: [{ name: 'echo', expr: 'c__id' }],
-      rules: [],
-      uses: [{ name: 'c', doc: child, params: { I_bias: 'I_budgett' } }], // typo ⇒ unresolvable
+      equations: [{ name: 'echo', expr: 'c__id' }],
+      checks: [],
+      blocks: [{ name: 'c', doc: child, params: { I_bias: 'I_budgett' } }], // typo ⇒ unresolvable
     };
     const res = runSheet(parent, dev);
     expect(
@@ -987,9 +987,9 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
       { name: 'guess', value: 0.7 },
       { name: 'V_node', value: 0.9 },
     ],
-    rows: [],
-    rules: [{ id: 'check', kind: 'guardrail', lhs, op: '<=', rhs: '0.05' }],
-    uses: [
+    equations: [],
+    checks: [{ id: 'check', kind: 'advisory', lhs, op: '<=', rhs: '0.05' }],
+    blocks: [
       {
         name: 'k',
         doc: {
@@ -1001,10 +1001,10 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
             { name: 'gm_id', value: 10 },
             { name: 'vd', value: 0.7 },
           ],
-          bind: { L: 'L', id: 'id', gm_id: 'gm_id', vds: 'vd' },
-          rows: [],
-          rules: [],
-          provide: ['vgs', 'vdsat'],
+          givens: { L: 'L', id: 'id', gm_id: 'gm_id', vds: 'vd' },
+          equations: [],
+          checks: [],
+          provides: ['vgs', 'vdsat'],
         },
         params: { vd: biasExpr },
       },
@@ -1092,9 +1092,9 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
     // block's own vgs: the diode identity, whose advice the class does not suppress. One warning,
     // naming the second rule.
     const doc = withRule('abs(k__vgs - guess - V_node)');
-    doc.rules.push({
+    doc.checks.push({
       id: 'diode-check',
-      kind: 'guardrail',
+      kind: 'advisory',
       lhs: 'abs(k__vgs - guess)',
       op: '<=',
       rhs: '0.05',
@@ -1125,17 +1125,17 @@ describe('validateSheet — composition', () => {
       title: 'c',
       polarity: 'n',
       params: [{ name: 'L', value: 1e-6 }],
-      rows: [],
-      rules: [],
-      provide: [],
+      equations: [],
+      checks: [],
+      provides: [],
     };
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         { name: 'a__b', doc: child },
         { name: 'x', doc: child, params: { nope: '1' } },
         { name: 'x', doc: child },
@@ -1152,17 +1152,17 @@ describe('validateSheet — composition', () => {
       title: 'c',
       polarity: 'n',
       params: [{ name: 'L', value: 1e-6 }],
-      rows: [],
-      rules: [],
-      provide: ['av0'],
+      equations: [],
+      checks: [],
+      provides: ['av0'],
     };
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
       params: [{ name: 'cs__av0', value: 1 }], // collides with the injected cs__av0
-      rows: [{ name: 'cs__id', expr: '1' }], // child provides only av0, so this does NOT collide
-      rules: [],
-      uses: [{ name: 'cs', doc: child }],
+      equations: [{ name: 'cs__id', expr: '1' }], // child provides only av0, so this does NOT collide
+      checks: [],
+      blocks: [{ name: 'cs', doc: child }],
     };
     const w = validateSheet(doc);
     expect(w.some((x) => x.rule === 'sheet-collision' && /cs__av0/.test(x.message))).toBe(true);
@@ -1170,18 +1170,18 @@ describe('validateSheet — composition', () => {
   });
 
   it('distinguishes an undeclared child scalar from a name whose block does not exist', () => {
-    const child = boundDoc({ provide: ['gm'] });
+    const child = boundDoc({ provides: ['gm'] });
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
       params: [],
-      rows: [
+      equations: [
         { name: 'a', expr: 'kid__gm' }, // provided — fine
         { name: 'b', expr: 'kid__gds' }, // the block exists but does not provide it
         { name: 'c', expr: 'kdi__gm' }, // no such block: a transposed use name
       ],
-      rules: [],
-      uses: [{ name: 'kid', doc: child }],
+      checks: [],
+      blocks: [{ name: 'kid', doc: child }],
     };
     const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
     expect(w.map((x) => x.symbol)).toEqual(['kid__gds', 'kdi__gm']);
@@ -1194,12 +1194,12 @@ describe('validateSheet — composition', () => {
       title: 't',
       polarity: 'n',
       params: [{ name: 'L', value: 1e-6 }],
-      rows: [{ name: 'Rout', expr: '1/kid__gds' }],
-      rules: [],
-      uses: [{ name: 'kid', doc: boundDoc({ provide: ['gds'] }) }],
+      equations: [{ name: 'Rout', expr: '1/kid__gds' }],
+      checks: [],
+      blocks: [{ name: 'kid', doc: boundDoc({ provides: ['gds'] }) }],
       // L and Rout are declared right here and T and w come from the table metadata; R_out is
       // a typo for the row and exposes nothing.
-      provide: ['Rout', 'L', 'T', 'w', 'R_out'],
+      provides: ['Rout', 'L', 'T', 'w', 'R_out'],
     };
     const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
     expect(w.map((x) => x.location)).toEqual(['R_out']);
@@ -1210,31 +1210,31 @@ describe('validateSheet — composition', () => {
     // Sizing publishes the whole table at the operating point, and a table may carry columns
     // no static list knows about — so a bound sheet's provide list is taken at its word. The
     // upward half of the check still catches a parent reading a name the child never provides.
-    const doc = boundDoc({ provide: ['gds', 'W', 'some_foundry_column'] });
+    const doc = boundDoc({ provides: ['gds', 'W', 'some_foundry_column'] });
     expect(validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage')).toEqual([]);
   });
 
   it('follows a grandchild re-export through both separators', () => {
-    const grand = boundDoc({ provide: ['id'] });
+    const grand = boundDoc({ provides: ['id'] });
     const mid: SheetDoc = {
       title: 'm',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'g', doc: grand }],
-      provide: ['g__id'],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'g', doc: grand }],
+      provides: ['g__id'],
     };
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
       params: [],
-      rows: [
+      equations: [
         { name: 'a', expr: 'm__g__id' }, // re-exported all the way up — resolves
         { name: 'b', expr: 'm__g__gm' }, // the grandchild provides id only
       ],
-      rules: [],
-      uses: [{ name: 'm', doc: mid }],
+      checks: [],
+      blocks: [{ name: 'm', doc: mid }],
     };
     const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
     expect(w.map((x) => x.symbol)).toEqual(['m__g__gm']);
@@ -1245,9 +1245,9 @@ describe('validateSheet — composition', () => {
       title: 't',
       polarity: 'n',
       params: [],
-      rows: [{ name: 'a', expr: 'later__gm + later__whatever' }],
-      rules: [],
-      uses: [{ name: 'later', ref: 'stages/cs-amp-resistive-load' }],
+      equations: [{ name: 'a', expr: 'later__gm + later__whatever' }],
+      checks: [],
+      blocks: [{ name: 'later', ref: 'stages/cs-amp-resistive-load' }],
     };
     expect(validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage')).toEqual([]);
   });
@@ -1257,16 +1257,16 @@ describe('validateSheet — composition', () => {
       title: 'c',
       polarity: 'n',
       params: [{ name: 'p', value: Number.NaN }], // non-finite param ⇒ child structural error
-      rows: [],
-      rules: [],
+      equations: [],
+      checks: [],
     };
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'kid', doc: child }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'kid', doc: child }],
     };
     const w = validateSheet(doc);
     expect(w.some((x) => x.rule === 'sheet-param' && x.message.includes('use "kid":'))).toBe(true);
@@ -1278,8 +1278,8 @@ describe('table temperature in the sheet scope', () => {
     title: 't',
     polarity: 'n',
     params: [],
-    rows: [{ name: 'tk', expr: 'T' }],
-    rules: [],
+    equations: [{ name: 'tk', expr: 'T' }],
+    checks: [],
   };
 
   it('seeds T from the table so temperature-aware author math tracks the data', () => {
@@ -1308,8 +1308,8 @@ describe('fail-closed hardening', () => {
         { name: 'a', value: 1000 },
         { name: 'b', value: 1 },
       ],
-      rows: [],
-      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: 'b', tolPct: NaN }],
+      equations: [],
+      checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: 'b', tolPct: NaN }],
     };
     const res = evaluateSheet(doc);
     expect(res.rules[0].status).toBe('na');
@@ -1325,8 +1325,8 @@ describe('fail-closed hardening', () => {
       title: 't',
       polarity: 'n',
       params: [{ name: 'x', value: 0.3 }],
-      rows: [{ name: 'y', expr: '0.1 + 0.2' }],
-      rules: [{ id: 'pin', kind: 'requirement', lhs: 'x', op: '>=', rhs: 'y' }],
+      equations: [{ name: 'y', expr: '0.1 + 0.2' }],
+      checks: [{ id: 'pin', kind: 'spec', lhs: 'x', op: '>=', rhs: 'y' }],
     };
     const res = evaluateSheet(doc);
     expect(res.rules[0].margin).toBe(0);
@@ -1339,8 +1339,8 @@ describe('fail-closed hardening', () => {
       title: 't',
       polarity: 'n',
       params: [{ name: 'x', value: -1 }],
-      rows: [{ name: 'bad', expr: 'sqrt(x)' }],
-      rules: [{ id: 'g', kind: 'guardrail', lhs: 'bad', op: '>=', rhs: '0' }],
+      equations: [{ name: 'bad', expr: 'sqrt(x)' }],
+      checks: [{ id: 'g', kind: 'advisory', lhs: 'bad', op: '>=', rhs: '0' }],
     };
     const res = evaluateSheet(doc);
     expect(res.warnings.some((w) => w.rule === 'sheet-nonfinite' && w.severity === 'error')).toBe(
@@ -1350,7 +1350,7 @@ describe('fail-closed hardening', () => {
   });
 
   it('an unphysical bind (negative gm) fails closed instead of sizing a negative width', () => {
-    const doc = boundDoc({ bind: { L: 'L', gm: '0 - 1e-3', gm_id: 'gm_id' } });
+    const doc = boundDoc({ givens: { L: 'L', gm: '0 - 1e-3', gm_id: 'gm_id' } });
     const res = evaluateSheet(doc, dev);
     expect(res.bind?.ok).toBe(false);
     expect(res.values.W).toBeUndefined();
@@ -1362,8 +1362,8 @@ describe('fail-closed hardening', () => {
       title: 't',
       polarity: 'n',
       params: [{ name: 'k', value: NaN, min: 1, max: 2 }],
-      rows: [],
-      rules: [{ id: 'r', kind: 'requirement', lhs: 'k', op: '>=', rhs: '0.5' }],
+      equations: [],
+      checks: [{ id: 'r', kind: 'spec', lhs: 'k', op: '>=', rhs: '0.5' }],
     };
     const sw = sweepSheet(doc, 'k', undefined, 3);
     expect(sw.x).toHaveLength(3);
@@ -1377,7 +1377,7 @@ describe('bind bias declaration (vds/vsb)', () => {
 
   it('a declared vds slices the table at that point and is reported', () => {
     const doc = boundDoc({
-      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev3);
     expect(res.bind?.ok).toBe(true);
@@ -1391,7 +1391,7 @@ describe('bind bias declaration (vds/vsb)', () => {
   it('the declaration accepts an expression over params', () => {
     const doc = boundDoc({
       params: [...boundDoc().params, { name: 'vds_op', value: 0.6 }],
-      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'vds_op' },
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'vds_op' },
     });
     const res = evaluateSheet(doc, dev3);
     expect(res.bind?.ok).toBe(true);
@@ -1413,7 +1413,7 @@ describe('bind bias declaration (vds/vsb)', () => {
       vsb: { min: 0, max: 0.6, step: 0.2 },
     });
     const doc = boundDoc({
-      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev4);
     expect(res.bind?.ok).toBe(true);
@@ -1428,7 +1428,7 @@ describe('bind bias declaration (vds/vsb)', () => {
       vsb: { min: 0.2, max: 0.6, step: 0.2 },
     });
     const doc = boundDoc({
-      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev4);
     expect(res.bind?.ok).toBe(false);
@@ -1438,7 +1438,7 @@ describe('bind bias declaration (vds/vsb)', () => {
 
   it('a declaration the table cannot honor (no live axis) is advisory, not fatal', () => {
     const doc = boundDoc({
-      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev); // 2-D demo: no vds axis
     expect(res.bind?.ok).toBe(true);
@@ -1447,7 +1447,9 @@ describe('bind bias declaration (vds/vsb)', () => {
   });
 
   it('an out-of-hull declaration is clamped with a warning, mirroring the L policy', () => {
-    const doc = boundDoc({ bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' } });
+    const doc = boundDoc({
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
+    });
     const res = evaluateSheet(doc, dev3);
     expect(res.bind?.ok).toBe(true);
     expect(res.warnings.some((w) => /outside the table's vds range/.test(w.message))).toBe(true);
@@ -1458,9 +1460,9 @@ describe('bind bias declaration (vds/vsb)', () => {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'cs', doc: boundDoc({ provide: ['id'] }) }], // child binds without vds
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'cs', doc: boundDoc({ provides: ['id'] }) }], // child binds without vds
     };
     const res = evaluateSheet(parent, dev3);
     expect(res.children?.[0].feasible).toBe(false);
@@ -1473,14 +1475,14 @@ describe('bind bias declaration (vds/vsb)', () => {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         {
           name: 'cs',
           doc: boundDoc({
-            bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
-            provide: ['id'],
+            givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+            provides: ['id'],
           }),
         },
       ],
@@ -1502,10 +1504,10 @@ describe('composition semantics (ratified)', () => {
       { name: 'L', value: 0.5e-6 },
       { name: 'gm_id', value: 12 },
     ],
-    bind: { L: 'L', id: I, gm_id: 'gm_id' },
-    rows: [],
-    rules: [],
-    provide: ['id', 'gm', 'W'],
+    givens: { L: 'L', id: I, gm_id: 'gm_id' },
+    equations: [],
+    checks: [],
+    provides: ['id', 'gm', 'W'],
   });
 
   it('a LATER sibling may reference an EARLIER sibling provide (document order)', () => {
@@ -1513,9 +1515,9 @@ describe('composition semantics (ratified)', () => {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         { name: 'a', doc: leaf('I_bias') },
         { name: 'b', doc: leaf('I_bias'), params: { I_bias: 'a__id / 2' } },
       ],
@@ -1532,9 +1534,9 @@ describe('composition semantics (ratified)', () => {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         { name: 'b', doc: leaf('I_bias'), params: { I_bias: 'a__id / 2' } },
         { name: 'a', doc: leaf('I_bias') },
       ],
@@ -1558,10 +1560,10 @@ describe('composition semantics (ratified)', () => {
         { name: 'gm_id', value: 12 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
-      rows: [],
-      rules: [],
-      uses: [{ name: 'c', doc: leaf('I_bias'), params: { I_bias: 'W * 1e-3' } }],
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'c', doc: leaf('I_bias'), params: { I_bias: 'W * 1e-3' } }],
     };
     const res = evaluateSheet(doc, dev);
     expect(res.children?.[0].feasible).toBe(false); // W binds AFTER children — not in scope
@@ -1573,9 +1575,9 @@ describe('composition semantics (ratified)', () => {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         { name: 'a', doc: leaf('I_bias') },
         { name: 'a', doc: leaf('I_bias / 2') },
       ],
@@ -1592,24 +1594,24 @@ describe('composition semantics (ratified)', () => {
       title: 'mid',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'g', doc: leaf('I_bias') }],
-      provide: ['g__id'],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'g', doc: leaf('I_bias') }],
+      provides: ['g__id'],
     };
     const top: SheetDoc = {
       title: 'top',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'm', doc: mid }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'm', doc: mid }],
     };
     expect(validateSheet(top).filter((w) => w.rule === 'sheet-provide')).toHaveLength(0);
     const res = runSheet(top, dev);
     expect(res.values.m__g__id).toBeCloseTo(20e-6, 18);
     // a separator key that matches nothing injectable is still flagged
-    const bad: SheetDoc = { ...top, uses: [{ name: 'm', doc: { ...mid, provide: ['x__y'] } }] };
+    const bad: SheetDoc = { ...top, blocks: [{ name: 'm', doc: { ...mid, provides: ['x__y'] } }] };
     expect(validateSheet(bad).some((w) => w.rule === 'sheet-provide')).toBe(true);
   });
 
@@ -1629,15 +1631,15 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
   // is real: a loop that NESTS another re-converges the child on every one of its own passes, and
   // the product can spend the pool before a later sibling iterates at all. What must not happen is
   // the innocent sibling being told IT failed — an author would go and rewrite a sheet that is fine.
-  const torn = (name: string, f: number, uses?: SheetDoc['uses']): SheetDoc => ({
+  const torn = (name: string, f: number, uses?: SheetDoc['blocks']): SheetDoc => ({
     title: name,
     polarity: 'n',
     params: [{ name: 'x', value: 1, solveFor: 'fx' }],
     // |f'| just under 1: converging, but far too slowly to finish inside any cap.
-    rows: [{ name: 'fx', expr: `${f}*x + 1` }],
-    rules: [],
-    provide: ['fx'],
-    ...(uses ? { uses } : {}),
+    equations: [{ name: 'fx', expr: `${f}*x + 1` }],
+    checks: [],
+    provides: ['fx'],
+    ...(uses ? { blocks: uses } : {}),
   });
 
   const res = evaluateSheet(
@@ -1645,9 +1647,9 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
       title: 'root',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         { name: 'eater', doc: torn('eater', 0.999, [{ name: 'sub', doc: torn('sub', 0.999) }]) },
         // Alone this closes in a handful of passes: |f'| = 0.3.
         { name: 'victim', doc: torn('victim', 0.3) },
@@ -1683,10 +1685,10 @@ describe('duplicate rule ids', () => {
       title: 'dup',
       polarity: 'n',
       params: [{ name: 'a', value: 1 }],
-      rows: [],
-      rules: [
-        { id: 'same', kind: 'requirement', lhs: 'a', op: '>=', rhs: '100' },
-        { id: 'same', kind: 'requirement', lhs: 'a', op: '>=', rhs: '1' },
+      equations: [],
+      checks: [
+        { id: 'same', kind: 'spec', lhs: 'a', op: '>=', rhs: '100' },
+        { id: 'same', kind: 'spec', lhs: 'a', op: '>=', rhs: '1' },
       ],
     };
     expect(
@@ -1730,19 +1732,19 @@ describe('bindingConstraint — naming the cause of one verdict', () => {
       title: 'c',
       polarity: 'n',
       params: [{ name: 'x', value: 1 }],
-      rows: [],
+      equations: [],
       // Fails by 90%: the worst rule in the tree, and it lives below the top sheet.
-      rules: [{ id: 'child-floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: '10' }],
-      provide: [],
+      checks: [{ id: 'child-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: '10' }],
+      provides: [],
     };
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
       params: [{ name: 'y', value: 9 }],
-      rows: [],
+      equations: [],
       // Fails by only 10%, so a walk that stopped at the top would name this one.
-      rules: [{ id: 'top-floor', kind: 'requirement', lhs: 'y', op: '>=', rhs: '10' }],
-      uses: [{ name: 'k', doc: child }],
+      checks: [{ id: 'top-floor', kind: 'spec', lhs: 'y', op: '>=', rhs: '10' }],
+      blocks: [{ name: 'k', doc: child }],
     };
     const b = bindingConstraint(runSheet(parent, dev));
     expect(b?.id).toBe('k.child-floor');
@@ -1779,7 +1781,7 @@ describe('sweepSheet2 — the design-plane feasibility map', () => {
         // the named binding rule really is a failing hard rule at that point
         const named = ref.rules.find((r) => r.id === sw.binding[yi][xi]);
         expect(named?.status).toBe('fail');
-        expect(named?.kind).not.toBe('guardrail');
+        expect(named?.kind).not.toBe('advisory');
       }
     }
     // the map is not degenerate: both regions exist on this example
@@ -1804,18 +1806,18 @@ describe('override and bias reporting fail closed (adversarial review regression
         { name: 'L', value: 0.5e-6 },
         { name: 'gm_id', value: 12 },
       ],
-      bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
-      rows: [],
-      rules: [],
-      provide: ['id'],
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      equations: [],
+      checks: [],
+      provides: ['id'],
     };
     const doc: SheetDoc = {
       title: 'p',
       polarity: 'n',
       params: [{ name: 'I_tail', value: 40e-6 }],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'cs', doc: child, params: { I_bais: 'I_tail / 2' } }], // typo: I_bais
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'cs', doc: child, params: { I_bais: 'I_tail / 2' } }], // typo: I_bais
     };
     const res = runSheet(doc, dev);
     expect(res.feasible).toBe(false);
@@ -1835,7 +1837,7 @@ describe('override and bias reporting fail closed (adversarial review regression
   it('an out-of-range bind bias reports the APPLIED clamped coordinate, not the request', () => {
     const dev3 = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
     const doc = boundDoc({
-      bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
     });
     const res = evaluateSheet(doc, dev3);
     expect(res.bind?.ok).toBe(true);
@@ -1853,9 +1855,9 @@ describe('diode-connected bind', () => {
       { name: 'I', value: 10e-6 },
       { name: 'gm_id', value: 10 },
     ],
-    bind: { L: 'L', id: 'I', gm_id: 'gm_id', diode: true, ...extra },
-    rows: [],
-    rules: [],
+    givens: { L: 'L', id: 'I', gm_id: 'gm_id', diode: true, ...extra },
+    equations: [],
+    checks: [],
   });
 
   it('lands on the vds = vgs diagonal, matching a fixed slice taken at the answer', () => {
@@ -1868,7 +1870,7 @@ describe('diode-connected bind', () => {
       {
         ...diodeDoc(),
         params: [...diodeDoc().params, { name: 'v', value: vgs }],
-        bind: { L: 'L', id: 'I', gm_id: 'gm_id', vds: 'v' },
+        givens: { L: 'L', id: 'I', gm_id: 'gm_id', vds: 'v' },
       },
       dev,
     );
@@ -1939,11 +1941,11 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     title: 'p',
     polarity: 'n',
     params: [
-      { name: 'x', value: 1, ...bounds, pin },
+      { name: 'x', value: 1, ...bounds, designConstraint: pin },
       { name: 'T', value: 5 },
     ],
-    rows: [{ name: 'y', expr }],
-    rules: [],
+    equations: [{ name: 'y', expr }],
+    checks: [],
   });
 
   // Precision below is PIN_TOL_REL x the bracket's span (1e-6 x 10): the root lands anywhere
@@ -2041,7 +2043,14 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     const both: SheetDoc = {
       ...noBracket,
       params: [
-        { name: 'x', value: 1, min: 0, max: 1, pin: { lhs: 'y', rhs: 'T' }, solveFor: 'y' },
+        {
+          name: 'x',
+          value: 1,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'y', rhs: 'T' },
+          solveFor: 'y',
+        },
         { name: 'T', value: 5 },
       ],
     };
@@ -2055,16 +2064,16 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     title: 'pair',
     polarity: 'n',
     params: [
-      { name: 'z', value: 1, min: 0, max: 10, pin: zPin },
-      { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'a', rhs: 'T' } },
+      { name: 'z', value: 1, min: 0, max: 10, designConstraint: zPin },
+      { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'a', rhs: 'T' } },
       { name: 'T', value: 5 },
     ],
-    rows: [
+    equations: [
       { name: 'a', expr: '2*x + 1' },
       { name: 'b', expr: 'a + z' },
       { name: 'c', expr: 'x - z' },
     ],
-    rules: [],
+    checks: [],
   });
 
   it('solves two pins one after the other when one relation reads the other pin', () => {
@@ -2085,7 +2094,13 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     // x is fitted through a (which reads x) against T; make z's relation c = x - z and x's
     // relation read z as well, and each needs the other's answer first: a coupled pair.
     const doc = pair({ lhs: 'c', rhs: '1' });
-    doc.params[1] = { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'b', rhs: 'T' } };
+    doc.params[1] = {
+      name: 'x',
+      value: 1,
+      min: 0,
+      max: 10,
+      designConstraint: { lhs: 'b', rhs: 'T' },
+    };
     const coupled = /pinned params depend on each other \((x → z → x|z → x → z)\)/;
     expect(validateSheet(doc).some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(
       true,
@@ -2100,25 +2115,25 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     title: 'parent',
     polarity: 'n',
     params: [
-      { name: 'P', value: 0.5, min: 0, max: 1, pin: { lhs: 'P + c__Q', rhs: '1' } },
+      { name: 'P', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'P + c__Q', rhs: '1' } },
       { name: 'A0', value: 0.8 },
     ],
-    rows: [],
-    rules: [],
-    uses: [
+    equations: [],
+    checks: [],
+    blocks: [
       {
         name: 'c',
         params: { A: wireA },
         doc: {
           title: 'child',
           polarity: 'n',
-          provide: ['Q'],
+          provides: ['Q'],
           params: [
-            { name: 'Q', value: 0.5, min: 0, max: 1, pin: { lhs: 'Q', rhs: 'A/2' } },
+            { name: 'Q', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'Q', rhs: 'A/2' } },
             { name: 'A', value: 0 },
           ],
-          rows: [],
-          rules: [],
+          equations: [],
+          checks: [],
         },
       },
     ],
@@ -2148,7 +2163,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
 
   it('refuses the coupled parent and child on a sheet that claims a range, too', () => {
     // A range claim sends the base run down a different path; the refusal has to be on it.
-    const doc: SheetDoc = { ...nested('P'), edges: [{ name: 'e', set: { A0: '0.9' } }] };
+    const doc: SheetDoc = { ...nested('P'), operatingRange: [{ name: 'e', set: { A0: '0.9' } }] };
     const res = evaluateSheet(doc, dev);
     expect(res.closes).toBe(false);
     expect(
@@ -2163,7 +2178,13 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     // nothing provides, so what z waits on is unknown — the report is about that name, not about
     // a loop between two params that only one of them created.
     const doc = pair({ lhs: 'z + nope', rhs: '1' });
-    doc.params[1] = { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'b', rhs: 'T' } };
+    doc.params[1] = {
+      name: 'x',
+      value: 1,
+      min: 0,
+      max: 10,
+      designConstraint: { lhs: 'b', rhs: 'T' },
+    };
     const messages = validateSheet(doc)
       .filter((w) => w.severity === 'error')
       .map((w) => w.message);
@@ -2181,15 +2202,15 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
       title: 'both',
       polarity: 'n',
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
         { name: 'e', value: 0, solveFor: 'fe' },
       ],
-      rows: [
+      equations: [
         { name: 'fe', expr: '0.5*e + x' }, // fixed point: e = 2x
         { name: 'y', expr: 'fe - x + 1' }, // = x + 1 at the fixed point → x = 4
       ],
-      rules: [],
+      checks: [],
     };
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(true);
@@ -2205,7 +2226,7 @@ describe('containment edges — exact range checks folded into the verdict', () 
     title: 'e',
     polarity: 'n',
     params: [
-      { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+      { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
       { name: 'T', value: 5 },
       { name: 'T_lo', value: 3 },
       { name: 'T_hi', value: 7 },
@@ -2213,9 +2234,9 @@ describe('containment edges — exact range checks folded into the verdict', () 
       // a bound would coin-flip on the pin's ~1e-5 landing tolerance.
       { name: 'x_floor', value: 0.5, min: 0, max: 1.6 },
     ],
-    rows: [{ name: 'y', expr: '2*x + 1' }],
-    rules: [{ id: 'node-floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: 'x_floor' }],
-    edges: [
+    equations: [{ name: 'y', expr: '2*x + 1' }],
+    checks: [{ id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor' }],
+    operatingRange: [
       { name: 'lo', set: { T: 'T_lo' } },
       { name: 'hi', set: { T: 'T_hi' } },
     ],
@@ -2235,9 +2256,11 @@ describe('containment edges — exact range checks folded into the verdict', () 
   it('never throws on malformed edges — half-written or mistyped shapes degrade', () => {
     // evaluate's contract is never-throw; curated JSON bypasses the sanitizer, so a
     // half-written edge (no set) or a mistyped edges field must not TypeError.
-    expect(() => evaluateSheet(mk({ edges: [{ name: 'lo' } as never] }), dev)).not.toThrow();
-    expect(() => evaluateSheet(mk({ edges: 'garbage' as never }), dev)).not.toThrow();
-    const res = evaluateSheet(mk({ edges: 'garbage' as never }), dev);
+    expect(() =>
+      evaluateSheet(mk({ operatingRange: [{ name: 'lo' } as never] }), dev),
+    ).not.toThrow();
+    expect(() => evaluateSheet(mk({ operatingRange: 'garbage' as never }), dev)).not.toThrow();
+    const res = evaluateSheet(mk({ operatingRange: 'garbage' as never }), dev);
     expect(res.edges).toBeUndefined(); // degrades to a plain evaluation
   });
 
@@ -2275,14 +2298,14 @@ describe('containment edges — exact range checks folded into the verdict', () 
 
   it('set expressions evaluate against the BASE result, not just params', () => {
     const doc = mk({
-      edges: [{ name: 'lo', set: { T: 'y - 2' } }], // base y = 5 → edge T = 3
+      operatingRange: [{ name: 'lo', set: { T: 'y - 2' } }], // base y = 5 → edge T = 3
     });
     const res = evaluateSheet(doc, dev);
     expect(res.edges?.[0].solved.x).toBeCloseTo(1, 4);
   });
 
   it('a set expression that does not resolve fails that edge closed, by name', () => {
-    const doc = mk({ edges: [{ name: 'lo', set: { T: 'nonsense_name' } }] });
+    const doc = mk({ operatingRange: [{ name: 'lo', set: { T: 'nonsense_name' } }] });
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(false);
     expect(res.edges?.[0].error).toMatch(/did not evaluate to a finite number/);
@@ -2294,9 +2317,9 @@ describe('containment edges — exact range checks folded into the verdict', () 
     // no on-chart cause. sqrt(6 - T) is finite at the base (T=5) and lo edge (T=3), na
     // at the hi edge (T=7).
     const doc = mk({
-      rules: [
-        { id: 'node-floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: 'x_floor' },
-        { id: 'na-at-hi', kind: 'invariant', lhs: 'sqrt(6 - T)', op: '>=', rhs: '0' },
+      checks: [
+        { id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor' },
+        { id: 'na-at-hi', kind: 'physical', lhs: 'sqrt(6 - T)', op: '>=', rhs: '0' },
       ],
     });
     const res = evaluateSheet(doc, dev);
@@ -2315,11 +2338,11 @@ describe('containment edges — exact range checks folded into the verdict', () 
       title: 'c',
       polarity: 'n',
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'P' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'P' } },
         { name: 'P', value: 5 },
       ],
-      rows: [{ name: 'y', expr: '2*x + 1' }],
-      rules: [],
+      equations: [{ name: 'y', expr: '2*x + 1' }],
+      checks: [],
     };
     const parent: SheetDoc = {
       title: 'p',
@@ -2328,10 +2351,10 @@ describe('containment edges — exact range checks folded into the verdict', () 
         { name: 'T', value: 5 },
         { name: 'T_hi', value: 25 }, // child y spans [1, 21]: unreachable at the edge
       ],
-      rows: [{ name: 'bad', expr: 'sqrt(21 - T)' }], // non-finite at T = 25, fine at 5
-      rules: [],
-      uses: [{ name: 'amp', doc: child, params: { P: 'T' } }],
-      edges: [{ name: 'hi', set: { T: 'T_hi' } }],
+      equations: [{ name: 'bad', expr: 'sqrt(21 - T)' }], // non-finite at T = 25, fine at 5
+      checks: [],
+      blocks: [{ name: 'amp', doc: child, params: { P: 'T' } }],
+      operatingRange: [{ name: 'hi', set: { T: 'T_hi' } }],
     };
     const res = evaluateSheet(parent, dev);
     expect(res.edges?.[0].feasible).toBe(false);
@@ -2346,8 +2369,8 @@ describe('containment edges — exact range checks folded into the verdict', () 
       title: 'q',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [{ id: 'eq', kind: 'requirement', lhs, op: '==', rhs: '1', tolPct: 1 }],
+      equations: [],
+      checks: [{ id: 'eq', kind: 'spec', lhs, op: '==', rhs: '1', tolPct: 1 }],
     });
     expect(evaluateSheet(eq('1.010005'), dev).rules[0].status).toBe('amber');
     expect(evaluateSheet(eq('1.02'), dev).rules[0].status).toBe('fail');
@@ -2356,8 +2379,8 @@ describe('containment edges — exact range checks folded into the verdict', () 
       title: 'g',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [{ id: 'ge', kind: 'requirement', lhs: '0.999995', op: '>=', rhs: '1' }],
+      equations: [],
+      checks: [{ id: 'ge', kind: 'spec', lhs: '0.999995', op: '>=', rhs: '1' }],
     };
     expect(evaluateSheet(ge, dev).rules[0].status).toBe('amber');
   });
@@ -2365,14 +2388,14 @@ describe('containment edges — exact range checks folded into the verdict', () 
   it("a composed child's edges are ignored, and validation says so", () => {
     const child = mk();
     child.params.find((p) => p.name === 'T_lo')!.value = 0.5; // its lo edge would fail hard
-    child.provide = ['y'];
+    child.provides = ['y'];
     const parent: SheetDoc = {
       title: 'parent',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'amp', doc: child }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'amp', doc: child }],
     };
     const res = runSheet(parent, dev);
     expect(res.feasible).toBe(true); // the child's base run closes; its edges never ran
@@ -2395,15 +2418,15 @@ describe('containment edges — exact range checks folded into the verdict', () 
   it('use names reserve the rule-path separators — a collision would shadow rule results', () => {
     // Rule outcomes are keyed `${usePath}.${ruleId}` and `${edgeName}@${ruleId}` in one map;
     // a use named across either separator could silently shadow an edge-qualified id.
-    const child: SheetDoc = { title: 'c', polarity: 'n', params: [], rows: [], rules: [] };
+    const child: SheetDoc = { title: 'c', polarity: 'n', params: [], equations: [], checks: [] };
     for (const name of ['a@b', 'a.b']) {
       const doc: SheetDoc = {
         title: 'p',
         polarity: 'n',
         params: [],
-        rows: [],
-        rules: [],
-        uses: [{ name, doc: child }],
+        equations: [],
+        checks: [],
+        blocks: [{ name, doc: child }],
       };
       const hit = validateSheet(doc).some(
         (w) => w.severity === 'error' && /tree-keyed rule ids/.test(w.message),
@@ -2420,31 +2443,31 @@ describe('containment edges — exact range checks folded into the verdict', () 
     expect(
       errs(
         mk({
-          edges: [
+          operatingRange: [
             { name: 'lo', set: { T: 'T_lo' } },
             { name: 'lo', set: { T: 'T_hi' } },
           ],
         }),
       ).join(),
     ).toMatch(/duplicate edge name/);
-    expect(errs(mk({ edges: [{ name: 'a@b', set: { T: 'T_lo' } }] })).join()).toMatch(
+    expect(errs(mk({ operatingRange: [{ name: 'a@b', set: { T: 'T_lo' } }] })).join()).toMatch(
       /must not contain/,
     );
-    expect(errs(mk({ edges: [{ name: 'lo', set: {} }] })).join()).toMatch(/sets nothing/);
-    expect(errs(mk({ edges: [{ name: 'lo', set: { nope: 'T_lo' } }] })).join()).toMatch(
+    expect(errs(mk({ operatingRange: [{ name: 'lo', set: {} }] })).join()).toMatch(/sets nothing/);
+    expect(errs(mk({ operatingRange: [{ name: 'lo', set: { nope: 'T_lo' } }] })).join()).toMatch(
       /not a param/,
     );
-    expect(errs(mk({ edges: [{ name: 'lo', set: { x: 'T_lo' } }] })).join()).toMatch(
+    expect(errs(mk({ operatingRange: [{ name: 'lo', set: { x: 'T_lo' } }] })).join()).toMatch(
       /the engine solves/,
     );
-    expect(errs(mk({ edges: [{ name: 'lo', set: { T: 'T_lo +* 2' } }] })).join()).toMatch(
+    expect(errs(mk({ operatingRange: [{ name: 'lo', set: { T: 'T_lo +* 2' } }] })).join()).toMatch(
       /does not parse/,
     );
     expect(
-      errs(mk({ rules: [{ id: 'a@b', kind: 'invariant', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
+      errs(mk({ checks: [{ id: 'a@b', kind: 'physical', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
     ).toMatch(/tree-keyed rule ids/);
     expect(
-      errs(mk({ rules: [{ id: 'a.b', kind: 'invariant', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
+      errs(mk({ checks: [{ id: 'a.b', kind: 'physical', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
     ).toMatch(/tree-keyed rule ids/);
   });
 });
@@ -2461,9 +2484,9 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
       { name: 'gm_id', value: gmId },
       { name: 'Ib', value: 20e-6 },
     ],
-    bind: { L: 'L', id: 'Ib', gm_id: 'gm_id' },
-    rows: [],
-    rules: [],
+    givens: { L: 'L', id: 'Ib', gm_id: 'gm_id' },
+    equations: [],
+    checks: [],
   });
 
   /** A parent tying one such child between two nodes. */
@@ -2477,9 +2500,9 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     title: 'p',
     polarity: 'n',
     params: [{ name: 'VDD', value: 1.8 }],
-    rows: [],
-    rules: [],
-    uses: [{ name: 'm', doc: child, ...(device ? { device } : {}), wiring: { gate, source } }],
+    equations: [],
+    checks: [],
+    blocks: [{ name: 'm', doc: child, ...(device ? { device } : {}), wiring: { gate, source } }],
     ...extra,
   });
 
@@ -2513,7 +2536,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     // depend on an author remembering to add 'vgs' to that block's provide list. This child
     // provides nothing at all, and is checked anyway.
     const child = boundChild();
-    expect(child.provide).toBeUndefined();
+    expect(child.provides).toBeUndefined();
     const v = sizedVgs(wired('0', '0', child));
     expect(wiringWarnings(evaluateSheet(wired(`${v}`, '0', child), dev))).toEqual([]);
     expect(wiringWarnings(evaluateSheet(wired(`${v + 0.5}`, '0', child), dev))).toHaveLength(1);
@@ -2562,8 +2585,8 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
   it('reaches a gate node the sheet defines as a ROW, not only as a param', () => {
     // Rows run AFTER children, so a node the parent derives from a child's own output only
     // exists at the end of the evaluation. The check runs there for exactly this reason.
-    const child = { ...boundChild(), provide: ['vgs'] };
-    const doc = wired('V_in', '0', child, { rows: [{ name: 'V_in', expr: 'm__vgs' }] });
+    const child = { ...boundChild(), provides: ['vgs'] };
+    const doc = wired('V_in', '0', child, { equations: [{ name: 'V_in', expr: 'm__vgs' }] });
     const res = evaluateSheet(doc, dev);
     expect(wiringWarnings(res)).toEqual([]);
     expect(res.values.V_in).toBeCloseTo(sizedVgs(doc), 12);
@@ -2574,9 +2597,9 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
       title: 'dev',
       polarity: 'n',
       params: [],
-      rows: [{ name: 'vgs', expr: '0.65' }],
-      rules: [],
-      provide: ['vgs'],
+      equations: [{ name: 'vgs', expr: '0.65' }],
+      checks: [],
+      provides: ['vgs'],
     };
     // The block publishes a `vgs` scalar and is STILL not checked against it: a row named vgs is
     // an author's arithmetic, not a sized operating point.
@@ -2589,7 +2612,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     // A child that could not size has no operating point to check against, and the bind error
     // says so already — under the child's PATH (`m.bind`), not the bare use name. Advising the
     // author about the wiring here would stack a second, wrong finding on the real one.
-    const broken: SheetDoc = { ...boundChild(), bind: { L: 'L', id: 'Ib', gm_id: 'nope' } };
+    const broken: SheetDoc = { ...boundChild(), givens: { L: 'L', id: 'Ib', gm_id: 'nope' } };
     const res = evaluateSheet(wired('0.65', '0', broken), dev);
     expect(res.warnings.some((w) => w.severity === 'error' && w.location === 'm.bind')).toBe(true);
     expect(wiringWarnings(res)).toEqual([]);
@@ -2606,12 +2629,12 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
 
   it('degrades instead of throwing on malformed wiring', () => {
     const half = wired('0.65', '0', boundChild());
-    half.uses![0].wiring = { gate: 5 } as unknown as { gate: string; source: string };
+    half.blocks![0].wiring = { gate: 5 } as unknown as { gate: string; source: string };
     expect(() => evaluateSheet(half, dev)).not.toThrow();
     expect(wiringWarnings(evaluateSheet(half, dev))[0]).toMatch(/gate is not an expression/);
 
     const garbage = wired('0.65', '0', boundChild());
-    garbage.uses![0].wiring = 'garbage' as unknown as { gate: string; source: string };
+    garbage.blocks![0].wiring = 'garbage' as unknown as { gate: string; source: string };
     expect(() => evaluateSheet(garbage, dev)).not.toThrow();
     expect(wiringWarnings(evaluateSheet(garbage, dev))).toEqual([]); // nothing to check
     expect(validateSheet(garbage).some((w) => /wiring must be an object/.test(w.message))).toBe(
@@ -2626,8 +2649,10 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     // different pair. So this pins the placement, not merely the count — a check running inside
     // the solve would report a probe's voltage.
     const doc = wired('x', '0', boundChild(), {
-      params: [{ name: 'x', value: 0.5, min: 0, max: 1, pin: { lhs: 'x2', rhs: '0.4713' } }],
-      rows: [{ name: 'x2', expr: 'x' }],
+      params: [
+        { name: 'x', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'x2', rhs: '0.4713' } },
+      ],
+      equations: [{ name: 'x2', expr: 'x' }],
     });
     const res = evaluateSheet(doc, dev);
     expect(res.values.x).toBeCloseTo(0.4713, 5);
@@ -2647,7 +2672,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
         { name: 'VDD', value: 1.8 },
         { name: 'I_lo', value: 10e-6 },
       ],
-      edges: [{ name: 'lo', set: { VDD: 'I_lo' } }],
+      operatingRange: [{ name: 'lo', set: { VDD: 'I_lo' } }],
     });
     const res = evaluateSheet(doc, dev);
     expect(wiringWarnings(res)).toHaveLength(1);
@@ -2658,7 +2683,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     const errs = (w: unknown): string[] =>
       validateSheet(
         wired('0.65', '0', boundChild(), {
-          uses: [{ name: 'm', doc: boundChild(), wiring: w as { gate: string; source: string } }],
+          blocks: [{ name: 'm', doc: boundChild(), wiring: w as { gate: string; source: string } }],
         }),
       )
         .filter((v) => v.rule === 'sheet-wiring' && v.severity === 'error')
@@ -2691,8 +2716,8 @@ describe('rawMargin — the honest distance beside the snapped one', () => {
       title: 'snap',
       polarity: 'n',
       params: [{ name: 'a', value: 1 }],
-      rows: [],
-      rules: [{ id: 'r', kind: 'requirement', lhs: 'a', op: '>=', rhs: 'a + 1e-9' }],
+      equations: [],
+      checks: [{ id: 'r', kind: 'spec', lhs: 'a', op: '>=', rhs: 'a + 1e-9' }],
     };
     const r = evaluateSheet(doc).rules[0];
     // The verdict reads the boundary it is parked on; a DERIVATIVE would read zero slope from
@@ -2708,8 +2733,8 @@ describe('rawMargin — the honest distance beside the snapped one', () => {
       title: 'na',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [{ id: 'r', kind: 'requirement', lhs: 'nope', op: '>=', rhs: '0' }],
+      equations: [],
+      checks: [{ id: 'r', kind: 'spec', lhs: 'nope', op: '>=', rhs: '0' }],
     };
     const r = evaluateSheet(doc).rules[0];
     expect(r.status).toBe('na');
@@ -2723,8 +2748,8 @@ describe('solver pass count — a loop that closes slowly says so', () => {
     title: 'g',
     polarity: 'n',
     params: [{ name: 'x', value: 0.1, solveFor: 'f' }],
-    rows: [{ name: 'f', expr: `${k}*x + ${1 - k}` }],
-    rules: [],
+    equations: [{ name: 'f', expr: `${k}*x + ${1 - k}` }],
+    checks: [],
   });
   const note = (doc: SheetDoc) =>
     evaluateSheet(doc).warnings.find((w) => w.rule === 'sheet-solve' && w.severity === 'info');
@@ -2748,21 +2773,21 @@ describe('limitingConstraint — the rule closest to breaking', () => {
     title: 'c',
     polarity: 'n',
     params: [],
-    rows: [],
-    rules: [{ id: 'tightest', kind: 'invariant', lhs: '1', op: '>=', rhs }],
-    provide: [],
+    equations: [],
+    checks: [{ id: 'tightest', kind: 'physical', lhs: '1', op: '>=', rhs }],
+    provides: [],
   });
   const doc = (childRhs: string, topRhs: string): SheetDoc => ({
     title: 'p',
     polarity: 'n',
     params: [],
-    rows: [],
-    rules: [
-      { id: 'loose', kind: 'requirement', lhs: '1', op: '>=', rhs: topRhs },
+    equations: [],
+    checks: [
+      { id: 'loose', kind: 'spec', lhs: '1', op: '>=', rhs: topRhs },
       // Tighter than either hard rule, and advisory — it must never be named.
-      { id: 'advice', kind: 'guardrail', lhs: '1', op: '>=', rhs: '0.999' },
+      { id: 'advice', kind: 'advisory', lhs: '1', op: '>=', rhs: '0.999' },
     ],
-    uses: [{ name: 'c', doc: child(childRhs) }],
+    blocks: [{ name: 'c', doc: child(childRhs) }],
   });
 
   it('names the tightest hard rule on a FEASIBLE tree, where nothing is failing', () => {
@@ -2791,12 +2816,12 @@ describe('limitingConstraint — the rule closest to breaking', () => {
         { name: 'a', value: 1 },
         { name: 'A_lo', value: 0.5 },
       ],
-      rows: [],
-      rules: [
-        { id: 'range', kind: 'requirement', lhs: 'a', op: '>=', rhs: 'A_lo' },
-        { id: 'tight', kind: 'requirement', lhs: 'a', op: '>=', rhs: '0.49' },
+      equations: [],
+      checks: [
+        { id: 'range', kind: 'spec', lhs: 'a', op: '>=', rhs: 'A_lo' },
+        { id: 'tight', kind: 'spec', lhs: 'a', op: '>=', rhs: '0.49' },
       ],
-      edges: [{ name: 'lo', set: { a: 'A_lo' } }],
+      operatingRange: [{ name: 'lo', set: { a: 'A_lo' } }],
     });
     expect(res.feasible).toBe(true);
     expect(res.edges![0].rules.find((r) => r.id === 'range')!.margin).toBe(0);
@@ -2814,13 +2839,13 @@ describe('limitingConstraint — the rule closest to breaking', () => {
       title: 'edge',
       polarity: 'n',
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'T' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
         { name: 'T_lo', value: 0.5 }, // y spans [1, 21] over the bracket — unreachable
       ],
-      rows: [{ name: 'y', expr: '2*x + 1' }],
-      rules: [{ id: 'ceiling', kind: 'invariant', lhs: 'x', op: '<=', rhs: '10.5' }],
-      edges: [{ name: 'lo', set: { T: 'T_lo' } }],
+      equations: [{ name: 'y', expr: '2*x + 1' }],
+      checks: [{ id: 'ceiling', kind: 'physical', lhs: 'x', op: '<=', rhs: '10.5' }],
+      operatingRange: [{ name: 'lo', set: { T: 'T_lo' } }],
     };
     const res = evaluateSheet(doc, dev);
     expect(res.edges![0].error).toMatch(/does not change sign/);
@@ -2834,8 +2859,8 @@ describe('limitingConstraint — the rule closest to breaking', () => {
       title: 'x',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [{ id: 'r', kind: 'invariant', lhs: 'nope', op: '>=', rhs: '0' }],
+      equations: [],
+      checks: [{ id: 'r', kind: 'physical', lhs: 'nope', op: '>=', rhs: '0' }],
     });
     expect(limitingConstraint(res)).toBeUndefined();
   });
@@ -2847,8 +2872,8 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     title: 'lin',
     polarity: 'n' as const,
     params: [{ name: 'a', value: 1, role: 'choice' as const, min: 0, max: 10, ...over }],
-    rows: [],
-    rules: [{ id: 'r', kind: 'requirement' as const, lhs: '2*a', op: '>=' as const, rhs }],
+    equations: [],
+    checks: [{ id: 'r', kind: 'spec' as const, lhs: '2*a', op: '>=' as const, rhs }],
     ...extra,
   });
 
@@ -2906,7 +2931,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     // certainly wrong.
     const s = sheetSensitivities({
       ...linear(),
-      rules: [{ id: 'eq', kind: 'requirement', lhs: 'a', op: '==', rhs: '1', tolPct: 10 }],
+      checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: '1', tolPct: 10 }],
     });
     const r = s[0].rules[0];
     expect(Number.isNaN(r.dMarginPerUnit)).toBe(true);
@@ -2918,7 +2943,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     // sqrt of a negative headroom at a + h: the row is non-finite from resolved inputs, which is
     // an error-severity diagnostic, so that side of the difference does not exist.
     const s = sheetSensitivities(
-      linear({}, '1', { rows: [{ name: 'q', expr: 'sqrt(1.005 - a)' }] }),
+      linear({}, '1', { equations: [{ name: 'q', expr: 'sqrt(1.005 - a)' }] }),
     );
     expect(s[0].error).toMatch(/did not stand/);
     expect(s[0].error).toContain('a = 1.01');
@@ -2938,7 +2963,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
         { name: 'a', value: 1, role: 'choice', min: 0, max: 10 },
         { name: 'A_lo', value: 0.5 },
       ],
-      edges: [{ name: 'lo', set: { a: 'A_lo' } }],
+      operatingRange: [{ name: 'lo', set: { a: 'A_lo' } }],
     });
     // Unasked: the edge runs never happen, so nothing edge-keyed is reported at all — never a
     // row of NaNs standing in for a measurement that was deliberately skipped.
@@ -2965,8 +2990,8 @@ describe('sheetSensitivities — which knob moves which margin', () => {
         { name: 'spec', value: 1, role: 'spec' },
         { name: 'e', value: 1, role: 'choice', solveFor: 't' },
       ],
-      rows: [{ name: 't', expr: '0.5*e + 0.5' }],
-      rules: [{ id: 'r', kind: 'requirement', lhs: '2*a', op: '>=', rhs: '1' }],
+      equations: [{ name: 't', expr: '0.5*e + 0.5' }],
+      checks: [{ id: 'r', kind: 'spec', lhs: '2*a', op: '>=', rhs: '1' }],
     };
     expect(sheetSensitivities(doc).map((s) => s.param)).toEqual(['a']);
     // Asked for by name, it is still refused — with the reason, not silently.
@@ -2999,9 +3024,9 @@ describe('sheetSensitivities — which knob moves which margin', () => {
   it('refuses to differentiate a doc that does not validate', () => {
     const s = sheetSensitivities({
       ...linear(),
-      rules: [
-        { id: 'r', kind: 'requirement', lhs: '2*a', op: '>=', rhs: '1' },
-        { id: 'r', kind: 'requirement', lhs: '2*a', op: '>=', rhs: '2' }, // duplicate id
+      checks: [
+        { id: 'r', kind: 'spec', lhs: '2*a', op: '>=', rhs: '1' },
+        { id: 'r', kind: 'spec', lhs: '2*a', op: '>=', rhs: '2' }, // duplicate id
       ],
     });
     expect(s[0].error).toMatch(/does not validate/);
@@ -3025,10 +3050,10 @@ describe('a bound gate-source voltage in a sheet', () => {
       { name: 'I_r', value: 20e-6 },
       { name: 'g_r', value: 10 },
     ],
-    bind: { L: 'L_r', id: 'I_r', gm_id: 'g_r', diode: true },
-    rows: [],
-    rules: [],
-    provide: ['W', 'vgs'],
+    givens: { L: 'L_r', id: 'I_r', gm_id: 'g_r', diode: true },
+    equations: [],
+    checks: [],
+    provides: ['W', 'vgs'],
   });
 
   /** A K:1 mirror whose output device binds `partner` as its second quantity. */
@@ -3041,10 +3066,10 @@ describe('a bound gate-source voltage in a sheet', () => {
       { name: 'V_out', value: 0.9 },
       { name: 'gm_id_m', value: 10 },
     ],
-    bind: { L: 'L', W: 'K*ref__W', ...partner, vds: 'V_out' },
-    rows: [{ name: 'ratio', expr: 'id/(K*20e-6)' }],
-    rules: [],
-    uses: [{ name: 'ref', doc: reference() }],
+    givens: { L: 'L', W: 'K*ref__W', ...partner, vds: 'V_out' },
+    equations: [{ name: 'ratio', expr: 'id/(K*20e-6)' }],
+    checks: [],
+    blocks: [{ name: 'ref', doc: reference() }],
   });
 
   it('sizes the output device at the reference gate voltage, not at a target it re-solves', () => {
@@ -3092,9 +3117,9 @@ describe('a bound gate-source voltage in a sheet', () => {
         { name: 'L', value: 0.5e-6 },
         { name: 'W_o', value: 4e-6 },
       ],
-      bind: { L: 'L', W: 'W_o', vgs: '1.5' },
-      rows: [{ name: 'v_read', expr: 'vgs' }],
-      rules: [],
+      givens: { L: 'L', W: 'W_o', vgs: '1.5' },
+      equations: [{ name: 'v_read', expr: 'vgs' }],
+      checks: [],
     };
     const res = runSheet(doc, dev);
 
@@ -3113,7 +3138,7 @@ describe('a bound gate-source voltage in a sheet', () => {
     // Two selectors over-determine the gate voltage, whichever two they are.
     const both: SheetDoc = {
       ...mirror({}),
-      bind: { L: 'L', vgs: 'ref__vgs', gm_id: 'gm_id_m' },
+      givens: { L: 'L', vgs: 'ref__vgs', gm_id: 'gm_id_m' },
     };
     expect(validateSheet(both).some((w) => /both set the operating point/.test(w.message))).toBe(
       true,
@@ -3138,9 +3163,9 @@ describe('a bound gate-source voltage in a sheet', () => {
         { name: 'v', value: 0.7 },
         { name: 'W', value: 4e-6 },
       ],
-      bind: { L: 'L', W: 'W', vgs: 'v', diode: true },
-      rows: [],
-      rules: [],
+      givens: { L: 'L', W: 'W', vgs: 'v', diode: true },
+      equations: [],
+      checks: [],
     };
     expect(validateSheet(doc)).toEqual([]);
     const res = runSheet(doc, devVds);
@@ -3150,12 +3175,12 @@ describe('a bound gate-source voltage in a sheet', () => {
     // The connection is not decorative here: it put the drain at 0.7 V, so the current carries
     // the demo's (1 + vds/VA) factor with VA = VA_PER_L·0.5 µm = 2.5 V. Against the same device
     // held at vds = 0 that is exactly 1 + 0.7/2.5 = 1.28x the current.
-    const atZero = runSheet({ ...doc, bind: { L: 'L', W: 'W', vgs: 'v', vds: '0' } }, devVds);
+    const atZero = runSheet({ ...doc, givens: { L: 'L', W: 'W', vgs: 'v', vds: '0' } }, devVds);
     expect(res.bind!.id / atZero.bind!.id).toBeCloseTo(1 + 0.7 / (VA_PER_L * 0.5e-6), 9);
 
     // A declared vds is still refused — the ruling is about vgs only.
     expect(
-      validateSheet({ ...doc, bind: { ...doc.bind!, vds: '0.5' } }).some((w) =>
+      validateSheet({ ...doc, givens: { ...doc.givens!, vds: '0.5' } }).some((w) =>
         /both a diode connection and a vds/.test(w.message),
       ),
     ).toBe(true);
@@ -3172,10 +3197,10 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
       { name: 'g', value: 10 },
       { name: 'vg', value: 0.7 },
     ],
-    bind: { L: 'L', ...bind } as SheetDoc['bind'],
-    rows: [],
-    rules: [],
-    provide: ['vgs', 'W'],
+    givens: { L: 'L', ...bind } as SheetDoc['givens'],
+    equations: [],
+    checks: [],
+    provides: ['vgs', 'W'],
   });
 
   const pair = (
@@ -3186,9 +3211,9 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
     title: 'p',
     polarity: 'n',
     params: [{ name: 'VDD', value: 1.8 }],
-    rows: [],
-    rules: [],
-    uses: [
+    equations: [],
+    checks: [],
+    blocks: [
       { name: 'one', doc: child({ id: 'Ib', gm_id: 'g' }), wiring: a },
       { name: 'two', doc: child(bindB), wiring: b },
     ],
@@ -3220,7 +3245,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
   it('says nothing once one of them is sized on the OTHER block gate voltage', () => {
     // The fix, and the only thing that actually holds the two at one voltage.
     const tied = withPartner();
-    tied.uses![1].params = { vg: 'one__vgs' };
+    tied.blocks![1].params = { vg: 'one__vgs' };
     expect(ties(tied)).toEqual([]);
   });
 
@@ -3231,16 +3256,16 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
     expect(ties(withPartner())).toHaveLength(1); // vg is the child's own param, a literal 0.7
 
     const elsewhere = withPartner();
-    elsewhere.uses!.push({ name: 'far', doc: child({ id: 'Ib', gm_id: 'g' }) });
-    elsewhere.uses![1].params = { vg: 'far__vgs' };
+    elsewhere.blocks!.push({ name: 'far', doc: child({ id: 'Ib', gm_id: 'g' }) });
+    elsewhere.blocks![1].params = { vg: 'far__vgs' };
     expect(ties(elsewhere)).toHaveLength(1);
   });
 
   it('needs two loose blocks, not one: something has to settle the voltage the rest follow', () => {
     // Three on one node, the other two sized on the first: the first is the anchor, not a defect.
     const three = withPartner();
-    three.uses![1].params = { vg: 'one__vgs' };
-    three.uses!.push({
+    three.blocks![1].params = { vg: 'one__vgs' };
+    three.blocks!.push({
       name: 'third',
       doc: child({ W: '3e-6', vgs: 'vg' }),
       params: { vg: 'one__vgs' },
@@ -3250,7 +3275,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
 
     // Cut the third loose and it is named alongside the one it should have followed — and the
     // one that IS tied stays out of the message.
-    three.uses![2] = {
+    three.blocks![2] = {
       name: 'third',
       doc: child({ id: 'Ib', gm_id: 'g' }),
       wiring: { gate: 'V_g', source: '0' },
@@ -3279,7 +3304,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
 
   it('rules on nothing it cannot see, without letting it hide what it can', () => {
     const unresolved = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
-    unresolved.uses![1] = {
+    unresolved.blocks![1] = {
       name: 'two',
       ref: 'somewhere/else',
       wiring: { gate: 'V_g', source: '0' },
@@ -3287,12 +3312,12 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
     expect(ties(unresolved)).toEqual([]);
 
     const unbound = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
-    delete unbound.uses![1].doc!.bind;
+    delete unbound.blocks![1].doc!.givens;
     expect(ties(unbound)).toEqual([]);
 
     // But a third block nobody can rule on must not suppress the real pair beside it.
     const beside = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
-    beside.uses!.push({ name: 'ref_only', ref: 'x/y', wiring: { gate: 'V_g', source: '0' } });
+    beside.blocks!.push({ name: 'ref_only', ref: 'x/y', wiring: { gate: 'V_g', source: '0' } });
     expect(ties(beside)).toHaveLength(1);
   });
 });

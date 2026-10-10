@@ -47,16 +47,18 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
     id: 2e-5,
     ...over,
   });
-  const doc = (bind: SheetDoc['bind']): SheetDoc => ({
+  const doc = (bind: SheetDoc['givens']): SheetDoc => ({
     title: 't',
     polarity: 'n',
     params: [{ name: 'I_d', value: 2e-5 }],
-    rows: [{ name: 'r', expr: 'I_d * 2' }],
-    rules: [{ id: 'x', kind: 'invariant', lhs: 'r', op: '>=', rhs: '0' }],
-    bind,
+    equations: [{ name: 'r', expr: 'I_d * 2' }],
+    checks: [{ id: 'x', kind: 'physical', lhs: 'r', op: '>=', rhs: '0' }],
+    givens: bind,
   });
-  const pin = (bind: SheetDoc['bind'], r: BindReport | undefined = report()): SheetDoc['bind'] =>
-    pinHardware(doc(bind), { bind: r }).doc.bind;
+  const pin = (
+    bind: SheetDoc['givens'],
+    r: BindReport | undefined = report(),
+  ): SheetDoc['givens'] => pinHardware(doc(bind), { bind: r }).doc.givens;
 
   it('leaves a width-first bind exactly as authored', () => {
     // Already fixed hardware. Its partner is how the sheet writes a gate tie, and under a move
@@ -80,7 +82,7 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
 
   it('pins the current too when the sheet never said where it comes from, and says so', () => {
     const p = pinHardware(doc({ L: 'L_p', gm: '2*pi*GBW*CL', gm_id: '10' }), { bind: report() });
-    expect(p.doc.bind).toEqual({ L: '5e-7', W: '0.000001194', id: '0.00002' });
+    expect(p.doc.givens).toEqual({ L: '5e-7', W: '0.000001194', id: '0.00002' });
     expect(p.assumedSource).toEqual(['bind']);
   });
 
@@ -114,17 +116,17 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
       title: 'c',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      bind: { L: 'L_p', gm_id: '10', id },
+      equations: [],
+      checks: [],
+      givens: { L: 'L_p', gm_id: '10', id },
     });
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [
+      equations: [],
+      checks: [],
+      blocks: [
         { name: 'dup', doc: leaf('I_a') },
         { name: 'dup', doc: leaf('I_b') },
       ],
@@ -148,15 +150,15 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
       },
     ];
     const out = pinHardware(parent, { children: kids }).doc;
-    expect(out.uses?.map((u) => u.doc?.bind?.W)).toEqual(['0.000001', '0.000002']);
-    expect(out.uses?.map((u) => u.doc?.bind?.id)).toEqual(['I_a', 'I_b']);
+    expect(out.blocks?.map((u) => u.doc?.givens?.W)).toEqual(['0.000001', '0.000002']);
+    expect(out.blocks?.map((u) => u.doc?.givens?.id)).toEqual(['I_a', 'I_b']);
   });
 
   it('leaves a bind alone when there is no hardware to pin it to', () => {
     // Degrade, never invent — the same discipline the rest of the engine takes. The caller gates
     // on the base run standing, so this is defence rather than a path in normal use.
     const b = { L: 'L_p', gm_id: '10', id: 'I_d' };
-    expect(pinHardware(doc(b), {}).doc.bind).toEqual(b); // no report at all
+    expect(pinHardware(doc(b), {}).doc.givens).toEqual(b); // no report at all
     expect(pin(b, report({ ok: false, W: NaN, L: NaN }))).toEqual(b);
   });
 
@@ -165,9 +167,9 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
       bind: report(),
     }).doc;
     expect(p.params).toEqual([{ name: 'I_d', value: 2e-5 }]);
-    expect(p.rows).toEqual([{ name: 'r', expr: 'I_d * 2' }]);
-    expect(p.rules).toEqual([{ id: 'x', kind: 'invariant', lhs: 'r', op: '>=', rhs: '0' }]);
-    expect(p.bind?.diode).toBe(true); // wiring, not a sizing spec
+    expect(p.equations).toEqual([{ name: 'r', expr: 'I_d * 2' }]);
+    expect(p.checks).toEqual([{ id: 'x', kind: 'physical', lhs: 'r', op: '>=', rhs: '0' }]);
+    expect(p.givens?.diode).toBe(true); // wiring, not a sizing spec
   });
 });
 
@@ -183,15 +185,15 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
   const device = (vds: string, vsb: string): SheetDoc => ({
     title: 'device',
     polarity: 'n',
-    provide: ['gm_id', 'gds', 'vgs'],
+    provides: ['gm_id', 'gds', 'vgs'],
     params: [
       { name: 'V_d', value: 0.6 },
       { name: 'V_s', value: 0.4 },
       { name: 'I_d', value: ID },
     ],
-    rows: [],
-    rules: [],
-    bind: { L: '0.5u', gm_id: '10', id: 'I_d', vds, vsb },
+    equations: [],
+    checks: [],
+    givens: { L: '0.5u', gm_id: '10', id: 'I_d', vds, vsb },
   });
 
   const mk = (over: Partial<SheetDoc>): SheetDoc => ({
@@ -204,9 +206,9 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       { name: 'VSB_lo', value: 0 },
       { name: 'VDD', value: 1.3 },
     ],
-    rows: [],
-    rules: [{ id: 'inverted', kind: 'invariant', lhs: 'm__gm_id', op: '>=', rhs: '1' }],
-    uses: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'VSB' } }],
+    equations: [],
+    checks: [{ id: 'inverted', kind: 'physical', lhs: 'm__gm_id', op: '>=', rhs: '1' }],
+    blocks: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'VSB' } }],
     ...over,
   });
 
@@ -221,7 +223,10 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // spec at the range end would land on this same point, so re-sizing here is indistinguishable
     // from re-biasing. The two tests below are the ones that tell them apart — both need the
     // drain to move, which on this model is the only channel that separates them.
-    const res = runSheet(mk({ edges: [{ name: 'body-lo', set: { VSB: 'VSB_lo' } }] }), dev);
+    const res = runSheet(
+      mk({ operatingRange: [{ name: 'body-lo', set: { VSB: 'VSB_lo' } }] }),
+      dev,
+    );
     expect(res.covers).toBe(true);
     const base = bindAt(res.children?.[0]);
     const end = bindAt(res.edges?.[0].children?.[0]);
@@ -239,7 +244,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // s = s(gm/ID = 10)·sqrt(1.24/1.4) = 10.5016, and gds is id/(VA + vds) at the new vds.
     // A range end free to re-size would instead give the device 88.57% of its width
     // and read gm/ID = 10 exactly at an unchanged vgs — which is what these numbers rule out.
-    const res = runSheet(mk({ edges: [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }] }), dev);
+    const res = runSheet(mk({ operatingRange: [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }] }), dev);
     expect(res.covers).toBe(true);
     const base = bindAt(res.children?.[0]);
     const end = bindAt(res.edges?.[0].children?.[0]);
@@ -258,15 +263,15 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     const ref: SheetDoc = {
       ...device('0.6', 'V_s'),
       title: 'ref',
-      provide: ['vgs'],
+      provides: ['vgs'],
     };
     const res = runSheet(
       mk({
-        uses: [
+        blocks: [
           { name: 'r', doc: ref, params: { V_s: 'VSB' } },
           { name: 'm', doc: device('V_d', '0'), params: { V_d: 'VDD - r__vgs' } },
         ],
-        edges: [{ name: 'body-lo', set: { VSB: 'VSB_lo' } }],
+        operatingRange: [{ name: 'body-lo', set: { VSB: 'VSB_lo' } }],
       }),
       dev,
     );
@@ -297,18 +302,18 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // knows a floor of disagreement this size is under both of them before any condition moves.
     const res = runSheet(
       mk({
-        uses: [
+        blocks: [
           {
             name: 'm',
             doc: {
               ...device('V_d', '0'),
-              provide: ['gm', 'gm_id'],
-              bind: { L: '0.5u', gm_id: '12', id: '10u', vds: 'V_d' },
+              provides: ['gm', 'gm_id'],
+              givens: { L: '0.5u', gm_id: '12', id: '10u', vds: 'V_d' },
             },
             params: { V_d: 'V_o' },
           },
         ],
-        edges: [{ name: 'null', set: { V_o: 'V_o' } }],
+        operatingRange: [{ name: 'null', set: { V_o: 'V_o' } }],
       }),
       dev,
     );
@@ -329,11 +334,11 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
 
   /** The device with its source on node X: the drain is moved by the range end, the body bias is
    *  X. `hold` says the gate — X plus the device's gate-source voltage — is what stays put. */
-  const underGate = (x: SheetDoc['params'][number], edges?: SheetDoc['edges']): SheetDoc =>
+  const underGate = (x: SheetDoc['params'][number], edges?: SheetDoc['operatingRange']): SheetDoc =>
     mk({
       params: [...mk({}).params, x],
-      uses: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'X' } }],
-      ...(edges ? { edges } : {}),
+      blocks: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'X' } }],
+      ...(edges ? { operatingRange: edges } : {}),
     });
   const drainHi = [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }];
   const X0 = 0.2;
@@ -377,7 +382,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // and no value of X is singled out. The relation reads exactly zero at the low end of the
     // bracket, which a bisection takes for a root — it would report the node at 0 V and cover.
     const doc = underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: 'X + R' }, drainHi);
-    doc.rows = [{ name: 'R', expr: '0 - X' }];
+    doc.equations = [{ name: 'R', expr: '0 - X' }];
     const res = runSheet(doc, dev);
     expect(res.closes).toBe(true);
     expect(res.covers).toBe(false);
@@ -419,7 +424,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     const held = (hold?: string): SheetDoc => {
       const doc = mk({
         params: [...mk({}).params, { name: 'Xp', value: 0.25 }],
-        uses: [
+        blocks: [
           {
             name: 'm',
             doc: {
@@ -429,7 +434,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
             params: { V_d: 'V_o', X: 'Xp' },
           },
         ],
-        edges: drainHi,
+        operatingRange: drainHi,
       });
       return doc;
     };
@@ -457,10 +462,10 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
         { name: 'VSB', value: 0, min: 0, max: 0.4 },
         { name: 'VSB_hi', value: 0.4 },
       ],
-      rows: [],
-      rules: [],
-      bind: { L: '0.5u', gm_id: '2.8', id: '20u', vds: '0.6', vsb: 'VSB' },
-      edges: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
+      equations: [],
+      checks: [],
+      givens: { L: '0.5u', gm_id: '2.8', id: '20u', vds: '0.6', vsb: 'VSB' },
+      operatingRange: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
     };
     const res = runSheet(doc, dev);
     expect(res.bind?.ok).toBe(true); // the center sized; it is the range end that cannot
@@ -482,10 +487,10 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
         { name: 'VSB', value: 0, min: 0, max: 0.4 },
         { name: 'VSB_hi', value: 0.4 },
       ],
-      rows: [],
-      rules: [],
-      bind: { L: '0.5u', W: '10u', gm: '8e-3', vds: '0.6', vsb: 'VSB' },
-      edges: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
+      equations: [],
+      checks: [],
+      givens: { L: '0.5u', W: '10u', gm: '8e-3', vds: '0.6', vsb: 'VSB' },
+      operatingRange: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
     };
     const e = runSheet(doc, dev).edges?.[0];
     expect(e?.state).toBe('does-not-cover');
@@ -506,15 +511,15 @@ describe('coverage is only asked of a design that exists', () => {
     title: 'g',
     polarity: 'n',
     params: [
-      { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'Spec' } },
+      { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Spec' } },
       { name: 'Spec', value: T },
       { name: 'Spec_lo', value: 3 },
       { name: 'floor', value: 0.5 },
     ],
-    rows: [{ name: 'y', expr: '2*x + 1' }],
-    rules: [{ id: 'node-floor', kind: 'invariant', lhs: 'x', op: '>=', rhs: 'floor' }],
-    bind: { L: '0.5u', gm_id: '10', id: '20u', vds: '0.6', vsb: '0' },
-    edges: [{ name: 'lo', set: { Spec: 'Spec_lo' } }],
+    equations: [{ name: 'y', expr: '2*x + 1' }],
+    checks: [{ id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'floor' }],
+    givens: { L: '0.5u', gm_id: '10', id: '20u', vds: '0.6', vsb: '0' },
+    operatingRange: [{ name: 'lo', set: { Spec: 'Spec_lo' } }],
   });
 
   it('skips the edges when the base run did not stand, and says the question went unasked', () => {
@@ -581,9 +586,9 @@ describe('covers — the sub-verdict that names which question was answered', ()
       { name: 'Spec_hi', value: 7 },
       { name: 'cap', value: 20 },
     ],
-    rows: [{ name: 'y', expr: '2*Spec' }],
-    rules: [{ id: 'ceil', kind: 'requirement', lhs: 'cap', op: '>=', rhs: 'y' }],
-    edges: [
+    equations: [{ name: 'y', expr: '2*Spec' }],
+    checks: [{ id: 'ceil', kind: 'spec', lhs: 'cap', op: '>=', rhs: 'y' }],
+    operatingRange: [
       { name: 'lo', set: { Spec: 'Spec_lo' } },
       { name: 'hi', set: { Spec: 'Spec_hi' } },
     ],
@@ -612,7 +617,7 @@ describe('covers — the sub-verdict that names which question was answered', ()
   });
 
   it('is absent on a sheet that claims no range at all', () => {
-    expect(evaluateSheet(mk({ edges: undefined }), dev).covers).toBeUndefined();
+    expect(evaluateSheet(mk({ operatingRange: undefined }), dev).covers).toBeUndefined();
   });
 });
 
@@ -627,17 +632,17 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
       .map((w) => w.message);
 
   /** A device driven by the parent, so a range end can reach its bind through the wiring. */
-  const child = (bind: SheetDoc['bind'], provide = ['id']): SheetDoc => ({
+  const child = (bind: SheetDoc['givens'], provide = ['id']): SheetDoc => ({
     title: 'c',
     polarity: 'n',
-    provide,
+    provides: provide,
     params: [
       { name: 'V_x', value: 0.6 },
       { name: 'I_c', value: 2e-5 },
     ],
-    rows: [],
-    rules: [],
-    bind,
+    equations: [],
+    checks: [],
+    givens: bind,
   });
 
   const parent = (over: Partial<SheetDoc>): SheetDoc => ({
@@ -646,20 +651,26 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     params: [
       { name: 'CM_dc', value: 0.9, min: 0.7, max: 1.3 },
       { name: 'CM_hi', value: 1.2 },
-      { name: 'V_t', value: 0.4, min: 0, max: 1, pin: { lhs: 'CM_out', rhs: 'CM_dc' } },
+      {
+        name: 'V_t',
+        value: 0.4,
+        min: 0,
+        max: 1,
+        designConstraint: { lhs: 'CM_out', rhs: 'CM_dc' },
+      },
     ],
     // The pin's own relation reads the edge-overridden param, so the node it solves for — and
     // the row that names it — move at the range end. That two-hop reach is what the checks below
     // have to follow; a direct-reference test alone would pass on a validator that never closed.
-    rows: [{ name: 'CM_out', expr: 'V_t + 0.5' }],
-    rules: [],
-    edges: [{ name: 'hi', set: { CM_dc: 'CM_hi' } }],
+    equations: [{ name: 'CM_out', expr: 'V_t + 0.5' }],
+    checks: [],
+    operatingRange: [{ name: 'hi', set: { CM_dc: 'CM_hi' } }],
     ...over,
   });
 
   /** The single-use shape every reach test below is a variation of. */
-  const withK = (bind: SheetDoc['bind'], params: Record<string, string>): SheetDoc =>
-    parent({ uses: [{ name: 'k', doc: child(bind), params }] });
+  const withK = (bind: SheetDoc['givens'], params: Record<string, string>): SheetDoc =>
+    parent({ blocks: [{ name: 'k', doc: child(bind), params }] });
 
   it('says nothing when a range end reaches a device through its drain alone', () => {
     // The exact case: a width-first bind at a moved vds reproduces its gate tie to the digit.
@@ -690,7 +701,7 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
         ...parent({}).params,
         { name: 'V_n', value: 0.2, min: 0, max: 0.4, hold: 'V_n + V_t' },
       ],
-      uses: [
+      blocks: [
         {
           name: 'k',
           doc: child({ L: '0.5u', W: '10u', gm_id: '10', vds: '0.6', vsb: 'V_x' }),
@@ -719,7 +730,7 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     // point — or both checks go quiet on exactly the composition they exist for.
     const w = warnings(
       parent({
-        uses: [
+        blocks: [
           {
             name: 'r',
             doc: child({ L: '0.5u', gm_id: '10', id: 'I_c', vds: 'V_x' }, ['vgs']),

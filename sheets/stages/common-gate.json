@@ -67,14 +67,14 @@
       "role": "choice"
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "id": "I_bias",
     "gm_id": "gm_id",
     "vds": "VDD - I_bias*R_load - V_in",
     "vsb": "V_in"
   },
-  "rows": [
+  "equations": [
     {
       "name": "V_out",
       "expr": "VDD - id*R_load",
@@ -114,10 +114,10 @@
       "note": "estimate: quiescent supply current — the one branch these rows model; the source that sets it is outside the stage. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -125,7 +125,7 @@
     },
     {
       "id": "headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out - V_in",
       "op": ">=",
       "rhs": "vdsat",
@@ -133,21 +133,21 @@
     },
     {
       "id": "input-match",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "Rin",
       "op": "<=",
       "rhs": "Rin_target",
       "note": "the resistance looking into the source must meet the input-resistance budget. This is what a common gate is usually infeasible on: closing it takes proportionally more gm, i.e. more current, not a different topology"
     },
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "gbw-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "GBW",
       "op": ">=",
       "rhs": "GBW_target",
       "note": "actual GBW into CL plus the parasitic estimate"
     }
   ],
-  "provide": ["Rin", "Rout", "I_q"]
+  "provides": ["Rin", "Rout", "I_q"]
 }

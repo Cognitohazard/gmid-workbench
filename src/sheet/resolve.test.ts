@@ -20,18 +20,18 @@ const LEAF: SheetDoc = {
   title: 'Leaf',
   polarity: 'n',
   params: [{ name: 'x', value: 2 }],
-  rows: [{ name: 'y', expr: '2*x' }],
-  rules: [{ id: 'r1', kind: 'requirement', lhs: 'y', op: '>=', rhs: '1' }],
-  provide: ['y'],
+  equations: [{ name: 'y', expr: '2*x' }],
+  checks: [{ id: 'r1', kind: 'spec', lhs: 'y', op: '>=', rhs: '1' }],
+  provides: ['y'],
 };
 
 const parent = (use: Partial<SheetUse>): SheetDoc => ({
   title: 'Parent',
   polarity: 'n',
   params: [{ name: 'x_top', value: 3, min: 1, max: 5 }],
-  rows: [{ name: 'z', expr: 'c__y + 1' }],
-  rules: [],
-  uses: [{ name: 'c', params: { x: 'x_top' }, ...use }],
+  equations: [{ name: 'z', expr: 'c__y + 1' }],
+  checks: [],
+  blocks: [{ name: 'c', params: { x: 'x_top' }, ...use }],
 });
 
 const INDEX = buildSheetRefIndex([{ path: 'blocks/leaf', doc: LEAF }]);
@@ -79,10 +79,10 @@ describe('resolveSheetRefs', () => {
     const raw = parent({ ref: 'blocks/leaf' });
     const r = resolveSheetRefs(raw, INDEX);
     expect(r.warnings).toEqual([]);
-    expect(r.doc.uses?.[0].doc).toEqual(LEAF);
-    expect(r.doc.uses?.[0].ref).toBe('blocks/leaf');
+    expect(r.doc.blocks?.[0].doc).toEqual(LEAF);
+    expect(r.doc.blocks?.[0].ref).toBe('blocks/leaf');
     // the input doc is untouched — resolution is pure
-    expect(raw.uses?.[0].doc).toBeUndefined();
+    expect(raw.blocks?.[0].doc).toBeUndefined();
   });
 
   it('resolves a chain of refs and a ref inside an embedded child', () => {
@@ -90,9 +90,9 @@ describe('resolveSheetRefs', () => {
       title: 'Mid',
       polarity: 'n',
       params: [],
-      rows: [],
-      rules: [],
-      uses: [{ name: 'inner', ref: 'blocks/leaf' }],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'inner', ref: 'blocks/leaf' }],
     };
     const idx = buildSheetRefIndex([
       { path: 'blocks/leaf', doc: LEAF },
@@ -101,15 +101,15 @@ describe('resolveSheetRefs', () => {
     // parent → ref mid → ref leaf, plus parent → embedded doc that itself refs leaf
     const raw: SheetDoc = {
       ...parent({ ref: 'blocks/mid' }),
-      uses: [
+      blocks: [
         { name: 'c', ref: 'blocks/mid' },
         { name: 'e', doc: { ...mid, title: 'Embedded' } },
       ],
     };
     const r = resolveSheetRefs(raw, idx);
     expect(r.warnings).toEqual([]);
-    expect(r.doc.uses?.[0].doc?.uses?.[0].doc).toEqual(LEAF);
-    expect(r.doc.uses?.[1].doc?.uses?.[0].doc).toEqual(LEAF);
+    expect(r.doc.blocks?.[0].doc?.blocks?.[0].doc).toEqual(LEAF);
+    expect(r.doc.blocks?.[1].doc?.blocks?.[0].doc).toEqual(LEAF);
   });
 
   it('a missing ref warns by id and stays docless (eval then fails closed)', () => {
@@ -117,7 +117,7 @@ describe('resolveSheetRefs', () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0].severity).toBe('error');
     expect(r.warnings[0].message).toContain('"blocks/nope"');
-    expect(r.doc.uses?.[0].doc).toBeUndefined();
+    expect(r.doc.blocks?.[0].doc).toBeUndefined();
 
     const res = runSheet(parent({ ref: 'blocks/nope' }), undefined, undefined, INDEX);
     expect(res.feasible).toBe(false);
@@ -132,12 +132,12 @@ describe('resolveSheetRefs', () => {
     const r = resolveSheetRefs(parent({ ref: 'leaf' }), idx);
     expect(r.warnings[0].message).toContain('a/leaf');
     expect(r.warnings[0].message).toContain('b/leaf');
-    expect(r.doc.uses?.[0].doc).toBeUndefined();
+    expect(r.doc.blocks?.[0].doc).toBeUndefined();
   });
 
   it('detects reference cycles, including self-reference', () => {
-    const a: SheetDoc = { ...LEAF, title: 'A', uses: [{ name: 'u', ref: 'x/b' }] };
-    const b: SheetDoc = { ...LEAF, title: 'B', uses: [{ name: 'u', ref: 'x/a' }] };
+    const a: SheetDoc = { ...LEAF, title: 'A', blocks: [{ name: 'u', ref: 'x/b' }] };
+    const b: SheetDoc = { ...LEAF, title: 'B', blocks: [{ name: 'u', ref: 'x/a' }] };
     const idx = buildSheetRefIndex([
       { path: 'x/a', doc: a },
       { path: 'x/b', doc: b },
@@ -147,7 +147,7 @@ describe('resolveSheetRefs', () => {
     expect(r.warnings[0].message).toContain('circular');
     expect(r.warnings[0].message).toContain('x/a -> x/b -> x/a');
 
-    const self: SheetDoc = { ...LEAF, title: 'Self', uses: [{ name: 'u', ref: 'x/self' }] };
+    const self: SheetDoc = { ...LEAF, title: 'Self', blocks: [{ name: 'u', ref: 'x/self' }] };
     const idx2 = buildSheetRefIndex([{ path: 'x/self', doc: self }]);
     const r2 = resolveSheetRefs(parent({ ref: 'x/self' }), idx2);
     expect(r2.warnings[0].message).toContain('circular');
@@ -161,7 +161,7 @@ describe('resolveSheetRefs', () => {
       doc: {
         ...LEAF,
         title: `Chain ${i}`,
-        uses: i < n - 1 ? [{ name: 'u', ref: `x/chain-${i + 1}` }] : undefined,
+        blocks: i < n - 1 ? [{ name: 'u', ref: `x/chain-${i + 1}` }] : undefined,
       } as SheetDoc,
     }));
     const idx = buildSheetRefIndex(entries);
@@ -173,7 +173,7 @@ describe('resolveSheetRefs', () => {
     const pinned: SheetDoc = { ...LEAF, title: 'Pinned snapshot' };
     const r = resolveSheetRefs(parent({ ref: 'blocks/leaf', doc: pinned }), INDEX);
     expect(r.warnings).toEqual([]);
-    expect(r.doc.uses?.[0].doc?.title).toBe('Pinned snapshot');
+    expect(r.doc.blocks?.[0].doc?.title).toBe('Pinned snapshot');
   });
 
   it('caps TOTAL expansion on a fan-out DAG (width^depth is acyclic but explosive)', () => {
@@ -186,7 +186,7 @@ describe('resolveSheetRefs', () => {
       doc: {
         ...LEAF,
         title: `Fan ${i}`,
-        uses:
+        blocks:
           i < levels - 1
             ? Array.from({ length: WIDTH }, (_, j) => ({ name: `u${j}`, ref: `x/fan-${i + 1}` }))
             : undefined,
@@ -257,8 +257,8 @@ describe('flattenSheetDoc', () => {
   it('inlines every ref and strips provenance — a self-contained doc', () => {
     const flat = flattenSheetDoc(parent({ ref: 'blocks/leaf' }), INDEX);
     expect(flat.warnings).toEqual([]);
-    expect(flat.doc.uses?.[0].ref).toBeUndefined();
-    expect(flat.doc.uses?.[0].doc).toEqual(LEAF);
+    expect(flat.doc.blocks?.[0].ref).toBeUndefined();
+    expect(flat.doc.blocks?.[0].doc).toEqual(LEAF);
     expect(JSON.stringify(flat.doc)).not.toContain('"ref"');
     // the flattened doc stands alone: same numbers with NO index supplied
     const res = runSheet(flat.doc);
@@ -269,7 +269,7 @@ describe('flattenSheetDoc', () => {
   it('keeps an unresolvable ref in place rather than dropping the use', () => {
     const flat = flattenSheetDoc(parent({ ref: 'blocks/nope' }), INDEX);
     expect(flat.warnings).toHaveLength(1);
-    expect(flat.doc.uses?.[0].ref).toBe('blocks/nope');
+    expect(flat.doc.blocks?.[0].ref).toBe('blocks/nope');
   });
 });
 

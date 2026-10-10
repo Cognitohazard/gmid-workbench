@@ -65,7 +65,7 @@
       "note": "diode-device inversion"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "m1",
       "doc": {
@@ -77,18 +77,18 @@
           { "name": "L1", "value": 1e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_1", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L1", "id": "I1", "gm_id": "gm_id_1", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L1", "id": "I1", "gm_id": "gm_id_1", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_1",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vgs", "W", "vdsat", "id"]
+        "provides": ["gm", "vgs", "W", "vdsat", "id"]
       },
       "params": {
         "I1": "I_bias",
@@ -97,14 +97,14 @@
       }
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "W": "K_bm*m1__W",
     "id": "I_bias",
     "vds": "V_dm2 - I_bias*R_bias",
     "vsb": "I_bias*R_bias"
   },
-  "rows": [
+  "equations": [
     {
       "name": "gm_target",
       "expr": "(2/R_bias)*(1 - 1/sqrt(K_bm))",
@@ -124,10 +124,10 @@
       "note": "the gate-source step the resistor must produce for the loop to close"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -135,7 +135,7 @@
     },
     {
       "id": "self-bias-fixed-point",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "delta_vgs",
       "op": "==",
       "rhs": "vgs_drop",
@@ -144,7 +144,7 @@
     },
     {
       "id": "gm-identity",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "m1__gm",
       "op": "==",
       "rhs": "gm_target",
@@ -152,5 +152,5 @@
       "note": "the classic square-law gm = (2/R)(1 - 1/sqrt(K)); the LUT gm is the truth, so this shows how far the hand formula drifts at this inversion. Estimate-grade"
     }
   ],
-  "provide": ["gm_target"]
+  "provides": ["gm_target"]
 }

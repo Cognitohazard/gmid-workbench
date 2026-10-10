@@ -70,13 +70,13 @@
       "note": "the follower's gate-source drop, which places its drain-source bias at VDD - V_in + vgs_est. Solved, not retuned: the engine iterates it until it equals the sized device's own vgs, so the stored value is only the starting guess, and a table with a different threshold lands somewhere else (near 0.77 V on a sky130 tt nfet at these defaults)"
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "id": "I_bias",
     "gm_id": "gm_id",
     "vds": "VDD - V_in + vgs_est"
   },
-  "rows": [
+  "equations": [
     {
       "name": "V_out",
       "expr": "V_in - vgs",
@@ -114,10 +114,10 @@
       "note": "estimate: quiescent supply current — the one branch these rows model, set by the bias source under the follower. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -125,16 +125,16 @@
     },
     {
       "id": "headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "VDD - V_out",
       "op": ">=",
       "rhs": "vdsat",
       "note": "device saturated: the drain-to-source voltage is VDD minus the source (output) level"
     },
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
@@ -142,12 +142,12 @@
     },
     {
       "id": "loading",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "R_L",
       "op": ">=",
       "rhs": "10*Rout",
       "note": "the stage is actually buffering only while the load it drives is well above its own output resistance. Ten to one is the convention for that regime, not physics: at exactly ten to one the loaded gain still sits within about ten percent of what an unloaded follower would give, and below it the load, not the device, sets the gain"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

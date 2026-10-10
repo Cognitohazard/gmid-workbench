@@ -57,7 +57,7 @@
       "max": 0.55,
       "unit": "V",
       "role": "choice",
-      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
       "note": "the tail node — the pair's source. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke. The max must stay below the diode-loaded drain (VDD minus the mirror's |vgs|) — both bracket ends have to size"
     },
     {
@@ -121,7 +121,7 @@
       "role": "choice"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "mloadp",
       "doc": {
@@ -133,18 +133,18 @@
           { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_m", "value": 10, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_m",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "cgg", "vnth_m"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "cgg", "vnth_m"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -165,18 +165,24 @@
           { "name": "vds_i", "value": 0.77, "unit": "V", "role": "spec" },
           { "name": "vsb_i", "value": 0.33, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_i",
+          "id": "I_half",
+          "gm_id": "gm_id_i",
+          "vds": "vds_i",
+          "vsb": "vsb_i"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_i",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -198,18 +204,18 @@
           { "name": "gm_id_o", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vds_o", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_o", "id": "I_o", "gm_id": "gm_id_o", "vds": "vds_o" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_o", "id": "I_o", "gm_id": "gm_id_o", "vds": "vds_o" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_o",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat", "cgg"]
+        "provides": ["gds", "vdsat", "cgg"]
       },
       "params": {
         "I_o": "K_m*I_tail/2",
@@ -229,18 +235,18 @@
           { "name": "L_n", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_n", "value": 10, "unit": "1/V", "role": "choice" }
         ],
-        "bind": { "L": "L_n", "id": "I_o", "gm_id": "gm_id_n", "diode": true },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_n", "id": "I_o", "gm_id": "gm_id_n", "diode": true },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_n",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "cgg"]
+        "provides": ["gm", "cgg"]
       },
       "params": {
         "I_o": "K_m*I_tail/2",
@@ -260,18 +266,18 @@
           { "name": "gm_id_o", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vds_o", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_o", "id": "I_o", "gm_id": "gm_id_o", "vds": "vds_o" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_o", "id": "I_o", "gm_id": "gm_id_o", "vds": "vds_o" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_o",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gds", "vdsat", "cgg"]
+        "provides": ["gds", "vdsat", "cgg"]
       },
       "params": {
         "I_o": "K_m*I_tail/2",
@@ -281,7 +287,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
@@ -350,13 +356,13 @@
       "note": "estimate: quiescent supply current — the input branch at the tail current plus the two mirrored output branches, each carrying K_m times half the tail. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
-    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+  "checks": [
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "spec", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
@@ -364,7 +370,7 @@
     },
     {
       "id": "pm-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "PM",
       "op": ">=",
       "rhs": "PM_target",
@@ -372,7 +378,7 @@
     },
     {
       "id": "input-sat-margin",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "VDD - abs(mloadp__vgs) - V_tail - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
@@ -380,7 +386,7 @@
     },
     {
       "id": "cm-not-below",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_in",
       "op": ">=",
       "rhs": "CM_lo",
@@ -388,14 +394,14 @@
     },
     {
       "id": "cm-not-above",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
       "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
     }
   ],
-  "edges": [
+  "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
@@ -407,5 +413,5 @@
       "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

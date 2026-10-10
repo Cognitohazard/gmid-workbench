@@ -163,9 +163,9 @@ const sheet = {
     { name: 'gm_id', value: 12, min: 6, max: 18, unit: '1/V', role: 'choice' },
     { name: 'L', value: 0.5e-6, unit: 'm', role: 'choice' },
   ],
-  bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.9' },
-  rows: [{ name: 'GBW', expr: 'gm/(2*pi*(cgg + CL))', unit: 'Hz' }],
-  rules: [{ id: 'inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
+  givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.9' },
+  equations: [{ name: 'GBW', expr: 'gm/(2*pi*(cgg + CL))', unit: 'Hz' }],
+  checks: [{ id: 'inversion', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
 };
 
 const out = runSheet(sheet, table);

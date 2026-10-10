@@ -12,6 +12,7 @@ import {
   BIND_FLAGS,
   DOC_KEYS,
   VAR_KEYS,
+  inCurrentKeys,
   ROW_KEYS,
   RULE_KEYS,
   USE_KEYS,
@@ -318,7 +319,7 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  * arity is validateSheet's business, which names the problem instead of silently unsizing
  * the sheet — so only an L-less bind is dropped, and its rules then go 'na'. Every piece
  * this pass does not carry over is recorded in `lost`, including a key no core key set
- * knows. Returns undefined only when `v` is not an object.
+ * knows. Returns undefined when `v` is not an object, or writes one key in two spellings.
  */
 export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc | undefined {
   if (!v || typeof v !== 'object') return undefined;
@@ -327,7 +328,14 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // is kept so the validator still sees a non-empty `uses` at the cap and raises its
   // depth error rather than the truncation reading as a shallower (silently valid) tree.
   if (depth > MAX_USE_DEPTH + 1) return undefined;
-  const o = v as Record<string, unknown>;
+  // Earlier spellings of the keys are brought up to the current ones FIRST, before anything
+  // below counts an unknown key or a lost piece — an older document must load, not be refused
+  // key by key. A key written in both spellings is ambiguous, so that document is refused.
+  const { doc: o, both } = inCurrentKeys(v as Record<string, unknown>);
+  if (both.length) {
+    lost?.push(...both.map((b) => `${b} (one key, two spellings)`));
+    return undefined;
+  }
   const str = (x: unknown, fallback: string) => (typeof x === 'string' && x ? x : fallback);
   // `lost` records the path of every authored piece this pass DROPS. Restore paths
   // tolerate drops (our own persisted data, best rescued); the import path passes a
@@ -355,7 +363,14 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   ): void => {
     for (const k of Object.keys(obj)) if (!keys.has(k)) lost?.push(`${at}${k}`);
   };
-  for (const k of ['params', 'rows', 'rules', 'uses', 'provide', 'edges'] as const)
+  for (const k of [
+    'params',
+    'equations',
+    'checks',
+    'blocks',
+    'provides',
+    'operatingRange',
+  ] as const)
     if (o[k] !== undefined && !Array.isArray(o[k])) lost?.push(k);
   // Keep only the string-valued entries of an authored name→expression map, recording the
   // rest — shared by a use's param overrides and an edge's set.
@@ -395,10 +410,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         else dropField(pp.solveFor !== undefined, `params[${i}].solveFor`);
         // Same stakes as solveFor: dropping a pin silently turns a solved node back into the
         // stale default it displays. An OBJECT field, so it needs its own shape check.
-        const pin = pp.pin as { lhs?: unknown; rhs?: unknown } | undefined;
+        const pin = pp.designConstraint as { lhs?: unknown; rhs?: unknown } | undefined;
         if (pin && typeof pin.lhs === 'string' && typeof pin.rhs === 'string')
-          out.pin = { lhs: pin.lhs, rhs: pin.rhs };
-        else dropField(pp.pin !== undefined, `params[${i}].pin`);
+          out.designConstraint = { lhs: pin.lhs, rhs: pin.rhs };
+        else dropField(pp.designConstraint !== undefined, `params[${i}].designConstraint`);
         // Same stakes again: a dropped hold leaves the node typed, and a range end would then
         // hold the node where the design holds the gate.
         if (typeof pp.hold === 'string' && pp.hold !== '') out.hold = pp.hold;
@@ -412,30 +427,31 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  const rows: SheetRow[] = Array.isArray(o.rows)
-    ? o.rows.flatMap((r, i) => {
-        if (!r || typeof r !== 'object') return drop(`rows[${i}]`);
+  const rows: SheetRow[] = Array.isArray(o.equations)
+    ? o.equations.flatMap((r, i) => {
+        if (!r || typeof r !== 'object') return drop(`equations[${i}]`);
         const rr = r as Record<string, unknown>;
-        if (typeof rr.name !== 'string' || typeof rr.expr !== 'string') return drop(`rows[${i}]`);
-        unknownKeys(rr, ROW_KEYS, `rows[${i}].`);
+        if (typeof rr.name !== 'string' || typeof rr.expr !== 'string')
+          return drop(`equations[${i}]`);
+        unknownKeys(rr, ROW_KEYS, `equations[${i}].`);
         const out: SheetRow = { name: rr.name, expr: rr.expr };
         if (typeof rr.unit === 'string') out.unit = rr.unit;
-        else dropField(rr.unit !== undefined, `rows[${i}].unit`);
+        else dropField(rr.unit !== undefined, `equations[${i}].unit`);
         if (typeof rr.note === 'string') out.note = rr.note;
-        else dropField(rr.note !== undefined, `rows[${i}].note`);
+        else dropField(rr.note !== undefined, `equations[${i}].note`);
         return [out];
       })
     : [];
 
-  const rules: SheetRule[] = Array.isArray(o.rules)
-    ? o.rules.flatMap((r, i) => {
-        if (!r || typeof r !== 'object') return drop(`rules[${i}]`);
+  const rules: SheetRule[] = Array.isArray(o.checks)
+    ? o.checks.flatMap((r, i) => {
+        if (!r || typeof r !== 'object') return drop(`checks[${i}]`);
         const rr = r as Record<string, unknown>;
-        if (typeof rr.lhs !== 'string' || typeof rr.rhs !== 'string') return drop(`rules[${i}]`);
+        if (typeof rr.lhs !== 'string' || typeof rr.rhs !== 'string') return drop(`checks[${i}]`);
         if (!RULE_OPS.has(rr.op as string) || !RULE_KINDS.has(rr.kind as string))
-          return drop(`rules[${i}]`);
-        unknownKeys(rr, RULE_KEYS, `rules[${i}].`);
-        dropField(rr.id !== undefined && !(typeof rr.id === 'string' && rr.id), `rules[${i}].id`);
+          return drop(`checks[${i}]`);
+        unknownKeys(rr, RULE_KEYS, `checks[${i}].`);
+        dropField(rr.id !== undefined && !(typeof rr.id === 'string' && rr.id), `checks[${i}].id`);
         const out: SheetRule = {
           id: str(rr.id, uid()),
           kind: rr.kind as RuleKind,
@@ -444,11 +460,11 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
           rhs: rr.rhs,
         };
         if (finite(rr.tolPct)) out.tolPct = rr.tolPct;
-        else dropField(rr.tolPct !== undefined, `rules[${i}].tolPct`);
+        else dropField(rr.tolPct !== undefined, `checks[${i}].tolPct`);
         if (typeof rr.justification === 'string') out.justification = rr.justification;
-        else dropField(rr.justification !== undefined, `rules[${i}].justification`);
+        else dropField(rr.justification !== undefined, `checks[${i}].justification`);
         if (typeof rr.note === 'string') out.note = rr.note;
-        else dropField(rr.note !== undefined, `rules[${i}].note`);
+        else dropField(rr.note !== undefined, `checks[${i}].note`);
         return [out];
       })
     : [];
@@ -457,8 +473,8 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // "exactly two" error the author can fix, whereas dropping it here would silently turn a
   // mis-authored sized sheet into an unsized one.
   let bind: SheetBind | undefined;
-  if (o.bind && typeof o.bind === 'object') {
-    const b = o.bind as Record<string, unknown>;
+  if (o.givens && typeof o.givens === 'object') {
+    const b = o.givens as Record<string, unknown>;
     if (typeof b.L === 'string') {
       const cand: SheetBind = { L: b.L };
       // Members are written through an index view: SheetBind mixes expression strings with a
@@ -476,12 +492,12 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         // A flag (the diode connection) is a boolean, and would fail the string test above —
         // which would delete the connection and leave the device unbiased on every reload.
         else if (BIND_FLAGS.has(k) && typeof b[k] === 'boolean') into[k] = b[k];
-        else dropField(true, `bind.${k}`);
+        else dropField(true, `givens.${k}`);
       }
       bind = cand;
     }
   }
-  if (o.bind !== undefined && !bind) lost?.push('bind');
+  if (o.givens !== undefined && !bind) lost?.push('givens');
 
   // Composition: each child is a full SheetDoc recursively sanitized; the param-override map,
   // the provide list, and the per-child `device` (a table uid the resolver matches against the
@@ -489,35 +505,37 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // that is not currently loaded simply reads infeasible until re-loaded. A by-reference child
   // (`ref` without an embedded doc) is kept as the reference — resolution happens at evaluation,
   // and a ref that no longer resolves reads infeasible rather than being dropped.
-  const uses: SheetUse[] = Array.isArray(o.uses)
-    ? o.uses.flatMap((u, i) => {
-        if (!u || typeof u !== 'object') return drop(`uses[${i}]`);
+  const uses: SheetUse[] = Array.isArray(o.blocks)
+    ? o.blocks.flatMap((u, i) => {
+        if (!u || typeof u !== 'object') return drop(`blocks[${i}]`);
         const uu = u as Record<string, unknown>;
-        if (typeof uu.name !== 'string' || !uu.name) return drop(`uses[${i}]`);
+        if (typeof uu.name !== 'string' || !uu.name) return drop(`blocks[${i}]`);
         // The use ITSELF only; `params` maps author-chosen param names, which no key set knows.
-        unknownKeys(uu, USE_KEYS, `uses[${i}].`);
+        unknownKeys(uu, USE_KEYS, `blocks[${i}].`);
         const childLost: string[] = [];
         const childDoc = sanitizeSheet(uu.doc, depth + 1, childLost);
-        if (uu.doc !== undefined && !childDoc) lost?.push(`uses[${i}].doc`);
-        else if (childLost.length) lost?.push(...childLost.map((p) => `uses[${i}].doc.${p}`));
+        // A child refused outright keeps its reason (a key in two spellings) beside its path.
+        if (uu.doc !== undefined && !childDoc)
+          lost?.push(`blocks[${i}].doc${childLost.length ? ` (${childLost[0]})` : ''}`);
+        else if (childLost.length) lost?.push(...childLost.map((p) => `blocks[${i}].doc.${p}`));
         // Any string ref is kept VERBATIM — including an empty one. An empty ref is an
         // authoring error the validator names ("empty ref", blocking feasibility);
         // coercing it away here would silently delete the authored block and let the
         // sheet read feasible where the core reads it infeasible.
         const ref = typeof uu.ref === 'string' ? uu.ref : undefined;
-        dropField(uu.ref !== undefined && ref === undefined, `uses[${i}].ref`);
-        if (!childDoc && ref === undefined) return uu.doc !== undefined ? [] : drop(`uses[${i}]`);
+        dropField(uu.ref !== undefined && ref === undefined, `blocks[${i}].ref`);
+        if (!childDoc && ref === undefined) return uu.doc !== undefined ? [] : drop(`blocks[${i}]`);
         const use: SheetUse = { name: uu.name };
         if (childDoc) use.doc = childDoc;
         if (ref !== undefined) use.ref = ref;
         // A malformed device binding must be REPORTED, not silently inherited from
         // the parent — the sheet would evaluate against the wrong table.
         if (typeof uu.device === 'string') use.device = uu.device;
-        else dropField(uu.device !== undefined, `uses[${i}].device`);
+        else dropField(uu.device !== undefined, `blocks[${i}].device`);
         if (uu.params && typeof uu.params === 'object' && !Array.isArray(uu.params)) {
-          const ov = strMap(uu.params as Record<string, unknown>, `uses[${i}].params`);
+          const ov = strMap(uu.params as Record<string, unknown>, `blocks[${i}].params`);
           if (Object.keys(ov).length) use.params = ov;
-        } else if (uu.params !== undefined) lost?.push(`uses[${i}].params`);
+        } else if (uu.params !== undefined) lost?.push(`blocks[${i}].params`);
         // Gate wiring: an OBJECT of expression strings on a use whose other members are plain
         // strings, so a pass that rebuilds field by field deletes it — and the consistency check
         // the declaration exists for silently stops running on every reload, which is the one
@@ -530,7 +548,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
           const into: Record<string, string> = {};
           for (const k of Object.keys(w)) {
             if (WIRING_KEYS.has(k) && typeof w[k] === 'string') into[k] = w[k] as string;
-            else dropField(true, `uses[${i}].wiring.${k}`);
+            else dropField(true, `blocks[${i}].wiring.${k}`);
           }
           // A HALF-declaration is carried through rather than completed or deleted: validateSheet
           // raises a visible "half-written wiring" error the author can fix, whereas dropping the
@@ -539,16 +557,16 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
           // it is a structural error the core would name, and a sheet must never reload cleaner
           // than the core reads it.
           if (Object.keys(into).length) use.wiring = into as unknown as SheetWiring;
-          else lost?.push(`uses[${i}].wiring`);
-        } else if (uu.wiring !== undefined) lost?.push(`uses[${i}].wiring`);
+          else lost?.push(`blocks[${i}].wiring`);
+        } else if (uu.wiring !== undefined) lost?.push(`blocks[${i}].wiring`);
         return [use];
       })
     : [];
 
-  const provide: string[] = Array.isArray(o.provide)
-    ? o.provide.flatMap((x, i) => {
+  const provide: string[] = Array.isArray(o.provides)
+    ? o.provides.flatMap((x, i) => {
         if (typeof x === 'string') return [x];
-        return drop(`provide[${i}]`);
+        return drop(`provides[${i}]`);
       })
     : [];
 
@@ -557,20 +575,20 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // dropped: validateSheet owns that verdict ("sets nothing", blocking feasibility), and
   // eating it here would let the sheet reload MORE feasible than the core reads it — the
   // exact hole the empty-ref rule above refuses.
-  const edges: SheetEdge[] = Array.isArray(o.edges)
-    ? o.edges.flatMap((e, i) => {
-        if (!e || typeof e !== 'object') return drop(`edges[${i}]`);
+  const edges: SheetEdge[] = Array.isArray(o.operatingRange)
+    ? o.operatingRange.flatMap((e, i) => {
+        if (!e || typeof e !== 'object') return drop(`operatingRange[${i}]`);
         const ee = e as Record<string, unknown>;
-        if (typeof ee.name !== 'string' || !ee.name) return drop(`edges[${i}]`);
-        unknownKeys(ee, EDGE_KEYS, `edges[${i}].`);
+        if (typeof ee.name !== 'string' || !ee.name) return drop(`operatingRange[${i}]`);
+        unknownKeys(ee, EDGE_KEYS, `operatingRange[${i}].`);
         if (!ee.set || typeof ee.set !== 'object' || Array.isArray(ee.set))
-          return drop(`edges[${i}]`);
+          return drop(`operatingRange[${i}]`);
         const out: SheetEdge = {
           name: ee.name,
-          set: strMap(ee.set as Record<string, unknown>, `edges[${i}].set`),
+          set: strMap(ee.set as Record<string, unknown>, `operatingRange[${i}].set`),
         };
         if (typeof ee.note === 'string') out.note = ee.note;
-        else dropField(ee.note !== undefined, `edges[${i}].note`);
+        else dropField(ee.note !== undefined, `operatingRange[${i}].note`);
         return [out];
       })
     : [];
@@ -580,12 +598,12 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
     ...(typeof o.description === 'string' && o.description ? { description: o.description } : {}),
     polarity: o.polarity === 'p' ? 'p' : 'n',
     params,
-    rows,
-    rules,
-    ...(bind ? { bind } : {}),
-    ...(uses.length ? { uses } : {}),
-    ...(provide.length ? { provide } : {}),
-    ...(edges.length ? { edges } : {}),
+    equations: rows,
+    checks: rules,
+    ...(bind ? { givens: bind } : {}),
+    ...(uses.length ? { blocks: uses } : {}),
+    ...(provide.length ? { provides: provide } : {}),
+    ...(edges.length ? { operatingRange: edges } : {}),
   };
 }
 

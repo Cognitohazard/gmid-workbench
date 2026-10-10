@@ -75,13 +75,13 @@
       "note": "minimum L for the lowest Ron and least channel charge"
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "W": "W_sw",
     "gm_id": "gm_id_on",
     "vds": "vds_test"
   },
-  "rows": [
+  "equations": [
     {
       "name": "Ron",
       "expr": "vds_test/id",
@@ -113,10 +113,10 @@
       "note": "estimate: the sampled voltage step from that charge; true value depends on switching speed and source impedance"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id_on",
       "op": "<=",
       "rhs": "ceiling",
@@ -124,7 +124,7 @@
     },
     {
       "id": "ron-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "Ron",
       "op": "<=",
       "rhs": "Ron_target",
@@ -132,7 +132,7 @@
     },
     {
       "id": "bw-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "BW",
       "op": ">=",
       "rhs": "BW_target",
@@ -140,7 +140,7 @@
     },
     {
       "id": "noise-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "vn_kTC",
       "op": "<=",
       "rhs": "vn_target",
@@ -148,7 +148,7 @@
     },
     {
       "id": "gate-drive-consistent",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "abs(vgs - VDD)",
       "op": "<=",
       "rhs": "0.05",
@@ -156,12 +156,12 @@
     },
     {
       "id": "charge-injection",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "dv_inj",
       "op": "<=",
       "rhs": "dv_inj_target",
       "note": "estimate-grade charge-injection step; a narrower switch or dummy/bottom-plate sampling reduces it"
     }
   ],
-  "provide": ["Ron"]
+  "provides": ["Ron"]
 }

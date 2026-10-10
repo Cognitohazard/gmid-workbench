@@ -91,7 +91,7 @@
       "note": "vds sign of the PMOS-pair table: +1 for the N-style demo axis, -1 for a signed-PMOS axis"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "n",
       "doc": {
@@ -104,18 +104,18 @@
           { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vgs", "vth", "vdsat"]
+        "provides": ["gm", "vgs", "vth", "vdsat"]
       },
       "params": { "Ix": "I_n/2", "Lx": "L_n", "gx": "gm_id_n", "vx": "vds_n" }
     },
@@ -137,23 +137,23 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "vgs", "vth", "vdsat"]
+        "provides": ["gm", "vgs", "vth", "vdsat"]
       },
       "params": { "Ix": "I_p/2", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*vds_p" }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "gm_n",
       "expr": "n__gm",
@@ -215,10 +215,10 @@
       "note": "estimate: quiescent supply current at mid-supply, which is the worst case — both pairs are live there, and one of them shuts off as the common mode approaches either rail. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "no-dead-zone",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "cm_p_max",
       "op": ">=",
       "rhs": "cm_n_min",
@@ -226,12 +226,12 @@
     },
     {
       "id": "gm-flatness",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "gm_ratio",
       "op": "<=",
       "rhs": "gm_ratio_target",
       "note": "the total transconductance swings by this ratio across the CM range; constant-gm control (current switching to hold gm_n + gm_p constant) is the standard fix and is a simulation-level technique out of scope here"
     }
   ],
-  "provide": ["gm_min", "gm_mid", "gm_max", "I_q"]
+  "provides": ["gm_min", "gm_mid", "gm_max", "I_q"]
 }

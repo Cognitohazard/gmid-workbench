@@ -57,20 +57,20 @@ const NMOS_GMID_SIZING: SheetDoc = {
   ],
   // bind-any-2: gm from the spec, gm/ID the knob; ID is derived via gm = gm/ID · ID.
   // The operating point is pinned here so sizing never silently borrows the panel's bias.
-  bind: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
-  rows: [
+  givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
+  equations: [
     { name: 'Cout', expr: 'cgg + CL', unit: 'F' },
     { name: 'GBW', expr: 'gm/(2*pi*Cout)', unit: 'Hz' },
     { name: 'vn_in', expr: 'vnth_m', unit: 'V/sqrt(Hz)' }, // γ-model thermal density from the namespace
   ],
-  rules: [
+  checks: [
     // Hard floors — checked against the LUT, never solved:
-    { id: 'feasible-inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' },
-    { id: 'headroom', kind: 'invariant', lhs: 'vstar', op: '>=', rhs: 'vstar_floor' },
+    { id: 'feasible-inversion', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: 'ceiling' },
+    { id: 'headroom', kind: 'physical', lhs: 'vstar', op: '>=', rhs: 'vstar_floor' },
     // Soft advisory:
-    { id: 'gbw-margin', kind: 'guardrail', lhs: 'GBW', op: '>=', rhs: 'GBW_target' },
+    { id: 'gbw-margin', kind: 'advisory', lhs: 'GBW', op: '>=', rhs: 'GBW_target' },
     // Self-adopted application spec (stands in for an absent consumer):
-    { id: 'noise-spec', kind: 'requirement', lhs: 'vn_in', op: '<=', rhs: 'vn_target' },
+    { id: 'noise-spec', kind: 'spec', lhs: 'vn_in', op: '<=', rhs: 'vn_target' },
   ],
 };
 
@@ -138,8 +138,8 @@ const NMOS_NOISE_MATCHING: SheetDoc = {
     },
   ],
   // bind-any-2: fix ID (budget) and gm/ID (knob); gm is derived via gm = gm/ID · ID.
-  bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
-  rows: [
+  givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
+  equations: [
     // The sizing reports every quantity at the SIZED width (svth/svfl included — the
     // parallel-composition rescale is the sizer's job, not author math), so the stored
     // input-referred PSDs are used directly. fco is intensive either way.
@@ -156,11 +156,11 @@ const NMOS_NOISE_MATCHING: SheetDoc = {
     { name: 'sigma_beta', expr: 'abeta/sqrt(W*L)', unit: '1' },
     { name: 'sigma_vos', expr: 'sqrt(2)*sqrt(sigma_vth^2 + (sigma_beta/gm_id)^2)', unit: 'V' },
   ],
-  rules: [
-    { id: 'feasible-inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' },
-    { id: 'headroom', kind: 'invariant', lhs: 'vstar', op: '>=', rhs: 'vstar_floor' },
-    { id: 'noise-spec', kind: 'requirement', lhs: 'vn_int', op: '<=', rhs: 'vn_target' },
-    { id: 'offset-spec', kind: 'requirement', lhs: 'sigma_vos', op: '<=', rhs: 'vos_target' },
+  checks: [
+    { id: 'feasible-inversion', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: 'ceiling' },
+    { id: 'headroom', kind: 'physical', lhs: 'vstar', op: '>=', rhs: 'vstar_floor' },
+    { id: 'noise-spec', kind: 'spec', lhs: 'vn_int', op: '<=', rhs: 'vn_target' },
+    { id: 'offset-spec', kind: 'spec', lhs: 'sigma_vos', op: '<=', rhs: 'vos_target' },
   ],
 };
 
@@ -189,10 +189,10 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
     },
   ],
   // vds is the (low) input-device drain; body-grounded ⇒ vsb = 0.
-  bind: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
-  rows: [],
-  rules: [{ id: 'feasible-inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
-  provide: ['gm', 'av0', 'vstar', 'id'],
+  givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
+  equations: [],
+  checks: [{ id: 'feasible-inversion', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
+  provides: ['gm', 'av0', 'vstar', 'id'],
 };
 
 /**
@@ -271,7 +271,7 @@ const NMOS_CASCODE: SheetDoc = {
       hold: 'V_x + vgs',
     },
   ],
-  uses: [
+  blocks: [
     {
       name: 'cs',
       doc: COMMON_SOURCE_INPUT,
@@ -284,18 +284,18 @@ const NMOS_CASCODE: SheetDoc = {
   // current cs__id (a child-provided scalar referenced right here in the parent's bind). Its
   // It sits between the output and that node, with its body grounded, so its source — and
   // with it its body bias — is the node voltage.
-  bind: { L: 'L', id: 'cs__id', gm_id: 'gm_id', vds: 'V_out - V_x', vsb: 'V_x' },
-  rows: [
+  givens: { L: 'L', id: 'cs__id', gm_id: 'gm_id', vds: 'V_out - V_x', vsb: 'V_x' },
+  equations: [
     // Cascode gain ≈ product of the two stages' intrinsic gains (av0 is width-independent).
     { name: 'Av', expr: 'av0 * cs__av0', unit: 'V/V' },
     { name: 'GBW', expr: 'cs__gm/(2*pi*CL)', unit: 'Hz' }, // input gm over the load cap
   ],
-  rules: [
-    { id: 'feasible-inversion', kind: 'invariant', lhs: 'gm_id', op: '<=', rhs: 'ceiling' },
-    { id: 'cs-headroom', kind: 'invariant', lhs: 'cs__vstar', op: '>=', rhs: 'vstar_floor' },
-    { id: 'cascode-headroom', kind: 'invariant', lhs: 'vstar', op: '>=', rhs: 'vstar_floor' },
-    { id: 'gain-spec', kind: 'requirement', lhs: 'Av', op: '>=', rhs: 'Av_target' },
-    { id: 'gbw-margin', kind: 'guardrail', lhs: 'GBW', op: '>=', rhs: 'GBW_target' },
+  checks: [
+    { id: 'feasible-inversion', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: 'ceiling' },
+    { id: 'cs-headroom', kind: 'physical', lhs: 'cs__vstar', op: '>=', rhs: 'vstar_floor' },
+    { id: 'cascode-headroom', kind: 'physical', lhs: 'vstar', op: '>=', rhs: 'vstar_floor' },
+    { id: 'gain-spec', kind: 'spec', lhs: 'Av', op: '>=', rhs: 'Av_target' },
+    { id: 'gbw-margin', kind: 'advisory', lhs: 'GBW', op: '>=', rhs: 'GBW_target' },
   ],
 };
 

@@ -56,7 +56,7 @@
       "max": 0.45,
       "unit": "V",
       "role": "choice",
-      "pin": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
       "note": "the tail node — the pair's source. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. The max must stay far enough below V_a for the pair to size at the top end — the input-sat guardrail owns saturation; the bracket only has to keep both ends on the table"
     },
     {
@@ -170,7 +170,7 @@
       "class": "independent"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "in",
       "doc": {
@@ -184,18 +184,24 @@
           { "name": "vds_i", "value": 0.2, "unit": "V", "role": "spec" },
           { "name": "vsb_i", "value": 0.35, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_i", "id": "I_half", "gm_id": "gm_id_i", "vds": "vds_i", "vsb": "vsb_i" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_i",
+          "id": "I_half",
+          "gm_id": "gm_id_i",
+          "vds": "vds_i",
+          "vsb": "vsb_i"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_i",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -218,18 +224,24 @@
           { "name": "vds_c", "value": 0.35, "unit": "V", "role": "spec" },
           { "name": "vsb_c", "value": 0.55, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_c",
+          "id": "I_half",
+          "gm_id": "gm_id_c",
+          "vds": "vds_c",
+          "vsb": "vsb_c"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_c",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat", "gm"]
+        "provides": ["av0", "gds", "vdsat", "gm"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -252,18 +264,24 @@
           { "name": "vds_c", "value": 0.4, "unit": "V", "role": "spec" },
           { "name": "vsb_c", "value": 0.5, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_c", "id": "I_half", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
-        "rows": [],
-        "rules": [
+        "givens": {
+          "L": "L_c",
+          "id": "I_half",
+          "gm_id": "gm_id_c",
+          "vds": "vds_c",
+          "vsb": "vsb_c"
+        },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_c",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gds", "vdsat"]
+        "provides": ["av0", "gds", "vdsat"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -285,18 +303,18 @@
           { "name": "gm_id_m", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vds_m", "value": 0.5, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "vds": "vds_m" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "vds": "vds_m" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_m",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "vdsat", "W", "vnth_m"]
+        "provides": ["gm", "gds", "vdsat", "W", "vnth_m"]
       },
       "params": {
         "I_half": "I_tail/2",
@@ -317,18 +335,18 @@
           { "name": "gm_id_b", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vds_b", "value": 0.6, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "vds": "vds_b" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "vds": "vds_b" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gm_id_b",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["av0", "gm", "cgg", "vdsat"]
+        "provides": ["av0", "gm", "cgg", "vdsat"]
       },
       "params": {
         "I_b": "I_boost",
@@ -338,7 +356,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
@@ -402,13 +420,13 @@
       "note": "estimate: quiescent supply current — the main branch at the tail current plus one booster per cascode polarity, as these rows model them. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
-    { "id": "gbw-spec", "kind": "guardrail", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
-    { "id": "sr-spec", "kind": "requirement", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
+  "checks": [
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gbw-spec", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
+    { "id": "sr-spec", "kind": "spec", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
@@ -416,7 +434,7 @@
     },
     {
       "id": "boost-bandwidth",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "f_boost",
       "op": ">=",
       "rhs": "GBW_target",
@@ -424,7 +442,7 @@
     },
     {
       "id": "input-sat",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "V_a - V_tail - in__vdsat",
       "op": ">=",
       "rhs": "0",
@@ -432,7 +450,7 @@
     },
     {
       "id": "casc-n-sat",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "V_out_dc - V_a - casc_n__vdsat",
       "op": ">=",
       "rhs": "0",
@@ -440,7 +458,7 @@
     },
     {
       "id": "casc-p-sat",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "V_b - V_out_dc - casc_p__vdsat",
       "op": ">=",
       "rhs": "0",
@@ -448,7 +466,7 @@
     },
     {
       "id": "mir-sat",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "VDD - V_b - mir__vdsat",
       "op": ">=",
       "rhs": "0",
@@ -456,7 +474,7 @@
     },
     {
       "id": "cm-not-below",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_in",
       "op": ">=",
       "rhs": "CM_lo",
@@ -464,14 +482,14 @@
     },
     {
       "id": "cm-not-above",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
       "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
     }
   ],
-  "edges": [
+  "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
@@ -483,5 +501,5 @@
       "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

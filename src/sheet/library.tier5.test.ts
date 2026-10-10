@@ -89,7 +89,7 @@ describe('tier5 goldens: Gm-C filter pole', () => {
     // is a guardrail, so feasibility is untouched — this locks both halves of that
     // statement so neither edit can be silently "fixed" away.
     const noise = res.rules.find((r) => r.id === 'noise-spec');
-    expect(noise?.kind).toBe('guardrail');
+    expect(noise?.kind).toBe('advisory');
     expect(noise?.status).toBe('fail');
     expect(res.feasible).toBe(true);
   });

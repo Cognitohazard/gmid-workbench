@@ -417,7 +417,7 @@ function runBind(
 
 /** Evaluate one rule's two sides and classify into a signed-margin RuleResult. */
 function evalRule(
-  rule: SheetDoc['rules'][number],
+  rule: SheetDoc['checks'][number],
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
@@ -543,7 +543,7 @@ function applyUseParams(
       warn({
         rule: 'sheet-use-param',
         severity: 'warning',
-        message: child.pin.held
+        message: child.designConstraint.held
           ? `use "${use.name}": override "${k}" sets a node the child holds under a gate — here the hardware is held, so the child re-solves it and the override is ignored`
           : `use "${use.name}": override "${k}" sets a param the child PINS — the engine chooses it from the pin's own bracket, so the override is ignored entirely`,
         location: use.name,
@@ -659,7 +659,7 @@ function evalChildren(
     // input, so its outputs are meaningless: withhold them so dependent parent math goes `na`.
     const provides: Record<string, number> = {};
     if (paramsOk) {
-      for (const key of srcDoc.provide ?? []) {
+      for (const key of srcDoc.provides ?? []) {
         const v = res.values[key];
         if (v !== undefined && Number.isFinite(v)) {
           provides[key] = v;
@@ -712,7 +712,7 @@ function evalChildren(
 function checkWiring(doc: SheetDoc, res: SheetResult): SheetResult {
   // Shape-guarded rather than trusted: evaluate never throws, so a malformed authored doc
   // (uses as a string, wiring as a string) has to degrade to "nothing to check".
-  const uses = Array.isArray(doc.uses) ? doc.uses : [];
+  const uses = Array.isArray(doc.blocks) ? doc.blocks : [];
   const out: QAWarning[] = [];
   const scope = scalarScope(res.values);
   const sized = new Map((res.children ?? []).map((c) => [c.name, c.bind]));
@@ -819,12 +819,12 @@ function evaluateOnce(
   // 2. Compose children FIRST, so the parent can reference their provided scalars
   //    (name__key) in its own bind/rows/rules.
   const children =
-    doc.uses && doc.uses.length > 0
-      ? evalChildren(doc.uses, table, resolveDevice, _depth, values, scope, warn, budget)
+    doc.blocks && doc.blocks.length > 0
+      ? evalChildren(doc.blocks, table, resolveDevice, _depth, values, scope, warn, budget)
       : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when bound.
-  const bind = doc.bind ? runBind(doc.bind, table, values, scope, warn) : undefined;
+  const bind = doc.givens ? runBind(doc.givens, table, values, scope, warn) : undefined;
 
   // 4. Author rows, in document order. A row that cannot RESOLVE (missing quantity,
   //    parse error) is skipped with a plain warning — graceful degradation for optional
@@ -833,7 +833,7 @@ function evaluateOnce(
   //    point, so it is an error: feasibility must fail closed even when no hard rule
   //    happens to reference the row (a guardrail-only figure of merit would otherwise
   //    render a green verdict over a NaN).
-  for (const row of doc.rows) {
+  for (const row of doc.equations) {
     const r = evalScalar(row.expr, values, scope, warn, `row "${row.name}"`);
     if (r === undefined) continue;
     if (!Number.isFinite(r)) {
@@ -849,7 +849,7 @@ function evaluateOnce(
   }
 
   // 5. Rules → signed margins.
-  const rules = doc.rules.map((rule) => evalRule(rule, values, scope, warn));
+  const rules = doc.checks.map((rule) => evalRule(rule, values, scope, warn));
 
   // 6. Overall feasibility, fail-closed: a declared bind sized successfully, every HARD rule
   //    (invariant = physical floor, requirement = application spec) holds (pass or near-miss),
@@ -859,7 +859,7 @@ function evaluateOnce(
     // A bound sheet needs the sizing to have succeeded AND the sizer's own verdict
     // (gm/ID ≤ the data ceiling) to hold — today the sizer throws past the ceiling, so
     // the flag is belt-and-suspenders, but it must never be silently ignored.
-    (!doc.bind || ((bind?.ok ?? false) && values.feasible !== 0)) &&
+    (!doc.givens || ((bind?.ok ?? false) && values.feasible !== 0)) &&
     hard.every((r) => r.status === 'pass' || r.status === 'amber') &&
     (children?.every((c) => c.feasible) ?? true) &&
     !warnings.some((w) => w.severity === 'error');
@@ -942,7 +942,7 @@ function tornSheets(doc: SheetDoc, depth = 0): number {
   if (depth >= MAX_USE_DEPTH) return 0;
   // Each pinned param runs a solver too (bisection probes are passes), one per pin.
   let n = (doc.params.some(torn) ? 1 : 0) + doc.params.filter(pinned).length;
-  for (const u of doc.uses ?? []) if (u.doc) n += tornSheets(u.doc, depth + 1);
+  for (const u of doc.blocks ?? []) if (u.doc) n += tornSheets(u.doc, depth + 1);
   return n;
 }
 
@@ -1200,7 +1200,7 @@ export function evaluateSheet(
   // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (edges as a
   // string or object — validation's problem) must degrade to a plain evaluation, not a
   // TypeError out of .map.
-  return Array.isArray(doc.edges) && doc.edges.length
+  return Array.isArray(doc.operatingRange) && doc.operatingRange.length
     ? evaluateWithEdges(doc, table, resolveDevice)
     : evaluateTop(doc, table, resolveDevice);
 }
@@ -1209,7 +1209,7 @@ export function evaluateSheet(
 function pinCount(doc: SheetDoc, depth = 0): number {
   if (depth >= MAX_USE_DEPTH) return 0;
   let n = doc.params.filter(pinned).length;
-  for (const u of doc.uses ?? []) if (u.doc) n += pinCount(u.doc, depth + 1);
+  for (const u of doc.blocks ?? []) if (u.doc) n += pinCount(u.doc, depth + 1);
   return n;
 }
 
@@ -1335,16 +1335,16 @@ function solveNode(
  */
 function solvePin(
   doc: SheetDoc,
-  p: SheetVar & { pin: { lhs: string; rhs: string; held?: boolean } },
+  p: SheetVar & { designConstraint: { lhs: string; rhs: string; held?: boolean } },
   landed: Record<string, number>,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   _depth: number,
   budget: SolveBudget,
 ): { res: SheetResult; ok: boolean } {
-  const { lhs, rhs } = p.pin;
+  const { lhs, rhs } = p.designConstraint;
   // A pin generated from a hold is named as the author wrote it.
-  const what = `${p.pin.held ? 'held' : 'pinned'} param "${p.name}"`;
+  const what = `${p.designConstraint.held ? 'held' : 'pinned'} param "${p.name}"`;
   const failed = (res: SheetResult, message: string) => ({
     res: solveFailed(res, message),
     ok: false,
@@ -1387,7 +1387,7 @@ function solvePin(
   // term — on a table that does not respond, or by rounding alone — and no value of the param is
   // singled out. Checked before either end can be taken as a root, because a cancelled relation
   // reads zero-to-rounding everywhere.
-  if (p.pin.held) {
+  if (p.designConstraint.held) {
     const own = Math.abs(additiveCoefficient(lhs, p.name) ?? 0) * span;
     if (!(Math.abs(gHi - gLo) >= HOLD_SLOPE_MIN * own))
       return failed(
@@ -1476,7 +1476,7 @@ function evaluateWithEdges(
   resolveDevice: DeviceResolver | undefined,
 ): SheetResult {
   const base = evaluateTop(doc, table, resolveDevice);
-  const edges = doc.edges ?? [];
+  const edges = doc.operatingRange ?? [];
   if (!stands(base)) {
     const reports = edges.map((e): SheetEdgeReport => ({
       name: e.name,

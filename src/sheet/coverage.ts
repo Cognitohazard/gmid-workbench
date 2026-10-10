@@ -127,16 +127,16 @@ export function heldShape(doc: SheetDoc): SheetDoc {
     feasible: true,
     provides: {},
     rules: [],
-    ...(d?.bind ? { bind: { ok: true, W: 1, L: 1, vgs: 0, id: 1 } } : {}),
+    ...(d?.givens ? { bind: { ok: true, W: 1, L: 1, vgs: 0, id: 1 } } : {}),
     held: Object.fromEntries((d?.params ?? []).filter(holds).map((p) => [p.name, 0])),
-    children: (d?.uses ?? []).map((u) => shape(u.doc, u.name)),
+    children: (d?.blocks ?? []).map((u) => shape(u.doc, u.name)),
   });
   return pinHardware(doc, shape(doc)).doc;
 }
 
 function pinNode(doc: SheetDoc, base: BindTree, path: string, out: PinnedHardware): SheetDoc {
-  const bind = doc.bind ? pinBind(doc.bind, base.bind, path, out.assumedSource) : undefined;
-  const uses = doc.uses?.map((use, i) => pinUse(use, base.children?.[i], path, out));
+  const bind = doc.givens ? pinBind(doc.givens, base.bind, path, out.assumedSource) : undefined;
+  const uses = doc.blocks?.map((use, i) => pinUse(use, base.children?.[i], path, out));
   // A node under a gate: the gate voltage the base run needed is part of the hardware, so the
   // held expression becomes a pin against that value and the node is re-solved (SheetVar.hold).
   const params = doc.params.map((p) => {
@@ -151,8 +151,8 @@ function pinNode(doc: SheetDoc, base: BindTree, path: string, out: PinnedHardwar
   return {
     ...doc,
     params,
-    ...(bind ? { bind } : {}),
-    ...(uses ? { uses } : {}),
+    ...(bind ? { givens: bind } : {}),
+    ...(uses ? { blocks: uses } : {}),
   };
 }
 

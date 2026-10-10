@@ -142,8 +142,8 @@ describe('spec application', () => {
       title: 'probe',
       polarity: 'n',
       params: [param],
-      rows: [],
-      rules: [],
+      equations: [],
+      checks: [],
     },
   });
   const ignoredReason = (param: SheetVar): string =>
@@ -423,9 +423,9 @@ describe('the search', () => {
         { name: 'Target', value: 5 },
         { name: 'k', value: 5, min: 1, max: 9, role: 'choice' },
       ],
-      rows: [{ name: 'y', expr: '2*k' }],
-      rules: [{ id: 'k-floor', kind: 'requirement', lhs: 'k', op: '>=', rhs: '1' }],
-      edges: [{ name: 'hi', set: { Target: 'Target_hi' } }], // Target_hi is declared nowhere
+      equations: [{ name: 'y', expr: '2*k' }],
+      checks: [{ id: 'k-floor', kind: 'spec', lhs: 'k', op: '>=', rhs: '1' }],
+      operatingRange: [{ name: 'hi', set: { Target: 'Target_hi' } }], // Target_hi is declared nowhere
     };
     const c = pickTopology({}, { path: 'synthetic/typo', doc }, table, undefined, {});
     expect(c.verdict).toBe('could-not-be-searched');
@@ -472,14 +472,14 @@ describe('the search', () => {
       title: 'stuck',
       polarity: 'n',
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'Target' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Target' } },
         { name: 'Target', value: 100 }, // y spans [1, 21]: the pin never lands, anywhere
         { name: 'Target_hi', value: 120 },
         { name: 'k', value: 1, min: 1, max: 9, role: 'choice' },
       ],
-      rows: [{ name: 'y', expr: '2*x + 1' }],
-      rules: [{ id: 'need-k', kind: 'requirement', lhs: 'k', op: '>=', rhs: '8' }],
-      edges: [{ name: 'hi', set: { Target: 'Target_hi' } }],
+      equations: [{ name: 'y', expr: '2*x + 1' }],
+      checks: [{ id: 'need-k', kind: 'spec', lhs: 'k', op: '>=', rhs: '8' }],
+      operatingRange: [{ name: 'hi', set: { Target: 'Target_hi' } }],
     };
     const c = pickTopology({}, { path: 'synthetic/stuck', doc }, table, undefined, {});
     expect(c.verdict).toBe('did-not-close');
@@ -501,14 +501,14 @@ describe('the search', () => {
       title: 'no-range',
       polarity: 'n',
       params: [
-        { name: 'x', value: 1, min: 0, max: 10, pin: { lhs: 'y', rhs: 'Target' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Target' } },
         { name: 'Target', value: 100 }, // y spans [1, 21]: the pin never lands, anywhere
         { name: 'k', value: 4, min: 1, max: 9, role: 'choice' },
       ],
-      rows: [{ name: 'y', expr: '2*x + 1' }],
-      rules: [
-        { id: 'k-floor', kind: 'requirement', lhs: 'k', op: '>=', rhs: '4.2' },
-        { id: 'k-ceiling', kind: 'requirement', lhs: 'k', op: '<=', rhs: '4.5' },
+      equations: [{ name: 'y', expr: '2*x + 1' }],
+      checks: [
+        { id: 'k-floor', kind: 'spec', lhs: 'k', op: '>=', rhs: '4.2' },
+        { id: 'k-ceiling', kind: 'spec', lhs: 'k', op: '<=', rhs: '4.5' },
       ],
     };
     const c = pickTopology({}, { path: 'synthetic/no-range', doc }, table, undefined, {});
@@ -527,8 +527,8 @@ describe('the search', () => {
           title: 'knobless',
           polarity: 'n',
           params: [{ name: 'A', value: 1, unit: 'V', role: 'spec' }],
-          rows: [],
-          rules: [{ id: 'impossible', kind: 'requirement', lhs: 'A', op: '<=', rhs: '0.02' }],
+          equations: [],
+          checks: [{ id: 'impossible', kind: 'spec', lhs: 'A', op: '<=', rhs: '0.02' }],
         },
       },
       table,

@@ -64,14 +64,14 @@
       "note": "degeneration resistor: larger R_s linearizes the stage (Gm -> 1/R_s) but lowers gain and adds 4kT*R_s noise"
     }
   ],
-  "bind": {
+  "givens": {
     "L": "L",
     "id": "I_bias",
     "gm_id": "gm_id",
     "vds": "V_out - I_bias*R_s",
     "vsb": "I_bias*R_s"
   },
-  "rows": [
+  "equations": [
     {
       "name": "loop",
       "expr": "1 + (gm + gmb)*R_s",
@@ -121,10 +121,10 @@
       "note": "estimate: quiescent supply current — the one branch these rows model; the degeneration resistor carries the same current. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "feasible-inversion",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "gm_id",
       "op": "<=",
       "rhs": "ceiling",
@@ -132,21 +132,21 @@
     },
     {
       "id": "headroom",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "V_out - I_bias*R_s",
       "op": ">=",
       "rhs": "vdsat",
       "note": "device saturated: the drain-to-source voltage is the drain level minus the I*R_s source lift"
     },
-    { "id": "gain-spec", "kind": "requirement", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
+    { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
-      "kind": "guardrail",
+      "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
       "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }

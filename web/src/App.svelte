@@ -256,13 +256,18 @@
   // Bumped to .v2 when panels/tabs gained the `auto` origin marker: a layout saved before that
   // has no markers, so a device swap could not tell its canonical panels apart and would
   // duplicate them. Reseeding the preset once on upgrade is cleaner than half-migrating.
-  const DASH_KEY = 'gmid.dash.v2';
-  const loadDashboard = (dev: DeviceTable): Dashboard =>
-    loadJSON(
-      DASH_KEY,
-      (raw) => sanitizeDashboard(raw, dev),
-      () => presetDashboard(dev),
+  // Bumped to .v3 when the sheet document's keys were renamed: a build from before the rename
+  // reads a sheet in the new keys as an empty one and saves it back that way, so the two must
+  // not share a slot. The earlier slot is read once, when this one is empty — the loader brings
+  // its sheets up to the current keys — and is then left alone for that earlier build.
+  const DASH_KEY = 'gmid.dash.v3';
+  const DASH_KEY_BEFORE = 'gmid.dash.v2';
+  const loadDashboard = (dev: DeviceTable): Dashboard => {
+    const parse = (raw: unknown) => sanitizeDashboard(raw, dev);
+    return loadJSON(DASH_KEY, parse, () =>
+      loadJSON(DASH_KEY_BEFORE, parse, () => presetDashboard(dev)),
     );
+  };
   // Null until the first device loads — the dashboard can only be seeded/validated against a
   // device (sanitizeDashboard/presetDashboard both need one). The saved layout in localStorage is
   // restored at that point, so a customized dashboard still survives a reload.

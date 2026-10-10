@@ -96,7 +96,7 @@ function select(doc: SheetDoc, names?: readonly string[]): Selected[] {
 /** The same doc with its containment edges dropped — see SensitivityOptions.rule for why a
  *  probe skips them. Structural, so `evaluateSheet` simply never enters the edge path. */
 function withoutEdges(doc: SheetDoc): SheetDoc {
-  const { edges: _edges, ...rest } = doc;
+  const { operatingRange: _edges, ...rest } = doc;
   return rest;
 }
 

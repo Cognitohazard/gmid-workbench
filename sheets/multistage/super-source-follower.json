@@ -68,7 +68,7 @@
       "hold": "vds_fb + in__vgs"
     }
   ],
-  "uses": [
+  "blocks": [
     {
       "name": "fb",
       "doc": {
@@ -81,18 +81,18 @@
           { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gds", "av0", "vdsat", "vgs"]
+        "provides": ["gm", "gds", "av0", "vdsat", "vgs"]
       },
       "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" }
     },
@@ -109,18 +109,18 @@
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "bind": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
-        "rows": [],
-        "rules": [
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [
           {
             "id": "feasible-inversion",
-            "kind": "invariant",
+            "kind": "physical",
             "lhs": "gx",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provide": ["gm", "gmb", "gds", "vgs", "vdsat", "cgg", "W"]
+        "provides": ["gm", "gmb", "gds", "vgs", "vdsat", "cgg", "W"]
       },
       "params": {
         "Ix": "I_in",
@@ -131,7 +131,7 @@
       }
     }
   ],
-  "rows": [
+  "equations": [
     {
       "name": "vds_in",
       "expr": "fb__vgs - vds_fb",
@@ -181,10 +181,10 @@
       "note": "estimate: quiescent supply current — ONE stacked branch: the feedback device reuses the input device's current rather than drawing its own, so the supply pays for it once. A realization that biases the output node with a source of its own adds that current on top. The datasheet line for comparing designs; no rule reads it"
     }
   ],
-  "rules": [
+  "checks": [
     {
       "id": "rout-spec",
-      "kind": "requirement",
+      "kind": "spec",
       "lhs": "Rout",
       "op": "<=",
       "rhs": "Rout_target",
@@ -192,7 +192,7 @@
     },
     {
       "id": "in-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "vds_in",
       "op": ">=",
       "rhs": "in__vdsat",
@@ -200,12 +200,12 @@
     },
     {
       "id": "fb-sat",
-      "kind": "invariant",
+      "kind": "physical",
       "lhs": "vds_fb",
       "op": ">=",
       "rhs": "fb__vdsat",
       "note": "feedback device stays saturated at its operating vds"
     }
   ],
-  "provide": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"]
 }
