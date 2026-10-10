@@ -971,7 +971,7 @@ test('design sheet: a stored sheet that fails validation is kept, opens with its
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
-  // Two rules share an id, which validation refuses (`sheet-rule`): results are keyed by rule id.
+  // Two rules share an id, which validation refuses (`sheet-check`): results are keyed by rule id.
   // The stored sheet stays in the library across boots; the user, not the loader, removes it.
   const doc = {
     ...vdSheet('Stored with a duplicate rule id', 'independent'),

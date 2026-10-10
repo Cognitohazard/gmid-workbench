@@ -919,7 +919,7 @@ result (validation refuses them).
 
 - `complies` — the held design was measured there and every hard rule holds.
 - `does-not-comply` — it was measured there and a hard rule fails; the failing rules are in
-  the end's own `rules`. One failure leaves no rule outcomes: a device held at its width whose
+  the end's own `checks`. One failure leaves no rule outcomes: a device held at its width whose
   required current density runs past the top of the swept `vgs` range cannot carry its current
   there at all ("this device cannot carry its current here" — or, for a device bound by its
   transconductance, "cannot reach its transconductance here"), with the lookup's own message
@@ -972,8 +972,8 @@ the full landscape. Costs and semantics to know:
 - `set` may not target an engine-solved param (`designConstraint`/`solveFor`) — the solve would discard
   the override; validation refuses it.
 - The report carries the full story per range end: `state` (the four-way outcome above), `set`
-  (the NUMERIC point that was asked about — the authored side may be an expression), `rules`
-  and `children` (path-attributable outcomes), `solved` (where the engine-solved params landed;
+  (the NUMERIC point that was asked about — the authored side may be an expression), `checks`
+  and `blocks` (path-attributable outcomes), `solved` (where the engine-solved params landed;
   EMPTY whenever `error` is set, so a bracket end is never reported as a landing), `warnings`
   (the run's own diagnostics, verbatim), `error` (present whenever the end's rule outcomes are
   not findings about that point: the solver's message, the table's reach, the refusal), and
@@ -1091,7 +1091,7 @@ silently repairs one.
    effect enters through the declared coordinate, not through a corrected formula.
 3. **Never bias a child with an estimate of that child's own answer.** A hand-tuned
    parameter standing in for a quantity the sheet itself computes is the retired pattern.
-   Backstop: the `sheet-standin` validation rule flags a parameter that feeds a child's bias
+   Backstop: the `sheet-assumption` validation rule flags a parameter that feeds a child's bias
    while a rule asserts it equals that child's output. A parameter already classed `assumed`
    is not flagged, unless the child is diode-connected: the sheet has said it types the level,
    the rule is how the assumption is checked, and the result lists it among its assumptions.

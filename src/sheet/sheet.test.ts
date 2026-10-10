@@ -15,12 +15,12 @@ import {
   sweepSheet,
   sweepSheet2,
   sweepable,
-  bindingConstraint,
-  limitingConstraint,
-  rangeEndConstraint,
+  bindingCheck,
+  limitingCheck,
+  rangeEndCheck,
   sheetSensitivities,
   withParams,
-  isHardRule,
+  isHardCheck,
   MAX_TORN_PARAMS,
   SOLVE_TOL_REL,
   WIRING_TOL,
@@ -69,9 +69,9 @@ describe('evaluateSheet — spec-first binds', () => {
     });
     const res = evaluateSheet(doc, dev);
 
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.W).toBeCloseTo(ref.W, 12);
-    expect(res.bind?.vgs).toBeCloseTo(ref.vgs, 12);
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.W).toBeCloseTo(ref.W, 12);
+    expect(res.sizing?.vgs).toBeCloseTo(ref.vgs, 12);
     // The sized device meets the spec the sheet asked for.
     expect(res.values.speed / ft).toBeCloseTo(1, 9);
   });
@@ -85,7 +85,7 @@ describe('evaluateSheet — spec-first binds', () => {
     });
 
     const problems = validateSheet(doc);
-    const invalid = problems.find((p) => p.rule === 'sheet-bind');
+    const invalid = problems.find((p) => p.rule === 'sheet-givens');
     expect(invalid?.message).toMatch(/both set the operating point/);
     // Named: exactly the two supplied, not the whole selector list.
     expect(invalid?.message).toContain('gm_id and ft');
@@ -94,8 +94,8 @@ describe('evaluateSheet — spec-first binds', () => {
     expect(invalid?.message).toContain('{gm, id, W}');
 
     const res = evaluateSheet(doc, dev);
-    expect(res.bind?.ok).toBe(false);
-    expect(res.bind?.error).toBe(invalid?.message);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.sizing?.error).toBe(invalid?.message);
     expect(res.feasible).toBe(false);
   });
 
@@ -118,7 +118,7 @@ describe('evaluateSheet — spec-first binds', () => {
     });
     const res = evaluateSheet(doc, dev);
 
-    expect(res.rules[0].status).toBe('amber'); // pinned by its own bind, not failed
+    expect(res.checks[0].status).toBe('amber'); // pinned by its own bind, not failed
     expect(res.feasible).toBe(true);
   });
 
@@ -130,8 +130,8 @@ describe('evaluateSheet — spec-first binds', () => {
     });
     const res = evaluateSheet(doc, noCgg);
 
-    expect(res.bind?.ok).toBe(false);
-    expect(res.bind?.error).toMatch(/carries no "cgg" column/);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.sizing?.error).toMatch(/carries no "cgg" column/);
     expect(res.feasible).toBe(false);
   });
 });
@@ -141,9 +141,9 @@ describe('evaluateSheet — sizing reuse', () => {
     const gm = 2 * Math.PI * 10e6 * 2e-12;
     const ref = sizeDevice({ table: dev, L: 0.5e-6, gm, gm_id: 12 });
     const res = evaluateSheet(boundDoc(), dev);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.W).toBeCloseTo(ref.W, 12);
-    expect(res.bind?.vgs).toBeCloseTo(ref.vgs, 9);
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.W).toBeCloseTo(ref.W, 12);
+    expect(res.sizing?.vgs).toBeCloseTo(ref.vgs, 9);
     expect(res.values.W).toBeCloseTo(ref.W, 12);
     // the operating-point bag is surfaced as flat scalars, matching sizeDevice exactly
     expect(res.values.vstar).toBeCloseTo(ref.quantities.vstar, 12);
@@ -163,11 +163,11 @@ describe('evaluateSheet — rules', () => {
     // vstar = 2/12 ≈ 0.1667
     const passDoc = boundDoc({ params: [...boundDoc().params], checks: [rule] });
     passDoc.params.find((p) => p.name === 'vstar_floor')!.value = 0.15;
-    expect(evaluateSheet(passDoc, dev).rules[0].status).toBe('pass');
+    expect(evaluateSheet(passDoc, dev).checks[0].status).toBe('pass');
 
     const failDoc = boundDoc({ checks: [rule] });
     failDoc.params.find((p) => p.name === 'vstar_floor')!.value = 0.2;
-    const failed = evaluateSheet(failDoc, dev).rules[0];
+    const failed = evaluateSheet(failDoc, dev).checks[0];
     expect(failed.status).toBe('fail');
     expect(failed.margin).toBeLessThan(0);
   });
@@ -185,7 +185,7 @@ describe('evaluateSheet — rules', () => {
         { id: 'eq', kind: 'advisory', lhs: 'a', op: '==', rhs: 'b', tolPct: 10 }, // |2|>0.8 -> fail
       ],
     });
-    const [ge, le, eq] = evaluateSheet(doc, dev).rules;
+    const [ge, le, eq] = evaluateSheet(doc, dev).checks;
     expect(ge.status).toBe('pass');
     expect(ge.margin).toBeCloseTo(2, 9);
     expect(le.status).toBe('fail');
@@ -204,7 +204,7 @@ describe('evaluateSheet — rules', () => {
       givens: undefined,
       checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=0.3 ≤ 0.5
     });
-    const pass = evaluateSheet(within, dev).rules[0];
+    const pass = evaluateSheet(within, dev).checks[0];
     expect(pass.status).toBe('pass');
     expect(pass.marginPct).toBeGreaterThanOrEqual(0);
 
@@ -216,7 +216,7 @@ describe('evaluateSheet — rules', () => {
       givens: undefined,
       checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: 'b', tolPct: 5 }], // |Δ|=1 > 0.5
     });
-    const fail = evaluateSheet(outside, dev).rules[0];
+    const fail = evaluateSheet(outside, dev).checks[0];
     expect(fail.status).toBe('fail');
     expect(fail.marginPct).toBeLessThan(0);
   });
@@ -230,7 +230,7 @@ describe('evaluateSheet — rules', () => {
       givens: undefined,
       checks: [{ id: 'div0', kind: 'advisory', lhs: '1/z', op: '<=', rhs: 'lim' }], // 1/0 = Inf
     });
-    expect(evaluateSheet(doc, dev).rules[0].status).toBe('na');
+    expect(evaluateSheet(doc, dev).checks[0].status).toBe('na');
   });
 });
 
@@ -243,22 +243,22 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
     // pair, cascode or source follower. The engine cannot tell which — a sheet describes no
     // nodes — so the coordinate it filled in must be distinguishable from one the author wrote.
     const res = evaluateSheet(boundDoc(), bodySwept);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias?.vsb).toBe(0);
-    expect(res.bind?.assumed).toContain('vsb');
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.bias?.vsb).toBe(0);
+    expect(res.sizing?.assumed).toContain('vsb');
   });
 
   it('does not mark a bias axis the bind declares', () => {
     const doc = boundDoc();
     const res = evaluateSheet({ ...doc, givens: { ...doc.givens!, vsb: '0.2' } }, bodySwept);
-    expect(res.bind?.bias?.vsb).toBeCloseTo(0.2, 12);
-    expect(res.bind?.assumed ?? []).not.toContain('vsb');
+    expect(res.sizing?.bias?.vsb).toBeCloseTo(0.2, 12);
+    expect(res.sizing?.assumed ?? []).not.toContain('vsb');
   });
 
   it('sizes a body-biased device differently — which is why the assumption has to be visible', () => {
     const doc = boundDoc();
     const at = (vsb: string): number =>
-      evaluateSheet({ ...doc, givens: { ...doc.givens!, vsb } }, bodySwept).bind?.vgs ?? NaN;
+      evaluateSheet({ ...doc, givens: { ...doc.givens!, vsb } }, bodySwept).sizing?.vgs ?? NaN;
     // Same gm/ID, same L: body bias moves the gate drive it takes to get there.
     expect(Math.abs(at('0.6') - at('0'))).toBeGreaterThan(1e-3);
   });
@@ -424,7 +424,7 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       blocks: [{ name: 'c', doc: { ...loopDoc(), provides: ['vstar_actual'] } }],
     };
     const res = evaluateSheet(parent, dev);
-    const child = res.children?.[0];
+    const child = res.blocks?.[0];
     expect(child?.feasible).toBe(true);
     expect(res.values.c__vstar_actual).toBeCloseTo(
       evaluateSheet(loopDoc(), dev).values.vstar_est,
@@ -591,7 +591,7 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       },
       dev,
     );
-    expect(res.children?.every((c) => c.feasible)).toBe(true);
+    expect(res.blocks?.every((c) => c.feasible)).toBe(true);
     expect(res.feasible).toBe(true);
   });
 
@@ -644,7 +644,7 @@ describe('evaluateSheet — degrades instead of throwing', () => {
     doc.params.find((p) => p.name === 'gm_id')!.value = 1000; // far above the slice ceiling
     let res!: ReturnType<typeof evaluateSheet>;
     expect(() => (res = evaluateSheet(doc, dev))).not.toThrow();
-    expect(res.bind?.ok).toBe(false);
+    expect(res.sizing?.ok).toBe(false);
     expect(res.warnings.some((w) => w.severity === 'error')).toBe(true);
     expect(res.feasible).toBe(false);
   });
@@ -661,10 +661,10 @@ describe('evaluateSheet — degrades instead of throwing', () => {
       checks: [{ id: 'ok', kind: 'advisory', lhs: 'gm_id', op: '<=', rhs: '20' }],
     });
     const res = evaluateSheet(doc); // no table
-    expect(res.bind?.ok).toBe(false);
+    expect(res.sizing?.ok).toBe(false);
     expect(res.warnings.some((w) => w.severity === 'error')).toBe(true); // unsolved bind ⇒ error
     expect(res.feasible).toBe(false); // never vacuously feasible without a successful size
-    expect(res.rules[0].status).toBe('pass'); // gm_id is a param, resolvable without a device
+    expect(res.checks[0].status).toBe('pass'); // gm_id is a param, resolvable without a device
   });
 });
 
@@ -675,8 +675,10 @@ describe('feasibility is fail-closed', () => {
       checks: [{ id: 'param-inv', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: '20' }], // 12<=20 would pass
     });
     const res = evaluateSheet(doc, dev);
-    expect(res.bind?.ok).toBe(false);
-    expect(res.warnings.some((w) => w.rule === 'sheet-bind' && w.severity === 'error')).toBe(true);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.warnings.some((w) => w.rule === 'sheet-givens' && w.severity === 'error')).toBe(
+      true,
+    );
     expect(res.feasible).toBe(false);
   });
 
@@ -692,13 +694,13 @@ describe('feasibility is fail-closed', () => {
       { ...base, checks: [{ id: 'spec', kind: 'spec', lhs: 'a', op: '<=', rhs: 'lim' }] },
       dev,
     );
-    expect(req.rules[0].status).toBe('fail');
+    expect(req.checks[0].status).toBe('fail');
     expect(req.feasible).toBe(false);
     const soft = evaluateSheet(
       { ...base, checks: [{ id: 'soft', kind: 'advisory', lhs: 'a', op: '<=', rhs: 'lim' }] },
       dev,
     );
-    expect(soft.rules[0].status).toBe('fail');
+    expect(soft.checks[0].status).toBe('fail');
     expect(soft.feasible).toBe(true); // guardrails never block
   });
 
@@ -722,15 +724,15 @@ describe('validateSheet', () => {
     });
     const w = validateSheet(doc);
     expect(w.some((x) => x.rule === 'sheet-param')).toBe(true);
-    expect(w.some((x) => x.rule === 'sheet-bind')).toBe(true);
+    expect(w.some((x) => x.rule === 'sheet-givens')).toBe(true);
   });
 });
 
 describe('the shipped example', () => {
   it('runs on the demo device with a mix of pass and fail', () => {
     const res = runSheet(EXAMPLES[0], dev);
-    expect(res.bind?.ok).toBe(true);
-    const statuses = res.rules.map((r) => r.status);
+    expect(res.sizing?.ok).toBe(true);
+    const statuses = res.checks.map((r) => r.status);
     expect(statuses).toContain('pass');
     expect(statuses).toContain('fail'); // headroom fails at the default gm/ID = 12
   });
@@ -741,7 +743,7 @@ describe('the noise & matching example', () => {
 
   it('its author formulas reproduce the core noise/mismatch oracles (no drift from the trusted impls)', () => {
     const res = runSheet(ex, dev);
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     const v = res.values;
     // Integrated input noise == core integratedNoise on the thermal PSD — which the
     // sizing already reports at the SIZED width — and the intensive flicker corner fco.
@@ -774,7 +776,7 @@ describe('the noise & matching example', () => {
   it('sweeping gm/ID opens a bounded feasible window: noise binds the low end, headroom the high end', () => {
     const sw = sweepSheet(ex, 'gm_id', dev, 13);
     const margins = (id: string) =>
-      sw.rules.find((r) => r.id === id)!.marginPct.filter((x): x is number => x != null);
+      sw.checks.find((r) => r.id === id)!.marginPct.filter((x): x is number => x != null);
     const noise = margins('noise-spec');
     const head = margins('headroom');
     // noise margin IMPROVES as gm/ID rises (more gm ⇒ less integrated thermal noise) ...
@@ -796,11 +798,11 @@ describe('sweepSheet — feasibility curve', () => {
     expect(sw.x.length).toBe(21);
     expect(sw.x[0]).toBeCloseTo(6, 9); // the example's gm/ID slider spans 6..18
     expect(sw.x[20]).toBeCloseTo(18, 9);
-    expect(sw.rules.map((r) => r.id)).toEqual(doc.checks.map((r) => r.id)); // parallel, in order
+    expect(sw.checks.map((r) => r.id)).toEqual(doc.checks.map((r) => r.id)); // parallel, in order
 
     // V* ≈ 2/(gm/ID) falls as gm/ID rises, so the headroom margin shrinks monotonically and
     // crosses zero — the whole point of the view (the efficiency↔headroom trade made visible).
-    const head = sw.rules.find((r) => r.id === 'headroom')!;
+    const head = sw.checks.find((r) => r.id === 'headroom')!;
     const finite = head.marginPct.filter((m): m is number => m != null);
     expect(finite[0]).toBeGreaterThan(finite.at(-1)!);
     expect(Math.max(...finite)).toBeGreaterThan(0); // passes at the low-gm/ID end
@@ -825,9 +827,9 @@ describe('composition — scalar provide/use', () => {
 
   it('evaluates children first, exposes provides as name__key, and reports each child', () => {
     const res = runSheet(cascode, dev);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.children).toHaveLength(1);
-    const cs = res.children![0];
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.blocks).toHaveLength(1);
+    const cs = res.blocks![0];
     expect(cs.name).toBe('cs');
     expect(cs.feasible).toBe(true);
     // the provided scalars are visible in the parent scope as cs__*
@@ -839,7 +841,7 @@ describe('composition — scalar provide/use', () => {
   });
 
   it('a leaf reports no children', () => {
-    expect(runSheet(EXAMPLES[0], dev).children).toBeUndefined();
+    expect(runSheet(EXAMPLES[0], dev).blocks).toBeUndefined();
   });
 
   it('is fail-closed: an infeasible child drags the parent infeasible, attributed to the use site', () => {
@@ -865,7 +867,7 @@ describe('composition — scalar provide/use', () => {
       blocks: [{ name: 'c', doc: badChild }],
     };
     const res = runSheet(parent, dev);
-    expect(res.children![0].feasible).toBe(false);
+    expect(res.blocks![0].feasible).toBe(false);
     expect(res.feasible).toBe(false);
     expect(res.warnings.some((w) => w.message.includes('use "c":'))).toBe(true);
   });
@@ -875,7 +877,7 @@ describe('composition — scalar provide/use', () => {
     expect(sw.feasible[0]).toBe(false); // gain too low at low gm/ID
     expect(sw.feasible.at(-1)).toBe(false); // headroom gone at high gm/ID
     expect(sw.feasible.some((f) => f)).toBe(true);
-    const gain = sw.rules
+    const gain = sw.checks
       .find((r) => r.id === 'gain-spec')!
       .marginPct.filter((x): x is number => x != null);
     expect(gain.at(-1)!).toBeGreaterThan(gain[0]!); // gain improves with gm/ID
@@ -904,12 +906,12 @@ describe('composition — scalar provide/use', () => {
       blocks: [{ name: 'k', doc: child, ...(device ? { device } : {}) }],
     });
     const resolve = (id: string) => (id === 'wide' ? generateDemoDevice({ W: 40e-6 }) : undefined);
-    expect(runSheet(parent('wide'), dev, resolve).children![0].feasible).toBe(true); // resolved
-    expect(runSheet(parent(undefined), dev, resolve).children![0].feasible).toBe(true); // inherited
+    expect(runSheet(parent('wide'), dev, resolve).blocks![0].feasible).toBe(true); // resolved
+    expect(runSheet(parent(undefined), dev, resolve).blocks![0].feasible).toBe(true); // inherited
 
     // A named device the resolver cannot supply fails closed with a clear, attributed message.
     const missing = runSheet(parent('missing'), dev, resolve);
-    expect(missing.children![0].feasible).toBe(false);
+    expect(missing.blocks![0].feasible).toBe(false);
     expect(missing.feasible).toBe(false);
     expect(
       missing.warnings.some(
@@ -940,7 +942,7 @@ describe('composition — scalar provide/use', () => {
       blocks: [{ name: 'k', doc: bindless, device: 'missing' }],
     };
     const res = runSheet(parent, dev, () => undefined);
-    expect(res.children![0].feasible).toBe(false);
+    expect(res.blocks![0].feasible).toBe(false);
     expect(res.feasible).toBe(false);
     expect(res.warnings.some((w) => /device "missing" did not resolve/.test(w.message))).toBe(true);
   });
@@ -971,7 +973,7 @@ describe('composition — scalar provide/use', () => {
     expect(
       res.warnings.some((w) => w.severity === 'error' && /override "I_bias"/.test(w.message)),
     ).toBe(true);
-    expect(res.children![0].feasible).toBe(false); // wiring broke ⇒ child infeasible
+    expect(res.blocks![0].feasible).toBe(false); // wiring broke ⇒ child infeasible
     expect(res.feasible).toBe(false); // ⇒ parent infeasible
     // the child's provides are withheld, so dependent parent math is `na`, not a stale number
     expect('c__id' in res.values).toBe(false);
@@ -1013,7 +1015,7 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
   });
   const standins = (d: SheetDoc): string[] =>
     validateSheet(d)
-      .filter((w) => w.rule === 'sheet-standin')
+      .filter((w) => w.rule === 'sheet-assumption')
       .map((w) => w.message);
 
   it('flags a param that biases a block while a rule asserts it equals that block’s own vgs', () => {
@@ -1143,9 +1145,11 @@ describe('validateSheet — composition', () => {
       ],
     };
     const w = validateSheet(doc);
-    expect(w.some((x) => x.rule === 'sheet-use' && /must not contain/.test(x.message))).toBe(true);
-    expect(w.some((x) => x.rule === 'sheet-use' && /duplicate/.test(x.message))).toBe(true);
-    expect(w.some((x) => x.rule === 'sheet-use-param')).toBe(true);
+    expect(w.some((x) => x.rule === 'sheet-block' && /must not contain/.test(x.message))).toBe(
+      true,
+    );
+    expect(w.some((x) => x.rule === 'sheet-block' && /duplicate/.test(x.message))).toBe(true);
+    expect(w.some((x) => x.rule === 'sheet-block-param')).toBe(true);
   });
 
   it('warns when a parent param/row name collides with a child-provided scalar', () => {
@@ -1313,7 +1317,7 @@ describe('fail-closed hardening', () => {
       checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: 'b', tolPct: NaN }],
     };
     const res = evaluateSheet(doc);
-    expect(res.rules[0].status).toBe('na');
+    expect(res.checks[0].status).toBe('na');
     expect(res.feasible).toBe(false);
     const pre = validateSheet(doc);
     expect(pre.some((w) => w.rule === 'sheet-tol' && w.severity === 'error')).toBe(true);
@@ -1330,8 +1334,8 @@ describe('fail-closed hardening', () => {
       checks: [{ id: 'pin', kind: 'spec', lhs: 'x', op: '>=', rhs: 'y' }],
     };
     const res = evaluateSheet(doc);
-    expect(res.rules[0].margin).toBe(0);
-    expect(res.rules[0].status).toBe('amber');
+    expect(res.checks[0].margin).toBe(0);
+    expect(res.checks[0].status).toBe('amber');
     expect(res.feasible).toBe(true);
   });
 
@@ -1353,7 +1357,7 @@ describe('fail-closed hardening', () => {
   it('an unphysical bind (negative gm) fails closed instead of sizing a negative width', () => {
     const doc = boundDoc({ givens: { L: 'L', gm: '0 - 1e-3', gm_id: 'gm_id' } });
     const res = evaluateSheet(doc, dev);
-    expect(res.bind?.ok).toBe(false);
+    expect(res.sizing?.ok).toBe(false);
     expect(res.values.W).toBeUndefined();
     expect(res.feasible).toBe(false);
   });
@@ -1381,11 +1385,11 @@ describe('bind bias declaration (vds/vsb)', () => {
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev3);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias).toEqual({ vds: 0.6 });
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.bias).toEqual({ vds: 0.6 });
     // equals sizing on a hand-sliced table
     const ref = evaluateSheet(boundDoc(), fixTable(dev3, { vds: 0.6 }));
-    expect(res.bind?.W).toBeCloseTo(ref.bind?.W as number, 12);
+    expect(res.sizing?.W).toBeCloseTo(ref.sizing?.W as number, 12);
     expect(res.values.gds).toBeCloseTo(ref.values.gds, 15);
   });
 
@@ -1395,15 +1399,15 @@ describe('bind bias declaration (vds/vsb)', () => {
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'vds_op' },
     });
     const res = evaluateSheet(doc, dev3);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias).toEqual({ vds: 0.6 });
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.bias).toEqual({ vds: 0.6 });
   });
 
   it('an undeclared live vds fails closed and flags the axis for the in-place fixer', () => {
     const res = evaluateSheet(boundDoc(), dev3); // dev3 has a live vds axis, none declared
-    expect(res.bind?.ok).toBe(false);
-    expect(res.bind?.error).toMatch(/declare the operating point/);
-    expect(res.bind?.needs).toEqual(['vds']);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.sizing?.error).toMatch(/declare the operating point/);
+    expect(res.sizing?.needs).toEqual(['vds']);
     expect(res.feasible).toBe(false);
   });
 
@@ -1417,9 +1421,9 @@ describe('bind bias declaration (vds/vsb)', () => {
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev4);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias).toEqual({ vds: 0.6, vsb: 0 });
-    expect(res.bind?.needs).toBeUndefined();
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.bias).toEqual({ vds: 0.6, vsb: 0 });
+    expect(res.sizing?.needs).toBeUndefined();
   });
 
   it('an undeclared vsb fails closed (not a silent clamp) when the table never characterizes 0', () => {
@@ -1432,8 +1436,8 @@ describe('bind bias declaration (vds/vsb)', () => {
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev4);
-    expect(res.bind?.ok).toBe(false);
-    expect(res.bind?.needs).toEqual(['vsb']);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.sizing?.needs).toEqual(['vsb']);
     expect(res.feasible).toBe(false);
   });
 
@@ -1442,8 +1446,8 @@ describe('bind bias declaration (vds/vsb)', () => {
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
     const res = evaluateSheet(doc, dev); // 2-D demo: no vds axis
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias).toBeUndefined();
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.bias).toBeUndefined();
     expect(res.warnings.some((w) => /no live vds axis/.test(w.message))).toBe(true);
   });
 
@@ -1452,7 +1456,7 @@ describe('bind bias declaration (vds/vsb)', () => {
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
     });
     const res = evaluateSheet(doc, dev3);
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(res.warnings.some((w) => /outside the table's vds range/.test(w.message))).toBe(true);
   });
 
@@ -1466,8 +1470,8 @@ describe('bind bias declaration (vds/vsb)', () => {
       blocks: [{ name: 'cs', doc: boundDoc({ provides: ['id'] }) }], // child binds without vds
     };
     const res = evaluateSheet(parent, dev3);
-    expect(res.children?.[0].feasible).toBe(false);
-    expect(res.children?.[0].bind?.needs).toEqual(['vds']);
+    expect(res.blocks?.[0].feasible).toBe(false);
+    expect(res.blocks?.[0].sizing?.needs).toEqual(['vds']);
     expect(res.feasible).toBe(false);
   });
 
@@ -1489,8 +1493,8 @@ describe('bind bias declaration (vds/vsb)', () => {
       ],
     };
     const res = evaluateSheet(parent, dev3);
-    expect(res.children?.[0].feasible).toBe(true);
-    expect(res.children?.[0].bind?.bias).toEqual({ vds: 0.6 });
+    expect(res.blocks?.[0].feasible).toBe(true);
+    expect(res.blocks?.[0].sizing?.bias).toEqual({ vds: 0.6 });
     expect(res.values.cs__id).toBeGreaterThan(0);
   });
 });
@@ -1527,7 +1531,7 @@ describe('composition semantics (ratified)', () => {
     expect(res.feasible).toBe(true);
     expect(res.values.b__id).toBeCloseTo(res.values.a__id / 2, 12);
     // the ratified direction produces no validator noise
-    expect(validateSheet(doc).some((w) => w.rule === 'sheet-use-param')).toBe(false);
+    expect(validateSheet(doc).some((w) => w.rule === 'sheet-block-param')).toBe(false);
   });
 
   it('a FORWARD sibling reference fails closed at eval and is named statically by the validator', () => {
@@ -1544,10 +1548,10 @@ describe('composition semantics (ratified)', () => {
     };
     const res = runSheet(doc, dev);
     expect(res.feasible).toBe(false);
-    expect(res.children?.[0].feasible).toBe(false);
+    expect(res.blocks?.[0].feasible).toBe(false);
     expect(
       validateSheet(doc).some(
-        (w) => w.rule === 'sheet-use-param' && /document order/.test(w.message),
+        (w) => w.rule === 'sheet-block-param' && /document order/.test(w.message),
       ),
     ).toBe(true);
   });
@@ -1567,7 +1571,7 @@ describe('composition semantics (ratified)', () => {
       blocks: [{ name: 'c', doc: leaf('I_bias'), params: { I_bias: 'W * 1e-3' } }],
     };
     const res = evaluateSheet(doc, dev);
-    expect(res.children?.[0].feasible).toBe(false); // W binds AFTER children — not in scope
+    expect(res.blocks?.[0].feasible).toBe(false); // W binds AFTER children — not in scope
     expect(res.feasible).toBe(false);
   });
 
@@ -1585,7 +1589,7 @@ describe('composition semantics (ratified)', () => {
     };
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(false);
-    expect(res.children?.[1].feasible).toBe(false);
+    expect(res.blocks?.[1].feasible).toBe(false);
     // the first block's provides are intact, not overwritten by the duplicate
     expect(res.values.a__id).toBeCloseTo(20e-6, 18);
   });
@@ -1619,10 +1623,10 @@ describe('composition semantics (ratified)', () => {
   it('a composed sweep traces descendant HARD rules with path-prefixed ids', () => {
     const cascode = EXAMPLES.find((e) => e.title === 'NMOS cascode (gain-boosted output)')!;
     const sw = sweepSheet(cascode, 'gm_id', dev, 5);
-    const ids = sw.rules.map((r) => r.id);
+    const ids = sw.checks.map((r) => r.id);
     expect(ids).toContain('cs-headroom'); // top-level rule, untouched
     expect(ids).toContain('cs.feasible-inversion'); // the child's own invariant, path-prefixed
-    const child = sw.rules.find((r) => r.id === 'cs.feasible-inversion')!;
+    const child = sw.checks.find((r) => r.id === 'cs.feasible-inversion')!;
     expect(child.marginPct.filter((m) => m !== null).length).toBeGreaterThan(0);
   });
 });
@@ -1681,7 +1685,7 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
 describe('duplicate rule ids', () => {
   it('are a validation error — results are keyed by id, so one would shadow the other', () => {
     // Two rules named "same": indexTreeResults Map.set-collapses them, the sweep charts one
-    // curve where two exist, and bindingConstraint can name the WRONG worst rule.
+    // curve where two exist, and bindingCheck can name the WRONG worst rule.
     const doc: SheetDoc = {
       title: 'dup',
       polarity: 'n',
@@ -1711,21 +1715,23 @@ describe('bindingConstraint — naming the cause of one verdict', () => {
   it('names the worst-margin failing hard rule, ignoring advisory guardrails', () => {
     const res = runSheet(at({ vn_target: 1e-12, vos_target: 1e-9 }), dev);
     expect(res.feasible).toBe(false);
-    const b = bindingConstraint(res);
-    const named = res.rules.find((r) => r.id === b?.id);
+    const b = bindingCheck(res);
+    const named = res.checks.find((r) => r.id === b?.id);
     expect(named?.status).toBe('fail');
-    expect(isHardRule(named!.kind)).toBe(true);
+    expect(isHardCheck(named!.kind)).toBe(true);
     // It is the WORST one, not merely a failing one.
     const worst = Math.min(
-      ...res.rules.filter((r) => isHardRule(r.kind) && r.status === 'fail').map((r) => r.marginPct),
+      ...res.checks
+        .filter((r) => isHardCheck(r.kind) && r.status === 'fail')
+        .map((r) => r.marginPct),
     );
     expect(b?.marginPct).toBe(worst);
   });
 
   it('is undefined when no hard rule fails — never a feasibility verdict of its own', () => {
-    expect(bindingConstraint(runSheet(ex, dev))).toBeUndefined();
+    expect(bindingCheck(runSheet(ex, dev))).toBeUndefined();
     // A tree with no rules at all is the degenerate case, not an error.
-    expect(bindingConstraint({ rules: [] })).toBeUndefined();
+    expect(bindingCheck({ checks: [] })).toBeUndefined();
   });
 
   it('attributes a child block rule by its use path, and outranks a milder top-level one', () => {
@@ -1747,7 +1753,7 @@ describe('bindingConstraint — naming the cause of one verdict', () => {
       checks: [{ id: 'top-floor', kind: 'spec', lhs: 'y', op: '>=', rhs: '10' }],
       blocks: [{ name: 'k', doc: child }],
     };
-    const b = bindingConstraint(runSheet(parent, dev));
+    const b = bindingCheck(runSheet(parent, dev));
     expect(b?.id).toBe('k.child-floor');
     expect(b?.marginPct).toBeCloseTo(-0.9, 6);
   });
@@ -1780,7 +1786,7 @@ describe('sweepSheet2 — the design-plane feasibility map', () => {
       expect(sw.feasible[yi][xi]).toBe(ref.feasible);
       if (!ref.feasible && sw.binding[yi][xi] !== null) {
         // the named binding rule really is a failing hard rule at that point
-        const named = ref.rules.find((r) => r.id === sw.binding[yi][xi]);
+        const named = ref.checks.find((r) => r.id === sw.binding[yi][xi]);
         expect(named?.status).toBe('fail');
         expect(named?.kind).not.toBe('advisory');
       }
@@ -1822,16 +1828,16 @@ describe('override and bias reporting fail closed (adversarial review regression
     };
     const res = runSheet(doc, dev);
     expect(res.feasible).toBe(false);
-    expect(res.children?.[0].feasible).toBe(false);
+    expect(res.blocks?.[0].feasible).toBe(false);
     expect(res.values.cs__id).toBeUndefined(); // provides withheld, not the 20µA default
     expect(
       res.warnings.some(
-        (w) => w.rule === 'sheet-use-param' && w.severity === 'error' && /I_bais/.test(w.message),
+        (w) => w.rule === 'sheet-block-param' && w.severity === 'error' && /I_bais/.test(w.message),
       ),
     ).toBe(true);
     // and the validator names it statically as an error too
     expect(
-      validateSheet(doc).some((w) => w.rule === 'sheet-use-param' && w.severity === 'error'),
+      validateSheet(doc).some((w) => w.rule === 'sheet-block-param' && w.severity === 'error'),
     ).toBe(true);
   });
 
@@ -1841,8 +1847,8 @@ describe('override and bias reporting fail closed (adversarial review regression
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
     });
     const res = evaluateSheet(doc, dev3);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias).toEqual({ vds: 1.2 }); // the slice actually used
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.bias).toEqual({ vds: 1.2 }); // the slice actually used
     expect(res.warnings.some((w) => /vds 5 is outside/.test(w.message))).toBe(true);
   });
 });
@@ -1863,8 +1869,8 @@ describe('diode-connected bind', () => {
 
   it('lands on the vds = vgs diagonal, matching a fixed slice taken at the answer', () => {
     const res = runSheet(diodeDoc(), dev);
-    expect(res.bind?.ok).toBe(true);
-    const vgs = res.bind!.vgs;
+    expect(res.sizing?.ok).toBe(true);
+    const vgs = res.sizing!.vgs;
     // Re-size the SAME device with vds pinned to the drop the diagonal produced. If the fold is
     // right the two agree; a diagonal that silently used some other vds would not.
     const fixed = runSheet(
@@ -1875,18 +1881,18 @@ describe('diode-connected bind', () => {
       },
       dev,
     );
-    expect(fixed.bind?.ok).toBe(true);
+    expect(fixed.sizing?.ok).toBe(true);
     const rel = (a: number, b: number): number => Math.abs(a - b) / Math.max(Math.abs(b), 1e-30);
-    expect(rel(fixed.bind!.vgs, vgs)).toBeLessThan(1e-3);
-    expect(rel(fixed.bind!.W, res.bind!.W)).toBeLessThan(1e-3);
+    expect(rel(fixed.sizing!.vgs, vgs)).toBeLessThan(1e-3);
+    expect(rel(fixed.sizing!.W, res.sizing!.W)).toBeLessThan(1e-3);
   });
 
   it('reports no single vds coordinate, because the diagonal has none', () => {
     // The applied vds moves with vgs across the fold, so one number in the report would be a
     // coordinate that is true nowhere. It must not be silently invented either.
     const res = runSheet(diodeDoc(), dev);
-    expect(res.bind?.bias?.vds).toBeUndefined();
-    expect(res.bind?.assumed ?? []).not.toContain('vds');
+    expect(res.sizing?.bias?.vds).toBeUndefined();
+    expect(res.sizing?.assumed ?? []).not.toContain('vds');
   });
 
   it('reports the coordinate it SAMPLED at, and says so when the diagonal had to clamp', () => {
@@ -1928,7 +1934,7 @@ describe('diode-connected bind', () => {
 
   it('warns rather than fails when the table has no vds axis to fold', () => {
     const res = runSheet(diodeDoc(), withoutColumns(fixTable(dev, { vds: 0.9 }), []));
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(res.warnings.some((w) => /no live vds axis to fold/.test(w.message))).toBe(true);
   });
 });
@@ -1992,7 +1998,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
   });
 
   it('fails closed on a HALF-WRITTEN pin instead of silently freezing the param', () => {
-    // {lhs} without {rhs} fails the pinned() shape guard: without this check the param would be
+    // {lhs} without {rhs} fails the constrained() shape guard: without this check the param would be
     // neither swept nor solved — stuck at its authored value with the sheet reading feasible.
     const doc = mk('2*x + 1', { lhs: 'y' } as unknown as { lhs: string; rhs: string });
     expect(
@@ -2248,11 +2254,11 @@ describe('operating range — the held design asked at each range end, apart fro
     const res = runSheet(mk(), dev);
     expect(res.feasible).toBe(true);
     expect(res.values.x).toBeCloseTo(2, 4); // base: y = 5 → x = 2
-    expect(res.edges?.map((e) => e.name)).toEqual(['lo', 'hi']);
-    expect(res.edges?.map((e) => e.state)).toEqual(['complies', 'complies']);
+    expect(res.rangeEnds?.map((e) => e.name)).toEqual(['lo', 'hi']);
+    expect(res.rangeEnds?.map((e) => e.state)).toEqual(['complies', 'complies']);
     expect(res.complies).toBe(true);
-    expect(res.edges?.[0].solved.x).toBeCloseTo(1, 4); // y = 3 → x = 1
-    expect(res.edges?.[1].solved.x).toBeCloseTo(3, 4); // y = 7 → x = 3
+    expect(res.rangeEnds?.[0].solved.x).toBeCloseTo(1, 4); // y = 3 → x = 1
+    expect(res.rangeEnds?.[1].solved.x).toBeCloseTo(3, 4); // y = 7 → x = 3
   });
 
   it('never throws on malformed edges — half-written or mistyped shapes degrade', () => {
@@ -2263,34 +2269,34 @@ describe('operating range — the held design asked at each range end, apart fro
     ).not.toThrow();
     expect(() => evaluateSheet(mk({ operatingRange: 'garbage' as never }), dev)).not.toThrow();
     const res = evaluateSheet(mk({ operatingRange: 'garbage' as never }), dev);
-    expect(res.edges).toBeUndefined(); // degrades to a plain evaluation
+    expect(res.rangeEnds).toBeUndefined(); // degrades to a plain evaluation
   });
 
   it('the report says WHICH point was checked, and never fabricates a landing', () => {
     const ok = evaluateSheet(mk(), dev);
-    expect(ok.edges?.[0].set).toEqual({ T: 3 }); // the resolved override, not the expression
-    expect(ok.edges?.[0].warnings).toEqual([]);
+    expect(ok.rangeEnds?.[0].set).toEqual({ T: 3 }); // the resolved override, not the expression
+    expect(ok.rangeEnds?.[0].warnings).toEqual([]);
     const doc = mk();
     doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // unreachable edge
     const bad = evaluateSheet(doc, dev);
-    expect(bad.edges?.[0].solved).toEqual({}); // a bracket end is not a landing
+    expect(bad.rangeEnds?.[0].solved).toEqual({}); // a bracket end is not a landing
   });
 
   it('a rule failing ONLY at a range end leaves the design feasible, and is named with its end', () => {
     const doc = mk();
     doc.params.find((p) => p.name === 'x_floor')!.value = 1.5; // base x=2 passes; lo end x=1 fails
     const res = evaluateSheet(doc, dev);
-    expect(res.rules.every((r) => r.status === 'pass' || r.status === 'amber')).toBe(true);
+    expect(res.checks.every((r) => r.status === 'pass' || r.status === 'amber')).toBe(true);
     // Two questions, two answers: the design meets its spec where it was sized, and does not
     // hold at one end of the range it claims.
     expect(res.feasible).toBe(true);
     expect(res.complies).toBe(false);
-    expect(res.edges?.map((e) => e.state)).toEqual(['does-not-comply', 'complies']);
+    expect(res.rangeEnds?.map((e) => e.state)).toEqual(['does-not-comply', 'complies']);
     // Nothing binds where the design was sized, so the feasibility question names no rule...
-    expect(bindingConstraint(res)).toBeUndefined();
+    expect(bindingCheck(res)).toBeUndefined();
     // ...and the range end's failure is named with its end, or by asking that run itself.
-    expect(rangeEndConstraint(res)?.id).toBe('lo@node-floor');
-    expect(bindingConstraint(res.edges![0])?.id).toBe('node-floor');
+    expect(rangeEndCheck(res)?.id).toBe('lo@node-floor');
+    expect(bindingCheck(res.rangeEnds![0])?.id).toBe('node-floor');
   });
 
   it('a range end the bracket cannot reach is no answer, with the solver reason verbatim', () => {
@@ -2300,12 +2306,12 @@ describe('operating range — the held design asked at each range end, apart fro
     // The solve did not land, so nothing was measured at that end: not a failure of the design,
     // and never a pass. The design itself is untouched by it.
     expect(res.feasible).toBe(true);
-    expect(res.edges?.[0].state).toBe('no-answer');
+    expect(res.rangeEnds?.[0].state).toBe('no-answer');
     expect(res.complies).toBe(false);
-    expect(res.edges?.[0].error).toMatch(/does not change sign/);
+    expect(res.rangeEnds?.[0].error).toMatch(/does not change sign/);
     // no failing RULE anywhere — the cause is the solve, so there is no rule to name
-    expect(bindingConstraint(res)).toBeUndefined();
-    expect(rangeEndConstraint(res)).toBeUndefined();
+    expect(bindingCheck(res)).toBeUndefined();
+    expect(rangeEndCheck(res)).toBeUndefined();
     // the failed edge does not leak error warnings into the base result
     expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
   });
@@ -2315,16 +2321,16 @@ describe('operating range — the held design asked at each range end, apart fro
       operatingRange: [{ name: 'lo', set: { T: 'y - 2' } }], // base y = 5 → edge T = 3
     });
     const res = evaluateSheet(doc, dev);
-    expect(res.edges?.[0].solved.x).toBeCloseTo(1, 4);
+    expect(res.rangeEnds?.[0].solved.x).toBeCloseTo(1, 4);
   });
 
   it('a set expression that does not resolve is no answer at that end, by name', () => {
     const doc = mk({ operatingRange: [{ name: 'lo', set: { T: 'nonsense_name' } }] });
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(true);
-    expect(res.edges?.[0].state).toBe('no-answer');
+    expect(res.rangeEnds?.[0].state).toBe('no-answer');
     expect(res.complies).toBe(false);
-    expect(res.edges?.[0].error).toMatch(/did not evaluate to a finite number/);
+    expect(res.rangeEnds?.[0].error).toMatch(/did not evaluate to a finite number/);
   });
 
   it('a range end that does not comply can NEVER chart non-negative — na fails it closed, on-chart', () => {
@@ -2339,9 +2345,9 @@ describe('operating range — the held design asked at each range end, apart fro
     });
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(true);
-    expect(res.edges?.[1].state).toBe('does-not-comply');
+    expect(res.rangeEnds?.[1].state).toBe('does-not-comply');
     const sw = sweepSheet(doc, 'x_floor', dev, 2);
-    const hiCurve = sw.rules.find((r) => r.id === 'hi@');
+    const hiCurve = sw.checks.find((r) => r.id === 'hi@');
     expect(hiCurve!.marginPct.every((m) => m !== null && m < 0)).toBe(true);
   });
 
@@ -2372,8 +2378,8 @@ describe('operating range — the held design asked at each range end, apart fro
       operatingRange: [{ name: 'hi', set: { T: 'T_hi' } }],
     };
     const res = evaluateSheet(parent, dev);
-    expect(res.edges?.[0].state).toBe('no-answer');
-    expect(res.edges?.[0].error).toMatch(/pinned param|does not change sign/);
+    expect(res.rangeEnds?.[0].state).toBe('no-answer');
+    expect(res.rangeEnds?.[0].error).toMatch(/pinned param|does not change sign/);
   });
 
   it('a snapped zero reads amber for EVERY operator — == included', () => {
@@ -2387,8 +2393,8 @@ describe('operating range — the held design asked at each range end, apart fro
       equations: [],
       checks: [{ id: 'eq', kind: 'spec', lhs, op: '==', rhs: '1', tolPct: 1 }],
     });
-    expect(evaluateSheet(eq('1.010005'), dev).rules[0].status).toBe('amber');
-    expect(evaluateSheet(eq('1.02'), dev).rules[0].status).toBe('fail');
+    expect(evaluateSheet(eq('1.010005'), dev).checks[0].status).toBe('amber');
+    expect(evaluateSheet(eq('1.02'), dev).checks[0].status).toBe('fail');
     // The inequality face of the same coin: a sub-snap genuine shortfall reads amber.
     const ge: SheetDoc = {
       title: 'g',
@@ -2397,7 +2403,7 @@ describe('operating range — the held design asked at each range end, apart fro
       equations: [],
       checks: [{ id: 'ge', kind: 'spec', lhs: '0.999995', op: '>=', rhs: '1' }],
     };
-    expect(evaluateSheet(ge, dev).rules[0].status).toBe('amber');
+    expect(evaluateSheet(ge, dev).checks[0].status).toBe('amber');
   });
 
   it("a composed child's edges are ignored, and validation says so", () => {
@@ -2414,7 +2420,7 @@ describe('operating range — the held design asked at each range end, apart fro
     };
     const res = runSheet(parent, dev);
     expect(res.feasible).toBe(true); // the child's base run closes; its edges never ran
-    expect(res.children?.[0].feasible).toBe(true);
+    expect(res.blocks?.[0].feasible).toBe(true);
     expect(res.warnings.some((w) => /not evaluated in composition/.test(w.message))).toBe(true);
   });
 
@@ -2428,7 +2434,7 @@ describe('operating range — the held design asked at each range end, apart fro
     const alone = evaluateSheet(withParams(doc, { x_floor: 1.6 }), dev);
     expect(alone.feasible).toBe(true);
     expect(alone.complies).toBe(false);
-    const loCurve = sw.rules.find((r) => r.id === 'lo@');
+    const loCurve = sw.checks.find((r) => r.id === 'lo@');
     expect(loCurve).toBeDefined();
     expect(loCurve!.marginPct[2]).toBeLessThan(0); // where the held design stops complying there
     expect(loCurve!.marginPct[0]).toBeGreaterThan(0);
@@ -2464,7 +2470,7 @@ describe('operating range — the held design asked at each range end, apart fro
     const doc = mk();
     doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // unreachable: the solve cannot land
     const sw = sweepSheet(doc, 'x_floor', dev, 2);
-    expect(sw.rules.find((r) => r.id === 'lo@')!.marginPct).toEqual([null, null]);
+    expect(sw.checks.find((r) => r.id === 'lo@')!.marginPct).toEqual([null, null]);
   });
 
   it('use names reserve the rule-path separators — a collision would shadow rule results', () => {
@@ -2563,7 +2569,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
 
   /** The vgs the child's bind actually landed on — the quantity the check reads. */
   const sizedVgs = (doc: SheetDoc, table = dev, resolve?: (id: string) => DeviceTable): number =>
-    evaluateSheet(doc, table, resolve).children![0].bind!.vgs;
+    evaluateSheet(doc, table, resolve).blocks![0].sizing!.vgs;
 
   it('passes just inside the tolerance and reports just outside it', () => {
     // 10 mV absolute (WIRING_TOL): the real disagreements this catches are tens to hundreds of
@@ -2662,11 +2668,13 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
 
   it('stays silent about a block whose own evaluation already failed', () => {
     // A child that could not size has no operating point to check against, and the bind error
-    // says so already — under the child's PATH (`m.bind`), not the bare use name. Advising the
+    // says so already — under the child's PATH (`m.givens`), not the bare use name. Advising the
     // author about the wiring here would stack a second, wrong finding on the real one.
     const broken: SheetDoc = { ...boundChild(), givens: { L: 'L', id: 'Ib', gm_id: 'nope' } };
     const res = evaluateSheet(wired('0.65', '0', broken), dev);
-    expect(res.warnings.some((w) => w.severity === 'error' && w.location === 'm.bind')).toBe(true);
+    expect(res.warnings.some((w) => w.severity === 'error' && w.location === 'm.givens')).toBe(
+      true,
+    );
     expect(wiringWarnings(res)).toEqual([]);
   });
 
@@ -2728,7 +2736,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     });
     const res = evaluateSheet(doc, dev);
     expect(wiringWarnings(res)).toHaveLength(1);
-    expect(res.edges![0].warnings.filter((w) => w.rule === 'sheet-wiring')).toHaveLength(1);
+    expect(res.rangeEnds![0].warnings.filter((w) => w.rule === 'sheet-wiring')).toHaveLength(1);
   });
 
   it('makes structural wiring problems validation ERRORS', () => {
@@ -2747,7 +2755,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
       /needs both gate and source \(source is missing\)/,
     );
     expect(errs({ source: 'VDD' }).join()).toMatch(/\(gate is missing\)/);
-    // Strict keys, like BIND_KEYS/EDGE_KEYS: a typo must not silently drop half the identity —
+    // Strict keys, like GIVENS_KEYS/RANGE_END_KEYS: a typo must not silently drop half the identity —
     // and a `sign` expression, which this check deliberately does not take, is named rather
     // than ignored.
     expect(errs({ gate: 'VDD', source: '0', polarity: 'p' }).join()).toMatch(
@@ -2771,7 +2779,7 @@ describe('rawMargin — the honest distance beside the snapped one', () => {
       equations: [],
       checks: [{ id: 'r', kind: 'spec', lhs: 'a', op: '>=', rhs: 'a + 1e-9' }],
     };
-    const r = evaluateSheet(doc).rules[0];
+    const r = evaluateSheet(doc).checks[0];
     // The verdict reads the boundary it is parked on; a DERIVATIVE would read zero slope from
     // that and conclude the rule cannot be moved.
     expect(r.margin).toBe(0);
@@ -2788,7 +2796,7 @@ describe('rawMargin — the honest distance beside the snapped one', () => {
       equations: [],
       checks: [{ id: 'r', kind: 'spec', lhs: 'nope', op: '>=', rhs: '0' }],
     };
-    const r = evaluateSheet(doc).rules[0];
+    const r = evaluateSheet(doc).checks[0];
     expect(r.status).toBe('na');
     expect(Number.isNaN(r.rawMargin)).toBe(true);
   });
@@ -2845,16 +2853,16 @@ describe('limitingConstraint — the rule closest to breaking', () => {
   it('names the tightest hard rule on a FEASIBLE tree, where nothing is failing', () => {
     const res = evaluateSheet(doc('0.99', '0.5'));
     expect(res.feasible).toBe(true);
-    expect(bindingConstraint(res)).toBeUndefined(); // no rule to blame — nothing failed
-    // Path-keyed exactly as bindingConstraint would name it.
-    expect(limitingConstraint(res)?.id).toBe('c.tightest');
+    expect(bindingCheck(res)).toBeUndefined(); // no rule to blame — nothing failed
+    // Path-keyed exactly as bindingCheck would name it.
+    expect(limitingCheck(res)?.id).toBe('c.tightest');
   });
 
   it('agrees with bindingConstraint once a rule fails', () => {
     const res = evaluateSheet(doc('0.99', '2'));
     expect(res.feasible).toBe(false);
-    expect(bindingConstraint(res)?.id).toBe('loose');
-    expect(limitingConstraint(res)?.id).toBe('loose');
+    expect(bindingCheck(res)?.id).toBe('loose');
+    expect(limitingCheck(res)?.id).toBe('loose');
   });
 
   it('looks past the boundary tautology a range end parks on', () => {
@@ -2876,13 +2884,13 @@ describe('limitingConstraint — the rule closest to breaking', () => {
       operatingRange: [{ name: 'lo', set: { a: 'A_lo' } }],
     });
     expect(res.feasible).toBe(true);
-    expect(res.edges![0].rules.find((r) => r.id === 'range')!.margin).toBe(0);
+    expect(res.rangeEnds![0].checks.find((r) => r.id === 'range')!.margin).toBe(0);
     // Asked of the range end's own run. The base run is a different question with its own
     // answer: there `range` (1 vs 0.5, 100%) is tighter than `tight` (1 vs 0.49, 104%).
-    const lim = limitingConstraint(res.edges![0])!;
+    const lim = limitingCheck(res.rangeEnds![0])!;
     expect(lim.id).toBe('tight');
     expect(lim.marginPct).toBeCloseTo(0.01 / 0.49, 9);
-    expect(limitingConstraint(res)?.id).toBe('range');
+    expect(limitingCheck(res)?.id).toBe('range');
   });
 
   it('never names a rule from a range end whose solve never landed', () => {
@@ -2902,11 +2910,11 @@ describe('limitingConstraint — the rule closest to breaking', () => {
       operatingRange: [{ name: 'lo', set: { T: 'T_lo' } }],
     };
     const res = evaluateSheet(doc, dev);
-    expect(res.edges![0].error).toMatch(/does not change sign/);
-    expect(res.edges![0].rules[0].marginPct).toBeLessThan(res.rules[0].marginPct);
-    expect(limitingConstraint(res)?.id).toBe('ceiling');
-    expect(bindingConstraint(res)).toBeUndefined();
-    expect(rangeEndConstraint(res)).toBeUndefined();
+    expect(res.rangeEnds![0].error).toMatch(/does not change sign/);
+    expect(res.rangeEnds![0].checks[0].marginPct).toBeLessThan(res.checks[0].marginPct);
+    expect(limitingCheck(res)?.id).toBe('ceiling');
+    expect(bindingCheck(res)).toBeUndefined();
+    expect(rangeEndCheck(res)).toBeUndefined();
   });
 
   it('has nothing to name when every hard rule is na', () => {
@@ -2917,7 +2925,7 @@ describe('limitingConstraint — the rule closest to breaking', () => {
       equations: [],
       checks: [{ id: 'r', kind: 'physical', lhs: 'nope', op: '>=', rhs: '0' }],
     });
-    expect(limitingConstraint(res)).toBeUndefined();
+    expect(limitingCheck(res)).toBeUndefined();
   });
 });
 
@@ -3011,7 +3019,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
   it('re-checks the containment edges only for a rule that lives on one', () => {
     // Every edge costs each probe another full evaluation of the whole sheet, so a readout about
     // a rule at the top must not pay for range ends nobody asked about. Naming an edge-keyed rule
-    // is how a caller opts in — and then the edge outcomes are keyed exactly as bindingConstraint
+    // is how a caller opts in — and then the edge outcomes are keyed exactly as bindingCheck
     // names them.
     const doc = linear({}, '1', {
       params: [
@@ -3060,7 +3068,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     };
     const res = evaluateSheet(doc);
     expect(res.feasible).toBe(true);
-    expect(res.edges?.map((e) => e.state)).toEqual(['does-not-comply', 'no-answer']);
+    expect(res.rangeEnds?.map((e) => e.state)).toEqual(['does-not-comply', 'no-answer']);
 
     const [lo] = sheetSensitivities(doc, undefined, undefined, { rule: 'lo@node-floor' });
     expect(lo.error).toBeUndefined();
@@ -3165,13 +3173,13 @@ describe('a bound gate-source voltage in a sheet', () => {
   it('sizes the output device at the reference gate voltage, not at a target it re-solves', () => {
     const res = runSheet(mirror({ vgs: 'ref__vgs' }), devVds);
 
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     // The two devices are on one wire: the sized gate voltage IS the reference's, exactly —
     // not "within an inversion level of it".
-    expect(res.bind!.vgs).toBeCloseTo(res.values.ref__vgs, 15);
-    expect(res.bind!.W).toBeCloseTo(3 * res.values.ref__W, 15);
+    expect(res.sizing!.vgs).toBeCloseTo(res.values.ref__vgs, 15);
+    expect(res.sizing!.W).toBeCloseTo(3 * res.values.ref__W, 15);
     // vgs is a SELECTOR, never a bias axis: the bind must not have sliced the vgs axis away.
-    expect(Object.keys(res.bind?.bias ?? {})).not.toContain('vgs');
+    expect(Object.keys(res.sizing?.bias ?? {})).not.toContain('vgs');
     expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
 
     // The demo device's channel-length modulation multiplies id by (1 + vds/VA), so two devices
@@ -3213,8 +3221,8 @@ describe('a bound gate-source voltage in a sheet', () => {
     };
     const res = runSheet(doc, dev);
 
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind!.vgs).toBeCloseTo(1.2, 12);
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing!.vgs).toBeCloseTo(1.2, 12);
     expect(res.values.vgs).toBeCloseTo(1.2, 12);
     expect(res.values.v_read).toBeCloseTo(1.2, 12);
 
@@ -3233,12 +3241,12 @@ describe('a bound gate-source voltage in a sheet', () => {
     expect(validateSheet(both).some((w) => /both set the operating point/.test(w.message))).toBe(
       true,
     );
-    expect(runSheet(both, devVds).bind?.ok).toBe(false);
+    expect(runSheet(both, devVds).sizing?.ok).toBe(false);
 
     // And a gate voltage on top of an already-complete width-first bind is a third quantity.
     const three = mirror({ vgs: 'ref__vgs', gm_id: 'gm_id_m' });
     expect(validateSheet(three).some((w) => /EXACTLY two/.test(w.message))).toBe(true);
-    expect(runSheet(three, devVds).bind?.ok).toBe(false);
+    expect(runSheet(three, devVds).sizing?.ok).toBe(false);
   });
 
   it('is legal alongside a diode connection: the connection picks the axis, the bind the point', () => {
@@ -3259,14 +3267,14 @@ describe('a bound gate-source voltage in a sheet', () => {
     };
     expect(validateSheet(doc)).toEqual([]);
     const res = runSheet(doc, devVds);
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind!.vgs).toBeCloseTo(0.7, 12);
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing!.vgs).toBeCloseTo(0.7, 12);
 
     // The connection is not decorative here: it put the drain at 0.7 V, so the current carries
     // the demo's (1 + vds/VA) factor with VA = VA_PER_L·0.5 µm = 2.5 V. Against the same device
     // held at vds = 0 that is exactly 1 + 0.7/2.5 = 1.28x the current.
     const atZero = runSheet({ ...doc, givens: { L: 'L', W: 'W', vgs: 'v', vds: '0' } }, devVds);
-    expect(res.bind!.id / atZero.bind!.id).toBeCloseTo(1 + 0.7 / (VA_PER_L * 0.5e-6), 9);
+    expect(res.sizing!.id / atZero.sizing!.id).toBeCloseTo(1 + 0.7 / (VA_PER_L * 0.5e-6), 9);
 
     // A declared vds is still refused — the ruling is about vgs only.
     expect(

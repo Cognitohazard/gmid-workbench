@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { libraryEntries, loadLibrary, sheet, table, REFS } from '../sheet/library.fixtures';
 import {
   runSheet,
-  bindingConstraint,
+  bindingCheck,
   withParams,
   type SheetDoc,
   type SheetRefEntry,
@@ -215,7 +215,7 @@ describe('the search', () => {
     // One screening evaluation plus the current back-off's bisection: the repair stage never
     // ran, which is the point of this golden — the spec closed the sheet, not the search.
     expect(c.evals).toBe(8);
-    expect(c.bindingConstraint).toBeUndefined();
+    expect(c.bindingCheck).toBeUndefined();
     expect(c.knobs).toEqual({ I_tail: 4.25e-6 });
   });
 
@@ -255,7 +255,7 @@ describe('the search', () => {
       REFS,
     );
     expect(hand.feasible).toBe(true);
-    expect(bindingConstraint(hand)).toBeUndefined();
+    expect(bindingCheck(hand)).toBeUndefined();
   });
 
   // A sheet that ran out of budget says so with the numbers that bounded it, and never says
@@ -387,8 +387,8 @@ describe('the search', () => {
     expect(c.cause).toContain('at the last point searched, gain-spec fails by');
     // The search got the gain within a few percent of closing without reaching it — a
     // statement about this search, and about nothing else.
-    expect(c.bindingConstraint?.id).toBe('gain-spec');
-    expect(c.bindingConstraint?.marginPct).toBeGreaterThan(-0.05);
+    expect(c.bindingCheck?.id).toBe('gain-spec');
+    expect(c.bindingCheck?.marginPct).toBeGreaterThan(-0.05);
   });
 
   // The picker answers FEASIBILITY, and a sheet's claimed operating range is a different question
@@ -421,8 +421,9 @@ describe('the search', () => {
     // k = 9 is the better design. At the range end the cap is 10: 10% of room at k = 9 against
     // 37% at 19/3 — the range end prefers the smaller k.
     const endRoom = (k: number): number =>
-      runSheet(withParams(doc(true), { k }), table).edges![0].rules.find((r) => r.id === 'cap')!
-        .marginPct;
+      runSheet(withParams(doc(true), { k }), table).rangeEnds![0].checks.find(
+        (r) => r.id === 'cap',
+      )!.marginPct;
     expect(endRoom(9)).toBeCloseTo(0.1, 12);
     expect(endRoom(19 / 3)).toBeCloseTo(11 / 30, 12);
 
@@ -460,7 +461,7 @@ describe('the search', () => {
     expect(own.complies).toBe(false);
     const c = pick('otas/current-mirror-ota.json', {});
     expect(c.verdict).toBe('closed');
-    expect(c.bindingConstraint).toBeUndefined();
+    expect(c.bindingCheck).toBeUndefined();
     expect(c.evals).toBe(8);
     expect(c.budgetExhausted).toBe(false);
   });
@@ -580,7 +581,7 @@ describe('the search', () => {
     };
     const c = pickTopology({}, { path: 'synthetic/unsettled', doc }, table, undefined, {});
     expect(c.verdict).toBe('could-not-be-searched');
-    expect(c.bindingConstraint).toBeUndefined();
+    expect(c.bindingCheck).toBeUndefined();
     expect(c.cause).toContain('does not change sign');
     expect(c.evals).toBe(1);
     expect(c.budgetExhausted).toBe(false);
@@ -737,7 +738,7 @@ describe('reading the results', () => {
       candidate('near miss', {
         verdict: 'did-not-close',
         worstMargin: { id: 'gain-spec', marginPct: -0.02 },
-        bindingConstraint: { id: 'gain-spec', marginPct: -0.02 },
+        bindingCheck: { id: 'gain-spec', marginPct: -0.02 },
       }),
       candidate('nothing settled', {
         verdict: 'could-not-be-searched',
@@ -814,7 +815,7 @@ describe('reading the results', () => {
       marginSpeaksFor(
         candidate('failed', {
           verdict: 'did-not-close',
-          bindingConstraint: { id: 'r', marginPct: -0.2 },
+          bindingCheck: { id: 'r', marginPct: -0.2 },
         }),
       ),
     ).toBe(true);

@@ -1,20 +1,20 @@
 // The bench's view of corner families: how a loaded table is named, how a sheet's device
 // binding is matched to a family, and what the localStorage registry keeps between sessions.
 //
-// The numerics are the core's (groupFamilies, variantAt, runVariant). What lives here is the
+// The numerics are the core's (groupDevices, tableAt, runCondition). What lives here is the
 // part the core deliberately refuses to know: the bench's table identity (`tableUid`) and the
 // syntax of a binding string. Core takes both as injected functions, so nothing below is a
 // second definition of a family — only of how this app addresses one.
 
 import {
   extraScalar,
-  familyIdentityOf,
-  familyUidOf,
-  groupFamilies,
+  deviceIdentityOf,
+  deviceUidOf,
+  groupDevices,
   pdkOf,
-  type CornerFamily,
+  type CharacterizedDevice,
   type DeviceTable,
-  type FamilyResolver,
+  type DeviceLookup,
 } from '@gmid/mostab-core';
 import { tableUid } from './dashboard';
 
@@ -24,21 +24,21 @@ import { tableUid } from './dashboard';
  * changes whenever any of it does, and the one control that changes a designation.
  */
 export interface Bench {
-  readonly families: readonly CornerFamily[];
-  readonly familyOf: FamilyResolver;
+  readonly devices: readonly CharacterizedDevice[];
+  readonly deviceOf: DeviceLookup;
   /** The family of the active table — the primary of every sheet panel on the dashboard. */
-  readonly primary: CornerFamily | undefined;
+  readonly primary: CharacterizedDevice | undefined;
   readonly options: readonly { binding: string; label: string }[];
   readonly revision: string;
-  readonly designate: (familyUid: string, uid: string) => void;
+  readonly designate: (deviceUid: string, uid: string) => void;
 }
 
 /** The discriminator a composed child's `device` string carries when it names a FAMILY rather
  *  than one table. Legacy documents store a raw table uid instead; both are read (see
- *  `familyResolver`), and only this form is ever written. */
+ *  `deviceLookup`), and only this form is ever written. */
 const FAMILY_PREFIX = 'family:';
 
-const familyBinding = (f: CornerFamily): string => FAMILY_PREFIX + f.familyUid;
+const deviceBinding = (f: CharacterizedDevice): string => FAMILY_PREFIX + f.deviceUid;
 
 /**
  * Group the loaded tables, with the bench's designations and its table identity.
@@ -49,17 +49,17 @@ const familyBinding = (f: CornerFamily): string => FAMILY_PREFIX + f.familyUid;
  * import, removal and designation — so handing back a fresh object for a family nobody touched
  * would re-derive all of it to reach the same answer.
  */
-export function benchFamilies(
+export function benchDevices(
   tables: readonly DeviceTable[],
   nominalByFamily: Readonly<Record<string, string>>,
-  previous: readonly CornerFamily[] = [],
-): readonly CornerFamily[] {
-  const next = groupFamilies(tables, {
-    nominalByFamily: new Map(Object.entries(nominalByFamily)),
+  previous: readonly CharacterizedDevice[] = [],
+): readonly CharacterizedDevice[] {
+  const next = groupDevices(tables, {
+    nominalByDevice: new Map(Object.entries(nominalByFamily)),
     uidOf: tableUid,
   });
-  const kept = new Map(previous.map((f) => [familySignature(f), f]));
-  const merged = next.map((f) => kept.get(familySignature(f)) ?? f);
+  const kept = new Map(previous.map((f) => [deviceSignature(f), f]));
+  const merged = next.map((f) => kept.get(deviceSignature(f)) ?? f);
   return merged.length === previous.length && merged.every((f, i) => f === previous[i])
     ? previous
     : merged;
@@ -74,35 +74,36 @@ export function benchFamilies(
  * remainder read as a family identity, and only when that family is actually loaded — so an
  * unrecognized string stays unresolved rather than half-matching.
  */
-export function familyResolver(families: readonly CornerFamily[]): FamilyResolver {
-  const byTable = new Map<string, CornerFamily>();
-  const byFamily = new Map<string, CornerFamily>();
-  for (const f of families) {
-    byFamily.set(f.familyUid, f);
-    for (const t of f.variants) {
+export function deviceLookup(devices: readonly CharacterizedDevice[]): DeviceLookup {
+  const byTable = new Map<string, CharacterizedDevice>();
+  const byDevice = new Map<string, CharacterizedDevice>();
+  for (const f of devices) {
+    byDevice.set(f.deviceUid, f);
+    for (const t of f.conditions) {
       byTable.set(tableUid(t), f);
       // Each member's OWN identity aliases to its family too: a binding stored before an
       // under-declared member merged into a declared sibling names the pre-merge identity,
       // and the device it means is still loaded. Safe — identical own-identities always land
       // in one family, so an alias can never be claimed by two.
-      byFamily.set(familyUidOf(t), f);
+      byDevice.set(deviceUidOf(t), f);
     }
   }
   return (binding: string) =>
     byTable.get(binding) ??
     (binding.startsWith(FAMILY_PREFIX)
-      ? byFamily.get(binding.slice(FAMILY_PREFIX.length))
+      ? byDevice.get(binding.slice(FAMILY_PREFIX.length))
       : undefined);
 }
 
 /** The family's process namespace as declared, or '' when its tables declare none. */
-const familyPdk = (f: CornerFamily): string => (f.variants[0] ? pdkOf(f.variants[0]) : '');
+const devicePdk = (f: CharacterizedDevice): string =>
+  f.conditions[0] ? pdkOf(f.conditions[0]) : '';
 
 /** A family in a menu: the device name, its namespace when it has one, and how many
  *  conditions it holds — the fact that decides whether a corner mode has anything to choose. */
-export function familyLabel(f: CornerFamily): string {
-  const pdk = familyPdk(f);
-  const n = f.variants.length;
+export function deviceLabel(f: CharacterizedDevice): string {
+  const pdk = devicePdk(f);
+  const n = f.conditions.length;
   return `${f.device}${pdk ? ` · ${pdk}` : ''}${n > 1 ? ` · ${n} conditions` : ''}`;
 }
 
@@ -110,15 +111,15 @@ export function familyLabel(f: CornerFamily): string {
  *  a `#n` suffix where two families would otherwise read the same — two undeclared-namespace
  *  processes shipping one device name. Built where the labels are, so a menu can never show a
  *  duplicate the labelling knew how to tell apart. */
-export function familyOptions(
-  families: readonly CornerFamily[],
+export function deviceOptions(
+  devices: readonly CharacterizedDevice[],
 ): { binding: string; label: string }[] {
   const seen = new Map<string, number>();
-  return families.map((f) => {
-    const label = familyLabel(f);
+  return devices.map((f) => {
+    const label = deviceLabel(f);
     const n = (seen.get(label) ?? 0) + 1;
     seen.set(label, n);
-    return { binding: familyBinding(f), label: n > 1 ? `${label} #${n}` : label };
+    return { binding: deviceBinding(f), label: n > 1 ? `${label} #${n}` : label };
   });
 }
 
@@ -145,7 +146,7 @@ export function describeBinding(binding: string): string {
   if (!binding.startsWith(FAMILY_PREFIX)) return binding;
   // Core owns both directions of the identity's serialization; reading the tuple by position
   // here would mislabel silently the day it grows a field.
-  const id = familyIdentityOf(binding.slice(FAMILY_PREFIX.length));
+  const id = deviceIdentityOf(binding.slice(FAMILY_PREFIX.length));
   if (!id?.device) return binding; // not our serialization after all — show it as written
   return id.pdk ? `${id.device} · ${id.pdk}` : id.device;
 }
@@ -155,10 +156,10 @@ export function describeBinding(binding: string): string {
  *  the condition the automatic rule had already chosen changes nothing but the answer to "who
  *  chose this", which is exactly what the strip is reporting. Every other field is a function of
  *  the members. */
-function familySignature(f: CornerFamily): string {
+function deviceSignature(f: CharacterizedDevice): string {
   const nominal = f.nominal ? tableUid(f.nominal) : '';
   const source = `${f.nominalSource}:${f.unresolvedNominal ?? ''}`;
-  return `${f.familyUid}@${f.variants.map(tableUid).join('~')}#${source}#${nominal}`;
+  return `${f.deviceUid}@${f.conditions.map(tableUid).join('~')}#${source}#${nominal}`;
 }
 
 /**
@@ -168,8 +169,8 @@ function familySignature(f: CornerFamily): string {
  * active table's uid cannot, because a bench edit can change every projection without the
  * active table moving at all.
  */
-export function familyRevision(families: readonly CornerFamily[]): string {
-  return families.map(familySignature).join('|');
+export function deviceRevision(devices: readonly CharacterizedDevice[]): string {
+  return devices.map(deviceSignature).join('|');
 }
 
 // --- the registry sidecar ----------------------------------------------------
@@ -183,7 +184,7 @@ export function familyRevision(families: readonly CornerFamily[]): string {
 export interface Registry {
   order: string[];
   active: number;
-  /** familyUid → the designated member's table uid. A uid that is no longer in its family is
+  /** deviceUid → the designated member's table uid. A uid that is no longer in its family is
    *  NOT dropped: it reads as an unresolved designation, so a bench that lost the table it
    *  named says so instead of quietly designating a different corner. */
   nominalByFamily: Record<string, string>;

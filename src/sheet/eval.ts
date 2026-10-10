@@ -15,35 +15,35 @@ import { fixTable } from '../series';
 import { diodeGrid, offHull } from '../grid';
 import {
   BIAS_AXES,
-  MAX_USE_DEPTH,
+  MAX_BLOCK_DEPTH,
   PATH_SEP,
   clampedIn,
   engineSolved,
   holds,
-  isHardRule,
+  isHardCheck,
   joinProvide,
-  pinProblem,
-  pinned,
-  prefixUseWarning,
+  constraintProblem,
+  constrained,
+  prefixBlockWarning,
   stands,
   torn,
   withParams,
 } from './types';
-import { assumedLevelRefusal, pinHardware, type PinnedHardware } from './coverage';
-import { dcInputs, pinPlan } from './validate';
+import { assumedLevelRefusal, holdHardware, type HeldHardware } from './coverage';
+import { dcInputs, constraintPlan } from './validate';
 import type {
-  BindReport,
-  RuleResult,
-  RuleStatus,
-  SheetBind,
-  SheetChildReport,
+  SizingReport,
+  CheckResult,
+  CheckStatus,
+  SheetGivens,
+  SheetBlockReport,
   SheetDoc,
-  SheetEdge,
-  SheetEdgeReport,
-  SheetEdgeState,
+  SheetRangeEnd,
+  RangeEndReport,
+  PointState,
   SheetResult,
   SheetVar,
-  SheetUse,
+  SheetBlock,
 } from './types';
 
 /** Resolve a device id to its lookup table (for a child `use` that names its own device).
@@ -236,10 +236,10 @@ const diodeTableCached = (t: DeviceTable): { table: DeviceTable; clamped: boolea
  * default when the table characterizes that point, and is reported as ASSUMED so the
  * coordinate is never silently invented; with neither, the axis stays live and sizing fails
  * with guidance. Returns the sliced table, the applied coordinates, and which of them were
- * assumed rather than authored — all three reach the BindReport.
+ * assumed rather than authored — all three reach the SizingReport.
  */
 function applyBindBias(
-  b: SheetBind,
+  b: SheetGivens,
   table: DeviceTable,
   values: Record<string, number>,
   scope: Scope,
@@ -283,30 +283,30 @@ function applyBindBias(
       // drop the data never measured. Silently clamping is exactly what this project does not do.
       if (fold.clamped)
         warn({
-          rule: 'sheet-bind',
+          rule: 'sheet-givens',
           severity: 'warning',
           message:
             `diode connection: the vgs sweep runs outside the characterized vds range, so the ` +
             `vds = vgs diagonal is clamped to the table's edge where it does. A drop landing in ` +
             `that region is read from data taken at a different vds`,
-          location: 'bind',
+          location: 'givens',
         });
       t = fold.table;
     } else
       warn({
-        rule: 'sheet-bind',
+        rule: 'sheet-givens',
         severity: 'warning',
         message:
           'bind declares a diode connection, but the table has no live vds axis to fold onto the ' +
           'vds = vgs diagonal — using the table as-is',
-        location: 'bind',
+        location: 'givens',
       });
   }
 
   for (const axis of BIAS_AXES) {
     if (axis === 'vds' && b.diode) continue; // the connection already fixed it
     const live = t.grid.axes.find((a) => a.name === axis && a.values.length > 1);
-    // BIAS_AXES is namespace-derived (dynamic strings), while SheetBind's declared bias
+    // BIAS_AXES is namespace-derived (dynamic strings), while SheetGivens's declared bias
     // fields are static — index structurally rather than by the literal key union.
     const declared = (b as unknown as Partial<Record<string, string>>)[axis];
     if (declared !== undefined) {
@@ -317,10 +317,10 @@ function applyBindBias(
         // The declaration is an assertion the table cannot honor (axis absent or already
         // collapsed — possibly at a DIFFERENT point we cannot see). Advisory, not fatal.
         warn({
-          rule: 'sheet-bind',
+          rule: 'sheet-givens',
           severity: 'warning',
           message: `bind ${axis} = ${v} declared, but the table has no live ${axis} axis to slice — using the table as-is`,
-          location: 'bind',
+          location: 'givens',
         });
         continue;
       }
@@ -333,10 +333,10 @@ function applyBindBias(
       if (offHull(live.values, v)) {
         clamped.push(axis);
         warn({
-          rule: 'sheet-bind',
+          rule: 'sheet-givens',
           severity: 'warning',
           message: `bind ${axis} ${v} is outside the table's ${axis} range [${live.values[0]}, ${live.values[live.values.length - 1]}]; clamped to ${applied}`,
-          location: 'bind',
+          location: 'givens',
         });
       }
     } else if (live) {
@@ -349,7 +349,7 @@ function applyBindBias(
       const hi = live.values[live.values.length - 1];
       if (def !== undefined && lo <= def && def <= hi) {
         slice(axis, live, def);
-        // Assumed, not authored — reported rather than warned; see BindReport.assumed.
+        // Assumed, not authored — reported rather than warned; see SizingReport.assumed.
         assumed.push(axis);
       } else needs.push(axis);
     }
@@ -368,16 +368,16 @@ function applyBindBias(
 
 /** Resolve the bind, call sizeDevice, and merge its operating point into `values`. */
 function runBind(
-  b: SheetBind,
+  b: SheetGivens,
   table: DeviceTable | undefined,
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
-): BindReport {
+): SizingReport {
   // Every bind failure surfaces an error warning AND an ok:false report, so the feasibility
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design).
-  const fail = (error: string, needs?: string[], clamped?: string[]): BindReport => {
-    warn({ rule: 'sheet-bind', severity: 'error', message: error, location: 'bind' });
+  const fail = (error: string, needs?: string[], clamped?: string[]): SizingReport => {
+    warn({ rule: 'sheet-givens', severity: 'error', message: error, location: 'givens' });
     return {
       ok: false,
       W: NaN,
@@ -420,9 +420,9 @@ function runBind(
     // hull) as advisory sheet warnings — same pattern children use at evalChildren.
     // Severity 'warning', not 'error', so a clamp does not flip feasibility closed.
     for (const m of res.warnings) {
-      warn({ rule: 'sheet-bind', severity: 'warning', message: m, location: 'bind' });
+      warn({ rule: 'sheet-givens', severity: 'warning', message: m, location: 'givens' });
     }
-    const report: BindReport = { ok: true, W: res.W, L, vgs: res.vgs, id: res.id };
+    const report: SizingReport = { ok: true, W: res.W, L, vgs: res.vgs, id: res.id };
     if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
     if (sliced.assumed.length) report.assumed = sliced.assumed;
     const clamped = [...sliced.clamped, ...res.clamped];
@@ -458,13 +458,13 @@ function runBind(
   }
 }
 
-/** Evaluate one rule's two sides and classify into a signed-margin RuleResult. */
+/** Evaluate one rule's two sides and classify into a signed-margin CheckResult. */
 function evalRule(
   rule: SheetDoc['checks'][number],
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
-): RuleResult {
+): CheckResult {
   const text = `${rule.lhs} ${rule.op} ${rule.rhs}`;
   const lhs = evalScalar(rule.lhs, values, scope, warn, `rule "${rule.id}" lhs`);
   const rhs = evalScalar(rule.rhs, values, scope, warn, `rule "${rule.id}" rhs`);
@@ -506,7 +506,7 @@ function evalRule(
     };
   }
   // Kept before the snap: the verdict wants the snapped value, a DERIVATIVE wants the honest
-  // one (see RuleResult.rawMargin).
+  // one (see CheckResult.rawMargin).
   const rawMargin = margin;
   // see MARGIN_SNAP_REL — a bind-pinned spec must not coin-flip on FP noise
   const snapped =
@@ -514,7 +514,7 @@ function evalRule(
   if (snapped) margin = 0;
   const marginPct = margin / Math.max(Math.abs(rhs), TINY);
 
-  let status: RuleStatus;
+  let status: CheckStatus;
   if (margin < 0) status = 'fail';
   else if (snapped)
     // A SNAPPED zero always reads amber, whatever the operator: the rule is sitting on
@@ -543,7 +543,7 @@ function evalRule(
  * so the caller withholds the child's provides too.
  */
 function applyUseParams(
-  use: SheetUse,
+  use: SheetBlock,
   childDoc: SheetDoc,
   parentValues: Record<string, number>,
   parentScope: Scope,
@@ -562,7 +562,7 @@ function applyUseParams(
     if (child === undefined) {
       ok = false;
       warn({
-        rule: 'sheet-use-param',
+        rule: 'sheet-block-param',
         severity: 'error',
         message: `use "${use.name}": override "${k}" does not match any child param (refusing to size the child on its embedded defaults)`,
         location: use.name,
@@ -575,16 +575,16 @@ function applyUseParams(
     // unmatched-key error above exists to prevent, and this one is easy to write by accident.
     if (torn(child)) {
       warn({
-        rule: 'sheet-use-param',
+        rule: 'sheet-block-param',
         severity: 'warning',
         message: `use "${use.name}": override "${k}" sets a param the child solves for, so it only seeds the iteration — the converged value wins`,
         location: use.name,
       });
     }
     // A pinned param is stronger still: bisection needs no seed, so the wired value does nothing.
-    if (pinned(child)) {
+    if (constrained(child)) {
       warn({
-        rule: 'sheet-use-param',
+        rule: 'sheet-block-param',
         severity: 'warning',
         message: child.designConstraint.held
           ? `use "${use.name}": override "${k}" sets a node the child holds under a gate — here the hardware is held, so the child re-solves it and the override is ignored`
@@ -596,7 +596,7 @@ function applyUseParams(
     if (v === undefined || !Number.isFinite(v)) {
       ok = false;
       warn({
-        rule: 'sheet-use-param',
+        rule: 'sheet-block-param',
         severity: 'error',
         message: `use "${use.name}": override "${k}" did not resolve to a finite number (refusing to fall back to the child default)`,
         location: use.name,
@@ -627,7 +627,7 @@ function applyUseParams(
  * the rolled-up error warning + the children-feasibility fold in evaluateSheet.
  */
 function evalChildren(
-  uses: SheetUse[],
+  uses: SheetBlock[],
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   depth: number,
@@ -635,21 +635,21 @@ function evalChildren(
   scope: Scope,
   warn: (w: QAWarning) => void,
   budget: SolveBudget,
-): SheetChildReport[] {
-  const reports: SheetChildReport[] = [];
+): SheetBlockReport[] {
+  const reports: SheetBlockReport[] = [];
   // Structural self-defense for direct evaluateSheet callers (runSheet validates, but
   // this entrypoint is public): a duplicate or empty use name would silently overwrite
   // the earlier sibling's provides — skip it, fail closed.
   const seenNames = new Set<string>();
   for (const use of uses) {
     const dead = (message: string): void => {
-      warn({ rule: 'sheet-use', severity: 'error', message, location: use.name });
+      warn({ rule: 'sheet-block', severity: 'error', message, location: use.name });
       reports.push({
         name: use.name,
         title: use.doc?.title ?? use.ref ?? '',
         feasible: false,
         provides: {},
-        rules: [],
+        checks: [],
       });
     };
     if (!use.name.trim()) {
@@ -672,8 +672,8 @@ function evalChildren(
       continue;
     }
     seenNames.add(use.name);
-    if (depth >= MAX_USE_DEPTH) {
-      dead(`use "${use.name}": composition nested deeper than ${MAX_USE_DEPTH}`);
+    if (depth >= MAX_BLOCK_DEPTH) {
+      dead(`use "${use.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
       continue;
     }
     // A child names its own device id (else it inherits the parent table). A named device that the
@@ -695,7 +695,7 @@ function evalChildren(
 
     // Roll up child warnings, attributed to the use site (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
-    for (const w of res.warnings) warn(prefixUseWarning(use.name, w));
+    for (const w of res.warnings) warn(prefixBlockWarning(use.name, w));
 
     // Expose the child's declared `provide` names as flat parent scalars — but ONLY when the
     // parent wiring was honored (paramsOk). On a broken override the child sized with the wrong
@@ -714,10 +714,10 @@ function evalChildren(
       name: use.name,
       title: srcDoc.title,
       feasible: paramsOk && res.feasible,
-      ...(res.bind ? { bind: res.bind } : {}),
+      ...(res.sizing ? { sizing: res.sizing } : {}),
       provides,
-      rules: res.rules,
-      ...(res.children ? { children: res.children } : {}),
+      checks: res.checks,
+      ...(res.blocks ? { blocks: res.blocks } : {}),
       ...(res.held ? { held: res.held } : {}),
     });
   }
@@ -758,7 +758,7 @@ function checkWiring(doc: SheetDoc, res: SheetResult): SheetResult {
   const uses = Array.isArray(doc.blocks) ? doc.blocks : [];
   const out: QAWarning[] = [];
   const scope = scalarScope(res.values);
-  const sized = new Map((res.children ?? []).map((c) => [c.name, c.bind]));
+  const sized = new Map((res.blocks ?? []).map((c) => [c.name, c.sizing]));
   for (const use of uses) {
     // Read as `unknown`: a persisted doc reaches evaluation unverified, and the shape checks
     // below are the same ones validate.ts reports on — stated here in the types, not assumed.
@@ -774,8 +774,8 @@ function checkWiring(doc: SheetDoc, res: SheetResult): SheetResult {
     // check against, and the reason is already reported. A second line advising a fix to the
     // wiring would be noise stacked on the finding, and worse, advice about the wrong thing. The
     // prefix match is what makes that true for a child's INTERNAL errors: they roll up to this
-    // use under its path (`<use>.bind`, `<use>.<inner>`), not under the bare use name. That
-    // path spelling is a contract with ONE owner — prefixUseWarning (types.ts) — so this match
+    // use under its path (`<use>.givens`, `<use>.<inner>`), not under the bare use name. That
+    // path spelling is a contract with ONE owner — prefixBlockWarning (types.ts) — so this match
     // moves if and only if that function does.
     if (
       res.warnings.some(
@@ -897,7 +897,7 @@ function evaluateOnce(
   // 6. Overall feasibility, fail-closed: a declared bind sized successfully, every HARD rule
   //    (invariant = physical floor, requirement = application spec) holds (pass or near-miss),
   //    EVERY child is feasible, and nothing errored. Guardrails are advisory and excluded.
-  const hard = rules.filter((r) => isHardRule(r.kind));
+  const hard = rules.filter((r) => isHardCheck(r.kind));
   const feasible =
     // A bound sheet needs the sizing to have succeeded AND the sizer's own verdict
     // (gm/ID ≤ the data ceiling) to hold — today the sizer throws past the ceiling, so
@@ -909,11 +909,11 @@ function evaluateOnce(
 
   return {
     values,
-    bind,
-    rules,
+    sizing: bind,
+    checks: rules,
     feasible,
     warnings,
-    ...(children ? { children } : {}),
+    ...(children ? { blocks: children } : {}),
   };
 }
 
@@ -979,9 +979,9 @@ interface SolveBudget {
  * blame landing by document order.
  */
 function tornSheets(doc: SheetDoc, depth = 0): number {
-  if (depth >= MAX_USE_DEPTH) return 0;
+  if (depth >= MAX_BLOCK_DEPTH) return 0;
   // Each pinned param runs a solver too (bisection probes are passes), one per pin.
-  let n = (doc.params.some(torn) ? 1 : 0) + doc.params.filter(pinned).length;
+  let n = (doc.params.some(torn) ? 1 : 0) + doc.params.filter(constrained).length;
   for (const u of doc.blocks ?? []) if (u.doc) n += tornSheets(u.doc, depth + 1);
   return n;
 }
@@ -1246,8 +1246,8 @@ export function evaluateSheet(
 
 /** How many params the tree pins — each one a bisection of its own. */
 function pinCount(doc: SheetDoc, depth = 0): number {
-  if (depth >= MAX_USE_DEPTH) return 0;
-  let n = doc.params.filter(pinned).length;
+  if (depth >= MAX_BLOCK_DEPTH) return 0;
+  let n = doc.params.filter(constrained).length;
   for (const u of doc.blocks ?? []) if (u.doc) n += pinCount(u.doc, depth + 1);
   return n;
 }
@@ -1267,7 +1267,7 @@ function evaluateTop(
 ): SheetResult {
   const res = evaluateNode(doc, table, resolveDevice, 0);
   if (pinCount(doc) < 2) return res;
-  const plan = pinPlan(doc);
+  const plan = constraintPlan(doc);
   // A pair on the top level itself was already refused, in these words, where it would have
   // been solved.
   return 'problem' in plan && !res.warnings.some((w) => w.message === plan.problem)
@@ -1335,21 +1335,21 @@ function solveNode(
   budget: SolveBudget,
 ): SheetResult {
   // One home for the structural pin checks (validateSheet raises the same words as errors);
-  // checked BEFORE filtering by the pinned() shape guard, because the guard rejects a
+  // checked BEFORE filtering by the constrained() shape guard, because the guard rejects a
   // half-written pin — which would otherwise sail past as "no pins" and freeze the param.
-  const problem = pinProblem(doc.params);
+  const problem = constraintProblem(doc.params);
   if (problem) {
     return solveFailed(solveTorn(doc, table, resolveDevice, _depth, budget), problem);
   }
-  const pins = doc.params.filter(pinned);
+  const pins = doc.params.filter(constrained);
   if (pins.length === 0) return solveTorn(doc, table, resolveDevice, _depth, budget);
 
   // Several pins at one level are solved one at a time, each after the pins its relation reads
-  // and with those held at the values they landed on. pinPlan proves that order exists; when it
+  // and with those held at the values they landed on. constraintPlan proves that order exists; when it
   // does not, the pins form a coupled system and nothing is solved.
   let order = pins;
   if (pins.length > 1) {
-    const plan = pinPlan(doc);
+    const plan = constraintPlan(doc);
     if ('problem' in plan)
       return solveFailed(solveTorn(doc, table, resolveDevice, _depth, budget), plan.problem);
     const rank = new Map(plan.order.map((name, at) => [name, at]));
@@ -1518,18 +1518,18 @@ function evaluateWithEdges(
   const base = evaluateTop(doc, table, resolveDevice);
   const edges = doc.operatingRange ?? [];
   if (!stands(base)) {
-    const reports = edges.map((e): SheetEdgeReport => ({
+    const reports = edges.map((e): RangeEndReport => ({
       name: e.name,
       state: 'not-run',
       // No `set`: the overrides resolve against the base VALUES, which here are wherever the
       // failed solve stopped. Reporting the point that would have been asked about from those
       // is reporting a phantom, the same reason a bracket end is never reported as a landing.
       set: {},
-      rules: [],
+      checks: [],
       solved: {},
       warnings: [],
     }));
-    return { ...base, edges: reports };
+    return { ...base, rangeEnds: reports };
   }
   // A design resting on an assumed voltage has no answer at a range end: holding a typed guess
   // fixed while the range moves around it measures the guess. Asked, and declined with the
@@ -1537,20 +1537,20 @@ function evaluateWithEdges(
   const assumed = dcInputs(doc).assumed;
   if (assumed.length) {
     const error = assumedLevelRefusal(assumed);
-    const reports = edges.map((e): SheetEdgeReport => ({
+    const reports = edges.map((e): RangeEndReport => ({
       name: e.name,
       state: 'no-answer',
       set: {},
-      rules: [],
+      checks: [],
       solved: {},
       warnings: [],
       error,
     }));
-    return { ...base, edges: reports, complies: false };
+    return { ...base, rangeEnds: reports, complies: false };
   }
-  const pinned = pinHardware(doc, base);
+  const pinned = holdHardware(doc, base);
   const reports = edges.map((e) => runEdge(e, pinned, base, table, resolveDevice));
-  return { ...base, edges: reports, complies: reports.every((r) => r.state === 'complies') };
+  return { ...base, rangeEnds: reports, complies: reports.every((r) => r.state === 'complies') };
 }
 
 /**
@@ -1567,7 +1567,7 @@ function evaluateWithEdges(
  * An `error` means the run's rule outcomes are not findings about this point.
  */
 export function heldOutcome(res: SheetResult): {
-  state: Exclude<SheetEdgeState, 'not-run'>;
+  state: Exclude<PointState, 'not-run'>;
   error?: string;
 } {
   // The SOLVER's own message when one exists — a child's solve failure rolls up mid-evaluation
@@ -1622,21 +1622,21 @@ export function heldOutcome(res: SheetResult): {
 
 /** One range end: resolve its `set` expressions against the base result, re-evaluate the
  *  FIXED-HARDWARE form of the doc with those values (through evaluateNode, so the run cannot
- *  recurse into range ends), and classify the outcome (see SheetEdgeReport.state):
+ *  recurse into range ends), and classify the outcome (see RangeEndReport.state):
  *
- *  - every hard rule holds: `complies`. One fails: `does-not-comply`, the failures in `rules`.
+ *  - every hard rule holds: `complies`. One fails: `does-not-comply`, the failures in `checks`.
  *  - a device held at its width cannot carry its current here: `does-not-comply`, with `error`.
  *  - the run could not be completed — a `set` that does not resolve, a solve that does not
  *    land — or it completed on data read off the table's hull: `no-answer`, the underlying
  *    message VERBATIM in `error`, so a shared-budget starvation stays distinguishable from
  *    "the bracket cannot reach it". */
 function runEdge(
-  edge: SheetEdge,
-  pinned: PinnedHardware,
+  edge: SheetRangeEnd,
+  pinned: HeldHardware,
   base: SheetResult,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
-): SheetEdgeReport {
+): RangeEndReport {
   // Copied per report rather than shared: the transformation allocates one list for the whole
   // document, and a consumer that sorted or de-duplicated one report's copy in place would be
   // rewriting every sibling's at the same time.
@@ -1646,11 +1646,11 @@ function runEdge(
   const scope = scalarScope(base.values);
   const over: Record<string, number> = {};
   /** Asked, and nothing was evaluated that could answer. */
-  const unanswered = (error: string): SheetEdgeReport => ({
+  const unanswered = (error: string): RangeEndReport => ({
     name: edge.name,
     state: 'no-answer',
     set: over,
-    rules: [],
+    checks: [],
     solved: {},
     warnings: [],
     error,
@@ -1688,8 +1688,8 @@ function runEdge(
     name: edge.name,
     state,
     set: over,
-    rules: res.rules,
-    ...(res.children ? { children: res.children } : {}),
+    checks: res.checks,
+    ...(res.blocks ? { blocks: res.blocks } : {}),
     solved,
     warnings: res.warnings,
     ...(err !== undefined ? { error: err } : {}),

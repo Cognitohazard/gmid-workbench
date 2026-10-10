@@ -169,7 +169,7 @@ const sheet = {
 };
 
 const out = runSheet(sheet, table);
-console.log(out.feasible, out.values.W, out.rules);
+console.log(out.feasible, out.values.W, out.checks);
 
 // Trace the gm_id knob across its [min, max] to map the feasibility region.
 const sweep = sweepSheet(sheet, 'gm_id', table);

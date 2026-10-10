@@ -25,9 +25,9 @@ import { runSheet, validateSheet, WIRING_TOL } from './index';
 import { resolveSheetRefs } from './resolve';
 import {
   docExpressions,
-  isHardRule,
-  type BindReport,
-  type SheetChildReport,
+  isHardCheck,
+  type SizingReport,
+  type SheetBlockReport,
   type SheetDoc,
   type SheetResult,
 } from './types';
@@ -53,7 +53,7 @@ import {
 import { searchable } from '../picker';
 // Test-only reach across to the condition runs: holding one sized design at a second
 // characterization is that module's transition, and one exemplar golden below asks it of a sheet.
-import { groupFamilies, runVariants } from '../corners';
+import { groupDevices, runConditions } from '../corners';
 
 const LIBRARY = loadLibrary();
 
@@ -72,13 +72,13 @@ const EVALUATED = LIBRARY.map(({ file, doc }) => {
 
 function hardNaRules(res: SheetResult): string[] {
   const out: string[] = [];
-  for (const r of res.rules) if (isHardRule(r.kind) && r.status === 'na') out.push(r.id);
-  const walk = (c: SheetChildReport, path: string): void => {
-    for (const r of c.rules)
-      if (isHardRule(r.kind) && r.status === 'na') out.push(`${path}.${r.id}`);
-    for (const cc of c.children ?? []) walk(cc, `${path}.${cc.name}`);
+  for (const r of res.checks) if (isHardCheck(r.kind) && r.status === 'na') out.push(r.id);
+  const walk = (c: SheetBlockReport, path: string): void => {
+    for (const r of c.checks)
+      if (isHardCheck(r.kind) && r.status === 'na') out.push(`${path}.${r.id}`);
+    for (const cc of c.blocks ?? []) walk(cc, `${path}.${cc.name}`);
   };
-  for (const c of res.children ?? []) walk(c, c.name);
+  for (const c of res.blocks ?? []) walk(c, c.name);
   return out;
 }
 
@@ -103,7 +103,7 @@ describe('sheet library: generic contract', () => {
         const r = res!;
         expect(r.warnings.filter((w) => w.severity === 'error')).toEqual([]);
         if (doc.givens) {
-          expect(r.bind?.ok, r.bind?.error).toBe(true);
+          expect(r.sizing?.ok, r.sizing?.error).toBe(true);
         }
         expect(hardNaRules(r)).toEqual([]);
       });
@@ -191,12 +191,12 @@ describe('sheet library: vetting lints', () => {
     ];
     for (const [file, gates] of cases) {
       const res = runSheet(sheet(file), table, undefined, REFS);
-      const end = res.edges?.find((e) => e.name === 'cm-lo');
+      const end = res.rangeEnds?.find((e) => e.name === 'cm-lo');
       expect(Object.keys(end?.solved ?? {}).sort()).toEqual(
         [...Object.keys(gates), 'V_tail'].sort(),
       );
       for (const [node, [device, sign]] of Object.entries(gates)) {
-        const vgs = Math.abs(end!.children!.find((c) => c.name === device)!.bind!.vgs);
+        const vgs = Math.abs(end!.blocks!.find((c) => c.name === device)!.sizing!.vgs);
         expect(end!.solved[node] + sign * vgs).toBeCloseTo(res.held![node], 5);
       }
     }
@@ -230,7 +230,7 @@ describe('sheet library: vetting lints', () => {
       const res = runSheet(doc, withBody, undefined, REFS);
       for (const [node, device] of Object.entries(HELD_UNDER[file])) {
         const use = doc.blocks?.find((u) => u.name === device);
-        const bind = device ? res.children?.find((c) => c.name === device)?.bind : res.bind;
+        const bind = device ? res.blocks?.find((c) => c.name === device)?.sizing : res.sizing;
         const pType = (use?.doc ?? doc).polarity === 'p';
         const vsb = bind!.bias!.vsb;
         const vgs = Math.abs(bind!.vgs);
@@ -417,10 +417,10 @@ describe('exemplar goldens: CS amp, current-source load', () => {
   const gm = 2 * Math.PI * 10e6 * 2e-12 * 1.25;
 
   it('binds the input device exactly from the spec', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.id, gm / 12)).toBeLessThan(1e-9);
-    expect(res.bind?.bias?.vds).toBe(0.9);
+    expect(res.sizing?.bias?.vds).toBe(0.9);
     // The supply-current line is that same derived branch current: on a sheet bound from a
     // bandwidth spec, what it costs to run is an OUTPUT of the sizing rather than a knob.
     expect(relErr(res.values.I_q, gm / 12)).toBeLessThan(1e-9);
@@ -460,7 +460,7 @@ describe('exemplar goldens: simple current mirror', () => {
   // needs no bias default — it is diode-connected, so the table's vds = vgs diagonal fixes it.
 
   it('sizes the output device at exactly K times the reference width', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W / res.values.ref__W, 4)).toBeLessThan(1e-9);
   });
 
@@ -517,8 +517,8 @@ describe('exemplar goldens: 5T OTA', () => {
   const L = 0.5e-6;
   const va = VA_PER_L * L;
   /** One block's sizing report, by block name. */
-  const block = (r: SheetResult, name: string): BindReport =>
-    r.children!.find((c) => c.name === name)!.bind!;
+  const block = (r: SheetResult, name: string): SizingReport =>
+    r.blocks!.find((c) => c.name === name)!.sizing!;
 
   // Only the reference's current is typed; every other one is what the demo model gives a device
   // of that width on that gate. There id ∝ (VA + vds) at fixed vgs and W, so a 1:1 mirror
@@ -640,7 +640,7 @@ describe('exemplar goldens: 5T OTA', () => {
 
   it('the common-mode rules close at defaults', () => {
     for (const id of ['tail-saturated', 'cm-not-below', 'cm-not-above']) {
-      const r = res.rules.find((x) => x.id === id);
+      const r = res.checks.find((x) => x.id === id);
       expect(r?.status === 'pass' || r?.status === 'amber', id).toBe(true);
     }
   });
@@ -651,8 +651,8 @@ describe('exemplar goldens: 5T OTA', () => {
     // The landed nodes must bracket the base solve (CM_in is monotone in V_tail), and the
     // linearized reach guardrails the edges replaced must stay gone. Whether the demo device
     // COVERS those ends is deliberately not asserted — budgets are tuned for real tables.
-    expect(res.edges?.map((e) => e.name)).toEqual(['cm-lo', 'cm-hi']);
-    const [lo, hi] = res.edges!;
+    expect(res.rangeEnds?.map((e) => e.name)).toEqual(['cm-lo', 'cm-hi']);
+    const [lo, hi] = res.rangeEnds!;
     expect(lo.solved.V_tail).toBeLessThan(res.values.V_tail);
     expect(hi.solved.V_tail).toBeGreaterThan(res.values.V_tail);
     const ids = doc.checks.map((r) => r.id);
@@ -687,9 +687,9 @@ describe('exemplar goldens: 5T OTA', () => {
       id: { ...t.id, corner, temp },
     });
     const weak = scaleQuantities(table, { id: 0.5, gm: 0.5 });
-    const [family] = groupFamilies([at(table, 'tt', 27), at(weak, 'ss', -40)]);
+    const [family] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
     const tt = { corner: 'tt', temp: 27 };
-    const [sized, held] = runVariants(
+    const [sized, held] = runConditions(
       doc,
       family,
       [tt, { corner: 'ss', temp: -40 }],
@@ -767,7 +767,7 @@ describe('what the gate-wiring check reports on the library at its shipped defau
     // 9 mV at the 0.9 V default, under the 10 mV wiring tolerance on BOTH sides. A '==' margin
     // is (tolPct/100)*|rhs| - |lhs - rhs|, so each is 0.009 V less the residual above.
     const rule = (id: string): { status: string; margin: number } =>
-      res.rules.find((r) => r.id === id) as { status: string; margin: number };
+      res.checks.find((r) => r.id === id) as { status: string; margin: number };
     expect(rule('input-consistent-n').status).toBe('fail');
     expect(rule('input-consistent-p').status).toBe('fail');
     expect(relErr(rule('input-consistent-n').margin, 0.009 - (0.9 - VGS_GMID12_L05))).toBeLessThan(

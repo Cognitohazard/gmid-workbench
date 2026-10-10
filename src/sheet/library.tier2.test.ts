@@ -37,7 +37,7 @@ describe('tier-2 goldens: cascode current mirror', () => {
   // Defaults: I_in 20 µA, K = 4, gm/ID 8, L = 1 µm, both mirror devices at vds = 0.7 V.
 
   it('sizes the output device at exactly K times the reference width', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W / res.values.ref__W, 4)).toBeLessThan(1e-9);
   });
 
@@ -102,7 +102,7 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
   });
 
   it('sizes the output device at exactly K times the reference width', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W / res.values.ref__W, 4)).toBeLessThan(1e-9);
   });
 
@@ -165,7 +165,7 @@ describe('tier-2 goldens: degenerated current mirror', () => {
   });
 
   it('binds the output device width-first at K times the reference width', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W / res.values.ref__W, 1)).toBeLessThan(1e-9);
   });
 
@@ -182,7 +182,7 @@ describe('tier-2 goldens: Widlar current source', () => {
   // Defaults: I_in 20 µA, I_out 5 µA, R_s 10 kΩ, M_ratio 1, L = 1 µm.
 
   it('binds the output device exactly at the chosen output current', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.id, 5e-6)).toBeLessThan(1e-9);
   });
 
@@ -218,7 +218,7 @@ describe('tier-2 goldens: beta-multiplier bias', () => {
   });
 
   it('sizes the resistor-side device at K_bm times the diode-device width', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W / res.values.m1__W, 4)).toBeLessThan(1e-9);
   });
 
@@ -233,7 +233,7 @@ describe('tier-2 goldens: matched mirror bank', () => {
   // output rail at 0.9 V. VA = 5 V.
 
   it('sizes the bank at exactly N_legs unit widths', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W / res.values.unit__W, 8)).toBeLessThan(1e-9);
   });
 

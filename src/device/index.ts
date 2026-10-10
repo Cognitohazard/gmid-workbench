@@ -120,7 +120,7 @@ export const BINDABLE = [...OP_SELECTORS, ...EXTENSIVE] as const;
  * The bind rule, in one place: EXACTLY two bound quantities, at most one of them an
  * operating-point selector. Returns null for a legal bind, else the problem in the
  * words every caller reports (sizeDevice throws it; the sheet's eval and validate
- * surface it as a sheet-bind error), so the three can never describe it differently.
+ * surface it as a sheet-givens error), so the three can never describe it differently.
  */
 export function bindProblem(supplied: readonly (typeof BINDABLE)[number][]): string | null {
   if (supplied.length !== 2) {

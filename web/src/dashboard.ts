@@ -7,35 +7,35 @@ import {
   metaScalars,
   fixTable,
   EXAMPLES,
-  MAX_USE_DEPTH,
-  BIND_KEYS,
-  BIND_FLAGS,
+  MAX_BLOCK_DEPTH,
+  GIVENS_KEYS,
+  GIVENS_FLAGS,
   DOC_KEYS,
   VAR_KEYS,
   inCurrentKeys,
-  ROW_KEYS,
-  RULE_KEYS,
-  USE_KEYS,
-  EDGE_KEYS,
+  EQUATION_KEYS,
+  CHECK_KEYS,
+  BLOCK_KEYS,
+  RANGE_END_KEYS,
   WIRING_KEYS,
-  RULE_KINDS,
-  RULE_OPS,
+  CHECK_KINDS,
+  CHECK_OPS,
   PARAM_CLASSES,
   type ParamClass,
   type DeviceTable,
   type SheetDoc,
   type SheetVar,
-  type SheetRow,
-  type SheetRule,
-  type SheetBind,
-  type SheetUse,
+  type SheetEquation,
+  type SheetCheck,
+  type SheetGivens,
+  type SheetBlock,
   type SheetWiring,
-  type SheetEdge,
-  variantKeyId,
-  variantKeyOf,
-  type RuleKind,
-  type RuleOp,
-  type VariantKey,
+  type SheetRangeEnd,
+  conditionKeyId,
+  conditionKeyOf,
+  type CheckKind,
+  type CheckOp,
+  type ConditionKey,
 } from '@gmid/mostab-core';
 
 // Canonical axis names the core's import seam guarantees (the `axis: true` base
@@ -205,17 +205,17 @@ const CORNER_MODES: readonly SheetCornerMode[] = ['nominal', 'active', 'chosen',
 /** Coerce an untrusted persisted list of conditions (a panel's chosen set). Keys are stored
  *  structured, never as a joined string, and re-canonicalized on the way in so a hand-edited
  *  `TT` still selects the condition `tt` names. */
-export function sanitizeVariantKeys(v: unknown): VariantKey[] {
+export function sanitizeConditionKeys(v: unknown): ConditionKey[] {
   if (!Array.isArray(v)) return [];
-  const out: VariantKey[] = [];
+  const out: ConditionKey[] = [];
   const seen = new Set<string>();
   for (const raw of v) {
     if (!raw || typeof raw !== 'object') continue;
     const o = raw as Record<string, unknown>;
     if (typeof o.corner !== 'string' || typeof o.temp !== 'number' || !Number.isFinite(o.temp))
       continue;
-    const key = variantKeyOf({ device: '', corner: o.corner, temp: o.temp });
-    const id = variantKeyId(key);
+    const key = conditionKeyOf({ device: '', corner: o.corner, temp: o.temp });
+    const id = conditionKeyId(key);
     if (seen.has(id)) continue;
     seen.add(id);
     out.push(key);
@@ -239,7 +239,7 @@ export interface Panel {
   // into `sheet`: the document describes the design, while which corners are loaded and which
   // of them a panel asks about is a property of this bench. Absent ⇒ 'nominal'.
   sheetCornerMode?: SheetCornerMode;
-  sheetCornerKeys?: VariantKey[]; // mode 'chosen': the conditions selected, structured
+  sheetCornerKeys?: ConditionKey[]; // mode 'chosen': the conditions selected, structured
   auto?: boolean; // an auto-generated canonical panel — regenerated per device on a swap, not
   // user-authored; absent on every panel the user adds, so user work survives a device swap.
 }
@@ -323,11 +323,11 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  */
 export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc | undefined {
   if (!v || typeof v !== 'object') return undefined;
-  // Depth backstop: the evaluator/validator error out past MAX_USE_DEPTH, but they can
+  // Depth backstop: the evaluator/validator error out past MAX_BLOCK_DEPTH, but they can
   // only do so if loading the doc didn't blow the stack first. One level beyond the cap
   // is kept so the validator still sees a non-empty `uses` at the cap and raises its
   // depth error rather than the truncation reading as a shallower (silently valid) tree.
-  if (depth > MAX_USE_DEPTH + 1) return undefined;
+  if (depth > MAX_BLOCK_DEPTH + 1) return undefined;
   // Earlier spellings of the keys are brought up to the current ones FIRST, before anything
   // below counts an unknown key or a lost piece — an older document must load, not be refused
   // key by key. A key written in both spellings is ambiguous, so that document is refused.
@@ -427,14 +427,14 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  const rows: SheetRow[] = Array.isArray(o.equations)
+  const rows: SheetEquation[] = Array.isArray(o.equations)
     ? o.equations.flatMap((r, i) => {
         if (!r || typeof r !== 'object') return drop(`equations[${i}]`);
         const rr = r as Record<string, unknown>;
         if (typeof rr.name !== 'string' || typeof rr.expr !== 'string')
           return drop(`equations[${i}]`);
-        unknownKeys(rr, ROW_KEYS, `equations[${i}].`);
-        const out: SheetRow = { name: rr.name, expr: rr.expr };
+        unknownKeys(rr, EQUATION_KEYS, `equations[${i}].`);
+        const out: SheetEquation = { name: rr.name, expr: rr.expr };
         if (typeof rr.unit === 'string') out.unit = rr.unit;
         else dropField(rr.unit !== undefined, `equations[${i}].unit`);
         if (typeof rr.note === 'string') out.note = rr.note;
@@ -443,20 +443,20 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  const rules: SheetRule[] = Array.isArray(o.checks)
+  const rules: SheetCheck[] = Array.isArray(o.checks)
     ? o.checks.flatMap((r, i) => {
         if (!r || typeof r !== 'object') return drop(`checks[${i}]`);
         const rr = r as Record<string, unknown>;
         if (typeof rr.lhs !== 'string' || typeof rr.rhs !== 'string') return drop(`checks[${i}]`);
-        if (!RULE_OPS.has(rr.op as string) || !RULE_KINDS.has(rr.kind as string))
+        if (!CHECK_OPS.has(rr.op as string) || !CHECK_KINDS.has(rr.kind as string))
           return drop(`checks[${i}]`);
-        unknownKeys(rr, RULE_KEYS, `checks[${i}].`);
+        unknownKeys(rr, CHECK_KEYS, `checks[${i}].`);
         dropField(rr.id !== undefined && !(typeof rr.id === 'string' && rr.id), `checks[${i}].id`);
-        const out: SheetRule = {
+        const out: SheetCheck = {
           id: str(rr.id, uid()),
-          kind: rr.kind as RuleKind,
+          kind: rr.kind as CheckKind,
           lhs: rr.lhs,
-          op: rr.op as RuleOp,
+          op: rr.op as CheckOp,
           rhs: rr.rhs,
         };
         if (finite(rr.tolPct)) out.tolPct = rr.tolPct;
@@ -472,13 +472,13 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // A bind with the wrong arity is kept, NOT dropped: validateSheet raises a visible
   // "exactly two" error the author can fix, whereas dropping it here would silently turn a
   // mis-authored sized sheet into an unsized one.
-  let bind: SheetBind | undefined;
+  let bind: SheetGivens | undefined;
   if (o.givens && typeof o.givens === 'object') {
     const b = o.givens as Record<string, unknown>;
     if (typeof b.L === 'string') {
-      const cand: SheetBind = { L: b.L };
-      // Members are written through an index view: SheetBind mixes expression strings with a
-      // boolean flag, so assigning by `keyof SheetBind` narrows the value type to never.
+      const cand: SheetGivens = { L: b.L };
+      // Members are written through an index view: SheetGivens mixes expression strings with a
+      // boolean flag, so assigning by `keyof SheetGivens` narrows the value type to never.
       const into = cand as unknown as Record<string, unknown>;
       // Walk what the document actually carries, checking each key against the core's own
       // lists rather than a copy of them: a hand-maintained whitelist here silently deleted
@@ -488,10 +488,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       // instead of quietly rewriting the design.
       for (const k of Object.keys(b)) {
         if (k === 'L') continue;
-        if (BIND_KEYS.has(k) && typeof b[k] === 'string') into[k] = b[k];
+        if (GIVENS_KEYS.has(k) && typeof b[k] === 'string') into[k] = b[k];
         // A flag (the diode connection) is a boolean, and would fail the string test above —
         // which would delete the connection and leave the device unbiased on every reload.
-        else if (BIND_FLAGS.has(k) && typeof b[k] === 'boolean') into[k] = b[k];
+        else if (GIVENS_FLAGS.has(k) && typeof b[k] === 'boolean') into[k] = b[k];
         else dropField(true, `givens.${k}`);
       }
       bind = cand;
@@ -505,13 +505,13 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // that is not currently loaded simply reads infeasible until re-loaded. A by-reference child
   // (`ref` without an embedded doc) is kept as the reference — resolution happens at evaluation,
   // and a ref that no longer resolves reads infeasible rather than being dropped.
-  const uses: SheetUse[] = Array.isArray(o.blocks)
+  const uses: SheetBlock[] = Array.isArray(o.blocks)
     ? o.blocks.flatMap((u, i) => {
         if (!u || typeof u !== 'object') return drop(`blocks[${i}]`);
         const uu = u as Record<string, unknown>;
         if (typeof uu.name !== 'string' || !uu.name) return drop(`blocks[${i}]`);
         // The use ITSELF only; `params` maps author-chosen param names, which no key set knows.
-        unknownKeys(uu, USE_KEYS, `blocks[${i}].`);
+        unknownKeys(uu, BLOCK_KEYS, `blocks[${i}].`);
         const childLost: string[] = [];
         const childDoc = sanitizeSheet(uu.doc, depth + 1, childLost);
         // A child refused outright keeps its reason (a key in two spellings) beside its path.
@@ -525,7 +525,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         const ref = typeof uu.ref === 'string' ? uu.ref : undefined;
         dropField(uu.ref !== undefined && ref === undefined, `blocks[${i}].ref`);
         if (!childDoc && ref === undefined) return uu.doc !== undefined ? [] : drop(`blocks[${i}]`);
-        const use: SheetUse = { name: uu.name };
+        const use: SheetBlock = { name: uu.name };
         if (childDoc) use.doc = childDoc;
         if (ref !== undefined) use.ref = ref;
         // A malformed device binding must be REPORTED, not silently inherited from
@@ -575,15 +575,15 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // dropped: validateSheet owns that verdict ("sets nothing", blocking feasibility), and
   // eating it here would let the sheet reload MORE feasible than the core reads it — the
   // exact hole the empty-ref rule above refuses.
-  const edges: SheetEdge[] = Array.isArray(o.operatingRange)
+  const edges: SheetRangeEnd[] = Array.isArray(o.operatingRange)
     ? o.operatingRange.flatMap((e, i) => {
         if (!e || typeof e !== 'object') return drop(`operatingRange[${i}]`);
         const ee = e as Record<string, unknown>;
         if (typeof ee.name !== 'string' || !ee.name) return drop(`operatingRange[${i}]`);
-        unknownKeys(ee, EDGE_KEYS, `operatingRange[${i}].`);
+        unknownKeys(ee, RANGE_END_KEYS, `operatingRange[${i}].`);
         if (!ee.set || typeof ee.set !== 'object' || Array.isArray(ee.set))
           return drop(`operatingRange[${i}]`);
-        const out: SheetEdge = {
+        const out: SheetRangeEnd = {
           name: ee.name,
           set: strMap(ee.set as Record<string, unknown>, `operatingRange[${i}].set`),
         };
@@ -692,7 +692,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       // A chosen condition is kept even when nothing loaded answers to it: the panel renders it
       // as its own not-evaluated row, which is the honest state — pruning it here would quietly
       // narrow the question the panel is asking.
-      const cornerKeys = render === 'sheet' ? sanitizeVariantKeys(pp.sheetCornerKeys) : [];
+      const cornerKeys = render === 'sheet' ? sanitizeConditionKeys(pp.sheetCornerKeys) : [];
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,

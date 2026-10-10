@@ -13,7 +13,7 @@ import {
 } from './resolve';
 import { runSheet, sweepSheet, sweepSheet2 } from './index';
 import { validateSheet } from './validate';
-import { MAX_USE_DEPTH, type SheetDoc, type SheetUse } from './types';
+import { MAX_BLOCK_DEPTH, type SheetDoc, type SheetBlock } from './types';
 
 /** A bind-less leaf: y = 2·x, provided upward, with one hard rule on y. */
 const LEAF: SheetDoc = {
@@ -25,7 +25,7 @@ const LEAF: SheetDoc = {
   provides: ['y'],
 };
 
-const parent = (use: Partial<SheetUse>): SheetDoc => ({
+const parent = (use: Partial<SheetBlock>): SheetDoc => ({
   title: 'Parent',
   polarity: 'n',
   params: [{ name: 'x_top', value: 3, min: 1, max: 5 }],
@@ -121,7 +121,7 @@ describe('resolveSheetRefs', () => {
 
     const res = runSheet(parent({ ref: 'blocks/nope' }), undefined, undefined, INDEX);
     expect(res.feasible).toBe(false);
-    expect(res.children?.[0].feasible).toBe(false);
+    expect(res.blocks?.[0].feasible).toBe(false);
   });
 
   it('an ambiguous ref names every qualified candidate', () => {
@@ -155,7 +155,7 @@ describe('resolveSheetRefs', () => {
 
   it('caps a non-cyclic reference chain at MAX_USE_DEPTH', () => {
     // chain-0 uses chain-1 uses chain-2 … — distinct docs, no cycle, just deep.
-    const n = MAX_USE_DEPTH + 2;
+    const n = MAX_BLOCK_DEPTH + 2;
     const entries = Array.from({ length: n }, (_, i) => ({
       path: `x/chain-${i}`,
       doc: {
@@ -166,7 +166,7 @@ describe('resolveSheetRefs', () => {
     }));
     const idx = buildSheetRefIndex(entries);
     const r = resolveSheetRefs(parent({ ref: 'x/chain-0' }), idx);
-    expect(r.warnings.some((w) => w.message.includes(`deeper than ${MAX_USE_DEPTH}`))).toBe(true);
+    expect(r.warnings.some((w) => w.message.includes(`deeper than ${MAX_BLOCK_DEPTH}`))).toBe(true);
   });
 
   it('leaves an embedded doc alone even when a ref sits beside it', () => {
@@ -180,7 +180,7 @@ describe('resolveSheetRefs', () => {
     // Each level's 20 uses all reference the next sheet: ~20^7 nodes if unbounded.
     // Duplicate use names are irrelevant here — resolution happens before eval's checks.
     const WIDTH = 20;
-    const levels = MAX_USE_DEPTH;
+    const levels = MAX_BLOCK_DEPTH;
     const entries = Array.from({ length: levels }, (_, i) => ({
       path: `x/fan-${i}`,
       doc: {
@@ -218,12 +218,12 @@ describe('ref’d children under evaluation', () => {
 
   it('a ref’d child’s hard rules ride a sweep with path-prefixed ids', () => {
     const sw = sweepSheet(parent({ ref: 'blocks/leaf' }), 'x_top', undefined, 5, undefined, INDEX);
-    expect(sw.rules.map((r) => r.id)).toContain('c.r1');
+    expect(sw.checks.map((r) => r.id)).toContain('c.r1');
     expect(sw.feasible.every(Boolean)).toBe(true);
   });
 
   it('refs resolve once for a 2-D sweep, and an unresolvable ref blocks every cell', () => {
-    const twoParams = (use: Partial<SheetUse>): SheetDoc => ({
+    const twoParams = (use: Partial<SheetBlock>): SheetDoc => ({
       ...parent(use),
       params: [
         { name: 'x_top', value: 3, min: 1, max: 5 },

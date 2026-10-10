@@ -11,21 +11,21 @@
 import type { DeviceTable } from '../types';
 import {
   choiceKnobs,
-  EDGE_SEP,
-  edgeBroke,
+  RANGE_END_SEP,
+  rangeEndBroke,
   engineSolved,
   stands,
   sweepable,
   treeRuleResults,
-  withoutEdges,
+  withoutRange,
   withParams,
 } from './types';
 import type {
-  RuleResult,
+  CheckResult,
   SheetDoc,
   SheetResult,
   SheetSensitivity,
-  SheetSensitivityRule,
+  SheetSensitivityCheck,
   SheetVar,
 } from './types';
 import { evaluateSheet, type DeviceResolver } from './eval';
@@ -125,7 +125,7 @@ function stepFor(p: SheetVar, absStep?: number): number | string {
  *
  * Refs are materialized and the doc validated ONCE — the tree is constant across the probes,
  * only a value moves — and the probes then go through `evaluateSheet`, the same entrypoint the
- * verdict uses. Differences are taken on RAW margins (see RuleResult.rawMargin): the snapped
+ * verdict uses. Differences are taken on RAW margins (see CheckResult.rawMargin): the snapped
  * margin reads exactly 0 for a rule parked on its own boundary, which would report zero slope
  * for a rule that is in fact moving. Relative margins are deliberately NOT differentiated —
  * their denominator is a bound that may be ~0, and the resulting ratio carries the denominator's
@@ -134,7 +134,7 @@ function stepFor(p: SheetVar, absStep?: number): number | string {
  * A central difference is used only where both probes stay strictly inside the authored
  * [min, max]; at a bound the readout switches to a second-order one-sided difference on the side
  * that fits, so a knob already at its limit still reports which way it would move things rather
- * than silently reporting nothing. Rules are keyed exactly as `bindingConstraint` names them, so
+ * than silently reporting nothing. Rules are keyed exactly as `bindingCheck` names them, so
  * a caller can hand this the id it already has.
  */
 export function sheetSensitivities(
@@ -170,7 +170,7 @@ export function sheetSensitivities(
 
   // Only a rule that lives ON an edge is worth re-checking coverage at every range end for; see
   // SensitivityOptions.rule.
-  const probeDoc = opts.rule?.includes(EDGE_SEP) ? r.doc : withoutEdges(r.doc);
+  const probeDoc = opts.rule?.includes(RANGE_END_SEP) ? r.doc : withoutRange(r.doc);
   const at = (over: Record<string, number>): SheetResult =>
     evaluateSheet(withParams(probeDoc, over), table, resolveDevice);
 
@@ -178,11 +178,11 @@ export function sheetSensitivities(
   // when the rule in question lives on one, and then THAT end leaving no outcomes is a probe
   // with nothing to difference, exactly like a base run that did not stand. Another range end
   // having no answer is no obstacle: its rules are simply not among the ones read.
-  const end = opts.rule?.includes(EDGE_SEP)
-    ? opts.rule.slice(0, opts.rule.indexOf(EDGE_SEP))
+  const end = opts.rule?.includes(RANGE_END_SEP)
+    ? opts.rule.slice(0, opts.rule.indexOf(RANGE_END_SEP))
     : undefined;
   const endBroke = (res: SheetResult): boolean =>
-    (res.edges ?? []).some((e) => e.name === end && edgeBroke(e));
+    (res.rangeEnds ?? []).some((e) => e.name === end && rangeEndBroke(e));
   const whole = (res: SheetResult): boolean => stands(res) && !endBroke(res);
   const base = at({});
   if (!stands(base)) {
@@ -237,7 +237,7 @@ export function sheetSensitivities(
     /** The raw margin of `id` at probe `i`, or NaN where that probe or that rule is absent. */
     const raw = (i: number, id: string): number => probes[i]?.get(id)?.rawMargin ?? NaN;
 
-    const rules: SheetSensitivityRule[] = [];
+    const rules: SheetSensitivityCheck[] = [];
     for (const [id, rr] of baseRules) rules.push(record(id, rr, offsets, raw));
     return {
       param: p.name,
@@ -257,10 +257,10 @@ export function sheetSensitivities(
  *  neither, so no slope is reported and the two one-sided deltas stand alone. */
 function record(
   id: string,
-  rr: RuleResult,
+  rr: CheckResult,
   [step, far]: [number, number],
   raw: (i: number, id: string) => number,
-): SheetSensitivityRule {
+): SheetSensitivityCheck {
   const central = far === -step;
   const m0 = rr.rawMargin;
   const m1 = raw(0, id);

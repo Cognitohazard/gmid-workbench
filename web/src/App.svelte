@@ -7,14 +7,14 @@
     formatEng,
     formatSI,
     validate,
-    validateFamilies,
-    validateFamily,
-    variantLabel,
+    validateDevices,
+    validateDeviceConditions,
+    conditionLabel,
     EXAMPLES,
     DERIVED_QUANTITIES,
     cloneDoc,
     withParams,
-    type CornerFamily,
+    type CharacterizedDevice,
     type QAWarning,
     type DeviceTable,
     type Grid,
@@ -52,11 +52,11 @@
   } from './dashboard';
   import { clearTables, deleteTable, loadTables, putTable, saneTable } from './devstore';
   import {
-    benchFamilies,
-    familyLabel,
-    familyOptions,
-    familyResolver,
-    familyRevision,
+    benchDevices,
+    deviceLabel,
+    deviceOptions,
+    deviceLookup,
+    deviceRevision,
     migrateNominals,
     parseRegistry,
     provenanceOf,
@@ -121,7 +121,7 @@
   // designations, which is the whole migration — a bench that designated nothing has nothing
   // to carry over, and the first save writes the versioned shape.
   const bootReg = loadJSON(REG_KEY, parseRegistry, () => null);
-  // familyUid → the table uid the bench designates as that family's nominal condition. Seeded
+  // deviceUid → the table uid the bench designates as that family's nominal condition. Seeded
   // from the registry before the first save effect can run, so a restore never writes an empty
   // set over the stored designations.
   let nominalByFamily = $state<Record<string, string>>({ ...(bootReg?.nominalByFamily ?? {}) });
@@ -134,42 +134,42 @@
   // The previous grouping is kept so a family nothing touched comes back as the SAME object and
   // everything memoized on it survives. Plain state, not `$state`: it is written from inside the
   // derived purely as that derived's own memo, and nothing reads it as a value.
-  let lastFamilies: readonly CornerFamily[] = [];
+  let lastFamilies: readonly CharacterizedDevice[] = [];
   const families = $derived.by(() => {
-    lastFamilies = benchFamilies(
+    lastFamilies = benchDevices(
       devices.map((d) => d.table),
       nominalByFamily,
       lastFamilies,
     );
     return lastFamilies;
   });
-  const familyOf = $derived(familyResolver(families));
-  const primaryFamily = $derived(device ? familyOf(tableUid(device)) : undefined);
+  const deviceOf = $derived(deviceLookup(families));
+  const primaryDevice = $derived(device ? deviceOf(tableUid(device)) : undefined);
   // Data-trust checks that only exist once several tables claim to be one device (duplicate
   // conditions, disagreeing axes, ranges, widths, provenance). Derived, so they are recomputed
   // on every import, restore, removal and redesignation rather than stored and left to age —
   // but per FAMILY OBJECT, so the redesignation of one family does not re-walk the axis lattice
   // of every other. The cache is weak: a family that regrouped is unreachable and collectable.
-  const qaCache = new WeakMap<CornerFamily, QAWarning[]>();
-  const familyQAOf = (f: CornerFamily): QAWarning[] => {
+  const qaCache = new WeakMap<CharacterizedDevice, QAWarning[]>();
+  const deviceQAOf = (f: CharacterizedDevice): QAWarning[] => {
     const hit = qaCache.get(f);
     if (hit) return hit;
-    const qa = validateFamily(f);
+    const qa = validateDeviceConditions(f);
     qaCache.set(f, qa);
     return qa;
   };
-  const familyQA = $derived(new Map(families.map((f) => [f.familyUid, familyQAOf(f)])));
+  const deviceQA = $derived(new Map(families.map((f) => [f.deviceUid, deviceQAOf(f)])));
   // Cross-family identity warnings (a join grouping refused): bench-level, because no single
   // family can see the sibling it stayed apart from.
-  const benchQA = $derived(validateFamilies(families));
+  const benchQA = $derived(validateDevices(families));
   const bench = $derived({
-    families,
-    familyOf,
-    primary: primaryFamily,
+    devices: families,
+    deviceOf,
+    primary: primaryDevice,
     // What a composed child's device menu offers: one entry per FAMILY, because a child is bound
     // to a logical device and projected to whichever condition the run fixed.
-    options: familyOptions(families),
-    revision: familyRevision(families),
+    options: deviceOptions(families),
+    revision: deviceRevision(families),
     designate,
   });
   // Position of a table in `devices` — the strip renders families, but select/overlay/remove
@@ -604,25 +604,25 @@
   /** Designate (or, on the condition that already holds it, un-designate) a family's nominal.
    *  A designation names a TABLE, so it survives a reload and goes visibly unresolved if that
    *  table leaves — the one thing it must never do is slide to another corner unannounced. */
-  function designate(familyUid: string, uid: string): void {
-    const { [familyUid]: current, ...rest } = nominalByFamily;
-    nominalByFamily = current === uid ? rest : { ...rest, [familyUid]: uid };
+  function designate(deviceUid: string, uid: string): void {
+    const { [deviceUid]: current, ...rest } = nominalByFamily;
+    nominalByFamily = current === uid ? rest : { ...rest, [deviceUid]: uid };
   }
 
   /** The family's conditions that CAN be overlaid: every member but the active one, which is
    *  already the curve the others are drawn against. */
-  const overlayable = (f: CornerFamily): number[] =>
-    f.variants
+  const overlayable = (f: CharacterizedDevice): number[] =>
+    f.conditions
       .map((t) => indexOfUid.get(tableUid(t)) ?? -1)
       .filter((i) => i >= 0 && i !== activeIdx);
-  const familyOverlaid = (f: CornerFamily): boolean => {
+  const deviceOverlaid = (f: CharacterizedDevice): boolean => {
     const idx = overlayable(f);
     return idx.length > 0 && idx.every((i) => overlayIdx.includes(i));
   };
   /** Draw the whole corner spread of one device, or clear it. */
-  function toggleFamilyOverlay(f: CornerFamily): void {
+  function toggleDeviceOverlay(f: CharacterizedDevice): void {
     const idx = overlayable(f);
-    overlayIdx = familyOverlaid(f)
+    overlayIdx = deviceOverlaid(f)
       ? overlayIdx.filter((i) => !idx.includes(i))
       : [...overlayIdx, ...idx.filter((i) => !overlayIdx.includes(i))];
   }
@@ -841,9 +841,9 @@
     <!-- One group per logical device; its characterization conditions sit inside it. A device
          loaded at a single condition looks exactly as it did before families existed — the
          group chrome only appears once there is more than one condition to tell apart. -->
-    {#each families as f (f.familyUid)}
-      {@const multi = f.variants.length > 1}
-      {@const qa = familyQA.get(f.familyUid) ?? []}
+    {#each families as f (f.deviceUid)}
+      {@const multi = f.conditions.length > 1}
+      {@const qa = deviceQA.get(f.deviceUid) ?? []}
       <!-- A designation whose table has left is shown (and fixable) whatever the family's size:
            the auto rule is deliberately not re-applied over it, so without this the bench would
            have no nominal and no word about why. -->
@@ -855,29 +855,29 @@
       {@const ambiguous = f.unresolvedNominal === 'ambiguous'}
       <span class="fam" class:multi={multi || stale} data-family={f.device}>
         {#if multi}
-          <span class="fname" title={CONTROL_HELP.cornerFamily}>{familyLabel(f)}</span>
+          <span class="fname" title={CONTROL_HELP.cornerFamily}>{deviceLabel(f)}</span>
           <label class="fov" title={CONTROL_HELP.cornerOverlay}>
             <input
               type="checkbox"
-              checked={familyOverlaid(f)}
-              onchange={() => toggleFamilyOverlay(f)}
+              checked={deviceOverlaid(f)}
+              onchange={() => toggleDeviceOverlay(f)}
             />corners
           </label>
         {/if}
-        {#each f.variants as t (tableUid(t))}
+        {#each f.conditions as t (tableUid(t))}
           {@const i = indexOfUid.get(tableUid(t)) ?? -1}
           {@const nominal = f.nominal === t}
           <span
             class="dev"
             class:active={i === activeIdx}
-            data-variant={variantLabel(t.id)}
+            data-variant={conditionLabel(t.id)}
             title={provenanceOf(t)}
           >
             <button
               class="dname"
               class:active={i === activeIdx}
               onclick={() => select(i)}
-              title={CONTROL_HELP.active}>{multi ? variantLabel(t.id) : deviceKey(t)}</button
+              title={CONTROL_HELP.active}>{multi ? conditionLabel(t.id) : deviceKey(t)}</button
             >
             {#if multi || stale}
               <!-- Which condition the bench means by "nominal". Marked here and changed here,
@@ -886,7 +886,7 @@
                 class="dnom"
                 class:on={nominal}
                 data-nominal={nominal ? '' : undefined}
-                onclick={() => designate(f.familyUid, tableUid(t))}
+                onclick={() => designate(f.deviceUid, tableUid(t))}
                 title={CONTROL_HELP.nominal}
                 >{nominal
                   ? f.nominalSource === 'designated'

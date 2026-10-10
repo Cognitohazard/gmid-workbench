@@ -139,7 +139,7 @@ test('corner family: two tables claiming one condition are an ambiguity nothing 
   await expect(page.locator('.devices .dev')).toHaveCount(2);
 
   // The family says so, at error severity, in the strip — no silent last-one-wins.
-  await expect(strip(page)).toContainText('family-duplicate-variant');
+  await expect(strip(page)).toContainText('device-duplicate-condition');
   await expect(strip(page)).toContainText('remove one or replace it explicitly');
   await expect(strip(page)).toContainText('no nominal condition');
 

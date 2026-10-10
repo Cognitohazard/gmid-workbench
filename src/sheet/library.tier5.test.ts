@@ -55,7 +55,7 @@ describe('tier5 goldens: Track & hold budget', () => {
   });
 
   it('binds the switch width-first at the chosen inversion', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W, 5e-6)).toBeLessThan(1e-9);
     expect(relErr(res.values.gm_id, 5)).toBeLessThan(1e-9);
   });
@@ -72,7 +72,7 @@ describe('tier5 goldens: Gm-C filter pole', () => {
   const vn_int = Math.sqrt(vnth_m ** 2 * (1e7 - 1 + 8e6 * Math.log(1e7 / 1)));
 
   it('pins gm from the cutoff spec and V* from the inversion knob', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.gm_id, 12)).toBeLessThan(1e-9);
   });
@@ -88,7 +88,7 @@ describe('tier5 goldens: Gm-C filter pole', () => {
     // visible, the same teaching stance as the inverter's consistency guardrails. The rule
     // is a guardrail, so feasibility is untouched — this locks both halves of that
     // statement so neither edit can be silently "fixed" away.
-    const noise = res.rules.find((r) => r.id === 'noise-spec');
+    const noise = res.checks.find((r) => r.id === 'noise-spec');
     expect(noise?.kind).toBe('advisory');
     expect(noise?.status).toBe('fail');
     expect(res.feasible).toBe(true);
@@ -102,8 +102,8 @@ describe('tier5 goldens: LDO (pass device + error amp)', () => {
   const A_loop = 1000 * 10 * (VA_PER_L * 0.5e-6 + 0.2);
 
   it('binds the pass device at max load with the dropout as its vds', () => {
-    expect(res.bind?.ok).toBe(true);
-    expect(res.bind?.bias?.vds).toBe(0.2);
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.bias?.vds).toBe(0.2);
     expect(relErr(res.values.gm_pass, gm_pass)).toBeLessThan(1e-9);
     expect(relErr(res.values.gm_id, 10)).toBeLessThan(1e-9);
   });
@@ -139,7 +139,7 @@ describe('tier5 goldens: Preamp + latch comparator', () => {
   const Rout = 1 / (1 / 2e4 + 1 / ro);
 
   it('binds the preamp and reports gm and gm/ID exactly', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.gm_id, 15)).toBeLessThan(1e-9);
   });

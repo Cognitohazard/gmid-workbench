@@ -6,13 +6,13 @@
 // Identity lives in the DATA. A family is derived from the headers its tables carry — process
 // namespace, device name, declared polarity — never minted, remembered, or assigned by a bench.
 // The derivation reads the loaded set as a whole: an under-declared header resolves against the
-// declared ones loaded beside it (see groupFamilies), so the same blank-header file can land in
+// declared ones loaded beside it (see groupDevices), so the same blank-header file can land in
 // a blank family on one bench and beside its declared siblings on another — but on any given
 // bench the result is a pure function of the loaded headers. A wrong grouping is corrected by
 // fixing the file rather than by a click, and there is no membership lifecycle to migrate or
 // orphan.
 //
-// One run, one variant key. Every evaluation first fixes exactly one VariantKey and projects
+// One run, one variant key. Every evaluation first fixes exactly one ConditionKey and projects
 // the primary AND every explicitly bound child to that same key. A child family's own nominal
 // never substitutes a different key inside a run, because a verdict assembled from a tt@27
 // input pair and a tt@85 tail describes a chip that does not exist. When any required family
@@ -22,7 +22,7 @@
 // One design across the conditions. A set of conditions is one question about ONE design: it is
 // sized once, at the base condition, and every other condition is asked about that same
 // hardware — the widths and lengths the base run produced, its currents, and the gate biases it
-// needed — with only the operating point re-settled (see pinHardware). A run that re-sized the
+// needed — with only the operating point re-settled (see holdHardware). A run that re-sized the
 // design at each condition would describe one chip per corner; only one of them is built.
 //
 // Two questions, never one. FEASIBILITY is asked once, where the design is sized: can this
@@ -39,7 +39,7 @@ import type {
   DeviceResolver,
   NamedBinding,
   SheetDoc,
-  SheetEdgeState,
+  PointState,
   SheetRefIndex,
   SheetResult,
 } from '../sheet';
@@ -48,7 +48,7 @@ import {
   dcInputs,
   evaluateSheet,
   heldOutcome,
-  limitingConstraint,
+  limitingCheck,
   namedBindings,
   resolvedSheet,
   stands,
@@ -56,9 +56,9 @@ import {
 } from '../sheet';
 import {
   assumedLevelRefusal,
-  pinHardware,
+  holdHardware,
   withNominalRange,
-  type PinnedHardware,
+  type HeldHardware,
 } from '../sheet/coverage';
 
 // --- variant identity --------------------------------------------------------
@@ -66,18 +66,18 @@ import {
 /**
  * The canonical identity of one characterization condition. `corner` is trimmed and
  * lower-cased so a file written `TT` and one written `tt` name the same condition; the source
- * spelling stays on the table for display (see `variantLabel`).
+ * spelling stays on the table for display (see `conditionLabel`).
  */
-export interface VariantKey {
+export interface ConditionKey {
   readonly corner: string;
   readonly temp: number; // [°C]
 }
 
 /** The canonical key of a table's identity. Accepts a table's own identity or a bare key, like
- *  `variantLabel`, so a caller canonicalizing a stored selection has no device name to invent. */
-export function variantKeyOf(
+ *  `conditionLabel`, so a caller canonicalizing a stored selection has no device name to invent. */
+export function conditionKeyOf(
   id: TableId | { readonly corner: string; readonly temp: number },
-): VariantKey {
+): ConditionKey {
   // `+ 0` folds -0 onto 0, so a table written `# temp: -0` is not its own condition.
   return { corner: id.corner.trim().toLowerCase(), temp: id.temp + 0 };
 }
@@ -86,22 +86,22 @@ export function variantKeyOf(
  *  duplicate detection and persisted selections can never disagree about what one condition
  *  is. `Object.is` on the temperature so a table carrying a non-finite temperature still
  *  matches itself rather than fragmenting into a key nothing can select. */
-export function sameVariant(a: VariantKey, b: VariantKey): boolean {
+export function sameCondition(a: ConditionKey, b: ConditionKey): boolean {
   return a.corner === b.corner && Object.is(a.temp, b.temp);
 }
 
 /** A key as a map/set key. JSON, not a joined string: a corner spelling is arbitrary text and
  *  an unescaped delimiter would let one condition impersonate another. The temperature goes in
  *  as text because JSON writes every non-finite number as `null`, which would collapse
- *  conditions `sameVariant` calls distinct into one id — a phantom duplicate. */
-export function variantKeyId(k: VariantKey): string {
+ *  conditions `sameCondition` calls distinct into one id — a phantom duplicate. */
+export function conditionKeyId(k: ConditionKey): string {
   return JSON.stringify([k.corner, String(k.temp)]);
 }
 
 /** The condition as a designer writes it: source spelling preserved, and the temperature
  *  elided at the 27 °C default so the common case reads `tt`, not `tt@27`. Accepts a table's
  *  own identity or a bare key, so a selected condition with no table loaded still labels. */
-export function variantLabel(id: { readonly corner: string; readonly temp: number }): string {
+export function conditionLabel(id: { readonly corner: string; readonly temp: number }): string {
   const corner = id.corner.trim();
   return id.temp === 27 ? corner : `${corner}@${id.temp}`;
 }
@@ -111,7 +111,7 @@ export function variantLabel(id: { readonly corner: string; readonly temp: numbe
 /** Declared channel type, or `unknown` when no table said. Unknown never claims to separate:
  *  two undeclared tables of the same name group together, because refusing to guess is not the
  *  same as knowing they differ. */
-export type FamilyPolarity = 'n' | 'p' | 'unknown';
+export type DevicePolarity = 'n' | 'p' | 'unknown';
 
 /**
  * An `extra` metadata scalar by case-insensitive key. Two reasons it is not a plain property
@@ -136,7 +136,7 @@ export function pdkOf(t: DeviceTable): string {
 
 /** The grouping tuple: process namespace, device name, declared polarity — all normalized, so
  *  case and surrounding space never split one device into two families. */
-function familyKeyOf(t: DeviceTable): [string, string, FamilyPolarity] {
+function familyKeyOf(t: DeviceTable): [string, string, DevicePolarity] {
   return [
     pdkOf(t).toLowerCase(),
     t.id.device.trim().toLowerCase(),
@@ -146,29 +146,29 @@ function familyKeyOf(t: DeviceTable): [string, string, FamilyPolarity] {
 
 /** The identity THIS TABLE's own headers declare: the canonical serialization of its grouping
  *  tuple. Purely derived — the same headers always produce the same value, on any machine and
- *  after any recharacterization. What a stored binding names is `CornerFamily.familyUid`, the
+ *  after any recharacterization. What a stored binding names is `CharacterizedDevice.deviceUid`, the
  *  bench-RESOLVED form of this (an under-declared table may sit in a more-declared family);
  *  the bench's resolver aliases each member's own value here to its family so bindings written
  *  before such a merge keep resolving. */
-export function familyUidOf(t: DeviceTable): string {
+export function deviceUidOf(t: DeviceTable): string {
   return JSON.stringify(familyKeyOf(t));
 }
 
 /** The grouping tuple a family identity was built from. */
-export interface FamilyIdentity {
+export interface DeviceIdentity {
   /** Process namespace, normalized; `''` when the tables declared none. */
   readonly pdk: string;
   /** Device name, normalized — the grouping spelling, not a member's display spelling. */
   readonly device: string;
-  readonly polarity: FamilyPolarity;
+  readonly polarity: DevicePolarity;
 }
 
-/** Read a `familyUid` back into the tuple it serializes, or `undefined` when the string is not
- *  one. The inverse lives beside `familyUidOf` so the serialization has a single owner: a caller
+/** Read a `deviceUid` back into the tuple it serializes, or `undefined` when the string is not
+ *  one. The inverse lives beside `deviceUidOf` so the serialization has a single owner: a caller
  *  that must show what an identity NAMES while no member of it is loaded — there is no family
  *  object to read a display name off — asks here instead of destructuring the JSON by position,
  *  which would mislabel silently if the tuple ever grew or was reordered. */
-export function familyIdentityOf(uid: string): FamilyIdentity | undefined {
+export function deviceIdentityOf(uid: string): DeviceIdentity | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(uid);
@@ -188,23 +188,23 @@ export function familyIdentityOf(uid: string): FamilyIdentity | undefined {
 /**
  * One logical device: every loaded table that shares its identity, indexed by condition.
  */
-export interface CornerFamily {
+export interface CharacterizedDevice {
   /** The bench-resolved grouping key (process namespace, device name, polarity). Usually every
-   *  member's own `familyUidOf`; blanker members that joined a declared sibling carry the
-   *  declared identity (see `groupFamilies`). */
-  readonly familyUid: string;
+   *  member's own `deviceUidOf`; blanker members that joined a declared sibling carry the
+   *  declared identity (see `groupDevices`). */
+  readonly deviceUid: string;
   /** The device name in its source spelling, for display. */
   readonly device: string;
   /** Members in load order. */
-  readonly variants: readonly DeviceTable[];
+  readonly conditions: readonly DeviceTable[];
   /** The conditions the family holds, in load order, once each. A condition two members claim
    *  appears once: it is one condition two tables characterize, and every mode that offers it
    *  offers the condition rather than the tables. */
-  readonly keys: readonly VariantKey[];
+  readonly keys: readonly ConditionKey[];
   /** Conditions claimed by more than one member. Nothing projects at these: load order is not
    *  a choice between two characterizations, so an ambiguous condition refuses until the bench
    *  removes one or replaces it explicitly. */
-  readonly duplicates: readonly VariantKey[];
+  readonly duplicates: readonly ConditionKey[];
   /** The condition a run means by "nominal", or `undefined` when nothing designates one. */
   readonly nominal: DeviceTable | undefined;
   /** Where `nominal` came from: `auto` (the tt-at-27 rule), `designated` (a bench choice that
@@ -219,13 +219,13 @@ export interface CornerFamily {
   readonly unresolvedNominal?: 'absent' | 'ambiguous';
 }
 
-export interface GroupFamiliesOptions {
-  /** familyUid → the identity of the member the bench designates nominal, in the CALLER's id
+export interface GroupDevicesOptions {
+  /** deviceUid → the identity of the member the bench designates nominal, in the CALLER's id
    *  space. Core never derives a table identity of its own: it compares whatever `uidOf`
    *  returns, so no uid scheme enters the numerics. Supplying a designation without `uidOf`
    *  leaves it unmatchable, which reads as an unresolved designation rather than as no
    *  designation at all. */
-  readonly nominalByFamily?: ReadonlyMap<string, string>;
+  readonly nominalByDevice?: ReadonlyMap<string, string>;
   /** The caller's identity for a table (the bench's content uid). */
   readonly uidOf?: (t: DeviceTable) => string;
 }
@@ -239,14 +239,14 @@ export interface GroupFamiliesOptions {
  * older corners of the same device — the ordinary upgrade path, not an edge case. A blank
  * namespace or an unknown polarity therefore joins the unique declared candidate for the same
  * device name, and stays its own family only when several candidates would make the join a
- * guess (that remainder is what `validateFamilies` warns about). The resulting family carries
- * the declared identity, so `CornerFamily.familyUid` is the bench-resolved key — a member's
- * own `familyUidOf` may be blanker.
+ * guess (that remainder is what `validateDevices` warns about). The resulting family carries
+ * the declared identity, so `CharacterizedDevice.deviceUid` is the bench-resolved key — a member's
+ * own `deviceUidOf` may be blanker.
  */
-export function groupFamilies(
+export function groupDevices(
   tables: readonly DeviceTable[],
-  opts?: GroupFamiliesOptions,
-): CornerFamily[] {
+  opts?: GroupDevicesOptions,
+): CharacterizedDevice[] {
   const raw = tables.map(familyKeyOf);
 
   // Declared namespaces per device name; a blank one joins the sole candidate.
@@ -257,7 +257,7 @@ export function groupFamilies(
     set.add(pdk);
     pdksByName.set(name, set);
   }
-  const effPdk = ([pdk, name]: readonly [string, string, FamilyPolarity]): string => {
+  const effPdk = ([pdk, name]: readonly [string, string, DevicePolarity]): string => {
     if (pdk) return pdk;
     const declared = pdksByName.get(name);
     return declared?.size === 1 ? [...declared][0] : '';
@@ -265,15 +265,15 @@ export function groupFamilies(
 
   // Declared polarities per (resolved namespace, name); unknown joins the sole candidate —
   // it never bridges n and p, since two candidates leave it unresolved.
-  const polsByGroup = new Map<string, Set<FamilyPolarity>>();
+  const polsByGroup = new Map<string, Set<DevicePolarity>>();
   for (const k of raw) {
     if (k[2] === 'unknown') continue;
     const group = JSON.stringify([effPdk(k), k[1]]);
-    const set = polsByGroup.get(group) ?? new Set<FamilyPolarity>();
+    const set = polsByGroup.get(group) ?? new Set<DevicePolarity>();
     set.add(k[2]);
     polsByGroup.set(group, set);
   }
-  const effKey = (k: readonly [string, string, FamilyPolarity]): string => {
+  const effKey = (k: readonly [string, string, DevicePolarity]): string => {
     const pdk = effPdk(k);
     const pols = polsByGroup.get(JSON.stringify([pdk, k[1]]));
     const pol = k[2] !== 'unknown' ? k[2] : pols?.size === 1 ? [...pols][0] : 'unknown';
@@ -297,12 +297,12 @@ export function groupFamilies(
 function buildFamily(
   familyUid: string,
   variants: DeviceTable[],
-  opts: GroupFamiliesOptions | undefined,
-): CornerFamily {
-  const seen = new Map<string, { key: VariantKey; count: number }>();
+  opts: GroupDevicesOptions | undefined,
+): CharacterizedDevice {
+  const seen = new Map<string, { key: ConditionKey; count: number }>();
   for (const t of variants) {
-    const key = variantKeyOf(t.id);
-    const id = variantKeyId(key);
+    const key = conditionKeyOf(t.id);
+    const id = conditionKeyId(key);
     const hit = seen.get(id);
     if (hit) hit.count++;
     else seen.set(id, { key, count: 1 });
@@ -310,9 +310,9 @@ function buildFamily(
   const keys = [...seen.values()].map((e) => e.key);
   const duplicates = [...seen.values()].filter((e) => e.count > 1).map((e) => e.key);
   return {
-    familyUid,
+    deviceUid: familyUid,
     device: variants[0]?.id.device ?? '',
-    variants,
+    conditions: variants,
     keys,
     duplicates,
     ...designate(variants, duplicates, familyUid, opts),
@@ -329,22 +329,22 @@ function buildFamily(
  *  use. */
 function designate(
   variants: readonly DeviceTable[],
-  duplicates: readonly VariantKey[],
+  duplicates: readonly ConditionKey[],
   familyUid: string,
-  opts: GroupFamiliesOptions | undefined,
-): Pick<CornerFamily, 'nominal' | 'nominalSource' | 'unresolvedNominal'> {
-  const wanted = opts?.nominalByFamily?.get(familyUid);
+  opts: GroupDevicesOptions | undefined,
+): Pick<CharacterizedDevice, 'nominal' | 'nominalSource' | 'unresolvedNominal'> {
+  const wanted = opts?.nominalByDevice?.get(familyUid);
   if (wanted !== undefined) {
     const uidOf = opts?.uidOf;
     const hit = uidOf && variants.find((t) => uidOf(t) === wanted);
     if (!hit)
       return { nominal: undefined, nominalSource: 'unresolved', unresolvedNominal: 'absent' };
-    if (duplicates.some((d) => sameVariant(d, variantKeyOf(hit.id))))
+    if (duplicates.some((d) => sameCondition(d, conditionKeyOf(hit.id))))
       return { nominal: undefined, nominalSource: 'unresolved', unresolvedNominal: 'ambiguous' };
     return { nominal: hit, nominalSource: 'designated' };
   }
   if (variants.length === 1) return { nominal: variants[0], nominalSource: 'auto' };
-  const tt = variants.filter((t) => variantKeyOf(t.id).corner === 'tt');
+  const tt = variants.filter((t) => conditionKeyOf(t.id).corner === 'tt');
   if (tt.length) {
     const near = nearestTo27(tt);
     return near
@@ -361,7 +361,7 @@ function nearestTo27(tt: readonly DeviceTable[]): DeviceTable | undefined {
   let bestDist = Infinity;
   let atBest = 0;
   for (const t of tt) {
-    const dist = Math.abs(variantKeyOf(t.id).temp - 27);
+    const dist = Math.abs(conditionKeyOf(t.id).temp - 27);
     if (!Number.isFinite(dist)) continue;
     if (dist < bestDist) {
       best = t;
@@ -375,9 +375,9 @@ function nearestTo27(tt: readonly DeviceTable[]): DeviceTable | undefined {
 /** The family's unique table at one condition — the ONE projection rule. `undefined` when no
  *  member claims the condition AND when several do: an ambiguous condition never resolves to a
  *  winner, here or anywhere else. */
-export function variantAt(f: CornerFamily, key: VariantKey): DeviceTable | undefined {
-  if (f.duplicates.some((d) => sameVariant(d, key))) return undefined;
-  return f.variants.find((t) => sameVariant(variantKeyOf(t.id), key));
+export function tableAt(f: CharacterizedDevice, key: ConditionKey): DeviceTable | undefined {
+  if (f.duplicates.some((d) => sameCondition(d, key))) return undefined;
+  return f.conditions.find((t) => sameCondition(conditionKeyOf(t.id), key));
 }
 
 /** One table's swept-axis signature — the shape fact family QA and projection both compare.
@@ -390,7 +390,7 @@ export function axisSignature(t: DeviceTable): string {
 // --- the run transition ------------------------------------------------------
 
 /** Why a condition could not be evaluated. Kinds, not prose, so a UI can group and act on
- *  them: `absent-variant` and `ambiguous-variant` are fixed at the bench (import the missing
+ *  them: `absent-condition` and `ambiguous-condition` are fixed at the bench (import the missing
  *  corner, remove the duplicate), `invalid-sheet-or-ref` in the sheet, and
  *  `runtime-evaluation` reports an evaluation that started and did not complete.
  *  `incompatible-table` refuses a family whose members do not sweep the same axes: its
@@ -402,17 +402,17 @@ export function axisSignature(t: DeviceTable): string {
  *  is the base. `assumed-level` says the design rests on a voltage its sheet types although its
  *  own parts determine it (class `assumed`): held fixed at another condition, a typed guess
  *  proves nothing about the hardware, so the question is declined rather than answered. */
-export type VariantIssueKind =
-  | 'absent-variant'
-  | 'ambiguous-variant'
+export type ConditionIssueKind =
+  | 'absent-condition'
+  | 'ambiguous-condition'
   | 'incompatible-table'
   | 'invalid-sheet-or-ref'
   | 'runtime-evaluation'
   | 'no-design'
   | 'assumed-level';
 
-export interface VariantIssue {
-  readonly kind: VariantIssueKind;
+export interface ConditionIssue {
+  readonly kind: ConditionIssueKind;
   /** The device the issue is about, when it is about one. */
   readonly device?: string;
   readonly message: string;
@@ -421,31 +421,31 @@ export interface VariantIssue {
 /**
  * One compliance point: one condition, at the design's own operating point (the centre) or at
  * one end of the sheet's claimed operating range. The states are the range-end vocabulary (see
- * SheetEdgeReport.state), because it is the same question — does this one design, held fixed,
+ * RangeEndReport.state), because it is the same question — does this one design, held fixed,
  * still work here — and the two that are not verdicts are kept apart for the same reason:
  * `not-run` was never asked (no design to hold, no table loaded at the condition), `no-answer`
  * was asked and could not be answered (the run did not complete, the data does not reach).
  */
 export interface CompliancePoint {
   /** The range end's name. Absent at the centre. */
-  readonly limit?: string;
-  readonly state: SheetEdgeState;
+  readonly rangeEnd?: string;
+  readonly state: PointState;
   /** Why the point has no rule outcomes to read, when it has none: the refusal, the solver's
    *  message, the table's reach. Absent where the point's rules were measured — a point that
    *  does not comply because a rule fails names the rule in its run's result instead. */
   readonly error?: string;
 }
 
-export type VariantRun =
+export type ConditionRun =
   | {
       readonly state: 'evaluated';
-      readonly key: VariantKey;
+      readonly key: ConditionKey;
       /** Whose hardware this run measured. `sized`: the run sized the design here, free to choose
        *  every width — the base condition. `held`: the design the base run sized, re-biased at
        *  this condition with its geometry, currents and gate biases fixed. */
       readonly design: 'sized' | 'held';
       /** On a `held` run: the blocks whose current the base run did not author, so it is held
-       *  here as an ideal source (see PinnedHardware.assumedSource). */
+       *  here as an ideal source (see HeldHardware.assumedSource). */
       readonly assumedSource?: readonly string[];
       /** This run's own verdict on its hard rules. On the `sized` run that is FEASIBILITY — the
        *  one answer to "can this design type meet the spec". On a `held` run it is the same
@@ -458,10 +458,10 @@ export type VariantRun =
     }
   | {
       readonly state: 'not-evaluated';
-      readonly key: VariantKey;
+      readonly key: ConditionKey;
       /** `sized` on the base condition's own attempt, `held` everywhere else. */
       readonly design: 'sized' | 'held';
-      readonly issues: readonly VariantIssue[];
+      readonly issues: readonly ConditionIssue[];
       /** The same points an evaluated run carries, none of them `complies`. */
       readonly points: readonly CompliancePoint[];
       /** Kept when an evaluation ran and did not stand, so its diagnostics survive the
@@ -473,55 +473,55 @@ export type VariantRun =
  *  loaded answers to it. Injected, exactly like `DeviceResolver`: how a binding string is
  *  matched (exact table identity first, family form second) is the bench's business, and core
  *  never parses one. */
-export type FamilyResolver = (binding: string) => CornerFamily | undefined;
+export type DeviceLookup = (binding: string) => CharacterizedDevice | undefined;
 
 /** Project every device binding to ONE condition: each binding answers with its family's table
  *  at `key`, and with nothing when no family answers to it or the condition does not project.
  *  The one place a binding becomes a table, so a verdict, a chart and a probe taken under it can
  *  never be reading different conditions of the same design. */
-export function projectingResolver(familyOf: FamilyResolver, key: VariantKey): DeviceResolver {
+export function projectingResolver(familyOf: DeviceLookup, key: ConditionKey): DeviceResolver {
   return (binding) => {
     const family = familyOf(binding);
-    return family && variantAt(family, key);
+    return family && tableAt(family, key);
   };
 }
 
 /** What a condition's preflight found: the primary family's table at it, and everything that
  *  stops it from being evaluated. */
-export interface VariantPreflight {
+export interface ConditionPreflight {
   /** `undefined` exactly when the primary family contributed a refusal. */
   readonly primary: DeviceTable | undefined;
-  readonly issues: readonly VariantIssue[];
+  readonly issues: readonly ConditionIssue[];
 }
 
 /**
  * Ask whether one condition can be evaluated at all — the primary family and every explicitly
- * bound child, in that order — WITHOUT evaluating it. This is step 2 of `runVariant`, exported
+ * bound child, in that order — WITHOUT evaluating it. This is step 2 of `runCondition`, exported
  * because a caller that must screen conditions before spending an evaluation on them (the picker
  * searching a catalog) has to refuse on the same grounds, in the same order, in the same words:
  * a second copy kept in step by hand is how a picker comes to rank a candidate the sheet panel
  * then refuses.
  *
- * Structural sheet problems are NOT in here: they are not about a condition, and `runVariant`
+ * Structural sheet problems are NOT in here: they are not about a condition, and `runCondition`
  * reports them before any family is asked.
  */
-export function preflightVariant(
+export function preflightCondition(
   doc: SheetDoc,
-  primaryFamily: CornerFamily,
-  key: VariantKey,
-  familyOf: FamilyResolver,
+  primaryFamily: CharacterizedDevice,
+  key: ConditionKey,
+  familyOf: DeviceLookup,
   refs?: SheetRefIndex,
-): VariantPreflight {
+): ConditionPreflight {
   return preflightBindings(namedBindings(doc, refs).bindings, primaryFamily, key, familyOf);
 }
 
 function preflightBindings(
   bindings: readonly NamedBinding[],
-  primaryFamily: CornerFamily,
-  key: VariantKey,
-  familyOf: FamilyResolver,
-): VariantPreflight {
-  const issues: VariantIssue[] = [];
+  primaryFamily: CharacterizedDevice,
+  key: ConditionKey,
+  familyOf: DeviceLookup,
+): ConditionPreflight {
+  const issues: ConditionIssue[] = [];
   const primary = memberFor(primaryFamily, key, 'the primary device', issues);
   const bound = new Set<string>();
   for (const b of bindings) {
@@ -530,7 +530,7 @@ function preflightBindings(
     const family = familyOf(b.binding);
     if (!family) {
       issues.push({
-        kind: 'absent-variant',
+        kind: 'absent-condition',
         device: b.binding,
         message: `block "${b.path}" names device "${b.binding}", which is not loaded`,
       });
@@ -538,7 +538,7 @@ function preflightBindings(
     }
     // A child bound to the primary's own family was already preflighted above; a second
     // issue for the same missing condition would list one problem twice.
-    if (family.familyUid === primaryFamily.familyUid) continue;
+    if (family.deviceUid === primaryFamily.deviceUid) continue;
     memberFor(family, key, `block "${b.path}"`, issues);
   }
   return { primary, issues };
@@ -554,7 +554,7 @@ interface PreparedRun {
   /** `validateSheet` on the resolved tree — folded into every result, which is what `runSheet`
    *  does with them, and read here for the blockers so the sheet is validated once, not twice. */
   readonly warnings: readonly QAWarning[];
-  readonly blockers: readonly VariantIssue[];
+  readonly blockers: readonly ConditionIssue[];
   readonly bindings: readonly NamedBinding[];
   /** The assumed DC inputs of the resolved tree — a fact about the document, so it is the same
    *  for every condition and attached to each result as `runSheet` attaches it. */
@@ -566,7 +566,7 @@ function prepareRun(doc: SheetDoc, refs?: SheetRefIndex): PreparedRun {
   const warnings = validateSheet(resolved.doc);
   const blockers = [...resolved.warnings, ...warnings]
     .filter((w) => w.severity === 'error')
-    .map((w): VariantIssue => ({ kind: 'invalid-sheet-or-ref', message: w.message }));
+    .map((w): ConditionIssue => ({ kind: 'invalid-sheet-or-ref', message: w.message }));
   return {
     doc: resolved.doc,
     warnings,
@@ -593,22 +593,22 @@ function prepareRun(doc: SheetDoc, refs?: SheetRefIndex): PreparedRun {
  * Children that name no device inherit the already-projected parent table, so the whole tree
  * evaluates at one condition without the resolver being consulted for them.
  */
-export function runVariant(
+export function runCondition(
   doc: SheetDoc,
-  primaryFamily: CornerFamily,
-  key: VariantKey,
-  familyOf: FamilyResolver,
+  primaryFamily: CharacterizedDevice,
+  key: ConditionKey,
+  familyOf: DeviceLookup,
   refs?: SheetRefIndex,
-): VariantRun {
+): ConditionRun {
   return runPrepared(prepareRun(doc, refs), primaryFamily, key, familyOf);
 }
 
 /**
  * One design asked about at a SET of conditions. The design is sized once, at `base` — or, when
- * no base is given, at the single condition asked about — by the same transition `runVariant`
+ * no base is given, at the single condition asked about — by the same transition `runCondition`
  * makes. Every other condition is then asked about THAT hardware: its binds rewritten to the
  * widths, lengths and currents the base run produced and its held nodes pinned to the gate
- * biases it needed (pinHardware), evaluated on that condition's tables with the operating point
+ * biases it needed (holdHardware), evaluated on that condition's tables with the operating point
  * free to re-settle. So the run at the base reads `design: 'sized'` and every other `'held'`.
  *
  * The base condition is part of every answer — feasibility is its verdict — so its run is
@@ -624,24 +624,24 @@ export function runVariant(
  * Everything that does not depend on the condition (resolving, validating, collecting bindings)
  * is done once for the set.
  */
-export function runVariants(
+export function runConditions(
   doc: SheetDoc,
-  primaryFamily: CornerFamily,
-  keys: readonly VariantKey[],
-  familyOf: FamilyResolver,
+  primaryFamily: CharacterizedDevice,
+  keys: readonly ConditionKey[],
+  familyOf: DeviceLookup,
   refs?: SheetRefIndex,
-  base?: VariantKey,
-): VariantRun[] {
+  base?: ConditionKey,
+): ConditionRun[] {
   const prepared = prepareRun(doc, refs);
   if (keys.length === 0) return [];
   /** A condition that cannot be asked about the held design: what is wrong with THIS condition
    *  comes first — a table missing here, or a sheet that does not validate, is a fact about the
    *  bench that stays true whatever happens to the design, and the fix is a different one. */
   const declined = (
-    key: VariantKey,
+    key: ConditionKey,
     state: 'not-run' | 'no-answer',
-    issue: VariantIssue,
-  ): VariantRun => {
+    issue: ConditionIssue,
+  ): ConditionRun => {
     const here = prepared.blockers.length
       ? prepared.blockers
       : preflightBindings(prepared.bindings, primaryFamily, key, familyOf).issues;
@@ -661,20 +661,20 @@ export function runVariants(
     );
 
   const sized = runPrepared(prepared, primaryFamily, at, familyOf);
-  const asked = keys.some((k) => sameVariant(k, at)) ? keys : [at, ...keys];
+  const asked = keys.some((k) => sameCondition(k, at)) ? keys : [at, ...keys];
   if (asked.length === 1) return [sized];
 
   // What stops the design being held anywhere else, when something does. A design that was not
   // sized was never asked about (`not-run`); one resting on an assumed level was asked and is
   // declined (`no-answer`).
-  let held: PinnedHardware | undefined;
-  let refusal: { state: 'not-run' | 'no-answer'; issue: VariantIssue } | undefined;
+  let held: HeldHardware | undefined;
+  let refusal: { state: 'not-run' | 'no-answer'; issue: ConditionIssue } | undefined;
   if (sized.state !== 'evaluated')
     refusal = {
       state: 'not-run',
       issue: {
         kind: 'no-design',
-        message: `the design was not evaluated at ${variantLabel(at)}, where it is sized, so there is nothing to hold here`,
+        message: `the design was not evaluated at ${conditionLabel(at)}, where it is sized, so there is nothing to hold here`,
       },
     };
   else if (prepared.assumptions.length)
@@ -682,10 +682,10 @@ export function runVariants(
       state: 'no-answer',
       issue: { kind: 'assumed-level', message: assumedLevelRefusal(prepared.assumptions) },
     };
-  else held = withNominalRange(pinHardware(prepared.doc, sized.result), sized.result);
+  else held = withNominalRange(holdHardware(prepared.doc, sized.result), sized.result);
 
-  return asked.map((key): VariantRun => {
-    if (sameVariant(key, at)) return sized;
+  return asked.map((key): ConditionRun => {
+    if (sameCondition(key, at)) return sized;
     if (!refusal) return runPrepared(prepared, primaryFamily, key, familyOf, held);
     return declined(key, refusal.state, refusal.issue);
   });
@@ -695,14 +695,14 @@ export function runVariants(
  *  first reason given. */
 function refused(
   prepared: PreparedRun,
-  key: VariantKey,
+  key: ConditionKey,
   design: 'sized' | 'held',
   state: 'not-run' | 'no-answer',
-  issues: readonly VariantIssue[],
-): VariantRun {
+  issues: readonly ConditionIssue[],
+): ConditionRun {
   const error = issues[0]?.message;
   const point = (limit?: string): CompliancePoint => ({
-    ...(limit === undefined ? {} : { limit }),
+    ...(limit === undefined ? {} : { rangeEnd: limit }),
     state,
     ...(error === undefined ? {} : { error }),
   });
@@ -721,18 +721,18 @@ function refused(
  *  a sized design answers for itself, a held one is classified like a range end (heldOutcome). */
 function runPrepared(
   prepared: PreparedRun,
-  primaryFamily: CornerFamily,
-  key: VariantKey,
-  familyOf: FamilyResolver,
-  held?: PinnedHardware,
-): VariantRun {
+  primaryFamily: CharacterizedDevice,
+  key: ConditionKey,
+  familyOf: DeviceLookup,
+  held?: HeldHardware,
+): ConditionRun {
   const design = held ? 'held' : 'sized';
   if (prepared.blockers.length) return refused(prepared, key, design, 'not-run', prepared.blockers);
 
   const { primary, issues } = preflightBindings(prepared.bindings, primaryFamily, key, familyOf);
   if (issues.length || primary === undefined)
     return refused(prepared, key, design, 'not-run', issues);
-  // A hold the base run recorded no value for has nothing to be held at (see pinHardware).
+  // A hold the base run recorded no value for has nothing to be held at (see holdHardware).
   if (held?.unheld.length)
     return refused(prepared, key, design, 'no-answer', [
       {
@@ -767,8 +767,8 @@ function runPrepared(
   else centre = { state: 'no-answer', error: runtimeIssues(result)[0].message };
   const points: CompliancePoint[] = [
     centre,
-    ...(result.edges ?? []).map((e): CompliancePoint => ({
-      limit: e.name,
+    ...(result.rangeEnds ?? []).map((e): CompliancePoint => ({
+      rangeEnd: e.name,
       state: e.state,
       ...(e.error === undefined ? {} : { error: e.error }),
     })),
@@ -799,26 +799,29 @@ function runPrepared(
  *  that must ask the question before evaluating (the picker preflights with it, so it never
  *  ranks a candidate the sheet panel would then refuse). `undefined` means the family has a
  *  unique, compatible table at the condition. */
-export function canProjectAt(family: CornerFamily, key: VariantKey): VariantIssue | undefined {
-  if (new Set(family.variants.map(axisSignature)).size > 1) {
+export function canProjectAt(
+  family: CharacterizedDevice,
+  key: ConditionKey,
+): ConditionIssue | undefined {
+  if (new Set(family.conditions.map(axisSignature)).size > 1) {
     return {
       kind: 'incompatible-table',
       device: family.device,
       message: `the loaded characterizations of "${family.device}" do not sweep the same axes, so no condition of this family projects until the imports agree`,
     };
   }
-  if (family.duplicates.some((d) => sameVariant(d, key))) {
+  if (family.duplicates.some((d) => sameCondition(d, key))) {
     return {
-      kind: 'ambiguous-variant',
+      kind: 'ambiguous-condition',
       device: family.device,
-      message: `several loaded tables claim "${family.device}" at ${variantLabel(key)} — remove one or replace it explicitly`,
+      message: `several loaded tables claim "${family.device}" at ${conditionLabel(key)} — remove one or replace it explicitly`,
     };
   }
-  if (!variantAt(family, key)) {
+  if (!tableAt(family, key)) {
     return {
-      kind: 'absent-variant',
+      kind: 'absent-condition',
       device: family.device,
-      message: `"${family.device}" is not characterized at ${variantLabel(key)}`,
+      message: `"${family.device}" is not characterized at ${conditionLabel(key)}`,
     };
   }
   return undefined;
@@ -827,22 +830,22 @@ export function canProjectAt(family: CornerFamily, key: VariantKey): VariantIssu
 /** The family's table at `key`, or `undefined` with the refusal appended to `issues`, said in
  *  terms of `where` the sheet asked for it. */
 function memberFor(
-  family: CornerFamily,
-  key: VariantKey,
+  family: CharacterizedDevice,
+  key: ConditionKey,
   where: string,
-  issues: VariantIssue[],
+  issues: ConditionIssue[],
 ): DeviceTable | undefined {
   const issue = canProjectAt(family, key);
   if (issue) {
     issues.push({ ...issue, message: `${where}: ${issue.message}` });
     return undefined;
   }
-  return variantAt(family, key);
+  return tableAt(family, key);
 }
 
 /** Why an evaluation did not complete, from the result itself: its error diagnostics. */
-function runtimeIssues(res: SheetResult): VariantIssue[] {
-  const issues: VariantIssue[] = res.warnings
+function runtimeIssues(res: SheetResult): ConditionIssue[] {
+  const issues: ConditionIssue[] = res.warnings
     .filter((w) => w.severity === 'error')
     .map((w) => ({ kind: 'runtime-evaluation' as const, message: w.message }));
   // A refusal with no reason is indistinguishable from a verdict, so this list is never empty.
@@ -853,7 +856,7 @@ function runtimeIssues(res: SheetResult): VariantIssue[] {
 
 // --- aggregation -------------------------------------------------------------
 
-export interface VariantAggregate {
+export interface ConditionAggregate {
   /**
    * FEASIBILITY — one answer, about the design where it was sized: can this design type meet
    * its spec at the base condition. Never a count and never moved by another condition or a
@@ -862,7 +865,7 @@ export interface VariantAggregate {
    */
   readonly feasibility: 'feasible' | 'infeasible' | 'no-answer' | 'not-run';
   /** The condition feasibility was asked at. Absent when the design was sized nowhere. */
-  readonly base?: VariantKey;
+  readonly base?: ConditionKey;
   /**
    * COMPLIANCE — a count over points, never a single word: `total` is conditions × (the centre
    * + every declared range end), and each point lands in exactly one bucket. Not-run and
@@ -884,8 +887,8 @@ export interface VariantAggregate {
   readonly worst: {
     readonly id: string;
     readonly marginPct: number;
-    readonly key: VariantKey;
-    readonly limit?: string;
+    readonly key: ConditionKey;
+    readonly rangeEnd?: string;
   } | null;
 }
 
@@ -894,19 +897,19 @@ export interface VariantAggregate {
  * answered apart, neither inferred from the other. A design that is feasible and loses a range
  * end at one corner is feasible and does not comply there — two facts, two places.
  */
-export function aggregateVariantRuns(runs: readonly VariantRun[]): VariantAggregate {
+export function aggregateConditionRuns(runs: readonly ConditionRun[]): ConditionAggregate {
   // One run per condition: the denominator is unique conditions, so a caller that passed the
   // same key twice must not double-count it. First-wins here is a de-dup of identical
   // repeats, not a merge policy — producing at most one run per condition is the caller's job.
-  const byKey = new Map<string, VariantRun>();
+  const byKey = new Map<string, ConditionRun>();
   for (const r of runs) {
-    const id = variantKeyId(r.key);
+    const id = conditionKeyId(r.key);
     if (!byKey.has(id)) byKey.set(id, r);
   }
   const unique = [...byKey.values()];
 
   const sized = unique.find((r) => r.design === 'sized');
-  const feasibility: VariantAggregate['feasibility'] = !sized
+  const feasibility: ConditionAggregate['feasibility'] = !sized
     ? 'not-run'
     : sized.state === 'evaluated'
       ? sized.feasible
@@ -923,7 +926,7 @@ export function aggregateVariantRuns(runs: readonly VariantRun[]): VariantAggreg
     'no-answer': 'noAnswer',
     'not-run': 'notRun',
   } as const;
-  let worst: VariantAggregate['worst'] = null;
+  let worst: ConditionAggregate['worst'] = null;
   for (const r of unique) {
     r.points.forEach((pt, i) => {
       compliance[BUCKET[pt.state]]++;
@@ -932,9 +935,9 @@ export function aggregateVariantRuns(runs: readonly VariantRun[]): VariantAggreg
       // outcomes were read somewhere other than the point asked about, or not at all.
       if (pt.error !== undefined || (pt.state !== 'complies' && pt.state !== 'does-not-comply'))
         return;
-      // points[0] is the run's own tree; points[i] mirrors result.edges[i - 1].
-      const at = i === 0 ? r.result : r.result?.edges?.[i - 1];
-      const limiting = at && limitingConstraint(at);
+      // points[0] is the run's own tree; points[i] mirrors result.rangeEnds[i - 1].
+      const at = i === 0 ? r.result : r.result?.rangeEnds?.[i - 1];
+      const limiting = at && limitingCheck(at);
       if (!limiting) return;
       const marginPct = clampMargin(limiting.marginPct);
       if (worst === null || marginPct < worst.marginPct)
@@ -942,7 +945,7 @@ export function aggregateVariantRuns(runs: readonly VariantRun[]): VariantAggreg
           id: limiting.id,
           marginPct,
           key: r.key,
-          ...(pt.limit === undefined ? {} : { limit: pt.limit }),
+          ...(pt.rangeEnd === undefined ? {} : { rangeEnd: pt.rangeEnd }),
         };
     });
   }

@@ -4,27 +4,27 @@
 
 import type { DeviceTable } from '../types';
 import {
-  EDGE_SEP,
+  RANGE_END_SEP,
   indexTreeResults,
-  isHardRule,
+  isHardCheck,
   sweepable,
   stands,
   treeRuleResults,
-  withoutEdges,
+  withoutRange,
   withParams,
 } from './types';
 export { sweepable } from './types';
 import { MARGIN_PCT_CAP } from './eval';
 import type {
-  RuleKind,
-  RuleResult,
-  SheetChildReport,
+  CheckKind,
+  CheckResult,
+  SheetBlockReport,
   SheetDoc,
-  SheetEdgeReport,
+  RangeEndReport,
   SheetResult,
   SheetSweep,
   SheetSweep2,
-  SheetSweepRule,
+  SheetSweepCheck,
 } from './types';
 import { dcInputs, validateSheet } from './validate';
 import { evaluateSheet, type DeviceResolver } from './eval';
@@ -33,7 +33,7 @@ import { resolvedSheet, type SheetRefIndex } from './resolve';
 export * from './types';
 export * from './legacy';
 export * from './eval';
-// Named rather than `export *`: validate.ts also exports reachedBinds, for a test that holds it
+// Named rather than `export *`: validate.ts also exports reachedGivens, for a test that holds it
 // and dcInputs to the same reach, and that is not public API.
 export {
   dcInputs,
@@ -85,9 +85,9 @@ export const SWEEP_POINTS = 41;
  * feasibility curve can flip with NO on-chart cause — the binding constraint lives
  * below the top sheet.
  */
-function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepRule[]): void {
+function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepCheck[]): void {
   for (const r of doc.checks) {
-    if (prefix === '' || isHardRule(r.kind))
+    if (prefix === '' || isHardCheck(r.kind))
       into.push({ id: prefix + r.id, kind: r.kind, marginPct: [] });
   }
   // A docless (unresolved-ref) use has no visible rules; the sweep is all-infeasible
@@ -107,14 +107,14 @@ function collectTreeRules(doc: SheetDoc, prefix: string, into: SheetSweepRule[])
  * both read exactly 0. A tautology admitted as the minimum is the answer forever, hiding every
  * rule that can actually move.
  *
- * Takes the two fields it decides on rather than a whole `RuleResult`, so a caller holding a
+ * Takes the two fields it decides on rather than a whole `CheckResult`, so a caller holding a
  * SWEEP row — which carries exactly a kind and a margin per sample — reads the same predicate
  * as a caller holding a full result, instead of restating it. The narrowing loses nothing: an
  * `na` outcome has a NaN margin, and `margin` is zero exactly when `marginPct` is (the relative
  * denominator is floored at TINY and the operands are finite by the time a margin exists).
  */
-export function measurable(kind: RuleKind, marginPct: number): boolean {
-  return isHardRule(kind) && Number.isFinite(marginPct) && marginPct !== 0;
+export function measurable(kind: CheckKind, marginPct: number): boolean {
+  return isHardCheck(kind) && Number.isFinite(marginPct) && marginPct !== 0;
 }
 
 /** A relative margin clamped to the range that carries information. Past MARGIN_PCT_CAP the
@@ -125,14 +125,14 @@ export const clampMargin = (m: number): number =>
   Math.max(-MARGIN_PCT_CAP, Math.min(MARGIN_PCT_CAP, m));
 
 /** `measurable` over a whole rule outcome — the shape the tree walks hand `worstBy`. */
-const isMeasurable = (rr: RuleResult): boolean => measurable(rr.kind, rr.marginPct);
+const isMeasurable = (rr: CheckResult): boolean => measurable(rr.kind, rr.marginPct);
 
 /** The smallest relative margin among the outcomes `keep` admits, with the tree key that names
  *  it — the one selector behind every "which rule is it" answer, so they can never disagree
  *  about how the minimum is taken. */
 function worstBy(
-  rules: Iterable<[string, RuleResult]>,
-  keep: (rr: RuleResult) => boolean,
+  rules: Iterable<[string, CheckResult]>,
+  keep: (rr: CheckResult) => boolean,
 ): { id: string; marginPct: number } | undefined {
   let worst: { id: string; marginPct: number } | undefined;
   for (const [id, rr] of rules) {
@@ -154,7 +154,7 @@ function worstBy(
  * shape a rule that could not be computed takes. Nothing about the range was measured there, and
  * a bottom clip would put a failure on the chart that the engine never established.
  */
-function edgeMargin(e: SheetEdgeReport): number | null {
+function edgeMargin(e: RangeEndReport): number | null {
   if (e.state === 'not-run' || e.state === 'no-answer') return null;
   if (e.error !== undefined) return -MARGIN_PCT_CAP;
   const found = worstBy(treeRuleResults(e), isMeasurable);
@@ -167,16 +167,16 @@ function edgeMargin(e: SheetEdgeReport): number | null {
 }
 
 /** A failing hard rule — what "binds". */
-const isFailing = (rr: RuleResult): boolean => isHardRule(rr.kind) && rr.status === 'fail';
+const isFailing = (rr: CheckResult): boolean => isHardCheck(rr.kind) && rr.status === 'fail';
 
 /** One run's own rule outcomes: its rules and its children's, and nothing from a range end.
  *  The binding and limiting constraints answer about ONE run — the design where it was sized,
  *  or one range end handed in by itself — so a range end's failure is never named as the
  *  reason a feasible design is infeasible. */
 const ownRules = (res: {
-  rules: readonly RuleResult[];
-  children?: readonly SheetChildReport[];
-}): Map<string, RuleResult> => treeRuleResults({ rules: res.rules, children: res.children });
+  checks: readonly CheckResult[];
+  blocks?: readonly SheetBlockReport[];
+}): Map<string, CheckResult> => treeRuleResults({ checks: res.checks, blocks: res.blocks });
 
 /**
  * The BINDING CONSTRAINT of one run: the failing HARD rule with the worst relative margin
@@ -189,9 +189,9 @@ const ownRules = (res: {
  * verdict can never disagree about which rule binds. A range end's report is a run too: pass
  * the report to ask what binds there.
  */
-export function bindingConstraint(res: {
-  rules: readonly RuleResult[];
-  children?: readonly SheetChildReport[];
+export function bindingCheck(res: {
+  checks: readonly CheckResult[];
+  blocks?: readonly SheetBlockReport[];
 }): { id: string; marginPct: number } | undefined {
   return worstBy(ownRules(res), isFailing);
 }
@@ -199,19 +199,19 @@ export function bindingConstraint(res: {
 /**
  * The LIMITING constraint of one run: the hard rule with the smallest finite relative margin
  * anywhere in the composition, whatever its status — the same walk and the same tree-keyed ids as
- * bindingConstraint, over a wider net. The two answer different questions and are kept apart on
- * purpose. "Which rule broke the design" only exists when something failed, so bindingConstraint
+ * bindingCheck, over a wider net. The two answer different questions and are kept apart on
+ * purpose. "Which rule broke the design" only exists when something failed, so bindingCheck
  * stays failing-only and a caller reading it can never mistake a comfortable pass for a cause.
  * "Which rule is closest to breaking" is the question a FEASIBLE design poses — the one to point
  * a sensitivity readout at — and it has an answer whether or not anything is failing. `undefined`
  * when no hard rule produced a finite margin at all (an all-`na` tree).
  *
  * The admissible set is `measurable` above — which skips the boundary tautologies, the reason
- * that predicate exists. bindingConstraint never had to care: a snapped zero is never `fail`.
+ * that predicate exists. bindingCheck never had to care: a snapped zero is never `fail`.
  */
-export function limitingConstraint(res: {
-  rules: readonly RuleResult[];
-  children?: readonly SheetChildReport[];
+export function limitingCheck(res: {
+  checks: readonly CheckResult[];
+  blocks?: readonly SheetBlockReport[];
 }): { id: string; marginPct: number } | undefined {
   return worstBy(ownRules(res), isMeasurable);
 }
@@ -222,10 +222,10 @@ export function limitingConstraint(res: {
  * sensitivity readout takes. `undefined` when no range end has a failing rule, which includes
  * every end that was not run or returned no answer: those carry no rule outcomes to name.
  */
-export function rangeEndConstraint(res: {
-  edges?: readonly SheetEdgeReport[];
+export function rangeEndCheck(res: {
+  rangeEnds?: readonly RangeEndReport[];
 }): { id: string; marginPct: number } | undefined {
-  return worstBy(treeRuleResults({ rules: [], edges: res.edges }), isFailing);
+  return worstBy(treeRuleResults({ checks: [], rangeEnds: res.rangeEnds }), isFailing);
 }
 
 /**
@@ -245,7 +245,7 @@ export function sweepSheet(
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
-    return { param, unit: v?.unit ?? '', x: [], rules: [], feasible: [], stands: [] };
+    return { param, unit: v?.unit ?? '', x: [], checks: [], feasible: [], stands: [] };
   }
 
   const pts = Math.max(2, Math.min(401, Math.floor(n)));
@@ -259,21 +259,21 @@ export function sweepSheet(
   const blocked =
     r.warnings.some((w) => w.severity === 'error') ||
     validateSheet(withParams(r.doc, { [param]: v.min })).some((w) => w.severity === 'error');
-  const rules: SheetSweepRule[] = [];
+  const rules: SheetSweepCheck[] = [];
   collectTreeRules(r.doc, '', rules);
   // Each range end rides the sweep as ONE aggregate curve: the held design's worst hard-rule
   // margin there, per sample — where along this knob the design stops complying at that end. It
   // is a compliance curve and never moves `feasible`. Held in a parallel array
-  // (res.edges mirrors doc.operatingRange by index), so the sample loop needs no id matching.
+  // (res.rangeEnds mirrors doc.operatingRange by index), so the sample loop needs no id matching.
   // Array.isArray, not truthiness, for the reason evaluateSheet's edges guard gives (eval.ts) — a
   // malformed persisted doc must degrade to a sweep with no coverage curves, not throw out of .map.
-  const edgeRules: SheetSweepRule[] = (
+  const edgeRules: SheetSweepCheck[] = (
     Array.isArray(r.doc.operatingRange) ? r.doc.operatingRange : []
   ).map((e) => ({
-    id: e.name + EDGE_SEP,
+    id: e.name + RANGE_END_SEP,
     kind: 'spec',
     marginPct: [],
-    edge: e.name,
+    rangeEnd: e.name,
   }));
   const x: number[] = [];
   const feasible: boolean[] = [];
@@ -284,8 +284,8 @@ export function sweepSheet(
     x.push(t);
     const res = evaluateSheet(withParams(r.doc, { [param]: t }), table, resolveDevice);
     feasible.push(!blocked && res.feasible);
-    const byPath = new Map<string, RuleResult>();
-    indexTreeResults(res.rules, res.children, '', byPath);
+    const byPath = new Map<string, CheckResult>();
+    indexTreeResults(res.checks, res.blocks, '', byPath);
     for (const rl of rules) {
       const rr = byPath.get(rl.id);
       rl.marginPct.push(
@@ -293,14 +293,21 @@ export function sweepSheet(
       );
     }
     for (let j = 0; j < edgeRules.length; j++) {
-      const rep = res.edges?.[j];
+      const rep = res.rangeEnds?.[j];
       edgeRules[j].marginPct.push(rep ? edgeMargin(rep) : null);
     }
     // `blocked` too: a structurally broken doc has no design at any sample, exactly as
     // `runSheet` reports it.
     stood.push(!blocked && stands(res));
   }
-  return { param, unit: v.unit ?? '', x, rules: [...rules, ...edgeRules], feasible, stands: stood };
+  return {
+    param,
+    unit: v.unit ?? '',
+    x,
+    checks: [...rules, ...edgeRules],
+    feasible,
+    stands: stood,
+  };
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */
@@ -356,7 +363,7 @@ export function sweepSheet2(
 
   const pts = Math.max(2, Math.min(101, Math.floor(n)));
   const r = resolvedSheet(doc, refs); // once — constant tree, only the two params move
-  const swept = withoutEdges(r.doc);
+  const swept = withoutRange(r.doc);
   const overrideTwo = (vx: number, vy: number): SheetDoc =>
     withParams(swept, { [paramX]: vx, [paramY]: vy });
   // Validated WITH its range: the map does not evaluate the range ends, but a sheet whose range
@@ -380,8 +387,8 @@ export function sweepSheet2(
       frow.push(!blocked && res.feasible);
       // Name the binding constraint — null when the cell is feasible, and also when
       // infeasibility came from something other than a failing rule (bind error, child
-      // structural error), which bindingConstraint reports as "no rule to name".
-      brow.push(res.feasible ? null : (bindingConstraint(res)?.id ?? null));
+      // structural error), which bindingCheck reports as "no rule to name".
+      brow.push(res.feasible ? null : (bindingCheck(res)?.id ?? null));
     }
     feasible.push(frow);
     binding.push(brow);

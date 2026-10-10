@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { runSheet } from './index';
-import type { BindReport, SheetResult } from './types';
+import type { SizingReport, SheetResult } from './types';
 import {
   table,
   relErr,
@@ -36,8 +36,8 @@ const CL = 2e-12;
 const L = 0.5e-6; // every default sheet sizes at 0.5 µm
 
 /** One block's sizing report, by block name. */
-const block = (r: SheetResult, name: string): BindReport =>
-  r.children!.find((c) => c.name === name)!.bind!;
+const block = (r: SheetResult, name: string): SizingReport =>
+  r.blocks!.find((c) => c.name === name)!.sizing!;
 
 // Every OTA's cgg_in is the gate of ONE input device, per input terminal. cgg = W*L*Cox is
 // exact in the demo model at the width the bind landed on, so where the input child exposes its
@@ -235,15 +235,15 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // and length the base run solved, to the last bit, and the endpoint bias comes out of the
     // operating point instead. A range end free to re-size gave the input pair ~9% more width at
     // cm-hi (1.194 µm → 1.302 µm) and reported the margins of a different amplifier.
-    for (const e of res.edges ?? []) {
+    for (const e of res.rangeEnds ?? []) {
       expect(
-        e.children?.map((c) => c.bind?.W),
+        e.blocks?.map((c) => c.sizing?.W),
         e.name,
-      ).toEqual(res.children?.map((c) => c.bind?.W));
+      ).toEqual(res.blocks?.map((c) => c.sizing?.W));
       expect(
-        e.children?.map((c) => c.bind?.L),
+        e.blocks?.map((c) => c.sizing?.L),
         e.name,
-      ).toEqual(res.children?.map((c) => c.bind?.L));
+      ).toEqual(res.blocks?.map((c) => c.sizing?.L));
     }
     // cm-lo's pin LANDS, so its operating point is a design point and can be locked as intent.
     // Pulling the input common mode 50 mV down to 1.0 V is paid almost entirely by the tail node
@@ -251,12 +251,12 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // drain stays at the fold node, so the 49 mV the tail gives up lands on its own vds, and the
     // extra channel-length modulation lets the gate back off the remaining ~1 mV at the same
     // 10 µA. The margins move with that.
-    const lo = res.edges?.find((e) => e.name === 'cm-lo');
+    const lo = res.rangeEnds?.find((e) => e.name === 'cm-lo');
     expect(lo?.error).toBeUndefined();
     expect(lo?.solved.V_tail).toBeCloseTo(0.4688622, 6);
-    const inAt = lo?.children?.find((c) => c.name === 'in')?.bind;
+    const inAt = lo?.blocks?.find((c) => c.name === 'in')?.sizing;
     expect(inAt?.vgs).toBeCloseTo(0.5311371, 6);
-    const margin = (id: string): number => lo!.rules.find((r) => r.id === id)!.marginPct;
+    const margin = (id: string): number => lo!.checks.find((r) => r.id === id)!.marginPct;
     expect(margin('gain-spec')).toBeCloseTo(-0.185759, 6);
     expect(margin('offset-spec')).toBeCloseTo(-0.4126382, 6);
     expect(lo?.state).toBe('does-not-comply'); // measured, and two specs fail there
@@ -267,7 +267,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // the last PROBE, not a landing — locking those numbers would be asserting an operating point
     // the run never reached, and `solved` is left empty precisely so no consumer can go looking
     // for one.
-    const hi = res.edges?.find((e) => e.name === 'cm-hi');
+    const hi = res.rangeEnds?.find((e) => e.name === 'cm-hi');
     expect(hi?.state).toBe('no-answer');
     expect(hi?.error).toMatch(/does not change sign/);
     expect(hi?.solved).toEqual({});
@@ -431,7 +431,7 @@ describe('operating-range honesty on the demo table', () => {
 
   it('the unreachable cm-hi end is no answer, with the solver reason, and feasibility stands', () => {
     expect(res.feasible).toBe(true);
-    const hi = res.edges?.find((e) => e.name === 'cm-hi');
+    const hi = res.rangeEnds?.find((e) => e.name === 'cm-hi');
     expect(hi?.state).toBe('no-answer'); // asked, and nothing landed — not "never asked"
     expect(hi?.error).toMatch(/does not change sign/);
     expect(hi?.solved).toEqual({}); // a bracket end is never reported as a landing
@@ -442,7 +442,7 @@ describe('operating-range honesty on the demo table', () => {
     // Holding the widths moves the landing: the same claim proven on the design the defaults
     // produce settles the tail 0.65% higher than it did when the endpoint was free to re-size
     // the devices around it (0.38292 → 0.38542). Locked as intent, not as a regression.
-    const lo = res.edges?.find((e) => e.name === 'cm-lo');
+    const lo = res.rangeEnds?.find((e) => e.name === 'cm-lo');
     expect(lo?.state).toBe('complies');
     expect(lo?.solved.V_tail).toBeCloseTo(0.385423, 6);
   });

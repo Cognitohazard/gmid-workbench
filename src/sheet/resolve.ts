@@ -6,7 +6,7 @@
 // unresolved, which evaluation refuses to size. Zero DOM; the library map is injected.
 
 import type { QAWarning } from '../types';
-import { MAX_USE_DEPTH, PATH_SEP, type SheetDoc, type SheetUse } from './types';
+import { MAX_BLOCK_DEPTH, PATH_SEP, type SheetDoc, type SheetBlock } from './types';
 
 /** One sheet the resolver can hand out: `path` is its library id — `folder/name`, no
  *  extension (curated sheets use their on-disk location; runtime-loaded sheets live
@@ -83,7 +83,7 @@ export const MAX_REF_EXPANSION = 256;
  * without refs are shared, not cloned, so callers that persist the result (flatten,
  * detach) must deep-copy before mutating. A resolved use keeps its `ref` alongside the
  * materialized `doc` as provenance — the UI renders such a child read-only. Failures
- * (missing id, ambiguous bare name, reference cycle, chain deeper than MAX_USE_DEPTH,
+ * (missing id, ambiguous bare name, reference cycle, chain deeper than MAX_BLOCK_DEPTH,
  * total expansion past MAX_REF_EXPANSION) push an error warning and leave the use
  * docless, which evaluateSheet fails closed.
  */
@@ -140,8 +140,8 @@ function resolveDoc(
       warnings.push(refError(at, `circular reference: ${[...chain, use.ref].join(' -> ')}`));
       return use;
     }
-    if (chain.length >= MAX_USE_DEPTH) {
-      warnings.push(refError(at, `reference chain nested deeper than ${MAX_USE_DEPTH}`));
+    if (chain.length >= MAX_BLOCK_DEPTH) {
+      warnings.push(refError(at, `reference chain nested deeper than ${MAX_BLOCK_DEPTH}`));
       return use;
     }
     if (budget.left <= 0) {
@@ -200,7 +200,7 @@ export function namedBindings(
 function collectBindings(doc: SheetDoc, prefix: string, depth: number, into: NamedBinding[]): void {
   // Shape-guarded like the evaluator's own walk: a persisted doc reaches here unverified, and
   // this must degrade to "nothing named", never throw.
-  if (depth >= MAX_USE_DEPTH || !Array.isArray(doc.blocks)) return;
+  if (depth >= MAX_BLOCK_DEPTH || !Array.isArray(doc.blocks)) return;
   for (const use of doc.blocks) {
     if (typeof use?.name !== 'string') continue;
     const path = prefix + use.name;
@@ -217,7 +217,7 @@ function stripRefs(doc: SheetDoc): SheetDoc {
   if (!doc.blocks?.length) return doc;
   return {
     ...doc,
-    blocks: doc.blocks.map((use): SheetUse => {
+    blocks: doc.blocks.map((use): SheetBlock => {
       if (!use.doc) return use; // unresolved — nothing to inline; the ref is the content
       const { ref: _ref, ...rest } = use;
       return { ...rest, doc: stripRefs(use.doc) };

@@ -40,7 +40,7 @@ describe('tier1 goldens: CS amp, resistive load', () => {
   const vOut = 1.8 - id * 50e3;
 
   it('binds gm exactly from the spec and derives id', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.id, id)).toBeLessThan(1e-9);
     // Supply current is that derived branch current — an OUTPUT of the sizing here, since the
@@ -59,7 +59,7 @@ describe('tier1 goldens: CS amp, resistive load', () => {
     expect(relErr(res.values.V_out, vOut)).toBeLessThan(1e-9);
     // The bind writes the level with id expanded as gm/gm_id; the row reads the sized id. Both
     // supplied quantities are exact, so the two agree to rounding.
-    expect(relErr(res.bind?.bias?.vds ?? NaN, res.values.V_out)).toBeLessThan(1e-9);
+    expect(relErr(res.sizing?.bias?.vds ?? NaN, res.values.V_out)).toBeLessThan(1e-9);
   });
 
   it('a different load moves the drain by exactly -id*dR, since nothing types it', () => {
@@ -69,7 +69,7 @@ describe('tier1 goldens: CS amp, resistive load', () => {
       withParams(sheet('cs-amp-resistive-load.json'), { R_load: 60e3 }),
       table,
     );
-    const dv = (moved.bind?.bias?.vds ?? NaN) - (res.bind?.bias?.vds ?? NaN);
+    const dv = (moved.sizing?.bias?.vds ?? NaN) - (res.sizing?.bias?.vds ?? NaN);
     expect(relErr(dv, -id * 10e3)).toBeLessThan(1e-9);
     expect(relErr(moved.values.V_out, 1.8 - id * 60e3)).toBeLessThan(1e-9);
     const gds = id / (VA_PER_L * 0.5e-6 + 1.8 - id * 60e3);
@@ -83,7 +83,7 @@ describe('tier1 goldens: CS amp, resistive load', () => {
     const moved = runSheet(withParams(sheet('cs-amp-resistive-load.json'), { gm_id: 10 }), table);
     const id10 = gm / 10;
     expect(relErr(moved.values.id, id10)).toBeLessThan(1e-9);
-    expect(relErr(moved.bind?.bias?.vds ?? NaN, 1.8 - id10 * 50e3)).toBeLessThan(1e-9);
+    expect(relErr(moved.sizing?.bias?.vds ?? NaN, 1.8 - id10 * 50e3)).toBeLessThan(1e-9);
     expect(relErr(moved.values.V_out, 1.8 - id10 * 50e3)).toBeLessThan(1e-9);
     const gds = id10 / (VA_PER_L * 0.5e-6 + 1.8 - id10 * 50e3);
     expect(relErr(moved.values.Rout, par(50e3, 1 / gds))).toBeLessThan(2e-3);
@@ -94,7 +94,7 @@ describe('tier1 goldens: CS amp, resistive load', () => {
       table,
     );
     const idM = (2 * Math.PI * 10e6 * 2e-12 * 1.5) / 12;
-    expect(relErr(margin.bind?.bias?.vds ?? NaN, 1.8 - idM * 50e3)).toBeLessThan(1e-9);
+    expect(relErr(margin.sizing?.bias?.vds ?? NaN, 1.8 - idM * 50e3)).toBeLessThan(1e-9);
   });
 
   it('the interface rows are the load resistor paralleled with ro, and the gate capacitance', () => {
@@ -115,7 +115,7 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
   const gm = 2 * Math.PI * 10e6 * 2e-12 * 1.25;
 
   it('binds the input gm exactly from the spec', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     // The branch current follows from that gm and the inversion choice, and is what the supply
     // pays — the load sits in the same branch and carries no current of its own.
@@ -153,7 +153,7 @@ describe('tier1 goldens: Source-degenerated CS amp', () => {
   const Rs = 2e3;
 
   it('binds gm exactly from the current and gm/ID', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
   });
 
@@ -186,7 +186,7 @@ describe('tier1 goldens: Cascode CS amp', () => {
   const VA = VA_PER_L * 0.5e-6;
 
   it('the cascode device carries the input branch current', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.in__id, I)).toBeLessThan(1e-9);
     expect(relErr(res.values.id, res.values.in__id)).toBeLessThan(1e-12);
   });
@@ -223,7 +223,7 @@ describe('tier1 goldens: Source follower', () => {
   const vds = 1.8 - 1.2 + VGS_GMID12_L05;
 
   it('binds gm exactly and the follower gain is below unity', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(res.values.Av).toBeLessThan(1);
   });
@@ -246,7 +246,7 @@ describe('tier1 goldens: Source follower', () => {
     // The gap below is vgs_est - vgs, which the solve closes to SOLVE_TOL_REL relative to the
     // larger of the two; vds is larger than both, so relative to vds it is smaller still. It is
     // zero to rounding on the demo device only because its vgs does not depend on vds.
-    expect(relErr(res.bind?.bias?.vds ?? NaN, 1.8 - 1.2 + res.values.vgs)).toBeLessThanOrEqual(
+    expect(relErr(res.sizing?.bias?.vds ?? NaN, 1.8 - 1.2 + res.values.vgs)).toBeLessThanOrEqual(
       SOLVE_TOL_REL,
     );
     expect(res.feasible).toBe(true);
@@ -266,9 +266,9 @@ describe('tier1 goldens: Source follower', () => {
     expect(Math.abs(moved.values.vgs_est - moved.values.vgs)).toBeLessThanOrEqual(
       SOLVE_TOL_REL * Math.max(Math.abs(moved.values.vgs_est), Math.abs(moved.values.vgs)),
     );
-    expect(relErr(moved.bind?.bias?.vds ?? NaN, 1.8 - 1.3 + moved.values.vgs)).toBeLessThanOrEqual(
-      SOLVE_TOL_REL,
-    );
+    expect(
+      relErr(moved.sizing?.bias?.vds ?? NaN, 1.8 - 1.3 + moved.values.vgs),
+    ).toBeLessThanOrEqual(SOLVE_TOL_REL);
     expect(moved.warnings).toHaveLength(0);
   });
 
@@ -278,7 +278,7 @@ describe('tier1 goldens: Source follower', () => {
     // ten to one the loaded gain sits 10% below what an unloaded follower would give.
     const gds = gdsOf(20e-6, 0.5e-6, vds);
     expect(relErr(res.values.Rout, 1 / (gm + gds + 1 / 100e3))).toBeLessThan(2e-3);
-    expect(res.rules.find((r) => r.id === 'loading')?.status).toBe('pass');
+    expect(res.checks.find((r) => r.id === 'loading')?.status).toBe('pass');
     expect(9 / (gm + gds)).toBeLessThan(100e3);
     expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
   });
@@ -295,7 +295,7 @@ describe('tier1 goldens: Common gate', () => {
 
   it('the drain sits at the supply less the load drop, and the device is sized there', () => {
     expect(relErr(res.values.V_out, 0.8)).toBeLessThan(1e-9);
-    expect(relErr(res.bind?.bias?.vds ?? NaN, 0.5)).toBeLessThan(1e-9);
+    expect(relErr(res.sizing?.bias?.vds ?? NaN, 0.5)).toBeLessThan(1e-9);
   });
 
   it('a different load moves the drain by exactly -I_bias*dR, since nothing types it', () => {
@@ -303,7 +303,7 @@ describe('tier1 goldens: Common gate', () => {
     // drain-side node follows gds to 20u/3.2.
     const moved = runSheet(withParams(sheet('common-gate.json'), { R_load: 40e3 }), table);
     expect(relErr(moved.values.V_out - res.values.V_out, 0.2)).toBeLessThan(1e-9);
-    expect(relErr(moved.bind?.bias?.vds ?? NaN, 0.7)).toBeLessThan(1e-9);
+    expect(relErr(moved.sizing?.bias?.vds ?? NaN, 0.7)).toBeLessThan(1e-9);
     expect(relErr(moved.values.Rout, 1 / (1 / 40e3 + 20e-6 / 3.2))).toBeLessThan(1e-9);
   });
 
@@ -313,7 +313,7 @@ describe('tier1 goldens: Common gate', () => {
     // leave the drain where it was.
     const moved = runSheet(withParams(sheet('common-gate.json'), { I_bias: 16e-6 }), table);
     expect(relErr(moved.values.V_out, 1.0)).toBeLessThan(1e-9);
-    expect(relErr(moved.bind?.bias?.vds ?? NaN, 0.7)).toBeLessThan(1e-9);
+    expect(relErr(moved.sizing?.bias?.vds ?? NaN, 0.7)).toBeLessThan(1e-9);
     expect(relErr(moved.values.Rout, 40e3)).toBeLessThan(1e-9);
   });
 
@@ -321,7 +321,7 @@ describe('tier1 goldens: Common gate', () => {
     // The input looks into the source, so the finite ro couples R_load back: the resistance
     // is (R_load + ro) divided by the device's own loop gain, not the 1/(gm + gmb) shorthand.
     // (50k + 150k)/(1 + 240u/6.667u) = 200k/37 = 5.405 kohm.
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     const rin = (50e3 + 1 / gds) / (1 + (gm + gmb) / gds);
     expect(relErr(res.values.Rin, rin)).toBeLessThan(1e-3);
@@ -338,8 +338,8 @@ describe('tier1 goldens: Common gate', () => {
     // estimate, simulated at a 0.6 V drain-source bias); the demo's Early voltage is lower, so
     // here it lands short and the gain rule still reads fail. Either way the binding
     // constraint is the input match.
-    expect(res.rules.find((r) => r.id === 'gain-spec')?.status).toBe('fail');
-    expect(res.rules.find((r) => r.id === 'input-match')?.status).toBe('fail');
+    expect(res.checks.find((r) => r.id === 'gain-spec')?.status).toBe('fail');
+    expect(res.checks.find((r) => r.id === 'input-match')?.status).toBe('fail');
   });
 
   it('the drain-side interface is the load paralleled with ro, and the gain rides it', () => {
@@ -394,7 +394,7 @@ describe('tier1 goldens: Sampling switch', () => {
   const L = 0.18e-6;
 
   it('gate capacitance is W*L*Cox at the bound width', () => {
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.cgg, Wsw * L * 0.01)).toBeLessThan(1e-9);
   });
 

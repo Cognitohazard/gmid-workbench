@@ -7,13 +7,13 @@ import { describe, it, expect } from 'vitest';
 import { compileExpr } from '../derive';
 import { additiveCoefficient } from '../expr';
 import { dcInputs, EXAMPLES, exprRoots, runSheet, validateSheet } from './index';
-import { pinPlan, reachedBinds, type ReachedBind } from './validate';
-import { BIND_FLAGS, type SheetBind, type SheetDoc, type SheetVar } from './types';
+import { constraintPlan, reachedGivens, type ReachedGivens } from './validate';
+import { GIVENS_FLAGS, type SheetGivens, type SheetDoc, type SheetVar } from './types';
 import { loadLibrary, REFS, sheet, table } from './library.fixtures';
 import { resolveSheetRefs } from './resolve';
 
 /** A leaf that sizes one device with its drain bias taken from the param `vd`. */
-const leaf = (bind: Partial<SheetBind> = {}, params: SheetVar[] = []): SheetDoc => ({
+const leaf = (bind: Partial<SheetGivens> = {}, params: SheetVar[] = []): SheetDoc => ({
   title: 'leaf',
   polarity: 'n',
   params: [
@@ -303,9 +303,9 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
     };
     expect(validateSheet(doc).filter((w) => w.severity === 'error')).toEqual([]);
     const res = runSheet(doc, table);
-    expect(res.bind?.ok, res.bind?.error).toBe(true);
+    expect(res.sizing?.ok, res.sizing?.error).toBe(true);
     expect(res.feasible).toBe(true);
-    expect(res.bind!.W / table.meta.W!).toBeCloseTo(4, 12);
+    expect(res.sizing!.W / table.meta.W!).toBeCloseTo(4, 12);
   });
 
   it("a binding child's provided pass-through column is that child's device", () => {
@@ -317,7 +317,7 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
       ...leaf({ vds: 'c__foo' }),
       blocks: [{ name: 'c', doc: { ...leaf(), provides: ['foo'] }, params: { vd: 'vgs' } }],
     };
-    expect(dcInputs(doc).cycles.map((c) => c.device)).toEqual(['bind', 'c']);
+    expect(dcInputs(doc).cycles.map((c) => c.device)).toEqual(['givens', 'c']);
   });
 
   it("a binding child's provided row or param is followed into the child, not read as its device", () => {
@@ -333,7 +333,7 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
         blocks: [{ name: 'c', doc: { ...c, equations: rows, provides: [key] } }],
       };
     };
-    const expected = [{ param: 'c.V_r', devices: ['bind'] }];
+    const expected = [{ param: 'c.V_r', devices: ['givens'] }];
     const row = viaChild('lvl', [{ name: 'lvl', expr: 'V_r + 0.1' }]);
     expect(dcInputs(row).unclassified).toEqual(expected);
     expect(dcInputs(viaChild('V_r', [])).unclassified).toEqual(expected);
@@ -482,7 +482,7 @@ describe('hold — the solve order is checked on the document a range end really
     validateSheet(doc)
       .filter((w) => w.severity === 'error')
       .map((w) => w.message);
-  const dev = (bind: SheetBind, provide: string[]): SheetDoc => ({
+  const dev = (bind: SheetGivens, provide: string[]): SheetDoc => ({
     title: 'dev',
     polarity: 'n',
     params: [
@@ -540,7 +540,7 @@ describe('hold — the solve order is checked on the document a range end really
     // waits on the cascode node: a loop. A range end holds the pair's width and current as
     // numbers, so there the cascode reads no tail at all and the order is node, then tail.
     expect(errors(stack({ hold: 'V_a + casc__vgs' }))).toEqual([]);
-    expect(pinPlan(stack({ hold: 'V_a + casc__vgs' }), { held: true })).toEqual({
+    expect(constraintPlan(stack({ hold: 'V_a + casc__vgs' }), { held: true })).toEqual({
       order: ['V_a', 'V_tail'],
     });
   });
@@ -740,19 +740,19 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
   });
 });
 
-// dcInputs and reachedBinds read the same dependency links — rows, solved relations, use
+// dcInputs and reachedGivens read the same dependency links — rows, solved relations, use
 // overrides, child provides — one walked backwards from each bind, the other forwards from a set
 // of moved names, each under its own policy. This holds them to the same answer on the question
 // both can ask: does a top-level param reach any device's sizing?
 
 /** Every `<bind path>.<bind key>:<name>` whose expression reads a name that moves with `moved`,
- *  by reachedBinds. */
+ *  by reachedGivens. */
 const forwardHits = (doc: SheetDoc, moved: string): string[] => {
-  const binds: ReachedBind[] = [];
-  reachedBinds(doc, [moved], '', binds, 0);
+  const binds: ReachedGivens[] = [];
+  reachedGivens(doc, [moved], '', binds, 0);
   return binds.flatMap(({ path, bind, reached }) =>
     Object.entries(bind).flatMap(([k, v]) =>
-      !BIND_FLAGS.has(k) && typeof v === 'string'
+      !GIVENS_FLAGS.has(k) && typeof v === 'string'
         ? compileExpr(v)
             .names.filter((n) => reached.has(n))
             .map((n) => `${path}.${k}:${n}`)
@@ -763,7 +763,7 @@ const forwardHits = (doc: SheetDoc, moved: string): string[] => {
 
 /** Forward reach of a top-level param, closed once through the containment edges. That closure
  *  is the one deliberate asymmetry between the walks: dcInputs follows a range end back into the
- *  edge's `set` expression, while reachedBinds starts from the param an edge sets and never reads
+ *  edge's `set` expression, while reachedGivens starts from the param an edge sets and never reads
  *  what the setting is written in — so a param named only in a `set` reaches when the param that
  *  edge sets does. */
 const forward = (doc: SheetDoc, p: string): boolean =>
@@ -837,12 +837,12 @@ describe('dcInputs and reachedBinds agree on which top-level params reach a devi
     // The simple mirror's output level is its own drain bias, read directly.
     const mirror = lib('mirrors-bias/simple-mirror.json');
     expect(bothWays(mirror, 'V_out')).toEqual([true, true]);
-    expect(forwardHits(mirror, 'V_out')).toEqual(['bind.vds:V_out']);
+    expect(forwardHits(mirror, 'V_out')).toEqual(['givens.vds:V_out']);
     // The wide-swing margin places vds_lo (solved for ref's vdsat plus the margin), which is the
     // reference's drain — so it reaches the output device's gate through the sibling's ref__vgs.
     const wide = lib('mirrors-bias/wide-swing-cascode-mirror.json');
     expect(bothWays(wide, 'node_margin')).toEqual([true, true]);
-    expect(forwardHits(wide, 'node_margin')).toContain('bind.vgs:ref__vgs');
+    expect(forwardHits(wide, 'node_margin')).toContain('givens.vgs:ref__vgs');
     // The inverter's input level enters neither device's bias.
     expect(bothWays(lib('stages/cmos-inverter-amp.json'), 'V_in')).toEqual([false, false]);
   });
@@ -871,7 +871,7 @@ describe('dcInputs and reachedBinds agree on which top-level params reach a devi
 
   it('an override of a pinned child param reaches nothing — a case reachedBinds does not model', () => {
     // The engine ignores the override (the pin picks the value from its own bracket), so the
-    // parent's V_p reaches no device. Only the backward side is asserted: reachedBinds seeds a
+    // parent's V_p reaches no device. Only the backward side is asserted: reachedGivens seeds a
     // child param from any override that reads a moved name, pinned or not, and so reports V_p
     // as reaching k's source — a known over-approximation in an advisory walk.
     expect(backward(overriding(pinnedSource(), 'V_s'), 'V_p')).toBe(false);

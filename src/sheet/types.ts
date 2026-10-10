@@ -62,7 +62,7 @@ export interface SheetVar {
    * `value` is only the displayed default; the solved value replaces it. A pinned param is not
    * sweepable (sweep the spec on the other side of the pin instead). A sheet may pin several
    * params when they can be solved one after another — each one's relation reading only params
-   * solved before it (see pinPlan); two that depend on each other are a coupled system, which
+   * solved before it (see constraintPlan); two that depend on each other are a coupled system, which
    * is refused.
    *
    * `held` is set by the engine, never authored: it marks the pin a fixed-hardware run generates
@@ -114,7 +114,7 @@ export type ParamClass = 'independent' | 'assumed';
 export const PARAM_CLASSES: ReadonlySet<string> = new Set<ParamClass>(['independent', 'assumed']);
 
 /** Type guard: a param the engine PINS via bracketed inversion (see SheetVar.designConstraint). */
-export function pinned(
+export function constrained(
   p: SheetVar,
 ): p is SheetVar & { designConstraint: { lhs: string; rhs: string; held?: boolean } } {
   return typeof p.designConstraint?.lhs === 'string' && typeof p.designConstraint?.rhs === 'string';
@@ -136,18 +136,18 @@ export function holdAsPin(p: SheetVar & { hold: string }, rhs: string): SheetVar
 /**
  * The structural problems that make a document's pins unsolvable, stated ONCE — evaluation
  * fails closed on the same words validation reports, mirroring bindProblem. Returns null when
- * the pins are well-formed. The half-written check comes first because `pinned()` rejects a
+ * the pins are well-formed. The half-written check comes first because `constrained()` rejects a
  * pin missing a side: such a param would otherwise be neither swept nor solved — frozen at its
  * authored value with no warning, and the sheet reported feasible on a design never solved.
  */
-export function pinProblem(params: readonly SheetVar[]): string | null {
-  const half = params.find((p) => p.designConstraint !== undefined && !pinned(p));
+export function constraintProblem(params: readonly SheetVar[]): string | null {
+  const half = params.find((p) => p.designConstraint !== undefined && !constrained(p));
   if (half)
     return (
       `param "${half.name}": pin needs both lhs and rhs — half-written, it would freeze the ` +
       `param without solving it`
     );
-  const pins = params.filter(pinned);
+  const pins = params.filter(constrained);
   const both = pins.find((p) => torn(p));
   if (both)
     return (
@@ -190,7 +190,7 @@ export function pinProblem(params: readonly SheetVar[]): string | null {
  * document order against earlier values + the sized device's quantities + constants.
  * Mirrors a DerivedQuantity {key, expr, unit} — one definition, no hand-rolled formula.
  */
-export interface SheetRow {
+export interface SheetEquation {
   name: string;
   expr: string;
   unit?: string;
@@ -210,10 +210,10 @@ export interface SheetRow {
  * the point here makes the bias an authored, persisted, sweepable part of the design
  * instead of a hidden host-side slice (a cascode's low-vds gds differs ~4–5× from the
  * mid-supply value, so an undeclared bias silently overstates gain). An axis left undeclared
- * takes its namespace default and is reported as ASSUMED (see BindReport.assumed), or — for
+ * takes its namespace default and is reported as ASSUMED (see SizingReport.assumed), or — for
  * vds, which has no honest default — fails the sizing.
  */
-export interface SheetBind {
+export interface SheetGivens {
   L: string;
   gm?: string;
   gm_id?: string;
@@ -268,7 +268,7 @@ export interface SheetBind {
  *
  *  vgs stays out even though a bind may now name it, and the exclusion is load-bearing: a
  *  bias axis is SLICED before sizing, which would collapse the very axis the sizing works
- *  along and leave nothing to place an operating point on. vgs reaches BIND_KEYS as a
+ *  along and leave nothing to place an operating point on. vgs reaches GIVENS_KEYS as a
  *  BINDABLE selector instead, and is consumed by sizeDevice — never by applyBindBias. */
 export const BIAS_AXES: readonly string[] = BASE_QUANTITIES.filter(
   (q) => q.axis && q.key !== 'vgs' && q.key !== 'l',
@@ -278,40 +278,44 @@ export const BIAS_AXES: readonly string[] = BASE_QUANTITIES.filter(
  *  bias axes it may pin. Stated once beside the interface it describes, so a document sanitizer
  *  can check a parsed bind against the real shape instead of a copy that goes stale when BINDABLE
  *  grows (which is exactly how a legal fT bind once got deleted on every reload). */
-export const BIND_KEYS: ReadonlySet<string> = new Set<string>([...BINDABLE, ...BIAS_AXES]);
+export const GIVENS_KEYS: ReadonlySet<string> = new Set<string>([...BINDABLE, ...BIAS_AXES]);
 
 /** Bind keys that are FLAGS rather than expressions. Listed separately because a sanitizer has
  *  to type-check them differently, and because a flag silently failing a string test is the same
- *  reload-eating bug BIND_KEYS was introduced to stop. */
-export const BIND_FLAGS: ReadonlySet<string> = new Set<string>(['diode']);
+ *  reload-eating bug GIVENS_KEYS was introduced to stop. */
+export const GIVENS_FLAGS: ReadonlySet<string> = new Set<string>(['diode']);
 
 // invariant = a hard physical floor (must hold or the design is unphysical); requirement = a
 // hard application spec (must hold or the design misses its purpose) — both gate feasibility.
 // guardrail = a soft advisory (a near-miss heads-up) that is shown but never blocks feasibility.
-export type RuleKind = 'physical' | 'advisory' | 'spec';
+export type CheckKind = 'physical' | 'advisory' | 'spec';
 
 /** True for the kinds that GATE feasibility. The one home for "hardness" — the leaf
  *  verdict, the sweep rule collection, and binding-rule attribution all consult this
  *  whitelist, so a future advisory kind cannot be silently promoted to hard by a
  *  `!== 'advisory'` blacklist somewhere. */
-export const isHardRule = (kind: RuleKind): boolean => kind === 'physical' || kind === 'spec';
-export type RuleOp = '>=' | '<=' | '==';
+export const isHardCheck = (kind: CheckKind): boolean => kind === 'physical' || kind === 'spec';
+export type CheckOp = '>=' | '<=' | '==';
 
-/** Runtime membership sets mirroring the RuleKind/RuleOp unions — one place to coerce untrusted
+/** Runtime membership sets mirroring the CheckKind/CheckOp unions — one place to coerce untrusted
  *  input (saved layouts, raw core callers). Typed ReadonlySet<string> so `.has(rawString)` works. */
-export const RULE_KINDS: ReadonlySet<string> = new Set<RuleKind>(['physical', 'advisory', 'spec']);
-export const RULE_OPS: ReadonlySet<string> = new Set<RuleOp>(['>=', '<=', '==']);
+export const CHECK_KINDS: ReadonlySet<string> = new Set<CheckKind>([
+  'physical',
+  'advisory',
+  'spec',
+]);
+export const CHECK_OPS: ReadonlySet<string> = new Set<CheckOp>(['>=', '<=', '==']);
 
 /**
  * A named comparison the design must satisfy. `lhs`/`rhs` are expression strings
  * (structured — the comparison itself is never parsed out of a string). `tolPct`
  * applies only to '=='; `justification` is an advisory note for a relaxed guardrail.
  */
-export interface SheetRule {
+export interface SheetCheck {
   id: string;
-  kind: RuleKind;
+  kind: CheckKind;
   lhs: string;
-  op: RuleOp;
+  op: CheckOp;
   rhs: string;
   tolPct?: number;
   justification?: string;
@@ -369,11 +373,11 @@ export interface SheetWiring {
   source: string;
 }
 
-/** The exact key set of a `wiring` declaration — strict, like BIND_KEYS/EDGE_KEYS, so a typo
+/** The exact key set of a `wiring` declaration — strict, like GIVENS_KEYS/RANGE_END_KEYS, so a typo
  *  is named rather than silently dropping half of the identity. */
 export const WIRING_KEYS: ReadonlySet<string> = new Set<string>(['gate', 'source']);
 
-export interface SheetUse {
+export interface SheetBlock {
   name: string;
   doc?: SheetDoc;
   ref?: string;
@@ -388,7 +392,7 @@ export interface SheetUse {
 /** Maximum composition nesting depth — a backstop against a pathologically deep
  *  authored tree (embedded docs form a finite tree, so this is a sanity cap, not a
  *  cycle guard). Shared by the evaluator and the validator. */
-export const MAX_USE_DEPTH = 8;
+export const MAX_BLOCK_DEPTH = 8;
 
 /** Maximum tearing variables (params carrying `solveFor`) one sheet may declare. The scope rule
  *  permits "small, explicit, designer-named fixed points" and forbids a nodal solver; tearing
@@ -407,9 +411,9 @@ export function torn(p: SheetVar): p is SheetVar & { solveFor: string } {
  *  (bisection). The one predicate for every surface that renders "solved, not set": read-only
  *  fields, slider suppression. (`sweepable` keeps its own structural test on purpose: it must
  *  also refuse to sweep a MALFORMED pin, which the shape guards here deliberately reject so
- *  pinProblem can name it.) */
+ *  constraintProblem can name it.) */
 export function engineSolved(p: SheetVar): boolean {
-  return torn(p) || pinned(p);
+  return torn(p) || constrained(p);
 }
 
 /** True when a param is a finitely-bounded slider variable (sweepable). The ONE
@@ -459,7 +463,7 @@ export const splitProvide = (name: string): [string, string] | undefined => {
 /** The flat names a child use injects into its parent's scope: exactly what its `provide` list
  *  declares, each joined to the use name. A ref-only use (no embedded doc yet) injects nothing
  *  — its list arrives at resolution. One spelling of "a block exposes only what it provides". */
-export const providedNames = (u: SheetUse): string[] =>
+export const providedNames = (u: SheetBlock): string[] =>
   (u.doc?.provides ?? []).map((k) => joinProvide(u.name, k));
 
 /**
@@ -488,7 +492,7 @@ export function withParams(doc: SheetDoc, o: Record<string, number>): SheetDoc {
 
 /** Re-attribute a composed child's warning to its use site, so a rolled-up warning points at
  *  the offending block (and a child error still blocks the parent's closed feasibility). */
-export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
+export function prefixBlockWarning(useName: string, w: QAWarning): QAWarning {
   return {
     ...w,
     message: `use "${useName}": ${w.message}`,
@@ -500,7 +504,7 @@ export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
  * One end of the sheet's claimed operating range: one more full evaluation of THIS doc with the
  * named params' values overridden — each `set` expression evaluated against the base result —
  * whose outcome is reported as compliance, beside feasibility and never folded into it (see
- * SheetEdgeReport.state). The canonical use is the claimed common-mode range:
+ * RangeEndReport.state). The canonical use is the claimed common-mode range:
  * `{name: "cm-lo", set: {CM_dc: "CM_lo"}}` asks whether the design the base run produced still
  * holds at the low end, EXACTLY (its own pin solve from the full authored bracket, its own
  * children) where a linearized guardrail could only estimate it. The devices are held at the
@@ -508,7 +512,7 @@ export function prefixUseWarning(useName: string, w: QAWarning): QAWarning {
  * and no other. Edges check the ENDS, not the interior — the sweep remains the interval
  * authority. A composed child's edges are not evaluated; the parent owns range claims.
  */
-export interface SheetEdge {
+export interface SheetRangeEnd {
   name: string;
   /** param name → expression, evaluated in the BASE evaluation's scope */
   set: Record<string, string>;
@@ -517,7 +521,7 @@ export interface SheetEdge {
 
 /** Separator between an edge name and a rule id in edge-qualified ids
  *  (`cm-lo@tail-saturated`). */
-export const EDGE_SEP = '@';
+export const RANGE_END_SEP = '@';
 
 /** Separator that joins a use path to a rule id in tree-keyed results (`cs.headroom`). */
 export const PATH_SEP = '.';
@@ -528,16 +532,16 @@ export const PATH_SEP = '.';
  *  use names) reserves both separators; a name carrying one could silently shadow
  *  another rule's outcome. One definition, so the reserved set cannot drift per site. */
 export function idSepProblem(name: string): string | undefined {
-  if (name.includes(EDGE_SEP)) return EDGE_SEP;
+  if (name.includes(RANGE_END_SEP)) return RANGE_END_SEP;
   if (name.includes(PATH_SEP)) return PATH_SEP;
   return undefined;
 }
 
-/** How a block names itself in a report or a warning: `bind` for the sheet's own device, the
+/** How a block names itself in a report or a warning: `givens` for the sheet's own device, the
  *  trimmed use path for anything below. One spelling, because a reader is meant to match a
  *  report's block against the warning that names the same one. */
 export const blockPath = (path: string): string =>
-  path === '' ? 'bind' : path.slice(0, -PATH_SEP.length);
+  path === '' ? 'givens' : path.slice(0, -PATH_SEP.length);
 
 /** A sheet document — the authored model the GUI edits and persists verbatim. A leaf
  *  has no `uses`; a composed sheet embeds child blocks and references their `provide`d
@@ -549,17 +553,17 @@ export interface SheetDoc {
   description?: string;
   polarity: 'n' | 'p'; // a self-description label only; no contract enforced at leaf
   params: SheetVar[];
-  givens?: SheetBind;
-  equations: SheetRow[];
-  checks: SheetRule[];
-  blocks?: SheetUse[];
+  givens?: SheetGivens;
+  equations: SheetEquation[];
+  checks: SheetCheck[];
+  blocks?: SheetBlock[];
   provides?: string[];
-  operatingRange?: SheetEdge[];
+  operatingRange?: SheetRangeEnd[];
 }
 
 /**
  * The exact key set of every authored container, stated beside the interfaces they mirror so a
- * document sanitizer can walk a parsed object against the REAL shape. BIND_KEYS/BIND_FLAGS above
+ * document sanitizer can walk a parsed object against the REAL shape. GIVENS_KEYS/GIVENS_FLAGS above
  * exist for the same reason and stay separate only because a bind's keys additionally split by
  * type (expression vs flag). A sanitizer keeping its own copy of this knowledge is the mechanism
  * that silently ate a legal fT bind on reload — and would have eaten `pin` and `diode` — so any
@@ -568,14 +572,14 @@ export interface SheetDoc {
 export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
   'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'designConstraint', 'hold', 'class',
 ]); // prettier-ignore
-export const ROW_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
-export const RULE_KEYS: ReadonlySet<string> = new Set<string>([
+export const EQUATION_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
+export const CHECK_KEYS: ReadonlySet<string> = new Set<string>([
   'id', 'kind', 'lhs', 'op', 'rhs', 'tolPct', 'justification', 'note',
 ]); // prettier-ignore
-export const USE_KEYS: ReadonlySet<string> = new Set<string>([
+export const BLOCK_KEYS: ReadonlySet<string> = new Set<string>([
   'name', 'doc', 'ref', 'device', 'params', 'wiring',
 ]); // prettier-ignore
-export const EDGE_KEYS: ReadonlySet<string> = new Set<string>(['name', 'set', 'note']);
+export const RANGE_END_KEYS: ReadonlySet<string> = new Set<string>(['name', 'set', 'note']);
 export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
   'title', 'description', 'polarity', 'params', 'givens', 'equations', 'checks', 'blocks',
   'provides', 'operatingRange',
@@ -593,11 +597,11 @@ export function docExpressions(doc: SheetDoc): string[] {
   const out: string[] = [];
   if (doc.givens) {
     for (const [k, v] of Object.entries(doc.givens)) {
-      if (!BIND_FLAGS.has(k) && typeof v === 'string') out.push(v);
+      if (!GIVENS_FLAGS.has(k) && typeof v === 'string') out.push(v);
     }
   }
   for (const p of doc.params) {
-    if (pinned(p)) out.push(p.designConstraint.lhs, p.designConstraint.rhs);
+    if (constrained(p)) out.push(p.designConstraint.lhs, p.designConstraint.rhs);
     if (torn(p)) out.push(p.solveFor);
     if (holds(p)) out.push(p.hold);
   }
@@ -613,20 +617,20 @@ export function docExpressions(doc: SheetDoc): string[] {
 
 /** A child block's evaluated summary, surfaced so the UI can show each child's title,
  *  feasibility, and the scalar values it exposed — without re-evaluating the tree.
- *  `rules` (and nested `children`) carry the child's own rule outcomes so a composed
+ *  `checks` (and nested `blocks`) carry the child's own rule outcomes so a composed
  *  report or sweep can show WHICH constraint below the top sheet binds — otherwise a
  *  feasibility flip caused by a child rule has no visible cause at the top. */
-export interface SheetChildReport {
+export interface SheetBlockReport {
   name: string;
   title: string;
   feasible: boolean;
   /** The child's own sized operating point (W, VGS, ID, bias) or its bind error — so a
    *  composed view can show each block's sizing, not just the scalars it exposes upward.
    *  Absent for a child that has no bind or died before sizing. */
-  bind?: BindReport;
+  sizing?: SizingReport;
   provides: Record<string, number>;
-  rules: RuleResult[];
-  children?: SheetChildReport[];
+  checks: CheckResult[];
+  blocks?: SheetBlockReport[];
   /** This block's own held expressions at this run (see SheetResult.held). */
   held?: Record<string, number>;
 }
@@ -640,9 +644,9 @@ export interface SheetChildReport {
  * bias clamp fires exactly at a claim's extreme, and a green chip must not rest on
  * silently clamped data), and — when the run could not be evaluated at all — the solver's
  * message in `error`, so a budget starvation stays tellable from "the bracket cannot
- * reach it". Rule-level failures live in `rules`, never in `error`.
+ * reach it". Rule-level failures live in `checks`, never in `error`.
  */
-export interface SheetEdgeReport {
+export interface RangeEndReport {
   name: string;
   /**
    * Which of FOUR outcomes this range end reached. `complies` / `does-not-comply` are verdicts
@@ -660,17 +664,17 @@ export interface SheetEdgeReport {
    * its current at this end at all. That is a measured failure of the design, not a gap in the
    * tool, though it leaves no rule outcomes either.
    */
-  state: SheetEdgeState;
+  state: PointState;
   set: Record<string, number>;
-  rules: RuleResult[];
-  children?: SheetChildReport[];
+  checks: CheckResult[];
+  blocks?: SheetBlockReport[];
   solved: Record<string, number>;
   warnings: QAWarning[];
   error?: string;
   /** Blocks whose bind named neither a width nor a current, so this run held the base current
    *  by ASSUMPTION — an ideal source, since the sheet never said where the current comes from.
-   *  Paths as warnings spell them (`bind` for the sheet's own device, the use path for a
-   *  child). Reported rather than warned, like BindReport.assumed: it is a property of what
+   *  Paths as warnings spell them (`givens` for the sheet's own device, the use path for a
+   *  child). Reported rather than warned, like SizingReport.assumed: it is a property of what
    *  the author wrote down, and the fix is to author the current explicitly. */
   assumedSource?: string[];
 }
@@ -679,9 +683,9 @@ export interface SheetEdgeReport {
  *  answers, not absences: asking a question of a design that does not exist, or of data that
  *  does not reach, has no honest verdict, and inventing one (either way) is what these two
  *  states exist to prevent. */
-export type SheetEdgeState = 'complies' | 'does-not-comply' | 'no-answer' | 'not-run';
+export type PointState = 'complies' | 'does-not-comply' | 'no-answer' | 'not-run';
 
-export type RuleStatus = 'pass' | 'amber' | 'fail' | 'na';
+export type CheckStatus = 'pass' | 'amber' | 'fail' | 'na';
 
 /**
  * The evaluated outcome of one rule: the two sides, a signed margin (SI distance to
@@ -689,14 +693,14 @@ export type RuleStatus = 'pass' | 'amber' | 'fail' | 'na';
  * side could not be computed (undeclared name, eval error, or a non-finite value) —
  * never a silent pass.
  */
-export interface RuleResult {
+export interface CheckResult {
   id: string;
-  kind: RuleKind;
+  kind: CheckKind;
   /** The comparison this outcome came from, carried structurally rather than left to be read
-   *  back out of `text` — the same discipline SheetRule states for the authored side. A
+   *  back out of `text` — the same discipline SheetCheck states for the authored side. A
    *  consumer that must treat '==' differently (its margin has a CUSP at agreement, so a
    *  central derivative across it is meaningless) needs the operator, not a rendering of it. */
-  op: RuleOp;
+  op: CheckOp;
   text: string; // human-readable "lhs op rhs"
   lhsValue: number;
   rhsValue: number;
@@ -710,7 +714,7 @@ export interface RuleResult {
    * `margin`; anything DIFFERENCING margins uses this.
    */
   rawMargin: number;
-  status: RuleStatus;
+  status: CheckStatus;
   detail?: string;
 }
 
@@ -720,7 +724,7 @@ export interface RuleResult {
  * The full operating point (gm, gm/ID, ceiling, feasible, vstar, …) reaches rows and
  * rules through the merged `values` map, so it is not duplicated here.
  */
-export interface BindReport {
+export interface SizingReport {
   ok: boolean;
   W: number;
   /** The length the bind resolved to — what the sizing was ASKED for (a length off the table's
@@ -762,14 +766,14 @@ export interface BindReport {
  */
 export interface SheetResult {
   values: Record<string, number>;
-  bind?: BindReport;
-  rules: RuleResult[];
+  sizing?: SizingReport;
+  checks: CheckResult[];
   feasible: boolean;
   warnings: QAWarning[];
   /** Present (possibly empty) only when the sheet composes children; absent for a leaf. */
-  children?: SheetChildReport[];
+  blocks?: SheetBlockReport[];
   /** Present only when the doc declares containment edges (top-level evaluation only). */
-  edges?: SheetEdgeReport[];
+  rangeEnds?: RangeEndReport[];
   /**
    * Whether the design this run produced, held fixed, still works at every end of its claimed
    * operating range — true only when every range end came back `complies`. A second question,
@@ -819,26 +823,26 @@ export function stands(res: SheetResult): boolean {
  *  attempted at all. Named once rather than retyped at each consumer: it is a two-field
  *  conjunction, and the site that gets its polarity wrong is the site that turns "we did not
  *  look" back into "we looked and it failed". */
-export const edgeBroke = (e: SheetEdgeReport): boolean =>
+export const rangeEndBroke = (e: RangeEndReport): boolean =>
   e.state !== 'not-run' && e.error !== undefined;
 
 /** The same doc with its operating range dropped, so an evaluation of it answers feasibility
  *  alone and never enters the range-end runs. Structural. */
-export function withoutEdges(doc: SheetDoc): SheetDoc {
+export function withoutRange(doc: SheetDoc): SheetDoc {
   const { operatingRange: _range, ...rest } = doc;
   return rest;
 }
 
 /** Every coordinate, anywhere in one evaluation's tree, that a device was asked for and its
- *  table does not reach (see BindReport.clamped) — `bind vds` for the sheet's own device,
+ *  table does not reach (see SizingReport.clamped) — `givens vds` for the sheet's own device,
  *  `stage1.load l` for a child's. Empty when every operating point was read where it was asked
  *  for. A held design's run consults it before calling its outcome an answer. */
 export function clampedIn(
-  res: { bind?: BindReport; children?: readonly SheetChildReport[] },
+  res: { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] },
   path = '',
 ): string[] {
-  const out = (res.bind?.clamped ?? []).map((axis) => `${path || 'bind'} ${axis}`);
-  for (const c of res.children ?? [])
+  const out = (res.sizing?.clamped ?? []).map((axis) => `${path || 'givens'} ${axis}`);
+  for (const c of res.blocks ?? [])
     out.push(...clampedIn(c, path ? `${path}${PATH_SEP}${c.name}` : c.name));
   return out;
 }
@@ -846,14 +850,14 @@ export function clampedIn(
 /** Index one evaluation's rule outcomes under `prefix`, by the tree-key scheme the sweep's
  *  rule collection uses: a child's outcomes carry its use path (`cs.headroom`). */
 export function indexTreeResults(
-  rules: readonly RuleResult[],
-  children: readonly SheetChildReport[] | undefined,
+  rules: readonly CheckResult[],
+  children: readonly SheetBlockReport[] | undefined,
   prefix: string,
-  into: Map<string, RuleResult>,
+  into: Map<string, CheckResult>,
 ): void {
   for (const rr of rules) into.set(prefix + rr.id, rr);
   for (const c of children ?? [])
-    indexTreeResults(c.rules, c.children, `${prefix}${c.name}${PATH_SEP}`, into);
+    indexTreeResults(c.checks, c.blocks, `${prefix}${c.name}${PATH_SEP}`, into);
 }
 
 /** Every rule outcome of one evaluation keyed by its tree key — use paths below the top sheet,
@@ -868,15 +872,15 @@ export function indexTreeResults(
  *  plainer reason that it has no outcomes at all — stated rather than left to the empty array,
  *  so the two reasons stay tellable apart here as everywhere else. */
 export function treeRuleResults(res: {
-  rules: readonly RuleResult[];
-  children?: readonly SheetChildReport[];
-  edges?: readonly SheetEdgeReport[];
-}): Map<string, RuleResult> {
-  const byPath = new Map<string, RuleResult>();
-  indexTreeResults(res.rules, res.children, '', byPath);
-  for (const e of res.edges ?? [])
+  checks: readonly CheckResult[];
+  blocks?: readonly SheetBlockReport[];
+  rangeEnds?: readonly RangeEndReport[];
+}): Map<string, CheckResult> {
+  const byPath = new Map<string, CheckResult>();
+  indexTreeResults(res.checks, res.blocks, '', byPath);
+  for (const e of res.rangeEnds ?? [])
     if (e.state !== 'not-run' && e.error === undefined)
-      indexTreeResults(e.rules, e.children, `${e.name}${EDGE_SEP}`, byPath);
+      indexTreeResults(e.checks, e.blocks, `${e.name}${RANGE_END_SEP}`, byPath);
   return byPath;
 }
 
@@ -885,17 +889,17 @@ export function treeRuleResults(res: {
  * says how much room a constraint has; this says which knob moves it, and how fast, so
  * "infeasible" comes with somewhere to turn.
  *
- * Margins are DIFFERENCED raw (see RuleResult.rawMargin), in SI units of the rule's own two
+ * Margins are DIFFERENCED raw (see CheckResult.rawMargin), in SI units of the rule's own two
  * sides. `deltaPlus`/`deltaMinus` are the change over one step in each direction — the ranking
  * quantity, since they compare knobs at a common fractional move — and `dMarginPerUnit` is the
  * slope in margin per unit of the parameter. Any of the three is NaN where it could not be
  * formed: a probe that did not stand, a direction a bound blocked, or an equality rule, whose
  * margin has a cusp at agreement and therefore no central derivative.
  */
-export interface SheetSensitivityRule {
+export interface SheetSensitivityCheck {
   id: string;
-  kind: RuleKind;
-  baseStatus: RuleStatus;
+  kind: CheckKind;
+  baseStatus: CheckStatus;
   baseMargin: number;
   dMarginPerUnit: number;
   deltaPlus: number;
@@ -915,7 +919,7 @@ export interface SheetSensitivity {
   param: string;
   value: number;
   step: number;
-  rules: SheetSensitivityRule[];
+  rules: SheetSensitivityCheck[];
   error?: string;
 }
 
@@ -926,14 +930,14 @@ export interface SheetSensitivity {
  * one axis. In a composed sweep, descendant blocks' HARD rules ride along with path-prefixed
  * ids (`cs.headroom`) so the constraint that binds is on the chart wherever it lives.
  */
-export interface SheetSweepRule {
+export interface SheetSweepCheck {
   id: string;
-  kind: RuleKind;
+  kind: CheckKind;
   marginPct: (number | null)[];
   /** Present on a containment edge's aggregate curve (the edge's name): the trace is the
    *  edge run's WORST hard-rule margin, not a single authored rule — consumers label it as
    *  an edge rather than parsing the trailing separator out of the id. */
-  edge?: string;
+  rangeEnd?: string;
 }
 
 /**
@@ -946,7 +950,7 @@ export interface SheetSweep {
   param: string;
   unit: string;
   x: number[];
-  rules: SheetSweepRule[];
+  checks: SheetSweepCheck[];
   feasible: boolean[];
   /**
    * Whether each sample's evaluation completed (see `stands`). A sample that did not is

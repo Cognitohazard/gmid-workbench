@@ -22,17 +22,17 @@ import {
   runSheet,
   evaluateSheet,
   heldOutcome,
-  rangeEndConstraint,
+  rangeEndCheck,
   sweepSheet,
   sheetSensitivities,
   validateSheet,
 } from './index';
-import { pinHardware } from './coverage';
+import { holdHardware } from './coverage';
 // The closed forms, from the module the library goldens share — not the fixtures that re-export
 // them, whose import walks sheets/ off disk and builds a demo table this suite does not use.
 import { gdsOf, relErr } from './library.math';
 import { clampedIn, stands, treeRuleResults } from './types';
-import type { BindReport, SheetChildReport, SheetDoc } from './types';
+import type { SizingReport, SheetBlockReport, SheetDoc } from './types';
 
 /** A four-dimensional [l, vds, vsb, vgs] table — the shape a real PDK export has. The 0.05 V
  *  vsb step lands each body-effect threshold shift (BODY_FACTOR × step) exactly on the 0.01 V
@@ -47,7 +47,7 @@ const dev = generateDemoDevice({
 // ---------------------------------------------------------------------------------------
 
 describe('the edge transformation — fixed hardware, decided on two booleans', () => {
-  const report = (over: Partial<BindReport> = {}): BindReport => ({
+  const report = (over: Partial<SizingReport> = {}): SizingReport => ({
     ok: true,
     W: 1.194e-6,
     L: 5e-7,
@@ -65,8 +65,8 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
   });
   const pin = (
     bind: SheetDoc['givens'],
-    r: BindReport | undefined = report(),
-  ): SheetDoc['givens'] => pinHardware(doc(bind), { bind: r }).doc.givens;
+    r: SizingReport | undefined = report(),
+  ): SheetDoc['givens'] => holdHardware(doc(bind), { sizing: r }).doc.givens;
 
   it('leaves a width-first bind exactly as authored', () => {
     // Already fixed hardware. Its partner is how the sheet writes a gate tie, and under a move
@@ -89,9 +89,9 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
   });
 
   it('pins the current too when the sheet never said where it comes from, and says so', () => {
-    const p = pinHardware(doc({ L: 'L_p', gm: '2*pi*GBW*CL', gm_id: '10' }), { bind: report() });
+    const p = holdHardware(doc({ L: 'L_p', gm: '2*pi*GBW*CL', gm_id: '10' }), { sizing: report() });
     expect(p.doc.givens).toEqual({ L: '5e-7', W: '0.000001194', id: '0.00002' });
-    expect(p.assumedSource).toEqual(['bind']);
+    expect(p.assumedSource).toEqual(['givens']);
   });
 
   it('drops EVERY operating-point selector, not a hand-copied subset', () => {
@@ -139,25 +139,25 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
         { name: 'dup', doc: leaf('I_b') },
       ],
     };
-    const kids: SheetChildReport[] = [
+    const kids: SheetBlockReport[] = [
       {
         name: 'dup',
         title: 'c',
         feasible: true,
-        bind: report({ W: 1e-6 }),
+        sizing: report({ W: 1e-6 }),
         provides: {},
-        rules: [],
+        checks: [],
       },
       {
         name: 'dup',
         title: 'c',
         feasible: true,
-        bind: report({ W: 2e-6 }),
+        sizing: report({ W: 2e-6 }),
         provides: {},
-        rules: [],
+        checks: [],
       },
     ];
-    const out = pinHardware(parent, { children: kids }).doc;
+    const out = holdHardware(parent, { blocks: kids }).doc;
     expect(out.blocks?.map((u) => u.doc?.givens?.W)).toEqual(['0.000001', '0.000002']);
     expect(out.blocks?.map((u) => u.doc?.givens?.id)).toEqual(['I_a', 'I_b']);
   });
@@ -166,13 +166,13 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
     // Degrade, never invent — the same discipline the rest of the engine takes. The caller gates
     // on the base run standing, so this is defence rather than a path in normal use.
     const b = { L: 'L_p', gm_id: '10', id: 'I_d' };
-    expect(pinHardware(doc(b), {}).doc.givens).toEqual(b); // no report at all
+    expect(holdHardware(doc(b), {}).doc.givens).toEqual(b); // no report at all
     expect(pin(b, report({ ok: false, W: NaN, L: NaN }))).toEqual(b);
   });
 
   it('touches nothing but the binds', () => {
-    const p = pinHardware(doc({ L: 'L_p', gm_id: '10', id: 'I_d', diode: true }), {
-      bind: report(),
+    const p = holdHardware(doc({ L: 'L_p', gm_id: '10', id: 'I_d', diode: true }), {
+      sizing: report(),
     }).doc;
     expect(p.params).toEqual([{ name: 'I_d', value: 2e-5 }]);
     expect(p.equations).toEqual([{ name: 'r', expr: 'I_d * 2' }]);
@@ -220,7 +220,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     ...over,
   });
 
-  const bindAt = (c: SheetChildReport | undefined): BindReport => c!.bind!;
+  const bindAt = (c: SheetBlockReport | undefined): SizingReport => c!.sizing!;
 
   it('holds the transistor and lets the body effect move the gate, and only the gate', () => {
     // The purest fixed-hardware statement the model can make: at a fixed vds and a fixed current
@@ -236,13 +236,13 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       dev,
     );
     expect(res.complies).toBe(true);
-    const base = bindAt(res.children?.[0]);
-    const end = bindAt(res.edges?.[0].children?.[0]);
+    const base = bindAt(res.blocks?.[0]);
+    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W); // to the last bit: this is the same transistor
     expect(end.L).toBe(base.L);
     expect(end.id).toBe(base.id); // the authored current, re-evaluated to the same number
     expect(end.vgs - base.vgs).toBeCloseTo(-BODY_FACTOR * 0.4, 9);
-    expect(res.edges?.[0].children?.[0].provides.gm_id).toBeCloseTo(10, 3);
+    expect(res.rangeEnds?.[0].blocks?.[0].provides.gm_id).toBeCloseTo(10, 3);
   });
 
   it('re-settles the operating point when the range end moves the drain', () => {
@@ -254,11 +254,11 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // and read gm/ID = 10 exactly at an unchanged vgs — which is what these numbers rule out.
     const res = runSheet(mk({ operatingRange: [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }] }), dev);
     expect(res.complies).toBe(true);
-    const base = bindAt(res.children?.[0]);
-    const end = bindAt(res.edges?.[0].children?.[0]);
+    const base = bindAt(res.blocks?.[0]);
+    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W);
     expect(end.vgs).toBeLessThan(base.vgs);
-    const at = res.edges?.[0].children?.[0].provides;
+    const at = res.rangeEnds?.[0].blocks?.[0].provides;
     expect(relErr(at!.gm_id, 10.5016)).toBeLessThan(1e-3); // interpolation, not the model
     expect(relErr(at!.gds, gdsOf(ID, L, 1.0))).toBeLessThan(1e-9); // closed form, exact
   });
@@ -284,14 +284,14 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       dev,
     );
     expect(res.complies).toBe(true);
-    const [rBase, mBase] = (res.children ?? []).map(bindAt);
-    const [rEnd, mEnd] = (res.edges?.[0].children ?? []).map(bindAt);
+    const [rBase, mBase] = (res.blocks ?? []).map(bindAt);
+    const [rEnd, mEnd] = (res.rangeEnds?.[0].blocks ?? []).map(bindAt);
     expect(rEnd.vgs - rBase.vgs).toBeCloseTo(-BODY_FACTOR * 0.4, 9);
     expect(rEnd.W).toBe(rBase.W);
     expect(mEnd.W).toBe(mBase.W);
     const vds = mEnd.bias!.vds;
     expect(vds - mBase.bias!.vds).toBeCloseTo(BODY_FACTOR * 0.4, 6);
-    const at = res.edges?.[0].children?.[1].provides;
+    const at = res.rangeEnds?.[0].blocks?.[1].provides;
     expect(at!.gm_id).toBeGreaterThan(10); // exactly 10 if the device had re-sized instead
     expect(relErr(at!.gds, gdsOf(ID, L, vds))).toBeLessThan(1e-9);
   });
@@ -326,14 +326,14 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       dev,
     );
     expect(res.complies).toBe(true);
-    const base = bindAt(res.children?.[0]);
-    const end = bindAt(res.edges?.[0].children?.[0]);
+    const base = bindAt(res.blocks?.[0]);
+    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W);
     expect(end.L).toBe(base.L);
     expect(end.id).toBe(base.id);
     expect(end.vgs).toBe(base.vgs);
-    const baseAt = res.children![0].provides;
-    const endAt = res.edges![0].children![0].provides;
+    const baseAt = res.blocks![0].provides;
+    const endAt = res.rangeEnds![0].blocks![0].provides;
     expect(baseAt.gm_id).toBe(12); // the authored ratio, honoured exactly
     const drift = 1 - endAt.gm / baseAt.gm;
     expect(drift).toBeGreaterThan(0);
@@ -358,7 +358,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     const res = runSheet(underGate(held), dev);
     expect(res.feasible).toBe(true);
     expect(res.values.X).toBe(X0);
-    expect(res.held).toEqual({ X: X0 + bindAt(res.children?.[0]).vgs });
+    expect(res.held).toEqual({ X: X0 + bindAt(res.blocks?.[0]).vgs });
   });
 
   it('holds the gate at a range end and lets the node under it move', () => {
@@ -369,15 +369,15 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // raises vgs by BODY_FACTOR·D on top of the same drain-driven fall d:
     //   (X + D) + (vgs - d + BODY_FACTOR·D) = X + vgs   gives   D = d/(1 + BODY_FACTOR).
     const typed = runSheet(underGate({ name: 'X', value: X0 }, drainHi), dev);
-    const d = bindAt(typed.children?.[0]).vgs - bindAt(typed.edges?.[0].children?.[0]).vgs;
+    const d = bindAt(typed.blocks?.[0]).vgs - bindAt(typed.rangeEnds?.[0].blocks?.[0]).vgs;
     expect(d).toBeGreaterThan(5e-3); // the drain really moved the device
 
     const res = runSheet(underGate(held, drainHi), dev);
     expect(res.complies).toBe(true);
-    const base = bindAt(res.children?.[0]);
-    const end = bindAt(res.edges?.[0].children?.[0]);
+    const base = bindAt(res.blocks?.[0]);
+    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W); // the same transistor
-    const landed = res.edges![0].solved.X;
+    const landed = res.rangeEnds![0].solved.X;
     expect(end.bias!.vsb).toBeCloseTo(landed, 12); // the node the device actually sat on
     // The gate is where it was, to the bisection's landing tolerance on a 0.4 V bracket.
     expect(landed + end.vgs).toBeCloseTo(res.held!.X, 5);
@@ -394,8 +394,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     const res = runSheet(doc, dev);
     expect(res.feasible).toBe(true);
     expect(res.complies).toBe(false);
-    expect(res.edges?.[0].error).toMatch(/held param "X".*numerically unresolved/);
-    expect(res.edges?.[0].solved).toEqual({});
+    expect(res.rangeEnds?.[0].error).toMatch(/held param "X".*numerically unresolved/);
+    expect(res.rangeEnds?.[0].solved).toEqual({});
   });
 
   it('still solves a held expression whose own term is tiny', () => {
@@ -406,7 +406,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       dev,
     );
     expect(res.complies).toBe(true);
-    expect(res.edges![0].solved.X).toBeCloseTo(X0, 5);
+    expect(res.rangeEnds![0].solved.X).toBeCloseTo(X0, 5);
   });
 
   it('fails the run when a held expression does not evaluate', () => {
@@ -447,12 +447,12 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       return doc;
     };
     const typed = runSheet(held(), dev);
-    const d = bindAt(typed.children?.[0]).vgs - bindAt(typed.edges?.[0].children?.[0]).vgs;
+    const d = bindAt(typed.blocks?.[0]).vgs - bindAt(typed.rangeEnds?.[0].blocks?.[0]).vgs;
 
     const res = runSheet(held('X + vgs'), dev);
-    const base = res.children![0];
+    const base = res.blocks![0];
     expect(base.held).toEqual({ X: 0.25 + bindAt(base).vgs });
-    const end = bindAt(res.edges?.[0].children?.[0]);
+    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(bindAt(base).W);
     expect(relErr(end.bias!.vsb - 0.25, d / (1 + BODY_FACTOR))).toBeLessThan(5e-3);
     expect(end.bias!.vsb + end.vgs).toBeCloseTo(base.held!.X, 5);
@@ -476,8 +476,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       operatingRange: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
     };
     const res = runSheet(doc, dev);
-    expect(res.bind?.ok).toBe(true); // the center sized; it is the range end that cannot
-    const e = res.edges?.[0];
+    expect(res.sizing?.ok).toBe(true); // the center sized; it is the range end that cannot
+    const e = res.rangeEnds?.[0];
     expect(e?.state).toBe('does-not-comply');
     expect(e?.error).toMatch(/^this device cannot carry its current here/);
     expect(e?.error).toMatch(/inverse lookup: id .* out of range/); // the reach, verbatim
@@ -500,7 +500,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       givens: { L: '0.5u', W: '10u', gm: '8e-3', vds: '0.6', vsb: 'VSB' },
       operatingRange: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
     };
-    const e = runSheet(doc, dev).edges?.[0];
+    const e = runSheet(doc, dev).rangeEnds?.[0];
     expect(e?.state).toBe('does-not-comply');
     expect(e?.error).toMatch(/^this device cannot reach its transconductance here/);
     expect(e?.error).toMatch(/inverse lookup: gm .* out of range/);
@@ -534,11 +534,11 @@ describe('coverage is only asked of a design that exists', () => {
     // Pinning coverage hardware to that probe would report a verdict about a design that was
     // never produced — the same phantom the errored-edge guards elsewhere exist to refuse.
     const res = evaluateSheet(unreachable(0.5), dev);
-    expect(res.bind?.ok).toBe(true);
+    expect(res.sizing?.ok).toBe(true);
     expect(stands(res)).toBe(false);
-    expect(res.edges?.[0].state).toBe('not-run');
-    expect(res.edges?.[0].error).toBeUndefined(); // "we did not check" is not "it broke"
-    expect(res.edges?.[0].set).toEqual({}); // no point was proven, so none is reported
+    expect(res.rangeEnds?.[0].state).toBe('not-run');
+    expect(res.rangeEnds?.[0].error).toBeUndefined(); // "we did not check" is not "it broke"
+    expect(res.rangeEnds?.[0].set).toEqual({}); // no point was proven, so none is reported
     expect(res.complies).toBeUndefined(); // absent: the question has no answer here, not a false one
     expect(res.feasible).toBe(false);
   });
@@ -548,8 +548,8 @@ describe('coverage is only asked of a design that exists', () => {
     doc.params.find((p) => p.name === 'floor')!.value = 5; // base x = 2 fails the floor
     const res = evaluateSheet(doc, dev);
     expect(stands(res)).toBe(true);
-    expect(res.rules[0].status).toBe('fail');
-    expect(res.edges?.[0].state).toBe('does-not-comply'); // checked, and the floor fails there too
+    expect(res.checks[0].status).toBe('fail');
+    expect(res.rangeEnds?.[0].state).toBe('does-not-comply'); // checked, and the floor fails there too
     expect(res.complies).toBe(false);
   });
 
@@ -567,7 +567,7 @@ describe('coverage is only asked of a design that exists', () => {
     // y spans [1, 21] over the pin's bracket, so the two ends of this sweep have no design and
     // its interior does. The edge curve must be a GAP at the ends and a real margin between.
     const sw = sweepSheet(doc, 'Spec', dev, 5);
-    const curve = sw.rules.find((r) => r.edge === 'lo')!;
+    const curve = sw.checks.find((r) => r.rangeEnd === 'lo')!;
     expect(curve.marginPct.map((m) => m === null)).toEqual([true, false, false, false, true]);
     expect(sw.feasible).toEqual([false, true, true, true, false]);
   });
@@ -603,7 +603,7 @@ describe('complies — the second question, answered apart from feasibility', ()
 
   it('is true only when every claimed end holds', () => {
     const res = evaluateSheet(mk(), dev);
-    expect(res.edges?.map((e) => e.state)).toEqual(['complies', 'complies']);
+    expect(res.rangeEnds?.map((e) => e.state)).toEqual(['complies', 'complies']);
     expect(res.complies).toBe(true);
     expect(res.feasible).toBe(true);
   });
@@ -615,8 +615,8 @@ describe('complies — the second question, answered apart from feasibility', ()
       mk({ params: [...mk().params.slice(0, 3), { name: 'cap', value: 12 }] }),
       dev,
     );
-    expect(res.rules[0].status).toBe('pass');
-    expect(res.edges?.map((e) => e.state)).toEqual(['complies', 'does-not-comply']);
+    expect(res.checks[0].status).toBe('pass');
+    expect(res.rangeEnds?.map((e) => e.state)).toEqual(['complies', 'does-not-comply']);
     expect(res.complies).toBe(false);
     expect(res.feasible).toBe(true);
   });
@@ -649,16 +649,16 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
   it('declines a range end the table does not reach, instead of answering from its edge', () => {
     const res = evaluateSheet(offHull(), dev);
     expect(res.feasible).toBe(true);
-    const e = res.edges![0];
+    const e = res.rangeEnds![0];
     expect(e.set).toEqual({ VD: 1.5 });
     // The run completed — on data taken 0.3 V away. Its `vd-cap` rule even fails there
     // (1.5 > 1.4), and that still is not a finding: the device numbers beside it are not this
     // point's, so the end is no answer rather than a failure, and no rule of it is named.
     expect(e.state).toBe('no-answer');
-    expect(e.error).toMatch(/^the table does not reach this point \(bind vds\)/);
+    expect(e.error).toMatch(/^the table does not reach this point \(givens vds\)/);
     expect(e.solved).toEqual({});
     expect(e.warnings.some((w) => /clamped to 1.2/.test(w.message))).toBe(true);
-    expect(rangeEndConstraint(res)).toBeUndefined();
+    expect(rangeEndCheck(res)).toBeUndefined();
     expect(res.complies).toBe(false);
   });
 
@@ -669,10 +669,10 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     doc.params[0].value = 1.3;
     doc.params[0].max = 1.5;
     const res = evaluateSheet(doc, dev);
-    expect(res.bind?.clamped).toEqual(['vds']);
-    expect(res.bind?.bias?.vds).toBeCloseTo(1.2, 12); // the table's last vds node
+    expect(res.sizing?.clamped).toEqual(['vds']);
+    expect(res.sizing?.bias?.vds).toBeCloseTo(1.2, 12); // the table's last vds node
     expect(res.feasible).toBe(true);
-    expect(clampedIn(res)).toEqual(['bind vds']);
+    expect(clampedIn(res)).toEqual(['givens vds']);
   });
 
   it('names a clamped child by its use path', () => {
@@ -708,7 +708,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
           operatingRange: [{ name: 'end', set }],
         },
         dev,
-      ).edges![0];
+      ).rangeEnds![0];
       return { state: e.state, error: e.error };
     };
     // vsb is characterized to 0.4 V; the end asks 0.6 V.
@@ -721,7 +721,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { VB: 'VB_hi' },
     );
     expect(vsb.state).toBe('no-answer');
-    expect(vsb.error).toMatch(/\(bind vsb\)/);
+    expect(vsb.error).toMatch(/\(givens vsb\)/);
     // A width-first bind keeps its length as an authored expression, so an end can move it:
     // 5 µm against a table that stops at 2 µm.
     const len = end(
@@ -733,7 +733,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { Lp: 'Lp_hi' },
     );
     expect(len.state).toBe('no-answer');
-    expect(len.error).toMatch(/\(bind l\)/);
+    expect(len.error).toMatch(/\(givens l\)/);
     // A supplied gate voltage of 1.5 V against a sweep that ends at 1.2 V.
     const vgs = end(
       { L: '0.5u', W: '10u', vgs: 'VG', vds: '0.6', vsb: '0' },
@@ -744,7 +744,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { VG: 'VG_hi' },
     );
     expect(vgs.state).toBe('no-answer');
-    expect(vgs.error).toMatch(/\(bind vgs\)/);
+    expect(vgs.error).toMatch(/\(givens vgs\)/);
   });
 
   it('does not call it a failure when the lookup runs out of range on clamped data', () => {
@@ -768,7 +768,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
         givens: { L: '0.5u', W: '10u', vgs: '1.2', vds: '0.6', vsb: '0' },
       },
       dev,
-    ).bind!.id;
+    ).sizing!.id;
     const doc: SheetDoc = {
       title: 'trap',
       polarity: 'n',
@@ -783,11 +783,11 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       givens: { L: '0.5u', W: '10u', id: `K*${top}`, vds: 'VD', vsb: '0' },
       operatingRange: [{ name: 'hi', set: { VD: 'VD_hi', K: 'K_hi' } }],
     };
-    const narrowEnd = evaluateSheet(doc, dev).edges![0];
+    const narrowEnd = evaluateSheet(doc, dev).rangeEnds![0];
     expect(narrowEnd.state).toBe('no-answer');
-    expect(narrowEnd.error).toMatch(/^the table does not reach this point \(bind vds\)/);
+    expect(narrowEnd.error).toMatch(/^the table does not reach this point \(givens vds\)/);
     expect(narrowEnd.error).toMatch(/the run then stopped: sizing failed: inverse lookup: id/);
-    expect(evaluateSheet(doc, wide).edges![0].state).toBe('complies');
+    expect(evaluateSheet(doc, wide).rangeEnds![0].state).toBe('complies');
   });
 
   it('declines a diode-connected device whose gate voltage lies past the characterized drain range', () => {
@@ -808,12 +808,12 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       operatingRange: [{ name: 'hi', set: { I: 'I_hi' } }],
     };
     const reached = evaluateSheet(doc, mk(1.2));
-    expect(reached.edges![0].state).toBe('complies'); // 0.967 V against the 0.975 V cap
+    expect(reached.rangeEnds![0].state).toBe('complies'); // 0.967 V against the 0.975 V cap
     const short = evaluateSheet(doc, mk(0.6));
     // At the centre the gate sits near 0.57 V, inside the drain range: read where it was asked.
-    expect(short.bind?.clamped).toBeUndefined();
-    expect(short.edges![0].state).toBe('no-answer');
-    expect(short.edges![0].error).toMatch(/\(bind vds\)/);
+    expect(short.sizing?.clamped).toBeUndefined();
+    expect(short.rangeEnds![0].state).toBe('no-answer');
+    expect(short.rangeEnds![0].error).toMatch(/\(givens vds\)/);
   });
 
   it('does not mistake float rounding at the hull for a clamp', () => {
@@ -833,9 +833,9 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     };
     const res = evaluateSheet(doc, dev);
     expect(0.3 - (0.1 + 0.2)).toBeLessThan(0);
-    expect(res.bind?.clamped).toBeUndefined();
+    expect(res.sizing?.clamped).toBeUndefined();
     expect(res.warnings.filter((w) => /clamped/.test(w.message))).toEqual([]);
-    expect(res.edges![0].state).toBe('complies');
+    expect(res.rangeEnds![0].state).toBe('complies');
   });
 
   it('reads a held current from the table: too much is a failure, too little is no answer', () => {
@@ -859,7 +859,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
         { name: 'hi', set: { I: 'I_hi' } },
       ],
     };
-    const [lo, hi] = evaluateSheet(doc, dev).edges!;
+    const [lo, hi] = evaluateSheet(doc, dev).rangeEnds!;
     expect(lo.state).toBe('no-answer');
     expect(lo.error).toMatch(/^sizing failed: inverse lookup: id 1e-15 out of range/);
     expect(hi.state).toBe('does-not-comply');
@@ -885,13 +885,13 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     });
     const fenced = evaluateSheet(doc('assumed'), dev);
     expect(fenced.feasible).toBe(true);
-    expect(fenced.edges![0].state).toBe('no-answer');
-    expect(fenced.edges![0].error).toMatch(/sized under assumed level V_d/);
-    expect(fenced.edges![0].rules).toEqual([]);
+    expect(fenced.rangeEnds![0].state).toBe('no-answer');
+    expect(fenced.rangeEnds![0].error).toMatch(/sized under assumed level V_d/);
+    expect(fenced.rangeEnds![0].checks).toEqual([]);
     expect(fenced.complies).toBe(false);
     // The same sheet with the voltage classed as an outside input is asked, and answers.
     const free = evaluateSheet(doc('independent'), dev);
-    expect(free.edges![0].state).toBe('complies');
+    expect(free.rangeEnds![0].state).toBe('complies');
     expect(free.complies).toBe(true);
   });
 });
@@ -899,9 +899,9 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
 describe('heldOutcome — what one run of a held design amounts to', () => {
   const run = (message?: string, feasible = true): Parameters<typeof heldOutcome>[0] => ({
     values: {},
-    rules: [],
+    checks: [],
     feasible: feasible && message === undefined,
-    warnings: message === undefined ? [] : [{ rule: 'sheet-bind', severity: 'error', message }],
+    warnings: message === undefined ? [] : [{ rule: 'sheet-givens', severity: 'error', message }],
   });
 
   it('reads a completed run by its hard rules', () => {
@@ -1085,6 +1085,6 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     const doc = withK({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, { I_c: '20u * CM_dc' });
     const res = runSheet(doc, dev);
     expect(res.warnings.every((w) => w.severity !== 'error')).toBe(true);
-    expect(res.edges?.[0].state).toBe('complies');
+    expect(res.rangeEnds?.[0].state).toBe('complies');
   });
 });

@@ -15,12 +15,12 @@
 
 import type { DeviceTable } from '../types';
 import {
-  bindingConstraint,
+  bindingCheck,
   choiceKnobs,
   clampMargin,
   cloneDoc,
   engineSolved,
-  limitingConstraint,
+  limitingCheck,
   MARGIN_PCT_CAP,
   measurable,
   resolvedSheet,
@@ -30,7 +30,7 @@ import {
   sweepSheet,
   sweepable,
   validateSheet,
-  withoutEdges,
+  withoutRange,
   withParams,
 } from '../sheet';
 import type {
@@ -193,7 +193,7 @@ export interface PickerCandidate {
   worstMargin?: { id: string; marginPct: number };
   /** The worst FAILING hard rule at the reported point. Undefined on a closed candidate, and
    *  also on an infeasible one whose failure is not a rule — which is why `cause` exists. */
-  bindingConstraint?: { id: string; marginPct: number };
+  bindingCheck?: { id: string; marginPct: number };
   /** Why this candidate is not closed, in words, always present when it is not. It carries
    *  every fact that applies, joined by `; `: the binding constraint, any error-severity
    *  warning, and — when the search stopped rather than the design failing — what stopped it.
@@ -341,7 +341,7 @@ function afford(m: Meter, n: number): boolean {
  * kind of point is feasible.
  */
 function scoreResult(res: SheetResult): number {
-  const worst = limitingConstraint(res);
+  const worst = limitingCheck(res);
   const s =
     worst === undefined ? (res.feasible ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst.marginPct);
   return stands(res) ? s : noDesign(s);
@@ -367,7 +367,7 @@ function noDesign(s: number): number {
  */
 function scoreSample(sw: SheetSweep, i: number): number {
   let worst = Infinity;
-  for (const r of sw.rules) {
+  for (const r of sw.checks) {
     // `m === null` is not redundant against `measurable`: TypeScript needs it to narrow.
     const m = r.marginPct[i];
     if (m === null || !measurable(r.kind, m)) continue;
@@ -396,7 +396,7 @@ function beats(f: boolean, s: number, bf: boolean, bs: number): boolean {
  */
 function causeOf(res: SheetResult): string {
   const parts: string[] = [];
-  const b = bindingConstraint(res);
+  const b = bindingCheck(res);
   if (b) parts.push(`${b.id} fails by ${(b.marginPct * 100).toFixed(1)}%`);
   const w = res.warnings.find((x) => x.severity === 'error');
   if (w) parts.push(w.message);
@@ -650,7 +650,7 @@ function repair(
       // scan but not a ranking, and spending the remainder on an unranked scan beats spending
       // it on nothing. `fits`, not `afford`, so a plan that did not fit does not declare the
       // meter spent while plan B still can be paid for.
-      const rank = rankKnobs(doc, knobs, limitingConstraint(res)?.id, table, resolveDevice, refs);
+      const rank = rankKnobs(doc, knobs, limitingCheck(res)?.id, table, resolveDevice, refs);
       meter.evals += rank.evals;
       ranked = rank.ranked;
       // With a ranking, one knob per round is enough and the rest of the budget goes into
@@ -744,7 +744,7 @@ function backOff(
   const atFloor = runSheet(scaled(floor), table, resolveDevice, refs);
   meter.evals += 1;
   if (atFloor.feasible) return { doc: scaled(floor), res: atFloor };
-  if (bindingConstraint(atFloor) === undefined) return { doc: doc0 };
+  if (bindingCheck(atFloor) === undefined) return { doc: doc0 };
 
   for (let i = 0; i < PICKER_BISECT_STEPS; i++) {
     if (!afford(meter, 1)) break;
@@ -757,7 +757,7 @@ function backOff(
     } else {
       // A failure with no rule to name is a solve that stopped standing, not a design that
       // ran out of current; bisecting further would be bisecting noise.
-      if (bindingConstraint(res) === undefined) break;
+      if (bindingCheck(res) === undefined) break;
       lo = mid;
     }
   }
@@ -804,7 +804,7 @@ export function pickTopology(
   // the sheet everywhere else, instead of vanishing with the part that carried it.
   const whole = cloneDoc(sheet.doc);
   const valid = !validateSheet(resolvedSheet(whole, refs).doc).some((w) => w.severity === 'error');
-  const base = valid ? withoutEdges(whole) : whole;
+  const base = valid ? withoutRange(whole) : whole;
   const { ignored, over } = applySpec(base, spec);
   const applied = Object.keys(over);
   const supplied = SPEC_FIELDS.filter((f) => {
@@ -826,7 +826,7 @@ export function pickTopology(
 
   if (res0.feasible) {
     verdict = 'closed';
-  } else if (bindingConstraint(res0) === undefined) {
+  } else if (bindingCheck(res0) === undefined) {
     // Nothing failing to descend on. The interior rules that DO evaluate are all passing here,
     // so a search would improve a number that was never the problem and report progress.
     // No stop note: `causeOf` already carries the whole answer for this one.
@@ -884,8 +884,8 @@ export function pickTopology(
     else cause = `${stopNote}; ${found}`;
   }
 
-  const worst = limitingConstraint(res);
-  const binding = bindingConstraint(res);
+  const worst = limitingCheck(res);
+  const binding = bindingCheck(res);
   const iq = res.values['I_q'];
   return {
     path: sheet.path,
@@ -896,7 +896,7 @@ export function pickTopology(
     atRangeFloor,
     currentAtRangeFloor,
     ...(worst === undefined ? {} : { worstMargin: worst }),
-    ...(binding === undefined ? {} : { bindingConstraint: binding }),
+    ...(binding === undefined ? {} : { bindingCheck: binding }),
     ...(cause === undefined ? {} : { cause }),
     ...(Number.isFinite(iq) ? { I_q: iq } : {}),
     specApplied: applied,
@@ -928,7 +928,7 @@ export type PickerSortKey = 'margin' | 'current';
  * re-derived from two other fields by every surface that shows the number.
  */
 export const marginSpeaksFor = (c: PickerCandidate): boolean =>
-  c.verdict === 'closed' || c.bindingConstraint !== undefined;
+  c.verdict === 'closed' || c.bindingCheck !== undefined;
 
 /** A ranked reading of one run's candidates. */
 export interface PickerRanking {

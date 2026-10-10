@@ -7,18 +7,18 @@
   import {
     marginSpeaksFor,
     pickTopology,
-    preflightVariant,
+    preflightCondition,
     projectingResolver,
     rankCandidates,
-    variantKeyOf,
-    variantLabel,
+    conditionKeyOf,
+    conditionLabel,
     SPEC_FIELDS,
     PICKER_MS_BUDGET,
     PICKER_EVAL_BUDGET,
     formatEng,
     formatSI,
-    type CornerFamily,
-    type FamilyResolver,
+    type CharacterizedDevice,
+    type DeviceLookup,
     type PickerCandidate,
     type PickerSortKey,
     type PickerSpec,
@@ -26,7 +26,7 @@
     type SheetDoc,
     type SheetRefEntry,
     type SpecName,
-    type VariantKey,
+    type ConditionKey,
   } from '@gmid/mostab-core';
   import Help from './Help.svelte';
   import { CONTROL_HELP } from './help';
@@ -106,15 +106,15 @@
   // The condition every candidate is searched at: the primary family's designated nominal.
   const primary = $derived(bench.primary);
   const nominalTable = $derived(primary?.nominal);
-  const nominalKey = $derived<VariantKey | undefined>(
-    nominalTable ? variantKeyOf(nominalTable.id) : undefined,
+  const nominalKey = $derived<ConditionKey | undefined>(
+    nominalTable ? conditionKeyOf(nominalTable.id) : undefined,
   );
 
   /** The first thing this bench cannot supply for a sheet at `key`, in words — or undefined when
    *  the primary and every named child project. A sheet whose children all inherit the primary
    *  names nothing of its own and turns on the primary alone.
    *
-   *  The walk is the run transition's own preflight (`preflightVariant`), so the picker never
+   *  The walk is the run transition's own preflight (`preflightCondition`), so the picker never
    *  ranks a candidate the sheet panel would then refuse: same grounds, same order, same words,
    *  from one definition rather than two kept in step by hand.
    *
@@ -123,12 +123,12 @@
    *  against another. */
   function unavailableDevice(
     sheet: SheetRefEntry,
-    primaryFamily: CornerFamily,
-    key: VariantKey,
+    primaryDevice: CharacterizedDevice,
+    key: ConditionKey,
     index: ReturnType<typeof sheetRefIndex>,
-    familyOf: FamilyResolver,
+    deviceOf: DeviceLookup,
   ): string | undefined {
-    return preflightVariant(sheet.doc, primaryFamily, key, familyOf, index).issues[0]?.message;
+    return preflightCondition(sheet.doc, primaryDevice, key, deviceOf, index).issues[0]?.message;
   }
 
   /** A budget box: the entered number when it is at or above the floor, and the last good value
@@ -158,10 +158,10 @@
     const frozen = { ...$state.snapshot(spec) } as PickerSpec;
     const index = refs;
     const key = nominalKey;
-    const family = primary;
+    const device = primary;
     const table = nominalTable;
-    const familyOf = bench.familyOf;
-    const projected = projectingResolver(familyOf, key);
+    const deviceOf = bench.deviceOf;
+    const projected = projectingResolver(deviceOf, key);
     const budget = { msBudget, evalBudget };
     ranSpec = frozen;
     ranTable = tableUid(table);
@@ -190,7 +190,7 @@
       // A design type that needs a device this bench cannot supply AT the searched condition is
       // not searched at all: entering the repair loop with a child that fails to resolve would
       // spend the budget improving a number whose failure has nothing to do with the design.
-      const missing = unavailableDevice(s, family, key, index, familyOf);
+      const missing = unavailableDevice(s, device, key, index, deviceOf);
       if (missing) {
         unsearched = [...unsearched, { path: s.path, why: missing }];
         i += 1;
@@ -402,7 +402,7 @@
       <button class="pbtn" onclick={cancel}>stop</button>
     {:else}
       <button class="pbtn" disabled={!nominalTable} onclick={run}
-        >search {total} sheets{#if nominalKey}{` at ${variantLabel(nominalKey)}`}{/if}</button
+        >search {total} sheets{#if nominalKey}{` at ${conditionLabel(nominalKey)}`}{/if}</button
       >
     {/if}
     <label class="budget" title="wall clock allowed per sheet before the search stops and says so"

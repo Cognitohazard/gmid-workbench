@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { inCurrentKeys } from './legacy';
-import { DOC_KEYS, RULE_KINDS, VAR_KEYS } from './types';
+import { DOC_KEYS, CHECK_KINDS, VAR_KEYS } from './types';
 
 describe('inCurrentKeys — an earlier document in the current vocabulary', () => {
   const earlier = {
@@ -57,7 +57,7 @@ describe('inCurrentKeys — an earlier document in the current vocabulary', () =
     for (const k of Object.keys(doc)) expect(DOC_KEYS.has(k)).toBe(true);
     for (const p of doc.params as object[])
       for (const k of Object.keys(p)) expect(VAR_KEYS.has(k)).toBe(true);
-    for (const c of doc.checks as { kind: string }[]) expect(RULE_KINDS.has(c.kind)).toBe(true);
+    for (const c of doc.checks as { kind: string }[]) expect(CHECK_KINDS.has(c.kind)).toBe(true);
   });
 
   it("rewrites one level: an embedded child is the walker's to pass back in", () => {

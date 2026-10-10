@@ -4,26 +4,26 @@
   // It holds no numerics — runSheet (core) does all evaluation and never throws.
   import {
     cloneDoc,
-    aggregateVariantRuns,
+    aggregateConditionRuns,
     clampMargin,
     measurable,
     projectingResolver,
-    runVariants,
-    sameVariant,
-    variantAt,
-    variantKeyId,
-    variantKeyOf,
-    variantLabel,
+    runConditions,
+    sameCondition,
+    tableAt,
+    conditionKeyId,
+    conditionKeyOf,
+    conditionLabel,
     sweepSheet,
     sweepSheet2,
     sweepable as isSweepable,
     torn,
-    pinned as isPinned,
+    constrained as isPinned,
     engineSolved,
-    bindingConstraint,
-    limitingConstraint,
-    rangeEndConstraint,
-    withoutEdges,
+    bindingCheck,
+    limitingCheck,
+    rangeEndCheck,
+    withoutRange,
     sheetSensitivities,
     SENSITIVITY_REL_STEP,
     resolveSheetRefs,
@@ -37,26 +37,26 @@
     SWEEP2_POINTS,
     type DeviceTable,
     type SheetDoc,
-    type SheetBind,
+    type SheetGivens,
     type SheetVar,
-    type SheetRule,
-    type SheetUse,
+    type SheetCheck,
+    type SheetBlock,
     type SheetSweep,
     type SheetSweep2,
     type SheetSensitivity,
-    type SheetChildReport,
-    type SheetEdgeReport,
-    type SheetEdgeState,
+    type SheetBlockReport,
+    type RangeEndReport,
+    type PointState,
     type QAWarning,
-    type BindReport,
-    type RuleResult,
-    type RuleStatus,
+    type SizingReport,
+    type CheckResult,
+    type CheckStatus,
     type SheetResult,
-    type VariantAggregate,
-    type VariantKey,
-    type VariantRun,
+    type ConditionAggregate,
+    type ConditionKey,
+    type ConditionRun,
   } from '@gmid/mostab-core';
-  import { describeBinding, familyLabel, type Bench } from './families';
+  import { describeBinding, deviceLabel, type Bench } from './families';
   import { tableUid, type SheetCornerMode } from './dashboard';
   import { PALETTE, type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
@@ -88,14 +88,14 @@
     sweep2?: string;
     /** Which characterization conditions this panel evaluates at (bench state, never in `cfg`). */
     cornerMode?: SheetCornerMode;
-    cornerKeys?: VariantKey[];
+    cornerKeys?: ConditionKey[];
     bench: Bench;
     styleVersion?: number;
     onChange: (s: SheetDoc) => void;
     onSweep: (s: string) => void;
     onSweep2: (s: string) => void;
     onCornerMode: (m: SheetCornerMode) => void;
-    onCornerKeys: (k: VariantKey[]) => void;
+    onCornerKeys: (k: ConditionKey[]) => void;
   } = $props();
 
   // The live sheet library (curated ∪ user-imported) and its by-reference index.
@@ -197,13 +197,13 @@
   // verdict assembled from a tt input pair and an ss tail describes a chip that does not exist.
   const primary = $derived(bench.primary);
   /** Every condition the primary family holds, in load order. */
-  const conditions = $derived<readonly VariantKey[]>(primary?.keys ?? []);
-  const activeKey = $derived(variantKeyOf(device.id));
-  const nominalKey = $derived(primary?.nominal ? variantKeyOf(primary.nominal.id) : undefined);
+  const conditions = $derived<readonly ConditionKey[]>(primary?.keys ?? []);
+  const activeKey = $derived(conditionKeyOf(device.id));
+  const nominalKey = $derived(primary?.nominal ? conditionKeyOf(primary.nominal.id) : undefined);
   /** The conditions this panel is asking about. A chosen key that is no longer loaded stays in
    *  the list: it is answered as its own not-evaluated row, where pruning it would silently
    *  narrow the question. */
-  const keys = $derived.by((): readonly VariantKey[] => {
+  const keys = $derived.by((): readonly ConditionKey[] => {
     if (!primary) return [];
     if (cornerMode === 'active') return [activeKey];
     if (cornerMode === 'all') return conditions;
@@ -230,11 +230,11 @@
   // sized there, so its home is always on the page, and feasibility is its verdict.
   const runs = $derived(
     primary
-      ? runVariants(
+      ? runConditions(
           cfg,
           primary,
           keys,
-          bench.familyOf,
+          bench.deviceOf,
           refs,
           keys.length > 1 ? nominalKey : undefined,
         )
@@ -243,7 +243,7 @@
   const multi = $derived(runs.length > 1);
   // Two questions, answered apart: is the design feasible where it is sized, and at how many of
   // the points it is promised to work at does that one design comply.
-  const agg = $derived(aggregateVariantRuns(runs));
+  const agg = $derived(aggregateConditionRuns(runs));
 
   // The run whose numbers the detail below belongs to: the one that SIZED the design — the
   // run feasibility is read from, evaluated or not, so its diagnostics are the ones on screen
@@ -251,7 +251,7 @@
   // nominal) has no such run, and then the first row stands in. In multi-condition mode the
   // detail is explicitly stamped with it, so no number on screen is unattributed.
   const refRun = $derived.by(
-    (): VariantRun | undefined => runs.find((r) => r.design === 'sized') ?? runs[0],
+    (): ConditionRun | undefined => runs.find((r) => r.design === 'sized') ?? runs[0],
   );
   const refKey = $derived(refRun?.key);
   const evaluated = $derived(refRun?.state === 'evaluated');
@@ -260,24 +260,24 @@
   const result = $derived<SheetResult | undefined>(refRun?.result);
   /** The primary table the detail was computed on: the family's member at the reference
    *  condition, which is the active table only when the panel is asking about that condition. */
-  const refTable = $derived(refKey && primary ? variantAt(primary, refKey) : undefined);
+  const refTable = $derived(refKey && primary ? tableAt(primary, refKey) : undefined);
   /** The projection at the reference condition — the resolver the detail body, the sweeps and
    *  the sensitivity probes all read. It is the core's own projection (the same one the runs
    *  above evaluated through), so a chart or a probe can never mix conditions the verdict above
    *  it did not. */
-  const resolveDevice = $derived(refKey ? projectingResolver(bench.familyOf, refKey) : undefined);
+  const resolveDevice = $derived(refKey ? projectingResolver(bench.deviceOf, refKey) : undefined);
 
   // ── What the header may say. FEASIBILITY is one answer about the design where it was sized;
   // COMPLIANCE is a count of points. Neither is inferred from the other, and a point that was
   // not run or could not be answered is counted as exactly that — never as a pass, never as a
   // failure.
-  const FEAS_TEXT: Record<VariantAggregate['feasibility'], string> = {
+  const FEAS_TEXT: Record<ConditionAggregate['feasibility'], string> = {
     feasible: 'feasible',
     infeasible: 'infeasible',
     'no-answer': 'no answer',
     'not-run': 'not evaluated',
   };
-  const FEAS_CLASS: Record<VariantAggregate['feasibility'], string> = {
+  const FEAS_CLASS: Record<ConditionAggregate['feasibility'], string> = {
     feasible: 'ok',
     infeasible: 'no',
     'no-answer': 'skip',
@@ -286,7 +286,7 @@
   /** The feasibility badge's words — stamped with the condition it was asked at whenever more
    *  than one condition is on the page, so no verdict there is unattributed. */
   const feasText = $derived(
-    FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${variantLabel(agg.base)}` : ''),
+    FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
   );
   /** Whether the sheet claims an operating range at all — read from the doc, so the range
    *  column is there even when no condition could be evaluated. */
@@ -315,35 +315,35 @@
    *  own label — the header never stands in for one of these, and none of them ever stands in
    *  for the header. */
   /** Whose hardware the row measured: the run that sized the design, or that design held. */
-  const designCell = (r: VariantRun): string =>
+  const designCell = (r: ConditionRun): string =>
     r.state !== 'evaluated' ? '' : r.design === 'sized' ? 'sized here' : 'held';
-  const POINT_MARK: Record<SheetEdgeState, string> = {
+  const POINT_MARK: Record<PointState, string> = {
     complies: '✓',
     'does-not-comply': '✗',
     'no-answer': '?',
     'not-run': '–',
   };
-  const POINT_TEXT: Record<SheetEdgeState, string> = {
+  const POINT_TEXT: Record<PointState, string> = {
     complies: 'complies',
     'does-not-comply': 'does not comply',
     'no-answer': 'no answer',
     'not-run': 'not run',
   };
-  const POINT_CLASS: Record<SheetEdgeState, string> = {
+  const POINT_CLASS: Record<PointState, string> = {
     complies: 'ok',
     'does-not-comply': 'no',
     'no-answer': 'skip',
     'not-run': 'skip',
   };
   /** The centre: the sized run answers feasibility in its own words, a held one compliance. */
-  const centreCell = (r: VariantRun): string => {
+  const centreCell = (r: ConditionRun): string => {
     const at = r.points[0].state;
     if (r.state === 'evaluated' && r.design === 'sized' && at !== 'no-answer')
       return r.feasible ? '✓ feasible' : '✗ infeasible';
     return `${POINT_MARK[at]} ${POINT_TEXT[at]}`;
   };
   /** The range ends, as a count with the worst outcome's mark — the chips below carry each one. */
-  const rangeCell = (r: VariantRun): string => {
+  const rangeCell = (r: ConditionRun): string => {
     const ends = r.points.slice(1);
     if (!ends.length) return '';
     const worst = (['does-not-comply', 'no-answer', 'not-run', 'complies'] as const).find((st) =>
@@ -352,18 +352,18 @@
     const ok = ends.filter((e) => e.state === 'complies').length;
     return `${POINT_MARK[worst]} range ${ok}/${ends.length}`;
   };
-  const runClass = (r: VariantRun): string => POINT_CLASS[r.points[0].state];
+  const runClass = (r: ConditionRun): string => POINT_CLASS[r.points[0].state];
   /** The one-line reason: what stopped a refused condition, else why its centre has no rule to
    *  read, else what binds (or is closest to binding) there, else the first range end that is
    *  not complying. */
-  const runDetail = (r: VariantRun): string => {
+  const runDetail = (r: ConditionRun): string => {
     if (r.state === 'not-evaluated' && r.points[0].state !== 'does-not-comply')
       return r.issues.map((i) => i.message).join(' · ');
     if (r.points[0].error) return r.points[0].error;
-    const b = r.result && (bindingConstraint(r.result) ?? limitingConstraint(r.result));
+    const b = r.result && (bindingCheck(r.result) ?? limitingCheck(r.result));
     const centre = b ? `${b.id} ${pct(b.marginPct)}` : '';
-    const end = r.points.find((pt) => pt.limit !== undefined && pt.state !== 'complies');
-    return [centre, end ? `${end.limit}: ${end.error ?? POINT_TEXT[end.state]}` : '']
+    const end = r.points.find((pt) => pt.rangeEnd !== undefined && pt.state !== 'complies');
+    return [centre, end ? `${end.rangeEnd}: ${end.error ?? POINT_TEXT[end.state]}` : '']
       .filter(Boolean)
       .join(' · ');
   };
@@ -373,17 +373,18 @@
   // condition that vanished is an answer the panel owes ("not evaluated"), not a tidy-up.
   const chosenOptions = $derived.by(() => {
     const out = conditions.map((key) => ({ key, absent: false }));
-    const have = new Set(conditions.map(variantKeyId));
-    for (const key of cornerKeys) if (!have.has(variantKeyId(key))) out.push({ key, absent: true });
+    const have = new Set(conditions.map(conditionKeyId));
+    for (const key of cornerKeys)
+      if (!have.has(conditionKeyId(key))) out.push({ key, absent: true });
     return out.map((o) => ({
       ...o,
-      on: cornerKeys.some((k) => sameVariant(k, o.key)),
+      on: cornerKeys.some((k) => sameCondition(k, o.key)),
     }));
   });
-  const toggleKey = (key: VariantKey): void =>
+  const toggleKey = (key: ConditionKey): void =>
     onCornerKeys(
-      cornerKeys.some((k) => sameVariant(k, key))
-        ? cornerKeys.filter((k) => !sameVariant(k, key))
+      cornerKeys.some((k) => sameCondition(k, key))
+        ? cornerKeys.filter((k) => !sameCondition(k, key))
         : [...cornerKeys, key],
     );
   // The control appears once there is a choice to make, and stays visible whenever a panel is
@@ -400,7 +401,7 @@
   // "infeasible" alone names no cause, and the offending rule is often a child's — not in the
   // table below at all. Core owns the definition, so the badge and the 2-D map's per-cell cause
   // can never disagree about which rule binds.
-  const binding = $derived(result ? bindingConstraint(result) : undefined);
+  const binding = $derived(result ? bindingCheck(result) : undefined);
 
   // ── Sensitivity readout: the missing half of a margin. A margin says how much room is left;
   // this says which knob moves it and how far, so an infeasible design comes with somewhere to
@@ -445,7 +446,7 @@
       return;
     }
     if (!sensReady || !result || !refTable) return;
-    const focus = binding ?? rangeEndConstraint(result) ?? limitingConstraint(result);
+    const focus = binding ?? rangeEndCheck(result) ?? limitingCheck(result);
     snap = {
       doc: cfg,
       dev: refTable,
@@ -513,19 +514,19 @@
    *  contributes no curve and stays visible as its breakdown row instead. */
   const sweptByKey = $derived.by(() => {
     if (!active || !multi || !primary) return [];
-    const out: { key: VariantKey; sweep: ReturnType<typeof sweepSheet> }[] = [];
+    const out: { key: ConditionKey; sweep: ReturnType<typeof sweepSheet> }[] = [];
     for (const r of runs) {
       if (r.state !== 'evaluated') continue;
-      const table = variantAt(primary, r.key);
+      const table = tableAt(primary, r.key);
       if (!table) continue;
       out.push({
         key: r.key,
         sweep: sweepSheet(
-          withoutEdges(rr.doc),
+          withoutRange(rr.doc),
           active,
           table,
           SWEEP_POINTS,
-          projectingResolver(bench.familyOf, r.key),
+          projectingResolver(bench.deviceOf, r.key),
         ),
       });
     }
@@ -577,9 +578,9 @@
    *  it stays out. `null` where no hard rule produced a number. */
   function worstHardMargin(s: SheetSweep, i: number): number | null {
     let worst: number | null = null;
-    for (const r of s.rules) {
+    for (const r of s.checks) {
       const m = r.marginPct[i];
-      if (r.edge !== undefined || m == null || !measurable(r.kind, m)) continue;
+      if (r.rangeEnd !== undefined || m == null || !measurable(r.kind, m)) continue;
       const clamped = clampMargin(m);
       if (worst === null || clamped < worst) worst = clamped;
     }
@@ -600,16 +601,16 @@
             return m == null ? null : m * 100;
           }),
         ),
-        lineLabels: set.map((e) => variantLabel(e.key)),
+        lineLabels: set.map((e) => conditionLabel(e.key)),
         yRange: [-MARGIN_CLIP, MARGIN_CLIP],
       };
     }
     if (!swept || swept.x.length === 0) return null;
     return {
       x: swept.x,
-      lines: swept.rules.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
-      lineLabels: swept.rules.map(ruleLabel),
-      lineDash: swept.rules.map((r) => (r.kind === 'advisory' ? [4, 3] : null)),
+      lines: swept.checks.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
+      lineLabels: swept.checks.map(ruleLabel),
+      lineDash: swept.checks.map((r) => (r.kind === 'advisory' ? [4, 3] : null)),
       yRange: [-MARGIN_CLIP, MARGIN_CLIP],
     };
   });
@@ -657,8 +658,8 @@
    *  stores a raw table uid; it still resolves, and is shown as the device it names rather than
    *  as something missing. A binding nothing answers to is the one that reads "not loaded". */
   const bindingOption = (binding: string): string => {
-    const f = bench.familyOf(binding);
-    return f ? `${familyLabel(f)} · stored by table` : `${describeBinding(binding)} (not loaded)`;
+    const f = bench.deviceOf(binding);
+    return f ? `${deviceLabel(f)} · stored by table` : `${describeBinding(binding)} (not loaded)`;
   };
 
   // Point a composed child at a specific loaded device (a family binding), or '' to inherit the
@@ -679,10 +680,10 @@
   // it must still pin (needs). Reading them off the report, not the panel device, keeps the control
   // correct when a composed child sizes against a different loaded table than its parent. BIAS_AXES
   // (the core's namespace-derived canonical list) fixes the display order.
-  const biasAxesFor = (r: BindReport | undefined): string[] =>
+  const biasAxesFor = (r: SizingReport | undefined): string[] =>
     BIAS_AXES.filter((a) => (r?.bias != null && a in r.bias) || (r?.needs?.includes(a) ?? false));
-  // The authored declaration string for a bias axis (SheetBind's vds/vsb are optional strings).
-  const biasField = (bind: SheetBind | undefined, axis: string): string | undefined =>
+  // The authored declaration string for a bias axis (SheetGivens's vds/vsb are optional strings).
+  const biasField = (bind: SheetGivens | undefined, axis: string): string | undefined =>
     (bind as unknown as Record<string, string | undefined> | undefined)?.[axis];
   // Editable here only when absent or a plain number: an expression (a param reference) stays
   // param-controlled, so writing a literal would silently sever the knob. Those show read-only.
@@ -693,7 +694,7 @@
     const edit = (doc: SheetDoc, depth: number): SheetDoc => {
       if (depth === path.length) {
         if (!doc.givens) return doc;
-        const bind = { ...doc.givens } as SheetBind & Record<string, string | undefined>;
+        const bind = { ...doc.givens } as SheetGivens & Record<string, string | undefined>;
         if (value == null || !Number.isFinite(value)) delete bind[axis];
         else bind[axis] = String(value);
         return { ...doc, givens: bind };
@@ -741,8 +742,8 @@
   // The AUTHORED use at `path` (childCard renders the resolved tree, which cannot tell
   // a live materialized ref from a hand-authored pinned ref+doc snapshot — only the raw
   // cfg can). Undefined once the path crosses into a referenced sheet's interior.
-  function cfgUseAt(path: number[]): SheetUse | undefined {
-    let u: SheetUse | undefined;
+  function cfgUseAt(path: number[]): SheetBlock | undefined {
+    let u: SheetBlock | undefined;
     let d: SheetDoc | undefined = cfg;
     for (const i of path) {
       u = d?.blocks?.[i];
@@ -786,7 +787,7 @@
   }
 
   /** The words the rule table and its help use for the three check kinds. */
-  const KIND_LABEL: Record<SheetRule['kind'], string> = {
+  const KIND_LABEL: Record<SheetCheck['kind'], string> = {
     physical: 'invariant',
     spec: 'requirement',
     advisory: 'guardrail · advisory',
@@ -798,7 +799,7 @@
   const signedFmt = (v: number): string =>
     Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${formatSI(v)}` : '—';
 
-  const edgeSolved = (e: SheetEdgeReport): string =>
+  const edgeSolved = (e: RangeEndReport): string =>
     Object.entries(e.solved)
       .map(([k, v]) => `${k} ${fmt(v)}`)
       .join(' · ');
@@ -808,23 +809,23 @@
    *  reason a held device cannot work there. An end with NO ANSWER says what stopped the
    *  question, and one that was NOT RUN says what is missing: neither is a verdict about the
    *  range, and neither may borrow one's words. */
-  const edgeDetail = (e: SheetEdgeReport): string => {
+  const edgeDetail = (e: RangeEndReport): string => {
     if (e.state === 'not-run') return 'not run — these settings produce no design';
     if (e.state === 'complies') return edgeSolved(e);
     if (e.error) return e.state === 'no-answer' ? `no answer — ${e.error}` : e.error;
-    const b = bindingConstraint(e);
+    const b = bindingCheck(e);
     return b ? `${b.id} ${pct(b.marginPct)}` : POINT_TEXT[e.state];
   };
   const edgeNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
   /** The run's own non-info diagnostics — a bias clamp fires exactly at a claim's extreme,
    *  and a green chip must not hide that it rests on clamped data. */
-  const edgeWarns = (e: SheetEdgeReport): QAWarning[] =>
+  const edgeWarns = (e: RangeEndReport): QAWarning[] =>
     e.warnings.filter((w) => w.severity !== 'info');
   // The tooltip carries WHICH point was checked (the resolved overrides), the authored note,
   // any run diagnostics, and — whenever the held design does not comply there — the full detail, because
   // the chip clamps long solver messages with an ellipsis. The concept-level help lives on the
   // group label.
-  const edgeTitle = (e: SheetEdgeReport, detail: string): string => {
+  const edgeTitle = (e: RangeEndReport, detail: string): string => {
     const at = Object.entries(e.set)
       .map(([k, v]) => `${k} = ${fmt(v)}`)
       .join(' · ');
@@ -838,12 +839,12 @@
   /** One label for a range end's aggregate sweep curve, shared by the legend and the chart
    *  series — consumers read the field, never parse the id's trailing separator. The words are
    *  the reading: above zero the held design complies at that range end, below zero it does not. */
-  const ruleLabel = (r: { id: string; edge?: string }): string =>
-    r.edge ? `complies at ${r.edge}` : r.id;
-  const CHIP: Record<RuleStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
+  const ruleLabel = (r: { id: string; rangeEnd?: string }): string =>
+    r.rangeEnd ? `complies at ${r.rangeEnd}` : r.id;
+  const CHIP: Record<CheckStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
-  // Author rule notes by id (a RuleResult carries no note — the physical-meaning note lives on the
-  // authored SheetRule). Top-level result.rules mirror cfg.checks 1:1, so the id lookup is exact.
+  // Author rule notes by id (a CheckResult carries no note — the physical-meaning note lives on the
+  // authored SheetCheck). Top-level result.checks mirror cfg.checks 1:1, so the id lookup is exact.
   const ruleNote = $derived(new Map(cfg.checks.map((r) => [r.id, r.note])));
   const ruleWhy = $derived(new Map(cfg.checks.map((r) => [r.id, r.justification])));
   // A rule row's tooltip carries the rule-SPECIFIC bits (its authored physical-meaning note and any
@@ -854,8 +855,8 @@
   // A CHILD's rule is looked up in `childRules` — the rules of the doc it was authored in.
   // Rule ids are unique only WITHIN a sheet (ten shipped sheets carry a `feasible-inversion`),
   // so reading a child chip out of the top-level maps shows the parent's note for an unrelated
-  // constraint. Absent ⇒ this sheet's own rules, which DO mirror result.rules 1:1.
-  function ruleTitle(r: RuleResult, childRules?: readonly SheetRule[]): string {
+  // constraint. Absent ⇒ this sheet's own rules, which DO mirror result.checks 1:1.
+  function ruleTitle(r: CheckResult, childRules?: readonly SheetCheck[]): string {
     const own = childRules?.find((a) => a.id === r.id);
     const parts: string[] = [];
     const note = childRules ? own?.note : ruleNote.get(r.id);
@@ -875,14 +876,14 @@
           .map(([k, v]) => `${k} ${formatSI(v)}${axisUnit(k)}${assumed?.includes(k) ? '?' : ''}`)
           .join(', ')
       : '';
-  const biasText = $derived(biasStr(result?.bind?.bias, result?.bind?.assumed));
+  const biasText = $derived(biasStr(result?.sizing?.bias, result?.sizing?.assumed));
   const biasHelp = (assumed: string[] | undefined): string =>
     CONTROL_HELP.bindBias + (assumed?.length ? `\n\n${CONTROL_HELP.bindAssumed}` : '');
 
   // An infeasible child's failing HARD rules (advisory guardrails excluded) — so the cause of a
   // red child block is on screen, not just its ✗.
-  const childFails = (c: SheetChildReport | undefined): RuleResult[] =>
-    c && !c.feasible ? c.rules.filter((r) => r.kind !== 'advisory' && r.status === 'fail') : [];
+  const childFails = (c: SheetBlockReport | undefined): CheckResult[] =>
+    c && !c.feasible ? c.checks.filter((r) => r.kind !== 'advisory' && r.status === 'fail') : [];
 
   // A pin whose bisection never landed leaves `values[name]` at the last PROBE — a bracket end,
   // not a solved node — so the field must not present it as the value the design used. The solver
@@ -1019,7 +1020,7 @@
 <!-- Per-block operating point: one editable field per live bias axis, writing into THIS block's
      bind at `path`. A field the bind must pin (vds, no default) but hasn't reads "needs"; body
      bias (vsb) pre-fills its default 0. A param-driven declaration shows read-only (edit the param). -->
-{#snippet biasCtl(bind: SheetBind | undefined, report: BindReport | undefined, path: number[])}
+{#snippet biasCtl(bind: SheetGivens | undefined, report: SizingReport | undefined, path: number[])}
   {@const axes = biasAxesFor(report)}
   {#if bind && axes.length}
     <div class="sbiasctl">
@@ -1061,8 +1062,8 @@
      index path from the top sheet; `inRef` marks a card living INSIDE a referenced sheet, whose
      internals belong to the library sheet and are read-only here. -->
 {#snippet childCard(
-  c: SheetChildReport | undefined,
-  use: SheetUse | undefined,
+  c: SheetBlockReport | undefined,
+  use: SheetBlock | undefined,
   path: number[],
   inRef: boolean = false,
 )}
@@ -1116,20 +1117,22 @@
     {#if use?.doc?.description}
       <p class="snote sudesc">{@html mathText(use.doc.description)}</p>
     {/if}
-    {#if c?.bind?.ok}
+    {#if c?.sizing?.ok}
       <div class="susebind">
-        W={fmt(c.bind.W)}m · V<sub>GS</sub>={fmt(c.bind.vgs)}V · I<sub>D</sub>={fmt(c.bind.id)}A
-        {#if c.bind.bias}<span class="sbias" title={biasHelp(c.bind.assumed)}
-            >@ {biasStr(c.bind.bias, c.bind.assumed)}</span
+        W={fmt(c.sizing.W)}m · V<sub>GS</sub>={fmt(c.sizing.vgs)}V · I<sub>D</sub>={fmt(
+          c.sizing.id,
+        )}A
+        {#if c.sizing.bias}<span class="sbias" title={biasHelp(c.sizing.assumed)}
+            >@ {biasStr(c.sizing.bias, c.sizing.assumed)}</span
           >{/if}
       </div>
-    {:else if c?.bind}
-      <div class="perr" title={c.bind.error}>sizing: {c.bind.error}</div>
+    {:else if c?.sizing}
+      <div class="perr" title={c.sizing.error}>sizing: {c.sizing.error}</div>
     {/if}
     <!-- A referenced block's bind belongs to the library sheet — no in-place bias editor
          (the applied operating point still shows in the sizing line; params remain the
          customization channel, and detach makes the internals local). -->
-    {#if !isRef}{@render biasCtl(use?.doc?.givens, c?.bind, path)}{/if}
+    {#if !isRef}{@render biasCtl(use?.doc?.givens, c?.sizing, path)}{/if}
     {#if c && Object.keys(c.provides).length}
       <div class="prov" title={CONTROL_HELP.provide}>
         {#each Object.entries(c.provides) as [k, v]}<code
@@ -1144,9 +1147,9 @@
           >{/each}
       </div>
     {/if}
-    {#if c?.children?.length}
+    {#if c?.blocks?.length}
       <div class="skids">
-        {#each c.children as gc, k}{@render childCard(
+        {#each c.blocks as gc, k}{@render childCard(
             gc,
             use?.doc?.blocks?.[k],
             [...path, k],
@@ -1183,8 +1186,8 @@
       >
     {/if}
     {#if refKey && !multi}
-      <span class="scond" data-condition={variantLabel(refKey)} title={CONTROL_HELP.cornerMode}
-        >at {variantLabel(refKey)}</span
+      <span class="scond" data-condition={conditionLabel(refKey)} title={CONTROL_HELP.cornerMode}
+        >at {conditionLabel(refKey)}</span
       >
     {/if}
     <!-- What the verdict rests on: a doc-level fact carried on the result, so it costs nothing
@@ -1215,20 +1218,19 @@
       title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sensitivity}
       onclick={toggleSens}>sensitivities</button
     >
-    {#if result?.bind && !multi}
-      {#if result.bind.ok}
+    {#if result?.sizing && !multi}
+      {#if result.sizing.ok}
         <span class="bind"
-          >W={fmt(result.bind.W)}m · V<sub>GS</sub>={fmt(result.bind.vgs)}V · I<sub>D</sub>={fmt(
-            result.bind.id,
-          )}A</span
+          >W={fmt(result.sizing.W)}m · V<sub>GS</sub>={fmt(result.sizing.vgs)}V · I<sub>D</sub
+          >={fmt(result.sizing.id)}A</span
         >
         {#if biasText}
-          <span class="sbias" title={biasHelp(result.bind?.assumed)}>@ {biasText}</span>
+          <span class="sbias" title={biasHelp(result.sizing?.assumed)}>@ {biasText}</span>
         {/if}
       {:else}
-        <span class="perr" title={result.bind.error}>sizing: {result.bind.error}</span>
+        <span class="perr" title={result.sizing.error}>sizing: {result.sizing.error}</span>
       {/if}
-      {@render biasCtl(cfg.givens, result.bind, [])}
+      {@render biasCtl(cfg.givens, result.sizing, [])}
     {/if}
     {#if sweepable.length}
       <label class="swsel" title={CONTROL_HELP.sheetSweep}>
@@ -1292,11 +1294,13 @@
         <option value="all">all ({conditions.length})</option>
       </select>
       {#if cornerMode === 'chosen'}
-        {#each chosenOptions as c (variantKeyId(c.key))}
+        {#each chosenOptions as c (conditionKeyId(c.key))}
           <label class="ckey" class:absent={c.absent}>
-            <input type="checkbox" checked={c.on} onchange={() => toggleKey(c.key)} />{variantLabel(
-              c.key,
-            )}{#if c.absent}<i>not loaded</i>{/if}
+            <input
+              type="checkbox"
+              checked={c.on}
+              onchange={() => toggleKey(c.key)}
+            />{conditionLabel(c.key)}{#if c.absent}<i>not loaded</i>{/if}
           </label>
         {/each}
       {/if}
@@ -1314,9 +1318,9 @@
         condition, so it needs one named.
       </p>
       <div class="snomctl">
-        {#each primary.variants as t (tableUid(t))}
-          <button onclick={() => bench.designate(primary.familyUid, tableUid(t))}
-            >designate {variantLabel(t.id)}</button
+        {#each primary.conditions as t (tableUid(t))}
+          <button onclick={() => bench.designate(primary.deviceUid, tableUid(t))}
+            >designate {conditionLabel(t.id)}</button
           >
         {/each}
       </div>
@@ -1340,16 +1344,16 @@
     {#if agg.worst}
       <p class="scap" title={CONTROL_HELP.compliance} data-worst>
         tightest hard rule over every point measured: {agg.worst.id}
-        {pct(agg.worst.marginPct)} at {variantLabel(agg.worst.key)}{#if agg.worst.limit}
-          · {agg.worst.limit}{/if}
+        {pct(agg.worst.marginPct)} at {conditionLabel(agg.worst.key)}{#if agg.worst.rangeEnd}
+          · {agg.worst.rangeEnd}{/if}
       </p>
     {/if}
     <table class="scorntab">
       <tbody>
-        {#each runs as r (variantKeyId(r.key))}
+        {#each runs as r (conditionKeyId(r.key))}
           {@const detail = runDetail(r)}
-          <tr class="st-{runClass(r)}" data-corner-row={variantLabel(r.key)}>
-            <td class="ccond">{variantLabel(r.key)}</td>
+          <tr class="st-{runClass(r)}" data-corner-row={conditionLabel(r.key)}>
+            <td class="ccond">{conditionLabel(r.key)}</td>
             <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
             <td class="ccl">{centreCell(r)}</td>
             {#if hasRange}<td class="ccv">{rangeCell(r)}</td>{/if}
@@ -1364,8 +1368,8 @@
        only the named reason, which is a different thing from a design that is infeasible. The
        words match the badge: "no answer" when a run started, "not evaluated" when none did. -->
   {#if refRun && refRun.state === 'not-evaluated'}
-    <div class="snotev" data-not-evaluated={variantLabel(refRun.key)}>
-      <p><b>{refRun.result ? 'no answer' : 'not evaluated'} at {variantLabel(refRun.key)}</b></p>
+    <div class="snotev" data-not-evaluated={conditionLabel(refRun.key)}>
+      <p><b>{refRun.result ? 'no answer' : 'not evaluated'} at {conditionLabel(refRun.key)}</b></p>
       {#each refRun.issues as issue}
         <p class="sissue">{issue.message}</p>
       {/each}
@@ -1380,7 +1384,7 @@
 
   {#if multi && result && refKey}
     <p class="scap sstamp">
-      detail below is <b>{variantLabel(refKey)}</b> — one of {runs.length} conditions
+      detail below is <b>{conditionLabel(refKey)}</b> — one of {runs.length} conditions
     </p>
   {/if}
 
@@ -1451,7 +1455,7 @@
     <div class="suses">
       <span class="glabel" title={CONTROL_HELP.provide}>composed blocks</span>
       {#each cfg.blocks as _u, i}
-        {@render childCard(result?.children?.[i], rr.doc.blocks?.[i], [i], false)}
+        {@render childCard(result?.blocks?.[i], rr.doc.blocks?.[i], [i], false)}
       {/each}
     </div>
   {/if}
@@ -1474,7 +1478,7 @@
 
     <table class="srules">
       <tbody>
-        {#each res.rules as r}
+        {#each res.checks as r}
           <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={ruleTitle(r)}>
             <td
               class="chip"
@@ -1499,10 +1503,10 @@
       </tbody>
     </table>
 
-    {#if res.edges?.length}
+    {#if res.rangeEnds?.length}
       <div class="sedges">
         <span class="glabel" title={CONTROL_HELP.edges}>operating range</span>
-        {#each res.edges as e (e.name)}
+        {#each res.rangeEnds as e (e.name)}
           {@const detail = edgeDetail(e)}
           <span class="sedge {POINT_CLASS[e.state]}" title={edgeTitle(e, detail)}>
             {POINT_MARK[e.state]}
@@ -1564,7 +1568,7 @@
           <span class="kitem"><i style="background:{PALETTE[i % PALETTE.length]}"></i>{label}</span>
         {/each}
       {:else}
-        {#each swept?.rules ?? [] as r, i}
+        {#each swept?.checks ?? [] as r, i}
           <span class="kitem"
             ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{ruleLabel(
               r,
@@ -1590,7 +1594,7 @@
     <p class="feas">
       {multi
         ? 'no condition in this set was evaluated, so there is nothing to sweep'
-        : `nothing to sweep at ${variantLabel(refRun.key)} — this condition was not evaluated`}
+        : `nothing to sweep at ${conditionLabel(refRun.key)} — this condition was not evaluated`}
     </p>
   {/if}
 
