@@ -244,7 +244,7 @@
         "provides": ["av0", "gds", "vdsat", "gm"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "in__id",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
         "vds_c": "V_out_dc - V_a",
@@ -284,7 +284,7 @@
         "provides": ["av0", "gds", "vdsat"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "in__id",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
         "vds_c": "sign_p*(V_b - V_out_dc)",
@@ -317,7 +317,7 @@
         "provides": ["gm", "gds", "vdsat", "W", "vnth_m"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "in__id",
         "L_m": "L_mir",
         "gm_id_m": "gm_id_mir",
         "vds_m": "sign_p*(VDD - V_b)"

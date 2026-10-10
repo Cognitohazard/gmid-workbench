@@ -198,7 +198,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "cgg", "vgs", "vdsat"]
+        "provides": ["gm", "gds", "cgg", "vgs", "vdsat", "id"]
       },
       "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" },
       "wiring": { "gate": "V1", "source": "VDD" }
@@ -232,7 +232,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gds", "vdsat"]
+        "provides": ["gds", "vdsat", "id"]
       },
       "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1", "vx": "ld_sign*abs(s2__vgs)" }
     },
@@ -269,7 +269,7 @@
         "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
       },
       "params": {
-        "Ix": "I1/2",
+        "Ix": "ld1__id",
         "Lx": "L_in",
         "gx": "gm_id_in",
         "vx": "(VDD - abs(s2__vgs)) - V_tail",
@@ -301,7 +301,7 @@
         ],
         "provides": ["gds", "vdsat"]
       },
-      "params": { "Ix": "I2", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
+      "params": { "Ix": "s2__id", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
     }
   ],
   "equations": [
