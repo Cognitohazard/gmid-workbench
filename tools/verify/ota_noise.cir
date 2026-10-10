@@ -1,15 +1,84 @@
-* Marco 5T OTA: nfet pair W=5.7/L=0.5 gm/ID~14, pfet mirror W=9.26/L=1 gm/ID~8, ideal tail 35.86u (sheet formula has no tail term), VDD 1.8, CL 2p
+* 5T OTA from sheets/otas/five-transistor-ota.json at its sky130 tt 27C defaults: input-referred noise
+*
+* Same circuit, widths and output servo as ota_op.cir, which explains all three. The sheet's
+* noise row is thermal only, from the tables' gamma model (4kT*gamma/gm with gamma = 1):
+*
+*   vn_in 22.67 nV/rtHz = sqrt(2*12.44^2 + 10.15^2 + 10.07^2)
+*     12.44  each pair device (in__vnth_m)
+*     10.15  load diode side, referred by its gm over the pair's (ldr__vnth_m * ldr__gm / in__gm)
+*     10.07  load output side, referred the same way
+*
+* The simulated total also carries flicker noise, which the sheet does not model. ngspice
+* reports each device's flicker part separately, so this deck splits the total into a flicker
+* part (the six devices' 1/f terms) and a thermal part (everything else) and refers both to
+* the input. The thermal part is the number to hold against vn_in. The sweep is 100 points
+* per decade from 1 Hz, so index 300 is 1 kHz, 500 is 100 kHz, 700 is 10 MHz, 800 is 100 MHz.
+*
+* The circuit section below is identical in ota_op.cir, ota_ac.cir and ota_noise.cir.
 .param mc_mm_switch=0
 .param mc_pr_switch=0
 .include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
-VDD vdd 0 1.8
-VIP inp 0 dc 1.0 ac 1
-VIN inn 0 dc 1.0
-XM1 n1 inp tail 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
-XM2 out inn tail 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
-XM3 n1 n1 vdd vdd sky130_fd_pr__pfet_01v8 L=1 W=9.26 nf=1
-XM4 out n1 vdd vdd sky130_fd_pr__pfet_01v8 L=1 W=9.26 nf=1
-IT tail 0 35.86u
-CL out 0 2p
-.noise v(out) VIP dec 20 1k 100meg
+
+VDD  vdd  0    1.8
+IB   vdd  nb   20u
+XMB  nb   nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
+XMT  tail nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
+XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
+XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
+XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
+XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
+CL   out  0    2p
+
+* inputs: v(inp) - v(inn) = VID + v(os), centred on CM_dc
+VCM  cm   0    1.1
+VID  dif  os   dc 0 ac 1
+EP   inp  cm   dif 0  0.5
+EN   inn  cm   dif 0 -0.5
+
+* output servo: integrates V_out_dc - v(out) onto node os
+VREF ref  0    0.9
+GSV  0    os   ref out 1u
+CSV  os   0    1
+
+.control
+noise v(out) VID dec 100 1 1g 1
+setplot noise1
+let gain = onoise_spectrum/inoise_spectrum
+let fl_in1 = onoise.m.xm1.msky130_fd_pr__nfet_01v8.1overf
+let fl_in2 = onoise.m.xm2.msky130_fd_pr__nfet_01v8.1overf
+let fl_ldr = onoise.m.xm3.msky130_fd_pr__pfet_01v8.1overf
+let fl_ld = onoise.m.xm4.msky130_fd_pr__pfet_01v8.1overf
+let fl_tail = onoise.m.xmt.msky130_fd_pr__nfet_01v8.1overf
+let fl_bias = onoise.m.xmb.msky130_fd_pr__nfet_01v8.1overf
+let flicker = sqrt(fl_in1^2 + fl_in2^2 + fl_ldr^2 + fl_ld^2 + fl_tail^2 + fl_bias^2)
+let thermal = sqrt(onoise_spectrum^2 - flicker^2)
+let vn_total = inoise_spectrum
+let vn_thermal = thermal/gain
+let vn_flicker = flicker/gain
+* the flicker part falls with frequency, so the fraction of the nine-decade sweep on which it
+* exceeds the thermal part locates the crossing
+let f_corner = 10^(9*mean(flicker gt thermal))
+* each device's channel thermal noise at 1 kHz, referred to the input
+let th_in1 = onoise.m.xm1.msky130_fd_pr__nfet_01v8.id[300]/gain[300]
+let th_in2 = onoise.m.xm2.msky130_fd_pr__nfet_01v8.id[300]/gain[300]
+let th_ldr = onoise.m.xm3.msky130_fd_pr__pfet_01v8.id[300]/gain[300]
+let th_ld = onoise.m.xm4.msky130_fd_pr__pfet_01v8.id[300]/gain[300]
+let th_tail = onoise.m.xmt.msky130_fd_pr__nfet_01v8.id[300]/gain[300]
+let th_bias = onoise.m.xmb.msky130_fd_pr__nfet_01v8.id[300]/gain[300]
+echo
+echo "== input-referred density [V/rtHz] at 1 kHz: total, thermal part, flicker part"
+print vn_total[300] vn_thermal[300] vn_flicker[300]
+echo "== at 100 kHz"
+print vn_total[500] vn_thermal[500] vn_flicker[500]
+echo "== at 10 MHz"
+print vn_total[700] vn_thermal[700] vn_flicker[700]
+echo "== at 100 MHz"
+print vn_total[800] vn_thermal[800] vn_flicker[800]
+echo "== frequency where the flicker part falls to the thermal part [Hz]"
+print f_corner
+echo "== thermal part by device at 1 kHz, input-referred [V/rtHz]"
+print th_in1 th_in2 th_ldr th_ld th_tail th_bias
+echo "== one side only (XM2 and XM4), and all four pair and load devices"
+print sqrt(th_in2^2+th_ld^2) sqrt(th_in1^2+th_in2^2+th_ldr^2+th_ld^2)
+.endc
 .end

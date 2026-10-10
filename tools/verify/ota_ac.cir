@@ -1,15 +1,48 @@
-* Marco 5T OTA: nfet pair W=5.7/L=0.5 gm/ID~14, pfet mirror W=9.26/L=1 gm/ID~8, ideal tail 35.86u (sheet formula has no tail term), VDD 1.8, CL 2p
+* 5T OTA from sheets/otas/five-transistor-ota.json at its sky130 tt 27C defaults: gain and bandwidth
+*
+* Same circuit, widths and output servo as ota_op.cir, which explains all three. VID drives the
+* inputs differentially, so v(out) is the differential gain directly. What the sheet reports,
+* to compare with what this deck prints:
+*
+*   Av 53.78 (in__gm * Rout)   GBW 8.535 MHz (in__gm / (2 pi CL))   PM 89.70 deg
+*
+* The circuit section below is identical in ota_op.cir, ota_ac.cir and ota_noise.cir.
 .param mc_mm_switch=0
 .param mc_pr_switch=0
 .include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
-VDD vdd 0 1.8
-VIP inp 0 dc 1.0 ac 1
-VIN inn 0 dc 1.0
-XM1 n1 inp tail 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
-XM2 out inn tail 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
-XM3 n1 n1 vdd vdd sky130_fd_pr__pfet_01v8 L=1 W=9.26 nf=1
-XM4 out n1 vdd vdd sky130_fd_pr__pfet_01v8 L=1 W=9.26 nf=1
-IT tail 0 35.86u
-CL out 0 2p
-.ac dec 20 100 1g
+
+VDD  vdd  0    1.8
+IB   vdd  nb   20u
+XMB  nb   nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
+XMT  tail nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
+XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
+XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
+XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
+XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
+CL   out  0    2p
+
+* inputs: v(inp) - v(inn) = VID + v(os), centred on CM_dc
+VCM  cm   0    1.1
+VID  dif  os   dc 0 ac 1
+EP   inp  cm   dif 0  0.5
+EN   inn  cm   dif 0 -0.5
+
+* output servo: integrates V_out_dc - v(out) onto node os
+VREF ref  0    0.9
+GSV  0    os   ref out 1u
+CSV  os   0    1
+
+.control
+ac dec 100 100 1g
+echo
+echo "== low-frequency differential gain, read at 100 Hz"
+meas ac av_lf find vm(out) at=100
+echo "== -3 dB frequency, unity-gain frequency and the phase there"
+let av_3db = av_lf/sqrt(2)
+meas ac f_3db when vm(out)=av_3db
+meas ac f_unity when vm(out)=1
+meas ac phase_unity find vp(out) when vm(out)=1
+let pm_deg = 180 + phase_unity*180/pi
+print pm_deg
+.endc
 .end

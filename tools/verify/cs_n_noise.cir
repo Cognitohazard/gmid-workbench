@@ -1,11 +1,50 @@
-* single-device noise: nfet_01v8 W=5.7 L=0.5 at OTA bias (ID=17.93u, vds~0.33) noiseless-R load
+* single-device noise reference: nfet_01v8 at the 5T OTA's input-pair bias point
+*
+* One device held at exactly the coordinates the sheet's in block was read at (see
+* ota_op.cir): W 1.7696 um as m copies of the 1 um device, L 0.5 um, vgs 825.63 mV,
+* vds 625.63 mV, vsb 274.37 mV. There the sheet reports
+*
+*   id 8.9374 uA   gm 107.25 uS   in__vnth_m 12.44 nV/rtHz (4kT*gamma/gm with gamma = 1)
+*
+* No load and no topology: the drain sits on a voltage source and HO turns its current into
+* v(o) at 1 V/A, so the output noise is the drain noise current in A/rtHz and the gain from
+* VG is gm. Dividing by gm gives the device's own input-referred density, which is what the
+* OTA's noise is built from. The sweep is 100 points per decade from 1 Hz, so index 300 is
+* 1 kHz and index 800 is 100 MHz.
 .param mc_mm_switch=0
 .param mc_pr_switch=0
 .include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
-VDD vdd 0 2.123
-R1 vdd d 100k noisy=0
-XM1 d g 0 0 sky130_fd_pr__nfet_01v8 L=0.5 W=5.7 nf=1
-VG g 0 dc 0.7656 ac 1
-.save all @m.xm1.msky130_fd_pr__nfet_01v8[gm] @m.xm1.msky130_fd_pr__nfet_01v8[id]
-.noise v(d) VG dec 20 1k 100meg
+
+VG   g    0    dc 0.82563 ac 1
+VD   d    0    0.62563
+VB   b    0    -0.27437
+XM1  d    g    0    b    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
+HO   o    0    VD   1
+
+.control
+op
+let id = @m.xm1.msky130_fd_pr__nfet_01v8[id]
+let gm = @m.xm1.msky130_fd_pr__nfet_01v8[gm]
+echo
+echo "== operating point"
+print id gm gm/id
+noise v(o) VG dec 100 1 10g 1
+setplot noise1
+let thermal = onoise.m.xm1.msky130_fd_pr__nfet_01v8.id
+let flicker = onoise.m.xm1.msky130_fd_pr__nfet_01v8.1overf
+let vn_total = inoise_spectrum
+let vn_thermal = thermal/op1.gm
+let vn_flicker = flicker/op1.gm
+* thermal drain-current density over 4kT*gm at 27 C
+let gamma_eff = thermal^2/(4*1.380649e-23*300.15*op1.gm)
+* the flicker part falls with frequency, so the fraction of the ten-decade sweep on which it
+* exceeds the thermal part locates the crossing
+let f_corner = 10^(10*mean(flicker gt thermal))
+echo "== input-referred density [V/rtHz] at 1 kHz: total, thermal part, flicker part"
+print vn_total[300] vn_thermal[300] vn_flicker[300]
+echo "== at 100 MHz"
+print vn_total[800] vn_thermal[800] vn_flicker[800]
+echo "== effective gamma, and the frequency where flicker falls to thermal [Hz]"
+print gamma_eff[300] f_corner
+.endc
 .end

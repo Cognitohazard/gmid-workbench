@@ -1,0 +1,68 @@
+* nfet_01v8 at one table point, the same width realized three ways
+*
+* The table point (sky130 tt 27 C, L 0.5 um, VDS 0.9 V, VSB 0): asking for gm = 1 mS at
+* gm/ID = 15 sizes W = 25.77 um at VGS = 718.4 mV. At exactly these coordinates the table,
+* characterized at W = 1 um and scaled per um, reads
+*
+*   id 66.659 uA   gm 999.25 uS   gds 8.945 uS   gm/id 14.99
+*
+*   XMM  25.77 parallel copies of the 1 um single-finger device the table was made from
+*        (a fractional multiplier: the table's own scaling assumption, not a layout)
+*   XMF  the same width as 26 fingers of 0.991 um
+*   XMW  the same width as one 25.77 um finger
+*
+* The operating point compares the three against the table. The gate sweep then reports how
+* far the single finger and the 26 fingers depart from the copies across inversion levels.
+*
+* wnflag = 1 makes ngspice choose the model bin from the finger width W/nf. Without it
+* ngspice-42 bins XMF by its total width and stops with "u0 ... is not positive".
+.param mc_mm_switch=0
+.param mc_pr_switch=0
+.option wnflag=1
+.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+
+VG   g    0    0.7184
+VDM  dm   0    0.9
+VDF  df   0    0.9
+VDW  dw   0    0.9
+XMM  dm   g    0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=25.77
+XMF  df   g    0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=25.77 nf=26
+XMW  dw   g    0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=25.77 nf=1
+
+.control
+op
+let id_copies = @m.xmm.msky130_fd_pr__nfet_01v8[id]
+let gm_copies = @m.xmm.msky130_fd_pr__nfet_01v8[gm]
+let gds_copies = @m.xmm.msky130_fd_pr__nfet_01v8[gds]
+let id_fingers = @m.xmf.msky130_fd_pr__nfet_01v8[id]
+let gm_fingers = @m.xmf.msky130_fd_pr__nfet_01v8[gm]
+let gds_fingers = @m.xmf.msky130_fd_pr__nfet_01v8[gds]
+let id_single = @m.xmw.msky130_fd_pr__nfet_01v8[id]
+let gm_single = @m.xmw.msky130_fd_pr__nfet_01v8[gm]
+let gds_single = @m.xmw.msky130_fd_pr__nfet_01v8[gds]
+echo
+echo "== 25.77 copies of the 1 um device (XMM)"
+print id_copies gm_copies gds_copies gm_copies/id_copies
+echo "== 26 fingers of 0.991 um (XMF)"
+print id_fingers gm_fingers gds_fingers gm_fingers/id_fingers
+echo "== one 25.77 um finger (XMW)"
+print id_single gm_single gds_single gm_single/id_single
+echo "== current relative to the copies at this point"
+print id_fingers/id_copies id_single/id_copies
+
+dc VG 0.4 1.8 0.01
+let single_ratio = i(VDW)/i(VDM)
+let fingers_ratio = i(VDF)/i(VDM)
+* gm/ID of the 1 um device along the sweep, to say where on the inversion axis a ratio falls
+let gm_id = deriv(i(VDM))/i(VDM)
+echo
+echo "== gate sweep 0.4 V to 1.8 V: single-finger current over the copies' current"
+meas dc single_max max single_ratio
+meas dc single_max_vgs max_at single_ratio
+meas dc gm_id_there find gm_id at=single_max_vgs
+meas dc single_at_1v8 find single_ratio at=1.8
+echo "== and the 26 fingers over the copies"
+meas dc fingers_min min fingers_ratio
+meas dc fingers_max max fingers_ratio
+.endc
+.end
