@@ -311,7 +311,6 @@ describe('sheet library: vetting lints', () => {
       'multistage/two-stage-cascode-comp-ota.json',
       'multistage/two-stage-miller-ota.json',
       'otas/current-mirror-ota.json',
-      'otas/differential-pair-tail.json',
       'otas/folded-cascode-ota.json',
       'otas/gain-boosted-cascode-ota.json',
       'otas/symmetrical-ota.json',

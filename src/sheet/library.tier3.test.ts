@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { runSheet } from './index';
-import type { SheetResult } from './types';
+import type { BindReport, SheetResult } from './types';
 import {
   table,
   relErr,
@@ -22,6 +22,8 @@ import {
   gmbOf,
   cggOf,
   sheet as libSheet,
+  VGS_GMID10_L05,
+  VGS_GMID12_L05,
 } from './library.fixtures';
 
 /** Intrinsic gain av0 = (gm/ID)·(VA + vds) at length `L`, declared vds. */
@@ -32,6 +34,10 @@ const sheet = (file: string) => libSheet(`otas/${file}`);
 const TWO_PI = 2 * Math.PI;
 const CL = 2e-12;
 const L = 0.5e-6; // every default sheet sizes at 0.5 µm
+
+/** One block's sizing report, by block name. */
+const block = (r: SheetResult, name: string): BindReport =>
+  r.children!.find((c) => c.name === name)!.bind!;
 
 // Every OTA's cgg_in is the gate of ONE input device, per input terminal. cgg = W*L*Cox is
 // exact in the demo model at the width the bind landed on, so where the input child exposes its
@@ -48,13 +54,53 @@ const itIsOneInputGate = (res: SheetResult): void => {
 
 describe('tier-3 goldens: differential pair + tail', () => {
   const res = runSheet(sheet('differential-pair-tail.json'), table);
-  // Defaults: I_tail 20 µA, gm/ID 12, L 0.5 µm, V_out 0.9, CM_dc 1.05 (placed so the tail
-  // stays honestly saturated on a 1.8 V process); the tail node is pinned to CM_dc.
-  const gmIn = 10e-6 * 12; // (I_tail/2)·gm_id, both supplied to the bind
+  // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 10, input gm/ID 12,
+  // L 0.5 µm, V_out 0.9, CM_dc 1.05 (placed so the tail stays honestly saturated on a 1.8 V
+  // process); the tail node is pinned to CM_dc.
+  const I_TAIL = 20e-6;
+  // Only the reference's current is typed. The tail device is the reference's width on the
+  // reference's gate, and in the demo model id ∝ (VA + vds) at fixed vgs and W, so it delivers
+  // the programmed current times (VA + vds_tail)/(VA + vds_ref) — the reference being
+  // diode-connected, vds_ref is its own vgs. Both voltages are the model's for the inversion
+  // level the sheet asks of each device, so nothing here is read back from the run:
+  //   tail node    V_tail = CM_dc − vgs(12) = 1.05 − 0.567023 = 0.482977 V
+  //   tail mirror  (2.5 + 0.482977)/(2.5 + 0.610063) = 0.959137   (reference at vgs(10))
+  const vTail = 1.05 - VGS_GMID12_L05;
+  const tailRatio = (va(L) + vTail) / (va(L) + VGS_GMID10_L05);
+  /** What each side of the pair carries: half of what the tail delivers, 9.591 µA. */
+  const iHalf = (I_TAIL / 2) * tailRatio;
+  const gmIn = 12 * iHalf; // (gm/ID)·id, both supplied to the bind
 
-  it('slew and GBW follow exactly from the tail current and input gm', () => {
-    expect(relErr(res.values.SR, 20e-6 / CL)).toBeLessThan(1e-9);
-    expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
+  it('the tail node carries one current and the tail mirror is one gate wire', () => {
+    // Kirchhoff at the tail node, to the last bit: the pair is HANDED the tail's current,
+    // halved, and only the reference is sized against the programmed number.
+    expect(block(res, 'bias').id).toBe(I_TAIL);
+    expect(res.values.tail__id).toBe(2 * res.values.in__id);
+    // A 1:1 mirror is the same width on the same gate. The width is passed through untouched;
+    // the gate voltage is reported as the table's own vgs coordinate at the point it was read,
+    // so two devices on one wire agree to rounding rather than always to the last bit.
+    expect(block(res, 'tail').W).toBe(block(res, 'bias').W);
+    expect(relErr(block(res, 'tail').vgs, block(res, 'bias').vgs)).toBeLessThan(1e-12);
+  });
+
+  it('the tail misses its reference by the drain-voltage ratio of the demo model', () => {
+    // The tail node (0.483 V) sits below the reference's diode drop (0.610 V), so the tail
+    // under-delivers by 1 − 0.959137 = 4.09 %. Compared as an error, the way the mirror goldens
+    // compare theirs: the diode diagonal is interpolated, so the ratio is not exact on the
+    // table, and 1e-2 of this error is 1.3 mV of drain-voltage difference.
+    const tailErr = 1 - res.values.tail__id / I_TAIL;
+    expect(relErr(tailErr, 1 - tailRatio)).toBeLessThan(1e-2);
+  });
+
+  it('slew, GBW and supply current follow from the current the tail delivers', () => {
+    // 20 µA × 0.959137 = 19.183 µA — not the 20 µA the reference is programmed to.
+    expect(relErr(res.values.SR, (I_TAIL * tailRatio) / CL)).toBeLessThan(1e-3);
+    expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-3);
+    // Which current each row reads, exactly: the tail's own, and the pair's half of it.
+    expect(relErr(res.values.SR, res.values.tail__id / CL)).toBeLessThan(1e-12);
+    expect(relErr(res.values.GBW, (12 * res.values.in__id) / (TWO_PI * CL))).toBeLessThan(1e-9);
+    // The reference branch is shared bias and is not counted.
+    expect(res.values.I_q).toBe(res.values.tail__id);
   });
 
   it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
@@ -62,17 +108,28 @@ describe('tier-3 goldens: differential pair + tail', () => {
   });
 
   it('gain is the input gm into the device gds plus the load conductance', () => {
-    // vds_in = V_out_dc − V_tail, with the tail node read from the converged result —
-    // the model check (gds/id = 1/(VA + vds) in the demo device) is what this test owns.
-    const av = gmIn / (gdsOf(10e-6, L, 0.9 - res.values.V_tail) + 3e-6);
-    expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
+    // The input device carries the half current at vds = V_out_dc − V_tail, so in the demo
+    // model gds = I/(VA + vds) there; the load is the 3 µS the sheet is told. The half current
+    // does not cancel against a fixed load conductance, so the gain falls with what the tail
+    // delivers: 115.10 µS / (3.288 µS + 3 µS) = 18.30.
+    const av = gmIn / (gdsOf(iHalf, L, 0.9 - vTail) + 3e-6);
+    expect(relErr(res.values.Av, av)).toBeLessThan(1e-3);
   });
 
   it('Rout is the inverse of that same denominator, and Av now reads through it', () => {
-    const rout = 1 / (gdsOf(10e-6, L, 0.9 - res.values.V_tail) + 3e-6);
-    expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-2);
+    const rout = 1 / (gdsOf(iHalf, L, 0.9 - vTail) + 3e-6);
+    expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-3);
     expect(relErr(res.values.Av, res.values.Gm * res.values.Rout)).toBeLessThan(1e-12);
     expect(relErr(res.values.cgg_in, cggInOf(res))).toBeLessThan(1e-9);
+  });
+
+  it('the common-mode gain is read off the tail device where it sits', () => {
+    // The tail copies its reference's saturation current I_tail/(1 + vgs(10)/VA), and
+    // gds = idSat/VA in the demo model, so its gds is I_tail/(VA + vgs(10)) whatever the tail
+    // node is. Over twice the pair's gm = 12 × (I_tail/2) × tailRatio, the programmed current
+    // and the reference's gate voltage both cancel: Acm = 1/(12·(VA + V_tail)) = 0.027937.
+    expect(relErr(res.values.Acm, 1 / (12 * (va(L) + vTail)))).toBeLessThan(1e-3);
+    expect(relErr(res.values.CMRR, res.values.Av / res.values.Acm)).toBeLessThan(1e-12);
   });
 });
 

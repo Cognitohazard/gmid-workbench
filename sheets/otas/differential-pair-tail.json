@@ -1,6 +1,6 @@
 {
   "title": "Differential pair + tail",
-  "description": "The bare differential-pair transconductor sized by half-circuit: one input device at half the tail current, plus the tail source. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The engine bisects $V_{tail}$ until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
+  "description": "The bare differential-pair transconductor sized by half-circuit: one input device, the tail source under it, and the diode-connected reference that biases the tail. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; and each side of the pair carries half of what the tail delivers. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. The engine bisects $V_{tail}$ until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -20,7 +20,7 @@
       "value": 9e-3,
       "unit": "V",
       "role": "spec",
-      "note": "input offset budget, 1 sigma; a bare half-micron pair at 20 uA sits near 7 mV with a generic Pelgrom coefficient"
+      "note": "input offset budget, 1 sigma; a bare half-micron pair under a tail programmed to 20 uA sits near 7.6 mV with a generic Pelgrom coefficient"
     },
     {
       "name": "gds_load_est",
@@ -34,7 +34,7 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95-1.19 V on sky130 tt). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.96-1.39 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -81,7 +81,8 @@
       "min": 2e-6,
       "max": 200e-6,
       "unit": "A",
-      "role": "choice"
+      "role": "choice",
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number"
     },
     {
       "name": "gm_id_in",
@@ -99,7 +100,7 @@
       "max": 16,
       "unit": "1/V",
       "role": "choice",
-      "note": "tail inversion: higher V* costs CM-low headroom but tightens the current source"
+      "note": "inversion level of the bias reference, which the tail device inherits through the shared gate: higher V* costs CM-low headroom but tightens the current source"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     {
@@ -108,15 +109,88 @@
       "min": 0.18e-6,
       "max": 2e-6,
       "unit": "m",
-      "role": "choice"
+      "role": "choice",
+      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error and lifts the common-mode rejection"
     }
   ],
   "blocks": [
     {
+      "name": "bias",
+      "doc": {
+        "title": "Tail bias reference",
+        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_b", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_b", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_b", "value": 10, "unit": "1/V", "role": "choice" }
+        ],
+        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "diode": true },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_b",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["W", "vgs"]
+      },
+      "params": {
+        "I_b": "I_tail",
+        "L_b": "L_tail",
+        "gm_id_b": "gm_id_tail"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. Its saturation headroom sets the CM-low edge, and its output conductance sets the common-mode rejection.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_t",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width — a 1:1 copy"
+          },
+          {
+            "name": "vgs_t",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "vds_t",
+            "value": 0.33,
+            "unit": "V",
+            "role": "spec",
+            "note": "the tail node"
+          }
+        ],
+        "givens": { "L": "L_t", "W": "W_t", "vgs": "vgs_t", "vds": "vds_t" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "W_t": "bias__W",
+        "vgs_t": "bias__vgs",
+        "L_t": "L_tail",
+        "vds_t": "V_tail"
+      }
+    },
+    {
       "name": "in",
       "doc": {
         "title": "Input-pair device",
-        "description": "Half-circuit input device at half the tail current. Its source sits at the tail node — that is its body bias — and its drain at V_out_dc, so its drain-source voltage is what is left between them.",
+        "description": "Half-circuit input device carrying half of what the tail device delivers. Its source sits at the tail node — that is its body bias — and its drain at V_out_dc, so its drain-source voltage is what is left between them.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -145,49 +219,11 @@
         "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "tail__id/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
         "vds_i": "V_out_dc - V_tail",
         "vsb_i": "V_tail"
-      }
-    },
-    {
-      "name": "tail",
-      "doc": {
-        "title": "Tail current source",
-        "description": "The tail device carrying the full bias current; its saturation headroom sets the CM-low edge, and its output conductance sets the common-mode rejection.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_t", "value": 10, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vds_t",
-            "value": 0.33,
-            "unit": "V",
-            "role": "spec",
-            "note": "the tail node"
-          }
-        ],
-        "givens": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_t",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["gm", "gds", "vdsat"]
-      },
-      "params": {
-        "I_t": "I_tail",
-        "L_t": "L_tail",
-        "gm_id_t": "gm_id_tail",
-        "vds_t": "V_tail"
       }
     }
   ],
@@ -217,7 +253,12 @@
       "note": "half-circuit gain into the device gds in parallel with the load conductance"
     },
     { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
-    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "SR",
+      "expr": "tail__id/CL",
+      "unit": "V/s",
+      "note": "the whole tail current steered into the load — the current the tail device delivers, not the number the reference is programmed to"
+    },
     {
       "name": "vn_in",
       "expr": "sqrt(2)*in__vnth_m",
@@ -256,9 +297,9 @@
     },
     {
       "name": "I_q",
-      "expr": "I_tail",
+      "expr": "tail__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the tail is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current of the stage — the current the tail device delivers is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The reference branch that programs it is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "checks": [
