@@ -43,6 +43,19 @@ the viewer's bench (which tables are loaded, which one is designated nominal), *
 document**: nothing corner-related appears in the sheet JSON, and a sheet file is portable
 across benches with different corner sets.
 
+**One design across the conditions.** A set of conditions is asked about one design, not one
+design per corner. The design is sized once — at the device's nominal condition, or at the only
+condition asked about when the bench designates none — and every other condition is then asked
+about that same hardware: the widths and lengths that run produced, the currents the sheet
+authors, and the gate biases its held nodes needed, with only the operating point re-settled on
+that condition's tables. This is the same fixed-hardware reading a range end uses (see [What "the
+same design" means at a range end](#what-the-same-design-means-at-a-range-end)), applied across
+corners. A design re-sized at each corner would report on a different chip each time; one is
+built. Three things decline the question at a condition instead of answering it: several
+conditions with no nominal among the loaded tables to size at; a nominal that did not evaluate;
+and a design that rests on a voltage classed `assumed`, since a typed guess held across corners
+says nothing about the hardware.
+
 ## The document model
 
 A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:

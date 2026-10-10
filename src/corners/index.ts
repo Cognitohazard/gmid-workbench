@@ -19,6 +19,12 @@
 // has no usable table at the key, the run is NOT EVALUATED — a fourth outcome, never folded
 // into "does not close".
 //
+// One design across the conditions. A set of conditions is one question about ONE design: it is
+// sized once, at the base condition, and every other condition is asked about that same
+// hardware — the widths and lengths the base run produced, its currents, and the gate biases it
+// needed — with only the operating point re-settled (see pinHardware). A run that re-sized the
+// design at each condition would describe one chip per corner; only one of them is built.
+//
 // Pure; zero DOM. Corner is categorical: nothing here interpolates, resamples, clips, or
 // merges tables across corners.
 
@@ -34,6 +40,7 @@ import {
   resolvedSheet,
   validateSheet,
 } from '../sheet';
+import { pinHardware, type PinnedHardware } from '../sheet/coverage';
 
 // --- variant identity --------------------------------------------------------
 
@@ -369,13 +376,21 @@ export function axisSignature(t: DeviceTable): string {
  *  `runtime-evaluation` reports an evaluation that started and did not complete.
  *  `incompatible-table` refuses a family whose members do not sweep the same axes: its
  *  variants cannot serve one sheet interchangeably, so no condition of it projects until the
- *  imports agree — the same fact family QA reports as an error. */
+ *  imports agree — the same fact family QA reports as an error.
+ *
+ *  Two are about holding one design across conditions. `no-design` says there is nothing to
+ *  hold: the base condition was not evaluated, or several conditions were asked about and none
+ *  is the base. `assumed-level` says the design rests on a voltage its sheet types although its
+ *  own parts determine it (class `assumed`): held fixed at another condition, a typed guess
+ *  proves nothing about the hardware, so the question is declined rather than answered. */
 export type VariantIssueKind =
   | 'absent-variant'
   | 'ambiguous-variant'
   | 'incompatible-table'
   | 'invalid-sheet-or-ref'
-  | 'runtime-evaluation';
+  | 'runtime-evaluation'
+  | 'no-design'
+  | 'assumed-level';
 
 export interface VariantIssue {
   readonly kind: VariantIssueKind;
@@ -392,6 +407,13 @@ export type VariantRun =
   | {
       readonly state: 'evaluated';
       readonly key: VariantKey;
+      /** Whose hardware this run measured. `sized`: the run sized the design here, free to choose
+       *  every width — the base condition. `held`: the design the base run sized, re-biased at
+       *  this condition with its geometry, currents and gate biases fixed. */
+      readonly design: 'sized' | 'held';
+      /** On a `held` run: the blocks whose current the base run did not author, so it is held
+       *  here as an ideal source (see PinnedHardware.assumedSource). */
+      readonly assumedSource?: readonly string[];
       readonly closes: 'pass' | 'fail';
       /** Narrower than PerRunCovers: a run that happened has a coverage answer, and letting it
        *  claim `unavailable` would put one condition in the closure counts and the coverage
@@ -543,36 +565,111 @@ export function runVariant(
   return runPrepared(prepareRun(doc, refs), primaryFamily, key, familyOf);
 }
 
-/** The same transition over a SET of conditions: identical run for identical arguments, with
- *  everything that does not depend on the condition done once instead of once per key. A panel
- *  asking about several conditions asks one question about one sheet, so resolving, validating
- *  and collecting its bindings that many times is work nobody ordered. */
+/**
+ * One design asked about at a SET of conditions. The design is sized once, at `base` — or, when
+ * no base is given, at the single condition asked about — by the same transition `runVariant`
+ * makes. Every other condition is then asked about THAT hardware: its binds rewritten to the
+ * widths, lengths and currents the base run produced and its held nodes pinned to the gate
+ * biases it needed (pinHardware), evaluated on that condition's tables with the operating point
+ * free to re-settle. So a run at the base reads `design: 'sized'` and every other `'held'`.
+ *
+ * Refusals, each answered per condition and never folded into a verdict:
+ *  - several conditions and no base: nothing says where the design is sized (`no-design`);
+ *  - the base was not evaluated: there is no hardware to hold (`no-design`);
+ *  - the design rests on an assumed voltage: holding a typed guess across conditions would
+ *    report on a design nobody can build (`assumed-level`). The check is the sheet's own list
+ *    of assumed inputs, which is every one that reaches a device's sizing — wider than the ones
+ *    that reach a bias, so a guess that only scales a width declines the question too.
+ * Everything that does not depend on the condition (resolving, validating, collecting bindings)
+ * is done once for the set.
+ */
 export function runVariants(
   doc: SheetDoc,
   primaryFamily: CornerFamily,
   keys: readonly VariantKey[],
   familyOf: FamilyResolver,
   refs?: SheetRefIndex,
+  base?: VariantKey,
 ): VariantRun[] {
   const prepared = prepareRun(doc, refs);
-  return keys.map((key) => runPrepared(prepared, primaryFamily, key, familyOf));
+  const at = base ?? (keys.length === 1 ? keys[0] : undefined);
+  const declined = (kind: VariantIssueKind, message: string): VariantRun[] =>
+    keys.map((key) => ({ state: 'not-evaluated', key, issues: [{ kind, message }] }));
+  if (keys.length === 0) return [];
+  if (at === undefined)
+    return declined(
+      'no-design',
+      'several conditions are asked about and none is designated nominal — the design has to be ' +
+        'sized at one condition before it can be held at the others',
+    );
+
+  const sized = runPrepared(prepared, primaryFamily, at, familyOf);
+  const others = keys.filter((k) => !sameVariant(k, at));
+  if (others.length === 0) return keys.map(() => sized);
+
+  let held: PinnedHardware | undefined;
+  let refusal: VariantIssue | undefined;
+  if (sized.state !== 'evaluated')
+    refusal = {
+      kind: 'no-design',
+      message: `the design was not evaluated at ${variantLabel(at)}, where it is sized, so there is nothing to hold here`,
+    };
+  else if (prepared.assumptions.length)
+    refusal = {
+      kind: 'assumed-level',
+      message:
+        `the design is sized under assumed ${prepared.assumptions.length === 1 ? 'level' : 'levels'} ` +
+        `${prepared.assumptions.join(', ')} — a typed value held across conditions says nothing ` +
+        `about the hardware. Derive it, or class it independent if nothing on the sheet sets it`,
+    };
+  else held = pinHardware(prepared.doc, sized.result);
+
+  return keys.map((key): VariantRun => {
+    if (sameVariant(key, at)) return sized;
+    if (!refusal) return runPrepared(prepared, primaryFamily, key, familyOf, held);
+    // What is wrong with THIS condition comes first: a table missing here is a fact about the
+    // bench that stays true whatever happens to the design, and the fix is a different one.
+    const here = prepared.blockers.length
+      ? prepared.blockers
+      : preflightBindings(prepared.bindings, primaryFamily, key, familyOf).issues;
+    return { state: 'not-evaluated', key, issues: here.length ? here : [refusal] };
+  });
 }
 
+/** One condition of a prepared sheet: sized here, or — given `held` — the held design re-biased
+ *  here. The two differ only in which document the engine sees and what the run is stamped. */
 function runPrepared(
   prepared: PreparedRun,
   primaryFamily: CornerFamily,
   key: VariantKey,
   familyOf: FamilyResolver,
+  held?: PinnedHardware,
 ): VariantRun {
   if (prepared.blockers.length) return { state: 'not-evaluated', key, issues: prepared.blockers };
 
   const { primary, issues } = preflightBindings(prepared.bindings, primaryFamily, key, familyOf);
   if (issues.length || primary === undefined) return { state: 'not-evaluated', key, issues };
+  // A hold the base run recorded no value for has nothing to be held at (see pinHardware).
+  if (held?.unheld.length)
+    return {
+      state: 'not-evaluated',
+      key,
+      issues: [
+        {
+          kind: 'runtime-evaluation',
+          message: `no gate bias was recorded for the held ${held.unheld.join(', ')}`,
+        },
+      ],
+    };
 
   // `runSheet`'s two halves, with its validation pass already in hand: the doc is resolved and
   // validated above, so this is exactly what it would return — an error-free validation neither
   // blocks the verdict nor changes a warning.
-  const evaluated = evaluateSheet(prepared.doc, primary, projectingResolver(familyOf, key));
+  const evaluated = evaluateSheet(
+    held?.doc ?? prepared.doc,
+    primary,
+    projectingResolver(familyOf, key),
+  );
   const result: SheetResult = {
     ...evaluated,
     warnings: [...prepared.warnings, ...evaluated.warnings],
@@ -587,6 +684,8 @@ function runPrepared(
   return {
     state: 'evaluated',
     key,
+    design: held ? 'held' : 'sized',
+    ...(held?.assumedSource.length ? { assumedSource: [...held.assumedSource] } : {}),
     closes: result.closes ? 'pass' : 'fail',
     covers: coversOf(result),
     result,

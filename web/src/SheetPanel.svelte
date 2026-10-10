@@ -215,12 +215,27 @@
     if (!primary) return 'no-device';
     return cornerMode === 'chosen' ? 'none-chosen' : 'undesignated';
   });
-  const multi = $derived(keys.length > 1);
+  /** The conditions actually run: the ones asked about, and — whenever the family has a nominal —
+   *  the nominal first even if it was not asked for. The design is SIZED there and HELD
+   *  everywhere else, so its home is always on the page: a held row beside no sized one would
+   *  show an operating point with no way to see the design it belongs to. */
+  const askKeys = $derived.by((): readonly VariantKey[] => {
+    const nk = nominalKey;
+    if (!nk || !keys.length || keys.some((k) => sameVariant(k, nk))) return keys;
+    return [nk, ...keys];
+  });
+  const multi = $derived(askKeys.length > 1);
   // ONE run per condition, through the core's single transition: it preflights the families,
   // refuses before the engine ever sees a missing or ambiguous table, and only calls a run
   // evaluated when it stands. The plural form is that transition per key, with the sheet
   // resolved and validated once for the set rather than once per condition.
-  const runs = $derived(primary ? runVariants(cfg, primary, keys, bench.familyOf, refs) : []);
+  //
+  // One DESIGN across the set: sized at the nominal condition (or at the single condition asked
+  // about, when the family designates none) and held at every other — same widths, lengths,
+  // currents and gate biases, operating point re-settled.
+  const runs = $derived(
+    primary ? runVariants(cfg, primary, askKeys, bench.familyOf, refs, nominalKey) : [],
+  );
   // Whether coverage is a question about this design AT ALL — read from the doc, because when
   // nothing was evaluated the runs cannot tell "claims no range" from "claims went unchecked".
   const hasEdges = $derived((rr.doc.operatingRange ?? []).length > 0);
@@ -296,6 +311,9 @@
   /** One condition's own answers, for the breakdown. Each is the run's own verdict beside its
    *  own label — the aggregate above never stands in for one of these, and none of them ever
    *  stands in for the aggregate. */
+  /** Whose hardware the row measured: the run that sized the design, or that design held. */
+  const designCell = (r: VariantRun): string =>
+    r.state !== 'evaluated' ? '' : r.design === 'sized' ? 'sized here' : 'held';
   const closesCell = (r: VariantRun): string =>
     r.state === 'evaluated'
       ? r.closes === 'pass'
@@ -1319,6 +1337,7 @@
           {@const detail = runDetail(r)}
           <tr class="st-{runClass(r)}" data-corner-row={variantLabel(r.key)}>
             <td class="ccond">{variantLabel(r.key)}</td>
+            <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
             <td class="ccl">{closesCell(r)}</td>
             {#if agg.covers}<td class="ccv">{coversCell(r)}</td>{/if}
             <td class="ccd" title={detail}>{detail}</td>
@@ -1347,7 +1366,7 @@
 
   {#if multi && result && refKey}
     <p class="scap sstamp">
-      detail below is <b>{variantLabel(refKey)}</b> — one of {keys.length} conditions
+      detail below is <b>{variantLabel(refKey)}</b> — one of {askKeys.length} conditions
     </p>
   {/if}
 
@@ -1717,6 +1736,12 @@
   .scorntab td {
     padding: 0.05rem 0.5rem 0.05rem 0;
     vertical-align: top;
+  }
+  /* Which hardware the row measured — quiet, because it qualifies the verdict beside it. */
+  .scorntab .cdes {
+    opacity: 0.7;
+    font-style: italic;
+    white-space: nowrap;
   }
   .scorntab .ccond {
     font-family: ui-monospace, monospace;

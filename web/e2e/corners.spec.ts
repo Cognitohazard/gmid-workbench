@@ -257,6 +257,9 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
   await expect(sp.locator('[data-corner-row="tt"]')).toContainText(/closes|does not close/);
   await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText(/closes|does not close/);
+  // One design across both: sized at the nominal condition, held at the other.
+  await expect(sp.locator('[data-corner-row="tt"] .cdes')).toHaveText('sized here');
+  await expect(sp.locator('[data-corner-row="ss@-40"] .cdes')).toHaveText('held');
   await expect(sp.locator('.feasb').first()).toContainText(
     /closes at all 2|does not close —|closure unverified/,
   );

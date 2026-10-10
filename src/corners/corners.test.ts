@@ -792,43 +792,172 @@ describe('runVariant', () => {
     expect(clear.primary?.id.temp).toBe(85);
   });
 
-  it('runs a set of conditions exactly as it runs them one at a time', () => {
-    // The plural form shares the singular's state machine; only the work that does not depend
-    // on the condition (resolving and validating the sheet, collecting its bindings) is lifted
-    // out of the loop, so no verdict may move.
-    const family = soleFamily([
-      retag(dev, 'tt', 27),
-      retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40),
-    ]);
-    const keys = [key('tt'), key('ss', -40), key('ff')];
-    /** A run's whole answer apart from the numbers: state, verdicts, and any refusals. */
-    const verdict = (r: VariantRun): unknown =>
-      r.state === 'evaluated' ? [r.state, r.key, r.closes, r.covers] : [r.state, r.key, r.issues];
-    const many = runVariants(gainDoc(20), family, keys, noFamilies);
-    expect(many.map(verdict)).toEqual(
-      keys.map((k) => verdict(runVariant(gainDoc(20), family, k, noFamilies))),
+  // --- one design across a set of conditions --------------------------------------------
+
+  /** A second characterization with half the drain current and half the transconductance at
+   *  every gate voltage: gm/ID is unchanged point for point, the current density is halved. */
+  const weak = (): DeviceTable => retag(scaleQuantities(dev, { id: 0.5, gm: 0.5 }), 'ss', -40);
+  const twoCorners = (): CornerFamily => soleFamily([retag(dev, 'tt', 27), weak()]);
+  /** A run's whole answer apart from the numbers: state, verdicts, and any refusals. */
+  const verdict = (r: VariantRun): unknown =>
+    r.state === 'evaluated' ? [r.state, r.key, r.closes, r.covers] : [r.state, r.key, r.issues];
+
+  it('sizes the design at the base condition exactly as a single run does', () => {
+    // The set shares the single run's state machine for the condition the design is sized at;
+    // only what does not depend on the condition is lifted out of the loop.
+    const family = twoCorners();
+    const [base] = runVariants(
+      gainDoc(20),
+      family,
+      [key('tt'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('tt'),
     );
-    // And the same warnings on the results themselves — validating once must not drop the
-    // validation's own findings from what a panel displays.
-    expect(many[0].result?.warnings).toEqual(
-      runVariant(gainDoc(20), family, key('tt'), noFamilies).result?.warnings,
-    );
+    const alone = runVariant(gainDoc(20), family, key('tt'), noFamilies);
+    expect(verdict(base)).toEqual(verdict(alone));
+    expect(base.result?.warnings).toEqual(alone.result?.warnings);
+    expect(base.state === 'evaluated' && base.design).toBe('sized');
   });
 
-  it('lists the sheet’s assumed DC inputs on the result of every condition it runs', () => {
-    // The drain bias is V_d, a voltage classed assumed that feeds the one device's sizing, so
-    // each condition's result is sized under exactly [V_d]. A bare evaluation computes no list.
+  it('holds that design at another condition instead of sizing a second one', () => {
+    // The sheet asks for gm/ID = 12 at 20 µA. At the weak condition every gate voltage carries
+    // half the current density at the same gm/ID, so a design sized THERE lands on the same gate
+    // voltage with twice the width. The design sized at tt has the tt width; held at the weak
+    // condition it must pull twice the density out of the weak table, which takes a higher gate
+    // voltage and so a lower gm/ID. Same transistor, different operating point.
+    const family = twoCorners();
+    const doc: SheetDoc = { ...gainDoc(0), equations: [{ name: 'eff', expr: 'gm_id' }] };
+    const [tt, ss] = runVariants(
+      doc,
+      family,
+      [key('tt'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('tt'),
+    );
+    const resized = runVariant(doc, family, key('ss', -40), noFamilies);
+    expect([tt.state, ss.state, resized.state]).toEqual(['evaluated', 'evaluated', 'evaluated']);
+    if (tt.state !== 'evaluated' || ss.state !== 'evaluated' || resized.state !== 'evaluated')
+      return;
+    const [wTt, wHeld, wResized] = [tt, ss, resized].map((r) => r.result.bind!.W);
+    expect(wResized / wTt).toBeCloseTo(2, 6); // what a per-condition re-size would have built
+    expect(resized.result.bind!.vgs).toBeCloseTo(tt.result.bind!.vgs, 9);
+    expect(ss.design).toBe('held');
+    expect(wHeld).toBe(wTt); // to the last bit: this is the tt transistor
+    expect(ss.result.bind!.id).toBe(tt.result.bind!.id); // the authored current, unchanged
+    expect(ss.result.bind!.vgs).toBeGreaterThan(tt.result.bind!.vgs);
+    expect(tt.result.values.eff).toBeCloseTo(12, 9);
+    expect(ss.result.values.eff).toBeLessThan(12);
+  });
+
+  it('sizes at the base even when the base is not one of the conditions asked about', () => {
+    const family = twoCorners();
+    const doc = gainDoc(0);
+    const [ss] = runVariants(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'));
+    const tt = runVariant(doc, family, key('tt'), noFamilies);
+    expect(ss.state === 'evaluated' && ss.design).toBe('held');
+    expect(ss.result?.bind?.W).toBe(tt.result?.bind?.W);
+  });
+
+  it('takes a single condition as its own base', () => {
+    const [only] = runVariants(gainDoc(20), twoCorners(), [key('ss', -40)], noFamilies);
+    expect(only.state === 'evaluated' && only.design).toBe('sized');
+  });
+
+  it('declines a set of conditions when nothing says where the design is sized', () => {
+    const runs = runVariants(gainDoc(20), twoCorners(), [key('tt'), key('ss', -40)], noFamilies);
+    expect(runs.map((r) => r.state)).toEqual(['not-evaluated', 'not-evaluated']);
+    for (const r of runs)
+      expect(r.state === 'not-evaluated' && r.issues.map((i) => i.kind)).toEqual(['no-design']);
+  });
+
+  it('has nothing to hold when the base condition does not evaluate', () => {
+    // ff is not characterized: the base is refused for its own reason, and the other condition
+    // is told there is no design — never evaluated on its own as if it were one.
+    const [ff, ss] = runVariants(
+      gainDoc(20),
+      twoCorners(),
+      [key('ff'), key('ss', -40)],
+      noFamilies,
+      undefined,
+      key('ff'),
+    );
+    expect(ff.state === 'not-evaluated' && ff.issues.map((i) => i.kind)).toEqual([
+      'absent-variant',
+    ]);
+    expect(ss.state === 'not-evaluated' && ss.issues.map((i) => i.kind)).toEqual(['no-design']);
+    expect(ss.result).toBeUndefined();
+  });
+
+  it('reports what is wrong with a condition itself ahead of there being no design', () => {
+    // The base (ff) is not characterized, so nothing can be held anywhere. But xx is not
+    // characterized either, and that is the more useful thing to say about xx: importing the
+    // missing table is its fix, whatever happens at the base.
+    const [ss, xx] = runVariants(
+      gainDoc(20),
+      twoCorners(),
+      [key('ss', -40), key('xx')],
+      noFamilies,
+      undefined,
+      key('ff'),
+    );
+    expect(ss.state === 'not-evaluated' && ss.issues.map((i) => i.kind)).toEqual(['no-design']);
+    expect(xx.state === 'not-evaluated' && xx.issues.map((i) => i.kind)).toEqual([
+      'absent-variant',
+    ]);
+  });
+
+  it('names the blocks whose current is held as an ideal source', () => {
+    // Bound by gm and gm/ID, the sheet never says where the current comes from, so holding the
+    // design holds the current the base run arrived at. Bound by an authored current, it does.
+    const family = twoCorners();
+    const derived: SheetDoc = {
+      ...gainDoc(0),
+      givens: { L: 'L', gm_id: '12', gm: '2.4e-4' },
+    };
+    const run = (doc: SheetDoc): VariantRun =>
+      runVariants(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'))[0];
+    const a = run(derived);
+    const b = run(gainDoc(0));
+    expect(a.state === 'evaluated' && a.assumedSource).toEqual(['bind']);
+    expect(b.state === 'evaluated' && b.assumedSource).toBeUndefined();
+  });
+
+  it('declines to hold a design that rests on an assumed voltage', () => {
+    // V_d is classed assumed and feeds the device's sizing. At the base that is reported with
+    // the result; at another condition the typed value would be held as if it were hardware, so
+    // the question is declined by name. Classed independent, the same sheet is held and answered.
     const withDrain = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
     const family = soleFamily([retag(withDrain, 'tt', 27), retag(withDrain, 'tt', 85)]);
-    const doc: SheetDoc = {
+    const drained = (cls: 'assumed' | 'independent'): SheetDoc => ({
       ...gainDoc(20),
-      params: [...gainDoc(20).params, { name: 'V_d', value: 0.6, unit: 'V', class: 'assumed' }],
+      params: [...gainDoc(20).params, { name: 'V_d', value: 0.6, unit: 'V', class: cls }],
       givens: { L: 'L', gm_id: '12', id: '2e-5', vds: 'V_d' },
-    };
-    const runs = runVariants(doc, family, [key('tt', 27), key('tt', 85)], noFamilies);
-    expect(runs.map((r) => r.state)).toEqual(['evaluated', 'evaluated']);
-    for (const r of runs) expect(r.result?.assumptions).toEqual(['V_d']);
-    expect(evaluateSheet(doc, withDrain).assumptions).toBeUndefined();
+    });
+    const ask = (cls: 'assumed' | 'independent'): VariantRun[] =>
+      runVariants(
+        drained(cls),
+        family,
+        [key('tt', 27), key('tt', 85)],
+        noFamilies,
+        undefined,
+        key('tt', 27),
+      );
+
+    const [base, other] = ask('assumed');
+    expect(base.state).toBe('evaluated');
+    expect(base.result?.assumptions).toEqual(['V_d']);
+    expect(other.state === 'not-evaluated' && other.issues.map((i) => i.kind)).toEqual([
+      'assumed-level',
+    ]);
+    expect(other.state === 'not-evaluated' && other.issues[0].message).toContain('V_d');
+
+    expect(ask('independent').map((r) => r.state === 'evaluated' && r.design)).toEqual([
+      'sized',
+      'held',
+    ]);
+    expect(evaluateSheet(drained('assumed'), withDrain).assumptions).toBeUndefined();
   });
 
   it('carries a curated library sheet across two conditions', () => {
@@ -1081,6 +1210,7 @@ const evaluated = (
 ): VariantRun => ({
   state: 'evaluated',
   key: key(corner),
+  design: 'sized',
   closes,
   covers,
   result: resultWith(marginPct, closes === 'pass'),
@@ -1163,6 +1293,7 @@ describe('aggregateVariantRuns — closure', () => {
     const tt: VariantRun = {
       state: 'evaluated',
       key: key('tt'),
+      design: 'sized',
       closes: 'pass',
       covers: 'covers',
       result: withCoveredEdge(resultWith(0.4), 0.05),
