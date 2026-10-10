@@ -193,10 +193,10 @@ describe('spec application', () => {
 
 describe('the search', () => {
   // The five-transistor OTA is INFEASIBLE at its shipped defaults on the demo device, binding
-  // `offset-spec` at -68.2%: the input pair's Pelgrom offset comes out at 16.82 mV against a
-  // 10 mV budget. `vos_target` is the only relaxing field here, and this spec asks 40 mV. Every
-  // other field of the spec is at or below the sheet's own default, so nothing else in it can be
-  // doing the work.
+  // `offset-spec` at -66.9%: the Pelgrom offset of the input pair and the mirror load together
+  // comes out at 16.69 mV against a 10 mV budget. `vos_target` is the only relaxing field here,
+  // and this spec asks 40 mV. Every other field of the spec is at or below the sheet's own
+  // default, so nothing else in it can be doing the work.
   const RELAXED: PickerSpec = {
     VDD: 1.8,
     CL: 2e-12,
@@ -220,10 +220,11 @@ describe('the search', () => {
   });
 
   // The same sheet at the tight spec — which is its shipped default — is the repair case. The
-  // search ranks the knobs against `offset-spec` and closes by moving three of them: the input
-  // pair further into weak inversion, a longer load, and — backed off by stage 2 afterwards —
-  // less tail current than it started with. Pinned after the algorithm was frozen; the assertion
-  // below re-evaluates that point standalone rather than trusting the search's own verdict.
+  // search ranks the knobs against `offset-spec` and closes by moving one of them, the input
+  // pair further into weak inversion; stage 2 then backs the programmed current off, and finds
+  // room for only a few percent before the offset budget binds again. Pinned after the algorithm
+  // was frozen; the assertion below re-evaluates that point standalone rather than trusting the
+  // search's own verdict.
   it('repairs the five-transistor OTA at its tight spec, and the endpoint stands alone', () => {
     const c = pick('otas/five-transistor-ota.json', {
       VDD: 1.8,
@@ -238,14 +239,14 @@ describe('the search', () => {
     });
     expect(c.verdict).toBe('closed');
     expect(c.specCoverage).toEqual({ consumed: 9, supplied: 9 });
-    expect(Object.keys(c.knobs)).toEqual(['I_tail', 'gm_id_in', 'L_ld']);
-    expect(c.knobs.I_tail).toBeCloseTo(1.2125e-5, 12);
+    expect(Object.keys(c.knobs)).toEqual(['I_tail', 'gm_id_in']);
+    expect(c.knobs.I_tail).toBeCloseTo(1.94375e-5, 12);
     expect(c.knobs.gm_id_in).toBe(18);
-    expect(c.knobs.L_ld).toBeCloseTo(7.8666667e-7, 12);
     expect(c.atRangeFloor).toEqual([]);
-    // The knob values above are where this search lands, pinned so a change to the search is
-    // noticed; they are not derived by hand, which is why the re-evaluation below is the check
-    // that they describe a feasible design.
+    // The knob values above are a SEARCH OUTCOME: where this search lands on this sheet, pinned
+    // so a change to either is noticed. They are not derived by hand and say nothing on their
+    // own about the design, which is why the re-evaluation below is the check that they describe
+    // a feasible one.
 
     const hand = runSheet(
       withParams(sheet('otas/five-transistor-ota.json'), c.knobs),

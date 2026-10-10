@@ -471,7 +471,9 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   // A composed multi-child library sheet (no parent bind) loads from another group.
   await pickSheet(sp, '5T OTA');
   await expect(sp.locator('.shead')).toContainText('5T OTA');
-  await expect(sp.locator('.suse')).toHaveCount(3);
+  // Five blocks: the bias reference and the tail device that mirrors it, the input pair, and the
+  // two sides of the mirror load.
+  await expect(sp.locator('.suse')).toHaveCount(5);
   await expect(sp.locator('.srules tr').first()).toBeVisible();
   // Each composed block explains itself: the author's description of what the device IS in the
   // topology, typeset (the 5T's blocks all carry $V_{GS}$-style math in that prose).
@@ -548,10 +550,18 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
   // The hint still matters wherever a child's vds is an AUTHORED expression, as here.
   await pickSheet(sp, '5T OTA');
 
-  // Bind the mirror-load child to the signed PMOS table: ld_sign still reads +1, so the
-  // panel names the ONE root cause instead of a wall of derived n/a warnings.
-  await sp.locator('.suse', { hasText: 'ld' }).first().locator('.dsel').selectOption({ index: 2 });
+  // Bind both sides of the mirror load to the signed PMOS table — they share a gate, so they
+  // are read from one table. Only the output side's vds is authored, and ld_sign still reads +1,
+  // so the panel names the ONE root cause instead of a wall of derived n/a warnings. The diode
+  // side has no sign param and gets no hint: its drain follows its own gate.
+  for (const name of ['ldr', 'ld']) {
+    const block = sp.locator('.suse', {
+      has: page.locator('.suseh b', { hasText: new RegExp(`^${name}$`) }),
+    });
+    await block.locator('.dsel').selectOption({ index: 2 });
+  }
   await expect(sp.locator('.pwarn', { hasText: 'set ld_sign = -1' })).toBeVisible();
+  await expect(sp.locator('.pwarn', { hasText: 'ldr_sign' })).toHaveCount(0);
 
   // Fixing the param clears the hint.
   const sign = sp.locator('.svar[data-param="ld_sign"] .num');

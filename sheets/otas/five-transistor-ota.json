@@ -1,6 +1,6 @@
 {
   "title": "5T OTA",
-  "description": "The five-transistor OTA, biased from the TAIL NODE and entered from the COMMON MODE. Internally the tail node is the one free bias variable: the pair's source sits at $V_{tail}$, so its body bias is $V_{tail}$, its drain-source voltage is $V_{out} - V_{tail}$, and every device is read straight out of the table with nothing iterated. Externally the designer types the common mode the application presents: $CM_{in} = V_{tail} + V_{GS}$ rises monotonically with the tail node, so the engine brackets $V_{tail}$ and bisects until the produced common mode equals $CM_{dc}$ — an inversion that cannot overshoot and owes nothing to a starting guess. Sweep $CM_{dc}$ to trace the common-mode axis. Gain falls as the common mode rises, because lifting the tail node squeezes the pair's own $v_{ds}$ — and it collapses well before the pair leaves saturation, which is why the gain rule, not a saturation edge, sets the usable ceiling.",
+  "description": "The five-transistor OTA, biased from the TAIL NODE and entered from the COMMON MODE. Internally the tail node is the one free bias variable: the pair's source sits at $V_{tail}$, so its body bias is $V_{tail}$, its drain-source voltage is $V_{out} - V_{tail}$, and every device is read straight out of the table with nothing iterated. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; the pair carries half of what the tail delivers; and the load mirror's output side shares its diode side's gate, so the two sides differ by their drain voltages in the same way. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. Externally the designer types the common mode the application presents: $CM_{in} = V_{tail} + V_{GS}$ rises monotonically with the tail node, so the engine brackets $V_{tail}$ and bisects until the produced common mode equals $CM_{dc}$ — an inversion that cannot overshoot and owes nothing to a starting guess. Sweep $CM_{dc}$ to trace the common-mode axis. Gain falls as the common mode rises, because lifting the tail node squeezes the pair's own $v_{ds}$ — and it collapses well before the pair leaves saturation, which is why the gain rule, not a saturation edge, sets the usable ceiling.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -13,21 +13,21 @@
       "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor measured on a sky130 tt realization of this OTA rather than above the gamma-model row (21.5 nV/rtHz at the default 20 uA and gm/ID split). Clearing only the model is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
+      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor measured on a sky130 tt realization of this OTA rather than above the gamma-model row (22.7 nV/rtHz there at the default 20 uA and gm/ID split, the pair receiving a little under the programmed current). Clearing only the model is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
     },
     {
       "name": "vos_target",
       "value": 10e-3,
       "unit": "V",
       "role": "spec",
-      "note": "input offset budget, 1 sigma. Half-micron devices at 20 uA are SMALL (about 2 um x 0.5 um here), so the generic Pelgrom coefficient puts the spread near 8 mV — offset is the 5T's area tax, and shrinking this budget is what forces bigger devices"
+      "note": "input offset budget, 1 sigma. Half-micron devices at 20 uA are SMALL (about 1.8 um x 0.5 um here), so the generic Pelgrom coefficient puts the spread near 9 mV — offset is the 5T's area tax, and shrinking this budget is what forces bigger devices. The systematic part is reported on its own row and is not charged against this budget"
     },
     {
       "name": "CM_lo",
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge. The cm-lo edge re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (0.95-1.39 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low edge. The cm-lo edge re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (from 0.96 V up to the 1.45 V top of the CM_dc slider on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -53,7 +53,7 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the mirror output device's vds and the top of the pair's own vds. The input device's drain and the mirror output device's drain meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here",
+      "note": "output DC level; sets the mirror output device's vds and the top of the pair's own vds. The input device's drain and the mirror output device's drain meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here. Wherever that is not one diode drop below the supply, the two sides of the load mirror carry different currents, and the systematic-offset row reports what that costs",
       "class": "independent"
     },
     { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
@@ -75,7 +75,8 @@
       "min": 2e-6,
       "max": 200e-6,
       "unit": "A",
-      "role": "choice"
+      "role": "choice",
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number"
     },
     {
       "name": "gm_id_in",
@@ -93,7 +94,7 @@
       "max": 14,
       "unit": "1/V",
       "role": "choice",
-      "note": "mirror-load inversion: lower gm/ID adds less noise and offset (both scale with the load's gm)"
+      "note": "mirror-load inversion, set on the diode side and inherited by the output side through the shared gate: lower gm/ID adds less noise and offset (both scale with the load's gm)"
     },
     {
       "name": "gm_id_tail",
@@ -102,7 +103,7 @@
       "max": 16,
       "unit": "1/V",
       "role": "choice",
-      "note": "tail inversion: higher V* costs CM-low headroom"
+      "note": "inversion level of the bias reference, which the tail device inherits through the shared gate: higher V* costs CM-low headroom"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     { "name": "L_ld", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
@@ -112,53 +113,82 @@
       "min": 0.18e-6,
       "max": 2e-6,
       "unit": "m",
-      "role": "choice"
+      "role": "choice",
+      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
     },
     {
       "name": "ld_sign",
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis"
+      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis. Only the output side reads it — the diode side's drain follows its own gate in whichever convention its table uses. Read both sides of the mirror from the same table: the gate voltage they share is passed in that table's convention"
     }
   ],
   "blocks": [
     {
-      "name": "ld",
+      "name": "bias",
       "doc": {
-        "title": "Mirror-load device",
-        "description": "One side of the mirror load at half the tail current. Its bias never moves with the input common mode — the output node and the supply set it — so its $g_{ds}$ and its diode drop are fixed once the output level is chosen.",
-        "polarity": "p",
+        "title": "Tail bias reference",
+        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "polarity": "n",
         "params": [
-          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
-          { "name": "L_l", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_l", "value": 8, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vds_l",
-            "value": 0.9,
-            "unit": "V",
-            "role": "spec",
-            "note": "output-side vds, signed to this table's axis convention"
-          }
+          { "name": "I_b", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "L_b", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_b", "value": 10, "unit": "1/V", "role": "choice" }
         ],
-        "givens": { "L": "L_l", "id": "I_half", "gm_id": "gm_id_l", "vds": "vds_l" },
+        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "diode": true },
         "equations": [],
         "checks": [
           {
             "id": "feasible-inversion",
             "kind": "physical",
-            "lhs": "gm_id_l",
+            "lhs": "gm_id_b",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m", "cgg"]
+        "provides": ["W", "vgs"]
       },
       "params": {
-        "I_half": "I_tail/2",
-        "L_l": "L_ld",
-        "gm_id_l": "gm_id_ld",
-        "vds_l": "ld_sign*(VDD - V_out_dc)"
+        "I_b": "I_tail",
+        "L_b": "L_tail",
+        "gm_id_b": "gm_id_tail"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what sets the low end of the usable common-mode range.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_t",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width — a 1:1 copy"
+          },
+          {
+            "name": "vgs_t",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "vds_t", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
+        ],
+        "givens": { "L": "L_t", "W": "W_t", "vgs": "vgs_t", "vds": "vds_t" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "W_t": "bias__W",
+        "vgs_t": "bias__vgs",
+        "L_t": "L_tail",
+        "vds_t": "V_tail"
       }
     },
     {
@@ -194,7 +224,7 @@
         "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "tail__id/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
         "vds_i": "V_out_dc - V_tail",
@@ -202,35 +232,75 @@
       }
     },
     {
-      "name": "tail",
+      "name": "ldr",
       "doc": {
-        "title": "Tail current source",
-        "description": "The tail device carrying the full bias current, with the tail node as its drain-source voltage. It leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what sets the low end of the usable common-mode range.",
-        "polarity": "n",
+        "title": "Mirror-load device, diode side",
+        "description": "The diode-connected side of the mirror load. It carries the current of the input device above it — half of what the tail delivers — and its drain is its gate, so it sits one $V_{GS}$ below the supply whatever the output does. That gate is the mirror node: this device's $g_m$ sets the second pole, and its width and gate voltage are what the output side copies.",
+        "polarity": "p",
         "params": [
-          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_t", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_t", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
+          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_l", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_l", "value": 8, "unit": "1/V", "role": "choice" }
         ],
-        "givens": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
+        "givens": { "L": "L_l", "id": "I_half", "gm_id": "gm_id_l", "diode": true },
         "equations": [],
         "checks": [
           {
             "id": "feasible-inversion",
             "kind": "physical",
-            "lhs": "gm_id_t",
+            "lhs": "gm_id_l",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vdsat"]
+        "provides": ["gm", "vgs", "W", "vnth_m", "cgg"]
       },
       "params": {
-        "I_t": "I_tail",
-        "L_t": "L_tail",
-        "gm_id_t": "gm_id_tail",
-        "vds_t": "V_tail"
+        "I_half": "tail__id/2",
+        "L_l": "L_ld",
+        "gm_id_l": "gm_id_ld"
+      }
+    },
+    {
+      "name": "ld",
+      "doc": {
+        "title": "Mirror-load device, output side",
+        "description": "The output side of the mirror load, on the diode side's gate at the diode side's width. The output node and the supply set its drain, so the input common mode reaches it only through the small change in tail current that its diode side passes on, and its $g_{ds}$ is all but fixed once the output level is chosen. Its current is read off the table at that drain voltage rather than typed: wherever the output does not sit one diode drop below the supply it differs from the diode side's, and that difference is the systematic offset the sheet reports.",
+        "polarity": "p",
+        "params": [
+          {
+            "name": "W_l",
+            "value": 0.3e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the diode side's width — a 1:1 copy"
+          },
+          {
+            "name": "vgs_l",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "the diode side's gate voltage — the mirror node the two share, in the sign convention of the diode side's table"
+          },
+          { "name": "L_l", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "vds_l",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "output-side vds, signed to this table's axis convention"
+          }
+        ],
+        "givens": { "L": "L_l", "W": "W_l", "vgs": "vgs_l", "vds": "vds_l" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vnth_m", "cgg", "id"]
+      },
+      "params": {
+        "W_l": "ldr__W",
+        "vgs_l": "ldr__vgs",
+        "L_l": "L_ld",
+        "vds_l": "ld_sign*(VDD - V_out_dc)"
       }
     }
   ],
@@ -261,9 +331,9 @@
     },
     {
       "name": "f_pole",
-      "expr": "ld__gm/(2*pi*(2*ld__cgg))",
+      "expr": "ldr__gm/(2*pi*(ldr__cgg + ld__cgg))",
       "unit": "Hz",
-      "note": "estimate: the mirror-node pole, the load's $g_m$ over both mirror gates' $C_{GG}$; the 5T's second pole. Read at the output-side bias — the diode side's own $g_m$ differs only by the shallow $g_m(v_{ds})$ slope, a few percent"
+      "note": "estimate: the mirror-node pole, the diode side's $g_m$ over both mirror gates' $C_{GG}$; the 5T's second pole. Read on the diode side, the device whose $g_m$ is that node's conductance"
     },
     {
       "name": "PM",
@@ -271,18 +341,29 @@
       "unit": "deg",
       "note": "estimate: phase margin left after the mirror node. That node is a pole-ZERO DOUBLET, not a lone pole — only half the signal takes the mirror path, putting a zero at twice the pole — so it costs far less phase than $f_{pole}$ alone suggests"
     },
-    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "SR",
+      "expr": "tail__id/CL",
+      "unit": "V/s",
+      "note": "the whole tail current steered into the load — the current the tail device delivers, not the number the reference is programmed to"
+    },
     {
       "name": "vn_in",
-      "expr": "sqrt(2*(in__vnth_m^2 + ld__vnth_m^2*(ld__gm/in__gm)^2))",
+      "expr": "sqrt(2*in__vnth_m^2 + (ldr__vnth_m*ldr__gm/in__gm)^2 + (ld__vnth_m*ld__gm/in__gm)^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "both pair devices and both mirror devices contribute, each at its own density: 2*(vn_pair^2 + vn_ld^2*(gm_ld/gm_in)^2) (simulation-verified two-sided total)"
+      "note": "both pair devices and both mirror devices contribute, each at its own density: 2*vn_pair^2 + (vn_ldr*gm_ldr/gm_in)^2 + (vn_ld*gm_ld/gm_in)^2. The mirror's two sides are read separately because they sit at different drain voltages; counting all four devices is the simulation-verified two-sided total"
     },
     {
       "name": "vos",
-      "expr": "sqrt(pelgrom_vos(avt, abeta, in__W, L_in, gm_id_in)^2 + (pelgrom_vos(avt, abeta, ld__W, L_ld, gm_id_ld)*ld__gm/in__gm)^2)",
+      "expr": "sqrt(pelgrom_vos(avt, abeta, in__W, L_in, gm_id_in)^2 + (pelgrom_vos(avt, abeta, ldr__W, L_ld, gm_id_ld)*ldr__gm/in__gm)^2)",
       "unit": "V",
-      "note": "input-pair offset plus the mirror pair's offset referred by the gm ratio"
+      "note": "random offset, 1 sigma: input-pair offset plus the mirror pair's offset referred by the gm ratio. The mirror pair is read at the diode side, whose width the output side copies"
+    },
+    {
+      "name": "vos_sys",
+      "expr": "abs(ld__id - tail__id/2)/in__gm",
+      "unit": "V",
+      "note": "estimate: input-referred systematic offset. The mirror's output side shares the diode side's gate but sits at $V_{DD} - V_{out,dc}$ while the diode side sits at its own diode drop, so it asks for a different current than the half of the tail current the pair hands it. With $V_{out,dc}$ held by a loop outside this sheet, that difference has to come from an input imbalance of this size; it is zero when the output sits one diode drop below the supply. Reported only; no rule reads it"
     },
     {
       "name": "tail_headroom",
@@ -298,9 +379,9 @@
     },
     {
       "name": "I_q",
-      "expr": "I_tail",
+      "expr": "tail__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the tail current is the whole of it, because the mirror load carries that same current down from the supply. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current of the amplifier — the current the tail device delivers is the whole of it, because the mirror load carries that same current down from the supply. The reference branch that programs it is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "checks": [
@@ -351,7 +432,7 @@
     {
       "id": "input-sat-margin",
       "kind": "advisory",
-      "lhs": "min(VDD - abs(ld__vgs), V_out_dc) - V_tail - in__vdsat",
+      "lhs": "min(VDD - abs(ldr__vgs), V_out_dc) - V_tail - in__vdsat",
       "op": ">=",
       "rhs": "0.1",
       "justification": "the pair's two drains sit at different levels — one a diode drop below the supply, the other at the output — and which is lower depends on V_out_dc, so this watches whichever it is. Gain collapses well before this trips, so treat it as a floor rather than as the usable ceiling",

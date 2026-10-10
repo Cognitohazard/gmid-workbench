@@ -692,7 +692,10 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     // The pin moves V_tail until the produced common mode equals CM_dc; the containment edges
     // substitute CM_lo and CM_hi for CM_dc. The output is a high-impedance node that only the
     // feedback the application closes around the amplifier holds, and that loop is not on the
-    // sheet, so V_out_dc is stated like the supply — nothing on this sheet is assumed.
+    // sheet, so V_out_dc is stated like the supply — nothing on this sheet is assumed. The two
+    // mirrors add no voltage to state: the tail device's gate is the bias reference's own diode
+    // drop and the load's output side sits on its diode side's gate, both read off devices that
+    // are on the sheet.
     expect(classes('otas/five-transistor-ota.json')).toEqual({
       independent: ['CM_dc', 'CM_hi', 'CM_lo', 'VDD', 'V_out_dc'],
       assumed: [],
@@ -824,6 +827,10 @@ describe('dcInputs and reachedBinds agree on which top-level params reach a devi
     // CM_dc reaches the pair and the tail only through the pin that solves V_tail from it.
     expect(bothWays(ota, 'CM_dc')).toEqual([true, true]);
     expect(forwardHits(ota, 'CM_dc')).toContain('tail.vds:vds_t');
+    // The programmed current enters the bias reference alone, and reaches the tail device as that
+    // reference's gate voltage — a mirror's shared gate, followed like any other link.
+    expect(forwardHits(ota, 'I_tail')).toContain('bias.id:I_b');
+    expect(forwardHits(ota, 'I_tail')).toContain('tail.vgs:vgs_t');
     // CM_lo is read by nothing but the cm-lo edge's `set`, so only the edge closure reaches it.
     expect(forwardHits(ota, 'CM_lo')).toEqual([]);
     expect(bothWays(ota, 'CM_lo')).toEqual([true, true]);

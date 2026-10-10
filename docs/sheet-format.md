@@ -1018,11 +1018,17 @@ exactly — an author reading a green chip should know what it is and is not a s
   residual below the base's, about 0.1% on the demo model, even where nothing about the condition
   changed. Read a base-against-end comparison with that floor already under it.
 - **The authored current expression IS the hardware model.** `I_o = K_m*I_tail/2` re-evaluates
-  at the range end, and that ratio is the mirror. What it does not model is a real tail source's
-  own output resistance re-settling the current as the drain moves; network-level re-settling is
-  out of scope here as everywhere else in this engine, and the sheet's authority ends where the
-  lookup table's does. Comparison against fixed-netlist simulation put that divergence at ~10%
-  at the far ends of the shipped range claims, without changing any of their verdicts.
+  at the range end, and that ratio is the mirror. What a typed current does not model is a real
+  source's own output resistance re-settling the current as its drain moves: a device handed
+  `I_tail` carries exactly `I_tail` wherever its drain goes. A device written as a copy of its
+  reference — the reference's width on the reference's gate, as the 5T OTA's tail device is —
+  has its current read off the table at the drain voltage it sits at, so that re-settling is in
+  the answer, and a device reading its current (`tail__id/2`) follows it (see
+  [The author's contract](#the-authors-contract)). Re-settling a network beyond what the
+  declared connections determine is out of scope here as everywhere else in this engine, and
+  the sheet's authority ends where the lookup table's does. For typed currents, comparison
+  against fixed-netlist simulation put the divergence at ~10% at the far ends of the shipped
+  range claims, without changing any of their verdicts.
 - **A device whose GATE is the fixed thing has to say so.** Bind `(W, vgs)` and the gate tie
   holds under any move a range end makes — drain, body bias, supply, temperature — because the
   bind re-reads the gate voltage the partner settles to there. Written any other way, the device
@@ -1139,6 +1145,20 @@ silently repairs one.
     which description is authoritative; the check says whether the two still agree, so a
     gate that must sit one `vgs` below a rail, or one gate shared by two devices, no longer
     evaluates without complaint.
+12. **A programmed current sets one device.** The current a bias network programs — a reference
+    current, a tail current — is the `id` of exactly one device on the sheet. Every other device
+    that carries it gets it from the circuit, and its bind says how: a device in the same branch,
+    or taking its share at a node, reads that device's current (`tail__id/2`), and a device that
+    mirrors it is tied to its gate (`W: K*ref__W, vgs: ref__vgs`) — never the programmed number
+    a second time. The reason is what happens when the design is held fixed and asked about at
+    another condition: every device the number was typed into then carries an ideal current,
+    where the circuit would have let all but one of them follow. The library's 5T OTA is the
+    worked example — its bias reference alone is programmed, the tail device is that reference's
+    width on that reference's gate, the pair takes half of what the tail delivers, and the load
+    mirror's output side sits on its diode side's gate. Backstop: the library's vetting suite
+    counts, for each parameter in amperes, the devices whose bound current reads it without
+    reading another block's output, and lists by name the curated sheets where that is still
+    more than one; `validateSheet` does not check this.
 
 ## A complete worked example
 
