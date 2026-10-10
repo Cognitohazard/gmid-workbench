@@ -1,7 +1,7 @@
 // By-reference composition: the index (bare-name aliasing, collision markers), the
 // resolver (materialization, provenance, cycles, depth, fail-closed misses), flatten
 // (ref-free self-contained export), and the runSheet/sweep integration. All docs here
-// are bind-less minis so no device table is needed — the physics is covered by the
+// are minis with no givens, so no device table is needed — the physics is covered by the
 // library suites, which now resolve the curated refs too.
 
 import { describe, it, expect } from 'vitest';
@@ -15,7 +15,7 @@ import { runSheet, sweepSheet, sweepSheet2 } from './index';
 import { validateSheet } from './validate';
 import { MAX_BLOCK_DEPTH, type SheetDoc, type SheetBlock } from './types';
 
-/** A bind-less leaf: y = 2·x, provided upward, with one hard rule on y. */
+/** A leaf with no givens: y = 2·x, provided upward, with one hard check on y. */
 const LEAF: SheetDoc = {
   title: 'Leaf',
   polarity: 'n',
@@ -25,13 +25,13 @@ const LEAF: SheetDoc = {
   provides: ['y'],
 };
 
-const parent = (use: Partial<SheetBlock>): SheetDoc => ({
+const parent = (block: Partial<SheetBlock>): SheetDoc => ({
   title: 'Parent',
   polarity: 'n',
   params: [{ name: 'x_top', value: 3, min: 1, max: 5 }],
   equations: [{ name: 'z', expr: 'c__y + 1' }],
   checks: [],
-  blocks: [{ name: 'c', params: { x: 'x_top' }, ...use }],
+  blocks: [{ name: 'c', params: { x: 'x_top' }, ...block }],
 });
 
 const INDEX = buildSheetRefIndex([{ path: 'blocks/leaf', doc: LEAF }]);
@@ -177,8 +177,8 @@ describe('resolveSheetRefs', () => {
   });
 
   it('caps TOTAL expansion on a fan-out DAG (width^depth is acyclic but explosive)', () => {
-    // Each level's 20 uses all reference the next sheet: ~20^7 nodes if unbounded.
-    // Duplicate use names are irrelevant here — resolution happens before eval's checks.
+    // Each level's 20 blocks all reference the next sheet: ~20^7 nodes if unbounded.
+    // Duplicate block names are irrelevant here — resolution happens before eval's checks.
     const WIDTH = 20;
     const levels = MAX_BLOCK_DEPTH;
     const entries = Array.from({ length: levels }, (_, i) => ({
@@ -216,15 +216,15 @@ describe('ref’d children under evaluation', () => {
     expect(res.warnings.some((w) => w.message.includes('unresolved reference'))).toBe(true);
   });
 
-  it('a ref’d child’s hard rules ride a sweep with path-prefixed ids', () => {
+  it('a ref’d child’s hard checks ride a sweep with path-prefixed ids', () => {
     const sw = sweepSheet(parent({ ref: 'blocks/leaf' }), 'x_top', undefined, 5, undefined, INDEX);
     expect(sw.checks.map((r) => r.id)).toContain('c.r1');
     expect(sw.feasible.every(Boolean)).toBe(true);
   });
 
   it('refs resolve once for a 2-D sweep, and an unresolvable ref blocks every cell', () => {
-    const twoParams = (use: Partial<SheetBlock>): SheetDoc => ({
-      ...parent(use),
+    const twoParams = (block: Partial<SheetBlock>): SheetDoc => ({
+      ...parent(block),
       params: [
         { name: 'x_top', value: 3, min: 1, max: 5 },
         { name: 'k', value: 1, min: 0.5, max: 2 },
@@ -266,7 +266,7 @@ describe('flattenSheetDoc', () => {
     expect(res.values.z).toBe(7);
   });
 
-  it('keeps an unresolvable ref in place rather than dropping the use', () => {
+  it('keeps an unresolvable ref in place rather than dropping the block', () => {
     const flat = flattenSheetDoc(parent({ ref: 'blocks/nope' }), INDEX);
     expect(flat.warnings).toHaveLength(1);
     expect(flat.doc.blocks?.[0].ref).toBe('blocks/nope');
@@ -274,7 +274,7 @@ describe('flattenSheetDoc', () => {
 });
 
 describe('validateSheet on raw (unresolved) docs', () => {
-  it('accepts a ref-only use and rejects neither/empty', () => {
+  it('accepts a ref-only block and rejects neither/empty', () => {
     expect(validateSheet(parent({ ref: 'blocks/leaf' }))).toEqual([]);
     const neither = validateSheet(parent({})).filter((w) => w.severity === 'error');
     expect(neither.some((w) => w.message.includes('neither an embedded doc nor a ref'))).toBe(true);

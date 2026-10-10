@@ -1,13 +1,13 @@
 // Tier 1 golden tests: the eight single-device stage sheets in sheets/stages/.
 // Each expected number is hand-derived from the synthetic EKV demo model's closed
-// forms (never by re-running the engine): supplied bind quantities are exact (gm =
+// forms (never by re-running the engine): supplied givens are exact (gm =
 // gm/ID * id algebra), the Early-voltage model gives gds/id = 1/(VA + vds) exactly
-// after binding (VA = VA_PER_L * L), and the thermal density is sqrt(4kTgamma/gm).
+// after sizing (VA = VA_PER_L * L), and the thermal density is sqrt(4kTgamma/gm).
 // gmb is BODY_FACTOR*gm at every point of the demo, but unlike gds it rides the
-// interpolated gm curve rather than the bound gm/ID, so rows built on it agree with
-// the closed form to interpolation order (~1e-3) instead of to the bind's 1e-9.
+// interpolated gm curve rather than the given gm/ID, so equations built on it agree with
+// the closed form to interpolation order (~1e-3) instead of to the givens' 1e-9.
 // The generic contract in library.test.ts already checks these sheets validate,
-// bind, and raise no hard-rule na on the same table; here we pin the physics.
+// size, and raise no hard-check na on the same table; here we pin the physics.
 
 import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
@@ -39,7 +39,7 @@ describe('tier1 goldens: CS amp, resistive load', () => {
   const id = gm / 12;
   const vOut = 1.8 - id * 50e3;
 
-  it('binds gm exactly from the spec and derives id', () => {
+  it('takes gm exactly from the spec and derives id', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.id, id)).toBeLessThan(1e-9);
@@ -57,8 +57,8 @@ describe('tier1 goldens: CS amp, resistive load', () => {
 
   it('output DC level is VDD minus the load drop, and the device is sized there', () => {
     expect(relErr(res.values.V_out, vOut)).toBeLessThan(1e-9);
-    // The bind writes the level with id expanded as gm/gm_id; the row reads the sized id. Both
-    // supplied quantities are exact, so the two agree to rounding.
+    // The givens write the level with id expanded as gm/gm_id; the equation reads the sized id.
+    // Both supplied quantities are exact, so the two agree to rounding.
     expect(relErr(res.sizing?.bias?.vds ?? NaN, res.values.V_out)).toBeLessThan(1e-9);
   });
 
@@ -79,7 +79,7 @@ describe('tier1 goldens: CS amp, resistive load', () => {
   it('a different inversion level or over-design factor moves the drain with the current', () => {
     // gm/ID 12 -> 10 at R_load 50k: gm stays 157.08 uS (the spec fixes it), so id = 157.08u/10 =
     // 15.708 uA and the drain sits at 1.8 - 15.708u*50k = 1.8 - 0.78540 = 1.01460 V, with gds =
-    // id/(2.5 + 1.01460). A current typed into the bind would leave the drain where it was.
+    // id/(2.5 + 1.01460). A current typed into the givens would leave the drain where it was.
     const moved = runSheet(withParams(sheet('cs-amp-resistive-load.json'), { gm_id: 10 }), table);
     const id10 = gm / 10;
     expect(relErr(moved.values.id, id10)).toBeLessThan(1e-9);
@@ -97,10 +97,10 @@ describe('tier1 goldens: CS amp, resistive load', () => {
     expect(relErr(margin.sizing?.bias?.vds ?? NaN, 1.8 - idM * 50e3)).toBeLessThan(1e-9);
   });
 
-  it('the interface rows are the load resistor paralleled with ro, and the gate capacitance', () => {
+  it('the interface equations are the load resistor paralleled with ro, and the gate capacitance', () => {
     // Rout is the inverse of the denominator the gain already used, so Av = gm*Rout is the same
-    // number by construction; what this pins is that the row IS that output node. cgg = W*L*Cox
-    // exactly in the demo model, at the width the bind landed on.
+    // number by construction; what this pins is that the equation IS that output node. cgg =
+    // W*L*Cox exactly in the demo model, at the width the sizing landed on.
     const gds = id / (VA_PER_L * 0.5e-6 + vOut);
     expect(relErr(res.values.Rout, par(50e3, 1 / gds))).toBeLessThan(2e-3);
     expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
@@ -114,7 +114,7 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
   // the transconductance ratio is exactly the gm/ID ratio.
   const gm = 2 * Math.PI * 10e6 * 2e-12 * 1.25;
 
-  it('binds the input gm exactly from the spec', () => {
+  it('takes the input gm exactly from the spec', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     // The branch current follows from that gm and the inversion choice, and is what the supply
@@ -152,7 +152,7 @@ describe('tier1 goldens: Source-degenerated CS amp', () => {
   const gmb = gmbOf(gm);
   const Rs = 2e3;
 
-  it('binds gm exactly from the current and gm/ID', () => {
+  it('takes gm exactly from the current and gm/ID', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
   });
@@ -208,8 +208,8 @@ describe('tier1 goldens: Cascode CS amp', () => {
 
   it('input capacitance is the input device gate, and nothing the cascode adds', () => {
     // Composition golden. The input child does not expose its sized width, so the absolute
-    // capacitance has no closed form to check here; what the row must get right is WHICH gate it
-    // reads — the driven one at the bottom of the stack, not the cascode's fixed gate above it.
+    // capacitance has no closed form to check here; what the equation must get right is WHICH gate
+    // it reads — the driven one at the bottom of the stack, not the cascode's fixed gate above it.
     expect(res.values.cgg_in).toBe(res.values.in__cgg);
   });
 });
@@ -222,7 +222,7 @@ describe('tier1 goldens: Source follower', () => {
   const gm = 20e-6 * 12;
   const vds = 1.8 - 1.2 + VGS_GMID12_L05;
 
-  it('binds gm exactly and the follower gain is below unity', () => {
+  it('takes gm exactly and the follower gain is below unity', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(res.values.Av).toBeLessThan(1);
@@ -272,7 +272,7 @@ describe('tier1 goldens: Source follower', () => {
     expect(moved.warnings).toHaveLength(0);
   });
 
-  it('the ten-to-one loading guardrail is the buffering claim, and the load clears it', () => {
+  it('the ten-to-one loading advisory check is the buffering claim, and the load clears it', () => {
     // R_L >= 10*Rout is not an identity: Rout folds 1/R_L in, so the condition reduces to
     // R_L*(gm + gds) >= 9 — about 36.7 kohm here, which the 100 kohm default clears. At exactly
     // ten to one the loaded gain sits 10% below what an unloaded follower would give.
@@ -309,7 +309,7 @@ describe('tier1 goldens: Common gate', () => {
 
   it('a different bias current moves the drain by exactly -dI*R_load', () => {
     // I_bias 20u -> 16u: the drain rises by 4u*50k = 0.2 V to 1.0 V, so vds = 0.7, gds =
-    // 16u/3.2 = 5 uS, and Rout = 1/(20u + 5u) = 40 kohm. A current typed into the bind would
+    // 16u/3.2 = 5 uS, and Rout = 1/(20u + 5u) = 40 kohm. A current typed into the givens would
     // leave the drain where it was.
     const moved = runSheet(withParams(sheet('common-gate.json'), { I_bias: 16e-6 }), table);
     expect(relErr(moved.values.V_out, 1.0)).toBeLessThan(1e-9);
@@ -317,7 +317,7 @@ describe('tier1 goldens: Common gate', () => {
     expect(relErr(moved.values.Rout, 40e3)).toBeLessThan(1e-9);
   });
 
-  it('binds gm exactly and Rin carries the drain load back to the source', () => {
+  it('takes gm exactly and Rin carries the drain load back to the source', () => {
     // The input looks into the source, so the finite ro couples R_load back: the resistance
     // is (R_load + ro) divided by the device's own loop gain, not the 1/(gm + gmb) shorthand.
     // (50k + 150k)/(1 + 240u/6.667u) = 200k/37 = 5.405 kohm.
@@ -336,14 +336,14 @@ describe('tier1 goldens: Common gate', () => {
     // Adding gmb raises the gain by about a fifth. On a sky130 tt realization of this stage
     // that is what carries it past the 10 V/V target (10.57 measured against an 8.72 gm-only
     // estimate, simulated at a 0.6 V drain-source bias); the demo's Early voltage is lower, so
-    // here it lands short and the gain rule still reads fail. Either way the binding
-    // constraint is the input match.
+    // here it lands short and the gain check still reads fail. Either way the binding
+    // check is the input match.
     expect(res.checks.find((r) => r.id === 'gain-spec')?.status).toBe('fail');
     expect(res.checks.find((r) => r.id === 'input-match')?.status).toBe('fail');
   });
 
   it('the drain-side interface is the load paralleled with ro, and the gain rides it', () => {
-    // Rout is the inverse of the denominator the gain row already used, so the rewrite is
+    // Rout is the inverse of the denominator the gain equation already used, so the rewrite is
     // arithmetic-free; the gds feedforward stays visible in the transconductance factor.
     expect(relErr(res.values.Rout, 1 / (1 / 50e3 + gds))).toBeLessThan(1e-9);
     expect(relErr(res.values.Av, (gm + gmb + gds) * res.values.Rout)).toBeLessThan(1e-3);
@@ -389,16 +389,16 @@ describe('tier1 goldens: CMOS inverter amplifier', () => {
 describe('tier1 goldens: Sampling switch', () => {
   const res = runSheet(sheet('sampling-switch.json'), table);
   // Defaults: W_sw 10 um, L 0.18 um, gm_id_on 3.5, vds_test 0.05, C_s 1 pF. The
-  // width is bound directly, so cgg = W*L*Cox is exact (Cox = 0.01).
+  // width is given directly, so cgg = W*L*Cox is exact (Cox = 0.01).
   const Wsw = 10e-6;
   const L = 0.18e-6;
 
-  it('gate capacitance is W*L*Cox at the bound width', () => {
+  it('gate capacitance is W*L*Cox at the given width', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.cgg, Wsw * L * 0.01)).toBeLessThan(1e-9);
   });
 
-  it('the width-first bind still lands gm/id at the target gm_id_on', () => {
+  it('the width-first givens still land gm/id at the target gm_id_on', () => {
     expect(relErr(res.values.gm / res.values.id, 3.5)).toBeLessThan(1e-9);
   });
 

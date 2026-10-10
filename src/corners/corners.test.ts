@@ -1,4 +1,4 @@
-// Corner families: identity derived from the data, one run at one condition, and the four
+// Characterized devices: identity derived from the data, one run at one condition, and the four
 // outcomes an aggregate is allowed to report.
 //
 // The device fixtures are hand-built (grouping and QA only ever read identity and shape) or
@@ -62,11 +62,11 @@ function table(spec: TableSpec = {}): DeviceTable {
   };
 }
 
-/** The one family `tables` group into — the shape most tests below assert on. */
-function soleFamily(tables: DeviceTable[]): CharacterizedDevice {
-  const families = groupDevices(tables);
-  expect(families).toHaveLength(1);
-  return families[0];
+/** The one device `tables` group into — the shape most tests below assert on. */
+function soleDevice(tables: DeviceTable[]): CharacterizedDevice {
+  const devices = groupDevices(tables);
+  expect(devices).toHaveLength(1);
+  return devices[0];
 }
 
 const key = (corner: string, temp = 27): ConditionKey => ({ corner, temp });
@@ -78,9 +78,9 @@ function retag(t: DeviceTable, corner: string, temp = 27, meta: TableMeta = {}):
   return { ...t, id: { ...t.id, corner, temp }, meta: { ...t.meta, ...meta } };
 }
 
-// --- variant identity --------------------------------------------------------
+// --- condition identity --------------------------------------------------------
 
-describe('variant identity', () => {
+describe('condition identity', () => {
   it('canonicalizes the corner spelling, so one condition is one key', () => {
     expect(
       sameCondition(conditionKeyOf({ device: 'a', corner: ' TT ', temp: 27 }), key('tt')),
@@ -104,18 +104,18 @@ describe('variant identity', () => {
 
 // --- membership --------------------------------------------------------------
 
-describe('family membership', () => {
+describe('device membership', () => {
   it('separates two devices that share a name but declare different process namespaces', () => {
-    const families = groupDevices([
+    const devices = groupDevices([
       table({ device: 'nch', meta: { pdk: 'sky130A' } }),
       table({ device: 'nch', meta: { pdk: 'gf180mcuC' } }),
     ]);
-    expect(families).toHaveLength(2);
-    expect(families[0].deviceUid).not.toBe(families[1].deviceUid);
+    expect(devices).toHaveLength(2);
+    expect(devices[0].deviceUid).not.toBe(devices[1].deviceUid);
   });
 
   it('joins tables whose name, namespace and corner differ only in case or spacing', () => {
-    const f = soleFamily([
+    const f = soleDevice([
       table({ device: 'NCH', corner: 'TT', meta: { pdk: 'Sky130A' } }),
       table({ device: ' nch ', corner: 'tt', temp: 85, meta: { pdk: 'sky130A ' } }),
     ]);
@@ -126,7 +126,7 @@ describe('family membership', () => {
   });
 
   it('never merges a declared N device with a declared P device of the same name', () => {
-    const families = groupDevices([
+    const devices = groupDevices([
       table({ device: 'dev', meta: { polarity: { device: 'n', signedInput: false } } }),
       table({
         device: 'dev',
@@ -134,22 +134,22 @@ describe('family membership', () => {
         meta: { polarity: { device: 'p', signedInput: true } },
       }),
     ]);
-    expect(families).toHaveLength(2);
+    expect(devices).toHaveLength(2);
   });
 
   it('does not separate two tables that declare no polarity at all', () => {
     // Undeclared is one value, not two: refusing to guess is not the same as knowing they
     // differ, and claiming a split here would be a claim the data does not support.
-    const f = soleFamily([table({ device: 'dev' }), table({ device: 'dev', corner: 'ss' })]);
+    const f = soleDevice([table({ device: 'dev' }), table({ device: 'dev', corner: 'ss' })]);
     expect(f.conditions).toHaveLength(2);
   });
 
   it('joins an undeclared identity to the sole declared one of the same name', () => {
     // The ordinary upgrade path: one corner re-exported with newly stamped `# pdk:` and
     // `# polarity:` headers must not silently split away from the older corners of the same
-    // device — undeclared never separates, against declared tables included. The merged family
+    // device — undeclared never separates, against declared tables included. The merged device
     // carries the declared identity.
-    const f = soleFamily([
+    const f = soleDevice([
       table({ device: 'dev', corner: 'ss' }),
       table({
         device: 'dev',
@@ -166,16 +166,16 @@ describe('family membership', () => {
 
   it('keeps an undeclared identity separate when several declared candidates exist', () => {
     // Joining would be a guess between them; validateDevices is the warning surface.
-    const families = groupDevices([
+    const devices = groupDevices([
       table({ device: 'dev', meta: { pdk: 'sky130A' } }),
       table({ device: 'dev', meta: { pdk: 'gf180mcuC' } }),
       table({ device: 'dev', corner: 'ss' }),
     ]);
-    expect(families).toHaveLength(3);
+    expect(devices).toHaveLength(3);
   });
 
   it('never lets an unknown polarity bridge a declared N and a declared P', () => {
-    const families = groupDevices([
+    const devices = groupDevices([
       table({ device: 'dev', meta: { polarity: { device: 'n', signedInput: false } } }),
       table({
         device: 'dev',
@@ -184,27 +184,27 @@ describe('family membership', () => {
       }),
       table({ device: 'dev', corner: 'ss' }),
     ]);
-    expect(families).toHaveLength(3);
+    expect(devices).toHaveLength(3);
   });
 
   it('reads a process namespace still stored as a passthrough header', () => {
     // A table imported before `# pdk:` was promoted keeps it in `extra`, under whatever case
-    // the file used. It must land in the same family as a freshly imported copy.
-    const f = soleFamily([
+    // the file used. It must land in the same device as a freshly imported copy.
+    const f = soleDevice([
       table({ meta: { pdk: 'sky130A' } }),
       table({ corner: 'ss', temp: -40, meta: { extra: { PDK: 'sky130A' } } }),
     ]);
     expect(f.conditions).toHaveLength(2);
   });
 
-  it('keeps load order within a family and between families', () => {
-    const families = groupDevices([
+  it('keeps load order within a device and between devices', () => {
+    const devices = groupDevices([
       table({ device: 'b', corner: 'ss' }),
       table({ device: 'a', corner: 'tt' }),
       table({ device: 'b', corner: 'tt' }),
     ]);
-    expect(families.map((f) => f.device)).toEqual(['b', 'a']);
-    expect(families[0].conditions.map((t) => t.id.corner)).toEqual(['ss', 'tt']);
+    expect(devices.map((f) => f.device)).toEqual(['b', 'a']);
+    expect(devices[0].conditions.map((t) => t.id.corner)).toEqual(['ss', 'tt']);
   });
 
   it('reads an identity back into the tuple it was built from', () => {
@@ -237,7 +237,7 @@ describe('family membership', () => {
 
 describe('nominal designation', () => {
   it('prefers tt at 27 °C over every other loaded condition', () => {
-    const f = soleFamily([
+    const f = soleDevice([
       table({ corner: 'ss', temp: -40 }),
       table({ corner: 'tt', temp: 85 }),
       table({ corner: 'tt', temp: 27 }),
@@ -248,25 +248,25 @@ describe('nominal designation', () => {
 
   it('falls to the tt condition nearest 27 °C when none sits there', () => {
     // |85 − 27| = 58 against |125 − 27| = 98.
-    const f = soleFamily([table({ corner: 'tt', temp: 125 }), table({ corner: 'tt', temp: 85 })]);
+    const f = soleDevice([table({ corner: 'tt', temp: 125 }), table({ corner: 'tt', temp: 85 })]);
     expect(f.nominal?.id.temp).toBe(85);
   });
 
   it('designates nothing when two tt conditions are equidistant from 27 °C', () => {
     // |17 − 27| = |37 − 27| = 10: picking either would be picking by load order.
-    const f = soleFamily([table({ corner: 'tt', temp: 17 }), table({ corner: 'tt', temp: 37 })]);
+    const f = soleDevice([table({ corner: 'tt', temp: 17 }), table({ corner: 'tt', temp: 37 })]);
     expect(f.nominal).toBeUndefined();
     expect(f.nominalSource).toBe('none');
   });
 
   it('lets a sole member speak for itself, whatever condition it names', () => {
-    const f = soleFamily([table({ corner: 'ss', temp: -40 })]);
+    const f = soleDevice([table({ corner: 'ss', temp: -40 })]);
     expect(f.nominal?.id.corner).toBe('ss');
     expect(f.nominalSource).toBe('auto');
   });
 
   it('designates nothing when the winning condition is claimed twice', () => {
-    const f = soleFamily([table(), table()]);
+    const f = soleDevice([table(), table()]);
     expect(f.duplicates.map(conditionLabel)).toEqual(['tt']);
     expect(f.nominal).toBeUndefined();
   });
@@ -321,21 +321,21 @@ describe('nominal designation', () => {
 
 describe('projection to one condition', () => {
   it('resolves the unique member at a condition, and nothing at an unclaimed one', () => {
-    const f = soleFamily([table({ corner: 'tt' }), table({ corner: 'ss', temp: -40 })]);
+    const f = soleDevice([table({ corner: 'tt' }), table({ corner: 'ss', temp: -40 })]);
     expect(tableAt(f, key('tt'))?.id.corner).toBe('tt');
     expect(tableAt(f, key('ff'))).toBeUndefined();
   });
 
   it('refuses a condition two tables claim, rather than picking the later one', () => {
     const first = table({ corner: 'ss', temp: -40 });
-    const f = soleFamily([first, table({ corner: 'ss', temp: -40 })]);
+    const f = soleDevice([first, table({ corner: 'ss', temp: -40 })]);
     expect(tableAt(f, key('ss', -40))).toBeUndefined();
   });
 
   it('keeps a duplicate at one condition from poisoning the others', () => {
-    // The refusal is scoped to the ambiguous condition — the family's unambiguous conditions
-    // keep projecting, so one bad re-import does not take the whole family off the bench.
-    const f = soleFamily([
+    // The refusal is scoped to the ambiguous condition — the device's unambiguous conditions
+    // keep projecting, so one bad re-import does not take the whole device off the bench.
+    const f = soleDevice([
       table({ corner: 'tt' }),
       table({ corner: 'ss', temp: -40 }),
       table({ corner: 'ss', temp: -40 }),
@@ -348,7 +348,7 @@ describe('projection to one condition', () => {
     // A condition two tables claim is still ONE condition: a mode that offers it offers the
     // condition, and the ambiguity is answered where the condition is projected, not by
     // hiding it from the list.
-    const f = soleFamily([
+    const f = soleDevice([
       table({ corner: 'ss', temp: -40 }),
       table({ corner: 'tt' }),
       table({ corner: 'ss', temp: -40 }),
@@ -357,28 +357,28 @@ describe('projection to one condition', () => {
   });
 });
 
-// --- family QA ---------------------------------------------------------------
+// --- device QA ---------------------------------------------------------------
 
 describe('validateFamily', () => {
   const rules = (f: CharacterizedDevice): string[] =>
     validateDeviceConditions(f).map((w) => w.rule);
 
-  it('says nothing about a single-variant family', () => {
-    expect(validateDeviceConditions(soleFamily([table()]))).toEqual([]);
+  it('says nothing about a single-condition device', () => {
+    expect(validateDeviceConditions(soleDevice([table()]))).toEqual([]);
   });
 
-  it('says nothing about variants that agree on everything but their condition', () => {
+  it('says nothing about tables that agree on everything but their condition', () => {
     const meta = { W: 1e-5, simulator: 'ngspice', pdk: 'sky130A' };
     expect(
       validateDeviceConditions(
-        soleFamily([table({ meta }), table({ corner: 'ss', temp: -40, meta })]),
+        soleDevice([table({ meta }), table({ corner: 'ss', temp: -40, meta })]),
       ),
     ).toEqual([]);
   });
 
   it('reports a duplicated condition as an error, naming it and the count', () => {
     const w = validateDeviceConditions(
-      soleFamily([table({ corner: 'ss', temp: -40 }), table({ corner: 'ss', temp: -40 })]),
+      soleDevice([table({ corner: 'ss', temp: -40 }), table({ corner: 'ss', temp: -40 })]),
     );
     expect(w).toHaveLength(1);
     expect(w[0].rule).toBe('device-duplicate-condition');
@@ -388,9 +388,9 @@ describe('validateFamily', () => {
     expect(w[0].message).toMatch(/\b2\b/);
   });
 
-  it('reports variants that sweep different axes as an error', () => {
+  it('reports conditions that sweep different axes as an error', () => {
     const w = validateDeviceConditions(
-      soleFamily([
+      soleDevice([
         table({ axes: { l: [1e-7], vgs: [0, 0.1] } }),
         table({ corner: 'ss', axes: { l: [1e-7], vds: [0.5], vgs: [0, 0.1] } }),
       ]),
@@ -403,7 +403,7 @@ describe('validateFamily', () => {
   it('reports a different sweep range over the same axes as a warning, not a blocker', () => {
     // Coverage is legitimately corner-specific; gating on it would refuse valid data.
     const w = validateDeviceConditions(
-      soleFamily([
+      soleDevice([
         table({ axes: { vgs: [0, 0.1, 0.2] } }),
         table({ corner: 'ss', axes: { vgs: [0, 0.1] } }),
       ]),
@@ -416,7 +416,7 @@ describe('validateFamily', () => {
     // Both run 0…0.4 in three points; only the middle one moves.
     expect(
       rules(
-        soleFamily([
+        soleDevice([
           table({ axes: { vgs: [0, 0.2, 0.4] } }),
           table({ corner: 'ss', axes: { vgs: [0, 0.1, 0.4] } }),
         ]),
@@ -425,16 +425,16 @@ describe('validateFamily', () => {
   });
 
   it('reports differing characterization widths and quantity columns', () => {
-    const f = soleFamily([
+    const f = soleDevice([
       table({ meta: { W: 1e-5 }, quantities: ['id', 'gm', 'gds'] }),
       table({ corner: 'ss', meta: { W: 2e-5 }, quantities: ['id', 'gm'] }),
     ]);
     expect(rules(f).sort()).toEqual(['device-quantities', 'device-width']);
   });
 
-  it('warns that a name-only family may not be one device when its provenance disagrees', () => {
+  it('warns that a name-only device may not be one device when its provenance disagrees', () => {
     const w = validateDeviceConditions(
-      soleFamily([
+      soleDevice([
         table({ meta: { simulator: 'ngspice', extra: { source: 'lab-a' } } }),
         table({ corner: 'ss', meta: { simulator: 'ngspice', extra: { source: 'lab-b' } } }),
       ]),
@@ -445,7 +445,7 @@ describe('validateFamily', () => {
   });
 
   it('keeps doubting an inferred membership, whichever file arrived first', () => {
-    // Grouping joined the undeclared file to the declared one, so this family's membership is
+    // Grouping joined the undeclared file to the declared one, so this device's membership is
     // INFERRED — the provenance disagreement is identity evidence and must stay visible, and
     // which file the user happened to import first is not a fact about the data.
     const blank = table({ device: 'dev', meta: { simulator: 'ngspice' } });
@@ -458,16 +458,16 @@ describe('validateFamily', () => {
       [blank, declared],
       [declared, blank],
     ]) {
-      const w = validateDeviceConditions(soleFamily(order));
+      const w = validateDeviceConditions(soleDevice(order));
       expect(w.map((x) => x.rule)).toContain('device-provenance');
     }
   });
 
-  it('does not doubt the identity of a family whose namespace is declared', () => {
+  it('does not doubt the identity of a device whose namespace is declared', () => {
     // The same disagreement, with `pdk` present: identity is settled, so the finding is about
     // the data instead — different simulators, reported as such.
     const w = validateDeviceConditions(
-      soleFamily([
+      soleDevice([
         table({ meta: { pdk: 'sky130A', simulator: 'ngspice' } }),
         table({ corner: 'ss', meta: { pdk: 'sky130A', simulator: 'spectre' } }),
       ]),
@@ -480,14 +480,14 @@ describe('validateFamily', () => {
 describe('validateFamilies', () => {
   it('warns when an undeclared identity had to stay apart from declared ones', () => {
     // The bench-level counterpart of the join rule: grouping refused this join (two declared
-    // namespaces to choose from), and no single family can see the sibling it stayed apart
+    // namespaces to choose from), and no single device can see the sibling it stayed apart
     // from, so the refusal is said here.
-    const families = groupDevices([
+    const devices = groupDevices([
       table({ device: 'dev', meta: { pdk: 'sky130A' } }),
       table({ device: 'dev', meta: { pdk: 'gf180mcuC' } }),
       table({ device: 'dev', corner: 'ss' }),
     ]);
-    const w = validateDevices(families);
+    const w = validateDevices(devices);
     expect(w).toHaveLength(1);
     expect(w[0].rule).toBe('device-split');
     expect(w[0].severity).toBe('warning');
@@ -495,7 +495,7 @@ describe('validateFamilies', () => {
     expect(w[0].message).not.toContain('# polarity:');
   });
 
-  it('says nothing about fully declared same-name families', () => {
+  it('says nothing about fully declared same-name devices', () => {
     // Two PDKs both shipping an `nch` is legitimate, and both files said which they are.
     const n = { polarity: { device: 'n', signedInput: false } } as const;
     const w = validateDevices(
@@ -519,7 +519,7 @@ describe('namedBindings', () => {
     checks: [],
   });
 
-  it('collects only the children that name a device, with their use paths', () => {
+  it('collects only the children that name a device, with their block paths', () => {
     const doc: SheetDoc = {
       ...leaf('top'),
       blocks: [
@@ -560,11 +560,11 @@ describe('namedBindings', () => {
 
 // --- one run, one condition --------------------------------------------------
 
-/** The pinned-node idiom the library writes: y = 2x + 1 solved to the typed spec T, with the
- *  claimed range [T_lo, T_hi] checked as containment edges. Base T = 5 lands x = 2; the lo
- *  edge (T = 3) lands x = 1 and the hi edge (T = 7) lands x = 3. */
-const pinnedDoc = (over: Partial<SheetDoc> = {}): SheetDoc => ({
-  title: 'pinned',
+/** The constrained-node idiom the library writes: y = 2x + 1 solved to the typed spec T, with the
+ *  claimed range [T_lo, T_hi] checked as range ends. Base T = 5 lands x = 2; the lo
+ *  range end (T = 3) lands x = 1 and the hi range end (T = 7) lands x = 3. */
+const constrainedDoc = (over: Partial<SheetDoc> = {}): SheetDoc => ({
+  title: 'constrained',
   polarity: 'n',
   params: [
     { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
@@ -578,9 +578,9 @@ const pinnedDoc = (over: Partial<SheetDoc> = {}): SheetDoc => ({
   ...over,
 });
 
-describe('runVariant', () => {
-  const primary = soleFamily([retag(dev, 'tt', 27), retag(dev, 'tt', 85)]);
-  const noFamilies = (): undefined => undefined;
+describe('runCondition', () => {
+  const primary = soleDevice([retag(dev, 'tt', 27), retag(dev, 'tt', 85)]);
+  const noDevices = (): undefined => undefined;
 
   const gainDoc = (aMin: number): SheetDoc => ({
     title: 'gain',
@@ -614,12 +614,12 @@ describe('runVariant', () => {
     ],
   });
 
-  /** The given tables presented as one child family named `nch_tail`. */
-  const tailFamily = (...tables: DeviceTable[]): CharacterizedDevice =>
-    soleFamily(tables.map((t) => ({ ...t, id: { ...t.id, device: 'nch_tail' } })));
+  /** The given tables presented as one child device named `nch_tail`. */
+  const tailDevice = (...tables: DeviceTable[]): CharacterizedDevice =>
+    soleDevice(tables.map((t) => ({ ...t, id: { ...t.id, device: 'nch_tail' } })));
 
   it('evaluates at the requested condition and reports feasibility and its points', () => {
-    const run = runCondition(gainDoc(20), primary, key('tt', 85), noFamilies);
+    const run = runCondition(gainDoc(20), primary, key('tt', 85), noDevices);
     expect(run.state).toBe('evaluated');
     if (run.state !== 'evaluated') return;
     expect(run.key).toEqual(key('tt', 85));
@@ -631,16 +631,16 @@ describe('runVariant', () => {
 
   it('reports the two conditions differently when the characterizations differ', () => {
     // The demo model's intrinsic gain is closed-form: gm/gds = (gm/ID)·VA with VA = VA_PER_L·L,
-    // so binding gm/ID = 12 at L = 0.5 µm gives 12 × 2.5 V = 30. The slow variant carries a
-    // doubled gds column, halving that to 15 at the same sized point — so a 20 V/V requirement
+    // so giving gm/ID = 12 at L = 0.5 µm gives 12 × 2.5 V = 30. The slow condition's table carries
+    // a doubled gds column, halving that to 15 at the same sized point — so a 20 V/V spec check
     // must pass at tt and fail at ss, with no other difference between the runs.
     expect(VA_PER_L * 0.5e-6).toBe(2.5);
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
-    const family = soleFamily([retag(dev, 'tt', 27), slow]);
+    const device = soleDevice([retag(dev, 'tt', 27), slow]);
     const doc = gainDoc(20);
 
-    const fast = runCondition(doc, family, key('tt'), noFamilies);
-    const cold = runCondition(doc, family, key('ss', -40), noFamilies);
+    const fast = runCondition(doc, device, key('tt'), noDevices);
+    const cold = runCondition(doc, device, key('ss', -40), noDevices);
     expect([fast.state, cold.state]).toEqual(['evaluated', 'evaluated']);
     if (fast.state !== 'evaluated' || cold.state !== 'evaluated') return;
     expect(fast.feasible).toBe(true);
@@ -650,7 +650,7 @@ describe('runVariant', () => {
   });
 
   it('refuses a condition the primary device is not characterized at', () => {
-    const run = runCondition(gainDoc(20), primary, key('ff'), noFamilies);
+    const run = runCondition(gainDoc(20), primary, key('ff'), noDevices);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['absent-condition']);
@@ -659,22 +659,22 @@ describe('runVariant', () => {
   });
 
   it('refuses a condition two loaded tables claim', () => {
-    const ambiguous = soleFamily([retag(dev, 'tt'), retag(dev, 'tt')]);
-    const run = runCondition(gainDoc(20), ambiguous, key('tt'), noFamilies);
+    const ambiguous = soleDevice([retag(dev, 'tt'), retag(dev, 'tt')]);
+    const run = runCondition(gainDoc(20), ambiguous, key('tt'), noDevices);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['ambiguous-condition']);
   });
 
   it('projects every named child to the run’s condition, never to the child’s own nominal', () => {
-    // The child family is characterized ONLY at tt@85 — its own nominal. A tt@27 run that
+    // The child device is characterized ONLY at tt@85 — its own nominal. A tt@27 run that
     // silently used it would report a verdict for a chip that was never at one temperature.
-    const child = tailFamily(retag(dev, 'tt', 85));
+    const child = tailDevice(retag(dev, 'tt', 85));
     const doc = withTail('tail-binding');
-    const familyOf = (b: string): CharacterizedDevice | undefined =>
+    const deviceOf = (b: string): CharacterizedDevice | undefined =>
       b === 'tail-binding' ? child : undefined;
 
-    const mixed = runCondition(doc, primary, key('tt', 27), familyOf);
+    const mixed = runCondition(doc, primary, key('tt', 27), deviceOf);
     expect(mixed.state).toBe('not-evaluated');
     if (mixed.state !== 'not-evaluated') return;
     expect(mixed.issues).toHaveLength(1);
@@ -683,11 +683,11 @@ describe('runVariant', () => {
     expect(mixed.issues[0].message).toContain('tailblk');
 
     // At the condition both are characterized at, the same sheet runs.
-    expect(runCondition(doc, primary, key('tt', 85), familyOf).state).toBe('evaluated');
+    expect(runCondition(doc, primary, key('tt', 85), deviceOf).state).toBe('evaluated');
   });
 
-  it('refuses a child family that is ambiguous at the run’s condition, naming the block', () => {
-    const child = tailFamily(retag(dev, 'tt'), retag(dev, 'tt'));
+  it('refuses a child device that is ambiguous at the run’s condition, naming the block', () => {
+    const child = tailDevice(retag(dev, 'tt'), retag(dev, 'tt'));
     const run = runCondition(withTail('tail-binding'), primary, key('tt'), () => child);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
@@ -698,7 +698,7 @@ describe('runVariant', () => {
   it('lists every missing device in one refusal, not only the first', () => {
     // Neither the primary nor the child is characterized at ff. A refusal that stopped at the
     // first hole would send the user importing tables one round trip at a time.
-    const child = tailFamily(retag(dev, 'ss', -40));
+    const child = tailDevice(retag(dev, 'ss', -40));
     const run = runCondition(withTail('tail-binding'), primary, key('ff'), () => child);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
@@ -706,15 +706,15 @@ describe('runVariant', () => {
     expect(new Set(run.issues.map((i) => i.device)).size).toBe(2);
   });
 
-  it('refuses a family whose members do not sweep the same axes, at every condition', () => {
+  it('refuses a device whose members do not sweep the same axes, at every condition', () => {
     // Which member is wrongly grouped is unknowable from the data, so the refusal is
-    // family-wide rather than scoped to the oddly-shaped member's own condition — the run
+    // device-wide rather than scoped to the oddly-shaped member's own condition — the run
     // here asks for tt, whose table is the ordinary one.
-    const family = soleFamily([
+    const device = soleDevice([
       table({ axes: { vgs: [0, 0.1, 0.2] } }),
       table({ corner: 'ss', temp: -40, axes: { vgs: [0, 0.1, 0.2], vds: [0, 0.9] } }),
     ]);
-    const run = runCondition(gainDoc(20), family, key('tt'), noFamilies);
+    const run = runCondition(gainDoc(20), device, key('tt'), noDevices);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['incompatible-table']);
@@ -722,19 +722,19 @@ describe('runVariant', () => {
 
   it('screens a condition on the same grounds without evaluating it', () => {
     // What a search asks before spending an evaluation. It must answer with the run's own
-    // refusals — the PRIMARY family's included, which is the ground a hand-written child-only
-    // walk drops: a family whose members sweep different axes would then be searched and
+    // refusals — the PRIMARY device's included, which is the ground a hand-written child-only
+    // walk drops: a device whose members sweep different axes would then be searched and
     // ranked, and refused afterwards by every panel that tried to evaluate it.
-    const mixed = soleFamily([
+    const mixed = soleDevice([
       table({ axes: { vgs: [0, 0.1, 0.2] } }),
       table({ corner: 'ss', temp: -40, axes: { vgs: [0, 0.1, 0.2], vds: [0, 0.9] } }),
     ]);
-    const screened = preflightCondition(gainDoc(20), mixed, key('tt'), noFamilies);
+    const screened = preflightCondition(gainDoc(20), mixed, key('tt'), noDevices);
     expect(screened.issues.map((i) => i.kind)).toEqual(['incompatible-table']);
     expect(screened.primary).toBeUndefined();
 
     // A named child nothing answers to, reported in the run's words rather than the caller's.
-    const missing = preflightCondition(withTail('tail-binding'), primary, key('tt'), noFamilies);
+    const missing = preflightCondition(withTail('tail-binding'), primary, key('tt'), noDevices);
     expect(missing.issues.map((i) => i.kind)).toEqual(['absent-condition']);
     expect(missing.issues[0].message).toBe(
       'block "tailblk" names device "tail-binding", which is not loaded',
@@ -742,7 +742,7 @@ describe('runVariant', () => {
 
     // Nothing in the way: the primary's table at the condition comes back, and no evaluation
     // has happened.
-    const clear = preflightCondition(gainDoc(20), primary, key('tt', 85), noFamilies);
+    const clear = preflightCondition(gainDoc(20), primary, key('tt', 85), noDevices);
     expect(clear.issues).toEqual([]);
     expect(clear.primary?.id.temp).toBe(85);
   });
@@ -752,7 +752,7 @@ describe('runVariant', () => {
   /** A second characterization with half the drain current and half the transconductance at
    *  every gate voltage: gm/ID is unchanged point for point, the current density is halved. */
   const weak = (): DeviceTable => retag(scaleQuantities(dev, { id: 0.5, gm: 0.5 }), 'ss', -40);
-  const twoCorners = (): CharacterizedDevice => soleFamily([retag(dev, 'tt', 27), weak()]);
+  const twoCorners = (): CharacterizedDevice => soleDevice([retag(dev, 'tt', 27), weak()]);
   /** A run's whole answer apart from the numbers: state, verdicts, and any refusals. */
   const verdict = (r: ConditionRun): unknown =>
     r.state === 'evaluated'
@@ -762,16 +762,16 @@ describe('runVariant', () => {
   it('sizes the design at the base condition exactly as a single run does', () => {
     // The set shares the single run's state machine for the condition the design is sized at;
     // only what does not depend on the condition is lifted out of the loop.
-    const family = twoCorners();
+    const device = twoCorners();
     const [base] = runConditions(
       gainDoc(20),
-      family,
+      device,
       [key('tt'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('tt'),
     );
-    const alone = runCondition(gainDoc(20), family, key('tt'), noFamilies);
+    const alone = runCondition(gainDoc(20), device, key('tt'), noDevices);
     expect(verdict(base)).toEqual(verdict(alone));
     expect(base.result?.warnings).toEqual(alone.result?.warnings);
     expect(base.state === 'evaluated' && base.design).toBe('sized');
@@ -783,17 +783,17 @@ describe('runVariant', () => {
     // voltage with twice the width. The design sized at tt has the tt width; held at the weak
     // condition it must pull twice the density out of the weak table, which takes a higher gate
     // voltage and so a lower gm/ID. Same transistor, different operating point.
-    const family = twoCorners();
+    const device = twoCorners();
     const doc: SheetDoc = { ...gainDoc(0), equations: [{ name: 'eff', expr: 'gm_id' }] };
     const [tt, ss] = runConditions(
       doc,
-      family,
+      device,
       [key('tt'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('tt'),
     );
-    const resized = runCondition(doc, family, key('ss', -40), noFamilies);
+    const resized = runCondition(doc, device, key('ss', -40), noDevices);
     expect([tt.state, ss.state, resized.state]).toEqual(['evaluated', 'evaluated', 'evaluated']);
     if (tt.state !== 'evaluated' || ss.state !== 'evaluated' || resized.state !== 'evaluated')
       return;
@@ -811,25 +811,25 @@ describe('runVariant', () => {
   it('answers at the base first, even when the base is not one of the conditions asked about', () => {
     // Feasibility is the base condition's verdict, so its run is part of every answer: asked
     // about ss alone with tt as the base, the set is tt (sized) and then ss (held).
-    const family = twoCorners();
+    const device = twoCorners();
     const doc = gainDoc(0);
-    const runs = runConditions(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'));
+    const runs = runConditions(doc, device, [key('ss', -40)], noDevices, undefined, key('tt'));
     expect(runs.map((r) => [r.key, r.design])).toEqual([
       [key('tt'), 'sized'],
       [key('ss', -40), 'held'],
     ]);
-    const tt = runCondition(doc, family, key('tt'), noFamilies);
+    const tt = runCondition(doc, device, key('tt'), noDevices);
     expect(runs[0]).toEqual(tt);
     expect(runs[1].result?.sizing?.W).toBe(tt.result?.sizing?.W);
   });
 
   it('takes a single condition as its own base', () => {
-    const [only] = runConditions(gainDoc(20), twoCorners(), [key('ss', -40)], noFamilies);
+    const [only] = runConditions(gainDoc(20), twoCorners(), [key('ss', -40)], noDevices);
     expect(only.state === 'evaluated' && only.design).toBe('sized');
   });
 
   it('declines a set of conditions when nothing says where the design is sized', () => {
-    const runs = runConditions(gainDoc(20), twoCorners(), [key('tt'), key('ss', -40)], noFamilies);
+    const runs = runConditions(gainDoc(20), twoCorners(), [key('tt'), key('ss', -40)], noDevices);
     expect(runs.map((r) => r.state)).toEqual(['not-evaluated', 'not-evaluated']);
     for (const r of runs)
       expect(r.state === 'not-evaluated' && r.issues.map((i) => i.kind)).toEqual(['no-design']);
@@ -842,7 +842,7 @@ describe('runVariant', () => {
       gainDoc(20),
       twoCorners(),
       [key('ff'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('ff'),
     );
@@ -861,7 +861,7 @@ describe('runVariant', () => {
       gainDoc(20),
       twoCorners(),
       [key('ss', -40), key('xx')],
-      noFamilies,
+      noDevices,
       undefined,
       key('ff'),
     );
@@ -884,13 +884,13 @@ describe('runVariant', () => {
   it('names the blocks whose current is held as an ideal source', () => {
     // Bound by gm and gm/ID, the sheet never says where the current comes from, so holding the
     // design holds the current the base run arrived at. Bound by an authored current, it does.
-    const family = twoCorners();
+    const device = twoCorners();
     const derived: SheetDoc = {
       ...gainDoc(0),
       givens: { L: 'L', gm_id: '12', gm: '2.4e-4' },
     };
     const run = (doc: SheetDoc): ConditionRun =>
-      runConditions(doc, family, [key('ss', -40)], noFamilies, undefined, key('tt'))[1];
+      runConditions(doc, device, [key('ss', -40)], noDevices, undefined, key('tt'))[1];
     const a = run(derived);
     const b = run(gainDoc(0));
     expect(a.state === 'evaluated' && a.assumedSource).toEqual(['givens']);
@@ -902,7 +902,7 @@ describe('runVariant', () => {
     // the result; at another condition the typed value would be held as if it were hardware, so
     // the question is declined by name. Classed independent, the same sheet is held and answered.
     const withDrain = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
-    const family = soleFamily([retag(withDrain, 'tt', 27), retag(withDrain, 'tt', 85)]);
+    const device = soleDevice([retag(withDrain, 'tt', 27), retag(withDrain, 'tt', 85)]);
     const drained = (cls: 'assumed' | 'independent'): SheetDoc => ({
       ...gainDoc(20),
       params: [...gainDoc(20).params, { name: 'V_d', value: 0.6, unit: 'V', class: cls }],
@@ -911,9 +911,9 @@ describe('runVariant', () => {
     const ask = (cls: 'assumed' | 'independent'): ConditionRun[] =>
       runConditions(
         drained(cls),
-        family,
+        device,
         [key('tt', 27), key('tt', 85)],
-        noFamilies,
+        noDevices,
         undefined,
         key('tt', 27),
       );
@@ -955,9 +955,9 @@ describe('runVariant', () => {
     const doc: SheetDoc = { ...gainDoc(0), givens: { L: 'L', gm_id: '4', id: '2e-5' } };
     const [tt, ss] = runConditions(
       doc,
-      soleFamily([retag(dev, 'tt', 27), quarter]),
+      soleDevice([retag(dev, 'tt', 27), quarter]),
       [key('tt'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('tt'),
     );
@@ -980,7 +980,7 @@ describe('runVariant', () => {
   it('gives no answer at a condition whose table does not reach the bias the design sits at', () => {
     // The design is biased at vds = 1.0 V. The second condition was characterized only to
     // 0.8 V, so the held device is read 0.2 V away from where it sits. The run completes and
-    // every rule passes — on the wrong data — so the point is neither a pass nor a failure.
+    // every check passes — on the wrong data — so the point is neither a pass nor a failure.
     const wide = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
     const narrow = generateDemoDevice({ vds: { min: 0, max: 0.8, step: 0.05 } });
     const doc: SheetDoc = {
@@ -989,9 +989,9 @@ describe('runVariant', () => {
     };
     const runs = runConditions(
       doc,
-      soleFamily([retag(wide, 'tt', 27), retag(narrow, 'ss', -40)]),
+      soleDevice([retag(wide, 'tt', 27), retag(narrow, 'ss', -40)]),
       [key('tt'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('tt'),
     );
@@ -1029,9 +1029,9 @@ describe('runVariant', () => {
     };
     const [tt, ss] = runConditions(
       doc,
-      soleFamily([retag(dev, 'tt', 27), slow]),
+      soleDevice([retag(dev, 'tt', 27), slow]),
       [key('tt'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('tt'),
     );
@@ -1049,7 +1049,7 @@ describe('runVariant', () => {
     // on the same silicon, so anything that differs between the two rows is a defect in the
     // holding, not a property of the design: every transistor keeps its width to the last bit,
     // feasibility reads the same, and every point lands in the same state.
-    const family = soleFamily([retag(libTable, 'tt', 27), retag(libTable, 'ss', -40)]);
+    const device = soleDevice([retag(libTable, 'tt', 27), retag(libTable, 'ss', -40)]);
     const widths = (r: ConditionRun): unknown => {
       const walk = (n: { sizing?: { W: number }; blocks?: readonly unknown[] }): unknown => [
         n.sizing?.W,
@@ -1061,9 +1061,9 @@ describe('runVariant', () => {
     for (const { file, doc } of loadLibrary()) {
       const [sized, other] = runConditions(
         doc,
-        family,
+        device,
         [key('tt'), key('ss', -40)],
-        noFamilies,
+        noDevices,
         REFS,
         key('tt'),
       );
@@ -1091,7 +1091,7 @@ describe('runVariant', () => {
     expect(held).toBeGreaterThan(30);
   });
 
-  it('pins every range end to the base, not only the first', () => {
+  it('fixes every range end at the base, not only the first', () => {
     // Two ends, both written against the design's own gain (30 at the base, 15 at the slow
     // condition). Each must be asked at the base's number at both conditions: 25 and 10.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
@@ -1109,9 +1109,9 @@ describe('runVariant', () => {
     };
     const runs = runConditions(
       doc,
-      soleFamily([retag(dev, 'tt', 27), slow]),
+      soleDevice([retag(dev, 'tt', 27), slow]),
       [key('tt'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('tt'),
     );
@@ -1158,9 +1158,9 @@ describe('runVariant', () => {
     };
     const [tt, ss] = runConditions(
       doc,
-      soleFamily([retag(dev, 'tt', 27), slow]),
+      soleDevice([retag(dev, 'tt', 27), slow]),
       [key('tt'), key('ss', -40)],
-      noFamilies,
+      noDevices,
       undefined,
       key('tt'),
     );
@@ -1177,7 +1177,7 @@ describe('runVariant', () => {
   it('says what is wrong with a condition even when no condition is the base', () => {
     // Several conditions and no nominal: nothing is sized, so every row is declined. A row
     // whose own table is missing still says THAT, since importing it is a different fix.
-    const [tt, xx] = runConditions(gainDoc(20), twoCorners(), [key('tt'), key('xx')], noFamilies);
+    const [tt, xx] = runConditions(gainDoc(20), twoCorners(), [key('tt'), key('xx')], noDevices);
     expect(tt.state === 'not-evaluated' && tt.issues.map((i) => i.kind)).toEqual(['no-design']);
     expect(xx.state === 'not-evaluated' && xx.issues.map((i) => i.kind)).toEqual([
       'absent-condition',
@@ -1186,18 +1186,18 @@ describe('runVariant', () => {
 
   it('carries a curated library sheet across two conditions', () => {
     // A real library document, not a synthetic one: the CS amp with a current-source load
-    // computes Av = gm·Rout with Rout = 1/(gds + load__gds) and gm pinned by its GBW spec, so
+    // computes Av = gm·Rout with Rout = 1/(gds + load__gds) and gm set by its GBW spec, so
     // a slow characterization with every gds doubled halves Av exactly — the load inherits
     // the projected primary table, so both gds terms scale together.
     const entry = loadLibrary().find((s) => s.file === 'stages/cs-amp-current-source-load.json');
     expect(entry).toBeDefined();
     if (!entry) return;
-    const family = soleFamily([
+    const device = soleDevice([
       retag(dev, 'tt', 27),
       retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40),
     ]);
-    const fast = runCondition(entry.doc, family, key('tt'), noFamilies);
-    const slow = runCondition(entry.doc, family, key('ss', -40), noFamilies);
+    const fast = runCondition(entry.doc, device, key('tt'), noDevices);
+    const slow = runCondition(entry.doc, device, key('ss', -40), noDevices);
     expect([fast.state, slow.state]).toEqual(['evaluated', 'evaluated']);
     if (fast.state !== 'evaluated' || slow.state !== 'evaluated') return;
     expect(fast.result.values.Av / slow.result.values.Av).toBeCloseTo(2, 6);
@@ -1235,7 +1235,7 @@ describe('runVariant', () => {
         },
       ],
     };
-    const deep = runCondition(nested, primary, key('tt'), noFamilies);
+    const deep = runCondition(nested, primary, key('tt'), noDevices);
     expect(deep.state).toBe('not-evaluated');
     if (deep.state !== 'not-evaluated') return;
     expect(deep.issues[0].message).toContain('mid.deep');
@@ -1247,7 +1247,7 @@ describe('runVariant', () => {
       },
     ]);
     const byRef: SheetDoc = { ...gainDoc(20), blocks: [{ name: 'cm', ref: 'lib/blk' }] };
-    const viaRef = runCondition(byRef, primary, key('tt'), noFamilies, refs);
+    const viaRef = runCondition(byRef, primary, key('tt'), noDevices, refs);
     expect(viaRef.state).toBe('not-evaluated');
     if (viaRef.state !== 'not-evaluated') return;
     expect(viaRef.issues[0].kind).toBe('absent-condition');
@@ -1256,7 +1256,7 @@ describe('runVariant', () => {
 
   it('refuses a sheet whose reference does not resolve, before any device is projected', () => {
     const doc: SheetDoc = { ...gainDoc(20), blocks: [{ name: 'cm', ref: 'lib/absent' }] };
-    const run = runCondition(doc, primary, key('tt'), noFamilies, buildSheetRefIndex([]));
+    const run = runCondition(doc, primary, key('tt'), noDevices, buildSheetRefIndex([]));
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['invalid-sheet-or-ref']);
@@ -1274,7 +1274,7 @@ describe('runVariant', () => {
         },
       ],
     };
-    const run = runCondition(doc, primary, key('tt'), noFamilies);
+    const run = runCondition(doc, primary, key('tt'), noDevices);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues[0].device).toBe('nothing-loaded');
@@ -1297,7 +1297,7 @@ describe('runVariant', () => {
         },
       ],
     };
-    expect(runCondition(doc, primary, key('tt'), noFamilies).state).toBe('evaluated');
+    expect(runCondition(doc, primary, key('tt'), noDevices).state).toBe('evaluated');
   });
 
   it('refuses a structurally broken sheet before any device is projected', () => {
@@ -1305,32 +1305,32 @@ describe('runVariant', () => {
       { ...gainDoc(20), givens: { L: 'L', gm_id: '12', ft: '2e9' } },
       primary,
       key('tt'),
-      noFamilies,
+      noDevices,
     );
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['invalid-sheet-or-ref']);
   });
 
-  it('refuses a run that did not complete, even though a hard rule also failed', () => {
-    // Both signals are present at once: the pin cannot reach T = 0.5 (y = 2x + 1 spans [1, 21]
-    // over the bracket), and `0 >= 1` fails outright. A run that could not be completed is not
-    // a design that does not close, so the rule failure must not promote it to an evaluated
-    // verdict — while its diagnostics stay reachable.
-    const doc = pinnedDoc({
+  it('refuses a run that did not complete, even though a hard check also failed', () => {
+    // Both signals are present at once: the design constraint cannot reach T = 0.5 (y = 2x + 1
+    // spans [1, 21] over the bracket), and `0 >= 1` fails outright. A run that could not be
+    // completed is not an infeasible design, so the check failure must not promote it to an
+    // evaluated verdict — while its diagnostics stay reachable.
+    const doc = constrainedDoc({
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 0.5 },
       ],
       checks: [{ id: 'impossible', kind: 'physical', lhs: '0', op: '>=', rhs: '1' }],
     });
-    const run = runCondition(doc, primary, key('tt'), noFamilies);
+    const run = runCondition(doc, primary, key('tt'), noDevices);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['runtime-evaluation']);
     expect(run.result?.checks.find((r) => r.id === 'impossible')?.status).toBe('fail');
     expect(run.result?.feasible).toBe(false);
-    // Asked, and it could not be answered — with the solver's reason, never the failing rule's.
+    // Asked, and it could not be answered — with the solver's reason, never the failing check's.
     expect(run.points).toHaveLength(1);
     expect(run.points[0].state).toBe('no-answer');
     expect(run.points[0].error).toMatch(/does not change sign/);
@@ -1340,7 +1340,7 @@ describe('runVariant', () => {
     // Base T = 5 lands x = 2, clearing a 1.6 floor; the lo end holds the same hardware at
     // T = 3, landing x = 1, which does not. The design is feasible; it does not comply at one
     // end of its claimed range — and the two must never be reported as one failure.
-    const doc = pinnedDoc({
+    const doc = constrainedDoc({
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
@@ -1349,7 +1349,7 @@ describe('runVariant', () => {
       ],
       operatingRange: [{ name: 'lo', set: { T: 'T_lo' } }],
     });
-    const run = runCondition(doc, primary, key('tt'), noFamilies);
+    const run = runCondition(doc, primary, key('tt'), noDevices);
     expect(run.state).toBe('evaluated');
     if (run.state !== 'evaluated') return;
     expect(run.feasible).toBe(true);
@@ -1365,7 +1365,7 @@ describe('runVariant', () => {
     // y = 2x + 1 cannot reach over the bracket, so nothing is measured there. Feasibility was
     // measured and stays reported; the end is no answer — never a failure, never a pass, and
     // never a reason to drop the run.
-    const doc = pinnedDoc({
+    const doc = constrainedDoc({
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
@@ -1374,7 +1374,7 @@ describe('runVariant', () => {
       ],
       operatingRange: [{ name: 'lo', set: { T: 'T_bad' } }],
     });
-    const run = runCondition(doc, primary, key('tt'), noFamilies);
+    const run = runCondition(doc, primary, key('tt'), noDevices);
     expect(run.state).toBe('evaluated');
     if (run.state !== 'evaluated') return;
     expect(run.feasible).toBe(true);
@@ -1387,7 +1387,7 @@ describe('runVariant', () => {
   });
 
   it('gives a refused condition one not-run point per point it was not asked at', () => {
-    const doc = pinnedDoc({
+    const doc = constrainedDoc({
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
@@ -1396,7 +1396,7 @@ describe('runVariant', () => {
       ],
       operatingRange: [{ name: 'lo', set: { T: 'T_lo' } }],
     });
-    const run = runCondition(doc, primary, key('ff'), noFamilies);
+    const run = runCondition(doc, primary, key('ff'), noDevices);
     expect(run.state).toBe('not-evaluated');
     expect(run.points.map((p) => [p.rangeEnd, p.state])).toEqual([
       [undefined, 'not-run'],
@@ -1405,7 +1405,7 @@ describe('runVariant', () => {
     expect(run.points[0].error).toBe(run.state === 'not-evaluated' ? run.issues[0].message : '');
   });
 
-  it('does not report the primary twice when a child binds its own family', () => {
+  it('does not report the primary twice when a child is bound to the primary device', () => {
     const run = runCondition(withTail('self-binding'), primary, key('ff'), () => primary);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
@@ -1415,7 +1415,7 @@ describe('runVariant', () => {
 
 // --- aggregation -------------------------------------------------------------
 
-const hardRule = (marginPct: number, id = 'r'): CheckResult => ({
+const hardCheck = (marginPct: number, id = 'r'): CheckResult => ({
   id,
   kind: 'physical',
   op: '>=',
@@ -1430,7 +1430,7 @@ const hardRule = (marginPct: number, id = 'r'): CheckResult => ({
   status: marginPct >= 0 ? 'pass' : 'fail',
 });
 
-/** One range end's report: measured (a rule at `marginPct`), or — given an `error` — not. */
+/** One range end's report: measured (a check at `marginPct`), or — given an `error` — not. */
 const end = (
   name: string,
   state: RangeEndReport['state'],
@@ -1440,14 +1440,14 @@ const end = (
   name,
   state,
   set: {},
-  checks: [hardRule(marginPct, 'e')],
+  checks: [hardCheck(marginPct, 'e')],
   solved: {},
   warnings: [],
   ...(error === undefined ? {} : { error }),
 });
 
 /** A run built the way the runner builds one: the centre first, then a point per range end,
- *  each mirroring its report. `centre` is the centre point's state; the run's own rule sits at
+ *  each mirroring its report. `centre` is the centre point's state; the run's own check sits at
  *  `marginPct`. */
 const ran = (
   corner: string,
@@ -1471,7 +1471,7 @@ const ran = (
   ],
   result: {
     values: {},
-    checks: [hardRule(marginPct)],
+    checks: [hardCheck(marginPct)],
     feasible: marginPct >= 0,
     warnings: [],
     ...(ends.length ? { rangeEnds: ends } : {}),
@@ -1497,7 +1497,7 @@ const refusedAt = (
 describe('aggregateVariantRuns — feasibility', () => {
   it('is the sized run and nothing else', () => {
     // One answer, read off the condition the design was sized at. A held condition failing
-    // every rule it has is a compliance finding and cannot move it.
+    // every check it has is a compliance finding and cannot move it.
     const agg = aggregateConditionRuns([
       ran('tt', 'sized', 'complies', 0.4),
       ran('ss', 'held', 'does-not-comply', -0.3),
@@ -1569,7 +1569,7 @@ describe('aggregateVariantRuns — compliance', () => {
 });
 
 describe('aggregateVariantRuns — the worst margin, and where', () => {
-  it('names the rule, the condition and the range end that own it', () => {
+  it('names the check, the condition and the range end that own it', () => {
     // The tightest point anywhere is the ss corner's lo end, at -0.1.
     const agg = aggregateConditionRuns([
       ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.05)]),
@@ -1586,8 +1586,8 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
     expect(agg.worst).toEqual({ id: 'r', marginPct: 0.12, key: key('ss') });
   });
 
-  it('reads no margin from a point whose rules were not measured there', () => {
-    // The ss centre was read off the table's hull and its lo end did not land: both carry rule
+  it('reads no margin from a point whose checks were not measured there', () => {
+    // The ss centre was read off the table's hull and its lo end did not land: both carry check
     // outcomes that are tighter than anything real, and neither may be quoted.
     const agg = aggregateConditionRuns([
       ran('tt', 'sized', 'complies', 0.4),

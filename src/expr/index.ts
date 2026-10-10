@@ -296,7 +296,7 @@ function evalNode(node: Node, scope: Scope, constants: Record<string, number>): 
           return reg.impl(...nums);
         } catch (e) {
           // Domain preconditions (e.g. a negative PSD) surface as engine errors so every
-          // caller's existing ExprError handling (na chips, skipped rows) applies.
+          // caller's existing ExprError handling (na chips, skipped equations) applies.
           throw new ExprError(`${fn}(): ${e instanceof Error ? e.message : String(e)}`);
         }
       }
@@ -475,7 +475,7 @@ export function additiveCoefficient(src: string, name: string): number | undefin
  * A Scope over a flat record of named scalars. Unknown names return undefined and
  * fall through to the engine's constant map. Resolves against the LIVE record — it
  * closes over `values`, so entries written after construction are visible (sheet
- * rows rely on this). The shared helper for every scalar-evaluation site.
+ * equations rely on this). The shared helper for every scalar-evaluation site.
  */
 export function scalarScope(values: Record<string, number>): Scope {
   return {

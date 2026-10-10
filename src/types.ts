@@ -115,7 +115,7 @@ export interface BaseQuantity {
   readonly perWidth?: boolean;
   /**
    * For a bias sweep axis only: the operating point a sizer may assume when a design sheet's
-   * bind leaves this axis undeclared — e.g. vsb = 0 (source at body, the body-grounded case
+   * givens leave this axis undeclared — e.g. vsb = 0 (source at body, the body-grounded case
    * almost every device sits in). An axis without one (vds, set by the circuit node) has no
    * honest default and must be pinned explicitly. The default applies only when the table
    * actually characterizes that point; otherwise sizing fails closed rather than silently

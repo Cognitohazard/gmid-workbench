@@ -54,45 +54,46 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   active:
     'Make this the active device: it drives the dashboard, the pickers, the bias sliders, and the sizer.',
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
-  // corner families: one logical device characterized at several (corner, temperature) conditions
-  cornerFamily:
+  // characterized devices: one logical device characterized at several (corner, temperature)
+  // conditions
+  deviceConditions:
     'One device, characterized at several conditions. Tables group by process namespace (# pdk:), device name and declared polarity — all read from the files, never assigned here. A grouping you disagree with is corrected in the data: add # pdk: to the exports and re-import.',
   cornerOverlay:
     'Draw every condition of this device alongside the active one, so the corner spread shows on every panel at once.',
   nominal:
     'The condition this bench means by “nominal”. Sheets evaluate there by default and the topology picker always searches there. Marked “auto” when the tt-at-27 °C rule picked it and nothing has been chosen — click to pin that choice, so a later import cannot move it; click a pinned one to release it back to the rule.',
   cornerMode:
-    'Which conditions this sheet is evaluated at. Every run fixes ONE condition and evaluates the whole composition there — the primary device and every named child block — because a verdict assembled from a fast input pair and a slow tail describes a chip that does not exist. nominal = the family’s designated condition; active table = whichever table is selected; chosen = the ones you tick; all = every condition loaded for this device. With one condition the design is sized there. With several it is one design: sized at the nominal condition — which joins the set if you left it out — and held at the others.',
+    'Which conditions this sheet is evaluated at. Every run fixes ONE condition and evaluates the whole composition there — the primary device and every named block — because a verdict assembled from a fast input pair and a slow tail describes a chip that does not exist. nominal = the device’s designated condition; active table = whichever table is selected; chosen = the ones you tick; all = every condition loaded for this device. With one condition the design is sized there. With several it is one design: sized at the nominal condition — which joins the set if you left it out — and held at the others.',
   cornerDesign:
     'One design, asked about at every condition. “sized here” is the run that chose the widths — the nominal condition, or the only one asked about. “held” is that same hardware at another condition: its widths, lengths, currents and gate biases fixed, only the operating point re-settled. A corner is never allowed to re-size the design, because only one chip gets built.',
   compliance:
-    'The second of two questions. Feasibility asks whether this design type can meet the spec, and is answered once, where the design is sized. Compliance asks whether that ONE design — its widths, lengths, currents and gate biases held fixed — still works everywhere it is promised to: at each condition selected, at its own operating point and at each end of the sheet’s operating range. Each of those is a point, and the badge counts them. A point either complies, fails, has no answer (it was asked and could not be answered: a solve did not land, the table does not reach that bias, or the design rests on an assumed voltage), or was not run (nothing to ask: no table at that condition, or no design to hold). The four are counted apart and never folded together, so “complies at 5 of 9” always says what happened to the other four. The tightest margin quoted below the badge is read only over points that were measured, and names the rule and the point that own it.',
+    'The second of two questions. Feasibility asks whether this design type can meet the spec, and is answered once, where the design is sized. Compliance asks whether that ONE design — its widths, lengths, currents and gate biases held fixed — still works everywhere it is promised to: at each condition selected, at its own operating point and at each end of the sheet’s operating range. Each of those is a point, and the badge counts them. A point either complies, fails, has no answer (it was asked and could not be answered: a solve did not land, the table does not reach that bias, or the design rests on an assumed voltage), or was not run (nothing to ask: no table at that condition, or no design to hold). The four are counted apart and never folded together, so “complies at 5 of 9” always says what happened to the other four. The tightest margin quoted below the badge is read only over points that were measured, and names the check and the point that own it.',
   cornerOneAtATime:
     'Only with a single condition selected. A design plane and a knob ranking are statements about one operating point, and there is no single point while several conditions are on screen.',
   sheet:
-    'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail constraints with margins, sized on the active device.',
+    'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail checks with margins, sized on the active device.',
   assumptions:
     'Voltages this design was sized under rather than solved for: the ones the sheet marks “assumed” — an internal stack node, a guessed gate-source drop — that feed at least one device’s sizing. The sheet’s own parts determine each of them, but the sheet types a value for now instead of deriving it. The verdict holds only while those typed values are right, so they are listed with it. A voltage nothing on the sheet determines — a supply, an input level, an output held by a feedback loop outside the sheet, a voltage across a device whose surroundings are not on the sheet — is one you state, and is not listed here.',
   held: 'Node voltages that hang under a transistor’s gate — a cascode’s source, a pair’s tail. The sheet states each node at this design point, and this is the gate voltage that puts it there: the node plus the device’s gate-source voltage. Where the design is held fixed and re-checked — at a range end — that gate voltage is what stays put, and the node is re-solved under it.',
   feasBadge:
-    'Can this design type meet the spec — on the device and at the condition the design is sized at, with the current variables? Feasible = every hard rule (invariant + requirement) passes there; guardrails are advisory and never gate it. When it is not, the badge names the binding constraint: the failing hard rule with the worst margin, anywhere in the composition (a child’s rule is shown by path). Nothing that happens at another condition or at an end of the operating range moves this badge — that is compliance, counted beside it. “No answer” means the evaluation started and did not complete; “not evaluated” means it never started.',
+    'Can this design type meet the spec — on the device and at the condition the design is sized at, with the current variables? Feasible = every hard check (physical + spec) passes there; advisory checks never gate it. When it is not, the badge names the binding check: the failing hard check with the worst margin, anywhere in the composition (a child’s check is shown by path). Nothing that happens at another condition or at an end of the operating range moves this badge — that is compliance, counted beside it. “No answer” means the evaluation started and did not complete; “not evaluated” means it never started.',
   sensitivity:
-    'Which knob to turn. For the rule the badge names (or, on a feasible design, the rule failing at a range end if one is, else the one with the least room left), this ranks the design choices by how far each moves that rule’s margin over one small step of its own value — up and down shown separately, since a knob is rarely symmetric and an equality rule genuinely differs on the two sides. It is a snapshot: each knob costs two full re-evaluations of the whole sheet, so it is taken when you ask and retired as soon as you change the design.',
+    'Which knob to turn. For the check the badge names (or, on a feasible design, the check failing at a range end if one is, else the one with the least room left), this ranks the design choices by how far each moves that check’s margin over one small step of its own value — up and down shown separately, since a knob is rarely symmetric and an equality check genuinely differs on the two sides. It is a snapshot: each knob costs two full re-evaluations of the whole sheet, so it is taken when you ask and retired as soon as you change the design.',
   wiringWarning:
-    'A block declares which node its gate and source are tied to, and the sizing says what its V_GS came out at. Those describe the same wire, so they must agree — this says by how much they do not. Nothing is repaired and no verdict moves: which of the two is wrong (the declared node, or the bind that implied a different one) is a design decision. It is the failure that lets two blocks be sized at gate voltages hundreds of millivolts apart with every rule still green. To make it gate the design, write a hard rule on the same two numbers.',
+    'A block declares which node its gate and source are tied to, and the sizing says what its V_GS came out at. Those describe the same wire, so they must agree — this says by how much they do not. Nothing is repaired and no verdict moves: which of the two is wrong (the declared node, or the givens that implied a different one) is a design decision. It is the failure that lets two blocks be sized at gate voltages hundreds of millivolts apart with every check still green. To make it gate the design, write a hard check on the same two numbers.',
   sheetSweep:
-    'Sweep one variable across its range and chart every rule’s margin — the region where the design is feasible.',
+    'Sweep one variable across its range and chart every check’s margin — the region where the design is feasible.',
   sheetSweep2:
-    'Add a second variable to sweep the design plane: a feasibility heatmap (green = feasible, red = a hard rule fails) instead of the 1-D margin chart.',
-  useDevice:
-    'Size this child block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load); “active device” inherits the parent’s.',
-  // design-sheet vocabulary (rule kinds, statuses, composition, bias, param roles)
-  ruleKind:
-    'invariant = a hard physical floor; requirement = a hard application spec — both must hold for a feasible design. guardrail = advisory only: shown, never blocks.',
+    'Add a second variable to sweep the design plane: a feasibility heatmap (green = feasible, red = a hard check fails) instead of the 1-D margin chart.',
+  blockDevice:
+    'Size this block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load); “active device” inherits the parent’s.',
+  // design-sheet vocabulary (check kinds, statuses, composition, bias, param roles)
+  checkKind:
+    'physical = a hard physical floor; spec = a hard application spec — both must hold for a feasible design. advisory = shown, never blocks.',
   amber:
-    'The rule holds but by under 5% margin — a near-miss worth a look. A spec pinned by its own bind snaps to amber instead of coin-flipping pass/fail on rounding.',
-  ruleNa:
-    'na = a side could not be computed (an undeclared name or a non-finite value). Never a silent pass: a hard rule reading na fails the design closed.',
+    'The check holds but by under 5% margin — a near-miss worth a look. A spec set by its own givens snaps to amber instead of coin-flipping pass/fail on rounding.',
+  checkNa:
+    'na = a side could not be computed (an undeclared name or a non-finite value). Never a silent pass: a hard check reading na fails the design closed.',
   provide:
     'Names this block exposes to a parent sheet. The parent reads each as child__name and writes its own math over it — scalar composition, no circuit solving.',
   copyResults:
@@ -107,20 +108,20 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Download a flattened copy: every referenced block inlined. Self-contained and frozen — later edits to the library sheets it referenced no longer change it.',
   userSheets:
     'Sheets you imported (.json). They join the picker and the reference library: a sheet can name one as user/<name> (or its bare name) in a `ref`. Kept across reloads.',
-  bindBias:
-    'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device pins its own; body bias (vsb) defaults to 0. Edit to override; clear to revert.',
-  bindAssumed:
-    'A coordinate marked ? was not declared by this block — the engine filled it in. That is right for a common-source device or a rail-referenced mirror, and wrong for a differential pair, cascode or source follower, where the source floats above the bulk. Declare vsb in the bind if this device is one of those.',
-  bindNeeds:
-    'This block must pin its drain bias (vds) but hasn’t — the table has a vds axis and there is no safe default, so sizing fails closed. Set a value here to size it in place.',
+  givensBias:
+    'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device states its own; body bias (vsb) defaults to 0. Edit to override; clear to revert.',
+  givensAssumed:
+    'A coordinate marked ? was not declared by this block — the engine filled it in. That is right for a common-source device or a rail-referenced mirror, and wrong for a differential pair, cascode or source follower, where the source floats above the bulk. Declare vsb in the givens if this device is one of those.',
+  givensNeeds:
+    'This block must state its drain bias (vds) but hasn’t — the table has a vds axis and there is no safe default, so sizing fails closed. Set a value here to size it in place.',
   solvedParam:
     'Solved, not set. This estimate stands in for a value only the evaluated sheet knows, closing a bias loop the block order cannot express: it is iterated until the two agree. The stored number is just a starting guess, so the field is read-only and the parameter cannot be swept.',
-  pinnedParam:
-    'Solved, not set. This is an internal bias node the engine chooses so a sheet output equals a spec you typed (e.g. the tail node placed so the common mode lands exactly on CM_dc). Solved by bisection between the parameter\u2019s min and max — its bracket, not slider bounds. Sweep the spec on the other side of the pin instead; the shown value is where the node landed.',
-  pinNotLanded:
-    'This pin did not land, so there is no solved value to show. The engine found no point in the parameter’s [min, max] bracket where the pinned equation holds — the warnings below name which way it failed (the bracket does not straddle the target, or the design stopped evaluating inside it). Move or widen the bracket, or relax the spec the pin chases.',
-  edges:
-    'Two different questions get asked of a sheet, and this strip answers the second one. Is the design FEASIBLE — can this design type meet the spec at all? The sweeps and the picker’s search work that way, free to re-size the devices while they look. Does it COMPLY — does the design you have right now still work at the ends of the range it claims (e.g. CM_dc = CM_lo, then CM_hi)? Every transistor is held exactly as this run sized it and only the bias re-settles, so a chip describes THIS instance and moves as you turn the knobs. Every hard rule must hold at each end. The two answers are never folded: a range end that does not comply leaves the feasibility badge green and is counted in the compliance badge beside it. A ✓ chip shows where the bias landed; a ✗ chip names the rule that fails there — and that often yields to re-centering rather than to a bigger device, so read the sensitivity ranking before spending area. A ? chip is no answer: the question was asked and could not be answered — a solve did not land, the table does not reach that bias, or the design rests on an assumed voltage — and it says which. A – chip was not run: the current settings produce no design to hold.',
+  constrainedParam:
+    'Solved, not set. This is an internal bias node the engine chooses so a sheet output equals a spec you typed (e.g. the tail node placed so the common mode lands exactly on CM_dc). Solved by bisection between the parameter\u2019s min and max — its bracket, not slider bounds. Sweep the spec on the other side of the design constraint instead; the shown value is where the node landed.',
+  constraintNotMet:
+    'This design constraint was not met, so there is no solved value to show. The engine found no point in the parameter’s [min, max] bracket where the constraint holds — the warnings below name which way its solve failed (the bracket does not straddle the target, or the design stopped evaluating inside it). Move or widen the bracket, or relax the spec the constraint chases.',
+  operatingRange:
+    'Two different questions get asked of a sheet, and this strip answers the second one. Is the design FEASIBLE — can this design type meet the spec at all? The sweeps and the picker’s search work that way, free to re-size the devices while they look. Does it COMPLY — does the design you have right now still work at the ends of the range it claims (e.g. CM_dc = CM_lo, then CM_hi)? Every transistor is held exactly as this run sized it and only the bias re-settles, so a chip describes THIS instance and moves as you turn the knobs. Every hard check must hold at each end. The two answers are never folded: a range end that does not comply leaves the feasibility badge green and is counted in the compliance badge beside it. A ✓ chip shows where the bias landed; a ✗ chip names the check that fails there — and that often yields to re-centering rather than to a bigger device, so read the sensitivity ranking before spending area. A ? chip is no answer: the question was asked and could not be answered — a solve did not land, the table does not reach that bias, or the design rests on an assumed voltage — and it says which. A – chip was not run: the current settings produce no design to hold.',
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
@@ -139,7 +140,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   picker:
     'Which design-type to start from. Type the spec you have — supply, load, gain, bandwidth, slew, noise, offset, common-mode range — and every amplifier and buffer sheet in the library is searched against it on the active device: does it close, at what quiescent current, with which knob settings, and what binds it. A screening instrument, not an optimizer — it finds feasible starting points and names their costs; the design still happens in the sheet. It answers feasibility only: whether a design you pick then holds across its operating range, or at other process conditions, is checked on its own sheet, where that one design is held fixed. Each field is optional: an empty box means "not my requirement", and the sheet keeps its own default.',
   pickerMargin:
-    'The worst hard-rule margin at the point reported — how much room the design has left where it is tightest, or how far it is from closing. A margin quoted on a sheet that did not close belongs to the last point the search reached, not to the design: it moves when the budget moves, so read the cause beside it before chasing the number.',
+    'The worst hard-check margin at the point reported — how much room the design has left where it is tightest, or how far it is from closing. A margin quoted on a sheet that did not close belongs to the last point the search reached, not to the design: it moves when the budget moves, so read the cause beside it before chasing the number.',
   pickerCoverage:
     'How many of the fields you typed this sheet actually has a parameter for and treats as a requirement you set. A sheet that consumed two of your ten is answering a smaller question than one that consumed ten, so the two are not comparable and are never ranked against each other. Hover for what was dropped and why — including a field whose name matches but whose unit does not (a noise density is not an integrated RMS), and one the sheet chooses for itself rather than taking from you.',
   fingers:

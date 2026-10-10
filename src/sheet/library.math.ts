@@ -8,7 +8,7 @@ import { VA_PER_L } from '../demo';
 /** Relative error against an expected value — the tolerance convention every golden states. */
 export const relErr = (v: number, expected: number): number => Math.abs(v / expected - 1);
 
-/** Two resistances in parallel — the shape half the library's output-node rows take. */
+/** Two resistances in parallel — the shape half the library's output-node equations take. */
 export const par = (a: number, b: number): number => 1 / (1 / a + 1 / b);
 
 /** Early voltage of the demo model at length `L`. */

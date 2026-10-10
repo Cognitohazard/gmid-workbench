@@ -140,7 +140,7 @@ export function deviceKey(t: DeviceTable): string {
  * short FNV-1a hash of the table's identity, geometry, and the FULL contents of every axis and
  * quantity column (sampling would let two regenerated tables that differ only in the interior
  * collide — and dedupe would then silently swap one for the other). This is the resolver /
- * persisted `use.device` key (the label is only for display). Two imports of the SAME file get
+ * persisted block `device` key (the label is only for display). Two imports of the SAME file get
  * the same uid (so a persisted child→device binding survives a re-import); two DIFFERENT tables
  * that happen to share a label get DISTINCT uids (so each is individually selectable and the
  * resolver targets the right one — fixing the non-unique-label ambiguity). Tables are immutable
@@ -194,10 +194,10 @@ export interface LegendConfig {
 }
 
 /**
- * Which characterization conditions a sheet panel is evaluated at. `nominal` is the family's
+ * Which characterization conditions a sheet panel is evaluated at. `nominal` is the device's
  * designated condition (and refuses, rather than substituting one, when nothing designates it);
  * `active` follows the active table's own condition; `chosen` is an explicit set; `all` is every
- * condition the primary family holds.
+ * condition the primary device holds.
  */
 export type SheetCornerMode = 'nominal' | 'active' | 'chosen' | 'all';
 const CORNER_MODES: readonly SheetCornerMode[] = ['nominal', 'active', 'chosen', 'all'];
@@ -314,10 +314,10 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 /**
  * Coerce an untrusted saved leaf design-sheet (from localStorage, or a user's imported
  * sheet JSON) into a valid SheetDoc, dropping malformed entries but keeping every
- * author expression verbatim — an unresolvable one surfaces as a per-rule 'na' chip at
- * evaluation, never a silent drop. A bind is kept whenever it carries a string `L` — its
+ * author expression verbatim — an unresolvable one surfaces as a per-check 'na' chip at
+ * evaluation, never a silent drop. The givens are kept whenever they carry a string `L` — their
  * arity is validateSheet's business, which names the problem instead of silently unsizing
- * the sheet — so only an L-less bind is dropped, and its rules then go 'na'. Every piece
+ * the sheet — so only L-less givens are dropped, and the checks then go 'na'. Every piece
  * this pass does not carry over is recorded in `lost`, including a key no core key set
  * knows. Returns undefined when `v` is not an object, or writes one key in two spellings.
  */
@@ -325,7 +325,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   if (!v || typeof v !== 'object') return undefined;
   // Depth backstop: the evaluator/validator error out past MAX_BLOCK_DEPTH, but they can
   // only do so if loading the doc didn't blow the stack first. One level beyond the cap
-  // is kept so the validator still sees a non-empty `uses` at the cap and raises its
+  // is kept so the validator still sees a non-empty `blocks` at the cap and raises its
   // depth error rather than the truncation reading as a shallower (silently valid) tree.
   if (depth > MAX_BLOCK_DEPTH + 1) return undefined;
   // Earlier spellings of the keys are brought up to the current ones FIRST, before anything
@@ -339,8 +339,8 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   const str = (x: unknown, fallback: string) => (typeof x === 'string' && x ? x : fallback);
   // `lost` records the path of every authored piece this pass DROPS. Restore paths
   // tolerate drops (our own persisted data, best rescued); the import path passes a
-  // collector and fails closed — a sheet whose mistyped rule was dropped would
-  // otherwise validate cleanly and read feasible without that requirement.
+  // collector and fails closed — a sheet whose mistyped check was dropped would
+  // otherwise validate cleanly and read feasible without that check.
   const drop = (path: string): [] => {
     lost?.push(path);
     return [];
@@ -354,8 +354,9 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // An UNKNOWN key is a drop too: every container below is rebuilt field by field, so a key
   // nothing carries over vanishes exactly like a malformed one. Each is checked against the
   // core's own key set rather than a copy of it — a whitelist maintained here is precisely the
-  // mechanism that silently ate a legal fT bind (and would have eaten `pin` and `diode`) on
-  // reload, and the same hole stayed open on the doc, params, rows, rules and uses.
+  // mechanism that silently ate a legal fT given (and would have eaten `designConstraint` and
+  // `diode`) on reload, and the same hole stayed open on the doc, params, equations, checks and
+  // blocks.
   const unknownKeys = (
     obj: Record<string, unknown>,
     keys: ReadonlySet<string>,
@@ -373,7 +374,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   ] as const)
     if (o[k] !== undefined && !Array.isArray(o[k])) lost?.push(k);
   // Keep only the string-valued entries of an authored name→expression map, recording the
-  // rest — shared by a use's param overrides and an edge's set.
+  // rest — shared by a block's param overrides and a range end's set.
   const strMap = (obj: Record<string, unknown>, at: string): Record<string, string> => {
     const out: Record<string, string> = {};
     for (const [k, val] of Object.entries(obj)) {
@@ -408,11 +409,11 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         // a hand-tuned estimate, which is exactly the wrong answer the field exists to prevent.
         if (typeof pp.solveFor === 'string' && pp.solveFor !== '') out.solveFor = pp.solveFor;
         else dropField(pp.solveFor !== undefined, `params[${i}].solveFor`);
-        // Same stakes as solveFor: dropping a pin silently turns a solved node back into the
-        // stale default it displays. An OBJECT field, so it needs its own shape check.
-        const pin = pp.designConstraint as { lhs?: unknown; rhs?: unknown } | undefined;
-        if (pin && typeof pin.lhs === 'string' && typeof pin.rhs === 'string')
-          out.designConstraint = { lhs: pin.lhs, rhs: pin.rhs };
+        // Same stakes as solveFor: dropping a design constraint silently turns a solved node back
+        // into the stale default it displays. An OBJECT field, so it needs its own shape check.
+        const constraint = pp.designConstraint as { lhs?: unknown; rhs?: unknown } | undefined;
+        if (constraint && typeof constraint.lhs === 'string' && typeof constraint.rhs === 'string')
+          out.designConstraint = { lhs: constraint.lhs, rhs: constraint.rhs };
         else dropField(pp.designConstraint !== undefined, `params[${i}].designConstraint`);
         // Same stakes again: a dropped hold leaves the node typed, and a range end would then
         // hold the node where the design holds the gate.
@@ -427,7 +428,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  const rows: SheetEquation[] = Array.isArray(o.equations)
+  const equations: SheetEquation[] = Array.isArray(o.equations)
     ? o.equations.flatMap((r, i) => {
         if (!r || typeof r !== 'object') return drop(`equations[${i}]`);
         const rr = r as Record<string, unknown>;
@@ -443,7 +444,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  const rules: SheetCheck[] = Array.isArray(o.checks)
+  const checks: SheetCheck[] = Array.isArray(o.checks)
     ? o.checks.flatMap((r, i) => {
         if (!r || typeof r !== 'object') return drop(`checks[${i}]`);
         const rr = r as Record<string, unknown>;
@@ -469,10 +470,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  // A bind with the wrong arity is kept, NOT dropped: validateSheet raises a visible
-  // "exactly two" error the author can fix, whereas dropping it here would silently turn a
+  // Givens with the wrong arity are kept, NOT dropped: validateSheet raises a visible
+  // "exactly two" error the author can fix, whereas dropping them here would silently turn a
   // mis-authored sized sheet into an unsized one.
-  let bind: SheetGivens | undefined;
+  let givens: SheetGivens | undefined;
   if (o.givens && typeof o.givens === 'object') {
     const b = o.givens as Record<string, unknown>;
     if (typeof b.L === 'string') {
@@ -482,7 +483,7 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       const into = cand as unknown as Record<string, unknown>;
       // Walk what the document actually carries, checking each key against the core's own
       // lists rather than a copy of them: a hand-maintained whitelist here silently deleted
-      // every bind quantity added to BINDABLE, which round-tripped a legal two-quantity bind
+      // every given quantity added to BINDABLE, which round-tripped legal two-quantity givens
       // into a one-quantity "needs exactly two" error on the next reload. Anything
       // unrecognized or non-string is RECORDED as dropped, so an import fails closed on it
       // instead of quietly rewriting the design.
@@ -494,23 +495,23 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         else if (GIVENS_FLAGS.has(k) && typeof b[k] === 'boolean') into[k] = b[k];
         else dropField(true, `givens.${k}`);
       }
-      bind = cand;
+      givens = cand;
     }
   }
-  if (o.givens !== undefined && !bind) lost?.push('givens');
+  if (o.givens !== undefined && !givens) lost?.push('givens');
 
   // Composition: each child is a full SheetDoc recursively sanitized; the param-override map,
-  // the provide list, and the per-child `device` (a table uid the resolver matches against the
+  // the provides, and the per-child `device` (a table uid the resolver matches against the
   // loaded devices) are kept verbatim so a composed sheet round-trips intact. A persisted device
   // that is not currently loaded simply reads infeasible until re-loaded. A by-reference child
   // (`ref` without an embedded doc) is kept as the reference — resolution happens at evaluation,
   // and a ref that no longer resolves reads infeasible rather than being dropped.
-  const uses: SheetBlock[] = Array.isArray(o.blocks)
+  const blocks: SheetBlock[] = Array.isArray(o.blocks)
     ? o.blocks.flatMap((u, i) => {
         if (!u || typeof u !== 'object') return drop(`blocks[${i}]`);
         const uu = u as Record<string, unknown>;
         if (typeof uu.name !== 'string' || !uu.name) return drop(`blocks[${i}]`);
-        // The use ITSELF only; `params` maps author-chosen param names, which no key set knows.
+        // The block ITSELF only; `params` maps author-chosen param names, which no key set knows.
         unknownKeys(uu, BLOCK_KEYS, `blocks[${i}].`);
         const childLost: string[] = [];
         const childDoc = sanitizeSheet(uu.doc, depth + 1, childLost);
@@ -525,24 +526,25 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         const ref = typeof uu.ref === 'string' ? uu.ref : undefined;
         dropField(uu.ref !== undefined && ref === undefined, `blocks[${i}].ref`);
         if (!childDoc && ref === undefined) return uu.doc !== undefined ? [] : drop(`blocks[${i}]`);
-        const use: SheetBlock = { name: uu.name };
-        if (childDoc) use.doc = childDoc;
-        if (ref !== undefined) use.ref = ref;
+        const block: SheetBlock = { name: uu.name };
+        if (childDoc) block.doc = childDoc;
+        if (ref !== undefined) block.ref = ref;
         // A malformed device binding must be REPORTED, not silently inherited from
         // the parent — the sheet would evaluate against the wrong table.
-        if (typeof uu.device === 'string') use.device = uu.device;
+        if (typeof uu.device === 'string') block.device = uu.device;
         else dropField(uu.device !== undefined, `blocks[${i}].device`);
         if (uu.params && typeof uu.params === 'object' && !Array.isArray(uu.params)) {
           const ov = strMap(uu.params as Record<string, unknown>, `blocks[${i}].params`);
-          if (Object.keys(ov).length) use.params = ov;
+          if (Object.keys(ov).length) block.params = ov;
         } else if (uu.params !== undefined) lost?.push(`blocks[${i}].params`);
-        // Gate wiring: an OBJECT of expression strings on a use whose other members are plain
+        // Gate wiring: an OBJECT of expression strings on a block whose other members are plain
         // strings, so a pass that rebuilds field by field deletes it — and the consistency check
         // the declaration exists for silently stops running on every reload, which is the one
-        // thing that check is there to prevent. Same stakes as `pin` and the diode flag.
+        // thing that check is there to prevent. Same stakes as `designConstraint` and the diode
+        // flag.
         if (uu.wiring && typeof uu.wiring === 'object' && !Array.isArray(uu.wiring)) {
           const w = uu.wiring as Record<string, unknown>;
-          // ONE keyed walk, exactly like the bind sanitizer above: each key checked against the
+          // ONE keyed walk, exactly like the givens sanitizer above: each key checked against the
           // core's own set, anything unrecognized or non-string recorded once. Written through an
           // index view because the members are assigned by name.
           const into: Record<string, string> = {};
@@ -556,10 +558,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
           // NOTHING — `{}`, or only keys this rejected — is recorded as lost for the same reason:
           // it is a structural error the core would name, and a sheet must never reload cleaner
           // than the core reads it.
-          if (Object.keys(into).length) use.wiring = into as unknown as SheetWiring;
+          if (Object.keys(into).length) block.wiring = into as unknown as SheetWiring;
           else lost?.push(`blocks[${i}].wiring`);
         } else if (uu.wiring !== undefined) lost?.push(`blocks[${i}].wiring`);
-        return [use];
+        return [block];
       })
     : [];
 
@@ -570,12 +572,12 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
       })
     : [];
 
-  // Containment edges: same stakes as `pin` — dropping one silently turns a checked range
-  // claim back into an unchecked number. An edge whose `set` survives EMPTY is kept, not
+  // Range ends: same stakes as `designConstraint` — dropping one silently turns a checked range
+  // claim back into an unchecked number. A range end whose `set` survives EMPTY is kept, not
   // dropped: validateSheet owns that verdict ("sets nothing", blocking feasibility), and
   // eating it here would let the sheet reload MORE feasible than the core reads it — the
   // exact hole the empty-ref rule above refuses.
-  const edges: SheetRangeEnd[] = Array.isArray(o.operatingRange)
+  const rangeEnds: SheetRangeEnd[] = Array.isArray(o.operatingRange)
     ? o.operatingRange.flatMap((e, i) => {
         if (!e || typeof e !== 'object') return drop(`operatingRange[${i}]`);
         const ee = e as Record<string, unknown>;
@@ -598,12 +600,12 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
     ...(typeof o.description === 'string' && o.description ? { description: o.description } : {}),
     polarity: o.polarity === 'p' ? 'p' : 'n',
     params,
-    equations: rows,
-    checks: rules,
-    ...(bind ? { givens: bind } : {}),
-    ...(uses.length ? { blocks: uses } : {}),
+    equations,
+    checks,
+    ...(givens ? { givens } : {}),
+    ...(blocks.length ? { blocks } : {}),
     ...(provide.length ? { provides: provide } : {}),
-    ...(edges.length ? { operatingRange: edges } : {}),
+    ...(rangeEnds.length ? { operatingRange: rangeEnds } : {}),
   };
 }
 

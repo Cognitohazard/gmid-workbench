@@ -70,7 +70,7 @@ export const roMirrored = (vdsRef: number, K: number, iIn: number): number =>
 
 /** An output node where a driver and its load carry the same current at the same L and the same
  *  |vds|: both gds are equal, so the node is half of one device's r_o. Pinning it alongside
- *  Av = gm·Rout says the interface row added a name and no arithmetic. */
+ *  Av = gm·Rout says the interface equation added a name and no arithmetic. */
 export const stage2Rout = (I: number, L: number, vds: number): number => 1 / (2 * gdsOf(I, L, vds));
 
 /** γ-model input-referred thermal density sqrt(4kTγ/gm) at the demo's γ = GAMMA_DEFAULT. */
@@ -81,8 +81,8 @@ export const gmbOf = (gm: number): number => BODY_FACTOR * gm;
 
 /** Gate capacitance of the demo model at a sized width: cgg = W·L·Cox, exact at every
  *  operating point (the model gives cgg no bias dependence at all). The sized W is what the
- *  bind lands on, so an input-capacitance golden pins the model relation and which device the
- *  row reads — the width itself is the sizer's answer, like a solved vgs. */
+ *  sizing lands on, so an input-capacitance golden pins the model relation and which device the
+ *  equation reads — the width itself is the sizer's answer, like a solved vgs. */
 export const cggOf = (W: number, L: number): number => W * L * COX;
 
 // The gate-source voltage the demo model needs for a given gm/ID at L = 0.5 µm, from the EKV

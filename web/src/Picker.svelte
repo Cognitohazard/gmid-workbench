@@ -36,14 +36,14 @@
   import { sheetRefIndex } from './sheetlib.svelte';
   import type { Bench } from './families';
 
-  // The picker reads the bench's families and the curated library; `onOpen` hands a chosen
+  // The picker reads the bench's devices and the curated library; `onOpen` hands a chosen
   // candidate to the dashboard. The open/close toggle stays in App, which renders this only
   // while open (and only once a device is loaded — the search needs a table).
   //
-  // It searches at the primary family's NOMINAL condition, always: nominal feasibility is the
+  // It searches at the primary device's NOMINAL condition, always: nominal feasibility is the
   // question a design-type search answers, and a cross-corner search is a different feature
   // rather than a wider default. That is also why nothing here falls back to the active table —
-  // an undesignated family means the bench has not said what nominal IS, and searching some
+  // an undesignated device means the bench has not said what nominal IS, and searching some
   // other condition would answer a question nobody asked.
   let {
     bench,
@@ -78,10 +78,10 @@
   let ranSpec = $state.raw<PickerSpec>({});
   /** The device the current results were searched on, for the same reason. */
   let ranTable = $state('');
-  /** The bench state the current results were searched against: which families exist, what is
+  /** The bench state the current results were searched against: which devices exist, what is
    *  in them, and which condition each designates. A result is an answer about all of it, and
    *  the active table's uid cannot detect a change to any of it — importing a sibling corner or
-   *  redesignating a child family's nominal moves what a search would find without the active
+   *  redesignating a child device's nominal moves what a search would find without the active
    *  table moving at all. */
   let ranRevision = $state('');
   /** Sheets that were never searched, and why: a device the sheet needs is not characterized at
@@ -103,7 +103,7 @@
 
   const total = SEARCHABLE_SHEETS.length;
 
-  // The condition every candidate is searched at: the primary family's designated nominal.
+  // The condition every candidate is searched at: the primary device's designated nominal.
   const primary = $derived(bench.primary);
   const nominalTable = $derived(primary?.nominal);
   const nominalKey = $derived<ConditionKey | undefined>(
@@ -256,12 +256,12 @@
   };
 
   /** The cause column, which is never blank: an infeasible candidate always carries the core's
-   *  composed cause, and a closed one names the rule with the least room left. */
+   *  composed cause, and a closed one names the check with the least room left. */
   function why(c: PickerCandidate): string {
     if (c.cause) return c.cause;
     return c.worstMargin
-      ? `tightest rule: ${c.worstMargin.id}`
-      : 'no hard rule could be measured at this point';
+      ? `tightest check: ${c.worstMargin.id}`
+      : 'no hard check could be measured at this point';
   }
 
   /** The margin column, and the one case where it must refuse to print a number: when the core
@@ -272,9 +272,9 @@
   }
 
   function marginTitle(c: PickerCandidate): string {
-    if (!c.worstMargin) return 'no hard rule could be measured at this point';
-    if (marginSpeaksFor(c)) return `worst hard-rule margin at this point: ${c.worstMargin.id}`;
-    return `the rules that could be evaluated read ${pct(c.worstMargin.marginPct)} (${c.worstMargin.id}), but they do not speak for this sheet — it is infeasible for a reason no rule measures`;
+    if (!c.worstMargin) return 'no hard check could be measured at this point';
+    if (marginSpeaksFor(c)) return `worst hard-check margin at this point: ${c.worstMargin.id}`;
+    return `the checks that could be evaluated read ${pct(c.worstMargin.marginPct)} (${c.worstMargin.id}), but they do not speak for this sheet — it is infeasible for a reason no check measures`;
   }
 
   /** Quiescent current, qualified when the back-off ended on the author's slider floor: that
@@ -504,7 +504,7 @@ one that stops the search first on a small table"
     </p>
     <p>
       The search moves the author's design choices only. The input common mode (CM_dc) is a spec the
-      engine solves around, not a knob: when a common-mode rule binds, the first thing a designer
+      engine solves around, not a knob: when a common-mode check binds, the first thing a designer
       would move is out of the search's reach, and yours to change in the sheet.
     </p>
   </div>

@@ -206,7 +206,7 @@ test('design sheet: the noise & matching example evaluates and sweeps to a feasi
   await expect(sp.locator('.feas')).toContainText('feasible');
 });
 
-test('design sheet: a composed cascode shows its child block and composes feasibility, persisted', async ({
+test('design sheet: a composed cascode shows its block and composes feasibility, persisted', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -226,7 +226,7 @@ test('design sheet: a composed cascode shows its child block and composes feasib
   await expect(sp.locator('.suse')).toHaveCount(1);
   await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
   await expect(sp.locator('.suse .prov')).toContainText('Av0,cs');
-  // The parent's composed gain rule evaluates over the child's provided scalars.
+  // The parent's composed gain check evaluates over the child's provided scalars.
   await expect(sp.locator('.srules tr', { hasText: 'gain-spec' })).toBeVisible();
 
   // Sweep the shared knob → a feasibility curve over the WHOLE composition.
@@ -271,7 +271,7 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   await expect(child.locator('.dsel')).toBeVisible();
 
   // The child inherits the active (demo) device; point it at the imported device → a different
-  // table re-sizes the child block (here the small fixture can't size it, so the card changes).
+  // table re-sizes the block (here the small fixture can't size it, so the card changes).
   const before = (await child.textContent())?.trim();
   await child.locator('.dsel').selectOption({ index: 2 }); // the imported nch_lvt
   await expect.poll(async () => (await child.textContent())?.trim()).not.toBe(before);
@@ -342,7 +342,7 @@ test('design sheet: two loaded devices sharing a label are each individually sel
   expect(errors).toEqual([]);
 });
 
-test('design sheet: a failing guardrail reads as advisory, distinct from a hard failure', async ({
+test('design sheet: a failing advisory check reads as advisory, distinct from a hard failure', async ({
   page,
 }) => {
   await page.goto('/');
@@ -350,9 +350,10 @@ test('design sheet: a failing guardrail reads as advisory, distinct from a hard 
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
-  // At the default gm/ID = 12 two rules fail with DIFFERENT severities: headroom (an invariant, a
-  // hard failure) and gbw-margin (a guardrail, advisory). Only the guardrail carries the advisory
-  // marker + wording — the two must be visually distinct (the audit finding this addresses).
+  // At the default gm/ID = 12 two checks fail with DIFFERENT severities: headroom (a physical
+  // check, a hard failure) and gbw-margin (an advisory check). Only the advisory check carries the
+  // advisory marker + wording — the two must be visually distinct (the audit finding this
+  // addresses).
   const headroom = sp.locator('.srules tr', { hasText: 'headroom' });
   const gbw = sp.locator('.srules tr', { hasText: 'gbw-margin' });
   await expect(headroom).toHaveClass(/st-fail/);
@@ -361,9 +362,9 @@ test('design sheet: a failing guardrail reads as advisory, distinct from a hard 
   await expect(gbw).toHaveClass(/advisory/);
   await expect(gbw).toContainText('advisory');
 
-  // Lower the efficiency knob so every HARD rule passes → the design is feasible-labeled, yet the
-  // guardrail still fails (cgg loads GBW below target) and still reads advisory — a red guardrail
-  // over a feasible design must not look like the design failed.
+  // Lower the efficiency knob so every HARD check passes → the design is feasible-labeled, yet the
+  // advisory check still fails (cgg loads GBW below target) and still reads advisory — a red
+  // advisory check over a feasible design must not look like the design failed.
   const gmId = sp.locator('.svar[data-param="gm_id"]').locator('.num');
   await gmId.fill('8');
   await gmId.blur();
@@ -437,8 +438,8 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await pickSheet(sp, 'CS amp, current-source load');
   await expect(sp.locator('.shead')).toContainText('CS amp, current-source load');
 
-  // It binds on the demo device, reports the declared operating point, evaluates its
-  // composed load child, and closes at defaults (the core golden pins the same numbers).
+  // It sizes on the demo device, reports the declared operating point, evaluates its
+  // composed load child, and is feasible at defaults (the core golden pins the same numbers).
   await expect(sp.locator('.bind')).toContainText('W=');
   await expect(sp.locator('.shead .sbias')).toContainText('vds');
   await expect(sp.locator('.suse', { hasText: 'load' })).toBeVisible();
@@ -451,15 +452,15 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await expect(sp.locator('.shead .sbiasctl .bx.ro').first()).toBeVisible();
 
   // Equations render (not raw source) and the author notes are shown in place, so a
-  // designer can read what each row computes and why without opening the JSON.
+  // designer can read what each equation computes and why without opening the JSON.
   const gainRow = sp.locator('.srow', { hasText: 'Av' }).first();
   await expect(gainRow.locator('.seq sub')).not.toHaveCount(0); // subscripted g_m/g_ds, not "gm"
   await expect(sp.locator('.srows .snote').first()).toBeVisible();
-  // A rule's physical-meaning note sits under its rendered comparison.
+  // A check's physical-meaning note sits under its rendered comparison.
   await expect(sp.locator('.srules .snote').first()).toBeVisible();
 
   // Authored names typeset instead of showing raw underscores: a composed provide renders the
-  // quantity with the block as a subscript (load__gm → g_{m,load}), and rule operators prettify.
+  // quantity with the block as a subscript (load__gm → g_{m,load}), and check operators prettify.
   await expect(sp.locator('.suse .prov code sub').first()).not.toHaveCount(0);
   await expect(sp.locator('.srules')).toContainText('≥');
 
@@ -468,7 +469,7 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   const options = sp.locator('.shead select.rm option:not([value=""])');
   await expect(options.first()).not.toHaveText(/^[✓✗]/);
 
-  // A composed multi-child library sheet (no parent bind) loads from another group.
+  // A composed multi-child library sheet (no parent givens) loads from another group.
   await pickSheet(sp, '5T OTA');
   await expect(sp.locator('.shead')).toContainText('5T OTA');
   // Five blocks: the bias reference and the tail device that mirrors it, the input pair, and the
@@ -479,7 +480,7 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   // topology, typeset (the 5T's blocks all carry $V_{GS}$-style math in that prose).
   await expect(sp.locator('.suse .sudesc').first()).toBeVisible();
   await expect(sp.locator('.suse .sudesc sub').first()).not.toHaveCount(0);
-  // An infeasible verdict names the binding constraint rather than stopping at "infeasible".
+  // An infeasible verdict names the binding check rather than stopping at "infeasible".
   const badge = sp.locator('.shead .feasb');
   if ((await badge.getAttribute('class'))?.includes('no'))
     await expect(badge.locator('i')).not.toHaveCount(0);
@@ -570,7 +571,7 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
   await expect(sp.locator('.pwarn', { hasText: 'set ld_sign = -1' })).toHaveCount(0);
 });
 
-test('design sheet: an imported fT bind survives import and reload (not silently stripped)', async ({
+test('design sheet: an imported fT given survives import and reload (not silently stripped)', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -581,8 +582,8 @@ test('design sheet: an imported fT bind survives import and reload (not silently
   await loadDemo(page);
 
   // A sheet that states a speed spec directly. Every save/restore path runs the document
-  // through the same sanitizer, so a bind quantity it does not recognise is deleted — which
-  // turns this legal two-quantity bind into "needs exactly two" on the next reload.
+  // through the same sanitizer, so a given quantity it does not recognise is deleted — which
+  // turns these legal two-quantity givens into "needs exactly two" on the next reload.
   await page.locator('.load input[type=file]').setInputFiles({
     name: 'speed-spec.json',
     mimeType: 'application/json',
@@ -628,10 +629,10 @@ test('design sheet: an imported solveFor survives import and reload (not silentl
   await loadDemo(page);
 
   // `vstar_est` is a tearing variable: it drives gm/ID, and solves for the vstar that results.
-  // Its authored value of 0.3 deliberately FAILS the invariant; the fixed point (~0.22) passes
-  // it. So the rule chip reports whether the loop was actually closed — and if the sanitizer
+  // Its authored value of 0.3 deliberately FAILS the physical check; the fixed point (~0.22) passes
+  // it. So the check chip reports whether the loop was actually closed — and if the sanitizer
   // drops solveFor on the way in or out of storage, the sheet silently reverts to the stale
-  // estimate and this rule fails.
+  // estimate and this check fails.
   await page.locator('.load input[type=file]').setInputFiles({
     name: 'solved-loop.json',
     mimeType: 'application/json',
@@ -676,9 +677,9 @@ test('design sheet: an imported diode connection survives import and reload (not
   await page.goto('/');
   await loadDemo(page);
 
-  // The connection is a BOOLEAN in a bind whose other members are all expression strings, so a
+  // The connection is a BOOLEAN in givens whose other members are all expression strings, so a
   // sanitizer that type-checks every member as a string deletes it — leaving the device with no
-  // vds at all. The rule below reads the drop the diagonal produced: on the demo device a diode
+  // vds at all. The check below reads the drop the diagonal produced: on the demo device a diode
   // sits well above 0.2 V, and a stripped connection makes the sizing fail outright rather than
   // report a smaller number, so the chip catches either outcome.
   await page.locator('.load input[type=file]').setInputFiles({
@@ -724,8 +725,9 @@ test('design sheet: a sheet written with the earlier key names still imports and
   await loadDemo(page);
 
   // Every renamed key at once: rows, rules and their kinds, a pin, and a child under uses that
-  // publishes through provide. The rule passes only at the pinned root (x = 0.25, so y = 0.5 and
-  // z = c__w + y = 1.5), so a key dropped on the way in would show as a missing or failing rule.
+  // publishes through provide. The check passes only at the constrained root (x = 0.25, so y = 0.5
+  // and z = c__w + y = 1.5), so a key dropped on the way in would show as a missing or failing
+  // check.
   await page.locator('.load input[type=file]').setInputFiles({
     name: 'earlier-keys.json',
     mimeType: 'application/json',
@@ -800,7 +802,7 @@ test('design sheet: an imported hold survives import and reload, and its gate bi
   await loadDemo(page);
 
   // A hold changes nothing at the design point, so a loader that dropped it would leave every
-  // rule and value as they were. The readout is what shows it is still there: the held
+  // check and value as they were. The readout is what shows it is still there: the held
   // expression and what it came to, X + B = 0.2 + 0.1.
   await page.locator('.load input[type=file]').setInputFiles({
     name: 'held-node.json',
@@ -832,7 +834,7 @@ test('design sheet: an imported hold survives import and reload, and its gate bi
   expect(errors).toEqual([]);
 });
 
-test('design sheet: an imported pin survives import and reload (not silently stripped)', async ({
+test('design sheet: an imported design constraint survives import and reload (not silently stripped)', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -842,15 +844,15 @@ test('design sheet: an imported pin survives import and reload (not silently str
   await page.goto('/');
   await loadDemo(page);
 
-  // The pin is an OBJECT on a param whose siblings are scalars, so a sanitizer that only carries
-  // known scalar fields deletes it — and the param then silently reverts to its stored default.
-  // The rule below passes only at the solved root (x = 0.25), never at the default (0.3).
+  // The design constraint is an OBJECT on a param whose siblings are scalars, so a sanitizer that
+  // only carries known scalar fields deletes it — and the param then silently reverts to its stored
+  // default. The check below passes only at the solved root (x = 0.25), never at the default (0.3).
   await page.locator('.load input[type=file]').setInputFiles({
-    name: 'pinned-node.json',
+    name: 'constrained-node.json',
     mimeType: 'application/json',
     buffer: Buffer.from(
       JSON.stringify({
-        title: 'Pinned node',
+        title: 'Constrained node',
         polarity: 'n',
         params: [
           { name: 'x', value: 0.3, min: 0, max: 1, designConstraint: { lhs: 'y', rhs: '0.5' } },
@@ -862,7 +864,7 @@ test('design sheet: an imported pin survives import and reload (not silently str
   });
 
   await page.locator('button.btn', { hasText: '+ sheet' }).click();
-  await pickSheet(page, 'Pinned node');
+  await pickSheet(page, 'Constrained node');
   const sheet = page.locator('.sheet').first();
   await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
   await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
@@ -922,8 +924,8 @@ test('design sheet: a DC-level class survives import and reload, and the assumpt
   await expect(after.locator('.feasb')).toHaveText('feasible');
   await expect(after.locator('.sassume')).toHaveText('sized under 1 assumption: V_d');
 
-  // "solved" is derived from pin/solveFor, never written — an import carrying it is refused by
-  // name rather than silently losing the class.
+  // "solved" is derived from designConstraint/solveFor, never written — an import carrying it is
+  // refused by name rather than silently losing the class.
   await load('solved-level.json', 'solved');
   await expect(page.locator('.qa.error')).toContainText(
     'malformed sheet content at params[2].class',
@@ -971,30 +973,30 @@ test('design sheet: a stored sheet that fails validation is kept, opens with its
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
-  // Two rules share an id, which validation refuses (`sheet-check`): results are keyed by rule id.
-  // The stored sheet stays in the library across boots; the user, not the loader, removes it.
+  // Two checks share an id, which validation refuses (`sheet-check`): results are keyed by check
+  // id. The stored sheet stays in the library across boots; the user, not the loader, removes it.
   const doc = {
-    ...vdSheet('Stored with a duplicate rule id', 'independent'),
+    ...vdSheet('Stored with a duplicate check id', 'independent'),
     checks: [
       { id: 'ib-range', kind: 'spec', lhs: 'Ib', op: '>=', rhs: '1e-6' },
       { id: 'ib-range', kind: 'spec', lhs: 'Ib', op: '<=', rhs: '1e-4' },
     ],
   };
   await page.evaluate(
-    (d) => localStorage.setItem('gmid.sheets.v2', JSON.stringify([{ name: 'dup-rule', doc: d }])),
+    (d) => localStorage.setItem('gmid.sheets.v2', JSON.stringify([{ name: 'dup-check', doc: d }])),
     doc,
   );
   await page.reload();
   await loadDemo(page);
-  const entry = page.locator('.usheets .dev', { hasText: 'dup-rule' });
+  const entry = page.locator('.usheets .dev', { hasText: 'dup-check' });
   await expect(entry).toBeVisible();
 
   await page.locator('button.btn', { hasText: '+ sheet' }).click();
-  await pickSheet(page, 'Stored with a duplicate rule id');
+  await pickSheet(page, 'Stored with a duplicate check id');
   const sheet = page.locator('.sheet').first();
   await expect(sheet.locator('.svar[data-param="V_d"]')).toBeVisible();
   await expect(sheet.locator('.feasb')).toHaveText('not evaluated');
-  await expect(sheet.locator('.sissue').first()).toContainText('duplicate rule id "ib-range"');
+  await expect(sheet.locator('.sissue').first()).toContainText('duplicate check id "ib-range"');
 
   await entry.locator('.drm').click();
   await expect(entry).toHaveCount(0);
@@ -1014,7 +1016,7 @@ test('design sheet: imported sheets join the library — pickable, referenceable
   await page.goto('/');
   await loadDemo(page);
 
-  // Import two sheets through the same load control as a CSV: a bind-less block, and a
+  // Import two sheets through the same load control as a CSV: a block with no givens, and a
   // top sheet that includes it BY REFERENCE (user sheets resolve like curated ones).
   const asFile = (name: string, doc: object) => ({
     name,
@@ -1044,11 +1046,11 @@ test('design sheet: imported sheets join the library — pickable, referenceable
   await expect(page.locator('.qa.error')).toContainText('refusing to import');
   await expect(page.locator('.usheets .dev', { hasText: 'huge' })).toHaveCount(0);
 
-  // A sheet whose rule is malformed (mistyped op) is REJECTED, not imported with the
-  // rule silently dropped — a dropped rule would read feasible without the requirement.
+  // A sheet whose check is malformed (mistyped op) is REJECTED, not imported with the
+  // check silently dropped — a dropped check would read feasible without the requirement.
   await input.setInputFiles(
-    asFile('bad-rule.json', {
-      title: 'Bad rule',
+    asFile('bad-check.json', {
+      title: 'Bad check',
       polarity: 'n',
       params: [{ name: 'x', value: 2 }],
       equations: [{ name: 'y', expr: '2*x' }],
@@ -1056,7 +1058,7 @@ test('design sheet: imported sheets join the library — pickable, referenceable
     }),
   );
   await expect(page.locator('.qa.error')).toContainText('malformed sheet content at checks[0]');
-  await expect(page.locator('.usheets .dev', { hasText: 'bad-rule' })).toHaveCount(0);
+  await expect(page.locator('.usheets .dev', { hasText: 'bad-check' })).toHaveCount(0);
 
   // Same for a malformed FIELD inside a kept entry: a non-string device binding
   // would silently inherit the parent's table — reject, do not repair.
@@ -1077,7 +1079,8 @@ test('design sheet: imported sheets join the library — pickable, referenceable
 
   // A key the core does not know is rejected on the same footing: the sanitizer rebuilds each
   // container field by field, so an unrecognized one is dropped as surely as a malformed one —
-  // silently, until it is recorded. That silence is how a legal fT bind and a legal pin were lost.
+  // silently, until it is recorded. That silence is how a legal fT given and a legal design
+  // constraint were lost.
   await input.setInputFiles(
     asFile('unknown-key.json', {
       title: 'Unknown key',
@@ -1166,7 +1169,7 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await pickSheet(sp, '5T OTA');
 
   // The 5T claims a CM range; the engine checks both ends on every evaluation and the
-  // panel reports one chip per edge. (Whether they read ✓ or ✗ on the demo device is the
+  // panel reports one chip per range end. (Whether they read ✓ or ✗ on the demo device is the
   // demo's business — budgets are tuned for real tables — the report SHAPE is the contract.)
   const chips = sp.locator('.sedge');
   await expect(chips).toHaveCount(2);
@@ -1179,7 +1182,7 @@ test('operating range: chips report each range end; an end the solve cannot reac
   // silently.
   await expect(sp.locator('.sedges .glabel')).toHaveText('operating range');
   // The second question has its own badge, a count of points: the centre and the two ends.
-  // On the demo device the design misses its offset budget where it is sized and again at the
+  // On the demo device the design misses its offset target where it is sized and again at the
   // low end; the high end sits past the table's drain range, so it is no answer.
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 3 points · 2 fail · 1 no answer',
@@ -1241,7 +1244,7 @@ test('operating range: a range end that was not run reads as a question nobody a
     await expect(chips.nth(i)).not.toContainText('✗');
   }
   // The centre's own solve did not land: feasibility has no answer, and the badge names no
-  // rule — a margin read where the solve stopped is not a cause. The count keeps the centre
+  // check — a margin read where the solve stopped is not a cause. The count keeps the centre
   // (asked, unanswered) apart from the two ends (never asked).
   await expect(sp.locator('.feasb')).toHaveText('no answer');
   await expect(sp.locator('[data-compliance]')).toHaveText(
@@ -1256,7 +1259,7 @@ test('operating range: a range end that was not run reads as a question nobody a
   await expect(chips.nth(0)).not.toHaveClass(/skip/);
 });
 
-test('design sheet: the sensitivity readout ranks the knobs that move the binding rule', async ({
+test('design sheet: the sensitivity readout ranks the knobs that move the binding check', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -1276,7 +1279,7 @@ test('design sheet: the sensitivity readout ranks the knobs that move the bindin
   const sens = sp.locator('.ssens');
   await expect(sens).toBeVisible();
   // The default example fails `headroom` at gm/ID = 12 (V* ≈ 167 mV under a 200 mV floor), so
-  // that is the rule the knobs are ranked against — the same one the badge names.
+  // that is the check the knobs are ranked against — the same one the badge names.
   await expect(sens.locator('.scap')).toContainText('headroom');
 
   // One line per design knob, ranked by how far it moves that margin over a common fractional
@@ -1308,11 +1311,11 @@ test('design sheet: an imported gate-wiring declaration survives import and relo
   await page.goto('/');
   await loadDemo(page);
 
-  // `wiring` is an OBJECT on a use whose siblings are strings, so a sanitizer that rebuilds the
-  // use field by field deletes it — and the consistency check goes quiet on the next reload
+  // `wiring` is an OBJECT on a block whose siblings are strings, so a sanitizer that rebuilds the
+  // block field by field deletes it — and the consistency check goes quiet on the next reload
   // without anything on screen saying so. Here the declared gate node (0 V) contradicts the
   // block's own sized V_GS by hundreds of millivolts, so a live check must say so out loud.
-  // The block publishes nothing: the check reads the bind, so no `provide` list is involved.
+  // The block publishes nothing: the check reads the sizing, so no `provides` are involved.
   const wiredSheet = (wiring: unknown): string =>
     JSON.stringify({
       title: 'Wired gate',

@@ -29,8 +29,8 @@ export function commitEng(
   }
 }
 
-/** A rule's relative margin as a signed percentage. Past MARGIN_PCT_CAP the ratio carries no
- *  information (a rule whose right-hand side is ~0 gets its margin from the clamp), so it reads
+/** A check's relative margin as a signed percentage. Past MARGIN_PCT_CAP the ratio carries no
+ *  information (a check whose right-hand side is ~0 gets its margin from the clamp), so it reads
  *  as "no percentage" rather than as a very large number. */
 export const pct = (v: number): string =>
   Number.isFinite(v) && Math.abs(v) < MARGIN_PCT_CAP

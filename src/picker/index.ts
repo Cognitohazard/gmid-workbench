@@ -91,7 +91,7 @@ export function searchable(path: string): boolean {
  * A name-only match is a silent-wrong-answer machine, and the library already contains the
  * proof: `vn_target` is a noise DENSITY (V/sqrt(Hz)) on the amplifier sheets and an integrated
  * RMS (V) on the sampling switch, so typing "20 nV/sqrt(Hz)" into a name-only picker applies a
- * budget thousands of times tighter than the sheet's own and reports the design as failing its
+ * target thousands of times tighter than the sheet's own and reports the design as failing its
  * noise spec. Matching the pair turns that into a disclosure instead: the field lands in
  * `specIgnored` with the mismatch stated.
  */
@@ -111,7 +111,7 @@ export interface SpecField {
  *
  * `CM_dc` is deliberately absent. It is an operating point the engine solves around, not a
  * requirement a designer states; `CM_lo`/`CM_hi` are the spec. The consequence is worth
- * knowing: when a common-mode rule binds, the search cannot reach the parameter a designer
+ * knowing: when a common-mode check binds, the search cannot reach the parameter a designer
  * would move first, because the knob set is choice params only.
  */
 export const SPEC_FIELDS = [
@@ -120,8 +120,8 @@ export const SPEC_FIELDS = [
   { name: 'Av_target', unit: 'V/V', note: 'required small-signal gain' },
   { name: 'GBW_target', unit: 'Hz', note: 'required gain-bandwidth product' },
   { name: 'SR_target', unit: 'V/s', note: 'required slew rate' },
-  { name: 'vn_target', unit: 'V/sqrt(Hz)', note: 'input-referred noise density budget' },
-  { name: 'vos_target', unit: 'V', note: 'input-referred offset budget (Pelgrom sigma)' },
+  { name: 'vn_target', unit: 'V/sqrt(Hz)', note: 'input-referred noise density target' },
+  { name: 'vos_target', unit: 'V', note: 'input-referred offset target (Pelgrom sigma)' },
   { name: 'PM_target', unit: 'deg', note: 'required phase margin' },
   { name: 'CM_lo', unit: 'V', note: 'lowest input common mode that must work' },
   { name: 'CM_hi', unit: 'V', note: 'highest input common mode that must work' },
@@ -151,7 +151,7 @@ export interface SpecMismatch {
  * What happened to one candidate, in three states that must never be conflated:
  *
  * - `closed` — a feasible point was found (at the sheet's defaults, or by the search).
- * - `did-not-close` — there was a failing rule to search against, and no feasible point was
+ * - `did-not-close` — there was a failing check to search against, and no feasible point was
  *   reached inside the budget or the round cap. This is a statement about the SEARCH, never
  *   about the design. It INCLUDES the case where the budget admitted no search round at all —
  *   which is not an edge case: on a real PDK table one evaluation of a solved OTA costs
@@ -159,7 +159,7 @@ export interface SpecMismatch {
  *   to be a common outcome there. `cause` always leads with what stopped the search, and any
  *   margin it quotes is labelled as belonging to the last point reached.
  * - `could-not-be-searched` — the search never got traction: the sheet is infeasible for a
- *   reason that is not a failing rule (a solve that could not bracket, a structural error), so
+ *   reason that is not a failing check (a solve that could not bracket, a structural error), so
  *   there is no margin to descend on. Reporting this as "did not close within N
  *   evaluations" would be the misleading half of an honest-sounding message.
  */
@@ -187,21 +187,21 @@ export interface PickerCandidate {
    *  only knobs the search MOVED: a current the author already shipped at its minimum bounds the
    *  reported number just as hard, and the back-off has nothing left to do there. */
   currentAtRangeFloor: boolean;
-  /** The worst hard-rule margin among the rules that COULD BE EVALUATED at the reported point,
-   *  with the rule that owns it — defined whether or not anything fails, so a closed candidate
+  /** The worst hard-check margin among the checks that COULD BE EVALUATED at the reported point,
+   *  with the check that owns it — defined whether or not anything fails, so a closed candidate
    *  still says how much room it has. */
   worstMargin?: { id: string; marginPct: number };
-  /** The worst FAILING hard rule at the reported point. Undefined on a closed candidate, and
-   *  also on an infeasible one whose failure is not a rule — which is why `cause` exists. */
+  /** The worst FAILING hard check at the reported point. Undefined on a closed candidate, and
+   *  also on an infeasible one whose failure is not a check — which is why `cause` exists. */
   bindingCheck?: { id: string; marginPct: number };
   /** Why this candidate is not closed, in words, always present when it is not. It carries
-   *  every fact that applies, joined by `; `: the binding constraint, any error-severity
+   *  every fact that applies, joined by `; `: the binding check, any error-severity
    *  warning, and — when the search stopped rather than the design failing — what stopped it.
    *  Never left blank next to a red verdict. */
   cause?: string;
   /** Quiescent supply current at the reported point, resolved by name from the evaluation —
-   *  the sheet's `I_q` interface row, or its `I_q` param on the one topology that publishes the
-   *  quantity as a parameter instead. Absent when the sheet does not publish one. */
+   *  the sheet's `I_q` interface equation, or its `I_q` param on the one topology that publishes
+   *  the quantity as a parameter instead. Absent when the sheet does not publish one. */
   I_q?: number;
   /** Spec fields this sheet consumed, by name. */
   specApplied: string[];
@@ -244,7 +244,7 @@ export const PICKER_MS_BUDGET = 1500;
 export const PICKER_EVAL_BUDGET = 200;
 
 /** How many rounds of "pick a knob, scan it, move" the repair stage may take. A cap rather
- *  than a convergence test: coordinate descent on a multi-rule tree can cycle (closing one
+ *  than a convergence test: coordinate descent on a multi-check tree can cycle (closing one
  *  margin opens another), and a bounded search that reports its bound is preferable to one
  *  that decides for itself when it is finished. */
 const PICKER_ROUND_CAP = 8;
@@ -319,11 +319,11 @@ function afford(m: Meter, n: number): boolean {
 // ---------------------------------------------------------------------------------------
 
 /**
- * The search's objective: the WORST hard-rule relative margin anywhere in the tree. Bigger is
+ * The search's objective: the WORST hard-check relative margin anywhere in the tree. Bigger is
  * better; feasible points land at or above zero.
  *
- * Descending on the currently-binding rule alone is what makes a multi-rule search chase its own
- * tail, so the objective is the minimum over every hard rule the evaluation could measure.
+ * Descending on the currently-binding check alone is what makes a multi-check search chase its own
+ * tail, so the objective is the minimum over every hard check the evaluation could measure.
  *
  * It is a FEASIBILITY objective and nothing else. Whether a design, once found, still works at
  * the ends of its claimed operating range is a question about that one design held fixed; it is
@@ -331,7 +331,7 @@ function afford(m: Meter, n: number): boolean {
  * dropped before anything is evaluated (see pickTopology), so no range end can move this number.
  *
  * A point where the evaluation did not complete — a solve that never landed — has NO DESIGN, and
- * its rule margins were read wherever the solve stopped. It is still ordered by its own worst
+ * its check margins were read wherever the solve stopped. It is still ordered by its own worst
  * margin, but inside a BAND of its own, strictly below every score a real design can reach (see
  * `noDesign`). Both halves matter. Without the ordering the search cannot climb out of a region
  * where nothing evaluates; without the band it climbs the wrong way — a margin read off a
@@ -355,15 +355,15 @@ function noDesign(s: number): number {
 }
 
 /**
- * The same objective read off one sample of a sweep. The sweep carries every hard rule in the
+ * The same objective read off one sample of a sweep. The sweep carries every hard check in the
  * tree, so the minimum over those is the same number `scoreResult` computes from a full result
  * — deliberately, since the search compares the two against each other: an incumbent scored
  * from a full result against a move scored from a sweep. "This sample produced no design" is
  * the sweep's own per-sample `stands`, the same predicate `scoreResult` reads.
  *
  * Admissibility is the core's own `measurable`, read off the two fields a sweep row carries: a
- * rule parked on its own boundary by construction reads zero forever and would otherwise be the
- * minimum forever, hiding every rule that can actually move.
+ * check parked on its own boundary by construction reads zero forever and would otherwise be the
+ * minimum forever, hiding every check that can actually move.
  */
 function scoreSample(sw: SheetSweep, i: number): number {
   let worst = Infinity;
@@ -390,7 +390,7 @@ function beats(f: boolean, s: number, bf: boolean, bs: number): boolean {
 
 /**
  * Why this evaluation is not feasible, in words — EVERY reason that applies, not the first one
- * found. A failing rule names itself; so does an error-severity warning; and when neither
+ * found. A failing check names itself; so does an error-severity warning; and when neither
  * applies the last resort states the situation rather than inventing a cause. Never returns a
  * blank — an empty cause beside a red verdict reads as a defect in the tool.
  */
@@ -400,7 +400,7 @@ function causeOf(res: SheetResult): string {
   if (b) parts.push(`${b.id} fails by ${(b.marginPct * 100).toFixed(1)}%`);
   const w = res.warnings.find((x) => x.severity === 'error');
   if (w) parts.push(w.message);
-  return parts.length > 0 ? parts.join('; ') : 'infeasible with no failing rule';
+  return parts.length > 0 ? parts.join('; ') : 'infeasible with no failing check';
 }
 
 // ---------------------------------------------------------------------------------------
@@ -489,7 +489,7 @@ type Knob = SheetVar & { min: number; max: number };
 // ---------------------------------------------------------------------------------------
 
 /**
- * Rank the knobs the readout can score by how strongly each moves the rule that currently
+ * Rank the knobs the readout can score by how strongly each moves the check that currently
  * binds, best first — or return no ranking at all when it has no signal to give.
  *
  * The statistic is the margin change at the readout's own 1%-of-value step, NOT the slope.
@@ -521,7 +521,7 @@ function rankKnobs(
   const sens = sheetSensitivities(doc, table, resolveDevice, {
     refs,
     params: knobs.map((k) => k.name),
-    rule: target,
+    check: target,
   });
   // Charge what was spent, not what was reserved: a knob the readout refused (its step reads
   // NaN) cost no probes, and a readout that refused the whole sheet cost only its base
@@ -531,7 +531,7 @@ function rankKnobs(
   const evals = 1 + 2 * sens.filter((s) => Number.isFinite(s.step)).length;
   const strength = new Map<string, number>();
   for (const s of sens) {
-    const r = s.rules.find((x) => x.id === target);
+    const r = s.checks.find((x) => x.id === target);
     if (!r) continue;
     const up = Number.isFinite(r.deltaPlus) ? r.deltaPlus : -Infinity;
     const down = Number.isFinite(r.deltaMinus) ? r.deltaMinus : -Infinity;
@@ -573,7 +573,7 @@ interface RepairOutcome {
 
 /**
  * Bounded coordinate descent on the worst hard margin: rank the knobs against the binding
- * rule, scan the best one across its whole authored range with the existing sweep, move to the
+ * check, scan the best one across its whole authored range with the existing sweep, move to the
  * best sample, repeat.
  *
  * The scan rather than a step is the load-bearing choice. A derivative says which way to lean;
@@ -714,9 +714,9 @@ function repair(
  * The floor is the largest ratio any knob needs to stay inside its authored range, so no knob
  * is ever clamped and the authored ratios survive the whole bisection exactly.
  *
- * A point where the design becomes infeasible with no failing rule to name — the signature of
- * a pin whose bracket no longer straddles its target — STOPS the back-off with the last
- * feasible point kept. It is not an error: the sheet was feasible where we left it, and a
+ * A point where the design becomes infeasible with no failing check to name — the signature of
+ * a design constraint whose bracket no longer straddles its target — STOPS the back-off with the
+ * last feasible point kept. It is not an error: the sheet was feasible where we left it, and a
  * search that cannot see past a bracket miss should say less, not throw.
  */
 function backOff(
@@ -755,7 +755,7 @@ function backOff(
       hi = mid;
       best = { doc: scaled(mid), res };
     } else {
-      // A failure with no rule to name is a solve that stopped standing, not a design that
+      // A failure with no check to name is a solve that stopped standing, not a design that
       // ran out of current; bisecting further would be bisecting noise.
       if (bindingCheck(res) === undefined) break;
       lo = mid;
@@ -821,13 +821,13 @@ export function pickTopology(
   let res = res0;
   let verdict: PickerVerdict;
   /** Why the search stopped, when that is a fact in its own right — the whole answer for a
-   *  sheet that could not be searched, an addendum to the binding constraint for one that was. */
+   *  sheet that could not be searched, an addendum to the binding check for one that was. */
   let stopNote: string | undefined;
 
   if (res0.feasible) {
     verdict = 'closed';
   } else if (bindingCheck(res0) === undefined) {
-    // Nothing failing to descend on. The interior rules that DO evaluate are all passing here,
+    // Nothing failing to descend on. The interior checks that DO evaluate are all passing here,
     // so a search would improve a number that was never the problem and report progress.
     // No stop note: `causeOf` already carries the whole answer for this one.
     verdict = 'could-not-be-searched';
@@ -919,10 +919,10 @@ export type PickerSortKey = 'margin' | 'current';
 
 /**
  * Whether `worstMargin` speaks for this candidate, or is a comfortable-looking number on a
- * design that cannot close. The field covers the rules that COULD be evaluated at the reported
- * point, so on a sheet made infeasible by something no rule measures — a solve that could not
+ * design that cannot close. The field covers the checks that COULD be evaluated at the reported
+ * point, so on a sheet made infeasible by something no check measures — a solve that could not
  * bracket — it reads as a pass on a point that cannot be built. That class is exactly the one
- * with no binding constraint.
+ * with no binding check.
  *
  * The predicate ships beside the hazard its doc comment describes, rather than being
  * re-derived from two other fields by every surface that shows the number.
@@ -960,7 +960,7 @@ export interface PickerRanking {
  * then ±Infinity, which is a real answer: the sheet with no published value sorts last).
  *
  * The margin key is read through `marginSpeaksFor`, and that is not a detail: a candidate gated
- * by something no rule measures typically has a COMFORTABLE margin (its interior rules all pass),
+ * by something no check measures typically has a COMFORTABLE margin (its interior checks all pass),
  * so a comparator reading the number directly floats exactly the rows whose margin cell prints
  * "—" to the top of the failures, above genuine near misses. Position in a sorted table is a
  * presentation of the key, so a margin no surface may print is a margin the order may not use

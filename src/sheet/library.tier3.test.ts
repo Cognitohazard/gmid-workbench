@@ -2,9 +2,9 @@
 // from the synthetic EKV demo model's closed forms — never by re-running the engine.
 //
 // The identities this tier leans on (see src/demo/index.ts):
-//  - A bound quantity is EXACT: gm = (gm/ID)·id when both are supplied, so slew,
+//  - A given quantity is EXACT: gm = (gm/ID)·id when both are supplied, so slew,
 //    GBW, and gm-ratio goldens hold to 1e-9.
-//  - After binding at a declared vds, gds/id = 1/(VA + vds) EXACTLY (VA = 5e6·L),
+//  - After sizing at a declared vds, gds/id = 1/(VA + vds) EXACTLY (VA = 5e6·L),
 //    so gds = id/(VA + vds) and the intrinsic gain av0 = (gm/ID)·(VA + vds). Analytic
 //    single-stage gains therefore land within interpolation error (< 1e-2).
 //  - Thermal density vnth_m = sqrt(4kTγ/gm) with γ = GAMMA_DEFAULT.
@@ -40,14 +40,14 @@ const block = (r: SheetResult, name: string): SizingReport =>
   r.blocks!.find((c) => c.name === name)!.sizing!;
 
 // Every OTA's cgg_in is the gate of ONE input device, per input terminal. cgg = W*L*Cox is
-// exact in the demo model at the width the bind landed on, so where the input child exposes its
-// sized width the row has a closed form to check; the estimate the sheet notes warn about is the
-// missing Miller term, which no table here carries and no rule reads.
+// exact in the demo model at the width the sizing landed on, so where the input child exposes its
+// sized width the equation has a closed form to check; the estimate the sheet notes warn about is
+// the missing Miller term, which no table here carries and no check reads.
 const cggInOf = (res: SheetResult): number => cggOf(res.values.in__W, L);
 
 /** The cgg_in golden five of these OTAs share verbatim; registered per describe. */
 const itIsOneInputGate = (res: SheetResult): void => {
-  it('input capacitance is one input gate at the width the bind landed on', () => {
+  it('input capacitance is one input gate at the width the sizing landed on', () => {
     expect(relErr(res.values.cgg_in, cggInOf(res))).toBeLessThan(1e-9);
   });
 };
@@ -56,7 +56,7 @@ describe('tier-3 goldens: differential pair + tail', () => {
   const res = runSheet(sheet('differential-pair-tail.json'), table);
   // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 10, input gm/ID 12,
   // L 0.5 µm, V_out 0.9, CM_dc 1.05 (placed so the tail stays honestly saturated on a 1.8 V
-  // process); the tail node is pinned to CM_dc.
+  // process); the tail node is constrained to CM_dc.
   const I_TAIL = 20e-6;
   // Only the reference's current is typed. The tail device is the reference's width on the
   // reference's gate, and in the demo model id ∝ (VA + vds) at fixed vgs and W, so it delivers
@@ -69,7 +69,7 @@ describe('tier-3 goldens: differential pair + tail', () => {
   const tailRatio = (va(L) + vTail) / (va(L) + VGS_GMID10_L05);
   /** What each side of the pair carries: half of what the tail delivers, 9.591 µA. */
   const iHalf = (I_TAIL / 2) * tailRatio;
-  const gmIn = 12 * iHalf; // (gm/ID)·id, both supplied to the bind
+  const gmIn = 12 * iHalf; // (gm/ID)·id, both supplied in the givens
 
   it('the tail node carries one current and the tail mirror is one gate wire', () => {
     // Kirchhoff at the tail node, to the last bit: the pair is HANDED the tail's current,
@@ -96,14 +96,14 @@ describe('tier-3 goldens: differential pair + tail', () => {
     // 20 µA × 0.959137 = 19.183 µA — not the 20 µA the reference is programmed to.
     expect(relErr(res.values.SR, (I_TAIL * tailRatio) / CL)).toBeLessThan(1e-3);
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-3);
-    // Which current each row reads, exactly: the tail's own, and the pair's half of it.
+    // Which current each equation reads, exactly: the tail's own, and the pair's half of it.
     expect(relErr(res.values.SR, res.values.tail__id / CL)).toBeLessThan(1e-12);
     expect(relErr(res.values.GBW, (12 * res.values.in__id) / (TWO_PI * CL))).toBeLessThan(1e-9);
     // The reference branch is shared bias and is not counted.
     expect(res.values.I_q).toBe(res.values.tail__id);
   });
 
-  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+  it('the design constraint lands the common mode on CM_dc, with the tail node as the variable', () => {
     expect(res.values.CM_in).toBeCloseTo(1.05, 5);
   });
 
@@ -139,8 +139,8 @@ describe('tier-3 goldens: degenerated differential pair', () => {
   // is actually met: V* + I·R_s = 0.143 + 0.12), L 0.5 µm.
   const gmIn = 10e-6 * 14;
   // Both source-referred generators drive current through R_s, so the degeneration factor
-  // carries gmb alongside gm. gmb rides the interpolated gm curve rather than the bound
-  // gm/ID, so rows built on it hold to interpolation order rather than to 1e-9.
+  // carries gmb alongside gm. gmb rides the interpolated gm curve rather than the given
+  // gm/ID, so equations built on it hold to interpolation order rather than to 1e-9.
   const nDeg = 1 + (gmIn + gmbOf(gmIn)) * 12000;
 
   it('the degeneration factor divides gm and GBW by both source generators', () => {
@@ -155,10 +155,10 @@ describe('tier-3 goldens: degenerated differential pair', () => {
   });
 
   it('degeneration lowers the transconductance but not the output node it drives', () => {
-    // Rout is the input device gds against the estimated load conductance — the row deliberately
-    // does NOT claim the degeneration boost the source resistor also gives the device r_o, which
-    // is the same conservatism the gain note already records. The pair's source node V_s is
-    // pinned to CM_dc, so read it from the result and let the model check own the rest.
+    // Rout is the input device gds against the estimated load conductance — the equation
+    // deliberately does NOT claim the degeneration boost the source resistor also gives the device
+    // r_o, which is the same conservatism the gain note already records. The pair's source node V_s
+    // is constrained to CM_dc, so read it from the result and let the model check own the rest.
     const rout = 1 / (gdsOf(10e-6, L, 0.9 - res.values.V_s) + 3e-6);
     expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-2);
     expect(relErr(res.values.Av, res.values.Gm_eff * res.values.Rout)).toBeLessThan(1e-12);
@@ -169,10 +169,10 @@ describe('tier-3 goldens: degenerated differential pair', () => {
 describe('tier-3 goldens: telescopic cascode OTA', () => {
   const res = runSheet(sheet('telescopic-cascode-ota.json'), table);
   // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8, all L 0.5 µm; the stack is
-  // parameterized by its NODES — V_a 0.55, V_b 1.35, V_out 0.9, the tail node pinned so
+  // parameterized by its NODES — V_a 0.55, V_b 1.35, V_out 0.9, the tail node constrained so
   // CM_in lands on CM_dc 0.97 — and every device vds is a subtraction between them.
   // (0.97, not a rounder number: the DC point must sit inside the claimed [0.95, 1.12]
-  // AND below the demo table's pin ceiling near 0.98 — the telescopic's ICMR is a slot.)
+  // AND below the demo table's constraint ceiling near 0.98 — the telescopic's ICMR is a slot.)
   const gmIn = 10e-6 * 14;
 
   it('slew and GBW follow exactly from the tail current and input gm', () => {
@@ -180,7 +180,7 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
   });
 
-  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+  it('the design constraint lands the common mode on CM_dc, with the tail node as the variable', () => {
     expect(res.values.CM_in).toBeCloseTo(0.97, 5);
   });
 
@@ -199,7 +199,7 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
 describe('tier-3 goldens: folded cascode OTA', () => {
   const res = runSheet(sheet('folded-cascode-ota.json'), table);
   // Defaults: I_tail 20 µA, I_branch 30 µA, gm/ID in 14 / casc 10 / cs 8, all L 0.5 µm;
-  // node-parameterized — V_fold 1.4, V_c 0.3, V_out 0.9, the tail node pinned so CM_in
+  // node-parameterized — V_fold 1.4, V_c 0.3, V_out 0.9, the tail node constrained so CM_in
   // lands on CM_dc 1.05 — and every device vds is a subtraction between adjacent nodes.
   const gmIn = 10e-6 * 14;
   const iFold = 30e-6 - 10e-6; // I_branch − I_tail/2, read from the input device
@@ -212,14 +212,14 @@ describe('tier-3 goldens: folded cascode OTA', () => {
   it('the supply carries the two folding branches, and the tail current runs through them', () => {
     // Only the two folding current sources sit on the supply rail, so what VDD delivers is
     // 2 × 30 µA. The tail is not a third branch: it is drawn down THROUGH those sources, so
-    // the row is 2·I_branch. The cross-check is the other end of the circuit — everything
+    // the equation is 2·I_branch. The cross-check is the other end of the circuit — everything
     // reaching ground is the tail plus both fold currents, I_tail + 2·I_fold = 20 + 2 × 20 µA,
     // and KCL requires the two to be the same 60 µA.
     expect(relErr(res.values.I_q, 2 * 30e-6)).toBeLessThan(1e-9);
     expect(relErr(res.values.I_q, 20e-6 + 2 * iFold)).toBeLessThan(1e-9);
   });
 
-  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+  it('the design constraint lands the common mode on CM_dc, with the tail node as the variable', () => {
     expect(res.values.CM_in).toBeCloseTo(1.05, 5);
   });
 
@@ -245,7 +245,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
         e.name,
       ).toEqual(res.blocks?.map((c) => c.sizing?.L));
     }
-    // cm-lo's pin LANDS, so its operating point is a design point and can be locked as intent.
+    // cm-lo's solve LANDS, so its operating point is a design point and can be locked as intent.
     // Pulling the input common mode 50 mV down to 1.0 V is paid almost entirely by the tail node
     // (0.5179 → 0.4689 V), because the input pair is held at the width the base run sized: its
     // drain stays at the fold node, so the 49 mV the tail gives up lands on its own vds, and the
@@ -260,13 +260,13 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     expect(margin('gain-spec')).toBeCloseTo(-0.185759, 6);
     expect(margin('offset-spec')).toBeCloseTo(-0.4126382, 6);
     expect(lo?.state).toBe('does-not-comply'); // measured, and two specs fail there
-    // cm-hi is the case where the pin never LANDS (cm-lo landed and merely fails its rules), and
+    // cm-hi is the case where the solve never LANDS (cm-lo landed and merely fails its checks), and
     // the only honest assertions about it are the three the engine actually vouches for. Its
-    // tail-node pin finds no sign change anywhere in the bracket, so nothing was measured at that
-    // end: it is no answer, not a failure. Whatever the bisection was holding when it gave up is
-    // the last PROBE, not a landing — locking those numbers would be asserting an operating point
-    // the run never reached, and `solved` is left empty precisely so no consumer can go looking
-    // for one.
+    // tail-node constraint finds no sign change anywhere in the bracket, so nothing was measured at
+    // that end: it is no answer, not a failure. Whatever the bisection was holding when it gave up
+    // is the last PROBE, not a landing — locking those numbers would be asserting an operating
+    // point the run never reached, and `solved` is left empty precisely so no consumer can go
+    // looking for one.
     const hi = res.rangeEnds?.find((e) => e.name === 'cm-hi');
     expect(hi?.state).toBe('no-answer');
     expect(hi?.error).toMatch(/does not change sign/);
@@ -287,7 +287,7 @@ describe('tier-3 goldens: current-mirror OTA', () => {
   });
 
   it('K_m is paid for out of the supply: the input branch plus two K_m-scaled output branches', () => {
-    // The mirror ratio buys GBW and slew above at a current price the gain row never shows:
+    // The mirror ratio buys GBW and slew above at a current price the gain equation never shows:
     // I_tail + 2·(K_m·I_tail/2) = I_tail·(1 + K_m) = 60 µA at the shipped K_m of 2.
     expect(relErr(res.values.I_q, 20e-6 * 3)).toBeLessThan(1e-9);
   });
@@ -361,7 +361,7 @@ describe('tier-3 goldens: symmetrical OTA', () => {
 describe('tier-3 goldens: gain-boosted cascode OTA', () => {
   const res = runSheet(sheet('gain-boosted-cascode-ota.json'), table);
   // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8 / boost 12, all L 0.5 µm; the
-  // stack is node-parameterized — V_a 0.55, V_b 1.3, V_out 0.9, the tail node pinned so
+  // stack is node-parameterized — V_a 0.55, V_b 1.3, V_out 0.9, the tail node constrained so
   // CM_in lands on CM_dc 0.95 — and every device vds is a subtraction between nodes.
   const gmIn = 10e-6 * 14;
 
@@ -371,11 +371,11 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
 
   it('the boosters cost supply current the main branch never sees: one per cascode polarity', () => {
     // 20 µA main branch + 2 × 5 µA of booster tail. The factor of two is the topology claim —
-    // the rows model an amplifier on the NMOS cascode and another on the PMOS cascode.
+    // the equations model an amplifier on the NMOS cascode and another on the PMOS cascode.
     expect(relErr(res.values.I_q, 20e-6 + 2 * 5e-6)).toBeLessThan(1e-9);
   });
 
-  it('the pin lands the common mode on CM_dc, with the tail node as the variable', () => {
+  it('the design constraint lands the common mode on CM_dc, with the tail node as the variable', () => {
     expect(res.values.CM_in).toBeCloseTo(0.95, 5);
   });
 

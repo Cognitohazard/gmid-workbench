@@ -12,10 +12,11 @@ export const PHYS = {
 export const UT: number = (PHYS.k * PHYS.T) / PHYS.q;
 
 /**
- * Default channel thermal-noise factor γ (Sid = 4kTγ·gm). 1.0 matches measured
- * sub-micron devices (sky130 ≈ 1.0); the long-channel 2/3 understates them — the
- * full argument lives in docs/sheet-format.md ("Body effect and noise-model
- * defaults"). Only a default: a table's own per-point `gamma` column shadows it.
+ * Default channel thermal-noise factor γ (Sid = 4kTγ·gm). In simulation 1.0 matches
+ * sky130's PMOS in strong inversion and understates its NMOS (about 1.95 at gm/ID 12);
+ * the long-channel 2/3 understates both — the full argument lives in
+ * docs/sheet-format.md ("Body effect and noise-model defaults"). Only a default: a
+ * table's own per-point `gamma` column shadows it.
  */
 export const GAMMA_DEFAULT = 1.0;
 

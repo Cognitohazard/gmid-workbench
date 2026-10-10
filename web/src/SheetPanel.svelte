@@ -1,6 +1,6 @@
 <script lang="ts">
   // A leaf design-sheet panel: pick a vetted example, tune the design variables, and
-  // watch the author equations and pass/fail constraints recompute with signed margins.
+  // watch the author equations and pass/fail checks recompute with signed margins.
   // It holds no numerics — runSheet (core) does all evaluation and never throws.
   import {
     cloneDoc,
@@ -18,7 +18,7 @@
     sweepSheet2,
     sweepable as isSweepable,
     torn,
-    constrained as isPinned,
+    constrained as isConstrained,
     engineSolved,
     bindingCheck,
     limitingCheck,
@@ -161,7 +161,7 @@
 
   // Onboarding guard: a child bound to a signed-PMOS table while its companion
   // `<child>_sign` param still reads +1 is the most common dead-on-arrival state for
-  // the mirror-load sheets — every dependent row goes n/a at once. Name the root
+  // the mirror-load sheets — every dependent equation goes n/a at once. Name the root
   // cause as a hint; never auto-flip (sign params are author math, not app state).
   const signHints = $derived.by(() => {
     const out: string[] = [];
@@ -196,7 +196,7 @@
   // (corner, temperature) key and projects the primary and every named child to it, because a
   // verdict assembled from a tt input pair and an ss tail describes a chip that does not exist.
   const primary = $derived(bench.primary);
-  /** Every condition the primary family holds, in load order. */
+  /** Every condition the primary device holds, in load order. */
   const conditions = $derived<readonly ConditionKey[]>(primary?.keys ?? []);
   const activeKey = $derived(conditionKeyOf(device.id));
   const nominalKey = $derived(primary?.nominal ? conditionKeyOf(primary.nominal.id) : undefined);
@@ -211,14 +211,14 @@
     return nominalKey ? [nominalKey] : [];
   });
   /** Why nothing can be evaluated, when nothing can be. `nominal` is the one that must never
-   *  fall back to the active table: "the family's nominal" is a designation, and quietly
+   *  fall back to the active table: "the device's nominal" is a designation, and quietly
    *  substituting whatever is selected would report a verdict about a condition nobody chose. */
   const blocked = $derived.by((): 'no-device' | 'undesignated' | 'none-chosen' | null => {
     if (keys.length) return null;
     if (!primary) return 'no-device';
     return cornerMode === 'chosen' ? 'none-chosen' : 'undesignated';
   });
-  // ONE run per condition, through the core's single transition: it preflights the families,
+  // ONE run per condition, through the core's single transition: it preflights the devices,
   // refuses before the engine ever sees a missing or ambiguous table, and only calls a run
   // evaluated when it stands. The sheet is resolved and validated once for the set.
   //
@@ -258,7 +258,7 @@
   /** The reference run's numbers. Absent when a condition was refused before the engine ran —
    *  and then NOTHING fabricates one: the panel shows what it could not evaluate instead. */
   const result = $derived<SheetResult | undefined>(refRun?.result);
-  /** The primary table the detail was computed on: the family's member at the reference
+  /** The primary table the detail was computed on: the device's table at the reference
    *  condition, which is the active table only when the panel is asking about that condition. */
   const refTable = $derived(refKey && primary ? tableAt(primary, refKey) : undefined);
   /** The projection at the reference condition — the resolver the detail body, the sweeps and
@@ -353,7 +353,7 @@
     return `${POINT_MARK[worst]} range ${ok}/${ends.length}`;
   };
   const runClass = (r: ConditionRun): string => POINT_CLASS[r.points[0].state];
-  /** The one-line reason: what stopped a refused condition, else why its centre has no rule to
+  /** The one-line reason: what stopped a refused condition, else why its centre has no check to
    *  read, else what binds (or is closest to binding) there, else the first range end that is
    *  not complying. */
   const runDetail = (r: ConditionRun): string => {
@@ -368,7 +368,7 @@
       .join(' · ');
   };
 
-  // The conditions the "chosen" mode offers: everything the family holds, plus any stored
+  // The conditions the "chosen" mode offers: everything the device holds, plus any stored
   // choice that is no longer loaded — kept visible and still selectable, because a chosen
   // condition that vanished is an answer the panel owes ("not evaluated"), not a tidy-up.
   const chosenOptions = $derived.by(() => {
@@ -398,9 +398,9 @@
   // searching each sheet's choice space against the entered spec, which is a different
   // feature (see the topology picker in the roadmap), not a decoration on a dropdown.
 
-  // "infeasible" alone names no cause, and the offending rule is often a child's — not in the
+  // "infeasible" alone names no cause, and the offending check is often a child's — not in the
   // table below at all. Core owns the definition, so the badge and the 2-D map's per-cell cause
-  // can never disagree about which rule binds.
+  // can never disagree about which check binds.
   const binding = $derived(result ? bindingCheck(result) : undefined);
 
   // ── Sensitivity readout: the missing half of a margin. A margin says how much room is left;
@@ -429,14 +429,14 @@
     if (snap && snap !== shot) snap = null;
   });
 
-  // The rule the readout points at: the one that broke the design when something did; else, on
-  // a feasible design that fails a range end, the rule failing there; else the one closest to
+  // The check the readout points at: the one that broke the design when something did; else, on
+  // a feasible design that fails a range end, the check failing there; else the one closest to
   // breaking. All are core definitions over the whole composition, so the knobs are ranked
-  // against the same rule the badge or the chip names. Taken WITH the snapshot, not derived
-  // reactively: the tree walk behind the limiting constraint would otherwise run on every slider
+  // against the same check the badge or the chip names. Taken WITH the snapshot, not derived
+  // reactively: the tree walk behind the limiting check would otherwise run on every slider
   // frame to answer a question only this readout asks, and any design change that could move the
   // answer retires the snapshot anyway.
-  const focusRule = $derived(shot?.focus);
+  const focusCheck = $derived(shot?.focus);
   // One condition at a time: a ranking is a statement about the point it was taken at, and
   // there is no such point while several conditions are on screen.
   const sensReady = $derived(!multi && evaluated && result !== undefined && refTable !== undefined);
@@ -451,24 +451,24 @@
       doc: cfg,
       dev: refTable,
       focus,
-      // Naming the rule keeps the probes off the range-end runs unless the rule in question
+      // Naming the check keeps the probes off the range-end runs unless the check in question
       // lives on one — the difference between 2 and 2*(1 + range ends) evaluations per knob.
       rows: sheetSensitivities(cfg, refTable, resolveDevice, {
         refs,
-        ...(focus ? { rule: focus.id } : {}),
+        ...(focus ? { check: focus.id } : {}),
       }),
     };
   }
 
-  // Knobs ranked for that rule. The ranking quantity is the margin change over ONE STEP of each
+  // Knobs ranked for that check. The ranking quantity is the margin change over ONE STEP of each
   // knob — a common fractional move — not the per-unit slope: the params are in different SI
   // units (a length against a gm/ID against a current), and a per-unit derivative would rank them
   // by how small their units are. Both directions are shown rather than one slope, because an
-  // equality rule's margin has a cusp at agreement where the two sides genuinely differ.
+  // equality check's margin has a cusp at agreement where the two sides genuinely differ.
   const KNOBS_SHOWN = 3;
   const sensLines = $derived.by(() => {
     const rows = sens;
-    const id = focusRule?.id;
+    const id = focusCheck?.id;
     if (!rows || id === undefined) return null;
     const knobs: { param: string; plus: number; minus: number; mag: number; step: number }[] = [];
     // A knob that could not be probed reports WHY (an unbounded zero, a range too narrow, an
@@ -476,7 +476,7 @@
     const blocked: { param: string; why: string }[] = [];
     const reach = (v: number): number => (Number.isFinite(v) ? Math.abs(v) : 0);
     for (const s of rows) {
-      const r = s.rules.find((x) => x.id === id);
+      const r = s.checks.find((x) => x.id === id);
       if (r && (Number.isFinite(r.deltaPlus) || Number.isFinite(r.deltaMinus)))
         knobs.push({
           param: s.param,
@@ -495,7 +495,7 @@
     return { knobs: knobs.slice(0, KNOBS_SHOWN), blocked: blocked.slice(0, KNOBS_SHOWN) };
   });
 
-  // ── Feasibility sweep: vary one slider parameter across its range and chart every rule's
+  // ── Feasibility sweep: vary one slider parameter across its range and chart every check's
   // relative margin. Only finitely-bounded params can be swept (the sweep walks [min,max]).
   const sweepable = $derived(cfg.params.filter((p) => isSweepable(p)));
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
@@ -550,7 +550,7 @@
       ? sweepSheet2(rr.doc, active, active2, refTable, SWEEP2_POINTS, resolveDevice)
       : null,
   );
-  // The distinct hard-rule ids (tree-path) that bound the infeasible region — the caption's "what
+  // The distinct hard-check ids (tree-path) that bound the infeasible region — the caption's "what
   // limits it", so the plane is never a wall of red with no named cause.
   const bindingIds = $derived.by(() => {
     const s = swept2;
@@ -561,21 +561,21 @@
     return [...ids];
   });
 
-  // One line per rule, margin as a percentage; guardrails dashed (advisory, never gate). The
-  // y = 0 gridline is the constraint boundary; PALETTE cycles the colours by default.
+  // One line per check, margin as a percentage; advisory checks dashed (never gate). The
+  // y = 0 gridline is where a check sits exactly on its limit; PALETTE cycles the colours by default.
   //
-  // The y window is FIXED at ±MARGIN_CLIP%. Rules like slew rate scale linearly with the swept
-  // current and run to several thousand percent, which auto-scales every rule near its boundary
+  // The y window is FIXED at ±MARGIN_CLIP%. Checks like slew rate scale linearly with the swept
+  // current and run to several thousand percent, which auto-scales every check near its boundary
   // into one flat band at y = 0 — hiding the only thing the chart is for. No zero crossing can
   // fall outside the window, so every feasibility edge survives; the data stays true (the chart
-  // clips the view, the numbers are not clamped) and the rules table carries exact values.
+  // clips the view, the numbers are not clamped) and the checks table carries exact values.
   const MARGIN_CLIP = 100;
-  /** The least room left among a sample's HARD rules — the same reading the badge's binding
-   *  constraint gives a point, and the one the core already takes for a range end's aggregate
-   *  curve. `measurable` is core's own predicate for a rule outcome that carries headroom
+  /** The least room left among a sample's HARD checks — the same reading the badge's binding
+   *  check gives a point, and the one the core already takes for a range end's aggregate
+   *  curve. `measurable` is core's own predicate for a check outcome that carries headroom
    *  (hardness included, so a future advisory kind cannot slip in here), and the clamp is the
    *  one every margin comparison applies. A range-end curve is compliance, not feasibility, so
-   *  it stays out. `null` where no hard rule produced a number. */
+   *  it stays out. `null` where no hard check produced a number. */
   function worstHardMargin(s: SheetSweep, i: number): number | null {
     let worst: number | null = null;
     for (const r of s.checks) {
@@ -587,9 +587,9 @@
     return worst;
   }
   const chartData = $derived.by((): ChartData | null => {
-    // Several conditions: one curve each, of the worst hard-rule margin, so the chart answers
+    // Several conditions: one curve each, of the worst hard-check margin, so the chart answers
     // "where is this design type feasible, and which condition takes it out first" instead of
-    // stacking one rule set per condition into an unreadable wall.
+    // stacking one check set per condition into an unreadable wall.
     if (multi) {
       const set = sweptByKey.filter((e) => e.sweep.x.length > 0);
       if (!set.length) return null;
@@ -609,7 +609,7 @@
     return {
       x: swept.x,
       lines: swept.checks.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
-      lineLabels: swept.checks.map(ruleLabel),
+      lineLabels: swept.checks.map(checkLabel),
       lineDash: swept.checks.map((r) => (r.kind === 'advisory' ? [4, 3] : null)),
       yRange: [-MARGIN_CLIP, MARGIN_CLIP],
     };
@@ -654,7 +654,7 @@
     const src = menu[gi]?.sheets[si];
     if (src) onChange(cloneDoc(src));
   }
-  /** A binding the menu does not offer. A document written before children named families
+  /** A binding the menu does not offer. A document written before children named devices
    *  stores a raw table uid; it still resolves, and is shown as the device it names rather than
    *  as something missing. A binding nothing answers to is the one that reads "not loaded". */
   const bindingOption = (binding: string): string => {
@@ -662,61 +662,61 @@
     return f ? `${deviceLabel(f)} · stored by table` : `${describeBinding(binding)} (not loaded)`;
   };
 
-  // Point a composed child at a specific loaded device (a family binding), or '' to inherit the
+  // Point a composed child at a specific loaded device (a device binding), or '' to inherit the
   // parent.
-  function setUseDevice(i: number, uid: string): void {
-    const uses = (cfg.blocks ?? []).map((u, j) => {
+  function setBlockDevice(i: number, uid: string): void {
+    const blocks = (cfg.blocks ?? []).map((u, j) => {
       if (j !== i) return u;
       const { device: _drop, ...rest } = u;
       return uid ? { ...rest, device: uid } : rest;
     });
-    onChange({ ...cfg, blocks: uses });
+    onChange({ ...cfg, blocks });
   }
 
-  // ── Per-block operating point. A sheet sizes one device per bind at its OWN vds/vsb; a
+  // ── Per-block operating point. A sheet sizes each device at its OWN vds/vsb; a
   // shared dashboard slider can't speak for a stack whose devices sit at different drains.
-  // So each block owns its bias here: vds must be pinned (no default), vsb defaults to 0.
+  // So each block owns its bias here: vds must be stated (no default), vsb defaults to 0.
   // A block's live bias axes come from its OWN sized report — the axes it sliced (bias) plus any
-  // it must still pin (needs). Reading them off the report, not the panel device, keeps the control
-  // correct when a composed child sizes against a different loaded table than its parent. BIAS_AXES
-  // (the core's namespace-derived canonical list) fixes the display order.
+  // it must still state (needs). Reading them off the report, not the panel device, keeps the
+  // control correct when a composed child sizes against a different loaded table than its parent.
+  // BIAS_AXES (the core's namespace-derived canonical list) fixes the display order.
   const biasAxesFor = (r: SizingReport | undefined): string[] =>
     BIAS_AXES.filter((a) => (r?.bias != null && a in r.bias) || (r?.needs?.includes(a) ?? false));
   // The authored declaration string for a bias axis (SheetGivens's vds/vsb are optional strings).
-  const biasField = (bind: SheetGivens | undefined, axis: string): string | undefined =>
-    (bind as unknown as Record<string, string | undefined> | undefined)?.[axis];
+  const biasField = (givens: SheetGivens | undefined, axis: string): string | undefined =>
+    (givens as unknown as Record<string, string | undefined> | undefined)?.[axis];
   // Editable here only when absent or a plain number: an expression (a param reference) stays
   // param-controlled, so writing a literal would silently sever the knob. Those show read-only.
   const isLiteral = (s: string | undefined): boolean => s === undefined || Number.isFinite(+s);
-  // Write (or clear, on empty) a bias literal into the bind at `path` — []=top sheet, [i]=child i,
-  // [i,j]=grandchild — and emit a fresh doc down the same immutable onChange path as setParam.
+  // Write (or clear, on empty) a bias literal into the givens at `path` — []=top sheet, [i]=child
+  // i, [i,j]=grandchild — and emit a fresh doc down the same immutable onChange path as setParam.
   function setBias(path: number[], axis: string, value: number | null): void {
     const edit = (doc: SheetDoc, depth: number): SheetDoc => {
       if (depth === path.length) {
         if (!doc.givens) return doc;
-        const bind = { ...doc.givens } as SheetGivens & Record<string, string | undefined>;
-        if (value == null || !Number.isFinite(value)) delete bind[axis];
-        else bind[axis] = String(value);
-        return { ...doc, givens: bind };
+        const givens = { ...doc.givens } as SheetGivens & Record<string, string | undefined>;
+        if (value == null || !Number.isFinite(value)) delete givens[axis];
+        else givens[axis] = String(value);
+        return { ...doc, givens };
       }
       const i = path[depth];
-      // A docless (by-reference) use has nothing local to write into — the control is
+      // A docless (by-reference) block has nothing local to write into — the control is
       // not rendered for those, so this is just the fail-safe.
-      const uses = (doc.blocks ?? []).map((u, j) =>
+      const blocks = (doc.blocks ?? []).map((u, j) =>
         j === i && u.doc ? { ...u, doc: edit(u.doc, depth + 1) } : u,
       );
-      return { ...doc, blocks: uses };
+      return { ...doc, blocks };
     };
     onChange(edit(cfg, 0));
   }
 
-  // Copy-on-write escape hatch: swap the by-reference use at `path` for an embedded
+  // Copy-on-write escape hatch: swap the by-reference block at `path` for an embedded
   // copy of the library sheet's AUTHORED doc — not the resolved subtree, so the
   // detached block's own nested refs stay live and a nested pinned snapshot stays
   // pinned, by construction. Local and editable from then on. cloneDoc: the index
   // holds library objects that must never alias into the panel's cfg.
   function detachRef(path: number[]): void {
-    const ref = cfgUseAt(path)?.ref;
+    const ref = cfgBlockAt(path)?.ref;
     const hit = ref !== undefined ? refs.get(ref) : undefined;
     if (!hit || !('doc' in hit)) return; // unresolved — the button is not rendered here
     const inline = cloneDoc(hit.doc);
@@ -734,15 +734,15 @@
     onChange(edit(cfg, 0));
   }
 
-  // Any by-reference use anywhere in the authored tree? Gates the flatten button.
+  // Any by-reference block anywhere in the authored tree? Gates the flatten button.
   const docHasRefs = (d: SheetDoc): boolean =>
     (d.blocks ?? []).some((u) => u.ref !== undefined || (u.doc ? docHasRefs(u.doc) : false));
   const hasRefs = $derived(docHasRefs(cfg));
 
-  // The AUTHORED use at `path` (childCard renders the resolved tree, which cannot tell
+  // The AUTHORED block at `path` (childCard renders the resolved tree, which cannot tell
   // a live materialized ref from a hand-authored pinned ref+doc snapshot — only the raw
   // cfg can). Undefined once the path crosses into a referenced sheet's interior.
-  function cfgUseAt(path: number[]): SheetBlock | undefined {
+  function cfgBlockAt(path: number[]): SheetBlock | undefined {
     let u: SheetBlock | undefined;
     let d: SheetDoc | undefined = cfg;
     for (const i of path) {
@@ -761,7 +761,7 @@
   // source), or flattened through the library index (every ref inlined — the frozen,
   // self-contained deliverable).
   // One-click handoff of the EVALUATED numbers (name/value lines, engineering
-  // notation): every computed row plus each child's, already child__-prefixed —
+  // notation): every computed value plus each child's, already child__-prefixed —
   // the recipe exports as JSON, the answers copy as text.
   let copied = $state(false);
   function copyResults(): void {
@@ -786,11 +786,11 @@
     download(`${name}.json`, href, true);
   }
 
-  /** The words the rule table and its help use for the three check kinds. */
+  /** The words the check table and its help use for the three check kinds. */
   const KIND_LABEL: Record<SheetCheck['kind'], string> = {
-    physical: 'invariant',
-    spec: 'requirement',
-    advisory: 'guardrail · advisory',
+    physical: 'physical',
+    spec: 'spec',
+    advisory: 'advisory',
   };
   const fmt = (v: number | undefined): string =>
     v == null || !Number.isFinite(v) ? '—' : formatSI(v);
@@ -799,77 +799,78 @@
   const signedFmt = (v: number): string =>
     Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${formatSI(v)}` : '—';
 
-  const edgeSolved = (e: RangeEndReport): string =>
+  const rangeEndSolved = (e: RangeEndReport): string =>
     Object.entries(e.solved)
       .map(([k, v]) => `${k} ${fmt(v)}`)
       .join(' · ');
   /** The one-line detail beside a range-end chip, one wording per outcome. An end the held
    *  design complies at shows where its bias landed; one it does not shows why — its worst
-   *  failing hard rule (the same definition the badge uses, asked of that end's own run), or the
+   *  failing hard check (the same definition the badge uses, asked of that end's own run), or the
    *  reason a held device cannot work there. An end with NO ANSWER says what stopped the
    *  question, and one that was NOT RUN says what is missing: neither is a verdict about the
    *  range, and neither may borrow one's words. */
-  const edgeDetail = (e: RangeEndReport): string => {
+  const rangeEndDetail = (e: RangeEndReport): string => {
     if (e.state === 'not-run') return 'not run — these settings produce no design';
-    if (e.state === 'complies') return edgeSolved(e);
+    if (e.state === 'complies') return rangeEndSolved(e);
     if (e.error) return e.state === 'no-answer' ? `no answer — ${e.error}` : e.error;
     const b = bindingCheck(e);
     return b ? `${b.id} ${pct(b.marginPct)}` : POINT_TEXT[e.state];
   };
-  const edgeNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
+  const rangeEndNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
   /** The run's own non-info diagnostics — a bias clamp fires exactly at a claim's extreme,
    *  and a green chip must not hide that it rests on clamped data. */
-  const edgeWarns = (e: RangeEndReport): QAWarning[] =>
+  const rangeEndWarns = (e: RangeEndReport): QAWarning[] =>
     e.warnings.filter((w) => w.severity !== 'info');
   // The tooltip carries WHICH point was checked (the resolved overrides), the authored note,
   // any run diagnostics, and — whenever the held design does not comply there — the full detail, because
   // the chip clamps long solver messages with an ellipsis. The concept-level help lives on the
   // group label.
-  const edgeTitle = (e: RangeEndReport, detail: string): string => {
+  const rangeEndTitle = (e: RangeEndReport, detail: string): string => {
     const at = Object.entries(e.set)
       .map(([k, v]) => `${k} = ${fmt(v)}`)
       .join(' · ');
-    const warns = edgeWarns(e)
+    const warns = rangeEndWarns(e)
       .map((w) => `⚠ ${w.message}`)
       .join('\n');
-    return [at, edgeNote.get(e.name), warns, e.state === 'complies' ? '' : detail]
+    return [at, rangeEndNote.get(e.name), warns, e.state === 'complies' ? '' : detail]
       .filter(Boolean)
       .join('\n\n');
   };
   /** One label for a range end's aggregate sweep curve, shared by the legend and the chart
    *  series — consumers read the field, never parse the id's trailing separator. The words are
    *  the reading: above zero the held design complies at that range end, below zero it does not. */
-  const ruleLabel = (r: { id: string; rangeEnd?: string }): string =>
+  const checkLabel = (r: { id: string; rangeEnd?: string }): string =>
     r.rangeEnd ? `complies at ${r.rangeEnd}` : r.id;
   const CHIP: Record<CheckStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
-  // Author rule notes by id (a CheckResult carries no note — the physical-meaning note lives on the
-  // authored SheetCheck). Top-level result.checks mirror cfg.checks 1:1, so the id lookup is exact.
-  const ruleNote = $derived(new Map(cfg.checks.map((r) => [r.id, r.note])));
-  const ruleWhy = $derived(new Map(cfg.checks.map((r) => [r.id, r.justification])));
-  // A rule row's tooltip carries the rule-SPECIFIC bits (its authored physical-meaning note and any
-  // eval detail); the generic kind/amber/na explanations live on their own elements via CONTROL_HELP.
-  // A rule's authored prose for the row tooltip. `justification` is the author's stated reason
-  // for a relaxed or unusual constraint — the thing a reviewer most needs — so it is shown,
-  // not just stored. A title attribute is a plain-TEXT sink: math goes through mathPlain.
-  // A CHILD's rule is looked up in `childRules` — the rules of the doc it was authored in.
-  // Rule ids are unique only WITHIN a sheet (ten shipped sheets carry a `feasible-inversion`),
+  // Author check notes by id (a CheckResult carries no note — the physical-meaning note lives on
+  // the authored SheetCheck). Top-level result.checks mirror cfg.checks 1:1, so the id lookup is
+  // exact.
+  const checkNote = $derived(new Map(cfg.checks.map((r) => [r.id, r.note])));
+  const checkWhy = $derived(new Map(cfg.checks.map((r) => [r.id, r.justification])));
+  // A check row's tooltip carries the check-SPECIFIC bits (its authored physical-meaning note and
+  // any eval detail); the generic kind/amber/na explanations live on their own elements via
+  // CONTROL_HELP. A check's authored prose for the row tooltip. `justification` is the author's
+  // stated reason for a relaxed or unusual constraint — the thing a reviewer most needs — so it is
+  // shown, not just stored. A title attribute is a plain-TEXT sink: math goes through mathPlain.
+  // A CHILD's check is looked up in `childChecks` — the checks of the doc it was authored in.
+  // Check ids are unique only WITHIN a sheet (ten shipped sheets carry a `feasible-inversion`),
   // so reading a child chip out of the top-level maps shows the parent's note for an unrelated
-  // constraint. Absent ⇒ this sheet's own rules, which DO mirror result.checks 1:1.
-  function ruleTitle(r: CheckResult, childRules?: readonly SheetCheck[]): string {
-    const own = childRules?.find((a) => a.id === r.id);
+  // constraint. Absent ⇒ this sheet's own checks, which DO mirror result.checks 1:1.
+  function checkTitle(r: CheckResult, childChecks?: readonly SheetCheck[]): string {
+    const own = childChecks?.find((a) => a.id === r.id);
     const parts: string[] = [];
-    const note = childRules ? own?.note : ruleNote.get(r.id);
+    const note = childChecks ? own?.note : checkNote.get(r.id);
     if (note) parts.push(note);
-    const why = childRules ? own?.justification : ruleWhy.get(r.id);
+    const why = childChecks ? own?.justification : checkWhy.get(r.id);
     if (why) parts.push(`why: ${why}`);
     if (r.detail) parts.push(r.detail);
     return mathPlain(parts.join(' — '));
   }
 
-  // The operating point a bind sliced at — declared, or filled from the namespace default —
+  // The operating point a sizing sliced at — declared, or filled from the namespace default —
   // formatted "vds 0.9V, vsb 0V", so the bias behind a sized width is never invisible. A "?"
-  // marks a coordinate the engine assumed rather than the author stating it (see bindAssumed).
+  // marks a coordinate the engine assumed rather than the author stating it (see givensAssumed).
   const biasStr = (b: Record<string, number> | undefined, assumed?: string[]): string =>
     b
       ? Object.entries(b)
@@ -878,26 +879,27 @@
       : '';
   const biasText = $derived(biasStr(result?.sizing?.bias, result?.sizing?.assumed));
   const biasHelp = (assumed: string[] | undefined): string =>
-    CONTROL_HELP.bindBias + (assumed?.length ? `\n\n${CONTROL_HELP.bindAssumed}` : '');
+    CONTROL_HELP.givensBias + (assumed?.length ? `\n\n${CONTROL_HELP.givensAssumed}` : '');
 
-  // An infeasible child's failing HARD rules (advisory guardrails excluded) — so the cause of a
-  // red child block is on screen, not just its ✗.
+  // An infeasible child's failing HARD checks (advisory ones excluded) — so the cause of a
+  // red block is on screen, not just its ✗.
   const childFails = (c: SheetBlockReport | undefined): CheckResult[] =>
     c && !c.feasible ? c.checks.filter((r) => r.kind !== 'advisory' && r.status === 'fail') : [];
 
-  // A pin whose bisection never landed leaves `values[name]` at the last PROBE — a bracket end,
-  // not a solved node — so the field must not present it as the value the design used. The solver
-  // marks that failure as an error warning naming the param (solveFailed in the core's eval).
-  const pinFailed = (p: SheetVar): boolean =>
-    isPinned(p) &&
+  // A design constraint whose bisection never landed leaves `values[name]` at the last PROBE — a
+  // bracket end, not a solved node — so the field must not present it as the value the design used.
+  // The solver marks that failure as an error warning naming the param (solveFailed in the core's
+  // eval).
+  const constraintFailed = (p: SheetVar): boolean =>
+    isConstrained(p) &&
     result !== undefined &&
     !result.feasible &&
-    result.warnings.some((w) => w.message.includes(`pinned param "${p.name}"`));
+    result.warnings.some((w) => w.message.includes(`constrained param "${p.name}"`));
   // The read-only field's tooltip: which mechanism owns the number, or that there is none.
   const solvedHelp = (p: SheetVar): string | undefined => {
     if (torn(p)) return CONTROL_HELP.solvedParam;
-    if (!isPinned(p)) return undefined;
-    return pinFailed(p) ? CONTROL_HELP.pinNotLanded : CONTROL_HELP.pinnedParam;
+    if (!isConstrained(p)) return undefined;
+    return constraintFailed(p) ? CONTROL_HELP.constraintNotMet : CONTROL_HELP.constrainedParam;
   };
 
   // Params group by role when ANY carries one (spec = the requirement, choice = the design knobs);
@@ -988,7 +990,7 @@
     >
     <!-- A tearing variable is solved, not set: show what it converged to (the authored value is
          only a starting guess) and refuse edits, rather than offering a knob the next
-         evaluation discards. A pin that did not land has nothing to show, so it reads "—". -->
+         evaluation discards. A constraint whose solve did not land has nothing to show, so it reads "—". -->
     <input
       class="num"
       class:solved={engineSolved(p)}
@@ -998,7 +1000,7 @@
       readonly={engineSolved(p)}
       tabindex={engineSolved(p) ? -1 : undefined}
       title={solvedHelp(p)}
-      value={pinFailed(p)
+      value={constraintFailed(p)
         ? '—'
         : formatEng(engineSolved(p) ? (result?.values[p.name] ?? p.value) : p.value)}
       onchange={(e) => commitEng(e.currentTarget, p.value, (v) => v != null && setParam(p.name, v))}
@@ -1018,20 +1020,24 @@
 {/snippet}
 
 <!-- Per-block operating point: one editable field per live bias axis, writing into THIS block's
-     bind at `path`. A field the bind must pin (vds, no default) but hasn't reads "needs"; body
+     givens at `path`. A field the givens must state (vds, no default) but haven't reads "needs"; body
      bias (vsb) pre-fills its default 0. A param-driven declaration shows read-only (edit the param). -->
-{#snippet biasCtl(bind: SheetGivens | undefined, report: SizingReport | undefined, path: number[])}
+{#snippet biasCtl(
+  givens: SheetGivens | undefined,
+  report: SizingReport | undefined,
+  path: number[],
+)}
   {@const axes = biasAxesFor(report)}
-  {#if bind && axes.length}
+  {#if givens && axes.length}
     <div class="sbiasctl">
       {#each axes as ax}
-        {@const decl = biasField(bind, ax)}
+        {@const decl = biasField(givens, ax)}
         {@const need = report?.needs?.includes(ax) ?? false}
         {#if isLiteral(decl)}
           <label
             class="bx"
             class:need
-            title={need ? CONTROL_HELP.bindNeeds : CONTROL_HELP.bindBias}
+            title={need ? CONTROL_HELP.givensNeeds : CONTROL_HELP.givensBias}
           >
             <span>{@html qLabel(ax)}</span>
             <input
@@ -1046,7 +1052,7 @@
             /><i>V</i>
           </label>
         {:else}
-          <span class="bx ro" title={CONTROL_HELP.bindBias}
+          <span class="bx ro" title={CONTROL_HELP.givensBias}
             >{@html qLabel(ax)}=<code>{@html qFormula(decl ?? '')}</code></span
           >
         {/if}
@@ -1055,67 +1061,67 @@
   {/if}
 {/snippet}
 
-<!-- One composed block as a self-contained card: its sizing, the operating point it's pinned at,
+<!-- One composed block as a self-contained card: its sizing, the operating point it's sized at,
      the scalars it hands up, its failing constraints, and — recursively — its own children, so the
-     composition tree reads as nested modules. `use` is this card's block from the RESOLVED tree
+     composition tree reads as nested modules. `block` is this card's entry from the RESOLVED tree
      (a by-reference child carries its materialized doc plus the ref as provenance); `path` is its
      index path from the top sheet; `inRef` marks a card living INSIDE a referenced sheet, whose
      internals belong to the library sheet and are read-only here. -->
 {#snippet childCard(
   c: SheetBlockReport | undefined,
-  use: SheetBlock | undefined,
+  block: SheetBlock | undefined,
   path: number[],
   inRef: boolean = false,
 )}
   <!-- An authored ref+doc pair is a PINNED snapshot: the embedded copy wins (core rule),
        so the block is local and editable — only its badge differs. A ref WITHOUT a local
        doc is live: its internals belong to the library sheet and render read-only. -->
-  {@const authored = inRef ? undefined : cfgUseAt(path)}
+  {@const authored = inRef ? undefined : cfgBlockAt(path)}
   {@const pinned = authored?.ref !== undefined && authored?.doc !== undefined}
-  {@const isRef = inRef || (use?.ref !== undefined && !pinned)}
+  {@const isRef = inRef || (block?.ref !== undefined && !pinned)}
   <!-- Three states, not two: a block whose condition was never evaluated has no verdict, and a
        ✗ would report one. It still renders — its device control is how the refusal is fixed. -->
   {@const state = c === undefined ? 'skip' : c.feasible ? 'pass' : 'fail'}
   <div class="suse st-{state}">
     <div class="suseh">
       <span class="chip">{state === 'skip' ? '–' : state === 'pass' ? '✓' : '✗'}</span>
-      <b>{c?.name ?? use?.name}</b><i>{c?.title ?? use?.doc?.title}</i>
-      {#if use?.ref}
+      <b>{c?.name ?? block?.name}</b><i>{c?.title ?? block?.doc?.title}</i>
+      {#if block?.ref}
         {#if pinned}
           <span
             class="refb pinned"
-            title="pinned snapshot of {use.ref} — the embedded copy wins and no longer tracks the library sheet; internals are local and editable"
-            >⤷ {use.ref} · pinned</span
+            title="pinned snapshot of {block.ref} — the embedded copy wins and no longer tracks the library sheet; internals are local and editable"
+            >⤷ {block.ref} · pinned</span
           >
         {:else}
-          <span class="refb" title={CONTROL_HELP.refBlock}>⤷ {use.ref}</span>
+          <span class="refb" title={CONTROL_HELP.refBlock}>⤷ {block.ref}</span>
           <!-- Only a MATERIALIZED ref can detach (an unresolved one has nothing to copy —
                rendering the button would be a dead control). -->
-          {#if !inRef && use.doc}
+          {#if !inRef && block.doc}
             <button class="detach" title={CONTROL_HELP.detachRef} onclick={() => detachRef(path)}
               >detach</button
             >
           {/if}
         {/if}
       {/if}
-      {#if path.length === 1 && use && (bench.options.length > 0 || use.device)}
-        <span class="dsl" title={CONTROL_HELP.useDevice}>device</span>
+      {#if path.length === 1 && block && (bench.options.length > 0 || block.device)}
+        <span class="dsl" title={CONTROL_HELP.blockDevice}>device</span>
         <select
           class="dsel"
-          title={CONTROL_HELP.useDevice}
-          value={use.device ?? ''}
-          onchange={(e) => setUseDevice(path[0], (e.currentTarget as HTMLSelectElement).value)}
+          title={CONTROL_HELP.blockDevice}
+          value={block.device ?? ''}
+          onchange={(e) => setBlockDevice(path[0], (e.currentTarget as HTMLSelectElement).value)}
         >
           <option value="">↳ active device</option>
-          {#if use.device && !bench.options.some((o) => o.binding === use.device)}
-            <option value={use.device}>{bindingOption(use.device)}</option>
+          {#if block.device && !bench.options.some((o) => o.binding === block.device)}
+            <option value={block.device}>{bindingOption(block.device)}</option>
           {/if}
           {#each bench.options as o}<option value={o.binding}>{o.label}</option>{/each}
         </select>
       {/if}
     </div>
-    {#if use?.doc?.description}
-      <p class="snote sudesc">{@html mathText(use.doc.description)}</p>
+    {#if block?.doc?.description}
+      <p class="snote sudesc">{@html mathText(block.doc.description)}</p>
     {/if}
     {#if c?.sizing?.ok}
       <div class="susebind">
@@ -1129,10 +1135,10 @@
     {:else if c?.sizing}
       <div class="perr" title={c.sizing.error}>sizing: {c.sizing.error}</div>
     {/if}
-    <!-- A referenced block's bind belongs to the library sheet — no in-place bias editor
+    <!-- A referenced block's givens belong to the library sheet — no in-place bias editor
          (the applied operating point still shows in the sizing line; params remain the
          customization channel, and detach makes the internals local). -->
-    {#if !isRef}{@render biasCtl(use?.doc?.givens, c?.sizing, path)}{/if}
+    {#if !isRef}{@render biasCtl(block?.doc?.givens, c?.sizing, path)}{/if}
     {#if c && Object.keys(c.provides).length}
       <div class="prov" title={CONTROL_HELP.provide}>
         {#each Object.entries(c.provides) as [k, v]}<code
@@ -1142,8 +1148,9 @@
     {/if}
     {#if childFails(c).length}
       <div class="cfails">
-        {#each childFails(c) as r}<span class="cfail" title={ruleTitle(r, use?.doc?.checks ?? [])}
-            >✗ {r.id} {pct(r.marginPct)}</span
+        {#each childFails(c) as r}<span
+            class="cfail"
+            title={checkTitle(r, block?.doc?.checks ?? [])}>✗ {r.id} {pct(r.marginPct)}</span
           >{/each}
       </div>
     {/if}
@@ -1151,7 +1158,7 @@
       <div class="skids">
         {#each c.blocks as gc, k}{@render childCard(
             gc,
-            use?.doc?.blocks?.[k],
+            block?.doc?.blocks?.[k],
             [...path, k],
             isRef,
           )}{/each}
@@ -1331,7 +1338,7 @@
     </div>
   {:else if blocked === 'no-device'}
     <div class="snotev" data-blocked="device">
-      <p>no device family is loaded for this panel.</p>
+      <p>no device is loaded for this panel.</p>
     </div>
   {/if}
 
@@ -1343,7 +1350,7 @@
          points that were not run or returned no answer. -->
     {#if agg.worst}
       <p class="scap" title={CONTROL_HELP.compliance} data-worst>
-        tightest hard rule over every point measured: {agg.worst.id}
+        tightest hard check over every point measured: {agg.worst.id}
         {pct(agg.worst.marginPct)} at {conditionLabel(agg.worst.key)}{#if agg.worst.rangeEnd}
           · {agg.worst.rangeEnd}{/if}
       </p>
@@ -1391,10 +1398,10 @@
   {#if sensLines}
     <div class="ssens">
       <span class="glabel" title={CONTROL_HELP.sensitivity}>sensitivities</span>
-      {#if focusRule}
+      {#if focusCheck}
         <p class="scap">
-          how <b>{focusRule.id}</b>’s margin moves per {SENSITIVITY_REL_STEP * 100}% step of each
-          knob, in that rule’s own units — ↑ raises the knob, ↓ lowers it
+          how <b>{focusCheck.id}</b>’s margin moves per {SENSITIVITY_REL_STEP * 100}% step of each
+          knob, in that check’s own units — ↑ raises the knob, ↓ lowers it
         </p>
         {#each sensLines.knobs as k}
           <div class="skline" title="step {fmt(k.step)} on {k.param}">
@@ -1410,7 +1417,7 @@
           <div class="skline dead">this sheet has no free design knob to probe</div>
         {/if}
       {:else}
-        <div class="skline dead">no hard rule reports a finite margin to rank knobs against</div>
+        <div class="skline dead">no hard check reports a finite margin to rank knobs against</div>
       {/if}
     </div>
   {/if}
@@ -1464,13 +1471,13 @@
     {@const res = result}
     {#if cfg.equations.length}
       <div class="srows">
-        {#each cfg.equations as row}
+        {#each cfg.equations as eq}
           <div class="srow">
             <span class="seq"
-              ><b>{@html qLabel(row.name)}</b> = {@html qFormula(row.expr)} =
-              <span class="sval">{fmt(res.values[row.name])}{row.unit ?? ''}</span></span
+              ><b>{@html qLabel(eq.name)}</b> = {@html qFormula(eq.expr)} =
+              <span class="sval">{fmt(res.values[eq.name])}{eq.unit ?? ''}</span></span
             >
-            {#if row.note}<span class="snote">{@html mathText(row.note)}</span>{/if}
+            {#if eq.note}<span class="snote">{@html mathText(eq.note)}</span>{/if}
           </div>
         {/each}
       </div>
@@ -1479,20 +1486,20 @@
     <table class="srules">
       <tbody>
         {#each res.checks as r}
-          <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={ruleTitle(r)}>
+          <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={checkTitle(r)}>
             <td
               class="chip"
               title={r.status === 'amber'
                 ? CONTROL_HELP.amber
                 : r.status === 'na'
-                  ? CONTROL_HELP.ruleNa
+                  ? CONTROL_HELP.checkNa
                   : undefined}>{CHIP[r.status]}</td
             >
-            <td class="rid">{r.id}<i title={CONTROL_HELP.ruleKind}>{KIND_LABEL[r.kind]}</i></td>
+            <td class="rid">{r.id}<i title={CONTROL_HELP.checkKind}>{KIND_LABEL[r.kind]}</i></td>
             <td class="rtext">
               <span class="req">{@html qFormula(r.text)}</span>
-              {#if ruleNote.get(r.id)}<span class="snote"
-                  >{@html mathText(ruleNote.get(r.id) ?? '')}</span
+              {#if checkNote.get(r.id)}<span class="snote"
+                  >{@html mathText(checkNote.get(r.id) ?? '')}</span
                 >{/if}
               {#if r.detail}<span class="snote sdetail">{r.detail}</span>{/if}
             </td>
@@ -1505,12 +1512,12 @@
 
     {#if res.rangeEnds?.length}
       <div class="sedges">
-        <span class="glabel" title={CONTROL_HELP.edges}>operating range</span>
+        <span class="glabel" title={CONTROL_HELP.operatingRange}>operating range</span>
         {#each res.rangeEnds as e (e.name)}
-          {@const detail = edgeDetail(e)}
-          <span class="sedge {POINT_CLASS[e.state]}" title={edgeTitle(e, detail)}>
+          {@const detail = rangeEndDetail(e)}
+          <span class="sedge {POINT_CLASS[e.state]}" title={rangeEndTitle(e, detail)}>
             {POINT_MARK[e.state]}
-            {e.name}{#if edgeWarns(e).length}&nbsp;⚠{/if}
+            {e.name}{#if rangeEndWarns(e).length}&nbsp;⚠{/if}
             {#if detail}<i>{detail}</i>{/if}
           </span>
         {/each}
@@ -1520,8 +1527,8 @@
 
   {#if twoD && swept2 && swept2.x.length}
     <div class="scap">
-      feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard rule (X →
-      right, Y ↑)
+      feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check (X
+      → right, Y ↑)
     </div>
     <div class="smap">
       <div class="smy">
@@ -1538,29 +1545,29 @@
       {#if bindingIds.length}
         region bounded by: {bindingIds.join(', ')}
       {:else}
-        no hard rule fails across this plane
+        no hard check fails across this plane
       {/if}
     </p>
   {:else if active && chartData && !twoD}
     <div class="scap">
       {#if multi}
-        worst hard-rule margin (%) vs <b>{active}</b>{#if sweptUnit}
+        worst hard-check margin (%) vs <b>{active}</b>{#if sweptUnit}
           ({sweptUnit}){/if} — one curve per condition that was evaluated, each re-sizing the design at
         that condition as the knob moves: where the design type is feasible there, not the held design.
-        The 0 line is the constraint boundary, clipped at ±{MARGIN_CLIP}%. A condition that could
-        not be evaluated draws no curve and stays in the table above.
+        The 0 line is where a check sits exactly on its limit, clipped at ±{MARGIN_CLIP}%. A
+        condition that could not be evaluated draws no curve and stays in the table above.
       {:else}
         margin (%) vs <b>{active}</b>{#if sweptUnit}
-          ({sweptUnit}){/if} — the 0 line is the constraint boundary; dashed = guardrail (advisory); clipped
-        at ±{MARGIN_CLIP}%{#if (cfg.operatingRange ?? []).length}
+          ({sweptUnit}){/if} — the 0 line is where a check sits exactly on its limit; dashed = advisory;
+        clipped at ±{MARGIN_CLIP}%{#if (cfg.operatingRange ?? []).length}
           · each sample holds its OWN design at the range ends, so the range-end curves move with
           the sweep and never change what is feasible{/if}
       {/if}
     </div>
     <div class="pchart" bind:this={el}></div>
     <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
-         legend the way a data panel does. Index order matches what ChartAdapter strokes. A
-         guardrail is dashed on the chart and tagged here, since an inline-styled swatch cannot
+         legend the way a data panel does. Index order matches what ChartAdapter strokes. An
+         advisory check is dashed on the chart and tagged here, since an inline-styled swatch cannot
          carry the dash. -->
     <div class="skey">
       {#if multi}
@@ -1570,7 +1577,7 @@
       {:else}
         {#each swept?.checks ?? [] as r, i}
           <span class="kitem"
-            ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{ruleLabel(
+            ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{checkLabel(
               r,
             )}{#if r.kind === 'advisory'}&nbsp;·&nbsp;adv{/if}</span
           >
@@ -1600,7 +1607,7 @@
 
   <!-- Resolution failures (missing/ambiguous/cyclic refs) lead — they explain why a
        referenced block below reads infeasible. One dead child makes EVERY dependent
-       row "not defined"; that fan-out is collapsed to a single line per child so the
+       equation "not defined"; that fan-out is collapsed to a single line per child so the
        root cause isn't buried under its own consequences. -->
   {#each warnLines as w}
     <p class="pwarn" title={w.help ? `${w.text}\n\n${w.help}` : w.text}>⚠ {w.text}</p>
@@ -1635,7 +1642,7 @@
     opacity: 0.8;
   }
   /* The two headline badges — feasibility, and compliance beside it — so a red advisory
-     guardrail below them is never mistaken for the whole design failing. */
+     check below them is never mistaken for the whole design failing. */
   /* One pill shell for the badges and the range-end chips; each keeps only its own text
      treatment. */
   .feasb,
@@ -1790,7 +1797,7 @@
   .sstamp {
     opacity: 0.75;
   }
-  /* The binding constraint rides inside the badge: same colour, but normal-case and lighter,
+  /* The binding check rides inside the badge: same colour, but normal-case and lighter,
      so the verdict still reads as the headline and the cause as its subtitle. */
   .feasb i {
     font-style: normal;
@@ -1946,7 +1953,7 @@
     width: 100%;
     min-width: 0;
   }
-  /* Intermediate/output equations: one block per row — the rendered formula and its value,
+  /* Intermediate/output equations: one block per equation — the rendered formula and its value,
      with the author's derivation note beneath so the sheet explains itself in place. */
   .srows {
     display: flex;
@@ -1973,7 +1980,7 @@
   .seq .sval {
     opacity: 0.75;
   }
-  /* Author comment explaining an equation or rule — the "why", not the math. */
+  /* Author comment explaining an equation or check — the "why", not the math. */
   .snote {
     font-size: calc(0.72rem * var(--text-scale));
     opacity: 0.6;
@@ -2014,7 +2021,7 @@
     margin-left: 0.4rem;
     font-size: calc(0.72rem * var(--text-scale));
   }
-  /* composed blocks: each `use` is a self-contained card (sizing, provides, failing rules),
+  /* composed blocks: each block is a self-contained card (sizing, provides, failing checks),
      children nest as indented cards so the composition tree reads as modules within modules. */
   .suses {
     display: flex;
@@ -2104,8 +2111,8 @@
     opacity: 1;
     border-color: currentColor;
   }
-  /* On-demand knob ranking for the binding (or limiting) rule — a short block, deliberately:
-     three knobs and their reasons, not a table of every rule against every param. */
+  /* On-demand knob ranking for the binding (or limiting) check — a short block, deliberately:
+     three knobs and their reasons, not a table of every check against every param. */
   .ssens {
     display: flex;
     flex-direction: column;
@@ -2178,7 +2185,7 @@
   .bx.ro code {
     opacity: 0.75;
   }
-  /* a bias the bind MUST pin but hasn't — the fail-closed remedy, flagged for the eye. */
+  /* a bias the givens MUST state but haven't — the fail-closed remedy, flagged for the eye. */
   .bx.need {
     color: var(--err);
     opacity: 1;
@@ -2203,7 +2210,7 @@
     padding-left: 0.5rem;
     border-left: 1px dashed color-mix(in srgb, currentColor 20%, transparent);
   }
-  /* An infeasible child's failing hard rules — one compact line inside its card. */
+  /* An infeasible child's failing hard checks — one compact line inside its card. */
   .cfails {
     display: flex;
     flex-wrap: wrap;
@@ -2220,7 +2227,7 @@
   .rtext .req {
     opacity: 0.85;
   }
-  /* the note shares the rules cell but must not inherit its baseline nowrap siblings */
+  /* the note shares the checks cell but must not inherit its baseline nowrap siblings */
   .rtext .snote {
     display: block;
   }
@@ -2241,8 +2248,8 @@
   .st-fail .rmar {
     color: var(--err);
   }
-  /* A guardrail is advisory — it never gates feasibility — so even a failing one reads amber
-     (a heads-up), not the hard-fail red an invariant/requirement earns. */
+  /* An advisory check never gates feasibility — so even a failing one reads amber
+     (a heads-up), not the hard-fail red a physical or spec check earns. */
   .srules tr.advisory.st-fail .chip,
   .srules tr.advisory.st-fail .rmar {
     color: var(--warn);

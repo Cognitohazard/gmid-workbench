@@ -131,8 +131,8 @@
     Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== cfg.family)),
   );
 
-  // Sheets receive the UNREDUCED table and own their operating point per block: each bind
-  // declares its vds/vsb (or the panel's per-block bias control writes one), and body bias
+  // Sheets receive the UNREDUCED table and own their operating point per block: each block's givens
+  // declare its vds/vsb (or the panel's per-block bias control writes one), and body bias
   // defaults to 0. The dashboard's shared-bias sliders drive only the device-cockpit charts,
   // never a sheet's sizing — a stack's devices sit at different vds, so one shared value can't
   // speak for all of them. Device resolution for a composed child lives in SheetPanel, which

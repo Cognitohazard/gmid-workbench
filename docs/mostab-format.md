@@ -9,14 +9,14 @@ write an exporter without reading the Workbench source.
 ## Scope: one file, one table
 
 One file describes **one table**: one device, at one process corner, at one
-temperature. Corner and temperature variants are separate files. The viewer
-groups files by `pdk`, device name, and polarity into one **corner family** —
-one logical device selectable by (corner, temp) condition — so those three
-headers are the family identity, and files that should read as one device
+temperature. Each (corner, temperature) condition is a separate file. The viewer
+groups files by `pdk`, device name, and polarity into one **device** —
+one entry selectable by (corner, temp) condition — so those three
+headers are the device's identity, and files that should read as one device
 across corners should agree on them. A file that declares no `pdk` (or no
-`polarity`) joins the sole declared family of the same device name, so
+`polarity`) joins the sole declared device of the same name, so
 re-exporting one corner with newly stamped headers does not split it from the
-others; it stays its own family only when several declared candidates would
+others; it stays a device of its own only when several declared candidates would
 make the join a guess. Two unrelated devices that happen to share a name are
 therefore kept apart by declaring a distinct `pdk` in **both** — declaring it
 in one file alone joins the other to it. A useful naming
@@ -48,9 +48,9 @@ Keys the importer interprets:
 | `device` | Device name (table identity) | string | filename stem, else `dev0` |
 | `corner` | Process corner (table identity) | string | `tt` |
 | `temp` (alias `temperature`) | Simulation temperature | number, °C | 27 |
-| `pdk` | Process/technology namespace (family identity) | string | undeclared |
+| `pdk` | Process/technology namespace (device identity) | string | undeclared |
 | `W` (alias `width`) | Characterization channel width | number, m | — |
-| `polarity` (alias `type`) | Declared channel type; see [Sign conventions](#sign-conventions) | `n`/`nmos`/`nch`/`nfet`/`nmosfet` or `p`/`pmos`/`pch`/`pfet`/`pmosfet` | undeclared |
+| `polarity` (alias `type`) | Declared channel type; see [Sign conventions](#units-and-sign-conventions) | `n`/`nmos`/`nch`/`nfet`/`nmosfet` or `p`/`pmos`/`pch`/`pfet`/`pmosfet` | undeclared |
 | `simulator` | Producing simulator, free-form | string | — |
 | `date` | Export date, free-form | string | — |
 | `AVT` | Pelgrom threshold-mismatch constant | number, V·m | — |

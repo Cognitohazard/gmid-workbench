@@ -1,8 +1,8 @@
-// By-reference sheet composition: a use may carry `ref` (a library id) instead of an
+// By-reference sheet composition: a block may carry `ref` (a library id) instead of an
 // embedded `doc`. Resolution is a pure pre-pass that materializes every ref into its
 // target doc — validation and evaluation then run on the resolved tree and stay
 // ref-unaware except for a fail-closed guard. Fail-closed throughout: a missing,
-// ambiguous, cyclic, or too-deep ref surfaces as an error warning and the use is left
+// ambiguous, cyclic, or too-deep ref surfaces as an error warning and the block is left
 // unresolved, which evaluation refuses to size. Zero DOM; the library map is injected.
 
 import type { QAWarning } from '../types';
@@ -70,7 +70,7 @@ const refError = (where: string, message: string): QAWarning => ({
 
 /**
  * Ceiling on TOTAL materialized refs per resolution. The chain-depth cap alone bounds
- * only one path: a fan-out DAG (each level's every use referencing the next sheet) is
+ * only one path: a fan-out DAG (each level's every block referencing the next sheet) is
  * acyclic yet expands as width^depth, so a handful of tiny hostile imports could pin
  * the tab. Any real composition is tens of blocks; past this, resolution stops and the
  * remaining refs stay unresolved (fail closed), with one error naming the ceiling.
@@ -78,13 +78,13 @@ const refError = (where: string, message: string): QAWarning => ({
 export const MAX_REF_EXPANSION = 256;
 
 /**
- * Materialize every `ref` use in `doc` (recursively — a ref target or an embedded child
+ * Materialize every `ref` block in `doc` (recursively — a ref target or an embedded child
  * may itself carry refs) against the index. Pure and zero-copy where possible: subtrees
  * without refs are shared, not cloned, so callers that persist the result (flatten,
- * detach) must deep-copy before mutating. A resolved use keeps its `ref` alongside the
+ * detach) must deep-copy before mutating. A resolved block keeps its `ref` alongside the
  * materialized `doc` as provenance — the UI renders such a child read-only. Failures
  * (missing id, ambiguous bare name, reference cycle, chain deeper than MAX_BLOCK_DEPTH,
- * total expansion past MAX_REF_EXPANSION) push an error warning and leave the use
+ * total expansion past MAX_REF_EXPANSION) push an error warning and leave the block
  * docless, which evaluateSheet fails closed.
  */
 export function resolveSheetRefs(doc: SheetDoc, refs: SheetRefIndex): ResolveResult {
@@ -110,39 +110,39 @@ function resolveDoc(
 ): SheetDoc {
   if (!doc.blocks?.length) return doc;
   let changed = false;
-  const uses = doc.blocks.map((use) => {
-    const at = `${where}${use.name}`;
-    // An embedded doc is authoritative — a use carrying both is an already-resolved (or
+  const blocks = doc.blocks.map((block) => {
+    const at = `${where}${block.name}`;
+    // An embedded doc is authoritative — a block carrying both is an already-resolved (or
     // deliberately pinned) snapshot, and refreshing it here would silently re-size a
     // design behind the author's back. Recurse for refs deeper in the embedded tree.
-    if (use.doc) {
-      const inner = resolveDoc(use.doc, refs, chain, `${at}.`, warnings, budget);
-      if (inner === use.doc) return use;
+    if (block.doc) {
+      const inner = resolveDoc(block.doc, refs, chain, `${at}.`, warnings, budget);
+      if (inner === block.doc) return block;
       changed = true;
-      return { ...use, doc: inner };
+      return { ...block, doc: inner };
     }
-    if (use.ref === undefined) return use; // neither — validateSheet names this error
-    const hit = refs.get(use.ref);
+    if (block.ref === undefined) return block; // neither — validateSheet names this error
+    const hit = refs.get(block.ref);
     if (hit === undefined) {
-      warnings.push(refError(at, `ref "${use.ref}" does not match any sheet in the library`));
-      return use;
+      warnings.push(refError(at, `ref "${block.ref}" does not match any sheet in the library`));
+      return block;
     }
     if ('ambiguous' in hit) {
       warnings.push(
         refError(
           at,
-          `ref "${use.ref}" is ambiguous — qualify it as one of: ${hit.ambiguous.join(', ')}`,
+          `ref "${block.ref}" is ambiguous — qualify it as one of: ${hit.ambiguous.join(', ')}`,
         ),
       );
-      return use;
+      return block;
     }
-    if (chain.includes(use.ref)) {
-      warnings.push(refError(at, `circular reference: ${[...chain, use.ref].join(' -> ')}`));
-      return use;
+    if (chain.includes(block.ref)) {
+      warnings.push(refError(at, `circular reference: ${[...chain, block.ref].join(' -> ')}`));
+      return block;
     }
     if (chain.length >= MAX_BLOCK_DEPTH) {
       warnings.push(refError(at, `reference chain nested deeper than ${MAX_BLOCK_DEPTH}`));
-      return use;
+      return block;
     }
     if (budget.left <= 0) {
       // Warn ONCE per resolution — past the ceiling every remaining ref is in the same
@@ -153,20 +153,20 @@ function resolveDoc(
         );
         budget.left = -1;
       }
-      return use;
+      return block;
     }
     budget.left -= 1;
     changed = true;
     return {
-      ...use,
-      doc: resolveDoc(hit.doc, refs, [...chain, use.ref], `${at}.`, warnings, budget),
+      ...block,
+      doc: resolveDoc(hit.doc, refs, [...chain, block.ref], `${at}.`, warnings, budget),
     };
   });
-  return changed ? { ...doc, blocks: uses } : doc;
+  return changed ? { ...doc, blocks } : doc;
 }
 
 /** One composed block that names its own device, and the binding string it names. `path` is
- *  the use path (`amp.s1`), so a caller reporting a device it cannot supply can point at the
+ *  the block path (`amp.s1`), so a caller reporting a device it cannot supply can point at the
  *  block that asked for it rather than at the sheet as a whole. */
 export interface NamedBinding {
   path: string;
@@ -183,7 +183,7 @@ export interface NamedBinding {
  * availability preflights exactly this list plus the primary it supplies itself.
  *
  * The resolution `warnings` come back with the bindings because they are the same question:
- * a use whose ref did not resolve has no visible subtree, so the list of bindings below it is
+ * a block whose ref did not resolve has no visible subtree, so the list of bindings below it is
  * silently short. All of them are error severity — a caller that means to preflight must stop
  * on them rather than proceed against a partial tree.
  */
@@ -201,14 +201,14 @@ function collectBindings(doc: SheetDoc, prefix: string, depth: number, into: Nam
   // Shape-guarded like the evaluator's own walk: a persisted doc reaches here unverified, and
   // this must degrade to "nothing named", never throw.
   if (depth >= MAX_BLOCK_DEPTH || !Array.isArray(doc.blocks)) return;
-  for (const use of doc.blocks) {
-    if (typeof use?.name !== 'string') continue;
-    const path = prefix + use.name;
+  for (const block of doc.blocks) {
+    if (typeof block?.name !== 'string') continue;
+    const path = prefix + block.name;
     // Every binding the evaluator will try to resolve, on its predicate (a declared `device`,
     // whatever its content) — a blank one included, so a caller preflighting availability
     // refuses it by name here instead of meeting it as a mid-evaluation failure.
-    if (typeof use.device === 'string') into.push({ path, binding: use.device });
-    if (use.doc) collectBindings(use.doc, path + PATH_SEP, depth + 1, into);
+    if (typeof block.device === 'string') into.push({ path, binding: block.device });
+    if (block.doc) collectBindings(block.doc, path + PATH_SEP, depth + 1, into);
   }
 }
 
@@ -217,10 +217,10 @@ function stripRefs(doc: SheetDoc): SheetDoc {
   if (!doc.blocks?.length) return doc;
   return {
     ...doc,
-    blocks: doc.blocks.map((use): SheetBlock => {
-      if (!use.doc) return use; // unresolved — nothing to inline; the ref is the content
-      const { ref: _ref, ...rest } = use;
-      return { ...rest, doc: stripRefs(use.doc) };
+    blocks: doc.blocks.map((block): SheetBlock => {
+      if (!block.doc) return block; // unresolved — nothing to inline; the ref is the content
+      const { ref: _ref, ...rest } = block;
+      return { ...rest, doc: stripRefs(block.doc) };
     }),
   };
 }
@@ -229,7 +229,7 @@ function stripRefs(doc: SheetDoc): SheetDoc {
  * Resolve + strip: the self-contained export shape — every reference inlined as an
  * embedded child, no ref left behind. The frozen-deliverable form: a flattened doc
  * never drifts when a library sheet it once referenced is later edited. Check the
- * returned warnings before persisting — an unresolved use cannot be inlined and keeps
+ * returned warnings before persisting — an unresolved block cannot be inlined and keeps
  * its ref.
  */
 export function flattenSheetDoc(doc: SheetDoc, refs: SheetRefIndex): ResolveResult {

@@ -1,5 +1,5 @@
 // Evaluate a leaf design-sheet in ONE pass: seed params, (optionally) size the device
-// via sizeDevice, then evaluate author rows in document order and check each rule into
+// via sizeDevice, then evaluate author equations in document order and evaluate each check into
 // a signed-margin result. Reuses the expression engine (compileExpr), the bind-any-2
 // sizing (sizeDevice), and the constant scope verbatim — it adds no numeric or parser
 // logic and never traverses a circuit. Pure, deterministic, never throws. Zero DOM.
@@ -46,11 +46,11 @@ import type {
   SheetBlock,
 } from './types';
 
-/** Resolve a device id to its lookup table (for a child `use` that names its own device).
+/** Resolve a device id to its lookup table (for a block that names its own device).
  *  Absent ⇒ children inherit the parent's table. */
 export type DeviceResolver = (id: string) => DeviceTable | undefined;
 
-/** A rule passing by a smaller relative margin than this reads as a near-miss (amber). */
+/** A check passing by a smaller relative margin than this reads as a near-miss (amber). */
 export const AMBER_BAND = 0.05; // 5% of the bound
 
 /** Floor for the relative-margin denominator so a zero bound cannot divide by zero. */
@@ -67,13 +67,13 @@ const NO_WARN = (): void => {};
 
 /**
  * Margins within this relative distance of zero snap to exactly 0. Two mechanisms park a
- * rule ON its own boundary by construction: a spec pinned by its own bind (bind
- * gm = 2π·GBW·CL, then rule GBW >= GBW_target) lands within floating-point rounding, and
- * a containment edge lands CM_in within the pin's landing tolerance of the very range end
- * the rule compares it against (PIN_TOL_REL x the bracket span, stretched by the
+ * check ON its own boundary by construction: a spec set by its own givens (given
+ * gm = 2π·GBW·CL, then check GBW >= GBW_target) lands within floating-point rounding, and
+ * a range end lands CM_in within the constraint's landing tolerance of the very range end
+ * the check compares it against (CONSTRAINT_TOL_REL x the bracket span, stretched by the
  * relation's slope — microvolts on a volt-scale node, ~1e-6 relative). Without the snap
- * either verdict is a coin flip. 1e-5 covers the pin case with margin while staying two
- * orders below the ~0.1% the sizer resolves between grid nodes — a rule "failing" by
+ * either verdict is a coin flip. 1e-5 covers the constraint case with margin while staying two
+ * orders below the ~0.1% the sizer resolves between grid nodes — a check "failing" by
  * less than the data can distinguish is not failing, it is sitting on the boundary,
  * and the snap reads it as the deterministic near-miss (amber) that it is.
  */
@@ -95,8 +95,8 @@ const HULL_SNAP = 1e-6;
 
 /** Passes a tearing loop may take and still be unremarkable. Above it the closure is weak or
  *  oscillatory — the designer's two-pass smell — which is worth a note even though the loop
- *  did close. Pins are excluded: bisection spends ~20 probes by construction, so a probe
- *  count carries no fragility signal there. */
+ *  did close. Design constraints are excluded: bisection spends ~20 probes by construction, so a
+ *  probe count carries no fragility signal there. */
 const SOLVE_PASSES_NOTE = 16;
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -111,7 +111,7 @@ const NUMERIC_LITERAL = /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
  * cannot resolve (parse error, an undeclared free name, an eval error, or — defensively
  * — an array result, which a scalar-only sheet scope never actually produces). Pushes a
  * warning for each failure. A finite-but-`Infinity`/`NaN` numeric result IS returned so
- * the caller can classify it (a row drops it; a rule side surfaces as `na`).
+ * the caller can classify it (an equation drops it; a check side surfaces as `na`).
  */
 function evalScalar(
   src: string,
@@ -121,7 +121,7 @@ function evalScalar(
   where: string,
 ): number | undefined {
   // A bare number is its own value: it compiles to itself and has no free names, so the whole
-  // path below is a no-op for it. Worth short-circuiting because the coverage transformation
+  // path below is a no-op for it. Worth short-circuiting because the fixed-hardware transformation
   // MINTS such sources (see coverage.ts numExpr), one per solved geometry per sample, and each
   // one is a permanent entry in the compile memo that can never be hit again. Anything the
   // pattern does not cover — a non-decimal spelling, a value that overflows to infinity — falls
@@ -232,13 +232,13 @@ const diodeTableCached = (t: DeviceTable): { table: DeviceTable; clamped: boolea
 
 /**
  * Collapse the table's bias axes (vds/vsb) to the operating point before sizing: a value
- * DECLARED in the bind wins; a live axis the bind does not declare takes the namespace
+ * DECLARED in the givens wins; a live axis the givens do not declare takes the namespace
  * default when the table characterizes that point, and is reported as ASSUMED so the
  * coordinate is never silently invented; with neither, the axis stays live and sizing fails
  * with guidance. Returns the sliced table, the applied coordinates, and which of them were
  * assumed rather than authored — all three reach the SizingReport.
  */
-function applyBindBias(
+function applyGivensBias(
   b: SheetGivens,
   table: DeviceTable,
   values: Record<string, number>,
@@ -297,7 +297,7 @@ function applyBindBias(
         rule: 'sheet-givens',
         severity: 'warning',
         message:
-          'bind declares a diode connection, but the table has no live vds axis to fold onto the ' +
+          'the givens declare a diode connection, but the table has no live vds axis to fold onto the ' +
           'vds = vgs diagonal — using the table as-is',
         location: 'givens',
       });
@@ -310,16 +310,16 @@ function applyBindBias(
     // fields are static — index structurally rather than by the literal key union.
     const declared = (b as unknown as Partial<Record<string, string>>)[axis];
     if (declared !== undefined) {
-      const v = evalScalar(declared, values, scope, warn, `bind ${axis}`);
+      const v = evalScalar(declared, values, scope, warn, `given ${axis}`);
       if (v === undefined || !Number.isFinite(v))
-        return { error: `bind ${axis} did not resolve to a finite number` };
+        return { error: `given ${axis} did not resolve to a finite number` };
       if (!live) {
         // The declaration is an assertion the table cannot honor (axis absent or already
         // collapsed — possibly at a DIFFERENT point we cannot see). Advisory, not fatal.
         warn({
           rule: 'sheet-givens',
           severity: 'warning',
-          message: `bind ${axis} = ${v} declared, but the table has no live ${axis} axis to slice — using the table as-is`,
+          message: `given ${axis} = ${v} declared, but the table has no live ${axis} axis to slice — using the table as-is`,
           location: 'givens',
         });
         continue;
@@ -335,7 +335,7 @@ function applyBindBias(
         warn({
           rule: 'sheet-givens',
           severity: 'warning',
-          message: `bind ${axis} ${v} is outside the table's ${axis} range [${live.values[0]}, ${live.values[live.values.length - 1]}]; clamped to ${applied}`,
+          message: `given ${axis} ${v} is outside the table's ${axis} range [${live.values[0]}, ${live.values[live.values.length - 1]}]; clamped to ${applied}`,
           location: 'givens',
         });
       }
@@ -357,24 +357,24 @@ function applyBindBias(
   if (needs.length) {
     const list = needs.join(', ');
     return {
-      error: `declare the operating point (${list}) in the bind — the table has ${
+      error: `declare the operating point (${list}) in the givens — the table has ${
         needs.length > 1 ? 'those axes' : 'that axis'
-      } and sizing must pin ${needs.length > 1 ? 'them' : 'it'} to a value`,
+      } and sizing must fix ${needs.length > 1 ? 'them' : 'it'} at a value`,
       needs,
     };
   }
   return { table: t, bias, assumed, clamped, ...(diode ? { diode } : {}) };
 }
 
-/** Resolve the bind, call sizeDevice, and merge its operating point into `values`. */
-function runBind(
+/** Resolve the givens, call sizeDevice, and merge its operating point into `values`. */
+function runSizing(
   b: SheetGivens,
   table: DeviceTable | undefined,
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
 ): SizingReport {
-  // Every bind failure surfaces an error warning AND an ok:false report, so the feasibility
+  // Every sizing failure surfaces an error warning AND an ok:false report, so the feasibility
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design).
   const fail = (error: string, needs?: string[], clamped?: string[]): SizingReport => {
     warn({ rule: 'sheet-givens', severity: 'error', message: error, location: 'givens' });
@@ -394,20 +394,20 @@ function runBind(
 
   const supplied = BINDABLE.filter((k) => b[k] !== undefined);
   const problem = bindProblem(supplied);
-  if (problem) return fail(`bind ${problem}`);
+  if (problem) return fail(`givens ${problem}`);
 
-  const L = evalScalar(b.L, values, scope, warn, 'bind L');
+  const L = evalScalar(b.L, values, scope, warn, 'given L');
   if (L === undefined || !Number.isFinite(L))
-    return fail('bind L did not resolve to a finite number');
+    return fail('given L did not resolve to a finite number');
 
-  const sliced = applyBindBias(b, table, values, scope, warn);
+  const sliced = applyGivensBias(b, table, values, scope, warn);
   if ('error' in sliced) return fail(sliced.error, sliced.needs);
 
   const q: SizeQuery = { table: sliced.table, L };
   for (const k of supplied) {
-    const v = evalScalar(b[k] as string, values, scope, warn, `bind ${k}`);
+    const v = evalScalar(b[k] as string, values, scope, warn, `given ${k}`);
     if (v === undefined || !Number.isFinite(v))
-      return fail(`bind ${k} did not resolve to a finite number`);
+      return fail(`given ${k} did not resolve to a finite number`);
     q[k] = v;
   }
 
@@ -417,7 +417,7 @@ function runBind(
     values.ceiling = res.ceiling; // not in the quantities bag
     values.feasible = res.feasible ? 1 : 0;
     // Surface the sizer's own engineering notes (e.g. an L clamped onto the table's
-    // hull) as advisory sheet warnings — same pattern children use at evalChildren.
+    // hull) as advisory sheet warnings — same pattern children use at evalBlocks.
     // Severity 'warning', not 'error', so a clamp does not flip feasibility closed.
     for (const m of res.warnings) {
       warn({ rule: 'sheet-givens', severity: 'warning', message: m, location: 'givens' });
@@ -443,7 +443,7 @@ function runBind(
     // The lookup's "extra non-degenerate axis" error is accurate but not actionable in
     // sheet vocabulary — point the author at the fix.
     if (m.includes('non-degenerate axis'))
-      m += ' — declare the operating point in the bind (vds/vsb) to collapse the axis';
+      m += ' — declare the operating point in the givens (vds/vsb) to collapse the axis';
     // What the failed sizing was read from still matters to whoever asks what the failure
     // means: a lookup that ran out of range on a table slice taken at its hull — a clamped
     // bias axis, a length off the hull, a diode diagonal that leaves the vds range — failed on
@@ -458,19 +458,19 @@ function runBind(
   }
 }
 
-/** Evaluate one rule's two sides and classify into a signed-margin CheckResult. */
-function evalRule(
-  rule: SheetDoc['checks'][number],
+/** Evaluate one check's two sides and classify into a signed-margin CheckResult. */
+function evalCheck(
+  check: SheetDoc['checks'][number],
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
 ): CheckResult {
-  const text = `${rule.lhs} ${rule.op} ${rule.rhs}`;
-  const lhs = evalScalar(rule.lhs, values, scope, warn, `rule "${rule.id}" lhs`);
-  const rhs = evalScalar(rule.rhs, values, scope, warn, `rule "${rule.id}" rhs`);
+  const text = `${check.lhs} ${check.op} ${check.rhs}`;
+  const lhs = evalScalar(check.lhs, values, scope, warn, `check "${check.id}" lhs`);
+  const rhs = evalScalar(check.rhs, values, scope, warn, `check "${check.id}" rhs`);
   const lhsValue = lhs ?? NaN;
   const rhsValue = rhs ?? NaN;
-  const base = { id: rule.id, kind: rule.kind, op: rule.op, text, lhsValue, rhsValue };
+  const base = { id: check.id, kind: check.kind, op: check.op, text, lhsValue, rhsValue };
 
   if (lhs === undefined || rhs === undefined || !Number.isFinite(lhs) || !Number.isFinite(rhs)) {
     return {
@@ -484,13 +484,13 @@ function evalRule(
   }
 
   let margin: number;
-  if (rule.op === '>=') margin = lhs - rhs;
-  else if (rule.op === '<=') margin = rhs - lhs;
+  if (check.op === '>=') margin = lhs - rhs;
+  else if (check.op === '<=') margin = rhs - lhs;
   else {
     // '==' : the SIGNED distance INSIDE the tolerance band (≥ 0 ⟺ within tolerance ⟺ pass), so
     // the zero line is the real pass/fail boundary on the chart and in the margin column, exactly
     // like '>='/'<='. tolPct is relative to |rhs|, so it is inert when rhs is 0 (exact match only).
-    margin = ((rule.tolPct ?? 0) / 100) * Math.abs(rhs) - Math.abs(lhs - rhs);
+    margin = ((check.tolPct ?? 0) / 100) * Math.abs(rhs) - Math.abs(lhs - rhs);
   }
   // The operands are finite (guarded above) but the margin itself may not be — a
   // non-finite tolPct poisons the '==' arithmetic, and NaN compares false against 0,
@@ -508,7 +508,7 @@ function evalRule(
   // Kept before the snap: the verdict wants the snapped value, a DERIVATIVE wants the honest
   // one (see CheckResult.rawMargin).
   const rawMargin = margin;
-  // see MARGIN_SNAP_REL — a bind-pinned spec must not coin-flip on FP noise
+  // see MARGIN_SNAP_REL — a spec set by its own givens must not coin-flip on FP noise
   const snapped =
     margin !== 0 && Math.abs(margin) <= MARGIN_SNAP_REL * Math.max(Math.abs(lhs), Math.abs(rhs));
   if (snapped) margin = 0;
@@ -517,11 +517,11 @@ function evalRule(
   let status: CheckStatus;
   if (margin < 0) status = 'fail';
   else if (snapped)
-    // A SNAPPED zero always reads amber, whatever the operator: the rule is sitting on
+    // A SNAPPED zero always reads amber, whatever the operator: the check is sitting on
     // its boundary by construction, and for '==' the alternative would be worse than a
     // coin flip — a margin just OUTSIDE the tolerance band silently reading full pass.
     status = 'amber';
-  else if (rule.op === '==')
+  else if (check.op === '==')
     status = 'pass'; // '==' is pass/fail only — no near-miss (amber) band
   else status = marginPct < AMBER_BAND ? 'amber' : 'pass';
   return { ...base, margin, marginPct, rawMargin, status };
@@ -531,9 +531,9 @@ function evalRule(
  * Build a child doc with its param values overridden by expressions evaluated in the
  * PARENT scope as built so far: parent params, constants, and the provides of EARLIER
  * siblings (children evaluate in document order — the ratified idiom for a later block
- * carrying a value an earlier block derived, e.g. binding a spec exactly on the input
+ * carrying a value an earlier block derived, e.g. giving a spec exactly on the input
  * device and feeding the derived current to the branch blocks). Children run before
- * the parent's own bind, so they never see the parent's sized device (that reverse
+ * the parent's own sizing, so they never see the parent's sized device (that reverse
  * coupling stays deferred), and a forward sibling reference fails closed as undeclared.
  *
  * Fail-closed: a declared override is the parent EXPLICITLY supplying a value, so one that
@@ -542,18 +542,18 @@ function evalRule(
  * feasible. A failed override raises an error (blocking feasibility) and returns ok:false
  * so the caller withholds the child's provides too.
  */
-function applyUseParams(
-  use: SheetBlock,
+function applyBlockParams(
+  block: SheetBlock,
   childDoc: SheetDoc,
   parentValues: Record<string, number>,
   parentScope: Scope,
   warn: (w: QAWarning) => void,
 ): { doc: SheetDoc; ok: boolean } {
-  if (!use.params) return { doc: childDoc, ok: true };
+  if (!block.params) return { doc: childDoc, ok: true };
   const childParams = new Map(childDoc.params.map((p) => [p.name, p]));
   const overrides: Record<string, number> = {};
   let ok = true;
-  for (const [k, expr] of Object.entries(use.params)) {
+  for (const [k, expr] of Object.entries(block.params)) {
     // An override key that names no child param is the same failure as an unresolvable
     // one: the parent explicitly supplied a value (typo and all) that will NOT reach the
     // child, so the child would size a different design than the author wired — and its
@@ -564,8 +564,8 @@ function applyUseParams(
       warn({
         rule: 'sheet-block-param',
         severity: 'error',
-        message: `use "${use.name}": override "${k}" does not match any child param (refusing to size the child on its embedded defaults)`,
-        location: use.name,
+        message: `block "${block.name}": override "${k}" does not match any child param (refusing to size the child on its embedded defaults)`,
+        location: block.name,
       });
       continue;
     }
@@ -577,29 +577,30 @@ function applyUseParams(
       warn({
         rule: 'sheet-block-param',
         severity: 'warning',
-        message: `use "${use.name}": override "${k}" sets a param the child solves for, so it only seeds the iteration — the converged value wins`,
-        location: use.name,
+        message: `block "${block.name}": override "${k}" sets a param the child solves for, so it only seeds the iteration — the converged value wins`,
+        location: block.name,
       });
     }
-    // A pinned param is stronger still: bisection needs no seed, so the wired value does nothing.
+    // A constrained param is stronger still: bisection needs no seed, so the wired value does
+    // nothing.
     if (constrained(child)) {
       warn({
         rule: 'sheet-block-param',
         severity: 'warning',
         message: child.designConstraint.held
-          ? `use "${use.name}": override "${k}" sets a node the child holds under a gate — here the hardware is held, so the child re-solves it and the override is ignored`
-          : `use "${use.name}": override "${k}" sets a param the child PINS — the engine chooses it from the pin's own bracket, so the override is ignored entirely`,
-        location: use.name,
+          ? `block "${block.name}": override "${k}" sets a node the child holds under a gate — here the hardware is held, so the child re-solves it and the override is ignored`
+          : `block "${block.name}": override "${k}" sets a param the child CONSTRAINS — the engine chooses it from the constraint's own bracket, so the override is ignored entirely`,
+        location: block.name,
       });
     }
-    const v = evalScalar(expr, parentValues, parentScope, warn, `use "${use.name}" param ${k}`);
+    const v = evalScalar(expr, parentValues, parentScope, warn, `block "${block.name}" param ${k}`);
     if (v === undefined || !Number.isFinite(v)) {
       ok = false;
       warn({
         rule: 'sheet-block-param',
         severity: 'error',
-        message: `use "${use.name}": override "${k}" did not resolve to a finite number (refusing to fall back to the child default)`,
-        location: use.name,
+        message: `block "${block.name}": override "${k}" did not resolve to a finite number (refusing to fall back to the child default)`,
+        location: block.name,
       });
       continue;
     }
@@ -619,15 +620,15 @@ function applyUseParams(
 }
 
 /**
- * Evaluate each child block, merge its `provide`d scalars into the parent `values` as
+ * Evaluate each block, merge its `provide`d scalars into the parent `values` as
  * flat `name__key` names, roll up its warnings (prefixed + attributed), and return a
- * per-child report. Runs BEFORE the parent's bind/rows so the parent can reference a
- * child's outputs anywhere — including its own bind (e.g. a cascode carrying the child's
+ * per-child report. Runs BEFORE the parent's sizing/equations so the parent can reference a
+ * child's outputs anywhere — including its own givens (e.g. a cascode carrying the child's
  * current). Fail-closed: a child that errors or is infeasible drags the parent down via
  * the rolled-up error warning + the children-feasibility fold in evaluateSheet.
  */
-function evalChildren(
-  uses: SheetBlock[],
+function evalBlocks(
+  blocks: SheetBlock[],
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   depth: number,
@@ -638,66 +639,66 @@ function evalChildren(
 ): SheetBlockReport[] {
   const reports: SheetBlockReport[] = [];
   // Structural self-defense for direct evaluateSheet callers (runSheet validates, but
-  // this entrypoint is public): a duplicate or empty use name would silently overwrite
+  // this entrypoint is public): a duplicate or empty block name would silently overwrite
   // the earlier sibling's provides — skip it, fail closed.
   const seenNames = new Set<string>();
-  for (const use of uses) {
+  for (const block of blocks) {
     const dead = (message: string): void => {
-      warn({ rule: 'sheet-block', severity: 'error', message, location: use.name });
+      warn({ rule: 'sheet-block', severity: 'error', message, location: block.name });
       reports.push({
-        name: use.name,
-        title: use.doc?.title ?? use.ref ?? '',
+        name: block.name,
+        title: block.doc?.title ?? block.ref ?? '',
         feasible: false,
         provides: {},
         checks: [],
       });
     };
-    if (!use.name.trim()) {
-      dead('a use has an empty name');
+    if (!block.name.trim()) {
+      dead('a block has an empty name');
       continue;
     }
     // A ref that reached evaluation unmaterialized (the caller skipped resolveSheetRefs,
     // or resolution failed and already named why) must never size on nothing.
-    const srcDoc = use.doc;
+    const srcDoc = block.doc;
     if (!srcDoc) {
       dead(
-        use.ref !== undefined
-          ? `use "${use.name}": unresolved reference "${use.ref}" — resolve against a sheet library before evaluation`
-          : `use "${use.name}" has neither an embedded doc nor a ref`,
+        block.ref !== undefined
+          ? `block "${block.name}": unresolved reference "${block.ref}" — resolve against a sheet library before evaluation`
+          : `block "${block.name}" has neither an embedded doc nor a ref`,
       );
       continue;
     }
-    if (seenNames.has(use.name)) {
-      dead(`duplicate use name "${use.name}" — the block was skipped, not silently merged`);
+    if (seenNames.has(block.name)) {
+      dead(`duplicate block name "${block.name}" — the block was skipped, not silently merged`);
       continue;
     }
-    seenNames.add(use.name);
+    seenNames.add(block.name);
     if (depth >= MAX_BLOCK_DEPTH) {
-      dead(`use "${use.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
+      dead(`block "${block.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
       continue;
     }
     // A child names its own device id (else it inherits the parent table). A named device that the
     // resolver cannot supply fails closed with a clear, attributed message — rather than the generic
-    // "no device to size against" the bind would otherwise raise.
+    // "no device to size against" the sizing would otherwise raise.
     let childTable = table;
-    if (use.device !== undefined) {
-      childTable = resolveDevice?.(use.device);
+    if (block.device !== undefined) {
+      childTable = resolveDevice?.(block.device);
       if (childTable === undefined) {
-        dead(`use "${use.name}": device "${use.device}" did not resolve`);
+        dead(`block "${block.name}": device "${block.device}" did not resolve`);
         continue;
       }
     }
 
-    const { doc: childDoc, ok: paramsOk } = applyUseParams(use, srcDoc, values, scope, warn);
-    // evaluateNode, not evaluateSheet: a composed child never evaluates its own edges —
-    // the parent owns range claims (validation says so at the use site).
+    const { doc: childDoc, ok: paramsOk } = applyBlockParams(block, srcDoc, values, scope, warn);
+    // evaluateNode, not evaluateSheet: a composed child never evaluates its own range ends —
+    // the parent owns range claims (validation says so at the block).
     const res = evaluateNode(childDoc, childTable, resolveDevice, depth + 1, budget);
 
-    // Roll up child warnings, attributed to the use site (so a child error fails the
+    // Roll up child warnings, attributed to the block (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
-    for (const w of res.warnings) warn(prefixBlockWarning(use.name, w));
+    for (const w of res.warnings) warn(prefixBlockWarning(block.name, w));
 
-    // Expose the child's declared `provide` names as flat parent scalars — but ONLY when the
+    // Expose the child's declared `provides` as flat parent scalars — but ONLY when the
     // parent wiring was honored (paramsOk). On a broken override the child sized with the wrong
     // input, so its outputs are meaningless: withhold them so dependent parent math goes `na`.
     const provides: Record<string, number> = {};
@@ -706,12 +707,12 @@ function evalChildren(
         const v = res.values[key];
         if (v !== undefined && Number.isFinite(v)) {
           provides[key] = v;
-          values[joinProvide(use.name, key)] = v;
+          values[joinProvide(block.name, key)] = v;
         }
       }
     }
     reports.push({
-      name: use.name,
+      name: block.name,
       title: srcDoc.title,
       feasible: paramsOk && res.feasible,
       ...(res.sizing ? { sizing: res.sizing } : {}),
@@ -725,72 +726,72 @@ function evalChildren(
 }
 
 /**
- * Check every child use that DECLARES its gate wiring against the identity that wiring imposes:
+ * Check every block that DECLARES its gate wiring against the identity that wiring imposes:
  * the gate sits one gate-source voltage from the source, above it for an N device and below it
- * for a P one (see SheetWiring). Runs once, on the FINAL result of a node — after any pin or
- * tearing solve, and after the parent's own rows, so a node the sheet defines as a row is as
- * reachable as one it defines as a param, and a solver's probes never spam the diagnostic.
+ * for a P one (see SheetWiring). Runs once, on the FINAL result of a node — after any constraint or
+ * tearing solve, and after the parent's own equations, so a node the sheet defines as an equation
+ * is as reachable as one it defines as a param, and a solver's probes never spam the diagnostic.
  *
- * The voltage compared against is the child's own BIND — the sizing's answer, which the sizing
+ * The voltage compared against is the child's own SIZED vgs — the sizing's answer, which the sizing
  * always has — not a scalar the child publishes upward. That is what keeps the check
- * unswitchoffable: no `provide` list, no parent expression, and no sign convention stands
+ * unswitchoffable: no `provides`, no parent expression, and no sign convention stands
  * between the declaration and the number it is checked against.
  *
  * A sheet that also claims operating ranges reports the disagreement once per RUN — the base
- * evaluation plus each containment edge, whose warnings ride its own report verbatim. That is
- * intended: an edge holds the SAME hardware at a different bias, and the identity is a statement
- * about voltages, so the residual there is a different measurement for a different reason — not
- * a duplicate of the first. A wiring declaration that holds at the center and breaks at a range
- * end is exactly the finding worth having twice.
+ * evaluation plus each range end, whose warnings ride its own report verbatim. That is
+ * intended: a range end holds the SAME hardware at a different bias, and the identity is a
+ * statement about voltages, so the residual there is a different measurement for a different reason
+ * — not a duplicate of the first. A wiring declaration that holds at the center and breaks at a
+ * range end is exactly the finding worth having twice.
  *
  * A DEDICATED evaluator, deliberately: every runtime problem here — an expression that does not
  * resolve, a block with no sized operating point, a disagreement past WIRING_TOL — is a
  * warning-severity 'sheet-wiring' diagnostic and nothing more. It never throws, never touches
  * feasibility, and never repairs anything. A wiring declaration describes the schematic the
  * author drew; when it disagrees with the sizing, which of the two is wrong is the author's
- * call, and an author who wants the disagreement to GATE writes a hard rule on the same numbers.
+ * call, and an author who wants the disagreement to GATE writes a hard check on the same numbers.
  * (Structural problems — a half-declaration, an unknown key, an expression that does not parse —
  * are validation errors, which is the only way wiring reaches a verdict.)
  */
 function checkWiring(doc: SheetDoc, res: SheetResult): SheetResult {
   // Shape-guarded rather than trusted: evaluate never throws, so a malformed authored doc
-  // (uses as a string, wiring as a string) has to degrade to "nothing to check".
-  const uses = Array.isArray(doc.blocks) ? doc.blocks : [];
+  // (blocks as a string, wiring as a string) has to degrade to "nothing to check".
+  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
   const out: QAWarning[] = [];
   const scope = scalarScope(res.values);
   const sized = new Map((res.blocks ?? []).map((c) => [c.name, c.sizing]));
-  for (const use of uses) {
+  for (const block of blocks) {
     // Read as `unknown`: a persisted doc reaches evaluation unverified, and the shape checks
     // below are the same ones validate.ts reports on — stated here in the types, not assumed.
-    const w: unknown = use?.wiring;
+    const w: unknown = block?.wiring;
     if (typeof w !== 'object' || w === null) continue;
     const decl = w as Record<string, unknown>;
-    const where = `use "${use.name}" wiring`;
+    const where = `block "${block.name}" wiring`;
     const warn = (message: string): void => {
-      out.push({ rule: 'sheet-wiring', severity: 'warning', message, location: use.name });
+      out.push({ rule: 'sheet-wiring', severity: 'warning', message, location: block.name });
     };
-    // A use the evaluation already killed — an unresolved ref, a device that did not resolve, an
-    // override that would not evaluate, a bind that could not size — has no operating point to
+    // A block the evaluation already killed — an unresolved ref, a device that did not resolve, an
+    // override that would not evaluate, givens that could not size — has no operating point to
     // check against, and the reason is already reported. A second line advising a fix to the
     // wiring would be noise stacked on the finding, and worse, advice about the wrong thing. The
     // prefix match is what makes that true for a child's INTERNAL errors: they roll up to this
-    // use under its path (`<use>.givens`, `<use>.<inner>`), not under the bare use name. That
-    // path spelling is a contract with ONE owner — prefixBlockWarning (types.ts) — so this match
-    // moves if and only if that function does.
+    // block under its path (`<block>.givens`, `<block>.<inner>`), not under the bare block name.
+    // That path spelling is a contract with ONE owner — prefixBlockWarning (types.ts) — so this
+    // match moves if and only if that function does.
     if (
       res.warnings.some(
         (v) =>
           v.severity === 'error' &&
-          (v.location === use.name || (v.location ?? '').startsWith(use.name + PATH_SEP)),
+          (v.location === block.name || (v.location ?? '').startsWith(block.name + PATH_SEP)),
       )
     )
       continue;
     // The sized gate-source voltage first: without it there is no identity to form, and reporting
     // each expression separately as well would turn one unsized block into three warnings.
-    const vgs = sized.get(use.name)?.vgs;
+    const vgs = sized.get(block.name)?.vgs;
     if (vgs === undefined || !Number.isFinite(vgs)) {
       warn(
-        `${where}: the block declares no bind, so it has no sized gate-source voltage for the ` +
+        `${where}: the block declares no givens, so it has no sized gate-source voltage for the ` +
           `wiring identity to be checked against`,
       );
       continue;
@@ -815,7 +816,7 @@ function checkWiring(doc: SheetDoc, res: SheetResult): SheetResult {
     if (gate === undefined || source === undefined) continue;
     // Magnitude plus direction, never the raw axis value: the sign lives in the child's declared
     // polarity, so a signed PMOS export and one in N convention check identically.
-    const expected = source + (use.doc?.polarity === 'p' ? -1 : 1) * Math.abs(vgs);
+    const expected = source + (block.doc?.polarity === 'p' ? -1 : 1) * Math.abs(vgs);
     const delta = gate - expected;
     if (Math.abs(delta) > WIRING_TOL) {
       warn(
@@ -851,7 +852,7 @@ function evaluateOnce(
   //    before params, so a same-named param deliberately wins.
   if (table) Object.assign(values, metaScalars(table.meta));
 
-  // 1. Seed top-level scalar params (a parent supplies a child's via use.params). A param
+  // 1. Seed top-level scalar params (a parent supplies a child's via its block's params). A param
   //    being solved for takes the current iterate in place of its authored starting guess.
   for (const p of doc.params) {
     const v = solved?.[p.name] ?? p.value;
@@ -860,60 +861,60 @@ function evaluateOnce(
   const scope = scalarScope(values); // closes over the mutated `values`
 
   // 2. Compose children FIRST, so the parent can reference their provided scalars
-  //    (name__key) in its own bind/rows/rules.
-  const children =
+  //    (name__key) in its own givens/equations/checks.
+  const blocks =
     doc.blocks && doc.blocks.length > 0
-      ? evalChildren(doc.blocks, table, resolveDevice, _depth, values, scope, warn, budget)
+      ? evalBlocks(doc.blocks, table, resolveDevice, _depth, values, scope, warn, budget)
       : undefined;
 
-  // 3. Size the device — the ONLY place physics enters — when bound.
-  const bind = doc.givens ? runBind(doc.givens, table, values, scope, warn) : undefined;
+  // 3. Size the device — the ONLY place physics enters — when givens are declared.
+  const sizing = doc.givens ? runSizing(doc.givens, table, values, scope, warn) : undefined;
 
-  // 4. Author rows, in document order. A row that cannot RESOLVE (missing quantity,
+  // 4. Author equations, in document order. An equation that cannot RESOLVE (missing quantity,
   //    parse error) is skipped with a plain warning — graceful degradation for optional
-  //    data. A row that resolves but computes NON-FINITE from finite inputs (sqrt of a
+  //    data. An equation that resolves but computes NON-FINITE from finite inputs (sqrt of a
   //    negative headroom, a division by zero) means the design math itself broke at this
-  //    point, so it is an error: feasibility must fail closed even when no hard rule
-  //    happens to reference the row (a guardrail-only figure of merit would otherwise
+  //    point, so it is an error: feasibility must fail closed even when no hard check
+  //    happens to reference the equation (an advisory-only figure of merit would otherwise
   //    render a green verdict over a NaN).
-  for (const row of doc.equations) {
-    const r = evalScalar(row.expr, values, scope, warn, `row "${row.name}"`);
+  for (const equation of doc.equations) {
+    const r = evalScalar(equation.expr, values, scope, warn, `equation "${equation.name}"`);
     if (r === undefined) continue;
     if (!Number.isFinite(r)) {
       warn({
         rule: 'sheet-nonfinite',
         severity: 'error',
-        message: `row "${row.name}" evaluated to a non-finite number from resolved inputs`,
-        location: row.name,
+        message: `equation "${equation.name}" evaluated to a non-finite number from resolved inputs`,
+        location: equation.name,
       });
       continue;
     }
-    values[row.name] = r;
+    values[equation.name] = r;
   }
 
-  // 5. Rules → signed margins.
-  const rules = doc.checks.map((rule) => evalRule(rule, values, scope, warn));
+  // 5. Checks → signed margins.
+  const checks = doc.checks.map((check) => evalCheck(check, values, scope, warn));
 
-  // 6. Overall feasibility, fail-closed: a declared bind sized successfully, every HARD rule
-  //    (invariant = physical floor, requirement = application spec) holds (pass or near-miss),
-  //    EVERY child is feasible, and nothing errored. Guardrails are advisory and excluded.
-  const hard = rules.filter((r) => isHardCheck(r.kind));
+  // 6. Overall feasibility, fail-closed: declared givens sized successfully, every HARD check
+  //    (physical = physical floor, spec = application spec) holds (pass or near-miss),
+  //    EVERY child is feasible, and nothing errored. Advisory checks are excluded.
+  const hard = checks.filter((r) => isHardCheck(r.kind));
   const feasible =
-    // A bound sheet needs the sizing to have succeeded AND the sizer's own verdict
+    // A sheet with givens needs the sizing to have succeeded AND the sizer's own verdict
     // (gm/ID ≤ the data ceiling) to hold — today the sizer throws past the ceiling, so
     // the flag is belt-and-suspenders, but it must never be silently ignored.
-    (!doc.givens || ((bind?.ok ?? false) && values.feasible !== 0)) &&
+    (!doc.givens || ((sizing?.ok ?? false) && values.feasible !== 0)) &&
     hard.every((r) => r.status === 'pass' || r.status === 'amber') &&
-    (children?.every((c) => c.feasible) ?? true) &&
+    (blocks?.every((c) => c.feasible) ?? true) &&
     !warnings.some((w) => w.severity === 'error');
 
   return {
     values,
-    sizing: bind,
-    checks: rules,
+    sizing,
+    checks,
     feasible,
     warnings,
-    ...(children ? { blocks: children } : {}),
+    ...(blocks ? { blocks } : {}),
   };
 }
 
@@ -980,7 +981,7 @@ interface SolveBudget {
  */
 function tornSheets(doc: SheetDoc, depth = 0): number {
   if (depth >= MAX_BLOCK_DEPTH) return 0;
-  // Each pinned param runs a solver too (bisection probes are passes), one per pin.
+  // Each constrained param runs a solver too (bisection probes are passes), one per constraint.
   let n = (doc.params.some(torn) ? 1 : 0) + doc.params.filter(constrained).length;
   for (const u of doc.blocks ?? []) if (u.doc) n += tornSheets(u.doc, depth + 1);
   return n;
@@ -1021,8 +1022,8 @@ function solveFailed(res: SheetResult, message: string): SheetResult {
 
 /**
  * Evaluate a sheet against an optional device table. Never throws: seed params → (compose
- * children) → size → author-order rows → signed-margin rules → aggregate feasibility.
- * `resolveDevice` is only consulted by a child `use` that names its own device; `_depth` is
+ * children) → size → author-order equations → signed-margin checks → aggregate feasibility.
+ * `resolveDevice` is only consulted by a block that names its own device; `_depth` is
  * internal.
  *
  * When the sheet declares tearing variables (params carrying `solveFor`), the pass above is
@@ -1042,7 +1043,7 @@ function solveFailed(res: SheetResult, message: string): SheetResult {
  * Failure is closed at every end — an estimate naming something that does not resolve to a
  * finite number, a residual that keeps growing, a loop that never settles, and an exhausted
  * tree-wide pass budget each return an infeasible result carrying the reason. Never a design
- * sized against a stale estimate. `evalChildren` recurses through here, so a child closes its
+ * sized against a stale estimate. `evalBlocks` recurses through here, so a child closes its
  * own loops, and `budget` is shared across the whole tree so nesting cannot go exponential.
  */
 function solveTorn(
@@ -1056,7 +1057,7 @@ function solveTorn(
   const unknowns = doc.params.filter(torn);
   if (unknowns.length === 0) return evaluateOnce(doc, table, resolveDevice, _depth, budget, extra);
 
-  // `extra` (a pinned param's probe value) merges UNDER the torn estimates: the two mechanisms
+  // `extra` (a constrained param's probe value) merges UNDER the torn estimates: the two mechanisms
   // never share a param — validation refuses that — so the spread order is belt and braces.
   const est: Record<string, number> = { ...extra };
   for (const p of unknowns) est[p.name] = p.value;
@@ -1162,10 +1163,10 @@ function solveTorn(
 
   // Out of passes — but WHOSE passes? The budget is shared across the whole composition so that
   // nesting cannot multiply the work without bound, which means the pool can drain before this
-  // loop has iterated at all: an expensive sibling elsewhere in the design, or a pin ABOVE this
-  // loop whose every probe re-closes it (the multiplicative cost is then this loop's own, spread
-  // across probes). Blaming this loop alone would send an author to rewrite a sheet that is
-  // fine; the message names both spenders because the engine cannot tell them apart here.
+  // loop has iterated at all: an expensive sibling elsewhere in the design, or a design constraint
+  // ABOVE this loop whose every probe re-closes it (the multiplicative cost is then this loop's
+  // own, spread across probes). Blaming this loop alone would send an author to rewrite a sheet
+  // that is fine; the message names both spenders because the engine cannot tell them apart here.
   //
   // KNOWN GAP: naming the cause is not fixing it. The allowance is linear in the NUMBER of loops
   // while nesting multiplies their cost, so a well-posed sheet can still read infeasible because
@@ -1177,7 +1178,7 @@ function solveTorn(
       res,
       `bias loop stopped after ${passes} pass(es) (${report()}) because the design's shared ` +
         `iteration budget ran out — spent by an expensive loop elsewhere in the tree, or by a ` +
-        `pin above this loop re-closing it on every probe. This loop was not shown to diverge. ` +
+        `design constraint above this loop re-closing it on every probe. This loop was not shown to diverge. ` +
         `Simplify or reparametrize the costliest loop in the composition, or reduce the nesting`,
     );
   }
@@ -1200,14 +1201,14 @@ function solveTorn(
 
 /** Probes bisection may spend before giving up — a backstop far above the ~20 halvings a real
  *  bracket needs; the shared budget is the real ceiling. */
-const PIN_MAX_PROBES = 200;
+const CONSTRAINT_MAX_PROBES = 200;
 
 /** Bracket-width tolerance, relative to the AUTHORED bracket's span — not to the iterates,
  *  which never close a purely relative test when the root sits at 0 (|lo|,|hi| stay ~constant
  *  while the width shrinks). Its own constant, looser than SOLVE_TOL_REL, because a bisection
  *  digit costs a full tree evaluation where a substitution digit is nearly free: 1e-6 lands in
  *  ~20 probes and resolves a volt-scale node to a microvolt. */
-const PIN_TOL_REL = 1e-6;
+const CONSTRAINT_TOL_REL = 1e-6;
 
 /** Residual tolerance at the accepted root, relative to the relation's RANGE over the authored
  *  bracket (max |lhs-rhs| at the two ends — already in hand from the sign check). Scaling by the
@@ -1216,7 +1217,7 @@ const PIN_TOL_REL = 1e-6;
  *  residual form and waved through a real jump riding a large DC offset. A steep-but-continuous
  *  relation leaves a residual of (slope x final width) — vanishing on the range scale — while a
  *  JUMP leaves a fixed fraction of it. */
-const PIN_RESIDUAL_REL = 1e-5;
+const CONSTRAINT_RESIDUAL_REL = 1e-5;
 
 /** The least a held expression may move across its bracket, as a fraction of what its own param's
  *  term moves. For a node under a gate the rest of the expression is a gate-source voltage, which
@@ -1225,10 +1226,10 @@ const PIN_RESIDUAL_REL = 1e-5;
 const HOLD_SLOPE_MIN = 1e-6;
 
 /**
- * Evaluate a sheet document — the single public entry. A doc that declares containment
- * edges dispatches to the edge wrapper; everything else, and every step the engine takes
- * below the top of a tree (composed children, solver probes, the edge runs themselves),
- * goes through evaluateNode — which structurally has no edge branch, so "edges evaluate
+ * Evaluate a sheet document — the single public entry. A doc that declares an operating
+ * range dispatches to the range wrapper; everything else, and every step the engine takes
+ * below the top of a tree (composed children, solver probes, the range-end runs themselves),
+ * goes through evaluateNode — which structurally has no range branch, so "range ends evaluate
  * only at the top" holds with no runtime guard to maintain.
  */
 export function evaluateSheet(
@@ -1236,29 +1237,30 @@ export function evaluateSheet(
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
 ): SheetResult {
-  // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (edges as a
+  // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (operatingRange as a
   // string or object — validation's problem) must degrade to a plain evaluation, not a
   // TypeError out of .map.
   return Array.isArray(doc.operatingRange) && doc.operatingRange.length
-    ? evaluateWithEdges(doc, table, resolveDevice)
+    ? evaluateWithRange(doc, table, resolveDevice)
     : evaluateTop(doc, table, resolveDevice);
 }
 
-/** How many params the tree pins — each one a bisection of its own. */
-function pinCount(doc: SheetDoc, depth = 0): number {
+/** How many params the tree constrains — each one a bisection of its own. */
+function constraintCount(doc: SheetDoc, depth = 0): number {
   if (depth >= MAX_BLOCK_DEPTH) return 0;
   let n = doc.params.filter(constrained).length;
-  for (const u of doc.blocks ?? []) if (u.doc) n += pinCount(u.doc, depth + 1);
+  for (const u of doc.blocks ?? []) if (u.doc) n += constraintCount(u.doc, depth + 1);
   return n;
 }
 
 /**
- * evaluateNode for the top of a tree, refusing a tree whose pins depend on each other ACROSS
- * levels. A child solves its own pins inside each of its parent's probes, which is exact while
- * the child's relations do not read the parent's pin; when they do, the nesting would close a
- * coupled system by iteration, which this engine does not do. One level's own pins are ordered
- * (or refused) where they are solved; this is the same question asked of the whole tree, in the
- * words validation raises. Two pins are the fewest that can depend on each other.
+ * evaluateNode for the top of a tree, refusing a tree whose design constraints depend on each other
+ * ACROSS levels. A child solves its own constraints inside each of its parent's probes, which is
+ * exact while the child's relations do not read the parent's constrained param; when they do, the
+ * nesting would close a coupled system by iteration, which this engine does not do. One level's own
+ * constraints are ordered (or refused) where they are solved; this is the same question asked of
+ * the whole tree, in the words validation raises. Two constraints are the fewest that can depend on
+ * each other.
  */
 function evaluateTop(
   doc: SheetDoc,
@@ -1266,7 +1268,7 @@ function evaluateTop(
   resolveDevice: DeviceResolver | undefined,
 ): SheetResult {
   const res = evaluateNode(doc, table, resolveDevice, 0);
-  if (pinCount(doc) < 2) return res;
+  if (constraintCount(doc) < 2) return res;
   const plan = constraintPlan(doc);
   // A pair on the top level itself was already refused, in these words, where it would have
   // been solved.
@@ -1317,14 +1319,14 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
  *
  *  - `solveFor` — the param is an ESTIMATE of a value the sheet itself resolves; closed by
  *    damped substitution (solveTorn above), with all the care that method needs.
- *  - `pin` — the param is a FREE internal variable (a node voltage) chosen so an output equals
- *    a spec. Closed by bisection on the param's [min, max]: no contraction requirement, no
- *    overshoot, no dependence on a starting guess. The honesty conditions are explicit —
- *    `lhs - rhs` must change sign across the bracket and must actually reach zero at the root —
- *    and every violation fails closed with the reason, never a design sized where the data was
- *    not.
+ *  - `designConstraint` — the param is a FREE internal variable (a node voltage) chosen so an
+ *    output equals a spec. Closed by bisection on the param's [min, max]: no contraction
+ *    requirement, no overshoot, no dependence on a starting guess. The honesty conditions are
+ *    explicit — `lhs - rhs` must change sign across the bracket and must actually reach zero at
+ *    the root — and every violation fails closed with the reason, never a design sized where the
+ *    data was not.
  *
- * The pinned solve is the OUTER loop: each probe re-closes any torn loops inside, and both
+ * The constraint solve is the OUTER loop: each probe re-closes any torn loops inside, and both
  * mechanisms draw on the one tree-wide pass budget, so nesting stays bounded.
  */
 function solveNode(
@@ -1334,32 +1336,33 @@ function solveNode(
   _depth: number,
   budget: SolveBudget,
 ): SheetResult {
-  // One home for the structural pin checks (validateSheet raises the same words as errors);
-  // checked BEFORE filtering by the constrained() shape guard, because the guard rejects a
-  // half-written pin — which would otherwise sail past as "no pins" and freeze the param.
+  // One home for the structural design-constraint checks (validateSheet raises the same words as
+  // errors); checked BEFORE filtering by the constrained() shape guard, because the guard rejects a
+  // half-written constraint — which would otherwise sail past as "no constraints" and freeze the
+  // param.
   const problem = constraintProblem(doc.params);
   if (problem) {
     return solveFailed(solveTorn(doc, table, resolveDevice, _depth, budget), problem);
   }
-  const pins = doc.params.filter(constrained);
-  if (pins.length === 0) return solveTorn(doc, table, resolveDevice, _depth, budget);
+  const constrainedParams = doc.params.filter(constrained);
+  if (constrainedParams.length === 0) return solveTorn(doc, table, resolveDevice, _depth, budget);
 
-  // Several pins at one level are solved one at a time, each after the pins its relation reads
-  // and with those held at the values they landed on. constraintPlan proves that order exists; when it
-  // does not, the pins form a coupled system and nothing is solved.
-  let order = pins;
-  if (pins.length > 1) {
+  // Several constraints at one level are solved one at a time, each after the ones its relation
+  // reads and with those held at the values they landed on. constraintPlan proves that order
+  // exists; when it does not, the constraints form a coupled system and nothing is solved.
+  let order = constrainedParams;
+  if (constrainedParams.length > 1) {
     const plan = constraintPlan(doc);
     if ('problem' in plan)
       return solveFailed(solveTorn(doc, table, resolveDevice, _depth, budget), plan.problem);
     const rank = new Map(plan.order.map((name, at) => [name, at]));
     const at = (p: SheetVar): number => rank.get(p.name) ?? Infinity;
-    order = [...pins].sort((a, b) => at(a) - at(b));
+    order = [...constrainedParams].sort((a, b) => at(a) - at(b));
   }
   const landed: Record<string, number> = {};
   let last: SheetResult | undefined;
   for (const p of order) {
-    const { res, ok } = solvePin(doc, p, landed, table, resolveDevice, _depth, budget);
+    const { res, ok } = solveConstraint(doc, p, landed, table, resolveDevice, _depth, budget);
     if (!ok) return res;
     landed[p.name] = res.values[p.name];
     last = res;
@@ -1368,11 +1371,11 @@ function solveNode(
 }
 
 /**
- * Bisect one pinned param on its bracket, with the pins solved before it (`landed`) held at their
- * values. `ok` is false for every way the solve can fail — each returns the last evaluation
+ * Bisect one constrained param on its bracket, with the ones solved before it (`landed`) held at
+ * their values. `ok` is false for every way the solve can fail — each returns the last evaluation
  * marked infeasible with the reason — and true only for a root that was actually reached.
  */
-function solvePin(
+function solveConstraint(
   doc: SheetDoc,
   p: SheetVar & { designConstraint: { lhs: string; rhs: string; held?: boolean } },
   landed: Record<string, number>,
@@ -1382,8 +1385,8 @@ function solvePin(
   budget: SolveBudget,
 ): { res: SheetResult; ok: boolean } {
   const { lhs, rhs } = p.designConstraint;
-  // A pin generated from a hold is named as the author wrote it.
-  const what = `${p.designConstraint.held ? 'held' : 'pinned'} param "${p.name}"`;
+  // A constraint generated from a hold is named as the author wrote it.
+  const what = `${p.designConstraint.held ? 'held' : 'constrained'} param "${p.name}"`;
   const failed = (res: SheetResult, message: string) => ({
     res: solveFailed(res, message),
     ok: false,
@@ -1395,10 +1398,16 @@ function solvePin(
 
   /** lhs - rhs at an already-evaluated probe; undefined when either side does not resolve.
    *  Diagnostics are swallowed (NO_WARN): a side that stops resolving is reported once,
-   *  with the pin's own message, not once per probe. */
+   *  with the constraint's own message, not once per probe. */
   const gap = (res: SheetResult): number | undefined => {
     const at = (src: string): number | undefined => {
-      const v = evalScalar(src, res.values, scalarScope(res.values), NO_WARN, `pin ${p.name}`);
+      const v = evalScalar(
+        src,
+        res.values,
+        scalarScope(res.values),
+        NO_WARN,
+        `constraint ${p.name}`,
+      );
       return v !== undefined && Number.isFinite(v) ? v : undefined;
     };
     const l = at(lhs);
@@ -1452,7 +1461,7 @@ function solvePin(
   const gScale = Math.max(Math.abs(gLo), Math.abs(gHi));
 
   let res = second;
-  for (let probes = 0; probes < PIN_MAX_PROBES && budget.left > 0; probes++) {
+  for (let probes = 0; probes < CONSTRAINT_MAX_PROBES && budget.left > 0; probes++) {
     const mid = (lo + hi) / 2;
     res = probeAt(mid);
     const g = gap(res);
@@ -1469,8 +1478,8 @@ function solvePin(
     } else hi = mid;
     // Accept only a genuine crossing: a relation that JUMPS across the target brings the bracket
     // to nothing while the residual stays macroscopic.
-    if (hi - lo <= PIN_TOL_REL * span) {
-      if (Math.abs(g) > PIN_RESIDUAL_REL * gScale)
+    if (hi - lo <= CONSTRAINT_TOL_REL * span) {
+      if (Math.abs(g) > CONSTRAINT_RESIDUAL_REL * gScale)
         return failed(
           res,
           `${what}: the bracket closed but ${lhs} - ${rhs} still reads ` +
@@ -1485,10 +1494,10 @@ function solvePin(
     res,
     budget.left <= 0
       ? `${what} stopped before its bracket closed because the design's ` +
-          `shared iteration budget ran out — spent by the loops this pin re-closes on every ` +
-          `probe, or by an expensive sibling elsewhere in the tree. This pin was not shown ` +
+          `shared iteration budget ran out — spent by the loops this constraint re-closes on every ` +
+          `probe, or by an expensive sibling elsewhere in the tree. This constraint was not shown ` +
           `to be unsolvable`
-      : `${what}: the bracket did not close in ${PIN_MAX_PROBES} probes`,
+      : `${what}: the bracket did not close in ${CONSTRAINT_MAX_PROBES} probes`,
   );
 }
 
@@ -1505,20 +1514,20 @@ function solvePin(
  * touches it. `complies` is whether that design, HELD FIXED (see coverage.ts), still works at
  * every range end — conditional on there being a design at all. When the base run did not stand,
  * every end comes back `not-run` rather than carrying a verdict about hardware the engine never
- * landed on — a failed pin leaves its last bisection probe in the result with every bind
- * reading `ok`, so "the binds sized" is nowhere near enough to have produced an instance. Rule
- * FAILURES do not gate: a center that misses its spec is still a design, and whether it holds
+ * landed on — a failed design constraint leaves its last bisection probe in the result with every
+ * sizing reading `ok`, so "the devices sized" is nowhere near enough to have produced an instance.
+ * Check FAILURES do not gate: a center that misses its spec is still a design, and whether it holds
  * across its claimed range is still a real question.
  */
-function evaluateWithEdges(
+function evaluateWithRange(
   doc: SheetDoc,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
 ): SheetResult {
   const base = evaluateTop(doc, table, resolveDevice);
-  const edges = doc.operatingRange ?? [];
+  const rangeEnds = doc.operatingRange ?? [];
   if (!stands(base)) {
-    const reports = edges.map((e): RangeEndReport => ({
+    const reports = rangeEnds.map((e): RangeEndReport => ({
       name: e.name,
       state: 'not-run',
       // No `set`: the overrides resolve against the base VALUES, which here are wherever the
@@ -1537,7 +1546,7 @@ function evaluateWithEdges(
   const assumed = dcInputs(doc).assumed;
   if (assumed.length) {
     const error = assumedLevelRefusal(assumed);
-    const reports = edges.map((e): RangeEndReport => ({
+    const reports = rangeEnds.map((e): RangeEndReport => ({
       name: e.name,
       state: 'no-answer',
       set: {},
@@ -1548,8 +1557,8 @@ function evaluateWithEdges(
     }));
     return { ...base, rangeEnds: reports, complies: false };
   }
-  const pinned = holdHardware(doc, base);
-  const reports = edges.map((e) => runEdge(e, pinned, base, table, resolveDevice));
+  const held = holdHardware(doc, base);
+  const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice));
   return { ...base, rangeEnds: reports, complies: reports.every((r) => r.state === 'complies') };
 }
 
@@ -1558,22 +1567,22 @@ function evaluateWithEdges(
  * the classification every compliance point shares, whether "here" is a range end or another
  * process condition.
  *
- * - it completed, every device read where it was asked for: `complies` when every hard rule
- *   holds, else `does-not-comply` (the failures are in the run's rules);
+ * - it completed, every device read where it was asked for: `complies` when every hard check
+ *   holds, else `does-not-comply` (the failures are in the run's checks);
  * - a device held at its width cannot carry its current here: `does-not-comply`, with `error`;
  * - it did not complete for any other reason, or completed on data read off the table's hull:
  *   `no-answer`, with `error` — the solver's message verbatim where there is one.
  *
- * An `error` means the run's rule outcomes are not findings about this point.
+ * An `error` means the run's check outcomes are not findings about this point.
  */
 export function heldOutcome(res: SheetResult): {
   state: Exclude<PointState, 'not-run'>;
   error?: string;
 } {
   // The SOLVER's own message when one exists — a child's solve failure rolls up mid-evaluation
-  // and later diagnostics (a non-finite parent row) land after it, so "last error" alone reports
-  // the consequence instead of the cause. One reverse scan: remember the last error of any kind
-  // as the fallback, prefer the last sheet-solve. (Reverse loop: the target lib predates
+  // and later diagnostics (a non-finite parent equation) land after it, so "last error" alone
+  // reports the consequence instead of the cause. One reverse scan: remember the last error of any
+  // kind as the fallback, prefer the last sheet-solve. (Reverse loop: the target lib predates
   // findLast, and a filter would copy the array to read one element.)
   let err: string | undefined;
   let lastError: string | undefined;
@@ -1624,15 +1633,15 @@ export function heldOutcome(res: SheetResult): {
  *  FIXED-HARDWARE form of the doc with those values (through evaluateNode, so the run cannot
  *  recurse into range ends), and classify the outcome (see RangeEndReport.state):
  *
- *  - every hard rule holds: `complies`. One fails: `does-not-comply`, the failures in `checks`.
+ *  - every hard check holds: `complies`. One fails: `does-not-comply`, the failures in `checks`.
  *  - a device held at its width cannot carry its current here: `does-not-comply`, with `error`.
  *  - the run could not be completed — a `set` that does not resolve, a solve that does not
  *    land — or it completed on data read off the table's hull: `no-answer`, the underlying
  *    message VERBATIM in `error`, so a shared-budget starvation stays distinguishable from
  *    "the bracket cannot reach it". */
-function runEdge(
-  edge: SheetRangeEnd,
-  pinned: HeldHardware,
+function runRangeEnd(
+  rangeEnd: SheetRangeEnd,
+  held: HeldHardware,
   base: SheetResult,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
@@ -1640,14 +1649,14 @@ function runEdge(
   // Copied per report rather than shared: the transformation allocates one list for the whole
   // document, and a consumer that sorted or de-duplicated one report's copy in place would be
   // rewriting every sibling's at the same time.
-  const assumed = pinned.assumedSource.length
-    ? { assumedSource: [...pinned.assumedSource] }
+  const assumed = held.assumedSource.length
+    ? { assumedSource: [...held.assumedSource] }
     : undefined;
   const scope = scalarScope(base.values);
   const over: Record<string, number> = {};
   /** Asked, and nothing was evaluated that could answer. */
   const unanswered = (error: string): RangeEndReport => ({
-    name: edge.name,
+    name: rangeEnd.name,
     state: 'no-answer',
     set: over,
     checks: [],
@@ -1656,36 +1665,37 @@ function runEdge(
     error,
     ...assumed,
   });
-  // `?? {}`: a half-written edge (no set) is validation's error to name; evaluate never throws.
-  for (const [param, expr] of Object.entries(edge.set ?? {})) {
-    const v = evalScalar(expr, base.values, scope, NO_WARN, `edge ${edge.name}`);
+  // `?? {}`: a half-written range end (no set) is validation's error to name; evaluate never
+  // throws.
+  for (const [param, expr] of Object.entries(rangeEnd.set ?? {})) {
+    const v = evalScalar(expr, base.values, scope, NO_WARN, `range end ${rangeEnd.name}`);
     if (v === undefined || !Number.isFinite(v))
       return unanswered(
-        `edge "${edge.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
+        `range end "${rangeEnd.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
           `number against the base result`,
       );
     over[param] = v;
   }
   // A hold with no recorded value has nothing to be held at. Unreachable while the base run
   // stands (a hold that does not evaluate fails it), so this is the closed door behind that.
-  if (pinned.unheld.length)
+  if (held.unheld.length)
     return unanswered(
-      `edge "${edge.name}": no nominal value was recorded for the held expression of ` +
-        pinned.unheld.join(', '),
+      `range end "${rangeEnd.name}": no nominal value was recorded for the held expression of ` +
+        held.unheld.join(', '),
     );
-  const res = evaluateTop(withParams(pinned.doc, over), table, resolveDevice);
+  const res = evaluateTop(withParams(held.doc, over), table, resolveDevice);
   const { state, error: err } = heldOutcome(res);
-  // The solved map is "where the edge LANDED" — a run with an `error` (a pin that never landed,
-  // data read somewhere else) leaves values that must not be reported as a landing.
+  // The solved map is "where the range end LANDED" — a run with an `error` (a solve that never
+  // landed, data read somewhere else) leaves values that must not be reported as a landing.
   const solved: Record<string, number> = {};
   if (err === undefined)
-    for (const p of pinned.doc.params)
+    for (const p of held.doc.params)
       if (engineSolved(p) && Number.isFinite(res.values[p.name]))
         solved[p.name] = res.values[p.name];
   // The run's warnings ride the report VERBATIM (never merged into the parent's), so the base
   // result's warning contract stays untouched.
   return {
-    name: edge.name,
+    name: rangeEnd.name,
     state,
     set: over,
     checks: res.checks,

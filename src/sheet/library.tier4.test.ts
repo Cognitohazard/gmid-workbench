@@ -2,20 +2,20 @@
 // Each number here is hand-derived from the synthetic EKV demo model's closed forms
 // (never by re-running the engine):
 //
-//   - Bound quantities are EXACT: with a gm/ID + ID bind the sizer sets gm = gm/ID·ID
+//   - Given quantities are EXACT: with gm/ID + ID given the sizer sets gm = gm/ID·ID
 //     and reports ID exactly, so gm1, gm2, GBW = gm1/(2π·Cc), z = gm2/Cc, and the slew
 //     limits pin to 1e-9.
 //   - Output conductance is EXACT in the demo: gds = ID/(VA + vds) with VA = 5e6·L,
 //     independent of the found vgs. So a gain built only from gm and gds (Av2, the FVF
 //     output resistance) is exact too.
-//   - Intrinsic gain av0 = gm/gds is reported from the INTERPOLATED gm (before the bind
+//   - Intrinsic gain av0 = gm/gds is reported from the INTERPOLATED gm (before the sizing
 //     overwrites gm), so any gain built on a provided av0 (the SSF/telescopic output
 //     resistances) carries the demo grid's ~1e-4 interpolation error — those assert at 1e-2.
 //   - vdsat and diode vgs come from the EKV inversion (noted constants), so swing/level
-//     rows assert at 1e-2.
+//     equations assert at 1e-2.
 //   - gmb = BODY_FACTOR·gm at every point, but like av0 it rides the interpolated gm, so
-//     rows built on it assert at interpolation order rather than at 1e-9.
-//   - The phase-margin rows are the sheet's own arctan estimate recomputed here from the
+//     equations built on it assert at interpolation order rather than at 1e-9.
+//   - The phase-margin equations are the sheet's own arctan estimate recomputed here from the
 //     exact gm values.
 
 import { describe, it, expect } from 'vitest';
@@ -55,7 +55,7 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
   const CL = 5e-12;
   const va = VA_PER_L * 0.5e-6;
 
-  it('bandwidth, RHP zero, and slew pin exactly to the bound transconductances', () => {
+  it('bandwidth, RHP zero, and slew pin exactly to the given transconductances', () => {
     expect(relErr(res.values.GBW, gm1 / (2 * Math.PI * Cc))).toBeLessThan(1e-9);
     expect(relErr(res.values.z_rhp, gm2 / Cc)).toBeLessThan(1e-9);
     expect(relErr(res.values.SR, Math.min(20e-6 / Cc, 60e-6 / CL))).toBeLessThan(1e-9);
@@ -80,7 +80,7 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     expect(relErr(res.values.Rout, stage2Rout(60e-6, 0.5e-6, 0.9))).toBeLessThan(1e-9);
     expect(relErr(res.values.Av2, gm2 * res.values.Rout)).toBeLessThan(1e-12);
     // Composition golden on cgg_in: the input child does not expose its sized width, so what is
-    // pinned is WHICH gate the row reads — one input device, per input terminal.
+    // pinned is WHICH gate the equation reads — one input device, per input terminal.
     expect(res.values.cgg_in).toBe(res.values.in__cgg);
     // Supply current is the stage-1 tail plus the single-ended output branch: 20 µA + 60 µA.
     expect(relErr(res.values.I_q, 20e-6 + 60e-6)).toBeLessThan(1e-9);
@@ -111,7 +111,7 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     expect(relErr(res.values.Rout, stage2Rout(60e-6, 0.5e-6, 0.9))).toBeLessThan(1e-9);
     expect(relErr(res.values.Av2, gm2 * res.values.Rout)).toBeLessThan(1e-12);
     // Composition golden on cgg_in: the input child does not expose its sized width, so what is
-    // pinned is WHICH gate the row reads — one input device, per input terminal.
+    // pinned is WHICH gate the equation reads — one input device, per input terminal.
     expect(res.values.cgg_in).toBe(res.values.in__cgg);
     // Cascode compensation changes where the compensation current flows, not what the two
     // branches draw: the same 20 µA tail plus 60 µA output branch as the Miller version.
@@ -135,7 +135,7 @@ describe('tier4 goldens: Rail-to-rail input stage', () => {
 
   it('the supply pays for both pairs, which is the mid-supply worst case', () => {
     // Both tails, 20 µA each. The stage only draws this much where both pairs conduct; toward
-    // either rail one of them shuts off, so the row is deliberately the pessimistic reading.
+    // either rail one of them shuts off, so the equation is deliberately the pessimistic reading.
     expect(relErr(res.values.I_q, 20e-6 + 20e-6)).toBeLessThan(1e-9);
   });
 });
@@ -216,7 +216,7 @@ describe('tier4 goldens: Super source follower', () => {
     expect(relErr(res.values.I_q, 50e-6)).toBeLessThan(1e-9);
   });
 
-  it('input capacitance is one input gate at the width the bind landed on', () => {
+  it('input capacitance is one input gate at the width the sizing landed on', () => {
     expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, 0.5e-6))).toBeLessThan(1e-9);
   });
 });
@@ -251,7 +251,7 @@ describe('tier4 goldens: Flipped voltage follower', () => {
   it('output resistance follows the derived node through the input device’s gds', () => {
     // Rout = gds_in/(gm_in·gm_fb), and gds = ID/(VA + vds) is exact in the demo at any vds. What
     // is not exact is vds itself: it now carries the interpolated vgs the node derives from, so
-    // this asserts at that constant's precision rather than at the bind's 1e-9.
+    // this asserts at that constant's precision rather than at the givens' 1e-9.
     expect(relErr(res.values.Rout, gdsIn / (gm * gm))).toBeLessThan(1e-5);
     expect(res.values.Rout).toBeLessThan(res.values.Rout_plain / 10);
   });
@@ -269,7 +269,7 @@ describe('tier4 goldens: Flipped voltage follower', () => {
     expect(relErr(res.values.headroom, 2 * vdsatDemo(VGS_GMID10_L05, 0.5e-6))).toBeLessThan(1e-2);
   });
 
-  it('input capacitance is one input gate at the width the bind landed on', () => {
+  it('input capacitance is one input gate at the width the sizing landed on', () => {
     expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, 0.5e-6))).toBeLessThan(1e-9);
   });
 });
@@ -288,14 +288,14 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
     const av0cascp = 8 * (va + (1.3 - 0.95));
     const av = gmIn * par(av0cascn / gdsIn, av0cascp / gdsLoad);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
-    // …and Rout is that same parallel combination, which the gain row already reads through.
+    // …and Rout is that same parallel combination, which the gain equation already reads through.
     expect(relErr(res.values.Rout, par(av0cascn / gdsIn, av0cascp / gdsLoad))).toBeLessThan(1e-2);
     expect(relErr(res.values.Av, gmIn * res.values.Rout)).toBeLessThan(1e-3);
   });
 
   it('input capacitance is the gate of one input device', () => {
     // Composition golden: the input child does not expose its sized width, so what is pinned is
-    // which gate the row reads — one input device, per input terminal, half-circuit like the
+    // which gate the equation reads — one input device, per input terminal, half-circuit like the
     // gain above.
     expect(res.values.cgg_in).toBe(res.values.in__cgg);
   });
@@ -320,7 +320,7 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
   const Cc = 3e-12;
   const CL = 5e-12;
 
-  it('bandwidth, RHP zero, and slew pin exactly to the bound transconductances', () => {
+  it('bandwidth, RHP zero, and slew pin exactly to the given transconductances', () => {
     expect(relErr(res.values.GBW, gm1 / (2 * Math.PI * Cc))).toBeLessThan(1e-9);
     expect(relErr(res.values.z_rhp, gm2 / Cc)).toBeLessThan(1e-9);
     expect(relErr(res.values.SR, Math.min(20e-6 / Cc, 60e-6 / CL))).toBeLessThan(1e-9);
@@ -337,7 +337,7 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
 
   it('the stage-1 output level is what the stage-2 gate needs, not a typed number', () => {
     // V1 is the stage-2 gate, so it sits one stage-2 vgs below the supply: for gm/ID 12 at
-    // L 0.5 µm that is 1.8 - 0.567023 = 1.232977 V. Declared wiring on that use restates the
+    // L 0.5 µm that is 1.8 - 0.567023 = 1.232977 V. Declared wiring on that block restates the
     // same identity, so it agrees to the last digit and reports nothing.
     expect(relErr(res.values.V1, 1.8 - VGS_GMID12_L05)).toBeLessThan(1e-3);
     expect(res.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);

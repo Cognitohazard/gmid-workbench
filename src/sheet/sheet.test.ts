@@ -31,10 +31,10 @@ import type { SheetDoc, SheetResult, SheetVar } from './types';
 
 const dev = generateDemoDevice();
 
-/** gm/gds on the 0.5 µm slice at a chosen vgs — used to pick a bind target off-node. */
+/** gm/gds on the 0.5 µm slice at a chosen vgs — used to pick a sizing target off-node. */
 const lookupAt = (vgs: number): number => lookup(dev, { l: 0.5e-6, vgs }).gm_gds;
 
-/** A minimal bound sheet at a known in-range operating point (gm/ID = 12, L = 0.5 µm). */
+/** A minimal sheet with givens at a known in-range operating point (gm/ID = 12, L = 0.5 µm). */
 function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
   return {
     title: 't',
@@ -53,8 +53,8 @@ function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
   };
 }
 
-describe('evaluateSheet — spec-first binds', () => {
-  it('binds fT through a sheet, matching sizeDevice exactly', () => {
+describe('evaluateSheet — spec-first givens', () => {
+  it('sizes from a given fT through a sheet, matching sizeDevice exactly', () => {
     // The claim that a sheet can state a speed spec directly, not just gm/ID.
     const ft = 2e9;
     const ref = sizeDevice({ table: dev, L: 0.5e-6, ft, id: 20e-6 });
@@ -99,10 +99,10 @@ describe('evaluateSheet — spec-first binds', () => {
     expect(res.feasible).toBe(false);
   });
 
-  it('a rule restating a bound spec reads as pinned, not as a failure against its own bind', () => {
+  it('a check restating a given spec reads as set by its own givens, not as a failure against them', () => {
     // A selector is recovered by inverting a node-sampled curve while the point re-derives it
     // from interpolated bases; between nodes those differ by ~0.1%, enough to drive a
-    // requirement on the very quantity the bind pinned to a hard fail. Binding a gain and
+    // spec check on the very quantity the givens set to a hard fail. Giving a gain and
     // then requiring that gain is the most natural thing an author writes, so it must not.
     const vgs = dev.grid.axes.find((a) => a.name === 'vgs') as { values: Float64Array };
     const midway = (vgs.values[40] + vgs.values[41]) / 2; // deliberately between nodes
@@ -118,11 +118,11 @@ describe('evaluateSheet — spec-first binds', () => {
     });
     const res = evaluateSheet(doc, dev);
 
-    expect(res.checks[0].status).toBe('amber'); // pinned by its own bind, not failed
+    expect(res.checks[0].status).toBe('amber'); // set by its own givens, not failed
     expect(res.feasible).toBe(true);
   });
 
-  it('names the missing column when a sheet binds a quantity the table cannot compute', () => {
+  it('names the missing column when a sheet gives a quantity the table cannot compute', () => {
     const noCgg = withoutColumns(dev, ['cgg']);
     const doc = boundDoc({
       params: [{ name: 'L', value: 0.5e-6 }],
@@ -137,7 +137,7 @@ describe('evaluateSheet — spec-first binds', () => {
 });
 
 describe('evaluateSheet — sizing reuse', () => {
-  it('reproduces sizeDevice W and vgs for the same bind (no re-inversion)', () => {
+  it('reproduces sizeDevice W and vgs for the same givens (no re-inversion)', () => {
     const gm = 2 * Math.PI * 10e6 * 2e-12;
     const ref = sizeDevice({ table: dev, L: 0.5e-6, gm, gm_id: 12 });
     const res = evaluateSheet(boundDoc(), dev);
@@ -151,9 +151,9 @@ describe('evaluateSheet — sizing reuse', () => {
   });
 });
 
-describe('evaluateSheet — rules', () => {
-  it('flips an invariant pass<->fail across its boundary', () => {
-    const rule = {
+describe('evaluateSheet — checks', () => {
+  it('flips a physical check pass<->fail across its boundary', () => {
+    const check = {
       id: 'headroom',
       kind: 'physical' as const,
       lhs: 'vstar',
@@ -161,11 +161,11 @@ describe('evaluateSheet — rules', () => {
       rhs: 'vstar_floor',
     };
     // vstar = 2/12 ≈ 0.1667
-    const passDoc = boundDoc({ params: [...boundDoc().params], checks: [rule] });
+    const passDoc = boundDoc({ params: [...boundDoc().params], checks: [check] });
     passDoc.params.find((p) => p.name === 'vstar_floor')!.value = 0.15;
     expect(evaluateSheet(passDoc, dev).checks[0].status).toBe('pass');
 
-    const failDoc = boundDoc({ checks: [rule] });
+    const failDoc = boundDoc({ checks: [check] });
     failDoc.params.find((p) => p.name === 'vstar_floor')!.value = 0.2;
     const failed = evaluateSheet(failDoc, dev).checks[0];
     expect(failed.status).toBe('fail');
@@ -193,8 +193,8 @@ describe('evaluateSheet — rules', () => {
     expect(eq.status).toBe('fail');
   });
 
-  it('gives a passing == rule a non-negative margin so the zero line is the real boundary', () => {
-    // The feasibility chart and the margin column read margin >= 0 as passing; an '==' rule that
+  it('gives a passing == check a non-negative margin so the zero line is the real boundary', () => {
+    // The feasibility chart and the margin column read margin >= 0 as passing; an '==' check that
     // holds within tolPct must sit at/above zero, not below it (it once always did, being |Δ|).
     const within = boundDoc({
       params: [
@@ -221,7 +221,7 @@ describe('evaluateSheet — rules', () => {
     expect(fail.marginPct).toBeLessThan(0);
   });
 
-  it('marks a non-finite rule side as na, never a false pass', () => {
+  it('marks a non-finite check side as na, never a false pass', () => {
     const doc = boundDoc({
       params: [
         { name: 'z', value: 0 },
@@ -238,7 +238,7 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
   // A table that actually sweeps body bias, so leaving vsb undeclared is a real choice.
   const bodySwept = generateDemoDevice({ vsb: { min: 0, max: 0.6, step: 0.2 } });
 
-  it('marks a bias axis the bind left undeclared', () => {
+  it('marks a bias axis the givens left undeclared', () => {
     // vsb = 0 is right for a device whose source sits at its bulk and wrong for a differential
     // pair, cascode or source follower. The engine cannot tell which — a sheet describes no
     // nodes — so the coordinate it filled in must be distinguishable from one the author wrote.
@@ -248,7 +248,7 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
     expect(res.sizing?.assumed).toContain('vsb');
   });
 
-  it('does not mark a bias axis the bind declares', () => {
+  it('does not mark a bias axis the givens declare', () => {
     const doc = boundDoc();
     const res = evaluateSheet({ ...doc, givens: { ...doc.givens!, vsb: '0.2' } }, bodySwept);
     expect(res.sizing?.bias?.vsb).toBeCloseTo(0.2, 12);
@@ -267,7 +267,7 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
 describe('evaluateSheet — bias-loop closure (solveFor)', () => {
   // A loop shaped like a real one: an estimate standing in for a value only the evaluated
   // sheet knows, perturbing the operating point WEAKLY. The demo table has no live bias axes,
-  // so the loop runs through a row rather than a bias declaration — `gm/ID` is nudged by the
+  // so the loop runs through an equation rather than a bias declaration — `gm/ID` is nudged by the
   // estimate, and the estimate solves for the vstar that results.
   //
   // The weak coefficient is what makes it converge, and that is the honest shape: measured
@@ -413,7 +413,7 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
   });
 
   it('closes a loop inside a composed child', () => {
-    // evalChildren recurses through evaluateSheet, so a child's own tearing variable must be
+    // evalBlocks recurses through evaluateSheet, so a child's own tearing variable must be
     // solved without the parent knowing anything about it.
     const parent: SheetDoc = {
       title: 'parent',
@@ -639,7 +639,7 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
 });
 
 describe('evaluateSheet — degrades instead of throwing', () => {
-  it('catches an out-of-range gm/ID as a failed bind, not an exception', () => {
+  it('catches an out-of-range gm/ID as a failed sizing, not an exception', () => {
     const doc = boundDoc();
     doc.params.find((p) => p.name === 'gm_id')!.value = 1000; // far above the slice ceiling
     let res!: ReturnType<typeof evaluateSheet>;
@@ -649,29 +649,29 @@ describe('evaluateSheet — degrades instead of throwing', () => {
     expect(res.feasible).toBe(false);
   });
 
-  it('skips a row with an undeclared name and warns', () => {
+  it('skips an equation with an undeclared name and warns', () => {
     const doc = boundDoc({ equations: [{ name: 'oops', expr: 'no_such_name * 2' }] });
     const res = evaluateSheet(doc, dev);
     expect('oops' in res.values).toBe(false);
     expect(res.warnings.some((w) => w.rule === 'sheet-undeclared')).toBe(true);
   });
 
-  it('evaluates without a device: bound rows go na, param rules still check', () => {
+  it('evaluates without a device: equations that read it go na, param checks still evaluate', () => {
     const doc = boundDoc({
       checks: [{ id: 'ok', kind: 'advisory', lhs: 'gm_id', op: '<=', rhs: '20' }],
     });
     const res = evaluateSheet(doc); // no table
     expect(res.sizing?.ok).toBe(false);
-    expect(res.warnings.some((w) => w.severity === 'error')).toBe(true); // unsolved bind ⇒ error
+    expect(res.warnings.some((w) => w.severity === 'error')).toBe(true); // unsolved sizing ⇒ error
     expect(res.feasible).toBe(false); // never vacuously feasible without a successful size
     expect(res.checks[0].status).toBe('pass'); // gm_id is a param, resolvable without a device
   });
 });
 
 describe('feasibility is fail-closed', () => {
-  it('a non-finite bind expression is infeasible even when a param-only invariant passes', () => {
+  it('a non-finite given expression is infeasible even when a param-only physical check passes', () => {
     const doc = boundDoc({
-      givens: { L: '1/0', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' }, // L = Infinity → bind fails
+      givens: { L: '1/0', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' }, // L = Infinity → sizing fails
       checks: [{ id: 'param-inv', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: '20' }], // 12<=20 would pass
     });
     const res = evaluateSheet(doc, dev);
@@ -682,7 +682,7 @@ describe('feasibility is fail-closed', () => {
     expect(res.feasible).toBe(false);
   });
 
-  it('a failed requirement is infeasible, but a failed guardrail is only advisory', () => {
+  it('a failed spec check is infeasible, but a failed advisory check only advises', () => {
     const base = boundDoc({
       params: [
         { name: 'a', value: 10 },
@@ -701,7 +701,7 @@ describe('feasibility is fail-closed', () => {
       dev,
     );
     expect(soft.checks[0].status).toBe('fail');
-    expect(soft.feasible).toBe(true); // guardrails never block
+    expect(soft.feasible).toBe(true); // advisory checks never block
   });
 
   it('runSheet folds a validation error (non-finite param) into feasibility', () => {
@@ -717,7 +717,7 @@ describe('feasibility is fail-closed', () => {
 });
 
 describe('validateSheet', () => {
-  it('flags a non-finite param and a wrong bind arity', () => {
+  it('flags a non-finite param and a wrong givens arity', () => {
     const doc = boundDoc({
       params: [{ name: 'x', value: Number.NaN }],
       givens: { L: 'L', gm: '1', gm_id: '1', id: '1' }, // three of three
@@ -791,7 +791,7 @@ describe('the noise & matching example', () => {
 });
 
 describe('sweepSheet — feasibility curve', () => {
-  it('traces a rule margin across a parameter range and bounds the feasible window', () => {
+  it('traces a check margin across a parameter range and bounds the feasible window', () => {
     const doc = structuredClone(EXAMPLES[0]);
     const sw = sweepSheet(doc, 'gm_id', dev, 21);
 
@@ -822,7 +822,7 @@ describe('sweepSheet — feasibility curve', () => {
   });
 });
 
-describe('composition — scalar provide/use', () => {
+describe('composition — blocks and the scalars they provide', () => {
   const cascode = EXAMPLES.find((e) => e.title.startsWith('NMOS cascode'))!;
 
   it('evaluates children first, exposes provides as name__key, and reports each child', () => {
@@ -836,7 +836,7 @@ describe('composition — scalar provide/use', () => {
     expect(res.values['cs__av0']).toBeCloseTo(cs.provides.av0, 12);
     // the parent's author math composed them: Av == av0 · cs__av0 (the cascode gain)
     expect(res.values.Av).toBeCloseTo(res.values.av0 * res.values['cs__av0'], 9);
-    // and the parent bound its OWN device to the child's current (the series stack)
+    // and the parent sized its OWN device from the child's current (the series stack)
     expect(res.values.id).toBeCloseTo(cs.provides.id, 15);
   });
 
@@ -844,7 +844,7 @@ describe('composition — scalar provide/use', () => {
     expect(runSheet(EXAMPLES[0], dev).blocks).toBeUndefined();
   });
 
-  it('is fail-closed: an infeasible child drags the parent infeasible, attributed to the use site', () => {
+  it('is fail-closed: an infeasible child drags the parent infeasible, attributed to the block', () => {
     const badChild: SheetDoc = {
       title: 'bad',
       polarity: 'n',
@@ -869,7 +869,7 @@ describe('composition — scalar provide/use', () => {
     const res = runSheet(parent, dev);
     expect(res.blocks![0].feasible).toBe(false);
     expect(res.feasible).toBe(false);
-    expect(res.warnings.some((w) => w.message.includes('use "c":'))).toBe(true);
+    expect(res.warnings.some((w) => w.message.includes('block "c":'))).toBe(true);
   });
 
   it('sweeping the shared knob bounds a feasible window over the whole tree', () => {
@@ -883,7 +883,7 @@ describe('composition — scalar provide/use', () => {
     expect(gain.at(-1)!).toBeGreaterThan(gain[0]!); // gain improves with gm/ID
   });
 
-  it('a child sizes against the device its `use` names (resolver), or inherits the parent table', () => {
+  it('a child sizes against the device its block names (resolver), or inherits the parent table', () => {
     const child: SheetDoc = {
       title: 'k',
       polarity: 'n',
@@ -922,10 +922,10 @@ describe('composition — scalar provide/use', () => {
 
   it('a named-but-unresolved device fails even a BINDLESS child closed (not vacuously feasible)', () => {
     // The regression this guards: without the unresolved-device branch, a bindless child sized
-    // against no table is vacuously feasible (no bind ⇒ no error), so the parent reads feasible
-    // while its child's named device silently does not exist. A child WITH a bind would fail on
-    // the bind regardless, so only a bindless child distinguishes the branch.
-    const bindless: SheetDoc = {
+    // against no table is vacuously feasible (no givens ⇒ no error), so the parent reads feasible
+    // while its child's named device silently does not exist. A child WITH givens would fail on
+    // the sizing regardless, so only a child without givens distinguishes the branch.
+    const noGivens: SheetDoc = {
       title: 'k0',
       polarity: 'n',
       params: [],
@@ -939,7 +939,7 @@ describe('composition — scalar provide/use', () => {
       params: [],
       equations: [],
       checks: [],
-      blocks: [{ name: 'k', doc: bindless, device: 'missing' }],
+      blocks: [{ name: 'k', doc: noGivens, device: 'missing' }],
     };
     const res = runSheet(parent, dev, () => undefined);
     expect(res.blocks![0].feasible).toBe(false);
@@ -981,9 +981,9 @@ describe('composition — scalar provide/use', () => {
   });
 });
 
-describe('validateSheet — hand-tuned stand-ins for a device operating point', () => {
-  // A child that binds vds from a parent param, and provides its own vgs back.
-  const withRule = (lhs: string, biasExpr = 'guess'): SheetDoc => ({
+describe('validateSheet — hand-tuned assumptions about a device operating point', () => {
+  // A child whose given vds comes from a parent param, and which provides its own vgs back.
+  const withCheck = (lhs: string, biasExpr = 'guess'): SheetDoc => ({
     title: 'p',
     polarity: 'n',
     params: [
@@ -1013,40 +1013,40 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
       },
     ],
   });
-  const standins = (d: SheetDoc): string[] =>
+  const assumptionFindings = (d: SheetDoc): string[] =>
     validateSheet(d)
       .filter((w) => w.rule === 'sheet-assumption')
       .map((w) => w.message);
 
-  it('flags a param that biases a block while a rule asserts it equals that block’s own vgs', () => {
-    const w = standins(withRule('abs(k__vgs - guess)'));
+  it('flags a param that biases a block while a check asserts it equals that block’s own vgs', () => {
+    const w = assumptionFindings(withCheck('abs(k__vgs - guess)'));
     expect(w).toHaveLength(1);
     expect(w[0]).toMatch(/"guess" biases block "k" \(vds\)/);
-    // The bias IS the stand-in and it is tied to vgs, so this is the diode identity.
+    // The bias IS the assumption and it is tied to vgs, so this is the diode identity.
     expect(w[0]).toMatch(/diode-connected/);
   });
 
-  it('does NOT flag a headroom guardrail that merely mentions both names', () => {
+  it('does NOT flag a headroom advisory check that merely mentions both names', () => {
     // The discriminator: this asserts nothing about the two being equal. Before the abs(...)
     // requirement this shape produced a false finding on a third of the library.
-    expect(standins(withRule('V_node - k__vdsat'))).toEqual([]);
+    expect(assumptionFindings(withCheck('V_node - k__vdsat'))).toEqual([]);
     // Nor does an abs() elsewhere in the same expression create a pairing.
-    expect(standins(withRule('abs(k__vdsat) - V_node + guess'))).toEqual([]);
+    expect(assumptionFindings(withCheck('abs(k__vdsat) - V_node + guess'))).toEqual([]);
   });
 
   it('calls a compound bias expression a node voltage, not a diode connection', () => {
-    const w = standins(withRule('abs(k__vgs - guess)', 'V_node - guess'));
+    const w = assumptionFindings(withCheck('abs(k__vgs - guess)', 'V_node - guess'));
     expect(w).toHaveLength(1);
     expect(w[0]).not.toMatch(/diode-connected/);
     expect(w[0]).toMatch(/node voltage/);
   });
 
   it('a scaled or offset bias is not a diode either — the identity must be the bare param', () => {
-    // `2*guess` and `guess - 0.1` say the drop is NOT the vgs, and "bind the connection"
+    // `2*guess` and `guess - 0.1` say the drop is NOT the vgs, and "declare the connection"
     // would change those designs. Counting free names (one) cannot see that; only the bare
     // identifier earns the diode advice.
     for (const bias of ['2*guess', 'guess - 0.1', 'guess*1.0']) {
-      const w = standins(withRule('abs(k__vgs - guess)', bias));
+      const w = assumptionFindings(withCheck('abs(k__vgs - guess)', bias));
       expect(w).toHaveLength(1);
       expect(w[0]).not.toMatch(/diode-connected/);
     }
@@ -1055,24 +1055,24 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
   it('sees the call, not the letters: a space before the paren does not hide the pattern', () => {
     // The parser treats `abs (x)` and `abs(x)` identically, so a literal "abs(" scan let a
     // one-space reformat silently switch the lint off.
-    expect(standins(withRule('abs (k__vgs - guess)'))).toHaveLength(1);
+    expect(assumptionFindings(withCheck('abs (k__vgs - guess)'))).toHaveLength(1);
     // …and a name merely ENDING in abs is not a call.
-    expect(standins(withRule('fabs(k__vgs - guess)'))).toEqual([]);
+    expect(assumptionFindings(withCheck('fabs(k__vgs - guess)'))).toEqual([]);
   });
 
   it('does not flag a declared bias paired with a symmetric headroom check', () => {
     // `abs(bias - dev__vdsat) <= margin` is the format docs' own recommended shape: a real
-    // declared bias plus a margin check. Only a LEVEL the stand-in could stand in for — vgs,
+    // declared bias plus a margin check. Only a LEVEL the assumption could stand in for — vgs,
     // vth — closes the round trip; a saturation margin does not.
-    expect(standins(withRule('abs(V_node - k__vdsat)', 'V_node'))).toEqual([]);
+    expect(assumptionFindings(withCheck('abs(V_node - k__vdsat)', 'V_node'))).toEqual([]);
   });
 
-  it('an estimate already classed "assumed" raises no stand-in finding', () => {
+  it('an estimate already classed "assumed" raises no assumption finding', () => {
     // The author has said in the sheet's own words that this level is typed rather than solved,
-    // and the rule tying it back is how that assumption is checked — so there is no advice left
+    // and the check tying it back is how that assumption is checked — so there is no advice left
     // to give. The run lists the param among its assumptions instead; no finding repeats it.
     // A compound bias (a node written as a difference), so this is not the diode case below.
-    const doc = withRule('abs(k__vgs - guess)', 'V_node - guess');
+    const doc = withCheck('abs(k__vgs - guess)', 'V_node - guess');
     doc.params[0] = { ...doc.params[0], class: 'assumed' };
     expect(validateSheet(doc).filter((x) => x.symbol === 'guess')).toEqual([]);
     // `guess` reaches k's drain through the override, so it is one of the run's assumptions.
@@ -1082,19 +1082,19 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
   it('a diode-connected estimate keeps its advice even when classed "assumed"', () => {
     // The class says the value is typed; the diode advice says it need not exist at all — the
     // connection can be declared and the table read on its diagonal. That fix outranks the label.
-    const doc = withRule('abs(k__vgs - guess)');
+    const doc = withCheck('abs(k__vgs - guess)');
     doc.params[0] = { ...doc.params[0], class: 'assumed' };
-    const w = standins(doc);
+    const w = assumptionFindings(doc);
     expect(w).toHaveLength(1);
     expect(w[0]).toMatch(/diode-connected/);
   });
 
-  it('the diode advice on an "assumed" estimate does not depend on which rule comes first', () => {
-    // The first rule sums three names in one abs — a loop of drops, not the diode identity — so on
+  it('the diode advice on an "assumed" estimate does not depend on which check comes first', () => {
+    // The first check sums three names in one abs — a loop of drops, not the diode identity — so on
     // an assumed param it earns nothing. The second compares exactly the bare drain bias and the
     // block's own vgs: the diode identity, whose advice the class does not suppress. One warning,
-    // naming the second rule.
-    const doc = withRule('abs(k__vgs - guess - V_node)');
+    // naming the second check.
+    const doc = withCheck('abs(k__vgs - guess - V_node)');
     doc.checks.push({
       id: 'diode-check',
       kind: 'advisory',
@@ -1103,27 +1103,27 @@ describe('validateSheet — hand-tuned stand-ins for a device operating point', 
       rhs: '0.05',
     });
     doc.params[0] = { ...doc.params[0], class: 'assumed' };
-    const w = standins(doc);
+    const w = assumptionFindings(doc);
     expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/rule "diode-check"/);
+    expect(w[0]).toMatch(/check "diode-check"/);
     expect(w[0]).toMatch(/diode-connected/);
   });
 
-  it('an estimate classed "independent" keeps the stand-in advice — the class contradicts it', () => {
-    const doc = withRule('abs(k__vgs - guess)', 'V_node - guess');
+  it('an estimate classed "independent" keeps the assumption advice — the class contradicts it', () => {
+    const doc = withCheck('abs(k__vgs - guess)', 'V_node - guess');
     doc.params[0] = { ...doc.params[0], class: 'independent' };
-    expect(standins(doc)).toHaveLength(1);
+    expect(assumptionFindings(doc)).toHaveLength(1);
   });
 
   it('is advisory — a sheet carrying the pattern still validates without errors', () => {
-    expect(validateSheet(withRule('abs(k__vgs - guess)')).some((w) => w.severity === 'error')).toBe(
-      false,
-    );
+    expect(
+      validateSheet(withCheck('abs(k__vgs - guess)')).some((w) => w.severity === 'error'),
+    ).toBe(false);
   });
 });
 
 describe('validateSheet — composition', () => {
-  it('flags a separator in a use name, a duplicate name, and a stray override', () => {
+  it('flags a separator in a block name, a duplicate name, and a stray override', () => {
     const child: SheetDoc = {
       title: 'c',
       polarity: 'n',
@@ -1152,7 +1152,7 @@ describe('validateSheet — composition', () => {
     expect(w.some((x) => x.rule === 'sheet-block-param')).toBe(true);
   });
 
-  it('warns when a parent param/row name collides with a child-provided scalar', () => {
+  it('warns when a parent param/equation name collides with a child-provided scalar', () => {
     const child: SheetDoc = {
       title: 'c',
       polarity: 'n',
@@ -1183,7 +1183,7 @@ describe('validateSheet — composition', () => {
       equations: [
         { name: 'a', expr: 'kid__gm' }, // provided — fine
         { name: 'b', expr: 'kid__gds' }, // the block exists but does not provide it
-        { name: 'c', expr: 'kdi__gm' }, // no such block: a transposed use name
+        { name: 'c', expr: 'kdi__gm' }, // no such block: a transposed block name
       ],
       checks: [],
       blocks: [{ name: 'kid', doc: child }],
@@ -1191,10 +1191,10 @@ describe('validateSheet — composition', () => {
     const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
     expect(w.map((x) => x.symbol)).toEqual(['kid__gds', 'kdi__gm']);
     expect(w[0].message).toMatch(/block "kid" does not provide/);
-    expect(w[1].message).toMatch(/no child block is named "kdi"/);
+    expect(w[1].message).toMatch(/no block is named "kdi"/);
   });
 
-  it('says so when a sheet with no bind claims to expose a name that does not exist', () => {
+  it('says so when a sheet with no givens claims to expose a name that does not exist', () => {
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
@@ -1203,7 +1203,7 @@ describe('validateSheet — composition', () => {
       checks: [],
       blocks: [{ name: 'kid', doc: boundDoc({ provides: ['gds'] }) }],
       // L and Rout are declared right here and T and w come from the table metadata; R_out is
-      // a typo for the row and exposes nothing.
+      // a typo for the equation and exposes nothing.
       provides: ['Rout', 'L', 'T', 'w', 'R_out'],
     };
     const w = validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage');
@@ -1213,7 +1213,7 @@ describe('validateSheet — composition', () => {
 
   it('lets a sheet that sizes a device name any table quantity it exposes', () => {
     // Sizing publishes the whole table at the operating point, and a table may carry columns
-    // no static list knows about — so a bound sheet's provide list is taken at its word. The
+    // no static list knows about — so a sizing sheet's provides are taken at their word. The
     // upward half of the check still catches a parent reading a name the child never provides.
     const doc = boundDoc({ provides: ['gds', 'W', 'some_foundry_column'] });
     expect(validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage')).toEqual([]);
@@ -1257,7 +1257,7 @@ describe('validateSheet — composition', () => {
     expect(validateSheet(doc).filter((x) => x.rule === 'sheet-provide-coverage')).toEqual([]);
   });
 
-  it('recurses into a child and attributes its structural error to the use site', () => {
+  it('recurses into a child and attributes its structural error to the block', () => {
     const child: SheetDoc = {
       title: 'c',
       polarity: 'n',
@@ -1274,7 +1274,9 @@ describe('validateSheet — composition', () => {
       blocks: [{ name: 'kid', doc: child }],
     };
     const w = validateSheet(doc);
-    expect(w.some((x) => x.rule === 'sheet-param' && x.message.includes('use "kid":'))).toBe(true);
+    expect(w.some((x) => x.rule === 'sheet-param' && x.message.includes('block "kid":'))).toBe(
+      true,
+    );
   });
 });
 
@@ -1323,15 +1325,15 @@ describe('fail-closed hardening', () => {
     expect(pre.some((w) => w.rule === 'sheet-tol' && w.severity === 'error')).toBe(true);
   });
 
-  it('snaps a floating-point-noise margin to zero: a pinned spec reads amber deterministically', () => {
-    // 0.1 + 0.2 overshoots 0.3 by ~5.5e-17 in doubles; without the snap this rule's
+  it('snaps a floating-point-noise margin to zero: a spec parked on its boundary reads amber deterministically', () => {
+    // 0.1 + 0.2 overshoots 0.3 by ~5.5e-17 in doubles; without the snap this check's
     // verdict is a coin flip on the rounding direction of the two sides.
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
       params: [{ name: 'x', value: 0.3 }],
       equations: [{ name: 'y', expr: '0.1 + 0.2' }],
-      checks: [{ id: 'pin', kind: 'spec', lhs: 'x', op: '>=', rhs: 'y' }],
+      checks: [{ id: 'parked', kind: 'spec', lhs: 'x', op: '>=', rhs: 'y' }],
     };
     const res = evaluateSheet(doc);
     expect(res.checks[0].margin).toBe(0);
@@ -1339,7 +1341,7 @@ describe('fail-closed hardening', () => {
     expect(res.feasible).toBe(true);
   });
 
-  it('a row that computes non-finite from resolved inputs is an error, even if only a guardrail reads it', () => {
+  it('an equation that computes non-finite from resolved inputs is an error, even if only an advisory check reads it', () => {
     const doc: SheetDoc = {
       title: 't',
       polarity: 'n',
@@ -1354,7 +1356,7 @@ describe('fail-closed hardening', () => {
     expect(res.feasible).toBe(false);
   });
 
-  it('an unphysical bind (negative gm) fails closed instead of sizing a negative width', () => {
+  it('an unphysical given (negative gm) fails closed instead of sizing a negative width', () => {
     const doc = boundDoc({ givens: { L: 'L', gm: '0 - 1e-3', gm_id: 'gm_id' } });
     const res = evaluateSheet(doc, dev);
     expect(res.sizing?.ok).toBe(false);
@@ -1376,7 +1378,7 @@ describe('fail-closed hardening', () => {
   });
 });
 
-describe('bind bias declaration (vds/vsb)', () => {
+describe('bias declared in the givens (vds/vsb)', () => {
   // A demo table with a live vds axis — sizing must collapse it to a point first.
   const dev3 = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
 
@@ -1467,7 +1469,7 @@ describe('bind bias declaration (vds/vsb)', () => {
       params: [],
       equations: [],
       checks: [],
-      blocks: [{ name: 'cs', doc: boundDoc({ provides: ['id'] }) }], // child binds without vds
+      blocks: [{ name: 'cs', doc: boundDoc({ provides: ['id'] }) }], // child's givens omit vds
     };
     const res = evaluateSheet(parent, dev3);
     expect(res.blocks?.[0].feasible).toBe(false);
@@ -1500,7 +1502,7 @@ describe('bind bias declaration (vds/vsb)', () => {
 });
 
 describe('composition semantics (ratified)', () => {
-  /** A minimal providing leaf: binds at a fixed current and exposes its outputs. */
+  /** A minimal providing leaf: sizes at a fixed current and exposes its outputs. */
   const leaf = (I: string): SheetDoc => ({
     title: 'leaf',
     polarity: 'n',
@@ -1571,11 +1573,11 @@ describe('composition semantics (ratified)', () => {
       blocks: [{ name: 'c', doc: leaf('I_bias'), params: { I_bias: 'W * 1e-3' } }],
     };
     const res = evaluateSheet(doc, dev);
-    expect(res.blocks?.[0].feasible).toBe(false); // W binds AFTER children — not in scope
+    expect(res.blocks?.[0].feasible).toBe(false); // W is sized AFTER children — not in scope
     expect(res.feasible).toBe(false);
   });
 
-  it('duplicate use names are skipped fail-closed even via the unvalidated entrypoint', () => {
+  it('duplicate block names are skipped fail-closed even via the unvalidated entrypoint', () => {
     const doc: SheetDoc = {
       title: 'p',
       polarity: 'n',
@@ -1620,12 +1622,12 @@ describe('composition semantics (ratified)', () => {
     expect(validateSheet(bad).some((w) => w.rule === 'sheet-provide')).toBe(true);
   });
 
-  it('a composed sweep traces descendant HARD rules with path-prefixed ids', () => {
+  it('a composed sweep traces descendant HARD checks with path-prefixed ids', () => {
     const cascode = EXAMPLES.find((e) => e.title === 'NMOS cascode (gain-boosted output)')!;
     const sw = sweepSheet(cascode, 'gm_id', dev, 5);
     const ids = sw.checks.map((r) => r.id);
-    expect(ids).toContain('cs-headroom'); // top-level rule, untouched
-    expect(ids).toContain('cs.feasible-inversion'); // the child's own invariant, path-prefixed
+    expect(ids).toContain('cs-headroom'); // top-level check, untouched
+    expect(ids).toContain('cs.feasible-inversion'); // the child's own physical check, path-prefixed
     const child = sw.checks.find((r) => r.id === 'cs.feasible-inversion')!;
     expect(child.marginPct.filter((m) => m !== null).length).toBeGreaterThan(0);
   });
@@ -1636,7 +1638,7 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
   // is real: a loop that NESTS another re-converges the child on every one of its own passes, and
   // the product can spend the pool before a later sibling iterates at all. What must not happen is
   // the innocent sibling being told IT failed — an author would go and rewrite a sheet that is fine.
-  const torn = (name: string, f: number, uses?: SheetDoc['blocks']): SheetDoc => ({
+  const torn = (name: string, f: number, blocks?: SheetDoc['blocks']): SheetDoc => ({
     title: name,
     polarity: 'n',
     params: [{ name: 'x', value: 1, solveFor: 'fx' }],
@@ -1644,7 +1646,7 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
     equations: [{ name: 'fx', expr: `${f}*x + 1` }],
     checks: [],
     provides: ['fx'],
-    ...(uses ? { blocks: uses } : {}),
+    ...(blocks ? { blocks } : {}),
   });
 
   const res = evaluateSheet(
@@ -1672,9 +1674,9 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
   });
 
   it('is told the budget went elsewhere, not that it failed to converge', () => {
-    // The message must not ACCUSE a specific spender: an expensive sibling and a pin nesting
-    // this loop under its probes are indistinguishable here, and "another loop, not this one"
-    // was provably false for the pin-over-torn case.
+    // The message must not ACCUSE a specific spender: an expensive sibling and a design constraint
+    // nesting this loop under its probes are indistinguishable here, and "another loop, not this
+    // one" was provably false for the constraint-over-torn case.
     expect(victim).toMatch(/budget ran out/);
     expect(victim).toMatch(/not shown to diverge/);
     expect(victim).not.toMatch(/diverging/);
@@ -1682,10 +1684,10 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
   });
 });
 
-describe('duplicate rule ids', () => {
+describe('duplicate check ids', () => {
   it('are a validation error — results are keyed by id, so one would shadow the other', () => {
-    // Two rules named "same": indexTreeResults Map.set-collapses them, the sweep charts one
-    // curve where two exist, and bindingCheck can name the WRONG worst rule.
+    // Two checks named "same": indexTreeResults Map.set-collapses them, the sweep charts one
+    // curve where two exist, and bindingCheck can name the WRONG worst check.
     const doc: SheetDoc = {
       title: 'dup',
       polarity: 'n',
@@ -1698,21 +1700,21 @@ describe('duplicate rule ids', () => {
     };
     expect(
       validateSheet(doc).some(
-        (w) => w.severity === 'error' && /duplicate rule id "same"/.test(w.message),
+        (w) => w.severity === 'error' && /duplicate check id "same"/.test(w.message),
       ),
     ).toBe(true);
   });
 });
 
-describe('bindingConstraint — naming the cause of one verdict', () => {
+describe('bindingCheck — naming the cause of one verdict', () => {
   const ex = EXAMPLES.find((e) => e.title === 'NMOS noise & matching')!;
-  // Force the noise requirement to fail hard, and the matching one to fail harder.
+  // Force the noise spec check to fail hard, and the matching one to fail harder.
   const at = (o: Record<string, number>): SheetDoc => ({
     ...ex,
     params: ex.params.map((p) => (o[p.name] !== undefined ? { ...p, value: o[p.name] } : p)),
   });
 
-  it('names the worst-margin failing hard rule, ignoring advisory guardrails', () => {
+  it('names the worst-margin failing hard check, ignoring advisory checks', () => {
     const res = runSheet(at({ vn_target: 1e-12, vos_target: 1e-9 }), dev);
     expect(res.feasible).toBe(false);
     const b = bindingCheck(res);
@@ -1728,19 +1730,19 @@ describe('bindingConstraint — naming the cause of one verdict', () => {
     expect(b?.marginPct).toBe(worst);
   });
 
-  it('is undefined when no hard rule fails — never a feasibility verdict of its own', () => {
+  it('is undefined when no hard check fails — never a feasibility verdict of its own', () => {
     expect(bindingCheck(runSheet(ex, dev))).toBeUndefined();
-    // A tree with no rules at all is the degenerate case, not an error.
+    // A tree with no checks at all is the degenerate case, not an error.
     expect(bindingCheck({ checks: [] })).toBeUndefined();
   });
 
-  it('attributes a child block rule by its use path, and outranks a milder top-level one', () => {
+  it('attributes a block check by its block path, and outranks a milder top-level one', () => {
     const child: SheetDoc = {
       title: 'c',
       polarity: 'n',
       params: [{ name: 'x', value: 1 }],
       equations: [],
-      // Fails by 90%: the worst rule in the tree, and it lives below the top sheet.
+      // Fails by 90%: the worst check in the tree, and it lives below the top sheet.
       checks: [{ id: 'child-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: '10' }],
       provides: [],
     };
@@ -1762,7 +1764,7 @@ describe('bindingConstraint — naming the cause of one verdict', () => {
 describe('sweepSheet2 — the design-plane feasibility map', () => {
   const ex = EXAMPLES.find((e) => e.title === 'NMOS noise & matching')!;
 
-  it('agrees pointwise with runSheet and names the binding hard rule per infeasible cell', () => {
+  it('agrees pointwise with runSheet and names the binding hard check per infeasible cell', () => {
     const sw = sweepSheet2(ex, 'gm_id', 'L', dev, 5);
     expect(sw.x).toHaveLength(5);
     expect(sw.y).toHaveLength(5);
@@ -1785,7 +1787,7 @@ describe('sweepSheet2 — the design-plane feasibility map', () => {
       const ref = runSheet(at, dev);
       expect(sw.feasible[yi][xi]).toBe(ref.feasible);
       if (!ref.feasible && sw.binding[yi][xi] !== null) {
-        // the named binding rule really is a failing hard rule at that point
+        // the named binding check really is a failing hard check at that point
         const named = ref.checks.find((r) => r.id === sw.binding[yi][xi]);
         expect(named?.status).toBe('fail');
         expect(named?.kind).not.toBe('advisory');
@@ -1841,7 +1843,7 @@ describe('override and bias reporting fail closed (adversarial review regression
     ).toBe(true);
   });
 
-  it('an out-of-range bind bias reports the APPLIED clamped coordinate, not the request', () => {
+  it('an out-of-range given bias reports the APPLIED clamped coordinate, not the request', () => {
     const dev3 = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
     const doc = boundDoc({
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
@@ -1853,7 +1855,7 @@ describe('override and bias reporting fail closed (adversarial review regression
   });
 });
 
-describe('diode-connected bind', () => {
+describe('diode-connected givens', () => {
   const diodeDoc = (extra: Record<string, unknown> = {}): SheetDoc => ({
     title: 'd',
     polarity: 'n',
@@ -1926,7 +1928,7 @@ describe('diode-connected bind', () => {
     expect(diodeGrid(covered).clamped).toBe(false);
   });
 
-  it('refuses a bind that declares both the connection and a vds', () => {
+  it('refuses givens that declare both the connection and a vds', () => {
     const errs = validateSheet(diodeDoc({ vds: '0.5' })).filter((w) => w.severity === 'error');
     expect(errs).toHaveLength(1);
     expect(errs[0].message).toMatch(/both a diode connection and a vds/);
@@ -1939,23 +1941,23 @@ describe('diode-connected bind', () => {
   });
 });
 
-describe('pinned params — bracketed inversion of a monotone relation', () => {
+describe('constrained params — bracketed inversion of a monotone relation', () => {
   const mk = (
     expr: string,
-    pin: { lhs: string; rhs: string },
+    constraint: { lhs: string; rhs: string },
     bounds: { min?: number; max?: number } = { min: 0, max: 10 },
   ): SheetDoc => ({
     title: 'p',
     polarity: 'n',
     params: [
-      { name: 'x', value: 1, ...bounds, designConstraint: pin },
+      { name: 'x', value: 1, ...bounds, designConstraint: constraint },
       { name: 'T', value: 5 },
     ],
     equations: [{ name: 'y', expr }],
     checks: [],
   });
 
-  // Precision below is PIN_TOL_REL x the bracket's span (1e-6 x 10): the root lands anywhere
+  // Precision below is CONSTRAINT_TOL_REL x the bracket's span (1e-6 x 10): the root lands anywhere
   // inside the final bracket, so 4 digits is what a volt-scale bracket honestly guarantees.
   it('inverts an increasing relation to the root, from no starting guess at all', () => {
     const res = evaluateSheet(mk('2*x + 1', { lhs: 'y', rhs: 'T' }), dev);
@@ -1970,7 +1972,8 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
 
   it('accepts a correct root written in RESIDUAL form (rhs = 0)', () => {
     // The residual scale is the relation's range over the bracket, not |lhs| at the root —
-    // scaling by |lhs| rejected every pin whose lhs IS the residual (it vanishes at the root).
+    // scaling by |lhs| rejected every design constraint whose lhs IS the residual (it vanishes at
+    // the root).
     const res = evaluateSheet(mk('2*x + 1', { lhs: 'y - T', rhs: '0' }), dev);
     expect(res.feasible).toBe(true);
     expect(res.values.x).toBeCloseTo(2, 4);
@@ -1997,18 +2000,20 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     );
   });
 
-  it('fails closed on a HALF-WRITTEN pin instead of silently freezing the param', () => {
+  it('fails closed on a HALF-WRITTEN design constraint instead of silently freezing the param', () => {
     // {lhs} without {rhs} fails the constrained() shape guard: without this check the param would be
     // neither swept nor solved — stuck at its authored value with the sheet reading feasible.
     const doc = mk('2*x + 1', { lhs: 'y' } as unknown as { lhs: string; rhs: string });
     expect(
       validateSheet(doc).some(
-        (w) => w.severity === 'error' && /pin needs both lhs and rhs/.test(w.message),
+        (w) => w.severity === 'error' && /design constraint needs both lhs and rhs/.test(w.message),
       ),
     ).toBe(true);
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(false);
-    expect(res.warnings.some((w) => /pin needs both lhs and rhs/.test(w.message))).toBe(true);
+    expect(
+      res.warnings.some((w) => /design constraint needs both lhs and rhs/.test(w.message)),
+    ).toBe(true);
   });
 
   it('fails closed when the bracket does not straddle the target', () => {
@@ -2040,7 +2045,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(sweepable(p)).toBe(false);
   });
 
-  it('validation refuses a missing bracket and a pin that is also torn', () => {
+  it('validation refuses a missing bracket and a constrained param that is also torn', () => {
     const noBracket = mk('2*x + 1', { lhs: 'y', rhs: 'T' }, {});
     expect(
       validateSheet(noBracket).some(
@@ -2066,12 +2071,13 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     ).toBe(true);
   });
 
-  /** Two pins on one sheet. `z` is written first, so document order is the wrong solve order. */
-  const pair = (zPin: { lhs: string; rhs: string }): SheetDoc => ({
+  /** Two design constraints on one sheet. `z` is written first, so document order is the wrong
+   *  solve order. */
+  const pair = (zConstraint: { lhs: string; rhs: string }): SheetDoc => ({
     title: 'pair',
     polarity: 'n',
     params: [
-      { name: 'z', value: 1, min: 0, max: 10, designConstraint: zPin },
+      { name: 'z', value: 1, min: 0, max: 10, designConstraint: zConstraint },
       { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'a', rhs: 'T' } },
       { name: 'T', value: 5 },
     ],
@@ -2083,7 +2089,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     checks: [],
   });
 
-  it('solves two pins one after the other when one relation reads the other pin', () => {
+  it('solves two design constraints one after the other when one relation reads the other constrained param', () => {
     // a = 2x + 1 = T = 5 gives x = 2. b = a + z = 8 then gives z = 3. The second relation reads
     // x through a, the first reads no z, so x is solved first whatever the document order. Solved
     // the other way round, z would be fitted against the unsolved a = 3 and land on 5, leaving
@@ -2097,7 +2103,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(res.values.b).toBeCloseTo(8, 4);
   });
 
-  it('refuses two pins whose relations read each other, in validation and in evaluation', () => {
+  it('refuses two design constraints whose relations read each other, in validation and in evaluation', () => {
     // x is fitted through a (which reads x) against T; make z's relation c = x - z and x's
     // relation read z as well, and each needs the other's answer first: a coupled pair.
     const doc = pair({ lhs: 'c', rhs: '1' });
@@ -2108,7 +2114,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
       max: 10,
       designConstraint: { lhs: 'b', rhs: 'T' },
     };
-    const coupled = /pinned params depend on each other \((x → z → x|z → x → z)\)/;
+    const coupled = /constrained params depend on each other \((x → z → x|z → x → z)\)/;
     expect(validateSheet(doc).some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(
       true,
     );
@@ -2117,7 +2123,8 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(res.warnings.some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(true);
   });
 
-  /** A parent pin over a child pin: P + c__Q = 1 above, Q = A/2 below, A wired by the parent. */
+  /** A parent's design constraint over a child's: P + c__Q = 1 above, Q = A/2 below, A wired by the
+   *  parent. */
   const nested = (wireA: string): SheetDoc => ({
     title: 'parent',
     polarity: 'n',
@@ -2146,7 +2153,7 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     ],
   });
 
-  it('solves a child pin inside its parent pin when the child does not read the parent', () => {
+  it("solves a child's design constraint inside its parent's when the child does not read the parent", () => {
     // A = 0.8 is fixed, so Q = 0.4 whatever P is, and P = 1 - Q = 0.6: a triangular pair.
     const res = evaluateSheet(nested('A0'), dev);
     expect(res.feasible).toBe(true);
@@ -2154,12 +2161,12 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(res.values.P).toBeCloseTo(0.6, 4);
   });
 
-  it('refuses a parent pin and a child pin that depend on each other', () => {
+  it("refuses a parent's and a child's design constraints that depend on each other", () => {
     // Wire A = P and the child's Q = P/2 reads the parent's unknown while the parent's
     // P = 1 - Q reads the child's. Nested bisection would close it (P = 2/3, Q = 1/3) by
     // iterating a coupled system, which is what the engine does not do.
     const doc = nested('P');
-    const coupled = /pinned params depend on each other \((P → c\.Q → P|c\.Q → P → c\.Q)\)/;
+    const coupled = /constrained params depend on each other \((P → c\.Q → P|c\.Q → P → c\.Q)\)/;
     expect(validateSheet(doc).some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(
       true,
     );
@@ -2175,12 +2182,12 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(res.feasible).toBe(false);
     expect(
       res.warnings.some(
-        (w) => w.severity === 'error' && /pinned params depend on each other/.test(w.message),
+        (w) => w.severity === 'error' && /constrained params depend on each other/.test(w.message),
       ),
     ).toBe(true);
   });
 
-  it('names the missing name when a pin cannot be placed in the order at all', () => {
+  it('names the missing name when a design constraint cannot be placed in the order at all', () => {
     // x is fitted through b = a + z, so it really does wait on z. z's relation reads a name
     // nothing provides, so what z waits on is unknown — the report is about that name, not about
     // a loop between two params that only one of them created.
@@ -2203,8 +2210,8 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
     expect(messages.filter((m) => /depend on each other/.test(m))).toEqual([]);
   });
 
-  it('solves the pin AND an inner torn loop together, off one budget', () => {
-    // The pin is the outer solver; each probe re-closes the substitution loop inside.
+  it('solves the design constraint AND an inner torn loop together, off one budget', () => {
+    // The constraint is the outer solver; each probe re-closes the substitution loop inside.
     const doc: SheetDoc = {
       title: 'both',
       polarity: 'n',
@@ -2227,8 +2234,8 @@ describe('pinned params — bracketed inversion of a monotone relation', () => {
 });
 
 describe('operating range — the held design asked at each range end, apart from feasibility', () => {
-  // Mirrors the library's CM idiom: x is the internal node the pin solves, y = 2x + 1 the
-  // produced output, T the typed spec, [T_lo, T_hi] the claimed range the edges check.
+  // Mirrors the library's CM idiom: x is the internal node the design constraint solves, y = 2x + 1
+  // the produced output, T the typed spec, [T_lo, T_hi] the claimed range the range ends check.
   const mk = (over: Partial<SheetDoc> = {}): SheetDoc => ({
     title: 'e',
     polarity: 'n',
@@ -2237,8 +2244,8 @@ describe('operating range — the held design asked at each range end, apart fro
       { name: 'T', value: 5 },
       { name: 'T_lo', value: 3 },
       { name: 'T_hi', value: 7 },
-      // max deliberately OFF the lo edge's landing point (x = 1): a sweep sample exactly on
-      // a bound would coin-flip on the pin's ~1e-5 landing tolerance.
+      // max deliberately OFF the lo range end's landing point (x = 1): a sweep sample exactly on
+      // a bound would coin-flip on the constraint's ~1e-5 landing tolerance.
       { name: 'x_floor', value: 0.5, min: 0, max: 1.6 },
     ],
     equations: [{ name: 'y', expr: '2*x + 1' }],
@@ -2250,7 +2257,7 @@ describe('operating range — the held design asked at each range end, apart fro
     ...over,
   });
 
-  it('re-solves the pin at each edge and reports where it landed', () => {
+  it('re-solves the design constraint at each range end and reports where it landed', () => {
     const res = runSheet(mk(), dev);
     expect(res.feasible).toBe(true);
     expect(res.values.x).toBeCloseTo(2, 4); // base: y = 5 → x = 2
@@ -2261,9 +2268,9 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(res.rangeEnds?.[1].solved.x).toBeCloseTo(3, 4); // y = 7 → x = 3
   });
 
-  it('never throws on malformed edges — half-written or mistyped shapes degrade', () => {
+  it('never throws on malformed range ends — half-written or mistyped shapes degrade', () => {
     // evaluate's contract is never-throw; curated JSON bypasses the sanitizer, so a
-    // half-written edge (no set) or a mistyped edges field must not TypeError.
+    // half-written range end (no set) or a mistyped range ends field must not TypeError.
     expect(() =>
       evaluateSheet(mk({ operatingRange: [{ name: 'lo' } as never] }), dev),
     ).not.toThrow();
@@ -2277,12 +2284,12 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(ok.rangeEnds?.[0].set).toEqual({ T: 3 }); // the resolved override, not the expression
     expect(ok.rangeEnds?.[0].warnings).toEqual([]);
     const doc = mk();
-    doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // unreachable edge
+    doc.params.find((p) => p.name === 'T_lo')!.value = 0.5; // unreachable range end
     const bad = evaluateSheet(doc, dev);
     expect(bad.rangeEnds?.[0].solved).toEqual({}); // a bracket end is not a landing
   });
 
-  it('a rule failing ONLY at a range end leaves the design feasible, and is named with its end', () => {
+  it('a check failing ONLY at a range end leaves the design feasible, and is named with its end', () => {
     const doc = mk();
     doc.params.find((p) => p.name === 'x_floor')!.value = 1.5; // base x=2 passes; lo end x=1 fails
     const res = evaluateSheet(doc, dev);
@@ -2292,7 +2299,7 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(res.feasible).toBe(true);
     expect(res.complies).toBe(false);
     expect(res.rangeEnds?.map((e) => e.state)).toEqual(['does-not-comply', 'complies']);
-    // Nothing binds where the design was sized, so the feasibility question names no rule...
+    // Nothing binds where the design was sized, so the feasibility question names no check...
     expect(bindingCheck(res)).toBeUndefined();
     // ...and the range end's failure is named with its end, or by asking that run itself.
     expect(rangeEndCheck(res)?.id).toBe('lo@node-floor');
@@ -2309,16 +2316,16 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(res.rangeEnds?.[0].state).toBe('no-answer');
     expect(res.complies).toBe(false);
     expect(res.rangeEnds?.[0].error).toMatch(/does not change sign/);
-    // no failing RULE anywhere — the cause is the solve, so there is no rule to name
+    // no failing CHECK anywhere — the cause is the solve, so there is no check to name
     expect(bindingCheck(res)).toBeUndefined();
     expect(rangeEndCheck(res)).toBeUndefined();
-    // the failed edge does not leak error warnings into the base result
+    // the failed range end does not leak error warnings into the base result
     expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
   });
 
   it('set expressions evaluate against the BASE result, not just params', () => {
     const doc = mk({
-      operatingRange: [{ name: 'lo', set: { T: 'y - 2' } }], // base y = 5 → edge T = 3
+      operatingRange: [{ name: 'lo', set: { T: 'y - 2' } }], // base y = 5 → range end T = 3
     });
     const res = evaluateSheet(doc, dev);
     expect(res.rangeEnds?.[0].solved.x).toBeCloseTo(1, 4);
@@ -2335,7 +2342,7 @@ describe('operating range — the held design asked at each range end, apart fro
 
   it('a range end that does not comply can NEVER chart non-negative — na fails it closed, on-chart', () => {
     // Hard `na` fails a range end closed while contributing no margin; without the floor a
-    // passing sibling rule painted the failing end at +margin. sqrt(6 - T) is finite at the
+    // passing sibling check painted the failing end at +margin. sqrt(6 - T) is finite at the
     // base (T=5) and lo end (T=3), na at the hi end (T=7).
     const doc = mk({
       checks: [
@@ -2351,10 +2358,10 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(hiCurve!.marginPct.every((m) => m !== null && m < 0)).toBe(true);
   });
 
-  it("edge.error prefers the SOLVER's message over whatever error landed last", () => {
-    // A child's pin failure rolls up mid-evaluation; a later parent row goes non-finite
-    // AFTER it. "Last error" alone would report the consequence (the row) instead of the
-    // cause (the solve).
+  it("a range end's error prefers the SOLVER's message over whatever error landed last", () => {
+    // A child's failed design constraint rolls up mid-evaluation; a later parent equation goes
+    // non-finite AFTER it. "Last error" alone would report the consequence (the equation) instead
+    // of the cause (the solve).
     const child: SheetDoc = {
       title: 'c',
       polarity: 'n',
@@ -2370,7 +2377,7 @@ describe('operating range — the held design asked at each range end, apart fro
       polarity: 'n',
       params: [
         { name: 'T', value: 5 },
-        { name: 'T_hi', value: 25 }, // child y spans [1, 21]: unreachable at the edge
+        { name: 'T_hi', value: 25 }, // child y spans [1, 21]: unreachable at the range end
       ],
       equations: [{ name: 'bad', expr: 'sqrt(21 - T)' }], // non-finite at T = 25, fine at 5
       checks: [],
@@ -2379,7 +2386,7 @@ describe('operating range — the held design asked at each range end, apart fro
     };
     const res = evaluateSheet(parent, dev);
     expect(res.rangeEnds?.[0].state).toBe('no-answer');
-    expect(res.rangeEnds?.[0].error).toMatch(/pinned param|does not change sign/);
+    expect(res.rangeEnds?.[0].error).toMatch(/constrained param|does not change sign/);
   });
 
   it('a snapped zero reads amber for EVERY operator — == included', () => {
@@ -2406,9 +2413,9 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(evaluateSheet(ge, dev).checks[0].status).toBe('amber');
   });
 
-  it("a composed child's edges are ignored, and validation says so", () => {
+  it("a composed child's range ends are ignored, and validation says so", () => {
     const child = mk();
-    child.params.find((p) => p.name === 'T_lo')!.value = 0.5; // its lo edge would fail hard
+    child.params.find((p) => p.name === 'T_lo')!.value = 0.5; // its lo range end would fail hard
     child.provides = ['y'];
     const parent: SheetDoc = {
       title: 'parent',
@@ -2419,7 +2426,7 @@ describe('operating range — the held design asked at each range end, apart fro
       blocks: [{ name: 'amp', doc: child }],
     };
     const res = runSheet(parent, dev);
-    expect(res.feasible).toBe(true); // the child's base run closes; its edges never ran
+    expect(res.feasible).toBe(true); // the child's base run is feasible; its range ends never ran
     expect(res.blocks?.[0].feasible).toBe(true);
     expect(res.warnings.some((w) => /not evaluated in composition/.test(w.message))).toBe(true);
   });
@@ -2456,7 +2463,7 @@ describe('operating range — the held design asked at each range end, apart fro
   });
 
   it('a structurally broken sheet has no design at any swept sample', () => {
-    // The evaluator tolerates a rule id the validator refuses, so the sample itself completes.
+    // The evaluator tolerates a check id the validator refuses, so the sample itself completes.
     // The sweep must still say there is no design, as runSheet does for the same document.
     const doc = mk({
       checks: [{ id: 'node.floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor' }],
@@ -2473,9 +2480,9 @@ describe('operating range — the held design asked at each range end, apart fro
     expect(sw.checks.find((r) => r.id === 'lo@')!.marginPct).toEqual([null, null]);
   });
 
-  it('use names reserve the rule-path separators — a collision would shadow rule results', () => {
-    // Rule outcomes are keyed `${usePath}.${ruleId}` and `${edgeName}@${ruleId}` in one map;
-    // a use named across either separator could silently shadow an edge-qualified id.
+  it('block names reserve the check-path separators — a collision would shadow check results', () => {
+    // Check outcomes are keyed `${blockPath}.${checkId}` and `${rangeEnd}@${checkId}` in one map;
+    // a block named across either separator could silently shadow a range-end-qualified id.
     const child: SheetDoc = { title: 'c', polarity: 'n', params: [], equations: [], checks: [] };
     for (const name of ['a@b', 'a.b']) {
       const doc: SheetDoc = {
@@ -2487,13 +2494,13 @@ describe('operating range — the held design asked at each range end, apart fro
         blocks: [{ name, doc: child }],
       };
       const hit = validateSheet(doc).some(
-        (w) => w.severity === 'error' && /tree-keyed rule ids/.test(w.message),
+        (w) => w.severity === 'error' && /tree-keyed check ids/.test(w.message),
       );
       expect(hit, name).toBe(true);
     }
   });
 
-  it('validateSheet rejects malformed edges and reserves the @ separator', () => {
+  it('validateSheet rejects malformed range ends and reserves the @ separator', () => {
     const errs = (doc: SheetDoc): string[] =>
       validateSheet(doc)
         .filter((w) => w.severity === 'error')
@@ -2507,7 +2514,7 @@ describe('operating range — the held design asked at each range end, apart fro
           ],
         }),
       ).join(),
-    ).toMatch(/duplicate edge name/);
+    ).toMatch(/duplicate range end name/);
     expect(errs(mk({ operatingRange: [{ name: 'a@b', set: { T: 'T_lo' } }] })).join()).toMatch(
       /must not contain/,
     );
@@ -2523,16 +2530,16 @@ describe('operating range — the held design asked at each range end, apart fro
     );
     expect(
       errs(mk({ checks: [{ id: 'a@b', kind: 'physical', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
-    ).toMatch(/tree-keyed rule ids/);
+    ).toMatch(/tree-keyed check ids/);
     expect(
       errs(mk({ checks: [{ id: 'a.b', kind: 'physical', lhs: 'x', op: '>=', rhs: '0' }] })).join(),
-    ).toMatch(/tree-keyed rule ids/);
+    ).toMatch(/tree-keyed check ids/);
   });
 });
 
 describe('gate wiring — the node a child sits on, declared and checked', () => {
-  /** A child that SIZES. The identity is checked against the voltage the BIND resolved to, so
-   *  the number under test is the sizing's own answer — a `provide` list is deliberately absent
+  /** A child that SIZES. The identity is checked against the voltage the SIZING resolved to, so
+   *  the number under test is the sizing's own answer — `provides` are deliberately absent
    *  here, because nothing the child publishes upward takes part in the check. */
   const boundChild = (polarity: 'n' | 'p' = 'n', gmId = 10): SheetDoc => ({
     title: 'dev',
@@ -2567,7 +2574,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
   const wiringWarnings = (r: SheetResult): string[] =>
     r.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.message);
 
-  /** The vgs the child's bind actually landed on — the quantity the check reads. */
+  /** The vgs the child's sizing actually landed on — the quantity the check reads. */
   const sizedVgs = (doc: SheetDoc, table = dev, resolve?: (id: string) => DeviceTable): number =>
     evaluateSheet(doc, table, resolve).blocks![0].sizing!.vgs;
 
@@ -2589,9 +2596,9 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     expect(wiringWarnings(off)[0]).toContain('delta 1.010e-2 V');
   });
 
-  it('checks a child that publishes NOTHING — the bind is what it reads', () => {
-    // The identity used to be arithmetic over a `<use>__vgs` scalar, which quietly made the check
-    // depend on an author remembering to add 'vgs' to that block's provide list. This child
+  it('checks a child that publishes NOTHING — the sizing is what it reads', () => {
+    // The identity used to be arithmetic over a `<block>__vgs` scalar, which quietly made the check
+    // depend on an author remembering to add 'vgs' to that block's provides. This child
     // provides nothing at all, and is checked anyway.
     const child = boundChild();
     expect(child.provides).toBeUndefined();
@@ -2601,7 +2608,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
   });
 
   it('reads the same node in all four polarity/table-convention combinations', () => {
-    // The direction comes from the child's declared polarity and the magnitude from its bind, so
+    // The direction comes from the child's declared polarity and the magnitude from its sizing, so
     // a signed PMOS export (negative vgs axis) and one in N convention (positive) check
     // identically. That is the whole reason no author-written sign expression exists: a wrong one
     // would silently INVERT the identity and report agreement on a design wired backwards.
@@ -2633,15 +2640,15 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
 
   it('never touches the verdict — a disagreement is a warning, never a feasibility flip', () => {
     // The escalation path is documented instead: an author who wants it to gate writes a hard
-    // rule on the same two numbers.
+    // check on the same two numbers.
     const res = evaluateSheet(wired('1.2', '0', boundChild()), dev);
     expect(wiringWarnings(res)).toHaveLength(1);
     expect(res.warnings.every((w) => w.severity !== 'error')).toBe(true);
     expect(res.feasible).toBe(true);
   });
 
-  it('reaches a gate node the sheet defines as a ROW, not only as a param', () => {
-    // Rows run AFTER children, so a node the parent derives from a child's own output only
+  it('reaches a gate node the sheet defines as an EQUATION, not only as a param', () => {
+    // Equations run AFTER children, so a node the parent derives from a child's own output only
     // exists at the end of the evaluation. The check runs there for exactly this reason.
     const child = { ...boundChild(), provides: ['vgs'] };
     const doc = wired('V_in', '0', child, { equations: [{ name: 'V_in', expr: 'm__vgs' }] });
@@ -2650,8 +2657,8 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     expect(res.values.V_in).toBeCloseTo(sizedVgs(doc), 12);
   });
 
-  it('says the block has no sized gate-source voltage when it declares no bind', () => {
-    const bindless: SheetDoc = {
+  it('says the block has no sized gate-source voltage when it declares no givens', () => {
+    const noGivens: SheetDoc = {
       title: 'dev',
       polarity: 'n',
       params: [],
@@ -2659,16 +2666,16 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
       checks: [],
       provides: ['vgs'],
     };
-    // The block publishes a `vgs` scalar and is STILL not checked against it: a row named vgs is
-    // an author's arithmetic, not a sized operating point.
-    const res = evaluateSheet(wired('0.65', '0', bindless), dev);
-    expect(wiringWarnings(res)[0]).toMatch(/no bind, so it has no sized gate-source voltage/);
+    // The block publishes a `vgs` scalar and is STILL not checked against it: an equation named vgs
+    // is an author's arithmetic, not a sized operating point.
+    const res = evaluateSheet(wired('0.65', '0', noGivens), dev);
+    expect(wiringWarnings(res)[0]).toMatch(/no givens, so it has no sized gate-source voltage/);
     expect(res.values.m__vgs).toBeCloseTo(0.65, 12);
   });
 
   it('stays silent about a block whose own evaluation already failed', () => {
-    // A child that could not size has no operating point to check against, and the bind error
-    // says so already — under the child's PATH (`m.givens`), not the bare use name. Advising the
+    // A child that could not size has no operating point to check against, and the sizing error
+    // says so already — under the child's PATH (`m.givens`), not the bare block name. Advising the
     // author about the wiring here would stack a second, wrong finding on the real one.
     const broken: SheetDoc = { ...boundChild(), givens: { L: 'L', id: 'Ib', gm_id: 'nope' } };
     const res = evaluateSheet(wired('0.65', '0', broken), dev);
@@ -2703,9 +2710,9 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
   });
 
   it('reports the LANDED design once, not a bracket end and not every probe', () => {
-    // A pinned parent bisects its whole tree ~20 times. Wiring the gate to the pinned node makes
-    // the reported numbers say WHERE the check ran: at the landing (0.4713) the delta is the
-    // distance from there to the sized vgs, where the bracket ends (0 and 1) would give a very
+    // A constrained parent bisects its whole tree ~20 times. Wiring the gate to the constrained
+    // node makes the reported numbers say WHERE the check ran: at the landing (0.4713) the delta is
+    // the distance from there to the sized vgs, where the bracket ends (0 and 1) would give a very
     // different pair. So this pins the placement, not merely the count — a check running inside
     // the solve would report a probe's voltage.
     const doc = wired('x', '0', boundChild(), {
@@ -2721,10 +2728,10 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     expect(wiringWarnings(res)[0]).toContain((0.4713 - sizedVgs(doc)).toExponential(3));
   });
 
-  it('reports once per RUN when the sheet also claims a range through edges', () => {
-    // Base plus one edge = two lines about the same declaration, and that is the intent: a range
-    // end re-settles the same hardware at a different bias, so its residual is a measurement of
-    // the same wire under different conditions. An edge run's warnings ride its own report
+  it('reports once per RUN when the sheet also claims a range through range ends', () => {
+    // Base plus one range end = two lines about the same declaration, and that is the intent: a
+    // range end re-settles the same hardware at a different bias, so its residual is a measurement
+    // of the same wire under different conditions. A range-end run's warnings ride its own report
     // verbatim, so the second copy is not a duplicate of the first — it belongs to a different
     // evaluation.
     const doc = wired('0', '0', boundChild(), {
@@ -2749,8 +2756,8 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
         .filter((v) => v.rule === 'sheet-wiring' && v.severity === 'error')
         .map((v) => v.message);
 
-    // Half-declared: the pin discipline — a declaration missing a side checks nothing while
-    // looking like it does.
+    // Half-declared: the design-constraint discipline — a declaration missing a side checks nothing
+    // while looking like it does.
     expect(errs({ gate: 'VDD' }).join()).toMatch(
       /needs both gate and source \(source is missing\)/,
     );
@@ -2781,7 +2788,7 @@ describe('rawMargin — the honest distance beside the snapped one', () => {
     };
     const r = evaluateSheet(doc).checks[0];
     // The verdict reads the boundary it is parked on; a DERIVATIVE would read zero slope from
-    // that and conclude the rule cannot be moved.
+    // that and conclude the check cannot be moved.
     expect(r.margin).toBe(0);
     expect(r.status).toBe('amber');
     expect(r.rawMargin).toBeCloseTo(-1e-9, 15);
@@ -2828,7 +2835,7 @@ describe('solver pass count — a loop that closes slowly says so', () => {
   });
 });
 
-describe('limitingConstraint — the rule closest to breaking', () => {
+describe('limitingCheck — the check closest to breaking', () => {
   const child = (rhs: string): SheetDoc => ({
     title: 'c',
     polarity: 'n',
@@ -2844,21 +2851,21 @@ describe('limitingConstraint — the rule closest to breaking', () => {
     equations: [],
     checks: [
       { id: 'loose', kind: 'spec', lhs: '1', op: '>=', rhs: topRhs },
-      // Tighter than either hard rule, and advisory — it must never be named.
+      // Tighter than either hard check, and advisory — it must never be named.
       { id: 'advice', kind: 'advisory', lhs: '1', op: '>=', rhs: '0.999' },
     ],
     blocks: [{ name: 'c', doc: child(childRhs) }],
   });
 
-  it('names the tightest hard rule on a FEASIBLE tree, where nothing is failing', () => {
+  it('names the tightest hard check on a FEASIBLE tree, where nothing is failing', () => {
     const res = evaluateSheet(doc('0.99', '0.5'));
     expect(res.feasible).toBe(true);
-    expect(bindingCheck(res)).toBeUndefined(); // no rule to blame — nothing failed
+    expect(bindingCheck(res)).toBeUndefined(); // no check to blame — nothing failed
     // Path-keyed exactly as bindingCheck would name it.
     expect(limitingCheck(res)?.id).toBe('c.tightest');
   });
 
-  it('agrees with bindingConstraint once a rule fails', () => {
+  it('agrees with bindingCheck once a check fails', () => {
     const res = evaluateSheet(doc('0.99', '2'));
     expect(res.feasible).toBe(false);
     expect(bindingCheck(res)?.id).toBe('loose');
@@ -2866,11 +2873,11 @@ describe('limitingConstraint — the rule closest to breaking', () => {
   });
 
   it('looks past the boundary tautology a range end parks on', () => {
-    // A range end lands the design exactly on the limit its own rule compares against, so that
-    // rule reads margin 0 by construction. Naming it as the limiter there would be true and
-    // useless — it would be the answer forever, hiding every rule that can actually move.
+    // A range end lands the design exactly on the limit its own check compares against, so that
+    // check reads margin 0 by construction. Naming it as the limiter there would be true and
+    // useless — it would be the answer forever, hiding every check that can actually move.
     const res = evaluateSheet({
-      title: 'edge',
+      title: 'range end',
       polarity: 'n',
       params: [
         { name: 'a', value: 1 },
@@ -2893,12 +2900,12 @@ describe('limitingConstraint — the rule closest to breaking', () => {
     expect(limitingCheck(res)?.id).toBe('range');
   });
 
-  it('never names a rule from a range end whose solve never landed', () => {
-    // Such an end's rules were evaluated wherever its bisection stopped — a design point the
-    // engine never landed on. Naming a constraint measured there points the designer at a
-    // phantom. The end's own `error` is the finding; its rules are not outcomes.
+  it('never names a check from a range end whose solve never landed', () => {
+    // Such an end's checks were evaluated wherever its bisection stopped — a design point the
+    // engine never landed on. Naming a check measured there points the designer at a
+    // phantom. The end's own `error` is the finding; its checks are not outcomes.
     const doc: SheetDoc = {
-      title: 'edge',
+      title: 'range end',
       polarity: 'n',
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
@@ -2917,7 +2924,7 @@ describe('limitingConstraint — the rule closest to breaking', () => {
     expect(rangeEndCheck(res)).toBeUndefined();
   });
 
-  it('has nothing to name when every hard rule is na', () => {
+  it('has nothing to name when every hard check is na', () => {
     const res = evaluateSheet({
       title: 'x',
       polarity: 'n',
@@ -2946,7 +2953,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     expect(s[0].param).toBe('a');
     expect(s[0].step).toBeCloseTo(0.01, 12); // 1% of the value
     expect(s[0].error).toBeUndefined();
-    const r = s[0].rules[0];
+    const r = s[0].checks[0];
     expect(r.id).toBe('r');
     expect(r.baseStatus).toBe('pass');
     expect(r.baseMargin).toBeCloseTo(1, 12);
@@ -2955,18 +2962,18 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     expect(r.deltaMinus).toBeCloseTo(-0.02, 9);
   });
 
-  it('treats a FAILING hard rule as an ordinary point — that is where direction is wanted', () => {
+  it('treats a FAILING hard check as an ordinary point — that is where direction is wanted', () => {
     const s = sheetSensitivities(linear({}, '100'));
     expect(s[0].error).toBeUndefined();
-    expect(s[0].rules[0].baseStatus).toBe('fail');
-    expect(s[0].rules[0].baseMargin).toBeCloseTo(-98, 9);
-    expect(s[0].rules[0].dMarginPerUnit).toBeCloseTo(2, 9);
+    expect(s[0].checks[0].baseStatus).toBe('fail');
+    expect(s[0].checks[0].baseMargin).toBeCloseTo(-98, 9);
+    expect(s[0].checks[0].dMarginPerUnit).toBeCloseTo(2, 9);
   });
 
   it('switches to a one-sided difference for a knob sitting on its bound', () => {
     const s = sheetSensitivities(linear({ value: 0.5, min: 0.5 }));
     expect(s[0].step).toBeCloseTo(0.005, 12);
-    const r = s[0].rules[0];
+    const r = s[0].checks[0];
     expect(r.dMarginPerUnit).toBeCloseTo(2, 9); // second-order one-sided: exact on a line
     expect(r.deltaPlus).toBeCloseTo(0.01, 9);
     expect(Number.isNaN(r.deltaMinus)).toBe(true); // no probe below the bound was taken
@@ -2975,7 +2982,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
   it('leans the other way for a knob sitting on its UPPER bound', () => {
     const s = sheetSensitivities(linear({ value: 10 })); // max is 10
     expect(s[0].step).toBeCloseTo(0.1, 12);
-    const r = s[0].rules[0];
+    const r = s[0].checks[0];
     expect(r.dMarginPerUnit).toBeCloseTo(2, 9);
     expect(r.deltaMinus).toBeCloseTo(-0.2, 9);
     expect(Number.isNaN(r.deltaPlus)).toBe(true);
@@ -2985,42 +2992,42 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     // Neither direction has room for the two probes a second-order difference needs.
     const s = sheetSensitivities(linear({ value: 1, min: 0.995, max: 1.005 }));
     expect(s[0].error).toMatch(/too narrow to difference across/);
-    expect(s[0].rules).toEqual([]);
+    expect(s[0].checks).toEqual([]);
   });
 
-  it('reports one-sided deltas and NO slope across an equality rule cusp', () => {
-    // margin = tol*|rhs| - |lhs - rhs| peaks where the rule is satisfied, so both directions
+  it('reports one-sided deltas and NO slope across an equality check cusp', () => {
+    // margin = tol*|rhs| - |lhs - rhs| peaks where the check is satisfied, so both directions
     // move it DOWN and a central difference averages them to a flat 0 — the one number that is
     // certainly wrong.
     const s = sheetSensitivities({
       ...linear(),
       checks: [{ id: 'eq', kind: 'spec', lhs: 'a', op: '==', rhs: '1', tolPct: 10 }],
     });
-    const r = s[0].rules[0];
+    const r = s[0].checks[0];
     expect(Number.isNaN(r.dMarginPerUnit)).toBe(true);
     expect(r.deltaPlus).toBeCloseTo(-0.01, 9);
     expect(r.deltaMinus).toBeCloseTo(-0.01, 9);
   });
 
   it('records a probe that did not stand, and fabricates nothing from it', () => {
-    // sqrt of a negative headroom at a + h: the row is non-finite from resolved inputs, which is
-    // an error-severity diagnostic, so that side of the difference does not exist.
+    // sqrt of a negative headroom at a + h: the equation is non-finite from resolved inputs, which
+    // is an error-severity diagnostic, so that side of the difference does not exist.
     const s = sheetSensitivities(
       linear({}, '1', { equations: [{ name: 'q', expr: 'sqrt(1.005 - a)' }] }),
     );
     expect(s[0].error).toMatch(/did not stand/);
     expect(s[0].error).toContain('a = 1.01');
-    const r = s[0].rules[0];
+    const r = s[0].checks[0];
     expect(Number.isNaN(r.deltaPlus)).toBe(true);
     expect(Number.isNaN(r.dMarginPerUnit)).toBe(true);
     expect(r.deltaMinus).toBeCloseTo(-0.02, 9); // the surviving side is still reported
   });
 
-  it('re-checks the containment edges only for a rule that lives on one', () => {
-    // Every edge costs each probe another full evaluation of the whole sheet, so a readout about
-    // a rule at the top must not pay for range ends nobody asked about. Naming an edge-keyed rule
-    // is how a caller opts in — and then the edge outcomes are keyed exactly as bindingCheck
-    // names them.
+  it('re-checks the range ends only for a check that lives on one', () => {
+    // Every range end costs each probe another full evaluation of the whole sheet, so a readout
+    // about a check at the top must not pay for range ends nobody asked about. Naming a
+    // range-end-keyed check is how a caller opts in — and then the range-end outcomes are keyed
+    // exactly as bindingCheck names them.
     const doc = linear({}, '1', {
       params: [
         { name: 'a', value: 1, role: 'choice', min: 0, max: 10 },
@@ -3028,27 +3035,27 @@ describe('sheetSensitivities — which knob moves which margin', () => {
       ],
       operatingRange: [{ name: 'lo', set: { a: 'A_lo' } }],
     });
-    // Unasked: the edge runs never happen, so nothing edge-keyed is reported at all — never a
-    // row of NaNs standing in for a measurement that was deliberately skipped.
-    expect(sheetSensitivities(doc)[0].rules.map((r) => r.id)).toEqual(['r']);
+    // Unasked: the range-end runs never happen, so nothing range-end-keyed is reported at all —
+    // never a row of NaNs standing in for a measurement that was deliberately skipped.
+    expect(sheetSensitivities(doc)[0].checks.map((r) => r.id)).toEqual(['r']);
 
     const byId = new Map(
-      sheetSensitivities(doc, undefined, undefined, { rule: 'lo@r' })[0].rules.map((r) => [
+      sheetSensitivities(doc, undefined, undefined, { check: 'lo@r' })[0].checks.map((r) => [
         r.id,
         r,
       ]),
     );
     expect([...byId.keys()].sort()).toEqual(['lo@r', 'r']);
     expect(byId.get('r')!.dMarginPerUnit).toBeCloseTo(2, 9);
-    // The edge pins `a` to its own value, so the knob cannot move that run at all.
+    // The range end pins `a` to its own value, so the knob cannot move that run at all.
     expect(byId.get('lo@r')!.dMarginPerUnit).toBeCloseTo(0, 12);
   });
 
-  it('answers for a rule at one range end while another range end has no answer', () => {
-    // y = k*x + 1 is pinned to T, so x = (T - 1)/k. At the lo end T = 3: x = 2/k, and the floor
-    // rule's margin there is 2/k - 1.5, whose slope in k at k = 2 is -2/k^2 = -0.5. The hi end
-    // asks T = 100, which x in [0, 10] cannot produce: no answer there. That is no reason to
-    // refuse the readout about lo — its rules were measured.
+  it('answers for a check at one range end while another range end has no answer', () => {
+    // y = k*x + 1 is constrained to T, so x = (T - 1)/k. At the lo end T = 3: x = 2/k, and the
+    // floor check's margin there is 2/k - 1.5, whose slope in k at k = 2 is -2/k^2 = -0.5. The hi
+    // end asks T = 100, which x in [0, 10] cannot produce: no answer there. That is no reason to
+    // refuse the readout about lo — its checks were measured.
     const doc: SheetDoc = {
       title: 'two-ends',
       polarity: 'n',
@@ -3070,13 +3077,13 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     expect(res.feasible).toBe(true);
     expect(res.rangeEnds?.map((e) => e.state)).toEqual(['does-not-comply', 'no-answer']);
 
-    const [lo] = sheetSensitivities(doc, undefined, undefined, { rule: 'lo@node-floor' });
+    const [lo] = sheetSensitivities(doc, undefined, undefined, { check: 'lo@node-floor' });
     expect(lo.error).toBeUndefined();
-    expect(lo.rules.find((r) => r.id === 'lo@node-floor')!.dMarginPerUnit).toBeCloseTo(-0.5, 3);
+    expect(lo.checks.find((r) => r.id === 'lo@node-floor')!.dMarginPerUnit).toBeCloseTo(-0.5, 3);
     // Pointed at the end that has no answer, it says so in those words — the sheet itself
     // evaluates, so "the sheet does not evaluate" would be false.
-    const [hi] = sheetSensitivities(doc, undefined, undefined, { rule: 'hi@node-floor' });
-    expect(hi.error).toMatch(/the range end "hi" has no rule outcomes/);
+    const [hi] = sheetSensitivities(doc, undefined, undefined, { check: 'hi@node-floor' });
+    expect(hi.error).toMatch(/the range end "hi" has no check outcomes/);
   });
 
   it('probes the author choices by default and never a param the engine solves', () => {
@@ -3096,19 +3103,19 @@ describe('sheetSensitivities — which knob moves which margin', () => {
     const asked = sheetSensitivities(doc, undefined, undefined, { params: ['e', 'ghost'] });
     expect(asked[0].error).toMatch(/the engine solves "e"/);
     expect(asked[1].error).toMatch(/"ghost" is not a param/);
-    expect(asked.every((s) => s.rules.length === 0)).toBe(true);
+    expect(asked.every((s) => s.checks.length === 0)).toBe(true);
   });
 
   it('scales a zero-valued knob from its range, and refuses to invent one without a range', () => {
     const bounded = sheetSensitivities(linear({ value: 0, min: -1, max: 1 }, '-1'));
     expect(bounded[0].step).toBeCloseTo(0.02, 12); // 1% of the span
-    expect(bounded[0].rules[0].dMarginPerUnit).toBeCloseTo(2, 9);
+    expect(bounded[0].checks[0].dMarginPerUnit).toBeCloseTo(2, 9);
 
     const unbounded = sheetSensitivities(
       linear({ value: 0, min: undefined, max: undefined }, '-1'),
     );
     expect(unbounded[0].error).toMatch(/pass an absolute step/);
-    expect(unbounded[0].rules).toEqual([]);
+    expect(unbounded[0].checks).toEqual([]);
 
     const told = sheetSensitivities(
       linear({ value: 0, min: undefined, max: undefined }, '-1'),
@@ -3116,7 +3123,7 @@ describe('sheetSensitivities — which knob moves which margin', () => {
       undefined,
       { absStep: 0.01 },
     );
-    expect(told[0].rules[0].dMarginPerUnit).toBeCloseTo(2, 9);
+    expect(told[0].checks[0].dMarginPerUnit).toBeCloseTo(2, 9);
   });
 
   it('refuses to differentiate a doc that does not validate', () => {
@@ -3128,11 +3135,11 @@ describe('sheetSensitivities — which knob moves which margin', () => {
       ],
     });
     expect(s[0].error).toMatch(/does not validate/);
-    expect(s[0].rules).toEqual([]);
+    expect(s[0].checks).toEqual([]);
   });
 });
 
-describe('a bound gate-source voltage in a sheet', () => {
+describe('a given gate-source voltage in a sheet', () => {
   // The mirror needs a device whose current actually depends on the drain, so the vds-swept
   // demo rather than the module's 2-D `dev`.
   const devVds = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
@@ -3154,7 +3161,7 @@ describe('a bound gate-source voltage in a sheet', () => {
     provides: ['W', 'vgs'],
   });
 
-  /** A K:1 mirror whose output device binds `partner` as its second quantity. */
+  /** A K:1 mirror whose output device is given `partner` as its second quantity. */
   const mirror = (partner: Record<string, string>): SheetDoc => ({
     title: 'mirror',
     polarity: 'n',
@@ -3178,7 +3185,7 @@ describe('a bound gate-source voltage in a sheet', () => {
     // not "within an inversion level of it".
     expect(res.sizing!.vgs).toBeCloseTo(res.values.ref__vgs, 15);
     expect(res.sizing!.W).toBeCloseTo(3 * res.values.ref__W, 15);
-    // vgs is a SELECTOR, never a bias axis: the bind must not have sliced the vgs axis away.
+    // vgs is a SELECTOR, never a bias axis: the sizing must not have sliced the vgs axis away.
     expect(Object.keys(res.sizing?.bias ?? {})).not.toContain('vgs');
     expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
 
@@ -3205,8 +3212,8 @@ describe('a bound gate-source voltage in a sheet', () => {
   it('reports a clamped gate voltage as the one it read AT, and says that it clamped', () => {
     // The hazard the clamp is written against is a result whose vgs disagrees with the point
     // every quantity beside it came from. The demo sweeps vgs to 1.2 V, so a request for 1.5 V
-    // must come back as 1.2 V everywhere it is reported — the bind report, the merged scope, and
-    // a row reading it — with the request surviving only in the warning. And the sheet must
+    // must come back as 1.2 V everywhere it is reported — the sizing report, the merged scope, and
+    // an equation reading it — with the request surviving only in the warning. And the sheet must
     // still size: a clamp is a note about where the data ends, not an infeasibility.
     const doc: SheetDoc = {
       title: 'c',
@@ -3243,13 +3250,13 @@ describe('a bound gate-source voltage in a sheet', () => {
     );
     expect(runSheet(both, devVds).sizing?.ok).toBe(false);
 
-    // And a gate voltage on top of an already-complete width-first bind is a third quantity.
+    // And a gate voltage on top of already-complete width-first givens is a third quantity.
     const three = mirror({ vgs: 'ref__vgs', gm_id: 'gm_id_m' });
     expect(validateSheet(three).some((w) => /EXACTLY two/.test(w.message))).toBe(true);
     expect(runSheet(three, devVds).sizing?.ok).toBe(false);
   });
 
-  it('is legal alongside a diode connection: the connection picks the axis, the bind the point', () => {
+  it('is legal alongside a diode connection: the connection picks the axis, the given vgs the point', () => {
     // A diode connection collapses vds onto the vds = vgs diagonal; naming vgs then picks the
     // point ON that diagonal. Two independent statements, both true — unlike a declared vds,
     // which would name the same coordinate twice.
@@ -3286,7 +3293,7 @@ describe('a bound gate-source voltage in a sheet', () => {
 });
 
 describe('validateSheet — gates declared on one wire but sized apart', () => {
-  const child = (bind: Record<string, unknown>): SheetDoc => ({
+  const child = (givens: Record<string, unknown>): SheetDoc => ({
     title: 'c',
     polarity: 'n',
     params: [
@@ -3295,7 +3302,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
       { name: 'g', value: 10 },
       { name: 'vg', value: 0.7 },
     ],
-    givens: { L: 'L', ...bind } as SheetDoc['givens'],
+    givens: { L: 'L', ...givens } as SheetDoc['givens'],
     equations: [],
     checks: [],
     provides: ['vgs', 'W'],
@@ -3304,7 +3311,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
   const pair = (
     a: { gate: string; source: string },
     b: { gate: string; source: string },
-    bindB: Record<string, unknown> = { id: 'Ib', gm_id: 'g' },
+    givensB: Record<string, unknown> = { id: 'Ib', gm_id: 'g' },
   ): SheetDoc => ({
     title: 'p',
     polarity: 'n',
@@ -3313,7 +3320,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
     checks: [],
     blocks: [
       { name: 'one', doc: child({ id: 'Ib', gm_id: 'g' }), wiring: a },
-      { name: 'two', doc: child(bindB), wiring: b },
+      { name: 'two', doc: child(givensB), wiring: b },
     ],
   });
 
@@ -3349,7 +3356,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
 
   it('is not silenced by a gate voltage that couples nothing', () => {
     // A typed number, and a gate voltage read off a block that is NOT on this node, leave the
-    // two devices exactly as unconnected as no vgs at all. Accepting any bound vgs would turn
+    // two devices exactly as unconnected as no vgs at all. Accepting any given vgs would turn
     // the check off on the sheets that most look like they pass it.
     expect(ties(withPartner())).toHaveLength(1); // vg is the child's own param, a literal 0.7
 

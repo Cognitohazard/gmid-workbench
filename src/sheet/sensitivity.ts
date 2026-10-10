@@ -3,8 +3,8 @@
 // and the designer goes back to moving sliders one at a time. This module differences the
 // evaluator against itself: perturb one design parameter, re-evaluate the WHOLE sheet through
 // the public entrypoint (children and solves included — a sensitivity must see what the verdict
-// sees; containment edges only when the rule in question lives on one, see
-// SensitivityOptions.rule), and report how far each rule's margin moved. No new numerics, no
+// sees; range ends only when the check in question lives on one, see
+// SensitivityOptions.check), and report how far each check's margin moved. No new numerics, no
 // analytic model of the sheet: the derivative is finite differences over the same evaluation
 // the badge shows. Pure, deterministic, never throws.
 
@@ -16,7 +16,7 @@ import {
   engineSolved,
   stands,
   sweepable,
-  treeRuleResults,
+  treeCheckResults,
   withoutRange,
   withParams,
 } from './types';
@@ -49,20 +49,19 @@ export const SENSITIVITY_REL_STEP = 1e-2;
  * `absStep` supplies a step for a knob sitting at 0 with no bounded range: the engine refuses to
  * invent one, because the invented scale would set the answer.
  *
- * `rule` names the outcome the caller actually wants ranked, and it is a COST declaration as
- * much as a filter: containment edges are re-run per probe only when the named rule lives on one
- * (an edge-keyed id, `cm-lo@tail-saturated`). Without it every probe re-checks coverage at every
- * range end —
- * 2*(1 + edges) full evaluations per knob, dozens per click on a sheet with several claims — to
- * produce numbers about a rule at the top. The edge-free runs then carry no edge-keyed rules at
- * all, in the base as well as the probes, so nothing reads as an unmeasured NaN that was in fact
- * never asked for.
+ * `check` names the outcome the caller actually wants ranked, and it is a COST declaration as
+ * much as a filter: range ends are re-run per probe only when the named check lives on one
+ * (a range-end-keyed id, `cm-lo@tail-saturated`). Without it every probe re-checks compliance at
+ * every range end — 2*(1 + range ends) full evaluations per knob, dozens per click on a sheet with
+ * several claims — to produce numbers about a check at the top. The range-free runs then carry no
+ * range-end-keyed checks at all, in the base as well as the probes, so nothing reads as an
+ * unmeasured NaN that was in fact never asked for.
  */
 export interface SensitivityOptions {
   refs?: SheetRefIndex;
   params?: readonly string[];
   absStep?: number;
-  rule?: string;
+  check?: string;
 }
 
 /** One knob to probe, or the reason it cannot be one. */
@@ -76,7 +75,7 @@ interface Selected {
  * Which knobs to probe. The default set is the author's 'choice' params — the implementation
  * knobs a designer re-balances, as opposed to 'spec' params, which state the requirement and
  * are not free to move. Engine-solved params are excluded from BOTH the default set and an
- * explicit request: a torn or pinned param's authored value is a starting guess the solver
+ * explicit request: a torn or constrained param's authored value is a starting guess the solver
  * discards, so perturbing it measures the solver's tolerance, not the design.
  */
 function select(doc: SheetDoc, names?: readonly string[]): Selected[] {
@@ -118,23 +117,23 @@ function stepFor(p: SheetVar, absStep?: number): number | string {
 }
 
 /**
- * How each rule's margin responds to each design knob, one entry per knob. Costs 2 full
- * evaluations per knob on top of the base one (more only when `opts.rule` asks for an edge-keyed
- * rule, which puts every containment edge back in each of them), so it is an on-demand readout,
- * never part of a reactive evaluation.
+ * How each check's margin responds to each design knob, one entry per knob. Costs 2 full
+ * evaluations per knob on top of the base one (more only when `opts.check` asks for a
+ * range-end-keyed check, which puts every range end back in each of them), so it is an on-demand
+ * readout, never part of a reactive evaluation.
  *
  * Refs are materialized and the doc validated ONCE — the tree is constant across the probes,
  * only a value moves — and the probes then go through `evaluateSheet`, the same entrypoint the
  * verdict uses. Differences are taken on RAW margins (see CheckResult.rawMargin): the snapped
- * margin reads exactly 0 for a rule parked on its own boundary, which would report zero slope
- * for a rule that is in fact moving. Relative margins are deliberately NOT differentiated —
+ * margin reads exactly 0 for a check parked on its own boundary, which would report zero slope
+ * for a check that is in fact moving. Relative margins are deliberately NOT differentiated —
  * their denominator is a bound that may be ~0, and the resulting ratio carries the denominator's
  * noise rather than the design's response.
  *
  * A central difference is used only where both probes stay strictly inside the authored
  * [min, max]; at a bound the readout switches to a second-order one-sided difference on the side
  * that fits, so a knob already at its limit still reports which way it would move things rather
- * than silently reporting nothing. Rules are keyed exactly as `bindingCheck` names them, so
+ * than silently reporting nothing. Checks are keyed exactly as `bindingCheck` names them, so
  * a caller can hand this the id it already has.
  */
 export function sheetSensitivities(
@@ -151,7 +150,7 @@ export function sheetSensitivities(
     param,
     value,
     step: NaN,
-    rules: [],
+    checks: [],
     error,
   });
   /** Every entry unavailable for one shared reason (a per-knob reason still wins). */
@@ -168,18 +167,18 @@ export function sheetSensitivities(
     );
   }
 
-  // Only a rule that lives ON an edge is worth re-checking coverage at every range end for; see
-  // SensitivityOptions.rule.
-  const probeDoc = opts.rule?.includes(RANGE_END_SEP) ? r.doc : withoutRange(r.doc);
+  // Only a check that lives ON a range end is worth re-checking compliance at every range end for;
+  // see SensitivityOptions.check.
+  const probeDoc = opts.check?.includes(RANGE_END_SEP) ? r.doc : withoutRange(r.doc);
   const at = (over: Record<string, number>): SheetResult =>
     evaluateSheet(withParams(probeDoc, over), table, resolveDevice);
 
   // A probe has to have completed wherever it is read. The probe doc carries range ends only
-  // when the rule in question lives on one, and then THAT end leaving no outcomes is a probe
+  // when the check in question lives on one, and then THAT end leaving no outcomes is a probe
   // with nothing to difference, exactly like a base run that did not stand. Another range end
-  // having no answer is no obstacle: its rules are simply not among the ones read.
-  const end = opts.rule?.includes(RANGE_END_SEP)
-    ? opts.rule.slice(0, opts.rule.indexOf(RANGE_END_SEP))
+  // having no answer is no obstacle: its checks are simply not among the ones read.
+  const end = opts.check?.includes(RANGE_END_SEP)
+    ? opts.check.slice(0, opts.check.indexOf(RANGE_END_SEP))
     : undefined;
   const endBroke = (res: SheetResult): boolean =>
     (res.rangeEnds ?? []).some((e) => e.name === end && rangeEndBroke(e));
@@ -193,11 +192,11 @@ export function sheetSensitivities(
   }
   if (endBroke(base)) {
     return dead(
-      `the range end "${end}" has no rule outcomes at these values, so there is nothing there ` +
+      `the range end "${end}" has no check outcomes at these values, so there is nothing there ` +
         `to differentiate`,
     );
   }
-  const baseRules = treeRuleResults(base);
+  const baseChecks = treeCheckResults(base);
 
   return picked.map((s) => {
     const p = s.param;
@@ -230,29 +229,29 @@ export function sheetSensitivities(
     const errors: string[] = [];
     const probes = offsets.map((dx) => {
       const res = at({ [p.name]: p.value + dx });
-      if (whole(res)) return treeRuleResults(res);
+      if (whole(res)) return treeCheckResults(res);
       errors.push(`the evaluation at ${p.name} = ${p.value + dx} did not stand`);
       return undefined;
     });
-    /** The raw margin of `id` at probe `i`, or NaN where that probe or that rule is absent. */
+    /** The raw margin of `id` at probe `i`, or NaN where that probe or that check is absent. */
     const raw = (i: number, id: string): number => probes[i]?.get(id)?.rawMargin ?? NaN;
 
-    const rules: SheetSensitivityCheck[] = [];
-    for (const [id, rr] of baseRules) rules.push(record(id, rr, offsets, raw));
+    const checks: SheetSensitivityCheck[] = [];
+    for (const [id, rr] of baseChecks) checks.push(record(id, rr, offsets, raw));
     return {
       param: p.name,
       value: p.value,
       step: h,
-      rules,
+      checks,
       ...(errors.length ? { error: errors.join('; ') } : {}),
     };
   });
 }
 
-/** One rule's record from the base outcome and the two probes, at the signed offsets they were
+/** One check's record from the base outcome and the two probes, at the signed offsets they were
  *  taken at: `step` is the one-step probe (positive leaning up, negative leaning down) and the
- *  scheme is central exactly when the second probe mirrors it. An EQUALITY rule's margin is
- *  `tol - |lhs - rhs|`, which has a cusp exactly where the rule is satisfied: a difference
+ *  scheme is central exactly when the second probe mirrors it. An EQUALITY check's margin is
+ *  `tol - |lhs - rhs|`, which has a cusp exactly where the check is satisfied: a difference
  *  taken across it averages two different one-sided slopes into a number that describes
  *  neither, so no slope is reported and the two one-sided deltas stand alone. */
 function record(

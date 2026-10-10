@@ -1,4 +1,5 @@
-// Coverage semantics: the edge transformation, and what a fixed-hardware range check produces.
+// Compliance semantics: the fixed-hardware transformation, and what a fixed-hardware range check
+// produces.
 //
 // The goldens here are HAND-DERIVED from the demo model's closed forms — vth(L, vsb) =
 // 0.4 + 0.02·ln(L/0.18µ + 1) + BODY_FACTOR·vsb, VA = VA_PER_L·L, gds = id/(VA + vds), and the EKV
@@ -31,7 +32,7 @@ import { holdHardware } from './coverage';
 // The closed forms, from the module the library goldens share — not the fixtures that re-export
 // them, whose import walks sheets/ off disk and builds a demo table this suite does not use.
 import { gdsOf, relErr } from './library.math';
-import { clampedIn, stands, treeRuleResults } from './types';
+import { clampedIn, stands, treeCheckResults } from './types';
 import type { SizingReport, SheetBlockReport, SheetDoc } from './types';
 
 /** A four-dimensional [l, vds, vsb, vgs] table — the shape a real PDK export has. The 0.05 V
@@ -46,7 +47,7 @@ const dev = generateDemoDevice({
 // The transformation alone
 // ---------------------------------------------------------------------------------------
 
-describe('the edge transformation — fixed hardware, decided on two booleans', () => {
+describe('the fixed-hardware transformation — decided on two booleans', () => {
   const report = (over: Partial<SizingReport> = {}): SizingReport => ({
     ok: true,
     W: 1.194e-6,
@@ -55,31 +56,31 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
     id: 2e-5,
     ...over,
   });
-  const doc = (bind: SheetDoc['givens']): SheetDoc => ({
+  const doc = (givens: SheetDoc['givens']): SheetDoc => ({
     title: 't',
     polarity: 'n',
     params: [{ name: 'I_d', value: 2e-5 }],
     equations: [{ name: 'r', expr: 'I_d * 2' }],
     checks: [{ id: 'x', kind: 'physical', lhs: 'r', op: '>=', rhs: '0' }],
-    givens: bind,
+    givens,
   });
-  const pin = (
-    bind: SheetDoc['givens'],
+  const hold = (
+    givens: SheetDoc['givens'],
     r: SizingReport | undefined = report(),
-  ): SheetDoc['givens'] => holdHardware(doc(bind), { sizing: r }).doc.givens;
+  ): SheetDoc['givens'] => holdHardware(doc(givens), { sizing: r }).doc.givens;
 
-  it('leaves a width-first bind exactly as authored', () => {
+  it('leaves width-first givens exactly as authored', () => {
     // Already fixed hardware. Its partner is how the sheet writes a gate tie, and under a move
-    // that shifts vds alone — every move the library's edges make — holding it reproduces the
+    // that shifts vds alone — every move the library's range ends make — holding it reproduces the
     // tied device exactly. Dropping it would replace a wiring statement with an assumption.
     const b = { L: 'L_p', W: 'K*ref__W', gm_id: 'gm_id_m', vds: 'V_o' };
-    expect(pin(b)).toEqual(b);
+    expect(hold(b)).toEqual(b);
   });
 
   it('trades an authored selector for the solved width, and KEEPS the authored current', () => {
     // The current expression IS the hardware in the sheet's own algebra — a mirror ratio, a tail
     // split — so it re-evaluates at the range end on purpose. Only the operating-point spec goes.
-    expect(pin({ L: 'L_p', gm_id: '10', id: 'I_tail/2', vds: 'V_o', vsb: 'V_t' })).toEqual({
+    expect(hold({ L: 'L_p', gm_id: '10', id: 'I_tail/2', vds: 'V_o', vsb: 'V_t' })).toEqual({
       L: '5e-7',
       W: '0.000001194',
       id: 'I_tail/2',
@@ -88,7 +89,7 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
     });
   });
 
-  it('pins the current too when the sheet never said where it comes from, and says so', () => {
+  it('holds the current too when the sheet never said where it comes from, and says so', () => {
     const p = holdHardware(doc({ L: 'L_p', gm: '2*pi*GBW*CL', gm_id: '10' }), { sizing: report() });
     expect(p.doc.givens).toEqual({ L: '5e-7', W: '0.000001194', id: '0.00002' });
     expect(p.assumedSource).toEqual(['givens']);
@@ -98,27 +99,27 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
     // The list is derived from the device module's own selectors; a selector left behind would
     // re-size the transistor at the range end, which is what a fixed-hardware check must not do.
     for (const k of ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar', 'vgs', 'gm']) {
-      const out = pin({ L: 'L_p', [k]: '3', id: 'I_d' });
+      const out = hold({ L: 'L_p', [k]: '3', id: 'I_d' });
       expect(Object.keys(out!).sort(), k).toEqual(['L', 'W', 'id']);
     }
   });
 
-  it('pins the length the sizing used, not the authored expression', () => {
-    // An L that reads an edge-overridden param would otherwise hand the range end a different
+  it('holds the length the sizing used, not the authored expression', () => {
+    // An L that reads a param a range end overrides would otherwise hand the range end a different
     // transistor while the report claimed the hardware was fixed.
-    expect(pin({ L: 'L_min * ratio', gm_id: '10', id: 'I_d' })!.L).toBe('5e-7');
+    expect(hold({ L: 'L_min * ratio', gm_id: '10', id: 'I_d' })!.L).toBe('5e-7');
   });
 
   it('injects numbers that parse back to the same double', () => {
-    // A fixed-digit reformat would pin the design to a width the base run never sized.
+    // A fixed-digit reformat would hold the design at a width the base run never sized.
     for (const W of [Math.PI * 1e-6, 1e-7, 1.2345678901234567e-9, 1e21, 5e-324]) {
-      const expr = pin({ L: 'L_p', gm_id: '10', id: 'I_d' }, report({ W }))!.W as string;
+      const expr = hold({ L: 'L_p', gm_id: '10', id: 'I_d' }, report({ W }))!.W as string;
       expect(compileExpr(expr).eval(scalarScope({})), expr).toBe(W);
     }
   });
 
-  it('keys the tree by index, so two uses of one name still get their own hardware', () => {
-    // evalChildren pushes exactly one report per use, dead ones included, so the indices align —
+  it('keys the tree by index, so two blocks of one name still get their own hardware', () => {
+    // evalBlocks pushes exactly one report per block, dead ones included, so the indices align —
     // while names can duplicate on a document that reached the engine without validation.
     const leaf = (id: string): SheetDoc => ({
       title: 'c',
@@ -162,15 +163,15 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
     expect(out.blocks?.map((u) => u.doc?.givens?.id)).toEqual(['I_a', 'I_b']);
   });
 
-  it('leaves a bind alone when there is no hardware to pin it to', () => {
+  it('leaves the givens alone when there is no hardware to hold them at', () => {
     // Degrade, never invent — the same discipline the rest of the engine takes. The caller gates
     // on the base run standing, so this is defence rather than a path in normal use.
     const b = { L: 'L_p', gm_id: '10', id: 'I_d' };
     expect(holdHardware(doc(b), {}).doc.givens).toEqual(b); // no report at all
-    expect(pin(b, report({ ok: false, W: NaN, L: NaN }))).toEqual(b);
+    expect(hold(b, report({ ok: false, W: NaN, L: NaN }))).toEqual(b);
   });
 
-  it('touches nothing but the binds', () => {
+  it('touches nothing but the givens', () => {
     const p = holdHardware(doc({ L: 'L_p', gm_id: '10', id: 'I_d', diode: true }), {
       sizing: report(),
     }).doc;
@@ -182,10 +183,10 @@ describe('the edge transformation — fixed hardware, decided on two booleans', 
 });
 
 // ---------------------------------------------------------------------------------------
-// What a coverage run produces, on a body-biased table
+// What a range-end run produces, on a body-biased table
 // ---------------------------------------------------------------------------------------
 
-describe('coverage runs re-bias the design instead of re-sizing it', () => {
+describe('range-end runs re-bias the design instead of re-sizing it', () => {
   const L = 5e-7; // VA = 2.5 V here
   const ID = 2e-5;
 
@@ -220,7 +221,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     ...over,
   });
 
-  const bindAt = (c: SheetBlockReport | undefined): SizingReport => c!.sizing!;
+  const sizingAt = (c: SheetBlockReport | undefined): SizingReport => c!.sizing!;
 
   it('holds the transistor and lets the body effect move the gate, and only the gate', () => {
     // The purest fixed-hardware statement the model can make: at a fixed vds and a fixed current
@@ -236,8 +237,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       dev,
     );
     expect(res.complies).toBe(true);
-    const base = bindAt(res.blocks?.[0]);
-    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
+    const base = sizingAt(res.blocks?.[0]);
+    const end = sizingAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W); // to the last bit: this is the same transistor
     expect(end.L).toBe(base.L);
     expect(end.id).toBe(base.id); // the authored current, re-evaluated to the same number
@@ -254,8 +255,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // and read gm/ID = 10 exactly at an unchanged vgs — which is what these numbers rule out.
     const res = runSheet(mk({ operatingRange: [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }] }), dev);
     expect(res.complies).toBe(true);
-    const base = bindAt(res.blocks?.[0]);
-    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
+    const base = sizingAt(res.blocks?.[0]);
+    const end = sizingAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W);
     expect(end.vgs).toBeLessThan(base.vgs);
     const at = res.rangeEnds?.[0].blocks?.[0].provides;
@@ -284,8 +285,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       dev,
     );
     expect(res.complies).toBe(true);
-    const [rBase, mBase] = (res.blocks ?? []).map(bindAt);
-    const [rEnd, mEnd] = (res.rangeEnds?.[0].blocks ?? []).map(bindAt);
+    const [rBase, mBase] = (res.blocks ?? []).map(sizingAt);
+    const [rEnd, mEnd] = (res.rangeEnds?.[0].blocks ?? []).map(sizingAt);
     expect(rEnd.vgs - rBase.vgs).toBeCloseTo(-BODY_FACTOR * 0.4, 9);
     expect(rEnd.W).toBe(rBase.W);
     expect(mEnd.W).toBe(mBase.W);
@@ -297,9 +298,9 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
   });
 
   it('re-reads gm at a range end, so even an end that moves nothing is not bit-identical', () => {
-    // The one thing a fixed-hardware end does NOT hold. The base bind names a gm/ID, which the
+    // The one thing a fixed-hardware end does NOT hold. The base givens name a gm/ID, which the
     // sizer honours arithmetically (gm = gm_id·I_D); its rewritten (W, I_D) form has no ratio to
-    // honour and reads gm back off the operating point the pinned width lands on. So this edge —
+    // honour and reads gm back off the operating point the held width lands on. So this range end —
     // which sets a param to its own value and therefore changes nothing whatsoever — still
     // reports a gm a fraction under the base's, and Av, GBW, PM, noise and offset each inherit
     // that fraction, always in the pessimistic direction.
@@ -326,8 +327,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       dev,
     );
     expect(res.complies).toBe(true);
-    const base = bindAt(res.blocks?.[0]);
-    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
+    const base = sizingAt(res.blocks?.[0]);
+    const end = sizingAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W);
     expect(end.L).toBe(base.L);
     expect(end.id).toBe(base.id);
@@ -342,11 +343,14 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
 
   /** The device with its source on node X: the drain is moved by the range end, the body bias is
    *  X. `hold` says the gate — X plus the device's gate-source voltage — is what stays put. */
-  const underGate = (x: SheetDoc['params'][number], edges?: SheetDoc['operatingRange']): SheetDoc =>
+  const underGate = (
+    x: SheetDoc['params'][number],
+    rangeEnds?: SheetDoc['operatingRange'],
+  ): SheetDoc =>
     mk({
       params: [...mk({}).params, x],
       blocks: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'X' } }],
-      ...(edges ? { operatingRange: edges } : {}),
+      ...(rangeEnds ? { operatingRange: rangeEnds } : {}),
     });
   const drainHi = [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }];
   const X0 = 0.2;
@@ -358,7 +362,7 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     const res = runSheet(underGate(held), dev);
     expect(res.feasible).toBe(true);
     expect(res.values.X).toBe(X0);
-    expect(res.held).toEqual({ X: X0 + bindAt(res.blocks?.[0]).vgs });
+    expect(res.held).toEqual({ X: X0 + sizingAt(res.blocks?.[0]).vgs });
   });
 
   it('holds the gate at a range end and lets the node under it move', () => {
@@ -369,13 +373,13 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
     // raises vgs by BODY_FACTOR·D on top of the same drain-driven fall d:
     //   (X + D) + (vgs - d + BODY_FACTOR·D) = X + vgs   gives   D = d/(1 + BODY_FACTOR).
     const typed = runSheet(underGate({ name: 'X', value: X0 }, drainHi), dev);
-    const d = bindAt(typed.blocks?.[0]).vgs - bindAt(typed.rangeEnds?.[0].blocks?.[0]).vgs;
+    const d = sizingAt(typed.blocks?.[0]).vgs - sizingAt(typed.rangeEnds?.[0].blocks?.[0]).vgs;
     expect(d).toBeGreaterThan(5e-3); // the drain really moved the device
 
     const res = runSheet(underGate(held, drainHi), dev);
     expect(res.complies).toBe(true);
-    const base = bindAt(res.blocks?.[0]);
-    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
+    const base = sizingAt(res.blocks?.[0]);
+    const end = sizingAt(res.rangeEnds?.[0].blocks?.[0]);
     expect(end.W).toBe(base.W); // the same transistor
     const landed = res.rangeEnds![0].solved.X;
     expect(end.bias!.vsb).toBeCloseTo(landed, 12); // the node the device actually sat on
@@ -386,9 +390,10 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
   });
 
   it('refuses a held expression that its own param does not move', () => {
-    // In the required form, yet the row cancels the param: R is -X, so X + R is zero everywhere
-    // and no value of X is singled out. The relation reads exactly zero at the low end of the
-    // bracket, which a bisection takes for a root — it would report the node at 0 V and cover.
+    // In the required form, yet the equation cancels the param: R is -X, so X + R is zero
+    // everywhere and no value of X is singled out. The relation reads exactly zero at the low end
+    // of the bracket, which a bisection takes for a root — it would report the node at 0 V and
+    // cover.
     const doc = underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: 'X + R' }, drainHi);
     doc.equations = [{ name: 'R', expr: '0 - X' }];
     const res = runSheet(doc, dev);
@@ -447,13 +452,13 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
       return doc;
     };
     const typed = runSheet(held(), dev);
-    const d = bindAt(typed.blocks?.[0]).vgs - bindAt(typed.rangeEnds?.[0].blocks?.[0]).vgs;
+    const d = sizingAt(typed.blocks?.[0]).vgs - sizingAt(typed.rangeEnds?.[0].blocks?.[0]).vgs;
 
     const res = runSheet(held('X + vgs'), dev);
     const base = res.blocks![0];
-    expect(base.held).toEqual({ X: 0.25 + bindAt(base).vgs });
-    const end = bindAt(res.rangeEnds?.[0].blocks?.[0]);
-    expect(end.W).toBe(bindAt(base).W);
+    expect(base.held).toEqual({ X: 0.25 + sizingAt(base).vgs });
+    const end = sizingAt(res.rangeEnds?.[0].blocks?.[0]);
+    expect(end.W).toBe(sizingAt(base).W);
     expect(relErr(end.bias!.vsb - 0.25, d / (1 + BODY_FACTOR))).toBeLessThan(5e-3);
     expect(end.bias!.vsb + end.vgs).toBeCloseTo(base.held!.X, 5);
   });
@@ -485,8 +490,8 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
   });
 
   it('names the transconductance instead when that is what the endpoint cannot reach', () => {
-    // A width-first bind is carried through untouched, so the quantity it runs out of table on is
-    // whichever one it authored. Saying "current" over a gm bind would describe the wrong
+    // Width-first givens are carried through untouched, so the quantity they run out of table on is
+    // whichever one they authored. Saying "current" over a given gm would describe the wrong
     // quantity to the one reader who most needs it named.
     const doc: SheetDoc = {
       title: 'edge-of-table-gm',
@@ -511,8 +516,9 @@ describe('coverage runs re-bias the design instead of re-sizing it', () => {
 // The standing-center gate
 // ---------------------------------------------------------------------------------------
 
-describe('coverage is only asked of a design that exists', () => {
-  /** A sheet whose pin cannot reach its target, with a bind that sizes at every probe. */
+describe('compliance is only asked of a design that exists', () => {
+  /** A sheet whose design constraint cannot reach its target, with givens that size at every probe.
+   *  */
   const unreachable = (T: number): SheetDoc => ({
     title: 'g',
     polarity: 'n',
@@ -528,11 +534,11 @@ describe('coverage is only asked of a design that exists', () => {
     operatingRange: [{ name: 'lo', set: { Spec: 'Spec_lo' } }],
   });
 
-  it('skips the edges when the base run did not stand, and says the question went unasked', () => {
-    // The case that makes "did the binds size" the wrong test: a pin that fails returns its LAST
-    // BISECTION PROBE, so every bind in the result reads ok while the engine landed on nothing.
-    // Pinning coverage hardware to that probe would report a verdict about a design that was
-    // never produced — the same phantom the errored-edge guards elsewhere exist to refuse.
+  it('skips the range ends when the base run did not stand, and says the question went unasked', () => {
+    // The case that makes "did the devices size" the wrong test: a design constraint that fails
+    // returns its LAST BISECTION PROBE, so every sizing in the result reads ok while the engine
+    // landed on nothing. Holding hardware at that probe would report a verdict about a design that
+    // was never produced — the same phantom the errored-range-end guards elsewhere exist to refuse.
     const res = evaluateSheet(unreachable(0.5), dev);
     expect(res.sizing?.ok).toBe(true);
     expect(stands(res)).toBe(false);
@@ -543,7 +549,7 @@ describe('coverage is only asked of a design that exists', () => {
     expect(res.feasible).toBe(false);
   });
 
-  it('checks the edges of a design that misses its spec — a failing rule is still a design', () => {
+  it('checks the range ends of a design that misses its spec — a failing check is still a design', () => {
     const doc = unreachable(5);
     doc.params.find((p) => p.name === 'floor')!.value = 5; // base x = 2 fails the floor
     const res = evaluateSheet(doc, dev);
@@ -553,19 +559,20 @@ describe('coverage is only asked of a design that exists', () => {
     expect(res.complies).toBe(false);
   });
 
-  it('leaves a skipped edge out of the rules a caller can name', () => {
+  it('leaves a skipped range end out of the checks a caller can name', () => {
     const res = evaluateSheet(unreachable(0.5), dev);
-    expect([...treeRuleResults(res).keys()]).toEqual(['node-floor']);
+    expect([...treeCheckResults(res).keys()]).toEqual(['node-floor']);
   });
 
-  it('draws no edge failure on a sweep where coverage was never checked', () => {
+  it('draws no range-end failure on a sweep where compliance was never checked', () => {
     // A bottom clip here would put a cause on the chart the engine never established — and would
     // flatten the picker's objective across the whole region whose centers fail.
     const doc = unreachable(5);
     doc.params.find((p) => p.name === 'Spec')!.min = 0.5;
     doc.params.find((p) => p.name === 'Spec')!.max = 25; // y spans [1, 21]: the top is unreachable
-    // y spans [1, 21] over the pin's bracket, so the two ends of this sweep have no design and
-    // its interior does. The edge curve must be a GAP at the ends and a real margin between.
+    // y spans [1, 21] over the constraint's bracket, so the two ends of this sweep have no design
+    // and its interior does. The range-end curve must be a GAP at the ends and a real margin
+    // between.
     const sw = sweepSheet(doc, 'Spec', dev, 5);
     const curve = sw.checks.find((r) => r.rangeEnd === 'lo')!;
     expect(curve.marginPct.map((m) => m === null)).toEqual([true, false, false, false, true]);
@@ -651,9 +658,9 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     expect(res.feasible).toBe(true);
     const e = res.rangeEnds![0];
     expect(e.set).toEqual({ VD: 1.5 });
-    // The run completed — on data taken 0.3 V away. Its `vd-cap` rule even fails there
+    // The run completed — on data taken 0.3 V away. Its `vd-cap` check even fails there
     // (1.5 > 1.4), and that still is not a finding: the device numbers beside it are not this
-    // point's, so the end is no answer rather than a failure, and no rule of it is named.
+    // point's, so the end is no answer rather than a failure, and no check of it is named.
     expect(e.state).toBe('no-answer');
     expect(e.error).toMatch(/^the table does not reach this point \(givens vds\)/);
     expect(e.solved).toEqual({});
@@ -675,7 +682,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     expect(clampedIn(res)).toEqual(['givens vds']);
   });
 
-  it('names a clamped child by its use path', () => {
+  it('names a clamped child by its block path', () => {
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
@@ -722,7 +729,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     );
     expect(vsb.state).toBe('no-answer');
     expect(vsb.error).toMatch(/\(givens vsb\)/);
-    // A width-first bind keeps its length as an authored expression, so an end can move it:
+    // Width-first givens keep their length as an authored expression, so an end can move it:
     // 5 µm against a table that stops at 2 µm.
     const len = end(
       { L: 'Lp', W: '10u', id: '20u', vds: '0.6', vsb: '0' },
@@ -793,7 +800,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
   it('declines a diode-connected device whose gate voltage lies past the characterized drain range', () => {
     // A diode connection is read where vds = vgs. Raise the current and the gate voltage climbs
     // to about 0.97 V; a table swept only to vds = 0.6 V reads that point at 0.6 V instead and
-    // reports a gate voltage 30 mV away from the real one — enough to flip a rule either way.
+    // reports a gate voltage 30 mV away from the real one — enough to flip a check either way.
     const mk = (vdsMax: number) => generateDemoDevice({ vds: { min: 0, max: vdsMax, step: 0.05 } });
     const doc: SheetDoc = {
       title: 'diode',
@@ -904,7 +911,7 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
     warnings: message === undefined ? [] : [{ rule: 'sheet-givens', severity: 'error', message }],
   });
 
-  it('reads a completed run by its hard rules', () => {
+  it('reads a completed run by its hard checks', () => {
     expect(heldOutcome(run())).toEqual({ state: 'complies' });
     expect(heldOutcome(run(undefined, false))).toEqual({ state: 'does-not-comply' });
   });
@@ -930,9 +937,9 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
   });
 
   it('calls any other run that did not complete no answer, with its message', () => {
-    expect(heldOutcome(run('pinned param x: does not change sign'))).toEqual({
+    expect(heldOutcome(run('constrained param x: does not change sign'))).toEqual({
       state: 'no-answer',
-      error: 'pinned param x: does not change sign',
+      error: 'constrained param x: does not change sign',
     });
   });
 });
@@ -944,11 +951,11 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
 describe('validation marks the reach of a range claim, and never repairs it', () => {
   const warnings = (doc: SheetDoc): string[] =>
     validateSheet(doc)
-      .filter((w) => w.severity === 'warning' && /^edge "/.test(w.message))
+      .filter((w) => w.severity === 'warning' && /^range end "/.test(w.message))
       .map((w) => w.message);
 
-  /** A device driven by the parent, so a range end can reach its bind through the wiring. */
-  const child = (bind: SheetDoc['givens'], provide = ['id']): SheetDoc => ({
+  /** A device driven by the parent, so a range end can reach its givens through the wiring. */
+  const child = (givens: SheetDoc['givens'], provide = ['id']): SheetDoc => ({
     title: 'c',
     polarity: 'n',
     provides: provide,
@@ -958,7 +965,7 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     ],
     equations: [],
     checks: [],
-    givens: bind,
+    givens,
   });
 
   const parent = (over: Partial<SheetDoc>): SheetDoc => ({
@@ -975,21 +982,22 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
         designConstraint: { lhs: 'CM_out', rhs: 'CM_dc' },
       },
     ],
-    // The pin's own relation reads the edge-overridden param, so the node it solves for — and
-    // the row that names it — move at the range end. That two-hop reach is what the checks below
-    // have to follow; a direct-reference test alone would pass on a validator that never closed.
+    // The constraint's own relation reads the param the range end overrides, so the node it solves
+    // for — and the equation that names it — move at the range end. That two-hop reach is what the
+    // checks below have to follow; a direct-reference test alone would pass on a validator that
+    // never closed.
     equations: [{ name: 'CM_out', expr: 'V_t + 0.5' }],
     checks: [],
     operatingRange: [{ name: 'hi', set: { CM_dc: 'CM_hi' } }],
     ...over,
   });
 
-  /** The single-use shape every reach test below is a variation of. */
-  const withK = (bind: SheetDoc['givens'], params: Record<string, string>): SheetDoc =>
-    parent({ blocks: [{ name: 'k', doc: child(bind), params }] });
+  /** The single-block shape every reach test below is a variation of. */
+  const withK = (givens: SheetDoc['givens'], params: Record<string, string>): SheetDoc =>
+    parent({ blocks: [{ name: 'k', doc: child(givens), params }] });
 
   it('says nothing when a range end reaches a device through its drain alone', () => {
-    // The exact case: a width-first bind at a moved vds reproduces its gate tie to the digit.
+    // The exact case: width-first givens at a moved vds reproduce their gate tie to the digit.
     // Warning here would fire on every mirror in the library, which is the false flag that
     // makes a QA signal worthless.
     expect(
@@ -997,7 +1005,7 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     ).toEqual([]);
   });
 
-  it('marks a width-first bind a range end reaches through anything but the drain', () => {
+  it('marks width-first givens a range end reaches through anything but the drain', () => {
     // Body bias is the case that bites: holding the operating-point spec across a vsb move
     // keeps a current a gate-tied device would lose. The engine cannot express the tie — vgs is
     // not bindable — so naming the reach is the honest thing available.
@@ -1005,13 +1013,15 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
       withK({ L: '0.5u', W: '10u', gm_id: '10', vds: '0.6', vsb: 'V_x' }, { V_x: 'V_t' }),
     );
     expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/edge "hi" reaches the bind at "k", which fixes a width, through "vsb"/);
+    expect(w[0]).toMatch(
+      /range end "hi" reaches the givens at "k", which fix a width, through "vsb"/,
+    );
   });
 
   it('follows a range end through a node held under a gate', () => {
     // The node is re-solved at the range end from the expression it holds, which reads the
-    // pinned V_t the edge moves. So a width-first device with its body on that node is reached
-    // exactly as it is when the node is pinned.
+    // constrained V_t the range end moves. So a width-first device with its body on that node is
+    // reached exactly as it is when the node is constrained.
     const doc = parent({
       params: [
         ...parent({}).params,
@@ -1027,7 +1037,9 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     });
     const w = warnings(doc);
     expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/edge "hi" reaches the bind at "k", which fixes a width, through "vsb"/);
+    expect(w[0]).toMatch(
+      /range end "hi" reaches the givens at "k", which fix a width, through "vsb"/,
+    );
   });
 
   it('marks a current that tracks the condition being swept', () => {
@@ -1037,7 +1049,7 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
       withK({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, { I_c: '20u * CM_dc' }),
     );
     expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/edge "hi" reaches the current expression of the bind at "k"/);
+    expect(w[0]).toMatch(/range end "hi" reaches the current expression of the givens at "k"/);
   });
 
   it('follows a range end through a sibling device onto the block it biases', () => {
@@ -1061,18 +1073,20 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
       }),
     );
     expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/edge "hi" reaches the bind at "k", which fixes a width, through "vsb"/);
+    expect(w[0]).toMatch(
+      /range end "hi" reaches the givens at "k", which fix a width, through "vsb"/,
+    );
   });
 
   it('says the geometry moved when THAT is what a range end reaches', () => {
     // A different finding from the one above, and pointing an author at the operating point when
-    // the transistor itself changed size would send them to the wrong place: a width-first bind
-    // is carried through untouched, so a moved W is a different device, not a different bias.
+    // the transistor itself changed size would send them to the wrong place: width-first givens
+    // are carried through untouched, so a moved W is a different device, not a different bias.
     const w = warnings(
       withK({ L: '0.5u', W: '10u * V_x', gm_id: '10', vds: '0.6' }, { V_x: 'V_t' }),
     );
     expect(w).toHaveLength(1);
-    expect(w[0]).toMatch(/edge "hi" moves the "W" of the bind at "k" — the range end sizes a/);
+    expect(w[0]).toMatch(/range end "hi" moves the "W" of the givens at "k" — it sizes a/);
   });
 
   it('says nothing about a current that is simply a parent budget', () => {

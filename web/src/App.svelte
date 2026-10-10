@@ -76,25 +76,25 @@
   // QA warnings live WITH their table so the displayed QA always matches the active device and
   // can never go stale when the active device changes or a device is removed.
   type Loaded = { table: DeviceTable; warnings: readonly QAWarning[] };
-  let devices = $state<Loaded[]>([]);
+  let tables = $state<Loaded[]>([]);
   let activeIdx = $state(0);
   let overlayIdx = $state<number[]>([]);
-  const active = $derived(devices[activeIdx]);
+  const active = $derived(tables[activeIdx]);
   const device = $derived(active?.table);
   const overlays = $derived(
-    overlayIdx.map((i) => devices[i]?.table).filter((d): d is DeviceTable => !!d),
+    overlayIdx.map((i) => tables[i]?.table).filter((d): d is DeviceTable => !!d),
   );
   const warnings = $derived(active?.warnings ?? []);
 
-  // The registry sidecar: load order + active index + each family's nominal designation, so a
+  // The registry sidecar: load order + active index + each device's nominal designation, so a
   // reload restores the bench exactly (IndexedDB getAll returns key order, which is not load
   // order, and holds no designations at all).
   const REG_KEY = 'gmid.devreg';
   $effect(() => {
-    if (devices.length) {
+    if (tables.length) {
       saveJSON(REG_KEY, {
         v: REGISTRY_VERSION,
-        order: devices.map((d) => tableUid(d.table)),
+        order: tables.map((d) => tableUid(d.table)),
         active: activeIdx,
         nominalByFamily,
       });
@@ -121,35 +121,35 @@
   // designations, which is the whole migration — a bench that designated nothing has nothing
   // to carry over, and the first save writes the versioned shape.
   const bootReg = loadJSON(REG_KEY, parseRegistry, () => null);
-  // deviceUid → the table uid the bench designates as that family's nominal condition. Seeded
+  // deviceUid → the table uid the bench designates as that device's nominal condition. Seeded
   // from the registry before the first save effect can run, so a restore never writes an empty
   // set over the stored designations.
   let nominalByFamily = $state<Record<string, string>>({ ...(bootReg?.nominalByFamily ?? {}) });
-  // Corner families: the loaded tables regrouped into logical devices, one entry per
+  // Characterized devices: the loaded tables regrouped into logical devices, one entry per
   // (process namespace, device name, declared polarity). Identity is derived from the data
   // headers, never assigned here — the bench displays, warns, and designates a nominal
   // condition, but never decides who a table is. Everything a sheet or the picker projects
   // goes through these.
   //
-  // The previous grouping is kept so a family nothing touched comes back as the SAME object and
+  // The previous grouping is kept so a device nothing touched comes back as the SAME object and
   // everything memoized on it survives. Plain state, not `$state`: it is written from inside the
   // derived purely as that derived's own memo, and nothing reads it as a value.
-  let lastFamilies: readonly CharacterizedDevice[] = [];
-  const families = $derived.by(() => {
-    lastFamilies = benchDevices(
-      devices.map((d) => d.table),
+  let lastDevices: readonly CharacterizedDevice[] = [];
+  const devices = $derived.by(() => {
+    lastDevices = benchDevices(
+      tables.map((d) => d.table),
       nominalByFamily,
-      lastFamilies,
+      lastDevices,
     );
-    return lastFamilies;
+    return lastDevices;
   });
-  const deviceOf = $derived(deviceLookup(families));
+  const deviceOf = $derived(deviceLookup(devices));
   const primaryDevice = $derived(device ? deviceOf(tableUid(device)) : undefined);
   // Data-trust checks that only exist once several tables claim to be one device (duplicate
   // conditions, disagreeing axes, ranges, widths, provenance). Derived, so they are recomputed
   // on every import, restore, removal and redesignation rather than stored and left to age —
-  // but per FAMILY OBJECT, so the redesignation of one family does not re-walk the axis lattice
-  // of every other. The cache is weak: a family that regrouped is unreachable and collectable.
+  // but per DEVICE OBJECT, so the redesignation of one device does not re-walk the axis lattice
+  // of every other. The cache is weak: a device that regrouped is unreachable and collectable.
   const qaCache = new WeakMap<CharacterizedDevice, QAWarning[]>();
   const deviceQAOf = (f: CharacterizedDevice): QAWarning[] => {
     const hit = qaCache.get(f);
@@ -158,23 +158,23 @@
     qaCache.set(f, qa);
     return qa;
   };
-  const deviceQA = $derived(new Map(families.map((f) => [f.deviceUid, deviceQAOf(f)])));
-  // Cross-family identity warnings (a join grouping refused): bench-level, because no single
-  // family can see the sibling it stayed apart from.
-  const benchQA = $derived(validateDevices(families));
+  const deviceQA = $derived(new Map(devices.map((f) => [f.deviceUid, deviceQAOf(f)])));
+  // Cross-device identity warnings (a join grouping refused): bench-level, because no single
+  // device can see the sibling it stayed apart from.
+  const benchQA = $derived(validateDevices(devices));
   const bench = $derived({
-    devices: families,
+    devices,
     deviceOf,
     primary: primaryDevice,
-    // What a composed child's device menu offers: one entry per FAMILY, because a child is bound
+    // What a composed child's device menu offers: one entry per DEVICE, because a child is bound
     // to a logical device and projected to whichever condition the run fixed.
-    options: deviceOptions(families),
-    revision: deviceRevision(families),
+    options: deviceOptions(devices),
+    revision: deviceRevision(devices),
     designate,
   });
-  // Position of a table in `devices` — the strip renders families, but select/overlay/remove
+  // Position of a table in `tables` — the strip renders devices, but select/overlay/remove
   // still address the flat list.
-  const indexOfUid = $derived(new Map(devices.map((d, i) => [tableUid(d.table), i])));
+  const indexOfUid = $derived(new Map(tables.map((d, i) => [tableUid(d.table), i])));
   void loadTables().then((stored) => {
     const pos = new Map(bootReg?.order.map((u, i) => [u, i]) ?? []);
     // Records whose stored key is not what the current algorithm computes. The registry names
@@ -186,7 +186,7 @@
     // treated as unlisted leftovers; restored tables append behind them, ordered by
     // the STORED key's registry slot (a recomputed uid may not match what the
     // registry recorded; without a registry every rank ties and order is kept).
-    const have = new Set(devices.map((d) => tableUid(d.table)));
+    const have = new Set(tables.map((d) => tableUid(d.table)));
     const restored: { item: Loaded; rank: number }[] = [];
     for (const { key, table: dt } of stored) {
       try {
@@ -226,16 +226,16 @@
         // a table that no longer validates is dropped silently
       }
     }
-    // In the same breath as the tables themselves: the save effect fires as soon as `devices`
+    // In the same breath as the tables themselves: the save effect fires as soon as `tables`
     // changes below, and it would persist designations that still name the pre-migration uids.
     // A designation whose table did NOT come back is left exactly as it was — it reads as an
     // unresolved designation, which is the visible truth, where dropping it would let the
-    // family quietly designate a different corner.
+    // device quietly designate a different corner.
     if (rekey.size) nominalByFamily = migrateNominals(nominalByFamily, rekey);
     if (!restored.length) return;
     restored.sort((a, b) => a.rank - b.rank);
-    const wasEmpty = devices.length === 0;
-    devices = [...devices, ...restored.map((r) => r.item)];
+    const wasEmpty = tables.length === 0;
+    tables = [...tables, ...restored.map((r) => r.item)];
     if (wasEmpty) select(Math.min(Math.max(bootReg?.active ?? 0, 0), restored.length - 1));
   });
   let importError = $state<string | null>(null);
@@ -399,8 +399,8 @@
   // persisted immediately and there is no undo, so adopting a picker result into a panel the
   // designer had tuned would destroy that work silently.
   //
-  // The clone comes FIRST because withParams copies only the params array — the rules, rows and
-  // child uses would stay aliased to the library literal that every other panel reads.
+  // The clone comes FIRST because withParams copies only the params array — the checks, equations
+  // and blocks would stay aliased to the library literal that every other panel reads.
   function addSheetPanel(doc: SheetDoc = EXAMPLES[0], params: Record<string, number> = {}): void {
     if (!activeTab) return;
     activeTab.panels.push({
@@ -506,7 +506,7 @@
     const batch = files ? [...files] : [];
     if (!batch.length) return;
     const seq = ++importSeq;
-    // Read in parallel, reassembled in selection order: load order is part of the family
+    // Read in parallel, reassembled in selection order: load order is part of the grouping
     // contract, and completion order is not an order at all.
     const staged: Staged[] = await Promise.all(
       batch.map(async (file): Promise<Staged> => {
@@ -558,14 +558,14 @@
     // refreshes it without moving its chip); the rest append in selection order.
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive merge scratch, discarded below
     const fresh = new Map(incoming.map((d) => [tableUid(d.table), d]));
-    const next = devices.map((d) => {
+    const next = tables.map((d) => {
       const uid = tableUid(d.table);
       const r = fresh.get(uid);
       if (r) fresh.delete(uid);
       return r ?? d;
     });
     next.push(...fresh.values());
-    devices = next;
+    tables = next;
     // Select by the first surviving imported UID, never by object identity: a batch whose
     // first file also appears later collapses to one entry, and an identity search would
     // then find nothing and select a slot that does not exist.
@@ -587,8 +587,8 @@
     overlayIdx = [];
     // First device seeds the dashboard (restoring any saved layout); later swaps reseat the live one.
     dashboard = dashboard
-      ? reseatDashboard(dashboard, devices[i].table)
-      : loadDashboard(devices[i].table);
+      ? reseatDashboard(dashboard, tables[i].table)
+      : loadDashboard(tables[i].table);
   }
 
   // Drop a loaded device from the registry; never remove the last or the active one.
@@ -601,7 +601,7 @@
     (d.querySelector('summary') as HTMLElement | null)?.focus();
   }
 
-  /** Designate (or, on the condition that already holds it, un-designate) a family's nominal.
+  /** Designate (or, on the condition that already holds it, un-designate) a device's nominal.
    *  A designation names a TABLE, so it survives a reload and goes visibly unresolved if that
    *  table leaves — the one thing it must never do is slide to another corner unannounced. */
   function designate(deviceUid: string, uid: string): void {
@@ -609,7 +609,7 @@
     nominalByFamily = current === uid ? rest : { ...rest, [deviceUid]: uid };
   }
 
-  /** The family's conditions that CAN be overlaid: every member but the active one, which is
+  /** The device's conditions that CAN be overlaid: every member but the active one, which is
    *  already the curve the others are drawn against. */
   const overlayable = (f: CharacterizedDevice): number[] =>
     f.conditions
@@ -628,9 +628,9 @@
   }
 
   function removeDevice(i: number): void {
-    if (devices.length <= 1 || i === activeIdx) return;
-    void deleteTable(tableUid(devices[i].table));
-    devices = devices.filter((_, k) => k !== i);
+    if (tables.length <= 1 || i === activeIdx) return;
+    void deleteTable(tableUid(tables[i].table));
+    tables = tables.filter((_, k) => k !== i);
     // Shift every index past the removed slot down one to track the shrunk list.
     const shift = (k: number) => (k > i ? k - 1 : k);
     activeIdx = shift(activeIdx);
@@ -645,7 +645,7 @@
     // The sizer's persisted problem is design data too: "forget everything" must
     // leave no retained record the UI can no longer show or delete.
     removeJSON(SIZER_KEY);
-    devices = [];
+    tables = [];
     activeIdx = 0;
     overlayIdx = [];
     // The designations go with them: they name tables that no longer exist, and "forget
@@ -834,17 +834,17 @@
   </div>
 {/if}
 
-{#if devices.length > 0}
+{#if tables.length > 0}
   <nav class="devices" aria-label="loaded devices">
-    <span class="dlabel">devices ({devices.length})</span>
+    <span class="dlabel">devices ({tables.length})</span>
     <Help text={CONTROL_HELP.overlay} />
     <!-- One group per logical device; its characterization conditions sit inside it. A device
-         loaded at a single condition looks exactly as it did before families existed — the
+         loaded at a single condition looks exactly as it did before grouping existed — the
          group chrome only appears once there is more than one condition to tell apart. -->
-    {#each families as f (f.deviceUid)}
+    {#each devices as f (f.deviceUid)}
       {@const multi = f.conditions.length > 1}
       {@const qa = deviceQA.get(f.deviceUid) ?? []}
-      <!-- A designation whose table has left is shown (and fixable) whatever the family's size:
+      <!-- A designation whose table has left is shown (and fixable) whatever the device's size:
            the auto rule is deliberately not re-applied over it, so without this the bench would
            have no nominal and no word about why. -->
       {@const stale = f.nominalSource === 'unresolved'}
@@ -855,7 +855,7 @@
       {@const ambiguous = f.unresolvedNominal === 'ambiguous'}
       <span class="fam" class:multi={multi || stale} data-family={f.device}>
         {#if multi}
-          <span class="fname" title={CONTROL_HELP.cornerFamily}>{deviceLabel(f)}</span>
+          <span class="fname" title={CONTROL_HELP.deviceConditions}>{deviceLabel(f)}</span>
           <label class="fov" title={CONTROL_HELP.cornerOverlay}>
             <input
               type="checkbox"
@@ -896,7 +896,7 @@
               >
             {/if}
             {#if multi}
-              <!-- Where this condition came from. A family grouped on the device name alone is
+              <!-- Where this condition came from. A device grouped on the device name alone is
                    only an informed grouping if what it was grouped from is on screen. -->
               <i class="dprov">{provenanceOf(t) || 'no provenance declared'}</i>
             {/if}
@@ -1365,7 +1365,7 @@
     border-radius: 5px;
     padding: 0.05rem 0.3rem;
   }
-  /* A family groups its conditions; with only one it adds nothing and draws nothing. */
+  /* A device groups its conditions; with only one it adds nothing and draws nothing. */
   .fam {
     display: inline-flex;
     align-items: center;

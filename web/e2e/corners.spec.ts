@@ -37,12 +37,12 @@ async function dropTwice(page: Page, first: string[], second: string[]): Promise
 const strip = (page: Page) => page.locator('nav[aria-label="loaded devices"]');
 /** One condition's chip in the strip. Scoped by device where the bench holds two devices whose
  *  conditions share a name (every `tt` is a `tt`). */
-const variant = (page: Page, label: string, device = '') =>
+const condition = (page: Page, label: string, device = '') =>
   page.locator(
     `.devices .fam${device ? `[data-family="${device}"]` : ''} .dev[data-variant="${label}"]`,
   );
 
-test('corner family: two conditions of one device group as one entry, with a nominal and QA', async ({
+test('device conditions: two conditions of one device group as one entry, with a nominal and QA', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -54,42 +54,42 @@ test('corner family: two conditions of one device group as one entry, with a nom
   await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(2);
 
-  // One logical device: a single family group holding both conditions.
+  // One logical device: a single device group holding both conditions.
   await expect(page.locator('.devices .fam')).toHaveCount(1);
   await expect(page.locator('.devices .fname')).toContainText('nmos_demo');
   await expect(page.locator('.devices .fname')).toContainText('2 conditions');
-  await expect(variant(page, 'tt')).toBeVisible();
-  await expect(variant(page, 'ss@-40')).toBeVisible();
+  await expect(condition(page, 'tt')).toBeVisible();
+  await expect(condition(page, 'ss@-40')).toBeVisible();
 
   // tt at 27 °C designates itself without anyone choosing, and says the rule chose it.
-  await expect(variant(page, 'tt').locator('.dnom')).toHaveText('★ nominal · auto');
-  await expect(variant(page, 'ss@-40').locator('.dnom')).toHaveText('nominal');
+  await expect(condition(page, 'tt').locator('.dnom')).toHaveText('★ nominal · auto');
+  await expect(condition(page, 'ss@-40').locator('.dnom')).toHaveText('nominal');
 
   // Each condition shows where it came from, so a grouping made on the device name alone is a
   // fact the designer can check rather than one the bench made out of sight.
-  await expect(variant(page, 'tt').locator('.dprov')).toContainText('demo-ekv');
-  await expect(variant(page, 'ss@-40').locator('.dprov')).toContainText('demo-ekv');
+  await expect(condition(page, 'tt').locator('.dprov')).toContainText('demo-ekv');
+  await expect(condition(page, 'ss@-40').locator('.dprov')).toContainText('demo-ekv');
 
   // Pinning the condition the rule had already chosen is still a bench statement, and the strip
   // must stop crediting the rule for it — the two differ only in who chose, which is the whole
   // point of saying which. Clicking it again hands the choice back to the rule.
-  await variant(page, 'tt').locator('.dnom').click();
-  await expect(variant(page, 'tt').locator('.dnom')).toHaveText('★ nominal');
-  await variant(page, 'tt').locator('.dnom').click();
-  await expect(variant(page, 'tt').locator('.dnom')).toHaveText('★ nominal · auto');
+  await condition(page, 'tt').locator('.dnom').click();
+  await expect(condition(page, 'tt').locator('.dnom')).toHaveText('★ nominal');
+  await condition(page, 'tt').locator('.dnom').click();
+  await expect(condition(page, 'tt').locator('.dnom')).toHaveText('★ nominal · auto');
 
   // Redesignating is a bench statement and it sticks across a reload (the registry sidecar
   // carries it alongside the load order).
-  await variant(page, 'ss@-40').locator('.dnom').click();
-  await expect(variant(page, 'ss@-40').locator('.dnom')).toHaveText('★ nominal');
+  await condition(page, 'ss@-40').locator('.dnom').click();
+  await expect(condition(page, 'ss@-40').locator('.dnom')).toHaveText('★ nominal');
   await page.reload();
-  await expect(variant(page, 'ss@-40').locator('.dnom')).toHaveText('★ nominal');
-  await expect(variant(page, 'tt').locator('.dnom')).toHaveText('nominal');
+  await expect(condition(page, 'ss@-40').locator('.dnom')).toHaveText('★ nominal');
+  await expect(condition(page, 'tt').locator('.dnom')).toHaveText('nominal');
 
   // Deleting the designated table does NOT quietly hand the title to the survivor: the bench
   // said which condition is nominal, and it now says that choice is unresolved.
-  await variant(page, 'tt').locator('.dname').click(); // ss must not be active to be removable
-  await variant(page, 'ss@-40').locator('.drm').click();
+  await condition(page, 'tt').locator('.dname').click(); // ss must not be active to be removable
+  await condition(page, 'ss@-40').locator('.drm').click();
   await expect(page.locator('.devices .dev')).toHaveCount(1);
   await expect(strip(page)).toContainText('designated nominal condition is not loaded');
 
@@ -97,7 +97,7 @@ test('corner family: two conditions of one device group as one entry, with a nom
   expect(errors).toEqual([]);
 });
 
-test('corner family: overlaying the corners is a family control, absent on a sole condition', async ({
+test('device conditions: overlaying the corners is a device control, absent on a sole condition', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -106,7 +106,7 @@ test('corner family: overlaying the corners is a family control, absent on a sol
 
   await page.goto('/');
   await loadDemo(page);
-  // A device loaded at one condition looks exactly as it did before families existed: no
+  // A device loaded at one condition looks exactly as it did before grouping existed: no
   // corners toggle, no nominal control — there is nothing to choose between.
   await expect(page.locator('.devices .fov')).toHaveCount(0);
   await expect(page.locator('.devices .dnom')).toHaveCount(0);
@@ -114,7 +114,7 @@ test('corner family: overlaying the corners is a family control, absent on a sol
 
   await load(page, 'demo-ss.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(2);
-  await variant(page, 'tt').locator('.dname').click(); // nominal active, ss free to overlay
+  await condition(page, 'tt').locator('.dname').click(); // nominal active, ss free to overlay
 
   const p0 = page.locator('.grid .panel').first();
   await expect(p0.locator('.pfoot')).not.toContainText('ss');
@@ -126,7 +126,7 @@ test('corner family: overlaying the corners is a family control, absent on a sol
   expect(errors).toEqual([]);
 });
 
-test('corner family: two tables claiming one condition are an ambiguity nothing projects from', async ({
+test('device conditions: two tables claiming one condition are an ambiguity nothing projects from', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -138,7 +138,7 @@ test('corner family: two tables claiming one condition are an ambiguity nothing 
   await load(page, 'demo.mostab.csv', 'demo-tt-alt.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(2);
 
-  // The family says so, at error severity, in the strip — no silent last-one-wins.
+  // The device says so, at error severity, in the strip — no silent last-one-wins.
   await expect(strip(page)).toContainText('device-duplicate-condition');
   await expect(strip(page)).toContainText('remove one or replace it explicitly');
   await expect(strip(page)).toContainText('no nominal condition');
@@ -240,7 +240,7 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // has nothing to evaluate at ss.
   await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv', 'sample.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(3);
-  await variant(page, 'tt', 'nmos_demo').locator('.dname').click();
+  await condition(page, 'tt', 'nmos_demo').locator('.dname').click();
   await expect(page.locator('header .device')).toContainText('nmos_demo');
 
   await page.getByRole('button', { name: '+ sheet' }).click();
@@ -282,7 +282,7 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await expect(sp.locator('[data-corner-row="ss@-40"]')).not.toContainText('does not comply');
   // Feasibility is still asked at tt, where the design is sized, and nowhere else. With the
   // child on that device the tt run starts and does not complete, so the badge says no answer —
-  // with no rule beside it, since nothing was measured — and the count keeps the point that
+  // with no check beside it, since nothing was measured — and the count keeps the point that
   // could not be answered apart from the one that was never asked.
   await expect(sp.locator('.feasb')).toHaveText('no answer at tt');
   await expect(sp.locator('[data-compliance]')).toHaveText(
@@ -297,7 +297,7 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // back. Holding the nominal design is what asking about several conditions means.
   await child.locator('.dsel').selectOption({ index: 0 });
   await sp.locator('[data-corner-mode]').selectOption('active');
-  await variant(page, 'ss@-40', 'nmos_demo').locator('.dname').click();
+  await condition(page, 'ss@-40', 'nmos_demo').locator('.dname').click();
   await expect(sp.locator('.scorntab')).toHaveCount(0);
   await expect(sp.locator('.scond')).toHaveText('at ss@-40');
   await expect(sp.locator('.feasb')).toContainText('infeasible');
@@ -315,7 +315,7 @@ test('sheet panel: a chosen condition that leaves is answered, not forgotten', a
 
   await page.goto('/');
   await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
-  await variant(page, 'tt').locator('.dname').click();
+  await condition(page, 'tt').locator('.dname').click();
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
 
@@ -327,7 +327,7 @@ test('sheet panel: a chosen condition that leaves is answered, not forgotten', a
 
   // Removing the table behind a chosen condition leaves the choice standing: it is reported as
   // a condition that was not run, and it survives a reload that way.
-  await variant(page, 'ss@-40').locator('.drm').click();
+  await condition(page, 'ss@-40').locator('.drm').click();
   await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText('not run');
   await page.reload();
   const sp2 = page.locator('.grid .panel').last();
@@ -351,9 +351,9 @@ test('sheet panel: nominal mode refuses to substitute a condition nobody designa
   await expect(sp.locator('.scond')).toHaveText('at tt'); // the auto designation
 
   // Designate ss, then delete it: the designation is unresolved, so "nominal" names nothing.
-  await variant(page, 'ss@-40').locator('.dnom').click();
-  await variant(page, 'tt').locator('.dname').click();
-  await variant(page, 'ss@-40').locator('.drm').click();
+  await condition(page, 'ss@-40').locator('.dnom').click();
+  await condition(page, 'tt').locator('.dname').click();
+  await condition(page, 'ss@-40').locator('.drm').click();
 
   // The panel blocks and offers the designation, rather than evaluating at the active table and
   // calling the answer nominal.
@@ -381,8 +381,8 @@ test('legacy binding: a device literally named "family:demo" still resolves', as
   const sp = page.locator('.grid .panel').last();
   await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
 
-  // A document saved before family bindings existed stores the raw table uid in the child's
-  // `device` — and that uid begins with the same word the family form uses, which is exactly
+  // A document saved before `family:` bindings existed stores the raw table uid in the child's
+  // `device` — and that uid begins with the same word the `family:` form uses, which is exactly
   // the string a prefix test would swallow. Patch the persisted layout to that older shape.
   const patched = await page.evaluate(() => {
     const reg = JSON.parse(localStorage.getItem('gmid.devreg') ?? '{}') as { order?: string[] };
@@ -469,12 +469,12 @@ test('registry: a version-1 bench with a legacy pdk key restores, re-keys, and k
   });
   await page.reload();
 
-  // Both conditions came back, in the stored order, as one family — the namespace is read from
+  // Both conditions came back, in the stored order, as one device — the namespace is read from
   // the legacy metadata, so the restored bench is not split from a fresh import of the same file.
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   await expect(page.locator('.devices .fname')).toContainText('legacyPdk');
   // The designation was rewritten to the record's new key, so it still designates ss.
-  await expect(variant(page, 'ss@-40').locator('.dnom')).toHaveText('★ nominal');
+  await expect(condition(page, 'ss@-40').locator('.dnom')).toHaveText('★ nominal');
   await expect(strip(page)).not.toContainText('designated nominal condition is not loaded');
 
   // The registry is now the versioned shape, naming the re-keyed tables.
@@ -500,7 +500,7 @@ test('picker: the search names its condition and goes stale when the bench moves
 
   await page.goto('/');
   await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
-  await variant(page, 'tt').locator('.dname').click();
+  await condition(page, 'tt').locator('.dname').click();
   await page.locator('header .btn.pick').click();
   const pk = page.locator('aside.picker');
   // It says which condition it will answer about, rather than leaving it to be assumed.
@@ -518,7 +518,7 @@ test('picker: the search names its condition and goes stale when the bench moves
 
   // Redesignating the nominal changes what a search would find — while the active table has not
   // moved at all. The rows on screen are answers about the old bench, and they say so.
-  await variant(page, 'ss@-40').locator('.dnom').click();
+  await condition(page, 'ss@-40').locator('.dnom').click();
   await expect(pk.locator('[data-stale]')).toContainText('the devices have changed');
 
   expect(errors).toEqual([]);

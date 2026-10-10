@@ -23,9 +23,9 @@ turns them into gm/ID design charts, operating-point lookups, and sized devices.
   intrinsic gain means stating the spec you actually have ("good to 5 GHz", "40 dB")
   instead of hand-iterating gm/ID toward it; a target out of reach at that length
   reports the lengths that do reach it.
-- **Design sheets** — author variables, equations, and pass/fail constraints with
-  margins; sweep a variable to chart every rule's margin and see where the design
-  closes. Sheets compose: a child block can be sized against a different loaded device,
+- **Design sheets** — author variables, equations, and pass/fail checks with
+  margins; sweep a variable to chart every check's margin and see where the design
+  is feasible. Sheets compose: a block can be sized against a different loaded device,
   embedded inline or included **by reference** from the sheet library (with a flatten
   export for a frozen, self-contained copy). The authoring model is documented in
   [docs/sheet-format.md](docs/sheet-format.md).
@@ -132,8 +132,9 @@ characterization width conducts up to 1.9× more per µm in moderate inversion.
 Realized as **fingers of the characterization width** the table tracks simulation to
 a fraction of a percent, so treat a sized W as "N fingers of W<sub>char</sub>" (the
 sizer suggests the finger count). Cross-check decks and measured numbers live in
-[tools/verify/](tools/verify/README.md). The γ-model noise density assumes γ = 2/3
-and thermal noise only; real devices run hotter (sky130's measured γ is ≈ 1) and
+[tools/verify/](tools/verify/README.md). The γ-model noise density assumes γ = 1
+and thermal noise only; real devices can run hotter (in simulation sky130's PMOS sits at
+γ ≈ 1 in strong inversion, but its NMOS at about 1.95 at gm/ID 12) and
 flicker can dominate far past the audio band — treat table-derived noise as a floor,
 not a budget.
 
@@ -175,10 +176,10 @@ console.log(out.feasible, out.values.W, out.checks);
 const sweep = sweepSheet(sheet, 'gm_id', table);
 ```
 
-A composed sheet's child block names its device by a resolver key (`use.device`); pass a
+A composed sheet's block names its device by a resolver key (the block's `device`); pass a
 resolver — `(id) => DeviceTable | undefined` — as the third argument to map those keys to
 tables. The app keys tables by a content-stable uid, but in a script you choose the key, so
-long as each child's `device` matches. A child included **by reference** (`use.ref`) needs a
+long as each child's `device` matches. A child included **by reference** (the block's `ref`) needs a
 sheet library to resolve against — build an index and pass it fourth; `flattenSheetDoc`
 inlines every reference into a self-contained document:
 

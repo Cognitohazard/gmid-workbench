@@ -1,22 +1,22 @@
 // Tier 2 golden tests: the mirror/bias sheets under sheets/mirrors-bias. Each sheet's
 // numbers are hand-derived from the synthetic EKV demo model's closed forms (never by
 // re-running the engine), so a physics or wiring regression in a sheet is caught here,
-// while the generic contract (validates, binds, no hard-rule na) is covered by
+// while the generic contract (validates, sizes, no hard-check na) is covered by
 // library.test.ts running over the same files.
 //
 // Demo model facts used below:
-//  - Early voltage VA = 5e6 * L, so gds/id = 1/(VA + vds) after binding.
-//  - gm/ID is drain-voltage independent (the CLM factor cancels), so a bind's vgs and
+//  - Early voltage VA = 5e6 * L, so gds/id = 1/(VA + vds) after sizing.
+//  - gm/ID is drain-voltage independent (the CLM factor cancels), so a sized device's vgs and
 //    idSat are the same on any vds slice: two mirror devices at the SAME declared vds
 //    carry the SAME current density and their ratio error is exactly zero, and two
 //    devices at DIFFERENT on-grid vds differ by exactly the CLM ratio
 //    (1 + vds_a/VA)/(1 + vds_b/VA).
-//  - Supplied bind quantities (id, W) are exact; a width-first W = N*ref__W makes
+//  - Supplied givens (id, W) are exact; a width-first W = N*ref__W makes
 //    W/ref__W exactly N.
 //  - pelgrom_irel scales as 1/sqrt(W*L), so at fixed L and gm/ID a K-times-wider device
 //    has exactly 1/sqrt(K) of the reference's current spread.
 //  - gmb = BODY_FACTOR*gm at every point, but it rides the interpolated gm curve rather
-//    than the bound gm/ID, so rows built on it hold to interpolation order, not to 1e-9.
+//    than the given gm/ID, so equations built on it hold to interpolation order, not to 1e-9.
 
 import { describe, it, expect } from 'vitest';
 import { runSheet } from './index';
@@ -71,7 +71,7 @@ describe('tier-2 goldens: cascode current mirror', () => {
     // Rout = r_o,casc*(1 + (gm + gmb)*r_o,mirror) + r_o,mirror — the mirror device's own output
     // resistance is what degenerates the cascode, playing the role a resistor plays in the
     // degenerated mirror. Both legs are width-mirrored, so both r_o come from the closed form
-    // above; the cascode's gm/ID is bound, so its gm is its own current times 8, and that current
+    // above; the cascode's gm/ID is given, so its gm is its own current times 8, and that current
     // is the mirrored saturation current scaled by the CLM factor of the vds it actually sits at.
     const ro = roMirrored(res.values.ref__vgs, 4, 20e-6);
     const roCasc = roMirrored(res.values.ref_casc__vgs, 4, 20e-6);
@@ -93,7 +93,7 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
     expect(res.values.vds_lo).toBeCloseTo(res.values.ref__vdsat + 0.05, 3);
   });
 
-  it('closes at defaults: the corrected compliance floor stays under the V_out default', () => {
+  it('is feasible at defaults: the corrected compliance floor stays under the V_out default', () => {
     // The compliance floor is the solved node plus the cascode vdsat — the node's real
     // parking spot, not the bare two-vdsat stack. The gm/ID 10 default exists so that this
     // floor clears V_out = 0.6 even on this high-V* device; at gm/ID 8 it does not.
@@ -116,13 +116,13 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
     // mirror leg sits at vds_lo and the cascode above it takes the rest of V_out, so the two move
     // opposite ways and a golden that typed 0.3 for both would nearly cancel its own error.
     // Second, the `casc` child is a REPRESENTATIVE device carrying the reference current, while
-    // the branch this row describes runs K times that through a K-times-wider device. At a fixed
-    // gm/ID that is exactly K times the gm and K times the gds, so the scaling is an identity of
-    // the sizing, not an approximation.
+    // the branch this equation describes runs K times that through a K-times-wider device. At a
+    // fixed gm/ID that is exactly K times the gm and K times the gds, so the scaling is an identity
+    // of the sizing, not an approximation.
     //
     // The solved node is an INPUT to the arithmetic below, so the solve is pinned first, on its
     // own terms: vds_lo is iterated until it equals wideswing_node, and a landed fixed point means
-    // that residual is zero. Everything after it is bound (id and gm/ID on the cascode, the width
+    // that residual is zero. Everything after it is given (id and gm/ID on the cascode, the width
     // ratio on the mirror), so what follows is closed-form given the node.
     expect(relErr(res.values.vds_lo, res.values.wideswing_node)).toBeLessThan(1e-9);
     const node = res.values.vds_lo;
@@ -164,7 +164,7 @@ describe('tier-2 goldens: degenerated current mirror', () => {
     expect(relErr(res.values.sys_err, err)).toBeLessThan(1e-2);
   });
 
-  it('binds the output device width-first at K times the reference width', () => {
+  it('sizes the output device width-first at K times the reference width', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W / res.values.ref__W, 1)).toBeLessThan(1e-9);
   });
@@ -181,7 +181,7 @@ describe('tier-2 goldens: Widlar current source', () => {
   const res = runSheet(sheet('widlar-current-source.json'), table);
   // Defaults: I_in 20 µA, I_out 5 µA, R_s 10 kΩ, M_ratio 1, L = 1 µm.
 
-  it('binds the output device exactly at the chosen output current', () => {
+  it('sizes the output device exactly at the chosen output current', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.id, 5e-6)).toBeLessThan(1e-9);
   });
@@ -196,7 +196,7 @@ describe('tier-2 goldens: Widlar current source', () => {
   });
 
   it('output resistance carries the degeneration boost, same form as the degenerated mirror', () => {
-    // The output device is bound by (W, id), not by gm/ID, so its gm is what the table gives at
+    // The output device is given (W, id), not by gm/ID, so its gm is what the table gives at
     // the density that lands — read it back, exactly as the degenerated-mirror golden does. What
     // this test owns is the model's gds (id/(VA + vds), with the source lifted I_out*R_s) and the
     // Rout algebra: the boost factor carries BOTH source-referred generators, and the resistor's

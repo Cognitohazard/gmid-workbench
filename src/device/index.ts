@@ -341,7 +341,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // pair): a sign-inconsistent pair, or a degenerate operating point (vanishing
   // current density sizing W to ±Infinity), must fail here by name — letting it
   // through would report a negative/infinite "design" that downstream feasibility
-  // checks cannot catch (rule inequalities flip sign along with the values).
+  // checks cannot catch (check inequalities flip sign along with the values).
   for (const [k, v] of [
     ['gm', gm],
     ['gm_id', gm_id],
@@ -390,7 +390,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // That includes a bound SELECTOR, which is recovered by inverting a curve sampled at the
   // vgs nodes while the point re-evaluates it from separately interpolated bases — for a
   // ratio the two differ by ~0.1% between nodes, well inside the data's own resolution but
-  // far outside the rule engine's pinned-spec tolerance. Without it, the most natural thing
+  // far outside the sheet engine's margin-snap tolerance. Without it, the most natural thing
   // an author writes — bind a gain spec, then require that gain — fails against its own bind.
   //
   // A bound `vgs` is the exception and must NOT be restored: it is the axis coordinate the
@@ -537,7 +537,7 @@ export function mismatch(W: number, L: number, gm_id: number, c: MismatchCoeffs)
 // formulas; registering them as expression functions lets sheet authors CALL them
 // (noise_rms, pelgrom_vos, pelgrom_irel) instead of re-typing Pelgrom or the band
 // integral per sheet — re-typed copies drift, calls cannot. Names are prefixed by
-// domain so they cannot shadow plausible row/param names.
+// domain so they cannot shadow plausible equation/param names.
 registerExprFunction('noise_rms', 4, integratedNoise);
 registerExprFunction(
   'pelgrom_vos',

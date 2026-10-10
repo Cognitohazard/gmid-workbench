@@ -1,6 +1,6 @@
 // Vetted sheets shipped as no-typing starting points. Single-device leaves plus one
-// COMPOSED example (the cascode below). Composition here is strictly SCALAR provide/use:
-// a child block exposes named scalars and the parent writes its own author math over them
+// COMPOSED example (the cascode below). Composition here is strictly SCALAR:
+// a block exposes named scalars and the parent writes its own author math over them
 // (referenced as `child__name`). There is still NO node/port/KCL machinery and no member
 // access — those remain the deferred coupling channels. Pure data; zero DOM imports.
 
@@ -165,11 +165,11 @@ const NMOS_NOISE_MATCHING: SheetDoc = {
 };
 
 /**
- * The child block of the cascode: a common-source NMOS input device sized at a fixed
+ * The block the cascode composes: a common-source NMOS input device sized at a fixed
  * current. It exposes the scalars a parent needs to compose a cascode — the intrinsic
  * gain av0 = gm/gds (intensive, so width-scale-free), the transconductance, the
  * saturation headroom V*, and its drain current (which the cascode device carries in
- * series). A leaf in its own right; it ships physical validity as an invariant.
+ * series). A leaf in its own right; it ships physical validity as a physical check.
  */
 const COMMON_SOURCE_INPUT: SheetDoc = {
   title: 'Common-source input device',
@@ -198,7 +198,7 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
 /**
  * A COMPOSED example: an NMOS cascode whose output resistance (and hence gain) is boosted
  * by stacking a cascode device on a common-source input. It instantiates the input device
- * as a child `use`, passes down the shared length / efficiency / current, and sizes its own
+ * as a block, passes down the shared length / efficiency / current, and sizes its own
  * cascode device in series (carrying the child's drain current `cs__id`). The cascode gain
  * is the classic product of the two stages' intrinsic gains, Av ≈ av0_input · av0_cascode —
  * ordinary author math over the child's exposed `av0`, no circuit traversal. Sweep gm/ID to
@@ -208,7 +208,7 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
 const NMOS_CASCODE: SheetDoc = {
   title: 'NMOS cascode (gain-boosted output)',
   description:
-    'A composed sheet: a common-source input device (child block "cs") with a cascode ' +
+    'A composed sheet: a common-source input device (block "cs") with a cascode ' +
     'device stacked in series, carrying the child-provided current $I_{D,cs}$. Gain is the ' +
     'product of the two intrinsic gains — author math over the child provides, no ' +
     'circuit solving. Sweep $g_m/I_D$ for the gain vs headroom window.',
@@ -281,7 +281,7 @@ const NMOS_CASCODE: SheetDoc = {
     },
   ],
   // The cascode device sits in series with the input device, so it carries the same drain
-  // current cs__id (a child-provided scalar referenced right here in the parent's bind). Its
+  // current cs__id (a child-provided scalar referenced right here in the parent's givens). Its
   // It sits between the output and that node, with its body grounded, so its source — and
   // with it its body bias — is the node voltage.
   givens: { L: 'L', id: 'cs__id', gm_id: 'gm_id', vds: 'V_out - V_x', vsb: 'V_x' },

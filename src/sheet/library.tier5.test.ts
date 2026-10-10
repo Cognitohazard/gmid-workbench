@@ -1,12 +1,12 @@
 // Tier 5 goldens: the spec-translation application sheets. These sheets are mostly
 // pure algebra over their params (settling counts, kT/C floors, loop-gain budgets),
 // with one embedded or bound device where a real transistor is sized. Every number
-// below is hand-derived from the same closed form the sheet author wrote (spec rows)
-// or from the demo model's exact relations (device rows) — never by re-running the
+// below is hand-derived from the same closed form the sheet author wrote (spec equations)
+// or from the demo model's exact relations (device equations) — never by re-running the
 // engine. The generic contract in library.test.ts already runs these sheets through
 // validation + demo evaluation; here we pin the physics.
 //
-// Demo model relations used: a bound (gm, gm/ID) or (id, gm/ID) pair is EXACT, so
+// Demo model relations used: a given (gm, gm/ID) or (id, gm/ID) pair is EXACT, so
 // id = gm/(gm/ID), gm = id·(gm/ID), and gm_id, id, gm, W are reported to 1e-9. The
 // DERIVED layer (vstar, ro, av0, vnth_m) is re-evaluated from the interpolated
 // operating point the sizer landed on, so those match only to interpolation order
@@ -49,12 +49,12 @@ describe('tier5 goldens: Track & hold budget', () => {
   const res = runSheet(loadSheet('track-and-hold-budget.json'), table);
   // Defaults: vn target 70 uV, C_s 1 pF, gm/ID 5, W_sw 5 um, eps_settle 1e-3.
 
-  it('sets the kT/C sampling floor from the noise budget', () => {
+  it('sets the kT/C sampling floor from the noise target', () => {
     expect(relErr(res.values.C_s_min, (PHYS.k * PHYS.T) / 70e-6 ** 2)).toBeLessThan(1e-9);
     expect(relErr(res.values.N_tau_req, Math.log(1 / 1e-3))).toBeLessThan(1e-9);
   });
 
-  it('binds the switch width-first at the chosen inversion', () => {
+  it('sizes the switch width-first at the chosen inversion', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W, 5e-6)).toBeLessThan(1e-9);
     expect(relErr(res.values.gm_id, 5)).toBeLessThan(1e-9);
@@ -82,11 +82,11 @@ describe('tier5 goldens: Gm-C filter pole', () => {
     expect(relErr(res.values.vn_int, vn_int)).toBeLessThan(1e-3);
   });
 
-  it('deliberately misses its own noise budget at the honest flicker corner', () => {
+  it('deliberately misses its own noise target at the honest flicker corner', () => {
     // The megahertz corner puts the integrated noise about 2.5x past vn_target, and the
-    // sheet keeps the tight budget ON PURPOSE: the red advisory is the 1/f tail made
-    // visible, the same teaching stance as the inverter's consistency guardrails. The rule
-    // is a guardrail, so feasibility is untouched — this locks both halves of that
+    // sheet keeps the tight target ON PURPOSE: the red advisory is the 1/f tail made
+    // visible, the same teaching stance as the inverter's consistency advisory checks. The check
+    // is an advisory check, so feasibility is untouched — this locks both halves of that
     // statement so neither edit can be silently "fixed" away.
     const noise = res.checks.find((r) => r.id === 'noise-spec');
     expect(noise?.kind).toBe('advisory');
@@ -101,7 +101,7 @@ describe('tier5 goldens: LDO (pass device + error amp)', () => {
   const gm_pass = 5e-3 * 10;
   const A_loop = 1000 * 10 * (VA_PER_L * 0.5e-6 + 0.2);
 
-  it('binds the pass device at max load with the dropout as its vds', () => {
+  it('sizes the pass device at max load with the dropout as its vds', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(res.sizing?.bias?.vds).toBe(0.2);
     expect(relErr(res.values.gm_pass, gm_pass)).toBeLessThan(1e-9);
@@ -138,7 +138,7 @@ describe('tier5 goldens: Preamp + latch comparator', () => {
   const ro = (VA_PER_L * 0.5e-6 + 0.6) / 5e-5;
   const Rout = 1 / (1 / 2e4 + 1 / ro);
 
-  it('binds the preamp and reports gm and gm/ID exactly', () => {
+  it('sizes the preamp and reports gm and gm/ID exactly', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
     expect(relErr(res.values.gm_id, 15)).toBeLessThan(1e-9);

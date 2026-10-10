@@ -5,7 +5,7 @@
 //
 // The goldens are deliberately behavioural rather than structural. Three of them exist for the
 // measured ways a picker of this shape lies: a spec matched by name alone applies a noise DENSITY
-// as an integrated budget; a sheet whose solve cannot bracket reports "did not close within N
+// as an integrated target; a sheet whose solve cannot bracket reports "did not close within N
 // evaluations" for a search that never ran; a back-off that hits the author's slider
 // floor reports the floor as if it were the design's answer.
 
@@ -47,7 +47,7 @@ const pick = (file: string, spec: PickerSpec, evalBudget?: number) =>
 
 // The sheets that carry a vocabulary NAME under a different unit — the whole reason the match
 // key is a pair. Both are `vn_target` as an integrated RMS in volts rather than a density:
-// the sampling switch's kT/C budget, and the filter pole's. Listed rather than filtered out,
+// the sampling switch's kT/C target, and the filter pole's. Listed rather than filtered out,
 // so a THIRD such sheet fails the gate below instead of quietly joining them.
 const KNOWN_UNIT_CLASHES: readonly string[] = [
   'applications/gm-c-filter-pole.json',
@@ -122,8 +122,8 @@ describe('spec application', () => {
   });
 
   // The false friend, pinned on the sheet that carries it. The sampling switch's `vn_target` is
-  // an INTEGRATED kT/C budget in volts; typing 20 nV/sqrt(Hz) must not be read as a 20 nV total
-  // noise budget. The verdict stays `closed` — the sheet is feasible at its own defaults — and
+  // an INTEGRATED kT/C target in volts; typing 20 nV/sqrt(Hz) must not be read as a 20 nV total
+  // noise target. The verdict stays `closed` — the sheet is feasible at its own defaults — and
   // the ignored field says why the number was not used.
   it('refuses a name match whose unit is a different quantity', () => {
     const c = pick('stages/sampling-switch.json', { vn_target: 2e-8 });
@@ -194,7 +194,7 @@ describe('spec application', () => {
 describe('the search', () => {
   // The five-transistor OTA is INFEASIBLE at its shipped defaults on the demo device, binding
   // `offset-spec` at -66.9%: the Pelgrom offset of the input pair and the mirror load together
-  // comes out at 16.69 mV against a 10 mV budget. `vos_target` is the only relaxing field here,
+  // comes out at 16.69 mV against a 10 mV target. `vos_target` is the only relaxing field here,
   // and this spec asks 40 mV. Every other field of the spec is at or below the sheet's own
   // default, so nothing else in it can be doing the work.
   const RELAXED: PickerSpec = {
@@ -207,7 +207,7 @@ describe('the search', () => {
     vos_target: 0.04,
   };
 
-  it('closes the five-transistor OTA on a relaxed offset budget, with no repair needed', () => {
+  it('closes the five-transistor OTA on a relaxed offset target, with no repair needed', () => {
     const c = pick('otas/five-transistor-ota.json', RELAXED);
     expect(c.verdict).toBe('closed');
     expect(c.specCoverage).toEqual({ consumed: 7, supplied: 7 });
@@ -222,7 +222,7 @@ describe('the search', () => {
   // The same sheet at the tight spec — which is its shipped default — is the repair case. The
   // search ranks the knobs against `offset-spec` and closes by moving one of them, the input
   // pair further into weak inversion; stage 2 then backs the programmed current off, and finds
-  // room for only a few percent before the offset budget binds again. Pinned after the algorithm
+  // room for only a few percent before the offset target binds again. Pinned after the algorithm
   // was frozen; the assertion below re-evaluates that point standalone rather than trusting the
   // search's own verdict.
   it('repairs the five-transistor OTA at its tight spec, and the endpoint stands alone', () => {
@@ -262,7 +262,7 @@ describe('the search', () => {
   // "cannot close". The cascode CS amp is sub-millisecond per evaluation, so the golden is
   // cheap. 20 evaluations buys one ranking pass (1 + 2 per knob) and leaves no room to scan —
   // so nothing but the sheet's own point was ever evaluated, and the cause must say THAT
-  // rather than leaving a bare rule miss standing as the answer.
+  // rather than leaving a bare check miss standing as the answer.
   it('reports a starved search as did-not-close, with the budget it was given', () => {
     const c = pick('stages/cascode-cs-amp.json', {}, 20);
     expect(c.verdict).toBe('did-not-close');
@@ -275,7 +275,7 @@ describe('the search', () => {
     // as if it had been.
     expect(c.elapsedMs).toBe(0);
     expect(c.knobs).toEqual({});
-    // The WHOLE disclosure, pinned verbatim. A `toContain` on the rule name would pass on a
+    // The WHOLE disclosure, pinned verbatim. A `toContain` on the check name would pass on a
     // cause that reads as a design property, which is the exact failure this golden exists to
     // catch: the stop has to come first, both budget numbers have to be quotable, and the
     // margin has to be labelled as belonging to the last point the search reached.
@@ -379,7 +379,7 @@ describe('the search', () => {
   // A search that stops on its own terms owes two facts, not one: what binds the design, and
   // what stopped the search. Reporting only the constraint reads as though the search had
   // established something about it; reporting only the stop hides what to go and fix.
-  it('names both the binding constraint and the reason the search stopped', () => {
+  it('names both the binding check and the reason the search stopped', () => {
     const c = pick('stages/cascode-cs-amp.json', {});
     expect(c.verdict).toBe('did-not-close');
     expect(c.budgetExhausted).toBe(false);
@@ -467,7 +467,7 @@ describe('the search', () => {
   });
 
   // A second repair golden, on a sheet with held cascode nodes. The telescopic OTA misses its
-  // offset budget at its defaults on this table; the search closes it, and the point it reports
+  // offset target at its defaults on this table; the search closes it, and the point it reports
   // is feasible when evaluated by itself. Whether that design then holds across its claimed
   // common-mode range is not something the candidate says anything about.
   it('repairs the telescopic OTA, and the point it reports stands alone', () => {
@@ -495,7 +495,7 @@ describe('the search', () => {
       polarity: 'n',
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Target' } },
-        { name: 'Target', value: 100 }, // y spans [1, 21]: the pin never lands, anywhere
+        { name: 'Target', value: 100 }, // y spans [1, 21]: the solve never lands, anywhere
         { name: 'k', value: 1, min: 1, max: 9, role: 'choice' },
       ],
       equations: [{ name: 'y', expr: '2*x + 1' }],
@@ -504,7 +504,7 @@ describe('the search', () => {
     const c = pickTopology({}, { path: 'synthetic/stuck', doc }, table, undefined, {});
     expect(c.verdict).toBe('did-not-close');
     expect(c.knobs).toEqual({ k: 9 });
-    // And the candidate still says nothing settled, so a reader cannot take the rule it now
+    // And the candidate still says nothing settled, so a reader cannot take the check it now
     // passes for a design that works.
     expect(c.cause).toContain('does not change sign');
   });
@@ -522,7 +522,7 @@ describe('the search', () => {
       polarity: 'n',
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Target' } },
-        { name: 'Target', value: 100 }, // y spans [1, 21]: the pin never lands, anywhere
+        { name: 'Target', value: 100 }, // y spans [1, 21]: the solve never lands, anywhere
         { name: 'k', value: 4, min: 1, max: 9, role: 'choice' },
       ],
       equations: [{ name: 'y', expr: '2*x + 1' }],
@@ -538,7 +538,7 @@ describe('the search', () => {
 
   // A sheet with nothing to turn cannot be searched — but the reason it fails is still the
   // most useful thing anyone can be told about it, so the stop does not displace it.
-  it('keeps the binding constraint when a sheet has no knobs to search', () => {
+  it('keeps the binding check when a sheet has no knobs to search', () => {
     const c = pickTopology(
       {},
       {
@@ -562,8 +562,8 @@ describe('the search', () => {
     expect(c.cause).not.toContain('at the last point searched');
   });
 
-  // The distinct third verdict. This sheet is infeasible with NO failing rule anywhere: its solve
-  // cannot bracket, so nothing settles and the one rule it has passes at wherever the solve
+  // The distinct third verdict. This sheet is infeasible with NO failing check anywhere: its solve
+  // cannot bracket, so nothing settles and the one check it has passes at wherever the solve
   // stopped. A search here would descend on a margin that was never the problem and report
   // progress, so it does not run at all — and the outcome must not borrow the language of a
   // search that did. The cause is the solver's own message.
@@ -573,7 +573,7 @@ describe('the search', () => {
       polarity: 'n',
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Target' } },
-        { name: 'Target', value: 100 }, // y spans [1, 21]: the pin never lands, anywhere
+        { name: 'Target', value: 100 }, // y spans [1, 21]: the solve never lands, anywhere
         { name: 'k', value: 5, min: 1, max: 9, role: 'choice' },
       ],
       equations: [{ name: 'y', expr: '2*x + 1' }],
@@ -729,8 +729,8 @@ describe('reading the results', () => {
   });
 
   // The interaction between the two rules, which is where the hazard actually lives: each is
-  // safe alone. A candidate gated by something no rule measures keeps a COMFORTABLE margin —
-  // its interior rules all pass — so a comparator reading the number directly floats exactly
+  // safe alone. A candidate gated by something no check measures keeps a COMFORTABLE margin —
+  // its interior checks all pass — so a comparator reading the number directly floats exactly
   // the rows whose margin cell prints "—" above the genuine near misses. Row position is a
   // presentation of the key, so a margin no surface may print may not order the table either.
   it('never lets a margin it refuses to print outrank one it does', () => {
@@ -819,7 +819,7 @@ describe('reading the results', () => {
         }),
       ),
     ).toBe(true);
-    // The hazard: rules that all pass, on a sheet whose solve never settled.
+    // The hazard: checks that all pass, on a sheet whose solve never settled.
     expect(
       marginSpeaksFor(
         candidate('unsearchable', {
