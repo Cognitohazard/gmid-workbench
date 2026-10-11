@@ -56,9 +56,25 @@ export function libraryEntries(): SheetRefEntry[] {
  *  sheets; library goldens resolve against it. */
 export const REFS: SheetRefIndex = buildSheetRefIndex(libraryEntries());
 
-// The 3-D [l, vds, vgs] demo table shared by every golden; the 0.05 V vds step keeps
+// The 4-D [l, vds, vsb, vgs] demo table shared by every golden; the 0.05 V vds step keeps
 // declared operating points on-grid where goldens want to be tight.
-export const table = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
+//
+// The body-bias sweep is there because the library uses it: a sheet that places a device's
+// source above its body (an input pair on its tail node, a cascode on the node under it)
+// declares that `vsb`, and a table without the axis would read the device body-grounded. The
+// 0.05 V step raises the threshold by BODY_FACTOR × 0.05 V = 10 mV per slice, which is the vgs
+// step, so each slice is the body-grounded one moved along vgs by whole grid steps. A body bias
+// that falls ON a slice is therefore read to the grid's own precision, and most of the node
+// levels the library types (0.3, 0.4, 0.45, 0.55 V) do. One between two slices — a tail node
+// the engine solved — is interpolated, which a golden that hinges on it sees as up to about
+// 0.2 mV of gate voltage. Both ranges reach past everything the library asks for, at its
+// defaults and at every range end: the largest body bias is 0.76 V (the folded cascode's input
+// pair at the top of its common-mode range) and the largest drain-source voltage 1.17 V (the
+// source follower). A library test holds the table to that.
+export const table = generateDemoDevice({
+  vds: { min: 0, max: 1.2, step: 0.05 },
+  vsb: { min: 0, max: 0.9, step: 0.05 },
+});
 
 /** Output-device r_o of a width-mirrored leg, in closed form. The reference sets the saturation
  *  current idSat_ref = I_in/(1 + vds_ref/VA); the output device copies the same current density at
@@ -88,8 +104,23 @@ export const cggOf = (W: number, L: number): number => W * L * COX;
 // The gate-source voltage the demo model needs for a given gm/ID at L = 0.5 µm, from the EKV
 // inversion gm/ID = sigmoid(x)/(n·UT·softplus(x)) with n = 1.3. Shared because a NODE LEVEL a
 // sheet derives from one device's gate — rather than typing it — lands on exactly these
-// numbers, so several goldens now hinge on the same three. The demo's gm/ID is independent of
-// vds and (with no vsb axis) of body bias, so one constant per gm/ID is the whole story.
+// numbers, so several goldens now hinge on the same few. The demo's gm/ID is independent of
+// vds, so one constant per gm/ID is the whole story for a device whose source is at its body.
+// One whose source sits above it needs BODY_FACTOR·vsb more — see vgsAtBody, and
+// sourceNodeUnder for a node that is solved from such a gate.
 export const VGS_GMID8_L05 = 0.668042;
 export const VGS_GMID10_L05 = 0.610063;
 export const VGS_GMID12_L05 = 0.567023;
+export const VGS_GMID14_L05 = 0.532095;
+
+/** Gate-source voltage of a device whose source sits `vsb` above its body, from the value the
+ *  same inversion level needs body-grounded. The demo model's threshold rises BODY_FACTOR·vsb and
+ *  nothing else moves, so the whole vgs curve shifts by exactly that. */
+export const vgsAtBody = (vgs0: number, vsb: number): number => vgs0 + BODY_FACTOR * vsb;
+
+/** Where a node lands when it is solved to put a device's gate at `gate` and that node is the
+ *  device's own source, body at ground: the node is then the body bias as well, so
+ *  gate = V + vgs0 + BODY_FACTOR·V, and V = (gate − vgs0)/(1 + BODY_FACTOR). `vgs0` is the
+ *  body-grounded gate-source voltage of the inversion level the device is sized at. */
+export const sourceNodeUnder = (gate: number, vgs0: number): number =>
+  (gate - vgs0) / (1 + BODY_FACTOR);

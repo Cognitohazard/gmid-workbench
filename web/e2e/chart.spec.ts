@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loadDemo, pickQuantity } from './helpers';
+import { loadDemo, loadDemoNoVsb, pickQuantity } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -77,7 +77,10 @@ test('panels: canonical grid renders, every picker option computes, hover gives 
 
   // Hover a panel with spread curves (gm/gds) → the FULL operating point: the sweep
   // coordinate (vgs) is recovered from the gm/ID cursor (invertX), then looked up.
+  // The panel sits in the second row, and a mouse position below the viewport hovers nothing,
+  // so bring it into view before measuring where its canvas is.
   const gmgds = page.locator('.grid .panel').nth(2);
+  await gmgds.scrollIntoViewIfNeeded();
   const b = await gmgds.locator('canvas').boundingBox();
   await page.mouse.move(b!.x + b!.width * 0.7, b!.y + b!.height * 0.4);
   await expect(gmgds.locator('.pfoot')).toContainText('vgs');
@@ -413,7 +416,9 @@ test('a panel that does not fan L exposes an L bias slider (no silent first-L bi
   page,
 }) => {
   await page.goto('/');
-  await loadDemo(page);
+  // The device with one bias axis: what is counted below is the slider row, and a table with a
+  // body-bias sweep would put a second pinned axis in it from the start.
+  await loadDemoNoVsb(page);
   // Overview: every panel fans L → only the vds slider is shown (L would be inert).
   await expect(page.locator('header .slider')).toHaveCount(1);
   await expect(page.locator('header .slider')).toContainText('vds');
@@ -529,7 +534,9 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/');
-  await loadDemo(page);
+  // The device with one bias axis: "one shared bias slider" below is a statement about a table
+  // that has only vds left to pin.
+  await loadDemoNoVsb(page);
 
   // Canonical preset: five gm/ID charts, every one with X = gm_id and family = L.
   await expect(page.locator('.grid .panel')).toHaveCount(5);
@@ -578,7 +585,7 @@ test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page 
   // A corrupt saved layout falls back to the canonical preset rather than crashing.
   await page.evaluate(() => localStorage.setItem('gmid.dash.v3', '{not valid json'));
   await page.reload();
-  await loadDemo(page);
+  await loadDemoNoVsb(page);
   await expect(page.locator('.grid .panel')).toHaveCount(5);
   await expect(page.locator('.grid canvas')).toHaveCount(5);
 

@@ -9,9 +9,19 @@ import { expect, type Page, type Locator } from '@playwright/test';
 // name collision uses sample-fab + sample-alt, which declare distinct namespaces.
 
 // The app boots empty (no built-in data); load the EKV demo device — global-setup regenerated it
-// as a fixture from the oracle — before tests that need its rich [l × vds × vgs] grid.
+// as a fixture from the oracle — before tests that need its rich [l × vds × vsb × vgs] grid.
+// This is the table every sheet in the suite is evaluated on: it carries the body-bias sweep
+// the sheets declare.
 export async function loadDemo(page: Page) {
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo.mostab.csv');
+  await expect(page.locator('header .device')).toContainText('nmos_demo');
+}
+
+// The same device without the body-bias sweep, [l × vds × vgs]: the bench then has exactly one
+// bias axis to pin. Only for a chart test whose subject is the bench's slider row — never load
+// it under a sheet, which would be read body-grounded on it.
+export async function loadDemoNoVsb(page: Page) {
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-no-vsb.mostab.csv');
   await expect(page.locator('header .device')).toContainText('nmos_demo');
 }
 

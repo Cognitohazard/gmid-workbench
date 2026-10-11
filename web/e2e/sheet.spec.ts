@@ -1222,18 +1222,29 @@ test('operating range: a range end that was not run reads as a question nobody a
   const chips = sp.locator('.sedge');
   await expect(chips).toHaveCount(2);
 
-  // Push the CENTRE past what the tail node can produce (still inside CM_dc's own slider, so
-  // this is a point the sweep and the picker both visit). There is now no design at all here,
-  // so neither range end has a design to hold — and the whole reason the engine reports that as
+  // Push the CENTRE past what the tail node can produce (still inside the sliders, so this is
+  // a point the sweep and the picker both visit). The pair's source is the tail node, so the
+  // node carries the pair's body effect and the common mode it produces rises 1.2 V per volt of
+  // node: at the shipped inversion level the 0.8 V top of the node's bracket reaches past the
+  // top of CM_dc's slider. With the input pair at the top of ITS slider (gm/ID 18, the least
+  // gate drive) it does not: the most the bracket produces is 0.8 V plus that pair's
+  // gate-source voltage there, 1.43 V on the demo model and a little less on this table's
+  // coarse body-bias grid, against a CM_dc of 1.45 V. There is now no design at all here, so
+  // neither range end has a design to hold — and the whole reason the engine reports that as
   // its own outcome is that showing it as a failure would answer a question it never asked. A
   // red "cm-lo" beside an empty design is a statement about the claimed range that nothing
   // measured.
   // At the default centre the low end IS run and reads red, so the strip starting from a state
-  // this test would fail on is what makes the transition below mean something.
+  // this test would fail on is what makes the transition below mean something. It is still run
+  // once the pair has moved, which is the state the centre is pushed out of.
   await expect(chips.nth(0)).toHaveClass(/no/);
+  const gmId = sp.locator('.svar[data-param="gm_id_in"] .num');
+  await gmId.fill('18');
+  await gmId.blur();
+  await expect(chips.nth(0)).not.toHaveClass(/skip/);
 
   const cm = sp.locator('.svar[data-param="CM_dc"] .num');
-  await cm.fill('1.4');
+  await cm.fill('1.45');
   await cm.blur();
 
   for (const i of [0, 1]) {

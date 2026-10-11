@@ -10,7 +10,7 @@
 //  - Thermal density vnth_m = sqrt(4kTγ/gm) with γ = GAMMA_DEFAULT.
 
 import { describe, it, expect } from 'vitest';
-import { runSheet } from './index';
+import { runSheet, withParams } from './index';
 import type { SizingReport, SheetResult } from './types';
 import {
   table,
@@ -24,6 +24,9 @@ import {
   sheet as libSheet,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
+  VGS_GMID14_L05,
+  sourceNodeUnder,
+  vgsAtBody,
 } from './library.fixtures';
 
 /** Intrinsic gain av0 = (gm/ID)·(VA + vds) at length `L`, declared vds. */
@@ -45,6 +48,28 @@ const block = (r: SheetResult, name: string): SizingReport =>
 // the missing Miller term, which no table here carries and no check reads.
 const cggInOf = (res: SheetResult): number => cggOf(res.values.in__W, L);
 
+/** Where the tail node lands at a range end that moves the common mode to `cm`, with the input
+ *  pair HELD: the width the design point gave it, the same current. A pair free to re-size
+ *  would put the node at (cm − vgs0)/(1 + BODY_FACTOR), like the design point's own. The held
+ *  one sees its drain-source voltage change by what the node moved (its drain stays at `drain`),
+ *  and id ∝ (VA + vds) at fixed width and gate drive in the demo model, so it needs its gate
+ *  drive changed by ln((VA + vds_end)/(VA + vds_base))/(gm/ID) to carry the same current — first
+ *  order in a change of a few percent, with vds_end taken at the re-sized landing. The node
+ *  absorbs that through the same 1/(1 + BODY_FACTOR). `vgs0` is the body-grounded gate-source
+ *  voltage of the pair's inversion level `gmId`. */
+const heldTailNode = (
+  cm: number,
+  cmBase: number,
+  vgs0: number,
+  gmId: number,
+  drain: number,
+): number => {
+  const base = sourceNodeUnder(cmBase, vgs0);
+  const resized = sourceNodeUnder(cm, vgs0);
+  const backOff = Math.log((va(L) + drain - resized) / (va(L) + drain - base)) / gmId;
+  return sourceNodeUnder(cm + backOff, vgs0);
+};
+
 /** The cgg_in golden five of these OTAs share verbatim; registered per describe. */
 const itIsOneInputGate = (res: SheetResult): void => {
   it('input capacitance is one input gate at the width the sizing landed on', () => {
@@ -62,12 +87,14 @@ describe('tier-3 goldens: differential pair + tail', () => {
   // reference's gate, and in the demo model id ∝ (VA + vds) at fixed vgs and W, so it delivers
   // the programmed current times (VA + vds_tail)/(VA + vds_ref) — the reference being
   // diode-connected, vds_ref is its own vgs. Both voltages are the model's for the inversion
-  // level the sheet asks of each device, so nothing here is read back from the run:
-  //   tail node    V_tail = CM_dc − vgs(12) = 1.05 − 0.567023 = 0.482977 V
-  //   tail mirror  (2.5 + 0.482977)/(2.5 + 0.610063) = 0.959137   (reference at vgs(10))
-  const vTail = 1.05 - VGS_GMID12_L05;
+  // level the sheet asks of each device, so nothing here is read back from the run. The pair's
+  // source is the tail node, so the node is its body bias as well and its gate needs
+  // BODY_FACTOR·V_tail more than vgs(12): CM_dc = V_tail + vgs(12) + 0.2·V_tail.
+  //   tail node    V_tail = (CM_dc − vgs(12))/1.2 = (1.05 − 0.567023)/1.2 = 0.402481 V
+  //   tail mirror  (2.5 + 0.402481)/(2.5 + 0.610063) = 0.933255   (reference at vgs(10))
+  const vTail = sourceNodeUnder(1.05, VGS_GMID12_L05);
   const tailRatio = (va(L) + vTail) / (va(L) + VGS_GMID10_L05);
-  /** What each side of the pair carries: half of what the tail delivers, 9.591 µA. */
+  /** What each side of the pair carries: half of what the tail delivers, 9.333 µA. */
   const iHalf = (I_TAIL / 2) * tailRatio;
   const gmIn = 12 * iHalf; // (gm/ID)·id, both supplied in the givens
 
@@ -84,16 +111,16 @@ describe('tier-3 goldens: differential pair + tail', () => {
   });
 
   it('the tail misses its reference by the drain-voltage ratio of the demo model', () => {
-    // The tail node (0.483 V) sits below the reference's diode drop (0.610 V), so the tail
-    // under-delivers by 1 − 0.959137 = 4.09 %. Compared as an error, the way the mirror goldens
+    // The tail node (0.402 V) sits below the reference's diode drop (0.610 V), so the tail
+    // under-delivers by 1 − 0.933255 = 6.67 %. Compared as an error, the way the mirror goldens
     // compare theirs: the diode diagonal is interpolated, so the ratio is not exact on the
-    // table, and 1e-2 of this error is 1.3 mV of drain-voltage difference.
+    // table, and 1e-2 of this error is 2.1 mV of drain-voltage difference.
     const tailErr = 1 - res.values.tail__id / I_TAIL;
     expect(relErr(tailErr, 1 - tailRatio)).toBeLessThan(1e-2);
   });
 
   it('slew, GBW and supply current follow from the current the tail delivers', () => {
-    // 20 µA × 0.959137 = 19.183 µA — not the 20 µA the reference is programmed to.
+    // 20 µA × 0.933255 = 18.665 µA — not the 20 µA the reference is programmed to.
     expect(relErr(res.values.SR, (I_TAIL * tailRatio) / CL)).toBeLessThan(1e-3);
     expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-3);
     // Which current each equation reads, exactly: the tail's own, and the pair's half of it.
@@ -111,7 +138,7 @@ describe('tier-3 goldens: differential pair + tail', () => {
     // The input device carries the half current at vds = V_out_dc − V_tail, so in the demo
     // model gds = I/(VA + vds) there; the load is the 3 µS the sheet is told. The half current
     // does not cancel against a fixed load conductance, so the gain falls with what the tail
-    // delivers: 115.10 µS / (3.288 µS + 3 µS) = 18.30.
+    // delivers: 111.99 µS / (3.113 µS + 3 µS) = 18.32.
     const av = gmIn / (gdsOf(iHalf, L, 0.9 - vTail) + 3e-6);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-3);
   });
@@ -127,7 +154,7 @@ describe('tier-3 goldens: differential pair + tail', () => {
     // The tail copies its reference's saturation current I_tail/(1 + vgs(10)/VA), and
     // gds = idSat/VA in the demo model, so its gds is I_tail/(VA + vgs(10)) whatever the tail
     // node is. Over twice the pair's gm = 12 × (I_tail/2) × tailRatio, the programmed current
-    // and the reference's gate voltage both cancel: Acm = 1/(12·(VA + V_tail)) = 0.027937.
+    // and the reference's gate voltage both cancel: Acm = 1/(12·(VA + V_tail)) = 0.028711.
     expect(relErr(res.values.Acm, 1 / (12 * (va(L) + vTail)))).toBeLessThan(1e-3);
     expect(relErr(res.values.CMRR, res.values.Av / res.values.Acm)).toBeLessThan(1e-12);
   });
@@ -171,8 +198,10 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
   // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8, all L 0.5 µm; the stack is
   // parameterized by its NODES — V_a 0.55, V_b 1.35, V_out 0.9, the tail node constrained so
   // CM_in lands on CM_dc 0.97 — and every device vds is a subtraction between them.
-  // (0.97, not a rounder number: the DC point must sit inside the claimed [0.95, 1.12]
-  // AND below the demo table's constraint ceiling near 0.98 — the telescopic's ICMR is a slot.)
+  // (The telescopic's ICMR is a slot: the DC point has to sit inside the claimed [0.95, 1.12]
+  // and under what the tail bracket can produce. On the demo table that is the bracket's 0.45 V
+  // top plus the pair's gate-source voltage there, 0.45 + vgs(14) + 0.2 × 0.45 = 1.072 V — above
+  // the 0.97 V design point, and below the claimed 1.12 V end, which is therefore not reached.)
   const gmIn = 10e-6 * 14;
 
   it('slew and GBW follow exactly from the tail current and input gm', () => {
@@ -191,6 +220,28 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     const Rp = av0Of(10, L, 1.35 - 0.9) / gdsOf(10e-6, L, 1.8 - 1.35);
     const Rout = 1 / (1 / Rn + 1 / Rp);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
+  });
+
+  it('every device whose source sits above its body pays for it at its gate', () => {
+    // Three devices in this stack have a source that is not at their body, and each needs
+    // BODY_FACTOR × that difference more gate voltage than the same inversion level takes
+    // body-grounded. None of these is read back from the run.
+    //
+    // The input pair's source is the tail node, which is solved so its gate lands on CM_dc:
+    //   V_tail = (0.97 − vgs(14))/1.2 = (0.97 − 0.532095)/1.2 = 0.364921 V
+    //   vgs_in = vgs(14) + 0.2 × 0.364921 = 0.605079 V
+    // The node sits between two body-bias slices of the table (0.35 and 0.40 V), where the
+    // table is interpolated, so these two agree to interpolation order: 0.16 mV here.
+    const vTail = sourceNodeUnder(0.97, VGS_GMID14_L05);
+    expect(relErr(res.values.V_tail, vTail)).toBeLessThan(1e-3);
+    expect(relErr(res.values.in__vgs, vgsAtBody(VGS_GMID14_L05, vTail))).toBeLessThan(1e-3);
+    // The N cascode's source is V_a = 0.55 V above ground, and the P cascode's is V_b = 1.35 V,
+    // which is 0.45 V below its body at the supply. Both are on a body-bias slice, so the gate
+    // each node is held under comes out to the constant's own precision:
+    //   N gate  V_a + vgs(10) + 0.2 × 0.55 = 0.55 + 0.610063 + 0.11 = 1.270063 V
+    //   P gate  V_b − vgs(10) − 0.2 × 0.45 = 1.35 − 0.610063 − 0.09 = 0.649937 V
+    expect(relErr(res.held!.V_a, 0.55 + vgsAtBody(VGS_GMID10_L05, 0.55))).toBeLessThan(1e-5);
+    expect(relErr(res.held!.V_b, 1.35 - vgsAtBody(VGS_GMID10_L05, 1.8 - 1.35))).toBeLessThan(1e-5);
   });
 
   itIsOneInputGate(res);
@@ -233,8 +284,11 @@ describe('tier-3 goldens: folded cascode OTA', () => {
   it('checks its claimed common-mode range on THIS design, not on a re-sized one', () => {
     // A range end re-measures the amplifier the defaults produced: every device keeps the width
     // and length the base run solved, to the last bit, and the endpoint bias comes out of the
-    // operating point instead. A range end free to re-size gave the input pair ~9% more width at
-    // cm-hi (1.194 µm → 1.302 µm) and reported the margins of a different amplifier.
+    // operating point instead. A range end free to re-size would give the input pair ~11% more
+    // width at cm-hi (1.167 µm → 1.291 µm: the pair's drain-source voltage falls from 0.968 V to
+    // 0.635 V there, and the same current at the same inversion level then takes
+    // (VA + 0.968)/(VA + 0.635) = 1.106 times the width) and report the margins of a different
+    // amplifier.
     for (const e of res.rangeEnds ?? []) {
       expect(
         e.blocks?.map((c) => c.sizing?.W),
@@ -246,31 +300,85 @@ describe('tier-3 goldens: folded cascode OTA', () => {
       ).toEqual(res.blocks?.map((c) => c.sizing?.L));
     }
     // cm-lo's solve LANDS, so its operating point is a design point and can be locked as intent.
-    // Pulling the input common mode 50 mV down to 1.0 V is paid almost entirely by the tail node
-    // (0.5179 → 0.4689 V), because the input pair is held at the width the base run sized: its
-    // drain stays at the fold node, so the 49 mV the tail gives up lands on its own vds, and the
-    // extra channel-length modulation lets the gate back off the remaining ~1 mV at the same
-    // 10 µA. The margins move with that.
+    // Pulling the input common mode 50 mV down to 1.0 V moves the tail node 41 mV
+    // (0.4318 → 0.3908 V) and the pair's gate-source voltage the other 9 mV. The pair's source
+    // is the tail node, so 8.2 mV of that is the body effect giving back BODY_FACTOR × 41 mV.
+    // The remaining 0.8 mV is the pair being held at the width the base run sized: its drain
+    // stays at the fold node, so what the tail gives up lands on its own vds, and the extra
+    // channel-length modulation lets the gate back off at the same 10 µA. The margins move with
+    // that.
+    //
+    // The four six-decimal numbers below are RECORDED from the engine on this table, not derived:
+    // each rides the table's interpolation between two body-bias slices, which no closed form
+    // reproduces past about 1e-4. A check that is derived stands beside each of them.
     const lo = res.rangeEnds?.find((e) => e.name === 'cm-lo');
     expect(lo?.error).toBeUndefined();
-    expect(lo?.solved.V_tail).toBeCloseTo(0.4688622, 6);
+    expect(lo?.solved.V_tail).toBeCloseTo(0.3907617, 6);
+    // Beside the node: the held-width landing in closed form, 0.39063 V. A pair re-sized at this
+    // end would land at (1.0 − vgs(14))/1.2 = 0.38992 V, 0.7 mV lower and 1.8e-3 of the node
+    // away, so the tolerance tells the two apart.
+    const heldLo = heldTailNode(1.0, 1.05, VGS_GMID14_L05, 14, 1.4);
+    expect(relErr(lo!.solved.V_tail, heldLo)).toBeLessThan(1e-3);
+    expect(relErr(sourceNodeUnder(1.0, VGS_GMID14_L05), heldLo)).toBeGreaterThan(1.5e-3);
     const inAt = lo?.blocks?.find((c) => c.name === 'in')?.sizing;
-    expect(inAt?.vgs).toBeCloseTo(0.5311371, 6);
+    expect(inAt?.vgs).toBeCloseTo(0.6092381, 6);
+    // Beside the gate-source voltage: it and the node are the common mode the end asked for.
+    expect(lo!.solved.V_tail + inAt!.vgs).toBeCloseTo(1.0, 5);
     const margin = (id: string): number => lo!.checks.find((r) => r.id === id)!.marginPct;
-    expect(margin('gain-spec')).toBeCloseTo(-0.185759, 6);
-    expect(margin('offset-spec')).toBeCloseTo(-0.4126382, 6);
+    expect(margin('gain-spec')).toBeCloseTo(-0.186085, 6);
+    expect(margin('offset-spec')).toBeCloseTo(-0.4178275, 6);
+    // Beside the margins: the output branches did not move, so both follow from the base run and
+    // the transconductances the range end reports. The pair's gm is 1.0033 times what it was at
+    // the design point (backing the gate off at a fixed current raises gm/ID), and the gain
+    // scales with it. The offset is the pair's own Pelgrom spread and the mirror's, the mirror's
+    // referred to the input by gm_mir/gm_in, at the widths the base run sized.
+    const gmAt = (name: string): number => lo!.blocks!.find((c) => c.name === name)!.provides.gm;
+    const gmRatio = gmAt('in') / res.values.in__gm;
+    expect(margin('gain-spec')).toBeCloseTo((res.values.Av * gmRatio) / 300 - 1, 6);
+    const sigma = (W: number, gmId: number): number =>
+      (Math.SQRT2 * Math.hypot(res.values.avt, res.values.abeta / gmId)) / Math.sqrt(W * L);
+    const vosLo = Math.hypot(
+      sigma(res.values.in__W, 14),
+      (sigma(res.values.nmir__W, 8) * gmAt('nmir')) / gmAt('in'),
+    );
+    expect(margin('offset-spec')).toBeCloseTo(1 - vosLo / 12e-3, 6);
     expect(lo?.state).toBe('does-not-comply'); // measured, and two specs fail there
-    // cm-hi is the case where the solve never LANDS (cm-lo landed and merely fails its checks), and
-    // the only honest assertions about it are the three the engine actually vouches for. Its
-    // tail-node constraint finds no sign change anywhere in the bracket, so nothing was measured at
-    // that end: it is no answer, not a failure. Whatever the bisection was holding when it gave up
-    // is the last PROBE, not a landing — locking those numbers would be asserting an operating
-    // point the run never reached, and `solved` is left empty precisely so no consumer can go
-    // looking for one.
+
+    // cm-hi lands too. The pair's gate needs BODY_FACTOR·V_tail more than it would body-grounded,
+    // so the 1.45 V end is produced with the tail node at 0.759 V, inside its [0.1, 0.8] bracket
+    // (body-grounded it would take 1.45 − vgs(14) = 0.918 V, which the bracket does not reach).
+    // It is therefore measured, and the same two specs fail there.
     const hi = res.rangeEnds?.find((e) => e.name === 'cm-hi');
+    expect(hi?.error).toBeUndefined();
+    expect(
+      relErr(hi!.solved.V_tail, heldTailNode(1.45, 1.05, VGS_GMID14_L05, 14, 1.4)),
+    ).toBeLessThan(1e-3);
+    expect(hi?.state).toBe('does-not-comply');
+    expect(hi?.checks.filter((r) => r.status === 'fail').map((r) => r.id)).toEqual([
+      'gain-spec',
+      'offset-spec',
+    ]);
+  });
+
+  it('gives no answer at a range end its tail-node bracket cannot produce', () => {
+    // The case where the solve never LANDS (the shipped ends both land and merely fail their
+    // checks), and the only honest assertions about it are the three the engine actually vouches
+    // for. The top of the tail bracket produces 0.8 + vgs(14) + 0.2 × 0.8 = 1.492 V; an
+    // application that presents 1.6 V asks for more than that. The tail-node constraint then
+    // finds no sign change anywhere in the bracket, so nothing was measured at that end: it is
+    // no answer, not a failure. Whatever the bisection was holding when it gave up is the last
+    // PROBE, not a landing — locking those numbers would be asserting an operating point the run
+    // never reached, and `solved` is left empty precisely so no consumer can go looking for one.
+    expect(0.8 + vgsAtBody(VGS_GMID14_L05, 0.8)).toBeLessThan(1.6);
+    const far = runSheet(withParams(sheet('folded-cascode-ota.json'), { CM_hi: 1.6 }), table);
+    const hi = far.rangeEnds?.find((e) => e.name === 'cm-hi');
     expect(hi?.state).toBe('no-answer');
     expect(hi?.error).toMatch(/does not change sign/);
     expect(hi?.solved).toEqual({});
+    // The end that was already reachable is untouched by the claim beside it.
+    expect(far.rangeEnds?.find((e) => e.name === 'cm-lo')?.solved).toEqual(
+      res.rangeEnds?.find((e) => e.name === 'cm-lo')?.solved,
+    );
   });
 
   itIsOneInputGate(res);
@@ -422,11 +530,12 @@ describe('tier-3 goldens: inverter-based OTA', () => {
 
 describe('operating-range honesty on the demo table', () => {
   // The claimed CM ranges are tuned against real sky130 data. On the demo device the
-  // current-mirror OTA's CM_hi (1.35 V) is unreachable — the tail bracket plus the demo diode
-  // drop cap the producible common mode near 1.1 V — so the tail-node solve finds no landing at
-  // cm-hi. The design is feasible where it is sized; what it cannot be given on this table is a
-  // compliance answer at that end. Locked as a golden so neither half is lost: the range end
-  // must never read as complying, and must never drag feasibility down with it.
+  // current-mirror OTA's CM_hi (1.35 V) is unreachable — the 0.55 V top of the tail bracket plus
+  // the pair's gate-source voltage there, vgs(12) + 0.2 × 0.55, caps the producible common mode
+  // near 1.23 V — so the tail-node solve finds no landing at cm-hi. The design is feasible where
+  // it is sized; what it cannot be given on this table is a compliance answer at that end.
+  // Locked as a golden so neither half is lost: the range end must never read as complying, and
+  // must never drag feasibility down with it.
   const res = runSheet(sheet('current-mirror-ota.json'), table);
 
   it('the unreachable cm-hi end is no answer, with the solver reason, and feasibility stands', () => {
@@ -440,10 +549,17 @@ describe('operating-range honesty on the demo table', () => {
 
   it('the reachable cm-lo end lands the tail node where the fixed design puts it', () => {
     // Holding the widths moves the landing: the same claim proven on the design the defaults
-    // produce settles the tail 0.65% higher than it did when the endpoint was free to re-size
-    // the devices around it (0.38292 → 0.38542). Locked as intent, not as a regression.
+    // produce settles the tail 0.54% higher than it would with the endpoint free to re-size the
+    // devices around it, which lands at (0.95 − vgs(12))/1.2 (0.31915 → 0.32087). Locked as
+    // intent, not as a regression.
     const lo = res.rangeEnds?.find((e) => e.name === 'cm-lo');
     expect(lo?.state).toBe('complies');
-    expect(lo?.solved.V_tail).toBeCloseTo(0.385423, 6);
+    // RECORDED from the engine on this table to six decimals. Beside it stands the held-width
+    // landing in closed form: the pair's drain is the load's diode node, VDD − vgs(10), and the
+    // pair sits at gm/ID 12, which gives 0.32089 V.
+    expect(lo?.solved.V_tail).toBeCloseTo(0.3208677, 6);
+    const held = heldTailNode(0.95, 1.05, VGS_GMID12_L05, 12, 1.8 - VGS_GMID10_L05);
+    expect(relErr(lo!.solved.V_tail, held)).toBeLessThan(1e-3);
+    expect(relErr(sourceNodeUnder(0.95, VGS_GMID12_L05), held)).toBeGreaterThan(5e-3);
   });
 });

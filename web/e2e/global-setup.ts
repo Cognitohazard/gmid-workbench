@@ -6,13 +6,30 @@ import { generateDemoDevice, scaleQuantities, signedMirrorDemo } from '../../src
 import { importMostab, type DeviceTable } from '../../src/index';
 
 // The app used to BOOT with `generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } })`.
-// Now the app boots empty, so the e2e suite loads that exact device from a file instead. We
-// regenerate it here (rather than commit a ~9k-row blob) so the fixture always tracks the oracle.
-// Every demo-specific assertion (4 lengths, 19 vds values, gm/ID ceiling, etc.) is preserved
-// because it is byte-for-byte the same data the app shipped.
+// Now the app boots empty, so the e2e suite loads that device from a file instead. We
+// regenerate it here (rather than commit a multi-megabyte blob) so the fixture always tracks the
+// oracle.
+//
+// The table the suite loads carries a body-bias sweep as well, because the sheets the tests
+// open use one: a design sheet declares `vsb` for every device whose source sits above its body
+// (an input pair on its tail node, a cascode on the node under it), and a table without the
+// axis would have each of them read body-grounded. The sweep is coarse — four slices, 0 to
+// 0.9 V in 0.3 V steps — to keep the file a quarter of the size the core suite's 0.05 V step
+// would make it: these tests check what the app SAYS, not the numbers to four digits. The range
+// is the core suite's, which reaches past every body bias a library sheet asks for at its
+// defaults or at an end of its operating range. The vsb = 0 slice is the table without the
+// axis, to the last bit, and the bench seeds a body-bias slider at its first value, so every
+// chart assertion written against the three-axis device (4 lengths, 19 vds values, gm/ID
+// ceiling, etc.) sees the same curves.
+const VDS = { min: 0.3, max: 1.2, step: 0.05 };
+const VSB = { min: 0, max: 0.9, step: 0.3 };
+
 export default function globalSetup(): void {
-  const demo = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.05 } });
+  const demo = generateDemoDevice({ vds: VDS, vsb: VSB });
   writeFixture(demo, 'demo.mostab.csv');
+  // The same device characterized body-grounded only: three axes, so the bench shows ONE bias
+  // slider. For the chart tests whose subject is that slider row; no sheet is evaluated on it.
+  writeFixture(generateDemoDevice({ vds: VDS }), 'demo-no-vsb.mostab.csv');
   // The same oracle recast as a signed-convention PMOS table (negative vgs/vds axes),
   // for the cross-polarity overlay test.
   writeFixture(signedMirrorDemo(demo), 'pmos-demo.mostab.csv');
@@ -48,7 +65,7 @@ function cornerCondition(
 
 function writeFixture(t: DeviceTable, filename: string): void {
   const { grid, id, meta } = t;
-  const axisNames = grid.axes.map((a) => a.name); // ['l','vds','vgs']
+  const axisNames = grid.axes.map((a) => a.name); // ['l','vds','vsb','vgs']
   const dataNames = [...grid.quantities.keys()].filter((n) => !axisNames.includes(n));
   const names = [...axisNames, ...dataNames];
   // makeGrid materializes axis columns into `quantities`, so every column is a flat array of

@@ -24,7 +24,9 @@ import {
   stage2Rout,
   sheet as libSheet,
   VGS_GMID8_L05,
+  VGS_GMID10_L05,
   VGS_GMID12_L05,
+  vgsAtBody,
 } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`stages/${file}`);
@@ -296,6 +298,15 @@ describe('tier1 goldens: Common gate', () => {
   it('the drain sits at the supply less the load drop, and the device is sized there', () => {
     expect(relErr(res.values.V_out, 0.8)).toBeLessThan(1e-9);
     expect(relErr(res.sizing?.bias?.vds ?? NaN, 0.5)).toBeLessThan(1e-9);
+  });
+
+  it('the source sits above the body, and the gate pays for it', () => {
+    // The signal enters at the source, V_in = 0.3 V above the body at ground, and the givens
+    // declare that as the device's body bias. The demo threshold rises BODY_FACTOR x 0.3 V =
+    // 60 mV there, so holding gm/ID 10 takes vgs(10) + 0.06 = 0.610063 + 0.06 = 0.670063 V.
+    // Read body-grounded the gate would come out 60 mV too low.
+    expect(res.sizing?.bias?.vsb).toBe(0.3);
+    expect(relErr(res.values.vgs, vgsAtBody(VGS_GMID10_L05, 0.3))).toBeLessThan(1e-4);
   });
 
   it('a different load moves the drain by exactly -I_bias*dR, since nothing types it', () => {

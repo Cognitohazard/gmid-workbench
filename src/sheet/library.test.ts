@@ -24,6 +24,7 @@ import type { DeviceTable } from '../types';
 import { runSheet, validateSheet, WIRING_TOL } from './index';
 import { resolveSheetRefs } from './resolve';
 import {
+  clampedIn,
   docExpressions,
   isHardCheck,
   type SizingReport,
@@ -42,6 +43,7 @@ import {
   VGS_GMID8_L05,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
+  sourceNodeUnder,
   cggOf,
   gdsOf,
   roMirrored,
@@ -109,6 +111,47 @@ describe('sheet library: generic contract', () => {
       });
     });
   }
+
+  it('is evaluated on a table that reaches every bias the library asks for', () => {
+    // The goldens read each device where its sheet puts it. A body bias the table has no axis
+    // for is read body-grounded, and a drain or body bias past the swept range is read at the
+    // table's edge — either way the number comes from somewhere else. The engine says so each
+    // time, with a warning on the givens and the coordinate listed as clamped, so the shared
+    // table is held to it here: at every sheet's defaults and at every end of its operating
+    // range, no device is read off an axis the table lacks or off its hull.
+    const elsewhere =
+      /has no live \w+ axis|is outside the table's \w+ range|does not reach this point/;
+    const off: string[] = [];
+    const bodyBiased = new Set<string>();
+    const walk = (
+      file: string,
+      n: { sizing?: SizingReport; blocks?: SheetBlockReport[] },
+    ): void => {
+      if ((n.sizing?.bias?.vsb ?? 0) > 0) bodyBiased.add(file);
+      for (const c of n.blocks ?? []) walk(file, c);
+    };
+    for (const { file, res } of EVALUATED) {
+      if (!res) continue; // an evaluation that threw already fails its own contract test
+      walk(file, res);
+      const runs = [
+        { at: 'defaults', said: res.warnings.map((w) => w.message), clamped: clampedIn(res) },
+        ...(res.rangeEnds ?? []).map((e) => ({
+          at: e.name,
+          said: [...e.warnings.map((w) => w.message), ...(e.error ? [e.error] : [])],
+          clamped: clampedIn(e),
+        })),
+      ];
+      for (const { at, said, clamped } of runs) {
+        for (const m of said) if (elsewhere.test(m)) off.push(`${file} @ ${at}: ${m}`);
+        for (const c of clamped) off.push(`${file} @ ${at}: read at the table's edge (${c})`);
+      }
+    }
+    expect(off).toEqual([]);
+    // Not vacuous: the table has both bias axes live, and the library does put sources above
+    // their bodies.
+    expect(table.grid.axes.map((a) => a.name)).toEqual(['l', 'vds', 'vsb', 'vgs']);
+    expect(bodyBiased.size).toBeGreaterThan(0);
+  });
 });
 
 // An engine with an EMPTY constant map, so `k`, `T`, `pi` and `gamma` come back as ordinary
@@ -526,15 +569,18 @@ describe('exemplar goldens: 5T OTA', () => {
   // of that width on that gate. There id ∝ (VA + vds) at fixed vgs and W, so a 1:1 mirror
   // delivers its reference current times (VA + vds_out)/(VA + vds_ref), and a diode-connected
   // reference has vds_ref equal to its own vgs. Each gate voltage below is the model's for the
-  // inversion level the sheet asks of that device, so nothing here is read back from the run:
-  //   tail node    V_tail = CM_dc − vgs(12) = 0.532977 V   (solved so the pair's gate is at CM_dc)
-  //   tail mirror  (2.5 + 0.532977)/(2.5 + 0.610063) = 0.975214   (reference at vgs(10))
+  // inversion level the sheet asks of that device, so nothing here is read back from the run.
+  // The pair's source is the tail node and its body is at ground, so the tail node is its body
+  // bias too and its gate needs BODY_FACTOR·V_tail more than vgs(12): the node is solved so that
+  // CM_dc = V_tail + vgs(12) + 0.2·V_tail.
+  //   tail node    V_tail = (CM_dc − vgs(12))/1.2 = (1.1 − 0.567023)/1.2 = 0.444148 V
+  //   tail mirror  (2.5 + 0.444148)/(2.5 + 0.610063) = 0.946652   (reference at vgs(10))
   //   load mirror  (2.5 + 0.9)/(2.5 + 0.668042)      = 1.073218   (diode side at vgs(8), output
   //                                                                side at VDD − V_out_dc)
-  const vTail = 1.1 - VGS_GMID12_L05;
+  const vTail = sourceNodeUnder(1.1, VGS_GMID12_L05);
   const tailRatio = (va + vTail) / (va + VGS_GMID10_L05);
   const loadRatio = (va + (1.8 - 0.9)) / (va + VGS_GMID8_L05);
-  /** What each side of the pair carries: half of what the tail delivers, 9.752 µA. */
+  /** What each side of the pair carries: half of what the tail delivers, 9.467 µA. */
   const iHalf = (I_TAIL / 2) * tailRatio;
 
   it('the tail node carries one current and each mirror is one gate wire', () => {
@@ -553,11 +599,11 @@ describe('exemplar goldens: 5T OTA', () => {
   });
 
   it('each mirror misses its reference by the drain-voltage ratio of the demo model', () => {
-    // The tail node (0.533 V) sits below the reference's diode drop (0.610 V), so the tail
-    // under-delivers by 1 − 0.975214 = 2.48 %. The output sits 0.9 V below the supply, further
+    // The tail node (0.444 V) sits below the reference's diode drop (0.610 V), so the tail
+    // under-delivers by 1 − 0.946652 = 5.33 %. The output sits 0.9 V below the supply, further
     // than the load's diode drop (0.668 V), so the output side asks for 7.32 % more than the
     // half tail current its diode side carries. Compared as errors, the way the mirror golden
-    // above compares its own: 1e-2 of them is 0.8 mV and 2.3 mV of drain-voltage difference.
+    // above compares its own: 1e-2 of them is 1.7 mV and 2.3 mV of drain-voltage difference.
     const tailErr = 1 - res.values.tail__id / I_TAIL;
     const loadErr = res.values.ld__id / (res.values.tail__id / 2) - 1;
     expect(relErr(tailErr, 1 - tailRatio)).toBeLessThan(1e-2);
@@ -568,7 +614,7 @@ describe('exemplar goldens: 5T OTA', () => {
   });
 
   it('slew rate, GBW and supply current follow from the current the tail delivers', () => {
-    // 20 µA × 0.975214 = 19.504 µA — not the 20 µA the reference is programmed to.
+    // 20 µA × 0.946652 = 18.933 µA — not the 20 µA the reference is programmed to.
     expect(relErr(res.values.SR, (I_TAIL * tailRatio) / CL)).toBeLessThan(1e-3);
     // Input gm = (gm/ID)·(half the delivered current) — both supplied in the givens.
     expect(relErr(res.values.GBW, (12 * iHalf) / (2 * Math.PI * CL))).toBeLessThan(1e-3);
@@ -586,7 +632,8 @@ describe('exemplar goldens: 5T OTA', () => {
     // at vds = V_out_dc − V_tail, so gds = I/(VA + vds) there. The load's output side copies the
     // diode side's saturation current I/(1 + vgs(8)/VA) and gds = idSat/VA in the demo model, so
     // its gds is I/(VA + vgs(8)) — the drain voltage it sits at cancels. The half current then
-    // cancels out of gm/gds as well: Av = 12 / (1/(VA + vds_in) + 1/(VA + vgs(8))) = 18.06.
+    // cancels out of gm/gds as well: Av = 12 / (1/(VA + vds_in) + 1/(VA + vgs(8))) = 18.35,
+    // with vds_in = 0.9 − 0.444148 = 0.455852 V.
     const vdsIn = 0.9 - vTail;
     const av = 12 / (1 / (va + vdsIn) + 1 / (va + VGS_GMID8_L05));
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-3);

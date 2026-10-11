@@ -32,6 +32,8 @@ import {
   VGS_GMID8_L05,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
+  sourceNodeUnder,
+  vgsAtBody,
   cggOf,
   par,
   stage2Rout,
@@ -43,6 +45,9 @@ const sheet = (file: string) => libSheet(`multistage/${file}.json`);
 // --- Demo-model closed forms shared across the buffer/output goldens ---
 const UT = (PHYS.k * PHYS.T) / PHYS.q;
 const vthDemo = (L: number): number => 0.4 + 0.02 * Math.log(L / 0.18e-6 + 1);
+// vdsat depends on the overdrive vgs − vth alone. A source above the body raises the gate-source
+// voltage and the threshold by the same BODY_FACTOR·vsb, so for a device at any body bias this
+// takes the BODY-GROUNDED vgs of its inversion level, against the body-grounded threshold.
 const vdsatDemo = (vgs: number, L: number): number => 2 * UT + Math.max(vgs - vthDemo(L), 0);
 
 describe('tier4 goldens: Two-stage Miller OTA', () => {
@@ -200,13 +205,19 @@ describe('tier4 goldens: Super source follower', () => {
     expect(up.values.vds_in - res.values.vds_in).toBeCloseTo(-0.05, 6);
   });
 
+  // The input device's source is the output node, 0.3 V above its body at ground, so its
+  // gate-source voltage is the body-grounded vgs(10) plus BODY_FACTOR × 0.3 V:
+  // 0.610063 + 0.06 = 0.670063 V.
+  const vgsIn = vgsAtBody(VGS_GMID10_L05, 0.3);
+
   it('reports the input level the output node hangs under', () => {
-    // The input device's gate is its source (the output, 0.3 V) plus its gate-source voltage.
-    expect(relErr(res.held!.vds_fb, 0.3 + VGS_GMID10_L05)).toBeLessThan(1e-3);
+    // The input device's gate is its source (the output, 0.3 V) plus its gate-source voltage:
+    // 0.970063 V.
+    expect(relErr(res.held!.vds_fb, 0.3 + vgsIn)).toBeLessThan(1e-3);
   });
 
   it('the DC level shift is the input follower vgs', () => {
-    expect(relErr(res.values.level_shift, VGS_GMID10_L05)).toBeLessThan(1e-2);
+    expect(relErr(res.values.level_shift, vgsIn)).toBeLessThan(1e-2);
   });
 
   it('the loop costs no extra supply current: both devices are one stacked branch', () => {
@@ -264,8 +275,10 @@ describe('tier4 goldens: Flipped voltage follower', () => {
   });
 
   it('branch headroom is the two stacked saturation voltages', () => {
-    // Unmoved by the node derivation: vdsat is a function of vgs and L in the demo model, and
-    // neither device's inversion level changed.
+    // Unmoved by the node derivation: vdsat is a function of the overdrive and L in the demo
+    // model, and neither device's inversion level changed. The input device's source sits 0.3 V
+    // above its body, which raises its gate-source voltage and its threshold by the same 60 mV,
+    // so the body-grounded vgs(10) is the right argument for both devices.
     expect(relErr(res.values.headroom, 2 * vdsatDemo(VGS_GMID10_L05, 0.5e-6))).toBeLessThan(1e-2);
   });
 
@@ -364,12 +377,15 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
   });
 
   it('stage-1 gain follows from the two levels that derived node fixes', () => {
-    // The tail is bisected until the produced common mode equals CM_dc = 1.0 V, and the demo
-    // vgs depends on neither vds nor body bias, so V_tail = CM_dc - vgs(12) — and the input
-    // device's drain-source V1 - V_tail collapses to VDD - CM_dc = 0.8 V, free of the EKV
-    // constant. The stage-1 load carries the rest of the supply, VDD - V1 = vgs(12).
+    // The tail is bisected until the produced common mode equals CM_dc = 1.0 V. The pair's
+    // source is the tail node and its body is at ground, so its gate needs BODY_FACTOR·V_tail
+    // more than vgs(12) and the node lands at (CM_dc - vgs(12))/1.2 = 0.360814 V. The input
+    // device's drain is V1 = VDD - vgs(12) = 1.232977 V, so its drain-source voltage is
+    // 1.232977 - 0.360814 = 0.872163 V. The stage-1 load carries the rest of the supply,
+    // VDD - V1 = vgs(12).
     const va = VA_PER_L * 0.5e-6;
-    const gdsIn = 10e-6 / (va + (1.8 - 1.0));
+    const vTail = sourceNodeUnder(1.0, VGS_GMID12_L05);
+    const gdsIn = 10e-6 / (va + (1.8 - VGS_GMID12_L05 - vTail));
     const gdsLd1 = 10e-6 / (va + VGS_GMID12_L05);
     expect(relErr(res.values.Av1, gm1 / (gdsIn + gdsLd1))).toBeLessThan(1e-3);
   });
