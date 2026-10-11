@@ -166,12 +166,13 @@ length `L`, and inverting the lookup table for the rest. Every field is an **exp
 string**, so a bound quantity can be computed from the params:
 
 ```json
-{ "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id" }
+{ "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id", "vds": "V_ds" }
 ```
 
 Here `gm` is fixed from the bandwidth spec and `gm/ID` is the design knob; the drain current
 follows from `gm = (gm/ID)·ID`, and the width, `VGS`, and every derived figure of merit fall
-out of the table.
+out of the table. `vds` is not one of the two: it states the drain voltage the device sits at,
+which every sized device does (see [The operating point](#the-operating-point-vds-vsb)).
 
 The bindable quantities do two different jobs:
 
@@ -234,8 +235,8 @@ width** (see [The width contract](#the-width-contract)). Equations and checks re
 ### The operating point (`vds`, `vsb`)
 
 Sizing inverts `gm/ID` along `vgs`, so every *other* sweep axis of the table must be collapsed
-to a single point first. The givens declare that point with optional `vds` and `vsb`
-expression strings:
+to a single point first. The givens declare that point with a `vds` and an optional `vsb`
+expression string:
 
 ```json
 { "L": "L", "id": "I_bias", "gm_id": "gm_id", "vds": "0.9", "vsb": "0" }
@@ -253,7 +254,10 @@ sweepable part of the design rather than a hidden host-side slice.
 If the table has a live axis the givens do not declare, the axis takes its **namespace default**
 when the table characterizes that point — `vsb = 0`, source at bulk — and the coordinate is
 reported as **assumed**, shown with a `?` beside it in the sizing line. `vds` has no honest
-default (it is set by the circuit node, not the device), so an undeclared live `vds` fails the
+default (it is set by the circuit node, not the device), so **every sized device states its
+drain voltage**: as `vds`, or as a diode connection (`diode: true`), which fixes the drain at
+the gate. Validation reports givens that state neither, and on any table — one that sweeps
+`vds`, one taken at a single drain voltage, one with no `vds` column — leaving it out fails the
 sizing with guidance to declare it. A declared value always wins, and a declared value outside
 the table's range is clamped to the nearest edge with a warning.
 
@@ -273,8 +277,10 @@ drain voltage, and there is no default. On such an axis:
   same rule. On a table with no `vsb` column, or one taken at `vsb = 0`, the device is sized. On
   a table taken at any other single body bias the sizing fails and asks for `vsb` to be stated
   — so removing a `vsb` line can never turn a refusal into a result;
-- a `vds` the givens do not state has no default and claims nothing: the device is sized from
-  the table as it is.
+- a `vds` the givens do not state has no default to fall back on: with neither a `vds` nor
+  `diode: true` the device is not sized, here as on a table that sweeps `vds`, and the sizing
+  asks for it. So no design sheet sizes a device from a table with no `vds` column — a stated
+  `vds` is refused there, and an unstated one is asked for.
 
 `L` follows the same rule on a table taken at a single length. A refusal is a failed sizing,
 not a warning beside a result: the device gets no numbers, the sheet does not evaluate on that
@@ -726,7 +732,12 @@ design constraint's bracket is fixed numbers that cannot follow it. The current-
 is a third, with a child's provided scalar as the target: a PMOS mirror output
 device has its drain on the node of an NMOS diode, the current it delivers there is the diode's,
 and the diode's gate-source voltage at that current is the node, so `V_nmir` solves for
-`nmir__vgs`. `value` is only the starting
+`nmir__vgs`. The 5T OTA and the two-stage Miller OTA solve a ratio: the share of the tail
+current the input pair's output-side transistor carries, solved to that transistor's fraction
+of the pair's current, so the two transistors add up to what the tail delivers although they
+sit at different drain voltages. The cascode current mirror solves the node between its output
+device and the cascode above it, as a multiple of the reference device's gate-source voltage
+(`k_x` solves for `k_casc`), so the two devices in series carry one current. `value` is only the starting
 guess: where the loop contracts to a single fixed point, every guess lands on the same answer. A
 guess still matters when it decides *which* fixed point you reach (contraction is local, so a loop
 can have more than one) or whether the iteration gets there at all, so keep it near the value you
@@ -893,7 +904,7 @@ does: a bias line holds the gate, and the node under it moves with the condition
 
 The expression must be a sum of terms in which the parameter appears **exactly once**, on its own
 or multiplied by a number: `V_a + casc_n__vgs`, `V_b - abs(casc_p__vgs)`,
-`V1 - V_casc + casc__vgs`. The check is on the shape, with no algebra attempted, so the
+`V_mir - V_casc + casc__vgs`. The check is on the shape, with no algebra attempted, so the
 parameter's own term is there to read. Any other relation is a `designConstraint`.
 
 | situation | result |
@@ -1119,13 +1130,14 @@ states the bias plan honestly, and the engine makes a false statement loud — i
 silently repairs one.
 
 1. **Declare the operating point of every device.** Bias axes (`vds`, `vsb`) are expressions
-   over named node parameters, stated in the givens (see *The operating point*). A bias axis
-   the author did not declare is taken from the namespace default and reported in the sizing's
-   `assumed` list — visible, never silently adopted. Backstop: a bias is read where it was
-   declared, or where its default puts it, or not at all — on a table that does not sweep that
-   axis and was not taken at that value, a declared bias refuses the device with the reason and
-   an undeclared `vsb` fails the sizing until it is declared, never sized on the table as it
-   stands.
+   over named node parameters, stated in the givens (see *The operating point*). The drain
+   voltage is always stated, as `vds` or as `diode: true`: a device that states neither is
+   reported by validation and is not sized on any table. A `vsb` the author did not declare is
+   taken from the namespace default and reported in the sizing's `assumed` list — visible, never
+   silently adopted. Backstop: a bias is read where it was declared, or where its default puts
+   it, or not at all — on a table that does not sweep that axis and was not taken at that
+   value, a declared bias refuses the device with the reason and an undeclared `vsb` fails the
+   sizing until it is declared, never sized on the table as it stands.
 2. **Name internal nodes as parameters and write every `vds` as a subtraction of nodes.**
    Node form makes branch sums checkable and inconsistencies expressible. A source sitting
    above the bulk means `vsb` is declared from the same node that sets the source — body
@@ -1196,8 +1208,10 @@ silently repairs one.
     another condition: every device the number was typed into then carries an ideal current,
     where the circuit would have let all but one of them follow. The library's 5T OTA is the
     worked example — its bias reference alone is programmed, the tail device is that reference's
-    width on that reference's gate, the pair takes half of what the tail delivers, and the load
-    mirror's output side sits on its diode side's gate. Backstop: the library's vetting suite
+    width on that reference's gate, the pair's output-side transistor takes its solved share of
+    what the tail delivers and its partner is that transistor's width on its gate-source
+    voltage, the load's diode side takes the rest, and the load mirror's output side sits on
+    its diode side's gate. Backstop: the library's vetting suite
     counts, for each parameter in amperes, the devices whose bound current reads it without
     reading another block's output, and lists by name the curated sheets where that is still
     more than one; `validateSheet` does not check this.
@@ -1246,8 +1260,8 @@ Reading it: `gm` is fixed from the spec and `gm/ID` chosen, so the givens size t
 surface `vstar`, `cgg`, `ceiling`, and the γ-model noise density `vnth_m`. The givens also fix
 the operating point with `vds` (from `V_ds`) and `vsb` (0, body-grounded), so the sizing
 slices the table at a stated point instead of borrowing the caller's bias. Stating a drain
-voltage means the sheet runs on a table that sweeps `vds`; `vsb = 0` is also what a table with
-no `vsb` column is read as. The two physical checks
+voltage means the sheet runs on a table that sweeps `vds`, or was taken at exactly that drain
+voltage; `vsb = 0` is also what a table with no `vsb` column is read as. The two physical checks
 enforce a physical `gm/ID` ceiling and a saturation-headroom floor. The spec check holds the
 input noise under target. The advisory check compares the *actual* GBW — which includes the sized
 `cgg` loading — against the target, so it reports how much the gate capacitance eats the
