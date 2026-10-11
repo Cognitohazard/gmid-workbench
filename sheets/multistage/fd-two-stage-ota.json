@@ -1,6 +1,6 @@
 {
   "title": "Fully differential two-stage OTA",
-  "description": "The fully differential version of the two-stage Miller OTA: a differential input stage with current-source loads driving a differential common-source second stage, Miller-compensated with $C_c$ on each side. The small-signal frequency plan is the same as the single-ended Miller OTA — GBW = $g_{m1}/(2*\\pi*C_c)$, an RHP zero $z = g_{m2}/C_c$ removed by the $R_z = 1/g_{m2}$ nulling resistor, a second-pole/phase-margin estimate, and SR = $min(I_1/C_c, I_2/C_L)$. Three things genuinely differ in the fully differential form: the stage-1 load is a current source rather than a current mirror, so there is no mirror pole or pole-zero doublet in the signal path (a cleaner frequency response); the differential output swing is twice the single-ended range; and a common-mode feedback loop is needed to set the output common mode, costing supply current. As in the telescopic sheet, the CMFB loop is out of scope (no loop solving) and appears only as the current line item $I_{cmfb}$. The stage-1 output common mode $V_1$ is the node the CMFB loop holds, but it is not a free number: that node is the stage-2 gate, so the loop must hold it exactly one stage-2 $V_{GS}$ from the supply, and the sheet derives it there rather than asking for it. The pole and phase-margin rows are ESTIMATE-grade; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
+  "description": "The fully differential version of the two-stage Miller OTA: a differential input stage with current-source loads driving a differential common-source second stage, Miller-compensated with $C_c$ on each side. The small-signal frequency plan is the same as the single-ended Miller OTA — GBW = $g_{m1}/(2*\\pi*C_c)$, an RHP zero $z = g_{m2}/C_c$ removed by the $R_z = 1/g_{m2}$ nulling resistor, a second-pole/phase-margin estimate, and SR = $min(I_1/C_c, I_2/C_L)$. Three things genuinely differ in the fully differential form: the stage-1 load is a current source rather than a current mirror, so there is no mirror pole or pole-zero doublet in the signal path (a cleaner frequency response); the differential output swing is twice the single-ended range; and a common-mode feedback loop is needed to set the output common mode, costing supply current. As in the telescopic sheet, the CMFB loop is out of scope (no loop solving) and appears only as the current line item $I_{cmfb}$. The stage-1 output common mode $V_1$ is the node the CMFB loop holds, but it is not a free number: that node is the stage-2 gate, so the loop must hold it exactly one stage-2 $V_{GS}$ from the supply, and the sheet derives it there rather than asking for it. The first-stage current is stated the way the circuit sets it: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, and each side of the first stage carries half of what the tail delivers, the stage-1 loads included — their gate is the common-mode feedback loop's to set, and the loop sets it so they carry what the pair hands them. The pole and phase-margin rows are ESTIMATE-grade; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -53,7 +53,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke"
+      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers"
     },
     {
       "name": "I_cmfb",
@@ -78,7 +78,7 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "stage-1 tail current"
+      "note": "the current the tail bias reference is programmed to — the one first-stage current that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the stage-1 slew limit, the bandwidth and the supply current are computed from what is delivered, not from this number"
     },
     {
       "name": "I2",
@@ -108,6 +108,15 @@
       "note": "stage-1 load inversion"
     },
     {
+      "name": "gm_id_tail",
+      "value": 10,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the tail bias reference, which the tail device inherits through the shared gate: a higher V* costs headroom at the tail node"
+    },
+    {
       "name": "gm_id_s2",
       "value": 12,
       "min": 6,
@@ -133,6 +142,15 @@
       "max": 2e-6,
       "unit": "m",
       "role": "choice"
+    },
+    {
+      "name": "L_tail",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
     },
     { "name": "L_s2", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     {
@@ -204,10 +222,67 @@
       "wiring": { "gate": "V1", "source": "VDD" }
     },
     {
+      "name": "bias",
+      "doc": {
+        "title": "Tail bias reference",
+        "description": "The diode-connected reference the programmed current $I_1$ flows into — the one first-stage device whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "polarity": "n",
+        "params": [
+          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" }
+        ],
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "diode": true },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["W", "vgs"]
+      },
+      "params": { "Ix": "I1", "Lx": "L_tail", "gx": "gm_id_tail" }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what the tail-headroom row watches.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "Wx",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width — a 1:1 copy"
+          },
+          {
+            "name": "vgsx",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "vx", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
+        ],
+        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gds", "vdsat", "id"]
+      },
+      "params": { "Wx": "bias__W", "vgsx": "bias__vgs", "Lx": "L_tail", "vx": "V_tail" }
+    },
+    {
       "name": "ld1",
       "doc": {
         "title": "Stage-1 current-source load",
-        "description": "A stage-1 current-source load (not a mirror — this is what removes the mirror pole) carrying half the tail current at the stage-1 output common mode.",
+        "description": "A stage-1 current-source load (not a mirror — this is what removes the mirror pole) at the stage-1 output common mode. It carries half of what the tail delivers: the common-mode feedback loop sets its gate so that it takes exactly the current the input device below hands it.",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -234,13 +309,18 @@
         ],
         "provides": ["gds", "vdsat", "id"]
       },
-      "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1", "vx": "ld_sign*abs(s2__vgs)" }
+      "params": {
+        "Ix": "tail__id/2",
+        "Lx": "L_ld1",
+        "gx": "gm_id_ld1",
+        "vx": "ld_sign*abs(s2__vgs)"
+      }
     },
     {
       "name": "in",
       "doc": {
         "title": "Stage-1 input-pair device",
-        "description": "Half-circuit input device at half the tail current; its drain sits at the stage-1 output common mode, its source one vgs below the input common mode.",
+        "description": "Half-circuit input device, in one branch with the stage-1 load above it and carrying that device's current: half of what the tail delivers. Its drain sits at the stage-1 output common mode, its source one vgs below the input common mode.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -367,9 +447,9 @@
     },
     {
       "name": "SR",
-      "expr": "min(I1/Cc, I2/CL)",
+      "expr": "min(tail__id/Cc, I2/CL)",
       "unit": "V/s",
-      "note": "the smaller slew limit: stage-1 tail charging Cc, or stage-2 current charging CL"
+      "note": "the smaller slew limit: the current the tail device delivers charging Cc, or the stage-2 current charging CL"
     },
     {
       "name": "Av1",
@@ -402,10 +482,16 @@
       "note": "differential output swing = twice the single-ended range set by the two output-device saturation voltages (the fully differential swing doubling)"
     },
     {
+      "name": "tail_headroom",
+      "expr": "V_tail - tail__vdsat",
+      "unit": "V",
+      "note": "how far the tail node sits above the tail device's saturation edge — exact here, because the tail node is the variable rather than something inferred from a common mode"
+    },
+    {
       "name": "I_q",
-      "expr": "2*I2 + I1 + I_cmfb",
+      "expr": "2*I2 + tail__id + I_cmfb",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the two stage-2 branches, the stage-1 tail, and the CMFB network's budget. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the two stage-2 branches, the current the tail device delivers to the first stage, and the CMFB network's budget. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     },
     {
       "name": "cgg2",
@@ -476,6 +562,14 @@
       "op": ">=",
       "rhs": "ld2__vdsat",
       "note": "stage-2 load saturated at the output common mode"
+    },
+    {
+      "id": "tail-saturated",
+      "kind": "physical",
+      "lhs": "tail_headroom",
+      "op": ">=",
+      "rhs": "0",
+      "note": "below this the tail device drops out of saturation and the first-stage current collapses; this is the mechanism behind the low end of the input common-mode range"
     },
     {
       "id": "input-sat-margin",

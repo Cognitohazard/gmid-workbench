@@ -529,9 +529,9 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   // A composed multi-child library sheet (no parent givens) loads from another group.
   await pickSheet(sp, '5T OTA');
   await expect(sp.locator('.shead')).toContainText('5T OTA');
-  // Five blocks: the bias reference and the tail device that mirrors it, the input pair, and the
-  // two sides of the mirror load.
-  await expect(sp.locator('.suse')).toHaveCount(5);
+  // Six blocks: the bias reference and the tail device that mirrors it, the two transistors of
+  // the input pair, and the two sides of the mirror load.
+  await expect(sp.locator('.suse')).toHaveCount(6);
   await expect(sp.locator('.srules tr').first()).toBeVisible();
   // Each composed block explains itself: the author's description of what the device IS in the
   // topology, typeset (the 5T's blocks all carry $V_{GS}$-style math in that prose).
@@ -1219,6 +1219,10 @@ test('discoverability: device bar counts from the first import, child picker lab
 test('operating range: chips report each range end; an end the solve cannot reach is no answer, with the reason', async ({
   page,
 }) => {
+  // The sweep below evaluates the sheet and both range ends at every sample, and the 5T now
+  // solves how its tail current splits between the pair's two transistors inside each of those
+  // evaluations, so the sweep takes several times as long as the rest of this suite's steps.
+  test.slow();
   await page.goto('/');
   await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
@@ -1250,7 +1254,7 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await expect(chips.nth(1)).toHaveClass(/skip/);
   await sp.locator('.swsel select').selectOption('CM_dc');
   await expect(sp.locator('.pchart canvas')).toBeVisible();
-  await expect(sp.locator('.skey')).toContainText('complies at cm-lo');
+  await expect(sp.locator('.skey')).toContainText('complies at cm-lo', { timeout: 60_000 });
   await expect(sp.locator('.scap')).toContainText('each sample holds its OWN design');
 
   // Make the low end unreachable: no tail-node position produces CM_in = 0.3 (the demo

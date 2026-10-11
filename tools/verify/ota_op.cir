@@ -8,12 +8,19 @@
 *   block               W [um]  id [uA]  vgs [mV]  gm [uS]  gm/id
 *   bias  (XMB)         2.5031  20.000     810.56  200.00   10.00   diode-connected, programmed
 *   tail  (XMT)         2.5031  17.875     810.56  175.17    9.80   bias gate, vds = V_tail
-*   in    (XM1, XM2)    1.7696   8.9374    825.63  107.25   12.00   half of what the tail delivers
-*   ldr   (XM3)         2.5268   8.9374  -1132.19   71.50    8.00   diode side of the load
-*   ld    (XM4)         2.5268   8.7943  -1132.19   70.42    8.01   output side, ldr's gate
+*   in    (XM2)         1.8066   9.1242    825.63  109.49   12.00   pair, output side: 51.04 % of the tail's
+*   ldr   (XM3)         2.4740   8.7507  -1132.19   70.01    8.00   diode side of the load: the rest
+*   inr   (XM1)         1.8066   8.7507    825.63  105.09   12.01   pair, diode side: in's W and vgs
+*   ld    (XM4)         2.4740   8.6106  -1132.19   68.95    8.01   output side, ldr's gate
 *
-*   V_tail 274.37 mV   tail__id = I_q 17.875 uA   vos_sys 1.3345 mV
-*   in__gds 1.3306 uS   ld__gds 0.6635 uS   Rout 501.47 kohm   Av 53.78
+*   V_tail 274.37 mV   tail__id = I_q 17.875 uA   pair_split 0.5104   vos_sys 4.7889 mV
+*   in__gds 1.3584 uS   ld__gds 0.6497 uS   Rout 497.99 kohm   gm_pair 107.25 uS   Av 53.41
+*
+* The pair and load rows, pair_split and vos_sys describe the OTA with its inputs balanced and
+* the output forced to V_out_dc. The servo below leaves the inputs apart by the offset instead,
+* which moves about a quarter of a microamp from the output branch to the diode branch; v(os)
+* is what to hold against vos_sys, and the README says how to put this deck in the balanced
+* state.
 *
 * Widths. The tables are characterized at W = 1 um, and the sheet scales them per um. Each
 * device here is that same 1 um single-finger device with a multiplier m equal to the sized
@@ -37,10 +44,10 @@ VDD  vdd  0    1.8
 IB   vdd  nb   20u
 XMB  nb   nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
 XMT  tail nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
-XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
-XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
-XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
-XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
+XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.8066
+XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.8066
+XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.4740
+XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.4740
 CL   out  0    2p
 
 * inputs: v(inp) - v(inn) = VID + v(os), centred on CM_dc
@@ -76,16 +83,16 @@ echo "== bias reference (XMB): vgs is v(nb)"
 print id_bias gm_bias gm_bias/id_bias v(nb)
 echo "== tail (XMT): on the reference's gate, vds is V_tail = v(tail)"
 print id_tail id_tail/id_bias gm_tail gm_tail/id_tail gds_tail v(tail)
-echo "== pair, diode side (XM1)"
+echo "== pair, diode side (XM1, the sheet's inr)"
 print id_in1 gm_in1 gm_in1/id_in1 v(inp)-v(tail) v(n1)-v(tail)
-echo "== pair, output side (XM2): the device the sheet's in block describes"
+echo "== pair, output side (XM2, the sheet's in)"
 print id_in2 gm_in2 gm_in2/id_in2 gds_in2 v(inn)-v(tail) v(out)-v(tail)
 echo "== load, diode side (XM3, the sheet's ldr)"
 print id_ldr gm_ldr gm_ldr/id_ldr v(n1)-v(vdd)
 echo "== load, output side (XM4, the sheet's ld)"
 print id_ld gm_ld gm_ld/id_ld gds_ld v(out)-v(vdd)
 echo "== output held at V_out_dc, and what it costs"
-print v(out) v(os) id_ldr-id_ld
+print v(out) v(os) id_ldr-id_ld id_in2-id_in1
 echo "== small-signal estimate from the output-node conductances"
 print 1/(gds_in2+gds_ld) gm_in2/(gds_in2+gds_ld)
 .endc

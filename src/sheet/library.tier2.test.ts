@@ -17,12 +17,22 @@
 //    has exactly 1/sqrt(K) of the reference's current spread.
 //  - gmb = BODY_FACTOR*gm at every point, but it rides the interpolated gm curve rather
 //    than the given gm/ID, so equations built on it hold to interpolation order, not to 1e-9.
+//  - The threshold rises BODY_FACTOR per volt of source-body bias and nothing else moves, and
+//    vdsat is 2*UT plus the overdrive above threshold. So a device's vdsat moves one for one
+//    with its gate-source voltage and by -BODY_FACTOR per volt of body bias, exactly on the
+//    grid, since both are linear along the axes.
+//  - gm/ID falls as the saturation current density rises, and never faster than the square
+//    law's 1/sqrt(density): the level sits between that and constant.
 
 import { describe, it, expect } from 'vitest';
-import { runSheet } from './index';
+import { BODY_FACTOR } from '../demo';
+import { runSheet, withParams } from './index';
+import type { SheetResult } from './types';
 import {
   table,
   relErr,
+  va,
+  gdsOf,
   VA_PER_L,
   gmbOf,
   roMirrored,
@@ -33,33 +43,121 @@ import {
 const sheet = (file: string) => libSheet(`mirrors-bias/${file}`);
 
 describe('tier-2 goldens: cascode current mirror', () => {
-  const res = runSheet(sheet('cascode-current-mirror.json'), table);
-  // Defaults: I_in 20 µA, K = 4, gm/ID 8, L = 1 µm, both mirror devices at vds = 0.7 V.
+  const doc = sheet('cascode-current-mirror.json');
+  const res = runSheet(doc, table);
+  // Defaults: I_in 20 µA, K = 4, gm/ID 8 on both reference devices, L = L_c = 1 µm, output at
+  // 1.1 V. The sheet's own device is the output cascode; the block `out` is the mirror device
+  // under it, and the node between the two is solved, as a multiple of the reference device's
+  // diode drop.
+  const K = 4;
+  const I_IN = 20e-6;
+  const V_OUT = 1.1;
+  const VA = va(1e-6);
 
-  it('sizes the output device at exactly K times the reference width', () => {
-    expect(res.sizing?.ok).toBe(true);
-    expect(relErr(res.values.W / res.values.ref__W, 4)).toBeLessThan(1e-9);
+  /** The output branch of a run in the terms every golden below is written in: the two output
+   *  devices as sized, the node between them, and the two diode drops of the reference stack —
+   *  read from the result, as every mirror golden reads a diode's own drop. */
+  const branch = (r: SheetResult) => ({
+    mirror: r.blocks!.find((b) => b.name === 'out')!.sizing!,
+    casc: r.sizing!,
+    node: r.values.V_x,
+    vRef: r.values.ref__vgs,
+    vCasc: r.values.ref_casc__vgs,
+  });
+  const { mirror, casc, node, vRef, vCasc } = branch(res);
+
+  it('solves the node between the output devices to where the cascode gate puts it', () => {
+    // The output cascode's gate is the top of the reference stack and its source is the node, so
+    // the node is that top less the gate-source voltage the cascode needs for its current. Formed
+    // here from the sized voltages rather than read from the sheet's own equation for it, so an
+    // equation that stopped saying this fails.
+    expect(relErr(node, vRef + vCasc - casc.vgs)).toBeLessThan(1e-6);
+    // What is solved is that node as a multiple of the reference device's diode drop, so that the
+    // starting guess of 1 follows the device; the node in volts is that multiple of the drop.
+    expect(relErr(node, res.values.k_x * vRef)).toBeLessThan(1e-12);
+    // The loop is a strong contraction, so it closes with nothing to report.
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
   });
 
-  it('systematic error is essentially zero: both mirror devices share one vds', () => {
-    // The cascode holds the reference and output mirror devices at the same vds — the reference
-    // diode's own drop — so their CLM factors match and the ratio error all but vanishes.
+  it('the two output devices are in series: one current, and one node between them', () => {
+    // The cascode is given the current the mirror device delivers, and that is the output current.
+    expect(relErr(casc.id, mirror.id)).toBeLessThan(1e-12);
+    expect(relErr(res.values.I_out, mirror.id)).toBeLessThan(1e-12);
+    // The node is the mirror device's drain, and the cascode's source: its body bias, and what
+    // is left of the output level is its drain-source voltage.
+    expect(mirror.bias?.vds).toBeCloseTo(node, 12);
+    expect(casc.bias?.vsb).toBeCloseTo(node, 12);
+    expect(casc.bias?.vds).toBeCloseTo(V_OUT - node, 12);
+    // The mirror device is on the reference device's gate, with its source at ground like it.
+    expect(mirror.vgs).toBeCloseTo(vRef, 12);
+    expect(mirror.bias?.vsb).toBe(0);
+  });
+
+  it('sizes each output device at exactly K times the matching reference width', () => {
+    expect(res.sizing?.ok).toBe(true);
+    expect(relErr(res.values.out__W / res.values.ref__W, K)).toBeLessThan(1e-9);
+    expect(relErr(res.values.W / res.values.ref_casc__W, K)).toBeLessThan(1e-9);
+  });
+
+  it('with the output level with the top of the reference stack, the output branch copies the reference branch', () => {
+    // Every voltage on the output branch then equals its counterpart on the reference branch and
+    // each output device is K reference devices side by side, so the node is the reference
+    // device's diode drop, the cascode sits at the reference cascode's gate-source voltage and the
+    // current is K times the reference current. That holds for any device, so it is the one
+    // point where the solve has an exact answer.
     //
-    // It is no longer EXACTLY zero, and the reason is worth keeping: the two sides now reach that
-    // shared voltage by different routes. The reference is folded onto the vds = vgs diagonal
-    // while the output device is sliced at a fixed vds, so they interpolate the same grid
-    // differently and disagree in the fifth decimal. The old exact zero came from both sides
-    // reading one hand-typed literal, which agreed with itself but not necessarily with the
-    // device.
-    expect(Math.abs(res.values.sys_err)).toBeLessThan(1e-4);
+    // What is left is the grid's: the reference devices are read along the vds = vgs diagonal and
+    // the output devices on a fixed-vds slice, which interpolate the same table differently and
+    // disagree in the fifth decimal.
+    const level = runSheet(withParams(doc, { V_out: vRef + vCasc }), table);
+    const b = branch(level);
+    expect(Math.abs(b.node - b.vRef)).toBeLessThan(1e-5);
+    expect(Math.abs(b.casc.vgs - b.vCasc)).toBeLessThan(1e-5);
+    expect(Math.abs(level.values.sys_err)).toBeLessThan(5e-5);
+  });
+
+  it('below that level the node settles under the reference diode drop, by a bracketed amount', () => {
+    // No closed form here: the node is where two table currents cross. A bracket instead.
+    //
+    // Put the node on the reference device's diode drop. The cascode then has the reference
+    // cascode's gate-source voltage and body bias, so K times its saturation current, but
+    // V_out - vgs_ref across it where the reference cascode has its own gate-source voltage. It
+    // carries a = (VA + V_out - vgs_ref)/(VA + vgs_casc) of K*I_in while the mirror device
+    // delivers all of it. Lowering the node by d closes that gap three ways at once: the cascode
+    // gains d of gate-source voltage and loses d of body bias, (1 + BODY_FACTOR)*gm*d; it gains d
+    // of drain-source voltage, gds*d; and the mirror device loses d, its own gds*d. So
+    //   d = (1 - a)*K*I_in / ((1 + BODY_FACTOR)*gm_casc + gds_casc + gds_mirror)
+    // with the conductances taken somewhere along the way. They are least at the start, where
+    // the cascode carries a*K*I_in at gm/ID 8 on a saturation current of K*I_in/(1 + vgs_casc/VA).
+    // They never exceed gm/ID 8 on the whole K*I_in, since the level only falls as the overdrive
+    // rises and the branch never carries more than K*I_in, with gds at the least drain-source
+    // voltage the cascode sees. The mirror device's gds does not move. K*I_in cancels throughout.
+    const a = (VA + V_OUT - vRef) / (VA + vCasc);
+    const least = (1 + BODY_FACTOR) * 8 * a + 1 / (VA + vCasc) + 1 / (VA + vRef);
+    const most = (1 + BODY_FACTOR) * 8 + 1 / (VA + V_OUT - vRef) + 1 / (VA + vRef);
+    const drop = vRef - node;
+    expect(drop).toBeGreaterThan((1 - a) / most);
+    expect(drop).toBeLessThan((1 - a) / least);
+    // The bracket is 6.8 to 7.3 mV, so a node left on the diode drop misses it by all of that.
+    expect((1 - a) / most).toBeGreaterThan(6e-3);
+  });
+
+  it('systematic error is the mirror device channel-length modulation across the node offset', () => {
+    // The mirror device shares the reference device's gate and source, so the two differ only in
+    // drain voltage: the reference at its own diode drop, the mirror device at the node. Their
+    // currents are in the ratio (VA + node)/(VA + vgs_ref), which is closed-form once the node is
+    // in hand. The tolerance is the fifth-decimal disagreement between the diagonal and the slice.
+    expect(Math.abs(res.values.sys_err - (node - vRef) / (VA + vRef))).toBeLessThan(5e-5);
+    expect(relErr(res.values.I_out, (K * I_IN * (VA + node)) / (VA + vRef))).toBeLessThan(5e-5);
   });
 
   it('the K-times-larger output device halves the AREA term of the reference current spread', () => {
-    // W_out = 4*W_ref at the same L, so the AREA term contributes exactly 1/2 — but no longer
-    // the whole ratio. The output device is sized on the reference's GATE now, so its inversion
+    // W_out = 4*W_ref at the same L, so the AREA term contributes exactly 1/2 — but not the
+    // whole ratio. The output mirror device is sized on the reference's GATE, so its inversion
     // level is read off the table instead of being the authored 8, and the threshold term
-    // carries the difference.
-    const expected = pelgromIrelRatio(res.values.gm_id, 8, 4, res.values.avt, res.values.abeta);
+    // carries the difference. It is the mirror device's level, not the cascode's, that counts.
+    const level = res.values.out__gm_id;
+    const expected = pelgromIrelRatio(level, 8, K, res.values.avt, res.values.abeta);
     expect(relErr(res.values.irel_out / res.values.irel_ref, expected)).toBeLessThan(1e-12);
     // On this table the two levels agree to the grid's own interpolation resolution, so the
     // ratio still sits within 4e-4 of 1/2. A real drift between the two gate-source voltages
@@ -67,20 +165,71 @@ describe('tier-2 goldens: cascode current mirror', () => {
     expect(relErr(res.values.irel_out / res.values.irel_ref, 0.5)).toBeLessThan(1e-3);
   });
 
-  it('the cascode multiplies the mirror r_o by its own local feedback factor', () => {
+  it('the cascode multiplies the mirror r_o by its own local feedback factor, at the current it carries', () => {
     // Rout = r_o,casc*(1 + (gm + gmb)*r_o,mirror) + r_o,mirror — the mirror device's own output
     // resistance is what degenerates the cascode, playing the role a resistor plays in the
-    // degenerated mirror. Both legs are width-mirrored, so both r_o come from the closed form
-    // above; the cascode's gm/ID is given, so its gm is its own current times 8, and that current
-    // is the mirrored saturation current scaled by the CLM factor of the vds it actually sits at.
-    const ro = roMirrored(res.values.ref__vgs, 4, 20e-6);
-    const roCasc = roMirrored(res.values.ref_casc__vgs, 4, 20e-6);
-    const va = VA_PER_L * 1e-6;
-    const idCasc = (4 * 20e-6 * (va + 1.1 - res.values.ref__vgs)) / (va + res.values.ref_casc__vgs);
-    const gm = 8 * idCasc;
-    expect(relErr(res.values.Rout, roCasc * (1 + (gm + gmbOf(gm)) * ro) + ro)).toBeLessThan(1e-3);
+    // degenerated mirror. The mirror device's r_o is the width-mirrored closed form. The
+    // cascode's is its current over VA plus the drain-source voltage it sits at, and that current
+    // is the mirror device's at the node.
+    const ro = roMirrored(vRef, K, I_IN);
+    const id = (K * I_IN * (VA + node)) / (VA + vRef);
+    const roCasc = 1 / gdsOf(id, 1e-6, V_OUT - node);
+    // The cascode is given a width and a current, so its gm is what the table gives at the
+    // density that lands — read back, as it is for any device given that way.
+    const gm = res.values.gm;
+    expect(relErr(res.values.Rout, roCasc * (1 + (gm + gmbOf(gm)) * ro) + ro)).toBeLessThan(1e-4);
+    // What the model does fix is the range that gm is read in. The cascode runs the reference
+    // cascode's saturation current density times
+    //   r = (VA + node)(VA + vgs_casc) / ((VA + vgs_ref)(VA + V_out - node)),
+    // 7 % more here, because it carries nearly the same current across less drain-source
+    // voltage. Its level is therefore under the reference cascode's 8, and by no more than the
+    // square-law factor 1/sqrt(r).
+    const r = ((VA + node) * (VA + vCasc)) / ((VA + vRef) * (VA + V_OUT - node));
+    expect(r).toBeGreaterThan(1.05);
+    expect(res.values.gm_id).toBeGreaterThan(8 / Math.sqrt(r));
+    expect(res.values.gm_id).toBeLessThan(8);
     // The whole point of the cascode: two orders of magnitude over the bare mirror.
     expect(res.values.Rout / ro).toBeGreaterThan(50);
+  });
+
+  it('the compliance floor is measured from the solved node, with the cascode at the overdrive it needs', () => {
+    // Against the reference cascode, the output cascode has (vgs_ref - node) more gate-source
+    // voltage — the same gate over a lower source — and that much less body bias. Its saturation
+    // voltage is therefore the reference cascode's plus (1 + BODY_FACTOR) times that difference.
+    const vdsat = res.values.ref_casc__vdsat + (1 + BODY_FACTOR) * (vRef - node);
+    expect(Math.abs(res.values.vdsat - vdsat)).toBeLessThan(1e-6);
+    const floor = res.checks.find((c) => c.id === 'compliance')!;
+    expect(floor.lhsValue).toBe(V_OUT);
+    expect(Math.abs(floor.rhsValue - (node + vdsat + res.values.v_margin))).toBeLessThan(1e-6);
+    expect(floor.status).toBe('pass');
+  });
+
+  it('holds away from the defaults, with the mirror and the cascode at different lengths and levels', () => {
+    // At the defaults the two lengths and the two inversion levels coincide, so a statement that
+    // read the wrong one of a pair would still pass above. Here they differ.
+    const over = { K: 2, gm_id_m: 6, gm_id_c: 10, L_c: 0.5e-6, V_out: 1.2 };
+    const off = runSheet(withParams(doc, over), table);
+    const b = branch(off);
+    expect(b.mirror.L).toBe(1e-6);
+    expect(b.casc.L).toBe(over.L_c);
+    expect(relErr(off.values.out__W / off.values.ref__W, over.K)).toBeLessThan(1e-9);
+    expect(relErr(off.values.W / off.values.ref_casc__W, over.K)).toBeLessThan(1e-9);
+    // The same node identity and the same series connection.
+    expect(relErr(b.node, b.vRef + b.vCasc - b.casc.vgs)).toBeLessThan(1e-6);
+    expect(relErr(b.casc.id, b.mirror.id)).toBeLessThan(1e-12);
+    expect(b.mirror.bias?.vds).toBeCloseTo(b.node, 12);
+    expect(b.casc.bias?.vsb).toBeCloseTo(b.node, 12);
+    expect(b.casc.bias?.vds).toBeCloseTo(over.V_out - b.node, 12);
+    // The output current through the MIRROR device's Early voltage, the cascode's r_o through
+    // its own, and the floor from the node.
+    const id = (over.K * I_IN * (VA + b.node)) / (VA + b.vRef);
+    expect(relErr(off.values.I_out, id)).toBeLessThan(5e-5);
+    expect(relErr(off.values.gds, gdsOf(id, over.L_c, over.V_out - b.node))).toBeLessThan(1e-4);
+    const vdsat = off.values.ref_casc__vdsat + (1 + BODY_FACTOR) * (b.vRef - b.node);
+    const floor = off.checks.find((c) => c.id === 'compliance')!;
+    expect(Math.abs(floor.rhsValue - (b.node + vdsat + off.values.v_margin))).toBeLessThan(1e-6);
+    // The level the sheet's own check holds against the ceiling is the cascode's.
+    expect(off.checks.find((c) => c.id === 'feasible-inversion')!.lhsValue).toBe(over.gm_id_c);
   });
 });
 

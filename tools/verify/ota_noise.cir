@@ -3,10 +3,11 @@
 * Same circuit, widths and output servo as ota_op.cir, which explains all three. The sheet's
 * noise row is thermal only, from the tables' gamma model (4kT*gamma/gm with gamma = 1):
 *
-*   vn_in 22.67 nV/rtHz = sqrt(2*12.44^2 + 10.15^2 + 10.07^2)
-*     12.44  each pair device (in__vnth_m)
-*     10.15  load diode side, referred by its gm over the pair's (ldr__vnth_m * ldr__gm / in__gm)
-*     10.07  load output side, referred the same way
+*   vn_in 22.57 nV/rtHz = sqrt(12.56^2 + 12.31^2 + 10.05^2 + 9.97^2)
+*     12.56  pair, diode side (inr__vnth_m)
+*     12.31  pair, output side (in__vnth_m)
+*     10.05  load diode side, referred by its gm over the pair's (ldr__vnth_m * ldr__gm / gm_pair)
+*      9.97  load output side, referred the same way
 *
 * The simulated total also carries flicker noise, which the sheet does not model. ngspice
 * reports each device's flicker part separately, so this deck splits the total into a flicker
@@ -23,10 +24,10 @@ VDD  vdd  0    1.8
 IB   vdd  nb   20u
 XMB  nb   nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
 XMT  tail nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
-XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
-XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7696
-XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
-XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5268
+XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.8066
+XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.8066
+XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.4740
+XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.4740
 CL   out  0    2p
 
 * inputs: v(inp) - v(inn) = VID + v(os), centred on CM_dc

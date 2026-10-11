@@ -694,18 +694,22 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     };
   };
 
-  it('5T OTA: the tail node is solved; the supply, the common mode, its range ends and the output level are stated', () => {
+  it('5T OTA: the tail node and the split of the tail current are solved; the supply, the common mode, its range ends and the output level are stated', () => {
     // The design constraint moves V_tail until the produced common mode equals CM_dc; the range
     // ends substitute CM_lo and CM_hi for CM_dc. The output is a high-impedance node that only the
     // feedback the application closes around the amplifier holds, and that loop is not on the
     // sheet, so V_out_dc is stated like the supply — nothing on this sheet is assumed. The two
     // mirrors add no voltage to state: the tail device's gate is the bias reference's own diode
     // drop and the load's output side sits on its diode side's gate, both read off devices that
-    // are on the sheet.
+    // are on the sheet. Nor does the pair's diode-side transistor: its gate-source voltage is its
+    // partner's and its drain is the load's diode node, one load gate-source voltage below the
+    // supply. The share of the tail current the output-side pair transistor carries is the
+    // second solved value: it is substituted until the pair's two currents add up to what the
+    // tail delivers.
     expect(classes('otas/five-transistor-ota.json')).toEqual({
       independent: ['CM_dc', 'CM_hi', 'CM_lo', 'VDD', 'V_out_dc'],
       assumed: [],
-      solved: ['V_tail'],
+      solved: ['V_tail', 'out_share'],
     });
   });
 
@@ -838,6 +842,23 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
     // reference's gate voltage — a mirror's shared gate, followed like any other link.
     expect(forwardHits(ota, 'I_tail')).toContain('bias.id:I_b');
     expect(forwardHits(ota, 'I_tail')).toContain('tail.vgs:vgs_t');
+    // The pair's two transistors hang from different nodes. The diode-side one has its drain on
+    // the load's diode node, one load gate-source voltage below the supply, so the supply reaches
+    // it there. Its current then decides how the tail current splits, and the split is what the
+    // output-side transistor and the load's diode side are each handed — so the supply reaches
+    // both of those currents through the solved share and nowhere else.
+    expect(forwardHits(ota, 'VDD')).toEqual(
+      expect.arrayContaining(['inr.vds:vds_i', 'in.id:I_side', 'ldr.id:I_side']),
+    );
+    expect(forwardHits(ota, 'out_share')).toEqual(
+      expect.arrayContaining(['in.id:I_side', 'ldr.id:I_side']),
+    );
+    // The diode-side one follows its partner through the gate-source voltage that partner
+    // publishes, so the inversion level typed for the output-side one reaches both. (The width
+    // it copies is hardware, which this walk holds and so never reports as moved.)
+    expect(forwardHits(ota, 'gm_id_in')).toEqual(
+      expect.arrayContaining(['in.gm_id:gm_id_i', 'inr.vgs:vgs_i']),
+    );
     // CM_lo is read by nothing but the cm-lo range end's `set`, so only the range-end closure
     // reaches it.
     expect(forwardHits(ota, 'CM_lo')).toEqual([]);

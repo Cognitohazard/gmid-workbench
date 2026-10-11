@@ -10,7 +10,15 @@
 // floor reports the floor as if it were the design's answer.
 
 import { describe, it, expect } from 'vitest';
-import { libraryEntries, loadLibrary, sheet, table, REFS } from '../sheet/library.fixtures';
+import {
+  libraryEntries,
+  loadLibrary,
+  sheet,
+  table,
+  va,
+  REFS,
+  VGS_GMID10_L05,
+} from '../sheet/library.fixtures';
 import { generateDemoDevice } from '../demo';
 import {
   runSheet,
@@ -194,8 +202,8 @@ describe('spec application', () => {
 
 describe('the search', () => {
   // The five-transistor OTA is INFEASIBLE at its shipped defaults on the demo device, binding
-  // `offset-spec` at -70.5%: the Pelgrom offset of the input pair and the mirror load together
-  // comes out at 17.05 mV against a 10 mV target. `vos_target` is the only relaxing field here,
+  // `offset-spec` at -73.9%: the Pelgrom offset of the input pair and the mirror load together
+  // comes out at 17.39 mV against a 10 mV target. `vos_target` is the only relaxing field here,
   // and this spec asks 40 mV. Every other field of the spec is at or below the sheet's own
   // default, so nothing else in it can be doing the work.
   const RELAXED: PickerSpec = {
@@ -222,10 +230,10 @@ describe('the search', () => {
 
   // The same sheet at the tight spec — which is its shipped default — is the repair case. The
   // search ranks the knobs against `offset-spec` and moves two of them. The input pair goes
-  // further into weak inversion, to the top of its slider, which leaves the offset 0.45 % over
-  // its target (10.045 mV against 10 mV); a longer load mirror then brings it to 7.77 mV and
+  // further into weak inversion, to the top of its slider, which leaves the offset 2.6 % over
+  // its target (10.255 mV against 10 mV); a longer load mirror then brings it to 7.93 mV and
   // closes the sheet. Stage 2 backs the programmed current off from there until the offset
-  // target binds again, at 12.1 µA. Pinned after the algorithm was frozen; the assertion below
+  // target binds again, at 12.7 µA. Pinned after the algorithm was frozen; the assertion below
   // re-evaluates that point standalone rather than trusting the search's own verdict.
   it('repairs the five-transistor OTA at its tight spec, and the endpoint stands alone', () => {
     const c = pick('otas/five-transistor-ota.json', {
@@ -242,7 +250,7 @@ describe('the search', () => {
     expect(c.verdict).toBe('closed');
     expect(c.specCoverage).toEqual({ consumed: 9, supplied: 9 });
     expect(Object.keys(c.knobs)).toEqual(['I_tail', 'gm_id_in', 'L_ld']);
-    expect(c.knobs.I_tail).toBeCloseTo(1.2125e-5, 12);
+    expect(c.knobs.I_tail).toBeCloseTo(1.26875e-5, 12);
     expect(c.knobs.gm_id_in).toBe(18);
     // A scan sample: a third of the way up the length slider, 0.787 µm.
     expect(c.knobs.L_ld).toBeCloseTo(0.18e-6 + (2e-6 - 0.18e-6) / 3, 15);
@@ -641,10 +649,27 @@ describe('the current back-off', () => {
   it('scales all current knobs by a single factor', () => {
     const c = pick('multistage/two-stage-miller-ota.json', {});
     expect(c.verdict).toBe('closed');
-    expect(c.knobs.I1).toBeCloseTo(1.5e-5, 12);
-    expect(c.knobs.I2).toBeCloseTo(4.5e-5, 12);
+    // What stops the back-off is the stage-1 slew limit: the tail current over Cc against
+    // 5 V/us, which the shipped 20 uA would meet at a scale of 0.75 if the tail delivered all
+    // of it. The tail is a mirror output, and on this model it delivers
+    // (VA + V_tail)/(VA + vgs of its diode reference) of what the reference is programmed to,
+    // so the limit sits at 0.75 over that fraction, about 0.815. The six probes from the
+    // sliders' floor (0.6, 0.8, 0.9, 0.85, 0.825, 0.8125) leave 0.825 as the last feasible one.
+    const at = runSheet(
+      withParams(sheet('multistage/two-stage-miller-ota.json'), c.knobs),
+      table,
+      undefined,
+      REFS,
+    );
+    const delivered = at.values.tail__id / c.knobs.I1;
+    const VA = va(0.5e-6);
+    expect(delivered).toBeCloseTo((VA + at.values.V_tail) / (VA + VGS_GMID10_L05), 3);
+    expect(0.75 / delivered).toBeGreaterThan(0.8125);
+    expect(0.75 / delivered).toBeLessThanOrEqual(0.825);
+    expect(c.knobs.I1).toBeCloseTo(0.825 * 2e-5, 12);
+    expect(c.knobs.I2).toBeCloseTo(0.825 * 6e-5, 12);
     expect(c.knobs.I2 / c.knobs.I1).toBeCloseTo(3, 9); // the shipped 6e-5 : 2e-5
-    expect(c.I_q).toBeCloseTo(6e-5, 12); // I1 + I2, down from 8e-5
+    expect(c.I_q).toBeCloseTo(at.values.tail__id + c.knobs.I2, 12); // what the tail delivers, plus I2
     expect(c.atRangeFloor).toEqual([]);
   });
 

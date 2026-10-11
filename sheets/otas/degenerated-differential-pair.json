@@ -1,6 +1,6 @@
 {
   "title": "Degenerated differential pair",
-  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. Entered from the COMMON MODE: the device's source node $V_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — is the one free bias variable, pinned so the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. Both bias coordinates then follow outright ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), and the body effect is charged in full rather than only the resistor's few tens of millivolts. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
+  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The two resistors meet at the tail node, and the tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and each side of the pair carries half of what the tail delivers there. Entered from the COMMON MODE: the tail node $V_{tail}$ is the one free bias variable, solved so that the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. The device's source node sits one resistor drop above the tail node, $V_s = V_{tail} + I_D*R_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — and both bias coordinates follow from it ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), so the body effect is charged in full rather than only the resistor's few tens of millivolts. The resistor drop comes out of the tail device's drain-source voltage, so the low end of the common-mode range is where that device leaves saturation, and a check says so. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -32,7 +32,7 @@
       "value": 35e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 32.5 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model estimate — a budget that only clears the model is not a budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm it is most of the modelled power, and the row lands near 25 nV/rtHz"
+      "note": "input-referred thermal density budget, set above the 32.5 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model estimate — a budget that only clears the model is not a budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm it is most of the modelled power, and the row lands near 28 nV/rtHz"
     },
     {
       "name": "vos_target",
@@ -50,10 +50,10 @@
     },
     {
       "name": "CM_lo",
-      "value": 0.9,
+      "value": 1.05,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.85-1.32 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 1.03-1.31 V on sky130 tt at the shipped choices). The low end is where the tail node falls under about 0.2 V: the tail device then delivers less, the resistor drop shrinks, and the linear-range target is the first to go. The range end checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -66,12 +66,12 @@
     },
     {
       "name": "CM_dc",
-      "value": 1.0,
+      "value": 1.15,
       "min": 0.7,
       "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the source node so the sheet sits exactly here; sweep it to trace the common-mode axis",
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis",
       "class": "independent"
     },
     {
@@ -83,24 +83,25 @@
       "class": "independent"
     },
     {
-      "name": "V_s",
-      "value": 0.35,
-      "min": 0.1,
-      "max": 0.8,
+      "name": "V_tail",
+      "value": 0.25,
+      "min": 0.05,
+      "max": 0.7,
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the input device's source node — its full elevation above the bulk, tail lift plus the resistor drop. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc"
+      "note": "the tail node — the tail device's drain, where the two degeneration resistors meet. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. The input device's source sits one resistor drop above it. The bracket reaches below the tail device's saturation voltage on purpose: a common mode that leaves the tail too little drain-source voltage then lands and fails the tail-saturated check, where a higher floor would leave the question unanswered"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
     {
       "name": "I_tail",
-      "value": 20e-6,
+      "value": 22e-6,
       "min": 2e-6,
       "max": 200e-6,
       "unit": "A",
-      "role": "choice"
+      "role": "choice",
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the resistor drop, slew rate, linear range and supply current are computed from what is delivered, not from this number"
     },
     {
       "name": "R_s",
@@ -120,18 +121,110 @@
       "role": "choice",
       "note": "input-pair inversion; high gm/ID makes degeneration more effective (larger (gm + gmb)*R_s)"
     },
-    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
+    {
+      "name": "gm_id_tail",
+      "value": 14,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the bias reference, which the tail device inherits through the shared gate: higher V* costs CM-low headroom. Set as weak as the pair's, because the resistor drop is taken out of the tail device's drain-source voltage"
+    },
+    {
+      "name": "L_in",
+      "value": 2e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "input-pair length. Long, because the gain is taken into a fixed load conductance and the degeneration has already divided the transconductance: the device's own output conductance has to stay well under the load's for the gain target to hold"
+    },
+    {
+      "name": "L_tail",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
+    }
   ],
   "blocks": [
+    {
+      "name": "bias",
+      "doc": {
+        "title": "Tail bias reference",
+        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "polarity": "n",
+        "params": [
+          { "name": "I_b", "value": 22e-6, "unit": "A", "role": "spec" },
+          { "name": "L_b", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_b", "value": 14, "unit": "1/V", "role": "choice" }
+        ],
+        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "diode": true },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_b",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["W", "vgs"]
+      },
+      "params": {
+        "I_b": "I_tail",
+        "L_b": "L_tail",
+        "gm_id_b": "gm_id_tail"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what sets the low end of the usable common-mode range.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_t",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width — a 1:1 copy"
+          },
+          {
+            "name": "vgs_t",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "vds_t", "value": 0.25, "unit": "V", "role": "spec", "note": "the tail node" }
+        ],
+        "givens": { "L": "L_t", "W": "W_t", "vgs": "vgs_t", "vds": "vds_t" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "W_t": "bias__W",
+        "vgs_t": "bias__vgs",
+        "L_t": "L_tail",
+        "vds_t": "V_tail"
+      }
+    },
     {
       "name": "in",
       "doc": {
         "title": "Input-pair device (degenerated)",
-        "description": "Half-circuit input device at half the tail current, with R_s in its source. Its source node V_s is the sheet's one free bias variable: vsb = V_s (the FULL elevation above the bulk, not just the resistor lift) and vds = V_out_dc - V_s.",
+        "description": "Half-circuit input device, carrying half of what the tail delivers, with R_s between its source and the tail node. Its source node V_s sits that current's drop across R_s above the tail node: vsb = V_s (the FULL elevation above the bulk, not just the resistor lift) and vds = V_out_dc - V_s.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
-          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "L_i", "value": 2e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_i", "value": 14, "unit": "1/V", "role": "choice" },
           { "name": "vds_i", "value": 0.55, "unit": "V", "role": "spec" },
           {
@@ -162,20 +255,26 @@
         "provides": ["gm", "gmb", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "tail__id/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
-        "vds_i": "V_out_dc - V_s",
-        "vsb_i": "V_s"
+        "vds_i": "V_out_dc - V_tail - (tail__id/2)*R_s",
+        "vsb_i": "V_tail + (tail__id/2)*R_s"
       }
     }
   ],
   "equations": [
     {
+      "name": "V_s",
+      "expr": "V_tail + in__id*R_s",
+      "unit": "V",
+      "note": "the input device's source node — its full elevation above the bulk: the tail node plus the drop the device's own current makes across its resistor. It is the device's body bias, and its drain-source voltage is what is left between the drain level and this node"
+    },
+    {
       "name": "CM_in",
       "expr": "V_s + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the source node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the design constraint is a well-posed bisection"
     },
     {
       "name": "n_deg",
@@ -202,12 +301,17 @@
       "note": "conservative: neglects the degeneration boost of the device output resistance"
     },
     { "name": "GBW", "expr": "Gm_eff/(2*pi*CL)", "unit": "Hz" },
-    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "SR",
+      "expr": "tail__id/CL",
+      "unit": "V/s",
+      "note": "the whole tail current steered into the load — the current the tail device delivers, not the number the reference is programmed to"
+    },
     {
       "name": "linrange",
-      "expr": "2/gm_id_in + (I_tail/2)*R_s",
+      "expr": "2/gm_id_in + in__id*R_s",
       "unit": "V",
-      "note": "single-ended linear range ~ V* + I*R_s (V* = 2/(gm/ID))"
+      "note": "single-ended linear range ~ V* + I*R_s (V* = 2/(gm/ID)), with I the current the input device carries — half of what the tail delivers"
     },
     {
       "name": "vos_undeg",
@@ -223,9 +327,15 @@
     },
     {
       "name": "vn_in",
-      "expr": "sqrt(2*(in__vnth_m^2 + 4*k*T*R_s))",
+      "expr": "sqrt(2*(in__vnth_m^2 + 4*k*T*R_s*((in__gm + in__gmb)/in__gm)^2))",
       "unit": "V/sqrt(Hz)",
-      "note": "device density plus the degeneration resistor's 4kT*R_s, both sides of the pair (estimate)"
+      "note": "device density plus the degeneration resistor's 4kT*R_s, both sides of the pair (estimate). The resistor's noise is a voltage in series with the source, and the source drives the channel through gm + gmb, so it refers to the gate through (gm + gmb)/gm, not 1. The device's own term is its gate-referred density as it stands"
+    },
+    {
+      "name": "tail_headroom",
+      "expr": "V_tail - tail__vdsat",
+      "unit": "V",
+      "note": "how far the tail node sits above the tail device's saturation edge — exact here, because the tail node is the variable rather than something inferred from a common mode"
     },
     {
       "name": "cgg_in",
@@ -235,9 +345,9 @@
     },
     {
       "name": "I_q",
-      "expr": "I_tail",
+      "expr": "tail__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the tail is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the current the tail device delivers is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -268,6 +378,14 @@
       "op": ">=",
       "rhs": "0.1",
       "note": "trips when the source node is pushed so high the device runs out of drain-source voltage at the drain DC level"
+    },
+    {
+      "id": "tail-saturated",
+      "kind": "physical",
+      "lhs": "tail_headroom",
+      "op": ">=",
+      "rhs": "0",
+      "note": "below this the tail source drops out of saturation and the bias current collapses; this is the mechanism behind the low end of the common-mode range, and the resistor drop brings it closer"
     },
     {
       "id": "cm-not-below",

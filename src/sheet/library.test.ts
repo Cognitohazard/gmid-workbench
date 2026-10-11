@@ -21,7 +21,7 @@ import { describe, it, expect } from 'vitest';
 import { createEngine } from '../expr';
 import { generateDemoDevice, scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
-import { runSheet, validateSheet, WIRING_TOL } from './index';
+import { runSheet, validateSheet, withParams, WIRING_TOL } from './index';
 import { resolveSheetRefs } from './resolve';
 import {
   clampedIn,
@@ -575,18 +575,57 @@ describe('exemplar goldens: 5T OTA', () => {
   //   tail mirror  (2.5 + 0.444148)/(2.5 + 0.610063) = 0.946652   (reference at vgs(10))
   //   load mirror  (2.5 + 0.9)/(2.5 + 0.668042)      = 1.073218   (diode side at vgs(8), output
   //                                                                side at VDD − V_out_dc)
+  // The pair is the same law once more. Its two transistors are one width on one gate-source
+  // voltage with their bodies on the same tail node, and their drains are different nodes: the
+  // output on one side, the load's diode node — one vgs(8) below the supply — on the other.
+  //   pair         (2.5 + 0.687810)/(2.5 + 0.455852) = 1.078474   (diode side at VDD − vgs(8) −
+  //                                                                V_tail, output side at
+  //                                                                V_out_dc − V_tail)
+  // With the inputs balanced the two pair currents add up to what the tail delivers, so they
+  // split it in that ratio and not in half: the output side takes 1/(1 + 1.078474) = 48.11 %.
+  // The load's diode side is in the diode-side pair transistor's branch and carries its current.
+  //   tail         20 µA × 0.946652                  = 18.933 µA
+  //   pair, output side   18.933 µA × 0.481122       =  9.109 µA
+  //   pair, diode side    18.933 µA × 0.518878       =  9.824 µA   (also the load's diode side)
+  //   load, output side    9.824 µA × 1.073218       = 10.543 µA
   const vTail = sourceNodeUnder(1.1, VGS_GMID12_L05);
   const tailRatio = (va + vTail) / (va + VGS_GMID10_L05);
   const loadRatio = (va + (1.8 - 0.9)) / (va + VGS_GMID8_L05);
-  /** What each side of the pair carries: half of what the tail delivers, 9.467 µA. */
-  const iHalf = (I_TAIL / 2) * tailRatio;
+  const vdsOut = 0.9 - vTail;
+  const vdsDiode = 1.8 - VGS_GMID8_L05 - vTail;
+  const pairRatio = (va + vdsDiode) / (va + vdsOut);
+  const iTail = I_TAIL * tailRatio;
+  /** What the pair's output-side transistor carries. */
+  const iOut = iTail / (1 + pairRatio);
+  /** What the pair's diode-side transistor carries, and the load's diode side with it. */
+  const iDiode = iTail - iOut;
+  // The model's gm/ID does not depend on the drain voltage, so both pair transistors sit at the
+  // gm/ID the output-side one is sized for and each has 12 × its own current. A differential
+  // input sees the two in series: 2·gm_a·gm_b/(gm_a + gm_b), 113.4 µS against 109.3 and 117.9.
+  const gmPair = (2 * (12 * iOut) * (12 * iDiode)) / (12 * iTail);
 
   it('the tail node carries one current and each mirror is one gate wire', () => {
-    // Kirchhoff at the tail node, to the last bit: the pair and the load's diode side are HANDED
-    // the tail's current, halved — none of them is sized against the programmed number.
+    // Only the reference is handed the programmed number. The pair's output side and the load's
+    // diode side are handed the two shares of what the tail delivers, which add up to it.
     expect(block(res, 'bias').id).toBe(I_TAIL);
-    expect(res.values.tail__id).toBe(2 * res.values.in__id);
-    expect(block(res, 'ldr').id).toBe(res.values.in__id);
+    const { tail__id, in__id, inr__id } = res.values;
+    expect(relErr(in__id + block(res, 'ldr').id, tail__id)).toBeLessThan(1e-12);
+    // The share is solved until the diode-side pair transistor, read from the table on its
+    // partner's gate-source voltage, carries the rest: the pair's two currents add up to the
+    // tail current and the load's diode side carries its own pair transistor's. Where the
+    // output-side transistor is sized for its inversion level, both pair currents scale with
+    // its width, so the share the table reads back does not depend on the share that was
+    // tried and the node's current law holds to rounding.
+    expect(relErr(in__id + inr__id, tail__id)).toBeLessThan(1e-12);
+    expect(relErr(block(res, 'ldr').id, inr__id)).toBeLessThan(1e-12);
+    expect(relErr(res.values.out_share, res.values.pair_split)).toBeLessThan(1e-12);
+    // For the same reason the stored value is only a starting guess: from 0.3 or from 0.7 the
+    // split lands where it does from one half.
+    for (const guess of [0.3, 0.7]) {
+      const from = runSheet(withParams(doc, { out_share: guess }), table);
+      expect(relErr(from.values.pair_split, res.values.pair_split)).toBeLessThan(1e-12);
+      expect(relErr(from.values.in__W, res.values.in__W)).toBeLessThan(1e-12);
+    }
     // A 1:1 mirror is the same width on the same gate. The width is passed through untouched;
     // the gate voltage is reported as the table's own vgs coordinate at the point it was read,
     // so two devices on one wire agree to rounding rather than always to the last bit.
@@ -596,84 +635,247 @@ describe('exemplar goldens: 5T OTA', () => {
     expect(relErr(block(res, 'ld').vgs, block(res, 'ldr').vgs)).toBeLessThan(1e-12);
   });
 
+  it('the pair is two transistors of one width on one gate-source voltage, each at its own drain', () => {
+    // The output-side transistor is the sized one. Its partner copies its width and its
+    // gate-source voltage, which is what a matched pair with balanced inputs on a common source
+    // is; the width is passed through untouched and the voltage is the table's own coordinate.
+    expect(block(res, 'inr').W).toBe(block(res, 'in').W);
+    expect(relErr(block(res, 'inr').vgs, block(res, 'in').vgs)).toBeLessThan(1e-12);
+    // Both sources are the tail node, so both bodies see it. The drains are not one node: the
+    // output-side drain is the output, and the diode-side drain is the load's diode node, read
+    // off the load device the run sized.
+    const node = res.values.V_tail;
+    expect(block(res, 'in').bias?.vsb).toBe(node);
+    expect(block(res, 'inr').bias?.vsb).toBe(node);
+    expect(block(res, 'in').bias?.vds).toBeCloseTo(0.9 - node, 12);
+    expect(block(res, 'inr').bias?.vds).toBeCloseTo(1.8 - block(res, 'ldr').vgs - node, 12);
+    // Where the model puts them: 0.456 V and 0.688 V. 1e-3 of either is under a millivolt.
+    expect(relErr(block(res, 'in').bias!.vds, vdsOut)).toBeLessThan(1e-3);
+    expect(relErr(block(res, 'inr').bias!.vds, vdsDiode)).toBeLessThan(1e-3);
+  });
+
   it('each mirror misses its reference by the drain-voltage ratio of the demo model', () => {
     // The tail node (0.444 V) sits below the reference's diode drop (0.610 V), so the tail
     // under-delivers by 1 − 0.946652 = 5.33 %. The output sits 0.9 V below the supply, further
-    // than the load's diode drop (0.668 V), so the output side asks for 7.32 % more than the
-    // half tail current its diode side carries. Compared as errors, the way the mirror golden
-    // above compares its own: 1e-2 of them is 1.7 mV and 2.3 mV of drain-voltage difference.
+    // than the load's diode drop (0.668 V), so the output side asks for 7.32 % more than its
+    // diode side carries. Compared as errors, the way the mirror golden above compares its
+    // own: 1e-2 of them is 1.7 mV and 2.3 mV of drain-voltage difference.
     const tailErr = 1 - res.values.tail__id / I_TAIL;
-    const loadErr = res.values.ld__id / (res.values.tail__id / 2) - 1;
+    const loadErr = res.values.ld__id / block(res, 'ldr').id - 1;
     expect(relErr(tailErr, 1 - tailRatio)).toBeLessThan(1e-2);
     expect(relErr(loadErr, loadRatio - 1)).toBeLessThan(1e-2);
-    // Referred to the input through the pair's gm = (gm/ID)·I, the half current cancels: the
-    // systematic offset is the load mirror's error over the pair's gm/ID, 0.073218/12 = 6.10 mV.
-    expect(relErr(res.values.vos_sys, (loadRatio - 1) / 12)).toBeLessThan(1e-2);
+  });
+
+  it('the pair transistors differ by the same ratio, so the tail current does not split in half', () => {
+    // The load's diode node (1.8 − 0.668 = 1.132 V) sits above the output (0.9 V), so the
+    // diode-side transistor has the larger drain-source voltage and carries 7.85 % more than
+    // its partner. 1e-2 of that error is 2.3 mV of drain voltage.
+    const pairErr = res.values.inr__id / res.values.in__id - 1;
+    expect(relErr(pairErr, pairRatio - 1)).toBeLessThan(1e-2);
+    // The two add up to the tail current, so the output side's share is 1/(1 + 1.078474). It is
+    // compared as its distance from one half, 0.018878 — the part the drains decide.
+    expect(relErr(0.5 - res.values.pair_split, 0.5 - 1 / (1 + pairRatio))).toBeLessThan(1e-2);
+    // Each device is then sized for the share it carries: the output-side pair transistor for
+    // 9.109 µA, and the load's diode side for the 9.824 µA its own pair transistor passes.
+    expect(relErr(res.values.in__id, iOut)).toBeLessThan(1e-3);
+    expect(relErr(res.values.inr__id, iDiode)).toBeLessThan(1e-3);
+    expect(relErr(block(res, 'ldr').id, iDiode)).toBeLessThan(1e-3);
+  });
+
+  it('the pair transconductance is its two transistors in series', () => {
+    // 2·gm_a·gm_b/(gm_a + gm_b): what a differential input sees through the common source. The
+    // two transistors carry 9.109 and 9.824 µA at gm/ID 12, so it is 113.4 µS — neither one's
+    // own gm, and 0.14 % under the 113.6 µS that half the tail current would give.
+    const { gm_pair, in__gm, inr__gm } = res.values;
+    expect(relErr(gm_pair, (2 * in__gm * inr__gm) / (in__gm + inr__gm))).toBeLessThan(1e-12);
+    expect(relErr(gm_pair, gmPair)).toBeLessThan(1e-3);
+    expect(gm_pair).toBeGreaterThan(in__gm);
+    expect(gm_pair).toBeLessThan(inr__gm);
+    expect(relErr(in__gm, 12 * iOut)).toBeLessThan(1e-3);
+    // The diode-side transistor's gm is read back off the table between two drain-voltage
+    // nodes, 0.13 % under the 12 × its current the model gives it.
+    expect(relErr(inr__gm, 12 * iDiode)).toBeLessThan(2e-3);
+  });
+
+  it('systematic offset is the current missing at the output over the pair transconductance', () => {
+    // With the inputs balanced the output-side transistor takes 9.109 µA and the mirror returns
+    // loadRatio times the 9.824 µA its diode side carries, 10.543 µA. The output is below the
+    // load's diode node here, so both differences — the pair's and the mirror's — leave the
+    // output node with current it has nowhere to send: 1.434 µA, which is the output-side
+    // current times (1.078474 × 1.073218 − 1). Over the pair's 113.4 µS that is 12.64 mV. The
+    // mirror alone, on an even split, would be 6.10 mV: a sheet that left the pair out is 2.07
+    // times short.
+    const missing = iOut * (pairRatio * loadRatio - 1);
+    expect(relErr(res.values.vos_sys, missing / gmPair)).toBeLessThan(2e-3);
+    const { in__id, ld__id, gm_pair } = res.values;
+    expect(relErr(Math.abs(in__id - ld__id), missing)).toBeLessThan(2e-3);
+    expect(relErr(res.values.vos_sys, Math.abs(in__id - ld__id) / gm_pair)).toBeLessThan(1e-12);
+  });
+
+  it('the offset vanishes and the split is even when the output sits one load vgs below the supply', () => {
+    // There the output is the load's diode node: the pair's two drains are one voltage and so
+    // are the mirror's, so neither pair of devices has anything to differ by. Nothing else on
+    // the sheet reads the output level, so the tail node stays where it was. What is left is
+    // the table's own resolution: the two tied devices are read between drain-voltage nodes and
+    // their partners on a node or along the diode diagonal.
+    const level = runSheet(withParams(doc, { V_out_dc: 1.8 - VGS_GMID8_L05 }), table);
+    expect(level.values.V_tail).toBeCloseTo(res.values.V_tail, 9);
+    expect(Math.abs(level.values.vos_sys)).toBeLessThan(1e-2 * res.values.vos_sys);
+    expect(Math.abs(level.values.pair_split - 0.5)).toBeLessThan(
+      1e-2 * Math.abs(res.values.pair_split - 0.5),
+    );
+    // Past that level both differences change sign together, so they still add, and the
+    // output side takes the larger share. At 1.3 V the output is 0.168 V above the diode node;
+    // the model gives
+    //   pair    (2.5 + 0.687810)/(2.5 + 0.855852) = 0.949926   (diode side over output side)
+    //   mirror  (2.5 + 0.5)/(2.5 + 0.668042)      = 0.946957
+    // so the output side takes 1/(1 + 0.949926) = 51.28 % of the tail current and the output
+    // node is short of that current times (1 − 0.949926 × 0.946957) = 10.05 %.
+    const above = runSheet(withParams(doc, { V_out_dc: 1.3 }), table);
+    const pairAbove = (va + vdsDiode) / (va + (1.3 - vTail));
+    const loadAbove = (va + (1.8 - 1.3)) / (va + VGS_GMID8_L05);
+    const outAbove = iTail / (1 + pairAbove);
+    const gmAbove = (2 * (12 * outAbove) * (12 * (iTail - outAbove))) / (12 * iTail);
+    expect(above.values.pair_split).toBeGreaterThan(0.5);
+    expect(relErr(above.values.pair_split - 0.5, 1 / (1 + pairAbove) - 0.5)).toBeLessThan(1e-2);
+    expect(
+      relErr(above.values.vos_sys, (outAbove * (1 - pairAbove * loadAbove)) / gmAbove),
+    ).toBeLessThan(1e-2);
   });
 
   it('slew rate, GBW and supply current follow from the current the tail delivers', () => {
     // 20 µA × 0.946652 = 18.933 µA — not the 20 µA the reference is programmed to.
-    expect(relErr(res.values.SR, (I_TAIL * tailRatio) / CL)).toBeLessThan(1e-3);
-    // Input gm = (gm/ID)·(half the delivered current) — both supplied in the givens.
-    expect(relErr(res.values.GBW, (12 * iHalf) / (2 * Math.PI * CL))).toBeLessThan(1e-3);
-    // Which current each equation reads, exactly: the tail's own, and the pair's half of it.
+    expect(relErr(res.values.SR, iTail / CL)).toBeLessThan(1e-3);
+    // The bandwidth is the pair's transconductance into the load, 113.4 µS over 2π × 2 pF.
+    expect(relErr(res.values.GBW, gmPair / (2 * Math.PI * CL))).toBeLessThan(1e-3);
+    // Which quantity each equation reads, exactly: the tail's own current, and the pair's
+    // transconductance row.
     expect(relErr(res.values.SR, res.values.tail__id / CL)).toBeLessThan(1e-12);
-    expect(relErr(res.values.GBW, (12 * res.values.in__id) / (2 * Math.PI * CL))).toBeLessThan(
-      1e-9,
-    );
+    expect(relErr(res.values.GBW, res.values.gm_pair / (2 * Math.PI * CL))).toBeLessThan(1e-12);
     // The reference branch is shared bias and is not counted.
     expect(res.values.I_q).toBe(res.values.tail__id);
   });
 
-  it('gain matches the demo model with the two output conductances', () => {
-    // Both conductances are read at the OUTPUT node. The input device carries the half current
-    // at vds = V_out_dc − V_tail, so gds = I/(VA + vds) there. The load's output side copies the
-    // diode side's saturation current I/(1 + vgs(8)/VA) and gds = idSat/VA in the demo model, so
-    // its gds is I/(VA + vgs(8)) — the drain voltage it sits at cancels. The half current then
-    // cancels out of gm/gds as well: Av = 12 / (1/(VA + vds_in) + 1/(VA + vgs(8))) = 18.35,
-    // with vds_in = 0.9 − 0.444148 = 0.455852 V.
-    const vdsIn = 0.9 - vTail;
-    const av = 12 / (1 / (va + vdsIn) + 1 / (va + VGS_GMID8_L05));
-    expect(relErr(res.values.Av, av)).toBeLessThan(1e-3);
-    // Rout is the inverse of that same sum, and the gain reads through it — a name for the
-    // output node, not a second opinion about it.
-    const rout = 1 / (gdsOf(iHalf, L, vdsIn) + gdsOf(iHalf, L, VGS_GMID8_L05));
+  it('gain is the pair transconductance into the two output conductances', () => {
+    // Both conductances are read at the OUTPUT node. The output-side pair transistor carries
+    // 9.109 µA at vds = V_out_dc − V_tail = 0.455852 V, so its gds is I/(VA + vds) there. The
+    // load's output side copies the diode side's saturation current I/(1 + vgs(8)/VA) and
+    // gds = idSat/VA in the demo model, so its gds is the diode side's 9.824 µA over
+    // (VA + vgs(8)) — the drain voltage it sits at cancels.
+    // Rout = 1/(9.109 µA/2.955852 V + 9.824 µA/3.168042 V) = 161.7 kΩ, and the gain is the pair's
+    // 113.4 µS into it, 18.35.
+    const rout = 1 / (gdsOf(iOut, L, vdsOut) + gdsOf(iDiode, L, VGS_GMID8_L05));
     expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-3);
-    expect(relErr(res.values.Av, res.values.in__gm * res.values.Rout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.Av, gmPair * rout)).toBeLessThan(1e-3);
+    // The gain reads through both rows — a name for the output node and a name for the pair,
+    // not second opinions about either.
+    expect(relErr(res.values.Av, res.values.gm_pair * res.values.Rout)).toBeLessThan(1e-12);
+    // The output node's own conductance is the output-side transistor's, whatever its partner
+    // does.
+    const { in__gds, ld__gds } = res.values;
+    expect(relErr(res.values.Rout, 1 / (in__gds + ld__gds))).toBeLessThan(1e-12);
+    expect(relErr(in__gds, gdsOf(iOut, L, vdsOut))).toBeLessThan(1e-3);
   });
 
   it('input capacitance is one input gate, at the width the sizing landed on', () => {
-    // Per input terminal: the pair is a half circuit, so a differential source drives one of
-    // these on each side. cgg = W·L·Cox exactly in the demo model.
+    // Per input terminal: a differential source drives one pair transistor on each side, and
+    // the row is the mean of the two. cgg = W·L·Cox exactly in the demo model, with no bias
+    // dependence, so here the two are one number.
     expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, L))).toBeLessThan(1e-9);
+    const { inr__cgg, in__cgg } = res.values;
+    expect(relErr(res.values.cgg_in, (inr__cgg + in__cgg) / 2)).toBeLessThan(1e-12);
   });
 
-  it('input noise counts both pair and both mirror devices (two-sided)', () => {
-    // Each device contributes 4kTγ·gm of current noise, referred by the pair's gm:
-    // vn² = (4kTγ/gm_in)·(2 + gm_ldr/gm_in + gm_ld/gm_in). The diode side carries the pair's
-    // current at gm/ID 8, so gm_ldr/gm_in = 8/12; the output side is on the same gate at a
-    // higher drain voltage, and gm scales with (VA + vds) exactly as id does, so its ratio is
-    // 8/12 × 1.073218.
-    const vn = vnthM(12 * iHalf) * Math.sqrt(2 + (8 / 12) * (1 + loadRatio));
+  it('input noise counts both pair and both mirror devices, each where it sits', () => {
+    // A pair transistor's noise is in series with its own input, so it enters at its own
+    // density 4kTγ/gm, each at its own gm: 12 × 9.109 µA on the output side and 12 × 9.824 µA
+    // on the diode side. A mirror device's 4kTγ·gm of current noise is a current at the output,
+    // referred through the pair's transconductance: its density times its gm over the pair's.
+    // The load's diode side carries 9.824 µA at gm/ID 8; its output side is on the same gate at
+    // a higher drain voltage, and gm scales with (VA + vds) exactly as id does, so it has
+    // 1.073218 times that. Counting the output-side pair transistor twice instead would read
+    // 1.1 % high, and referring the mirror through that transistor's own gm 1.6 % high.
+    const referred = (gm: number): number => (vnthM(gm) * gm) / gmPair;
+    const vn = Math.hypot(
+      vnthM(12 * iDiode),
+      vnthM(12 * iOut),
+      referred(8 * iDiode),
+      referred(8 * iDiode * loadRatio),
+    );
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
   });
 
-  it('random offset refers the mirror pair through the diode side', () => {
-    // Pelgrom, written out: sigma(vos) of a pair is sqrt(2)·hypot(A_VT, A_beta/(gm/ID))/sqrt(W·L).
-    // The mirror pair's is referred to the input by gm_ldr/gm_in = 8/12 — the diode side's gm,
-    // not the output side's, which is 7.3 % higher and would move this number by 4 %. The widths
-    // are the sizer's answers, read from the result the way the capacitance golden reads its own.
-    const { avt, abeta } = res.values;
+  it('random offset counts each pair transistor and refers the mirror pair through the diode side', () => {
+    // Pelgrom, written out: sigma(vos) of a pair is sqrt(2)·hypot(A_VT, A_beta/(gm/ID))/sqrt(W·L),
+    // and each of its two transistors carries half of that variance at its own gm/ID.
+    // The mirror pair's is a current at the output, referred to the input through the pair's
+    // transconductance by gm_ldr/gm_pair — the diode side's gm, 8 × 9.824 µA, not the output
+    // side's, which is 7.3 % higher and would move this number by 4 %. The widths are the
+    // sizer's answers, read from the result the way the capacitance golden reads its own.
+    const { avt, abeta, in__W, ldr__W, ldr__gm, gm_pair } = res.values;
     const sigma = (W: number, gmId: number): number =>
       (Math.SQRT2 * Math.hypot(avt, abeta / gmId)) / Math.sqrt(W * L);
-    const vos = Math.hypot(sigma(res.values.in__W, 12), (sigma(res.values.ldr__W, 8) * 8) / 12);
-    expect(relErr(res.values.vos, vos)).toBeLessThan(1e-9);
+    // In the model the two pair transistors share a gm/ID as well as a width — it does not
+    // depend on the drain voltage — so the pair's two halves are one figure. The diode-side one
+    // is read back off the table between two drain-voltage nodes, 0.13 % under the 12 it has
+    // in the model; that moves its own term by parts per million and the pair's
+    // transconductance, which the mirror term divides by, by 0.06 %.
+    const model = Math.hypot(sigma(in__W, 12), (sigma(ldr__W, 8) * 8 * iDiode) / gmPair);
+    expect(relErr(res.values.vos, model)).toBeLessThan(1e-3);
+    // At the gm/ID and the transconductances the run reports, the row is exact to rounding.
+    const gmId = (name: string): number => res.values[`${name}__gm`] / res.values[`${name}__id`];
+    const pair = Math.hypot(sigma(in__W, gmId('inr')), sigma(in__W, gmId('in'))) / Math.SQRT2;
+    const mirror = (sigma(ldr__W, 8) * ldr__gm) / gm_pair;
+    expect(relErr(res.values.vos, Math.hypot(pair, mirror))).toBeLessThan(1e-9);
+  });
+
+  it('every row reads the pair where it is about the pair and one transistor where it is about a node', () => {
+    // The demo model cannot tell the pair's two transistors apart in gate capacitance (no bias
+    // dependence at all) or in inversion level (no drain-voltage dependence), so the value
+    // goldens above would pass on a capacitance or a random offset that read one transistor
+    // twice. What each row reads is therefore pinned here as well.
+    const names = (row: string): readonly string[] =>
+      exprNames(doc.equations.find((r) => r.name === row)!.expr);
+    const reads = (row: string, device: string): boolean =>
+      names(row).some((n) => n.startsWith(`${device}__`));
+    // About the pair as a whole: both transistors, each at its own operating point.
+    for (const row of ['pair_split', 'gm_pair', 'vn_in', 'vos', 'cgg_in'])
+      expect([row, reads(row, 'inr'), reads(row, 'in')]).toEqual([row, true, true]);
+    // Through the pair's transconductance: the one row for it, and neither transistor's own gm.
+    for (const row of ['Av', 'GBW', 'vos_sys', 'vn_in'])
+      expect([
+        row,
+        names(row).includes('gm_pair'),
+        names(row).some((n) => /^inr?__gm$/.test(n)),
+      ]).toEqual([row, true, false]);
+    expect(names('vos')).toContain('gm_pair');
+    // About the output node: the output-side transistor and the mirror's output device only.
+    expect([...names('Rout')].sort()).toEqual(['in__gds', 'ld__gds']);
+    expect([...names('vos_sys')].sort()).toEqual(['gm_pair', 'in__id', 'ld__id']);
+  });
+
+  it('the saturation margin watches whichever pair drain has less to spare', () => {
+    // Each transistor is held against its own saturation voltage at its own drain. With the
+    // output at 0.9 V, below the load's diode node (1.132 V), the output side is the one with
+    // less: 0.9 V less the tail node less its saturation voltage.
+    const margin = (r: SheetResult): number =>
+      r.checks.find((c) => c.id === 'input-sat-margin')!.lhsValue!;
+    const { V_tail, in__vdsat, inr__vdsat, ldr__vgs } = res.values;
+    expect(margin(res)).toBeCloseTo(0.9 - V_tail - in__vdsat, 12);
+    // Raise the output past the diode node and the diode side becomes the one that binds; the
+    // output level then drops out of the margin altogether.
+    const raised = runSheet(withParams(doc, { V_out_dc: 1.3 }), table);
+    const v = raised.values;
+    expect(margin(raised)).toBeCloseTo(1.8 - v.ldr__vgs - v.V_tail - v.inr__vdsat, 12);
+    expect(margin(raised)).toBeLessThan(1.3 - v.V_tail - v.in__vdsat);
+    // In the model that is the same margin the default would have had on its diode side.
+    expect(margin(raised)).toBeCloseTo(1.8 - ldr__vgs - V_tail - inr__vdsat, 9);
   });
 
   it('the mirror-node pole is the diode side gm over both mirror gates', () => {
-    // gm_ldr = 8 × the half current; the two mirror devices are one width and one length, so
-    // the node carries twice one gate's W·L·Cox.
-    const fPole = (8 * iHalf) / (2 * Math.PI * 2 * cggOf(res.values.ldr__W, L));
+    // gm_ldr = 8 × the 9.824 µA the diode side carries; the two mirror devices are one width
+    // and one length, so the node carries twice one gate's W·L·Cox.
+    const fPole = (8 * iDiode) / (2 * Math.PI * 2 * cggOf(res.values.ldr__W, L));
     expect(relErr(res.values.f_pole, fPole)).toBeLessThan(1e-3);
   });
 
@@ -750,15 +952,23 @@ describe('exemplar goldens: 5T OTA', () => {
     if (sized.state !== 'evaluated' || held.state !== 'evaluated') return;
     const [s, h] = [sized.result, held.result];
 
-    for (const name of ['bias', 'tail', 'in', 'ldr', 'ld'])
+    for (const name of ['bias', 'tail', 'in', 'ldr', 'inr', 'ld'])
       expect([name, block(h, name).W]).toEqual([name, block(s, name).W]);
     expect(block(h, 'bias').id).toBe(I_TAIL);
     expect(block(h, 'bias').vgs).toBeGreaterThan(block(s, 'bias').vgs);
     expect(relErr(block(h, 'tail').vgs, block(h, 'bias').vgs)).toBeLessThan(1e-12);
     expect(h.values.V_tail).toBeLessThan(s.values.V_tail);
+    // The pair stays one gate-source voltage there: the output-side transistor needs more of it
+    // at half the current density, and its partner is read at whatever that comes to.
+    expect(block(h, 'in').vgs).toBeGreaterThan(block(s, 'in').vgs);
+    expect(relErr(block(h, 'inr').vgs, block(h, 'in').vgs)).toBeLessThan(1e-12);
 
-    expect(h.values.tail__id).toBe(2 * h.values.in__id);
-    expect(block(h, 'ldr').id).toBe(h.values.in__id);
+    // The split is solved again there, on the held widths: the pair's two currents add up to
+    // what the tail delivers at this condition and the load's diode side carries its own pair
+    // transistor's, to the solve's 1e-7.
+    expect(relErr(h.values.in__id + h.values.inr__id, h.values.tail__id)).toBeLessThan(1e-6);
+    expect(relErr(block(h, 'ldr').id, h.values.inr__id)).toBeLessThan(1e-6);
+    expect(relErr(h.values.out_share, h.values.pair_split)).toBeLessThan(1e-6);
     expect(h.values.tail__id).toBeLessThan(s.values.tail__id);
     const ratio = (va + h.values.V_tail) / (va + block(h, 'bias').vgs);
     expect(relErr(1 - h.values.tail__id / I_TAIL, 1 - ratio)).toBeLessThan(1e-2);

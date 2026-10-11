@@ -1,6 +1,6 @@
 {
   "title": "Two-stage OTA, cascode compensation",
-  "description": "The Ahuja (cascode) variant of the two-stage Miller OTA: the compensation cap $C_c$ returns to a low-impedance cascode node instead of directly across the second stage. Routing the compensation current through the common-gate cascode blocks the feedforward path, so the right-half-plane zero that plagues plain Miller compensation is removed and the pole-splitting is better damped — for the same GBW the phase margin comes almost entirely from the second pole. The stage structure mirrors the plain Miller OTA (stage-1 input pair + mirror load, stage-2 common source + load); the added cascode device carries the stage-1 branch current and provides the node $C_c$ returns through. The stage-1 mirror load is diode-bound: at DC balance its output side sits at exactly the diode drop (the zero-systematic-offset condition), so the stage-1 output DC is $VDD - |V_{GS,ld1}|$ by construction rather than a number to retune. Entered from the COMMON MODE like the 5T: the input pair's tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$. The pole and phase-margin rows are ESTIMATE-grade small-signal approximations; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
+  "description": "The Ahuja (cascode) variant of the two-stage Miller OTA: the compensation cap $C_c$ returns to a low-impedance cascode node instead of directly across the second stage. Routing the compensation current through the common-gate cascode blocks the feedforward path, so the right-half-plane zero that plagues plain Miller compensation is removed and the pole-splitting is better damped — for the same GBW the phase margin comes almost entirely from the second pole. The stage structure mirrors the plain Miller OTA (stage-1 input pair + mirror load, stage-2 common source + load); the added cascode devices carry the stage-1 branch currents, and the one on the output side provides the node $C_c$ returns through. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply, and the cascode and the input device stack under that node. On the output side the mirror's output device and the cascode share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. Each output-side device is tied to its diode-side partner: the mirror's output device and the input device take their partner's width and gate-source voltage and carry what the table gives at their own drain voltage, and the cascode takes its partner's width and gate. The node under the output-side cascode is the one thing that tie leaves open, and it is solved: it sits where that cascode, carrying the current of the input device below it, needs the gate voltage the two cascodes share. The two sides then carry different currents wherever the two levels differ, and the systematic-offset row reports what that costs at the input. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$. The pole and phase-margin rows are ESTIMATE-grade small-signal approximations; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -64,7 +64,7 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "stage-1 tail current"
+      "note": "stage-1 tail current. No tail device is on this sheet, so its half is typed into exactly one device, the mirror's diode-side device, and the cascode and the input device in that branch read that device's current"
     },
     {
       "name": "I2",
@@ -82,7 +82,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "input-pair inversion"
+      "note": "input-pair inversion, set on the diode-side device; the output-side device shares its gate-source voltage and its width"
     },
     {
       "name": "gm_id_ld1",
@@ -91,7 +91,7 @@
       "max": 14,
       "unit": "1/V",
       "role": "choice",
-      "note": "stage-1 mirror-load inversion"
+      "note": "stage-1 mirror-load inversion, set on the diode side and inherited by the output side through the shared gate"
     },
     {
       "name": "gm_id_casc",
@@ -100,7 +100,7 @@
       "max": 16,
       "unit": "1/V",
       "role": "choice",
-      "note": "cascode device inversion"
+      "note": "cascode device inversion, set on the diode-side cascode; the output-side cascode takes its width and its gate"
     },
     {
       "name": "gm_id_s2",
@@ -163,8 +163,21 @@
       "max": 1.0,
       "unit": "V",
       "role": "choice",
-      "note": "cascode node vds (the low-impedance node Cc returns through). Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
-      "hold": "V1 - V_casc + casc__vgs"
+      "note": "drain-source voltage of the diode-side cascode, whose drain is the mirror node. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
+      "hold": "V_mir - V_casc + casc__vgs"
+    },
+    {
+      "name": "V_casco",
+      "value": 0.5,
+      "min": 0.1,
+      "max": 0.7,
+      "unit": "V",
+      "role": "choice",
+      "designConstraint": {
+        "lhs": "V1 - V_casco + casco__vgs",
+        "rhs": "V_mir - V_casc + casc__vgs"
+      },
+      "note": "drain-source voltage of the output-side cascode, whose drain is the stage-1 output and whose source is the low-impedance node Cc returns through. Solved rather than set: the two cascodes share one gate, so this is bisected between min and max (the BRACKET) until the output-side cascode's gate voltage equals the diode-side cascode's. Both bracket ends must size, so the max has to leave the input device under this cascode a positive drain-source voltage"
     },
     {
       "name": "out_sign",
@@ -172,14 +185,28 @@
       "unit": "1",
       "role": "spec",
       "note": "vds sign of the stage-2 device table: +1 N-style, -1 signed-PMOS"
+    },
+    {
+      "name": "ld1o_sign",
+      "value": 1,
+      "unit": "1",
+      "role": "spec",
+      "note": "vds sign of the table the stage-1 mirror's output device reads: +1 for an N-style axis, -1 for a signed-PMOS axis. The diode side needs none — its drain follows its own gate in whichever convention its table uses. Read both sides of the mirror from the same table: the gate voltage they share is passed in that table's convention"
+    },
+    {
+      "name": "vos_sys_target",
+      "value": 1e-3,
+      "unit": "V",
+      "role": "spec",
+      "note": "systematic input offset budget. The offset is set by how far the second stage's gate-source voltage sits from the stage-1 mirror's diode drop, referred to the input through the first-stage gain, so this is the budget for leaving the two unequal: 50 mV between them at a first-stage gain of 50 is 1 mV"
     }
   ],
   "blocks": [
     {
       "name": "ld1",
       "doc": {
-        "title": "Stage-1 mirror-load device",
-        "description": "One side of the stage-1 mirror load at half the tail current; its diode drop sets the stage-1 output DC and its output conductance loads the first stage.",
+        "title": "Stage-1 mirror-load device, diode side",
+        "description": "The diode-connected side of the stage-1 current-mirror load at half the tail current — the one first-stage device whose current is typed. Its drain is its gate, so it sits one $V_{GS}$ below the supply whatever the stage-1 output does. That gate is the mirror node: this device's width and gate voltage are what the output side copies.",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -197,15 +224,15 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "id"]
+        "provides": ["gm", "vgs", "vdsat", "id", "W"]
       },
       "params": { "Ix": "I1/2", "Lx": "L_ld1", "gx": "gm_id_ld1" }
     },
     {
       "name": "in",
       "doc": {
-        "title": "Stage-1 input-pair device",
-        "description": "Half-circuit input device at half the tail current. Its source sits at the tail node — that is its body bias — and its drain sits one compensation-cascode drop BELOW the stage-1 output (the cascode is in series in this branch), so its drain-source voltage is what is left after both the mirror diode drop and V_casc.",
+        "title": "Stage-1 input-pair device, diode side",
+        "description": "The input device on the mirror's diode side, in one branch with the diode-connected mirror device and carrying that device's current. Its source sits at the tail node — that is its body bias — and its drain sits one cascode drop BELOW the mirror node (the cascode is in series in this branch), so its drain-source voltage is what is left after both the mirror diode drop and V_casc. Its width and its gate-source voltage are what the output-side device shares.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -225,7 +252,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
+        "provides": ["gm", "vgs", "vth", "vdsat", "vnth_m", "cgg", "W", "id"]
       },
       "params": {
         "Ix": "ld1__id",
@@ -238,8 +265,8 @@
     {
       "name": "casc",
       "doc": {
-        "title": "Compensation cascode device",
-        "description": "The common-gate cascode carrying the stage-1 branch current; the compensation cap returns to its low-impedance source, so the feedforward path (and the RHP zero) is blocked.",
+        "title": "Cascode device, diode side",
+        "description": "The common-gate cascode in the diode-side branch, between the input device and the mirror node, carrying that branch's current. It is sized here for its inversion level; its width and its gate voltage are what the output-side cascode shares.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -271,7 +298,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "vdsat", "vgs"]
+        "provides": ["gm", "vdsat", "vgs", "W"]
       },
       "params": {
         "Ix": "ld1__id",
@@ -315,6 +342,136 @@
       "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" }
     },
     {
+      "name": "ld1o",
+      "doc": {
+        "title": "Stage-1 mirror-load device, output side",
+        "description": "The output side of the stage-1 mirror load, on the diode side's gate at the diode side's width. Its drain is the stage-1 output, and that node is the second stage's gate, so this device sits one second-stage $V_{GS}$ below the supply rather than one diode drop. Its current is read off the table at that drain voltage rather than typed: wherever the two levels differ it is not the diode side's current, and the difference is the larger part of the systematic offset the sheet reports. Its output conductance loads the first-stage gain.",
+        "polarity": "p",
+        "params": [
+          {
+            "name": "Wx",
+            "value": 0.3e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the diode side's width — a 1:1 copy"
+          },
+          {
+            "name": "vgsx",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "the diode side's gate voltage — the mirror node the two share, in the sign convention of the diode side's table"
+          },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.57,
+            "unit": "V",
+            "role": "spec",
+            "note": "the supply down to the stage-1 output, signed to this table's axis convention"
+          }
+        ],
+        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "id"]
+      },
+      "params": {
+        "Wx": "ld1__W",
+        "vgsx": "ld1__vgs",
+        "Lx": "L_ld1",
+        "vx": "ld1o_sign*abs(s2__vgs)"
+      }
+    },
+    {
+      "name": "ino",
+      "doc": {
+        "title": "Stage-1 input-pair device, output side",
+        "description": "The input device on the stage-1 output side. At balance the pair has one gate drive and one source, so this device takes the diode-side device's gate-source voltage and, the pair being matched, its width. Its drain is the source of the output-side cascode, which holds it within a few millivolts of the diode-side device's drain. Its current is read off the table at that drain voltage rather than typed.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "Wx",
+            "value": 0.9e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the diode-side device's width — the pair is matched"
+          },
+          {
+            "name": "vgsx",
+            "value": 0.64,
+            "unit": "V",
+            "role": "spec",
+            "note": "the diode-side device's gate-source voltage — one gate drive at balance, one source"
+          },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.37,
+            "unit": "V",
+            "role": "spec",
+            "note": "from the output-side cascode's source down to the tail node"
+          },
+          { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
+        ],
+        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "Wx": "in__W",
+        "vgsx": "in__vgs",
+        "Lx": "L_in",
+        "vx": "VDD - abs(s2__vgs) - V_casco - V_tail",
+        "vsbx": "V_tail"
+      }
+    },
+    {
+      "name": "casco",
+      "doc": {
+        "title": "Compensation cascode device, output side",
+        "description": "The common-gate cascode in the output-side branch, between the input device and the stage-1 output; the compensation cap returns to its low-impedance source, so the feedforward path (and the RHP zero) is blocked. It is the diode-side cascode's width on the diode-side cascode's gate, and it carries the current of the input device below it. Its drain sits at the second stage's gate rather than at the mirror node, so its source settles a little away from the diode-side cascode's — the node this sheet solves.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "Wx",
+            "value": 0.6e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the diode-side cascode's width — the two are matched"
+          },
+          { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.5,
+            "unit": "V",
+            "role": "spec",
+            "note": "from the stage-1 output down to this device's source"
+          },
+          {
+            "name": "vsbx",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "the source stands on the output-side input device's drain node, not the bulk"
+          }
+        ],
+        "givens": { "L": "Lx", "W": "Wx", "id": "Ix", "vds": "vx", "vsb": "vsbx" },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "vdsat", "vgs"]
+      },
+      "params": {
+        "Wx": "casc__W",
+        "Ix": "ino__id",
+        "Lx": "L_casc",
+        "vx": "V_casco",
+        "vsbx": "VDD - abs(s2__vgs) - V_casco"
+      }
+    },
+    {
       "name": "ld2",
       "ref": "multistage/stage2-current-source-load",
       "params": { "Ix": "s2__id", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
@@ -328,16 +485,22 @@
       "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
     },
     {
-      "name": "V1",
+      "name": "V_mir",
       "expr": "VDD - abs(ld1__vgs)",
       "unit": "V",
-      "note": "stage-1 output DC — the mirror diode drop below the supply, by construction rather than retuned: at balance the mirror's output side sits exactly there (also the zero-systematic-offset condition)"
+      "note": "the stage-1 mirror node — the diode side's drain and the gate the two mirror devices share, one diode drop below the supply"
+    },
+    {
+      "name": "V1",
+      "expr": "VDD - abs(s2__vgs)",
+      "unit": "V",
+      "note": "stage-1 output DC. Derived, not typed: this node is the second stage's gate, so it sits one second-stage gate-source voltage below the supply (abs() keeps both table conventions working). It is the drain of the mirror's output device and of the output-side cascode, and it is not the mirror node: the two levels differ by the difference between the second stage's gate-source voltage and the mirror's diode drop"
     },
     {
       "name": "gm1",
-      "expr": "in__gm",
+      "expr": "(in__gm*ld1o__gm/ld1__gm + ino__gm)/2",
       "unit": "S",
-      "note": "stage-1 (input pair) transconductance"
+      "note": "stage-1 transconductance into the stage-1 output node. Each input device turns half the differential input into current: the diode-side half reaches the output through the mirror, whose current gain is its output device's $g_m$ over its diode device's, and the output-side half arrives through its cascode. It is one input device's $g_m$ where the two sides sit at the same levels"
     },
     {
       "name": "gm2",
@@ -347,9 +510,9 @@
     },
     {
       "name": "gm_casc",
-      "expr": "casc__gm",
+      "expr": "casco__gm",
       "unit": "S",
-      "note": "cascode transconductance (sets the impedance of the node Cc returns to)"
+      "note": "transconductance of the output-side cascode, the one Cc returns through (sets the impedance of that node)"
     },
     {
       "name": "GBW",
@@ -383,9 +546,9 @@
     },
     {
       "name": "Av1",
-      "expr": "gm1/(in__gds + ld1__gds)",
+      "expr": "gm1/(ino__gds + ld1o__gds)",
       "unit": "V/V",
-      "note": "stage-1 gain into the input-device and mirror-load output conductances"
+      "note": "stage-1 gain into the output conductances of the pair's output-side device and of the mirror's output device. The cascode above the input device raises the resistance looking down from the stage-1 output; this row does not count that, so it understates the gain"
     },
     {
       "name": "Rout",
@@ -404,6 +567,18 @@
       "expr": "Av1*Av2",
       "unit": "V/V",
       "note": "two-stage DC gain (product of the stage gains)"
+    },
+    {
+      "name": "vos_sys",
+      "expr": "abs(ld1o__id - ino__id)/gm1",
+      "unit": "V",
+      "note": "estimate: input-referred systematic offset. At the stage-1 output the mirror's output device delivers one current and the output-side cascode takes another, the current of the input device below it. The mirror device is tied to its diode-side partner but sits at the second stage's gate voltage instead of the mirror's diode drop; the input device is shielded by its cascode and moves far less. The feedback the application closes around the amplifier holds the output, and with it the second stage's gate, so the current missing at that node has to come from an input imbalance of this size. It is zero when the second stage's gate-source voltage equals the mirror's diode drop — the classic condition that the second-stage device and the mirror devices run at one current density"
+    },
+    {
+      "name": "pair_residual",
+      "expr": "in__id + ino__id - I1",
+      "unit": "A",
+      "note": "what the two input devices carry between them, less the tail current. The diode-side device is handed half the tail current and the output-side device is read at the same gate-source voltage at its own drain voltage, so the two do not add up to the tail current exactly. In the circuit they do: the pair's gate-source voltage settles until the sum is the tail current, which moves each device by about half of this. The sheet reports the difference instead of closing it: the split between the two input devices would have to be solved together with the two cascode nodes, which read those devices' currents, and that is a coupled system. The cascodes keep the two drains within millivolts of each other, so it is small here. No check reads it"
     },
     {
       "name": "cgg2",
@@ -479,23 +654,31 @@
       "lhs": "V_casc",
       "op": ">=",
       "rhs": "casc__vdsat",
-      "note": "the cascode device stays saturated at its node vds"
+      "note": "the diode-side cascode stays saturated at its drain-source voltage"
+    },
+    {
+      "id": "cascode-out-sat",
+      "kind": "physical",
+      "lhs": "V_casco",
+      "op": ">=",
+      "rhs": "casco__vdsat",
+      "note": "the output-side cascode, the one Cc returns through, stays saturated at the drain-source voltage the solve puts it at"
     },
     {
       "id": "input-sat-margin",
       "kind": "advisory",
-      "lhs": "V1 - V_casc - V_tail - in__vdsat",
+      "lhs": "min(V_mir - V_casc - V_tail - in__vdsat, V1 - V_casco - V_tail - ino__vdsat)",
       "op": ">=",
       "rhs": "0.1",
-      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the mirror diode drop — lower gm/ID on the mirror spends less of it"
+      "note": "each input device has what is left under its cascode, and this watches whichever has less room. Trips when the tail node is pushed so high that device runs out of drain-source voltage — lower gm/ID on the mirror spends less of the supply above it"
     },
     {
       "id": "systematic-offset",
       "kind": "advisory",
-      "lhs": "abs(abs(s2__vgs) - abs(ld1__vgs))",
+      "lhs": "vos_sys",
       "op": "<=",
-      "rhs": "0.05",
-      "note": "the stage-2 gate sits at V1 = VDD - |vgs_ld1|, so stage 2 carries its intended current only when its own |vgs| at (I2, gm_id_s2) matches the mirror diode drop — the classic W/L-ratio condition. Retune gm_id_s2 or I2 until these agree, or the second stage sits at a different current than the sheet assumes"
+      "rhs": "vos_sys_target",
+      "note": "the systematic input offset stays inside its budget. The stage-1 output sits at the second stage's gate, V1 = VDD - |vgs_s2|, while the mirror node sits at VDD - |vgs_ld1|, and the offset grows with the distance between the two — the classic W/L-ratio condition. Retune gm_id_s2, gm_id_ld1 or I2 until the two gate-source voltages agree and the offset falls to zero"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"]
