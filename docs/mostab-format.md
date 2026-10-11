@@ -143,15 +143,21 @@ was taken at.
 |-|-|
 | Plotting | Nothing more. Every accepted file plots, whatever it lacks. |
 | Sizing one device | An `l` column, because a device is sized at a length, and the characterization width (`# W:`). |
-| A design sheet that gives a device a drain voltage (`vds`) or connects it as a diode (`diode: true`) | A `vds` sweep. |
-| A design sheet that puts a device's source above its body (`vsb` other than 0) | A `vsb` sweep. |
+| A design sheet, for every device it sizes | Drain-voltage data: a `vds` sweep, or a `vds` column holding the one value the device states. |
+| A design sheet that connects a device as a diode (`diode: true`) | A `vds` sweep. |
+| A design sheet that puts a device's source above its body (`vsb` other than 0) | Body-bias data: a `vsb` sweep, or a `vsb` column holding the one value the device states. |
 
-A design sheet sizes a device only from a table that carries every sweep the device's givens
-use. Where the table does not, that device is **refused** — it is not sized, and the sheet
+A design sheet sizes a device only from a table that can answer for every bias the device's
+givens state. Where the table cannot, that device is **refused** — it is not sized, and the sheet
 says why — so the sheet is not evaluated on that table. It is never sized on the table as it
 stands with a warning beside the numbers: those numbers would belong to a different
 operating point than the one the sheet states. A sheet that does not use the missing sweep
 still runs on the same table.
+
+Every device on a design sheet states its drain voltage — a `vds`, or a diode connection,
+which fixes the drain at the gate — so a design sheet always needs drain-voltage data. A
+device whose givens state neither is not sized, whatever the file holds, and the sheet says
+what to state.
 
 The rule, for each of `vds`, `vsb` and the length that a device's givens state:
 
@@ -165,8 +171,9 @@ The rule, for each of `vds`, `vsb` and the length that a device's givens state:
   tied to the body, `vsb = 0`. A device given `vsb = 0` is sized from it; a device given any
   other body bias is refused.
 - **The file has no `vds` column.** Nothing says what drain voltage it was taken at, and
-  there is no default. A device given a `vds` is refused. A device whose givens state no
-  drain voltage is sized from the table as it is.
+  there is no default. A device given a `vds` is refused, and every device on a sheet states
+  its drain voltage, so no design sheet sizes a device from it. It still plots, and one
+  device can still be sized from it on its own.
 - **A diode-connected device** is read where `vds = vgs`, which needs a `vds` sweep. It is
   refused on a file with no `vds` column and on one with a single `vds` value.
 - **The file has no `l` column.** No device can be sized from it; it plots.
@@ -238,9 +245,9 @@ sweep above is only to keep the example short.)
 
 This file has a `VDS` column with one value and no `VSB` column, so it was taken at
 `vds = 0.9` and is read as `vsb = 0`. It plots, and a design sheet can size a device from it
-when the device's givens state `vds = 0.9` (or no drain voltage) and `vsb = 0` (or no body
-bias). A device given any other drain voltage, a diode-connected device, or a device whose
-source sits above its body needs a file that sweeps `vds` or `vsb` — see
+when the device's givens state `vds = 0.9` and `vsb = 0` (or no body bias). A device given
+any other drain voltage, a diode-connected device, or a device whose source sits above its
+body needs a file that sweeps `vds` or `vsb` — see
 [What each use needs](#what-each-use-needs).
 
 ## Writing an exporter: checklist

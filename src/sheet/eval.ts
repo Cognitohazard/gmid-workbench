@@ -24,6 +24,7 @@ import {
   joinProvide,
   constraintProblem,
   constrained,
+  drainProblem,
   prefixBlockWarning,
   refusedIn,
   stands,
@@ -344,7 +345,9 @@ function sweepRefusal(lacking: readonly Unswept[]): string {
  * DECLARED in the givens wins; a live axis the givens do not declare takes the namespace
  * default when the table characterizes that point, and is reported as ASSUMED so the
  * coordinate is never silently invented; with neither, the axis stays live and sizing fails
- * with guidance. A value declared on an axis the table does not sweep is held against the one
+ * with guidance. The drain voltage has no default and is never left out: givens that state
+ * neither a `vds` nor a diode connection fail the sizing on any table (see drainProblem).
+ * A value declared on an axis the table does not sweep is held against the one
  * point the table was taken at, and sized there or refused (see Unswept); `lacking` arrives
  * holding what the caller already found missing, so one device is refused in one message. An
  * undeclared axis's default is held against that point too, and has to be declared where the
@@ -390,7 +393,7 @@ function applyGivensBias(
   // given a coordinate, because the wiring supplies one that moves with vgs. The applied value
   // then varies across the slice, so `bias.vds` would be a single number that is true nowhere —
   // the report says "diode" instead, which is the whole content of the operating point here.
-  if (b.diode) {
+  if (b.diode === true) {
     const live = t.grid.axes.find((a) => a.name === 'vds' && a.values.length > 1);
     if (live) {
       const fold = diodeTableCached(t);
@@ -412,8 +415,15 @@ function applyGivensBias(
     } else lacking.push(unsweptDiode(t));
   }
 
+  // Every sized device states its drain voltage, whatever its table holds: a table that sweeps
+  // vds cannot be collapsed without one, and a table taken at one drain voltage, or with no vds
+  // column, would size the device from whatever point it happens to hold. So the omission is the
+  // author's to fix on all three, and `vds` is asked for like any other axis left to declare.
+  const drain = drainProblem(b);
+
   for (const axis of BIAS_AXES) {
-    if (axis === 'vds' && b.diode) continue; // the connection already fixed it
+    // The connection already fixed it — or nothing states it, which is said below.
+    if (axis === 'vds' && (b.diode === true || drain)) continue;
     const live = t.grid.axes.find((a) => a.name === axis && a.values.length > 1);
     // BIAS_AXES is namespace-derived (dynamic strings), while SheetGivens's declared bias
     // fields are static — index structurally rather than by the literal key union.
@@ -464,7 +474,7 @@ function applyGivensBias(
       // taken at: a table characterized at vsb = 0.3 on every row does not answer for a source
       // at the body, and reading it as if it did would size the device somewhere nobody wrote
       // down. The author states the value — the same fail-closed path a sweep that leaves the
-      // default out takes above. An axis with no default (vds) claims nothing when left unstated.
+      // default out takes above. (The drain voltage has no default, and never gets here unstated.)
       const own = t.grid.axes.find((a) => a.name === axis);
       const def = AXIS_DEFAULT_BIAS.get(axis);
       if (own && def !== undefined && !takenAt(axis, own.values[0], def)) {
@@ -475,17 +485,19 @@ function applyGivensBias(
   }
   // What the table lacks comes first: no declaration the author could add would make it answer.
   // An axis that still needs declaring rides along as data, so the fix for it stays on offer.
+  const toDeclare = drain ? ['vds', ...needs] : needs;
   if (lacking.length)
     return {
       error: sweepRefusal(lacking),
       unswept: lacking.map((u) => u.axis),
-      ...(needs.length ? { needs } : {}),
+      ...(toDeclare.length ? { needs: toDeclare } : {}),
     };
   if (needs.length) {
     const list = needs.join(', ');
     const swept = needs.length - taken.length;
     return {
       error:
+        (drain ? `${drain}; ` : '') +
         `declare the operating point (${list}) in the givens — ` +
         [
           ...(swept
@@ -496,9 +508,10 @@ function applyGivensBias(
             : []),
           ...taken.map((at) => `the table was taken at ${at}`),
         ].join('; '),
-      needs,
+      needs: toDeclare,
     };
   }
+  if (drain) return { error: drain, needs: toDeclare };
   return { table: t, bias, assumed, clamped, ...(diode ? { diode } : {}) };
 }
 
@@ -594,7 +607,7 @@ function runSizing(
     // The lookup's "extra non-degenerate axis" error is accurate but not actionable in
     // sheet vocabulary — point the author at the fix.
     if (m.includes('non-degenerate axis'))
-      m += ' — declare the operating point in the givens (vds/vsb) to collapse the axis';
+      m += ' — declare the operating point in the givens to collapse the axis';
     // What the failed sizing was read from still matters to whoever asks what the failure
     // means: a lookup that ran out of range on a table slice taken at its hull — a clamped
     // bias axis, a length off the hull, a diode diagonal that leaves the vds range — failed on

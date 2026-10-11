@@ -71,7 +71,10 @@ function soleDevice(tables: DeviceTable[]): CharacterizedDevice {
 
 const key = (corner: string, temp = 27): ConditionKey => ({ corner, temp });
 
-const dev = generateDemoDevice();
+// The demo device characterized over drain voltage. Every sized device states its drain voltage,
+// so the documents below state one — 0.5 V, unless the test is about another — and the
+// conditions they run at carry a vds sweep that holds it.
+const dev = generateDemoDevice({ vds: { min: 0, max: 1, step: 0.5 } });
 
 /** The demo device presented as another condition of the same logical device. */
 function retag(t: DeviceTable, corner: string, temp = 27, meta: TableMeta = {}): DeviceTable {
@@ -589,7 +592,7 @@ describe('runCondition', () => {
       { name: 'L', value: 0.5e-6 },
       { name: 'A_min', value: aMin },
     ],
-    givens: { L: 'L', gm_id: '12', id: '2e-5' },
+    givens: { L: 'L', gm_id: '12', id: '2e-5', vds: '0.5' },
     equations: [{ name: 'A', expr: 'gm_gds' }],
     checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'A_min' }],
   });
@@ -606,7 +609,7 @@ describe('runCondition', () => {
           title: 'tail',
           polarity: 'n',
           params: [],
-          givens: { L: '5e-7', gm_id: '10', id: '2e-5' },
+          givens: { L: '5e-7', gm_id: '10', id: '2e-5', vds: '0.5' },
           equations: [],
           checks: [],
         },
@@ -630,10 +633,12 @@ describe('runCondition', () => {
   });
 
   it('reports the two conditions differently when the characterizations differ', () => {
-    // The demo model's intrinsic gain is closed-form: gm/gds = (gm/ID)·VA with VA = VA_PER_L·L,
-    // so giving gm/ID = 12 at L = 0.5 µm gives 12 × 2.5 V = 30. The slow condition's table carries
-    // a doubled gds column, halving that to 15 at the same sized point — so a 20 V/V spec check
-    // must pass at tt and fail at ss, with no other difference between the runs.
+    // The demo model's intrinsic gain is closed-form. Its drain current and gm rise as
+    // 1 + vds/VA with VA = VA_PER_L·L while gds stays put, so gm/gds = (gm/ID)·(VA + vds):
+    // giving gm/ID = 12 at L = 0.5 µm and vds = 0.5 V gives 12 × (2.5 + 0.5) V = 36. The slow
+    // condition's table carries a doubled gds column, halving that to 18 at the same sized point
+    // — so a 20 V/V spec check must pass at tt and fail at ss, with no other difference between
+    // the runs.
     expect(VA_PER_L * 0.5e-6).toBe(2.5);
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
     const device = soleDevice([retag(dev, 'tt', 27), slow]);
@@ -887,7 +892,7 @@ describe('runCondition', () => {
     const device = twoCorners();
     const derived: SheetDoc = {
       ...gainDoc(0),
-      givens: { L: 'L', gm_id: '12', gm: '2.4e-4' },
+      givens: { L: 'L', gm_id: '12', gm: '2.4e-4', vds: '0.5' },
     };
     const run = (doc: SheetDoc): ConditionRun =>
       runConditions(doc, device, [key('ss', -40)], noDevices, undefined, key('tt'))[1];
@@ -952,7 +957,10 @@ describe('runCondition', () => {
     // characterized gate voltage reaches 20 µA at that width (the table tops out near 12 µA):
     // the built transistor cannot do its job there. That is a verdict about the design.
     const quarter = retag(scaleQuantities(dev, { id: 0.25, gm: 0.25 }), 'ss', -40);
-    const doc: SheetDoc = { ...gainDoc(0), givens: { L: 'L', gm_id: '4', id: '2e-5' } };
+    const doc: SheetDoc = {
+      ...gainDoc(0),
+      givens: { L: 'L', gm_id: '4', id: '2e-5', vds: '0.5' },
+    };
     const [tt, ss] = runConditions(
       doc,
       soleDevice([retag(dev, 'tt', 27), quarter]),
@@ -1115,10 +1123,10 @@ describe('runCondition', () => {
 
   it('asks every condition about the same range, resolved once at the base', () => {
     // The range end is written against the design's own gain: "a floor 10 below A". At the base
-    // A = 30, so that end is Floor = 20. The second condition halves the gain to 15 — and the
-    // end it is asked about is still Floor = 20, the application's number, not 15 - 10 = 5.
-    // There the held design has A = 15 against a floor of 20 and does not comply; re-reading the
-    // expression per condition would have asked 15 >= 5 and passed.
+    // A = 36, so that end is Floor = 26. The second condition halves the gain to 18 — and the
+    // end it is asked about is still Floor = 26, the application's number, not 18 - 10 = 8.
+    // There the held design has A = 18 against a floor of 26 and does not comply; re-reading the
+    // expression per condition would have asked 18 >= 8 and passed.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
     const doc: SheetDoc = {
       ...gainDoc(0),
@@ -1138,9 +1146,9 @@ describe('runCondition', () => {
       key('tt'),
     );
     const at = (r: ConditionRun): number | undefined => r.result?.rangeEnds?.[0].set.Floor;
-    expect(at(tt)).toBeCloseTo(VA_PER_L * 0.5e-6 * 12 - 10, 1); // 30 - 10
+    expect(at(tt)).toBeCloseTo((VA_PER_L * 0.5e-6 + 0.5) * 12 - 10, 1); // 36 - 10
     expect(at(ss)).toBe(at(tt));
-    expect(ss.result?.values.A).toBeCloseTo(15, 1);
+    expect(ss.result?.values.A).toBeCloseTo(18, 1);
     expect(tt.points.map((p) => p.state)).toEqual(['complies', 'complies']);
     expect(ss.points.map((p) => p.state)).toEqual(['complies', 'does-not-comply']);
   });
@@ -1194,8 +1202,8 @@ describe('runCondition', () => {
   });
 
   it('fixes every range end at the base, not only the first', () => {
-    // Two ends, both written against the design's own gain (30 at the base, 15 at the slow
-    // condition). Each must be asked at the base's number at both conditions: 25 and 10.
+    // Two ends, both written against the design's own gain (36 at the base, 18 at the slow
+    // condition). Each must be asked at the base's number at both conditions: 31 and 16.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
     const doc: SheetDoc = {
       ...gainDoc(0),
@@ -1219,11 +1227,11 @@ describe('runCondition', () => {
     );
     const asked = (r: ConditionRun): (number | undefined)[] =>
       (r.result?.rangeEnds ?? []).map((e) => e.set.Floor);
-    expect(asked(runs[0])[0]).toBeCloseTo(25, 1);
-    expect(asked(runs[0])[1]).toBeCloseTo(10, 1);
+    expect(asked(runs[0])[0]).toBeCloseTo(31, 1);
+    expect(asked(runs[0])[1]).toBeCloseTo(16, 1);
     expect(asked(runs[1])).toEqual(asked(runs[0]));
-    // Held at the slow condition the gain is 15: short of the near end's 25, clear of the far
-    // end's 10 — and the aggregate names the end that owns the tightest margin.
+    // Held at the slow condition the gain is 18: short of the near end's 31, clear of the far
+    // end's 16 — and the aggregate names the end that owns the tightest margin.
     expect(runs[1].points.map((p) => [p.rangeEnd, p.state])).toEqual([
       [undefined, 'complies'],
       ['near', 'does-not-comply'],
@@ -1231,13 +1239,13 @@ describe('runCondition', () => {
     ]);
     const worst = aggregateConditionRuns(runs).worst;
     expect(worst).toMatchObject({ id: 'gain', key: key('ss', -40), rangeEnd: 'near' });
-    expect(worst?.marginPct).toBeCloseTo((15 - 25) / 25, 2);
+    expect(worst?.marginPct).toBeCloseTo((18 - 31) / 31, 2);
   });
 
   it('leaves the range ends of a held condition unasked when its own centre does not settle', () => {
-    // A solved node whose relation reads the device: y = A + x must equal 35, with A the
-    // intrinsic gain. At the base A = 30, so x lands at 5. The slow condition halves the gain to
-    // 15, the held design then needs x = 20, and the search range [0, 10] does not contain it:
+    // A solved node whose relation reads the device: y = A + x must equal 41, with A the
+    // intrinsic gain. At the base A = 36, so x lands at 5. The slow condition halves the gain to
+    // 18, the held design then needs x = 23, and the search range [0, 10] does not contain it:
     // the held centre has no answer, and a centre that did not settle leaves nothing to ask at
     // the range end.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
@@ -1246,11 +1254,11 @@ describe('runCondition', () => {
       polarity: 'n',
       params: [
         { name: 'L', value: 0.5e-6 },
-        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: '35' } },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: '41' } },
         { name: 'Spec', value: 1 },
         { name: 'Spec_hi', value: 2 },
       ],
-      givens: { L: 'L', gm_id: '12', id: '2e-5' },
+      givens: { L: 'L', gm_id: '12', id: '2e-5', vds: '0.5' },
       equations: [
         { name: 'A', expr: 'gm_gds' },
         { name: 'y', expr: 'A + x' },
@@ -1315,7 +1323,7 @@ describe('runCondition', () => {
   it('preflights a device named two levels down, and a device named through a reference', () => {
     // Both are blocks the top sheet never mentions: one nested inside an embedded child, one
     // materialized from the library. Neither may reach the engine unpreflighted.
-    const sizing = { L: '5e-7', gm_id: '10', id: '2e-5' };
+    const sizing = { L: '5e-7', gm_id: '10', id: '2e-5', vds: '0.5' };
     const inner: SheetDoc = {
       title: 'inner',
       polarity: 'n',
@@ -1395,7 +1403,7 @@ describe('runCondition', () => {
             title: 'x',
             polarity: 'n',
             params: [],
-            givens: { L: '5e-7', gm_id: '10', id: '2e-5' },
+            givens: { L: '5e-7', gm_id: '10', id: '2e-5', vds: '0.5' },
             equations: [],
             checks: [],
           },
@@ -1407,7 +1415,7 @@ describe('runCondition', () => {
 
   it('refuses a structurally broken sheet before any device is projected', () => {
     const run = runCondition(
-      { ...gainDoc(20), givens: { L: 'L', gm_id: '12', ft: '2e9' } },
+      { ...gainDoc(20), givens: { L: 'L', gm_id: '12', ft: '2e9', vds: '0.5' } },
       primary,
       key('tt'),
       noDevices,
@@ -1415,6 +1423,40 @@ describe('runCondition', () => {
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['invalid-sheet-or-ref']);
+  });
+
+  it('still runs a sheet whose device states no drain voltage, and returns the failed sizing', () => {
+    // Validation reports the omission as a warning, so it is not a structural break: the sheet
+    // is prepared and run, and the sizing is what refuses the device. The run did not complete,
+    // but its result is kept — and the sizing report in it names the axis to state, which is
+    // what a caller needs to offer the fix in place.
+    const NO_DRAIN = /^the givens state no drain voltage, so the device is not sized/;
+    const run = runCondition(
+      { ...gainDoc(20), givens: { L: 'L', gm_id: '12', id: '2e-5' } },
+      primary,
+      key('tt'),
+      noDevices,
+    );
+    expect(run.state).toBe('not-evaluated');
+    if (run.state !== 'not-evaluated') return;
+    expect(run.issues.map((i) => i.kind)).toEqual(['runtime-evaluation']);
+    expect(run.issues[0].message).toMatch(NO_DRAIN);
+    expect(run.result?.sizing?.ok).toBe(false);
+    expect(run.result?.sizing?.error).toMatch(NO_DRAIN);
+    expect(run.result?.sizing?.needs).toEqual(['vds']);
+    // Asked, and not answered: neither a design that fails nor one that was never run.
+    expect(run.points).toEqual([{ state: 'no-answer', error: run.issues[0].message }]);
+
+    // The same for a block: its own report carries the axis, under the block's name.
+    const tail = withTail('tail-binding');
+    tail.blocks![0].doc!.givens = { L: '5e-7', gm_id: '10', id: '2e-5' };
+    const inBlock = runCondition(tail, primary, key('tt'), () => primary);
+    expect(inBlock.state).toBe('not-evaluated');
+    expect(inBlock.result?.sizing?.ok).toBe(true);
+    expect(inBlock.result?.blocks?.[0].sizing?.needs).toEqual(['vds']);
+    expect(inBlock.state === 'not-evaluated' && inBlock.issues.map((i) => i.message)).toEqual([
+      expect.stringMatching(/^block "tailblk": the givens state no drain voltage/),
+    ]);
   });
 
   it('refuses a run that did not complete, even though a hard check also failed', () => {

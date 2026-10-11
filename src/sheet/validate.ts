@@ -27,6 +27,7 @@ import {
   constrained,
   torn,
   constraintProblem,
+  drainProblem,
   PARAM_CLASSES,
   PROVIDE_SEP,
   CHECK_KINDS,
@@ -1211,8 +1212,13 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
               `another condition`,
             location: name,
           });
+        // The warning below is about an operating-point SPEC kept across the move — a gm/ID held
+        // where a gate-tied device would keep its voltage. Givens that state the gate voltage keep
+        // no such spec: the table is read at that gate voltage — the partner's, re-read at the
+        // range end, where the device is tied to one, or the number the author stated — and at
+        // the new bias, body bias included. The note below still says the current moved.
         const bias = via.filter((k) => k !== 'W' && k !== 'L');
-        if (bias.length)
+        if (bias.length && givens.vgs === undefined)
           out.push({
             rule: 'sheet-range',
             severity: 'warning',
@@ -1352,6 +1358,23 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         rule: 'sheet-givens',
         severity: 'error',
         message: `givens ${problem}`,
+        location: 'givens',
+      });
+    }
+    // Every sized device states its drain voltage. That holds whatever table the sheet is later
+    // run on, so it is said here with no table in hand, in the words the sizing fails on. A
+    // warning, not an error: the sizing is what refuses the device, and a sheet that is still
+    // run reaches it — where the report names the axis to state, so the fix is offered in place.
+    const drain = drainProblem(doc.givens);
+    if (drain) {
+      out.push({ rule: 'sheet-givens', severity: 'warning', message: drain, location: 'givens' });
+    }
+    // A flag that is not a boolean is not a connection either way; the sizing reads only `true`.
+    if (doc.givens.diode !== undefined && typeof doc.givens.diode !== 'boolean') {
+      out.push({
+        rule: 'sheet-givens',
+        severity: 'error',
+        message: 'given diode must be true or false',
         location: 'givens',
       });
     }

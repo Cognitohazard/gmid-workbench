@@ -92,9 +92,11 @@ through. One table per (device, corner, temperature).
 
 Any accepted table plots. What else it can be used for depends on the sweeps it
 carries: a design sheet sizes a device only from a table that can answer for the
-bias the device states, and refuses the device otherwise. A stated drain voltage
-needs a `vds` sweep, and a source above the body a `vsb` sweep — or a table taken at
-exactly that value; a diode connection needs a `vds` sweep. The format document
+bias the device states, and refuses the device otherwise. Every device on a sheet
+states its drain voltage, so a design sheet always needs drain-voltage data: a `vds`
+sweep, or a table taken at exactly the stated value. A source above the body needs a
+`vsb` sweep in the same way, and a diode connection needs a `vds` sweep. A table
+with no `vds` column still plots and sizes a single device. The format document
 sets out [what each use needs](docs/mostab-format.md#what-each-use-needs).
 
 ### Converting a medwatt / mosplot `.npz`

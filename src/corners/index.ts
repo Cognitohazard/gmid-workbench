@@ -52,6 +52,7 @@ import {
   namedBindings,
   resolvedSheet,
   stands,
+  withoutRestated,
   validateSheet,
 } from '../sheet';
 import {
@@ -751,7 +752,7 @@ function runPrepared(
   );
   const result: SheetResult = {
     ...evaluated,
-    warnings: [...prepared.warnings, ...evaluated.warnings],
+    warnings: [...withoutRestated(prepared.warnings, evaluated.warnings), ...evaluated.warnings],
     assumptions: [...prepared.assumptions],
   };
   const completed = stands(result);

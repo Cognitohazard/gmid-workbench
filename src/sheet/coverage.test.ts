@@ -90,8 +90,10 @@ describe('the fixed-hardware transformation — decided on two booleans', () => 
   });
 
   it('holds the current too when the sheet never said where it comes from, and says so', () => {
-    const p = holdHardware(doc({ L: 'L_p', gm: '2*pi*GBW*CL', gm_id: '10' }), { sizing: report() });
-    expect(p.doc.givens).toEqual({ L: '5e-7', W: '0.000001194', id: '0.00002' });
+    const p = holdHardware(doc({ L: 'L_p', gm: '2*pi*GBW*CL', gm_id: '10', vds: 'V_o' }), {
+      sizing: report(),
+    });
+    expect(p.doc.givens).toEqual({ L: '5e-7', W: '0.000001194', id: '0.00002', vds: 'V_o' });
     expect(p.assumedSource).toEqual(['givens']);
   });
 
@@ -99,21 +101,22 @@ describe('the fixed-hardware transformation — decided on two booleans', () => 
     // The list is derived from the device module's own selectors; a selector left behind would
     // re-size the transistor at the range end, which is what a fixed-hardware check must not do.
     for (const k of ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar', 'vgs', 'gm']) {
-      const out = hold({ L: 'L_p', [k]: '3', id: 'I_d' });
-      expect(Object.keys(out!).sort(), k).toEqual(['L', 'W', 'id']);
+      const out = hold({ L: 'L_p', [k]: '3', id: 'I_d', vds: 'V_o' });
+      expect(Object.keys(out!).sort(), k).toEqual(['L', 'W', 'id', 'vds']);
     }
   });
 
   it('holds the length the sizing used, not the authored expression', () => {
     // An L that reads a param a range end overrides would otherwise hand the range end a different
     // transistor while the report claimed the hardware was fixed.
-    expect(hold({ L: 'L_min * ratio', gm_id: '10', id: 'I_d' })!.L).toBe('5e-7');
+    expect(hold({ L: 'L_min * ratio', gm_id: '10', id: 'I_d', vds: 'V_o' })!.L).toBe('5e-7');
   });
 
   it('injects numbers that parse back to the same double', () => {
     // A fixed-digit reformat would hold the design at a width the base run never sized.
     for (const W of [Math.PI * 1e-6, 1e-7, 1.2345678901234567e-9, 1e21, 5e-324]) {
-      const expr = hold({ L: 'L_p', gm_id: '10', id: 'I_d' }, report({ W }))!.W as string;
+      const given = { L: 'L_p', gm_id: '10', id: 'I_d', vds: 'V_o' };
+      const expr = hold(given, report({ W }))!.W as string;
       expect(compileExpr(expr).eval(scalarScope({})), expr).toBe(W);
     }
   });
@@ -127,7 +130,7 @@ describe('the fixed-hardware transformation — decided on two booleans', () => 
       params: [],
       equations: [],
       checks: [],
-      givens: { L: 'L_p', gm_id: '10', id },
+      givens: { L: 'L_p', gm_id: '10', id, vds: 'V_o' },
     });
     const parent: SheetDoc = {
       title: 'p',
@@ -166,7 +169,7 @@ describe('the fixed-hardware transformation — decided on two booleans', () => 
   it('leaves the givens alone when there is no hardware to hold them at', () => {
     // Degrade, never invent — the same discipline the rest of the engine takes. The caller gates
     // on the base run standing, so this is defence rather than a path in normal use.
-    const b = { L: 'L_p', gm_id: '10', id: 'I_d' };
+    const b = { L: 'L_p', gm_id: '10', id: 'I_d', vds: 'V_o' };
     expect(holdHardware(doc(b), {}).doc.givens).toEqual(b); // no report at all
     expect(hold(b, report({ ok: false, W: NaN, L: NaN }))).toEqual(b);
   });
@@ -1012,8 +1015,7 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
 
   it('marks width-first givens a range end reaches through anything but the drain', () => {
     // Body bias is the case that bites: holding the operating-point spec across a vsb move
-    // keeps a current a gate-tied device would lose. The engine cannot express the tie — vgs is
-    // not bindable — so naming the reach is the honest thing available.
+    // keeps a current a gate-tied device would lose, so the reach is named.
     const w = warnings(
       withK({ L: '0.5u', W: '10u', gm_id: '10', vds: '0.6', vsb: 'V_x' }, { V_x: 'V_t' }),
     );
@@ -1021,6 +1023,16 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     expect(w[0]).toMatch(
       /range end "hi" reaches the givens at "k", which fix a width, through "vsb"/,
     );
+  });
+
+  it('does not mark a gate-tied device whose body bias a range end moves', () => {
+    // Given its width and a gate voltage, the device keeps no spec across the move: the table is
+    // read at that gate voltage and the new body bias. One half of a matched pair on a tail node
+    // is written this way, with the gate voltage read from its partner; a gate voltage typed as
+    // a number, as here, is taken as the author's statement of it.
+    expect(
+      warnings(withK({ L: '0.5u', W: '10u', vgs: '0.6', vds: '0.6', vsb: 'V_x' }, { V_x: 'V_t' })),
+    ).toEqual([]);
   });
 
   it('follows a range end through a node held under a gate', () => {

@@ -346,10 +346,11 @@ describe('validate: the bias sweeps a table does not carry', () => {
     expect(w.map((x) => [x.rule, x.severity, x.location])).toEqual([
       ['no-vds-sweep', 'info', 'vds'],
     ]);
-    // What it rules out: a device given a drain voltage, and a diode-connected one.
-    expect(w[0].message).toMatch(/no vds sweep/);
+    // What it rules out: every device a design sheet sizes, since each one states its drain
+    // voltage and the table records none.
+    expect(w[0].message).toMatch(/no vds sweep \(no vds column\): it plots, but no design sheet/);
+    expect(w[0].message).toMatch(/can size a device from it/);
     expect(w[0].message).toMatch(/drain voltage/);
-    expect(w[0].message).toMatch(/diode/);
   });
 
   it('says a table with no vsb column is taken as vsb = 0, and what that rules out', () => {
@@ -380,6 +381,9 @@ describe('validate: the bias sweeps a table does not carry', () => {
     ]);
     expect(w[0].message).toMatch(/no vds sweep/);
     expect(w[0].message).toMatch(/vds = 0\.9/);
+    // One drain voltage is one a device can state, so the message excludes only the others.
+    expect(w[0].message).toMatch(/any other drain voltage, or connects as a diode/);
+    expect(w[0].message).not.toMatch(/no design sheet/);
     // A table taken with the body biased is not a body-grounded table, and is not called one.
     expect(w[1].message).toMatch(/no vsb sweep/);
     expect(w[1].message).toMatch(/vsb = 0\.3/);

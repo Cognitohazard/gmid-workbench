@@ -9,6 +9,7 @@ import {
   isHardCheck,
   sweepable,
   stands,
+  withoutRestated,
   treeCheckResults,
   withoutRange,
   withParams,
@@ -69,7 +70,7 @@ export function runSheet(
   return {
     ...res,
     feasible: res.feasible && !blocked,
-    warnings: [...pre, ...res.warnings],
+    warnings: [...withoutRestated(pre, res.warnings), ...res.warnings],
     assumptions: dcInputs(r.doc).assumed,
   };
 }

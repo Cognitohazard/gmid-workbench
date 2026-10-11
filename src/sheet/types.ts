@@ -211,9 +211,10 @@ export interface SheetEquation {
  * inverts gm/ID along vgs and needs every other axis collapsed to a point; declaring
  * the point here makes the bias an authored, persisted, sweepable part of the design
  * instead of a hidden host-side slice (a cascode's low-vds gds differs ~4–5× from the
- * mid-supply value, so an undeclared bias silently overstates gain). An axis left undeclared
- * takes its namespace default and is reported as ASSUMED (see SizingReport.assumed), or — for
- * vds, which has no honest default — fails the sizing.
+ * mid-supply value, so an undeclared bias silently overstates gain). A `vsb` left undeclared
+ * takes its namespace default and is reported as ASSUMED (see SizingReport.assumed). `vds` has
+ * no honest default, so every sized device states its drain voltage — as `vds`, or as a diode
+ * connection — and one that states neither fails the sizing on any table (see drainProblem).
  *
  * A device is sized only on a table that carries what its givens use. A bias declared on an
  * axis the table does not sweep is sized where the table was taken — its one value on that axis,
@@ -293,6 +294,26 @@ export const GIVENS_KEYS: ReadonlySet<string> = new Set<string>([...BINDABLE, ..
  *  to type-check them differently, and because a flag silently failing a string test is the same
  *  reload-eating bug GIVENS_KEYS was introduced to stop. */
 export const GIVENS_FLAGS: ReadonlySet<string> = new Set<string>(['diode']);
+
+/**
+ * Why givens that leave the drain voltage out size no device, stated ONCE — the sizing fails on
+ * the same words validation reports, mirroring bindProblem. Returns null when they state it: as
+ * `vds`, or as a diode connection, which fixes the drain at the gate.
+ *
+ * It holds on every table. A drain voltage is set by the node the drain sits on, so neither the
+ * device nor its table has one to supply: a table taken at one drain voltage, or with no `vds`
+ * column, would otherwise size the device from whatever point it happens to hold, with nothing
+ * beside the result to say which.
+ */
+export function drainProblem(givens: SheetGivens): string | null {
+  // A blank `vds` states nothing, and only a literal `true` is a connection: a document read as
+  // plain JSON can carry `"diode": "false"`, which must not pass for one.
+  const vds = String(givens.vds ?? '').trim();
+  return vds === '' && givens.diode !== true
+    ? 'the givens state no drain voltage, so the device is not sized — give vds, or declare a ' +
+        'diode connection (diode: true), which fixes the drain at the gate'
+    : null;
+}
 
 // physical = a hard physical floor (must hold or the design is unphysical); spec = a
 // hard application spec (must hold or the design misses its purpose) — both gate feasibility.
@@ -749,9 +770,11 @@ export interface SizingReport {
    *  axis, signed) — declared in the givens, or defaulted for body bias. Absent when the
    *  table needed no reduction. Makes the sizing bias visible in reports. */
   bias?: Record<string, number>;
-  /** Bias axes this block must declare: the table has them live and there is no safe
-   *  default (i.e. `vds`, which varies per device — `vsb` defaults to 0, body-grounded).
-   *  Present only on a failed sizing, so the UI can offer an in-place operating-point fix. */
+  /** Bias axes this block must declare: `vds` where its givens state neither a drain voltage
+   *  nor a diode connection, on any table (it varies per device and has no default), and `vsb`
+   *  where the table does not answer for its default of 0, body-grounded. Present only on a
+   *  sizing that failed at the operating point — a given that did not resolve, or givens that
+   *  do not size at all, is reported alone — so the UI can offer an in-place fix. */
   needs?: string[];
   /** Bias axes whose coordinate the engine ASSUMED (the namespace default) because the givens
    *  left them undeclared — an authored operating point and a filled-in one must be tellable
@@ -874,6 +897,22 @@ export function refusedIn(res: {
   const out = res.sizing?.unswept?.length ? [res.sizing.error ?? 'the device is not sized'] : [];
   for (const c of res.blocks ?? []) out.push(...refusedIn(c).map((m) => `block "${c.name}": ${m}`));
   return out;
+}
+
+/** `pre` — what resolving and validating a sheet found — without the findings the evaluation
+ *  then repeats in the same words at the same place. A device that states no drain voltage is
+ *  named when the sheet is validated and refused when it is sized; a reader needs it once, and
+ *  the evaluation's is the one that carries the consequence. */
+export function withoutRestated(
+  pre: readonly QAWarning[],
+  evaluated: readonly QAWarning[],
+): QAWarning[] {
+  return pre.filter(
+    (w) =>
+      !evaluated.some(
+        (e) => e.rule === w.rule && e.location === w.location && e.message === w.message,
+      ),
+  );
 }
 
 /** Index one evaluation's check outcomes under `prefix`, by the tree-key scheme the sweep's

@@ -433,6 +433,8 @@ export function validate(table: DeviceTable): QAWarning[] {
   // Information, not a defect: a table taken at one drain voltage, at one length, or with the
   // source tied to the body, is valid data and plots as it is. What it cannot do is answer for a
   // point it was not taken at, and a design sheet refuses to size a device that asks it to.
+  // A table with no vds column records no drain voltage at all, and every device on a sheet
+  // states one, so no sheet sizes a device from it.
   // Saying so here puts the limit in front of whoever imports the table, before a sheet is the
   // first to mention it. Never raised on a table that sweeps the axis, whatever the sweep's sign.
   const unswept = (axis: string): string | undefined => {
@@ -459,9 +461,12 @@ export function validate(table: DeviceTable): QAWarning[] {
       rule: 'no-vds-sweep',
       severity: 'info',
       message:
-        `the table has no vds sweep (${noVds}): it plots, but a device that a design sheet ` +
-        `gives ${axisIndex(grid, 'vds') < 0 ? 'a drain voltage' : 'any other drain voltage'}, ` +
-        `or connects as a diode, cannot be sized from it`,
+        `the table has no vds sweep (${noVds}): it plots, but ` +
+        (axisIndex(grid, 'vds') < 0
+          ? `no design sheet can size a device from it — every device on a sheet states its ` +
+            `drain voltage, and nothing records the one this table was taken at`
+          : `a device that a design sheet gives any other drain voltage, or connects as a ` +
+            `diode, cannot be sized from it`),
       location: 'vds',
     });
   }

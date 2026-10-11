@@ -29,22 +29,33 @@ import { EXAMPLES } from './examples';
 import type { DeviceTable } from '../types';
 import type { SheetDoc, SheetResult, SheetVar } from './types';
 
-const dev = generateDemoDevice();
+// The demo device characterized over drain voltage. Every sized device states its drain voltage,
+// so every document here that sizes one does — 0.6 V, unless the test is about another — and
+// runs on a table that sweeps it.
+const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
 
-// The same device characterized over drain voltage and body bias as well. A device is sized only
-// on a table that carries what its givens use, so a sheet that states a drain voltage, puts a
-// source above its body or declares a diode connection runs on this one: the shipped examples
-// all state a vds, and the cascode stands its upper device on the node between the two. The
-// 0.05 V steps put every bias those sheets ask for on a grid node.
+/** That table sliced at the stated drain voltage: what `sizeDevice`, which takes a table already
+ *  reduced to [l × vgs], is handed where a sheet's answer is compared with it. */
+const devAt = fixTable(dev, { vds: 0.6 });
+
+/** What `sizeDevice` makes of boundDoc's givens on a table it can read as it stands. */
+const sizeBound = (table: DeviceTable): ReturnType<typeof sizeDevice> =>
+  sizeDevice({ table, L: 0.5e-6, gm: 2 * Math.PI * 10e6 * 2e-12, gm_id: 12 });
+
+// The same device characterized over body bias as well, on a finer grid. A device is sized only
+// on a table that carries what its givens use, so a sheet that puts a source above its body
+// runs on this one: the cascode stands its upper device on the node between the two. The
+// 0.05 V steps put every bias the shipped examples ask for on a grid node.
 const devBias = generateDemoDevice({
   vds: { min: 0, max: 1.2, step: 0.05 },
   vsb: { min: 0, max: 0.9, step: 0.05 },
 });
 
 /** gm/gds on the 0.5 µm slice at a chosen vgs — used to pick a sizing target off-node. */
-const lookupAt = (vgs: number): number => lookup(dev, { l: 0.5e-6, vgs }).gm_gds;
+const lookupAt = (vgs: number): number => lookup(devAt, { l: 0.5e-6, vgs }).gm_gds;
 
-/** A minimal sheet with givens at a known in-range operating point (gm/ID = 12, L = 0.5 µm). */
+/** A minimal sheet with givens at a known in-range operating point (gm/ID = 12, L = 0.5 µm,
+ *  vds = 0.6 V). */
 function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
   return {
     title: 't',
@@ -56,25 +67,30 @@ function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
       { name: 'gm_id', value: 12 },
       { name: 'vstar_floor', value: 0.15 },
     ],
-    givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' },
+    givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     equations: [],
     checks: [],
     ...overrides,
   };
 }
 
+/** boundDoc sizing its device with exactly the bias `bias` states — none at all when it is
+ *  empty, which leaves the drain voltage out. */
+const given = (bias: Record<string, unknown>, overrides: Partial<SheetDoc> = {}): SheetDoc =>
+  boundDoc({ givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', ...bias }, ...overrides });
+
 describe('evaluateSheet — spec-first givens', () => {
   it('sizes from a given fT through a sheet, matching sizeDevice exactly', () => {
     // The claim that a sheet can state a speed spec directly, not just gm/ID.
     const ft = 2e9;
-    const ref = sizeDevice({ table: dev, L: 0.5e-6, ft, id: 20e-6 });
+    const ref = sizeDevice({ table: devAt, L: 0.5e-6, ft, id: 20e-6 });
     const doc = boundDoc({
       params: [
         { name: 'L', value: 0.5e-6 },
         { name: 'ft_target', value: ft },
         { name: 'Ib', value: 20e-6 },
       ],
-      givens: { L: 'L', ft: 'ft_target', id: 'Ib' },
+      givens: { L: 'L', ft: 'ft_target', id: 'Ib', vds: '0.6' },
       equations: [{ name: 'speed', expr: 'ft' }],
     });
     const res = evaluateSheet(doc, dev);
@@ -91,7 +107,7 @@ describe('evaluateSheet — spec-first givens', () => {
     // same words, or an author gets contradictory advice from the two.
     const doc = boundDoc({
       params: [{ name: 'L', value: 0.5e-6 }],
-      givens: { L: 'L', ft: '2e9', gm_id: '12' },
+      givens: { L: 'L', ft: '2e9', gm_id: '12', vds: '0.6' },
     });
 
     const problems = validateSheet(doc);
@@ -123,7 +139,7 @@ describe('evaluateSheet — spec-first givens', () => {
         { name: 'Av', value: target },
         { name: 'Ib', value: 2e-5 },
       ],
-      givens: { L: 'L', gm_gds: 'Av', id: 'Ib' },
+      givens: { L: 'L', gm_gds: 'Av', id: 'Ib', vds: '0.6' },
       checks: [{ id: 'gain', kind: 'spec', lhs: 'gm_gds', op: '>=', rhs: 'Av' }],
     });
     const res = evaluateSheet(doc, dev);
@@ -136,7 +152,7 @@ describe('evaluateSheet — spec-first givens', () => {
     const noCgg = withoutColumns(dev, ['cgg']);
     const doc = boundDoc({
       params: [{ name: 'L', value: 0.5e-6 }],
-      givens: { L: 'L', ft: '2e9', id: '20e-6' },
+      givens: { L: 'L', ft: '2e9', id: '20e-6', vds: '0.6' },
     });
     const res = evaluateSheet(doc, noCgg);
 
@@ -149,7 +165,7 @@ describe('evaluateSheet — spec-first givens', () => {
 describe('evaluateSheet — sizing reuse', () => {
   it('reproduces sizeDevice W and vgs for the same givens (no re-inversion)', () => {
     const gm = 2 * Math.PI * 10e6 * 2e-12;
-    const ref = sizeDevice({ table: dev, L: 0.5e-6, gm, gm_id: 12 });
+    const ref = sizeDevice({ table: devAt, L: 0.5e-6, gm, gm_id: 12 });
     const res = evaluateSheet(boundDoc(), dev);
     expect(res.sizing?.ok).toBe(true);
     expect(res.sizing?.W).toBeCloseTo(ref.W, 12);
@@ -246,7 +262,10 @@ describe('evaluateSheet — checks', () => {
 
 describe('evaluateSheet — an assumed bias coordinate is reported, not invented', () => {
   // A table that actually sweeps body bias, so leaving vsb undeclared is a real choice.
-  const bodySwept = generateDemoDevice({ vsb: { min: 0, max: 0.6, step: 0.2 } });
+  const bodySwept = generateDemoDevice({
+    vds: { min: 0, max: 1.2, step: 0.3 },
+    vsb: { min: 0, max: 0.6, step: 0.2 },
+  });
 
   it('marks a bias axis the givens left undeclared', () => {
     // vsb = 0 is right for a device whose source sits at its bulk and wrong for a differential
@@ -276,9 +295,9 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
 
 describe('evaluateSheet — bias-loop closure (solveFor)', () => {
   // A loop shaped like a real one: an estimate standing in for a value only the evaluated
-  // sheet knows, perturbing the operating point WEAKLY. The demo table has no live bias axes,
-  // so the loop runs through an equation rather than a bias declaration — `gm/ID` is nudged by the
-  // estimate, and the estimate solves for the vstar that results.
+  // sheet knows, perturbing the operating point WEAKLY. Here the loop runs through an equation
+  // rather than a bias declaration — `gm/ID` is nudged by the estimate, and the estimate solves
+  // for the vstar that results.
   //
   // The weak coefficient is what makes it converge, and that is the honest shape: measured
   // |f'| here is ~0.12, against ~0.01 for the input-bias loop of a real 5T OTA. Coupling the
@@ -293,7 +312,7 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
         { name: 'id', value: 10e-6 },
         { name: 'vstar_est', value: 0.3, solveFor: 'vstar_actual' },
       ],
-      givens: { L: 'L', id: 'id', gm_id: '8 + 5*vstar_est' },
+      givens: { L: 'L', id: 'id', gm_id: '8 + 5*vstar_est', vds: '0.6' },
       equations: [{ name: 'vstar_actual', expr: 'vstar' }],
       checks: [],
       ...overrides,
@@ -319,7 +338,7 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     // Independently re-size at the converged estimate: the engine's answer must be the true
     // fixed point of the map, not merely a value that stopped changing.
     const point = sizeDevice({
-      table: dev,
+      table: devAt,
       L: 0.5e-6,
       id: 10e-6,
       gm_id: 8 + 5 * res.values.vstar_est,
@@ -681,7 +700,7 @@ describe('evaluateSheet — degrades instead of throwing', () => {
 describe('feasibility is fail-closed', () => {
   it('a non-finite given expression is infeasible even when a param-only physical check passes', () => {
     const doc = boundDoc({
-      givens: { L: '1/0', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id' }, // L = Infinity → sizing fails
+      givens: { L: '1/0', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' }, // L = Infinity → sizing fails
       checks: [{ id: 'param-inv', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: '20' }], // 12<=20 would pass
     });
     const res = evaluateSheet(doc, dev);
@@ -730,11 +749,112 @@ describe('validateSheet', () => {
   it('flags a non-finite param and a wrong givens arity', () => {
     const doc = boundDoc({
       params: [{ name: 'x', value: Number.NaN }],
-      givens: { L: 'L', gm: '1', gm_id: '1', id: '1' }, // three of three
+      givens: { L: 'L', gm: '1', gm_id: '1', id: '1', vds: '0.6' }, // three of three
     });
     const w = validateSheet(doc);
     expect(w.some((x) => x.rule === 'sheet-param')).toBe(true);
     expect(w.some((x) => x.rule === 'sheet-givens')).toBe(true);
+  });
+});
+
+describe('validateSheet — every sized device states its drain voltage', () => {
+  const NO_DRAIN =
+    'the givens state no drain voltage, so the device is not sized — give vds, or declare a ' +
+    'diode connection (diode: true), which fixes the drain at the gate';
+  /** A sheet that sizes nothing itself and composes `blocks`. */
+  const composing = (blocks: NonNullable<SheetDoc['blocks']>): SheetDoc => ({
+    title: 'p',
+    polarity: 'n',
+    params: [],
+    equations: [],
+    checks: [],
+    blocks,
+  });
+  const onGivens = (doc: SheetDoc) => validateSheet(doc).filter((w) => w.rule === 'sheet-givens');
+
+  it('is reported on the givens with no table in hand — as a warning, the sizing being what refuses', () => {
+    expect(validateSheet(given({}))).toEqual([
+      { rule: 'sheet-givens', severity: 'warning', message: NO_DRAIN, location: 'givens' },
+    ]);
+  });
+
+  it('is met by a vds or by a diode connection, and by nothing else', () => {
+    expect(validateSheet(given({ vds: '0.6' }))).toEqual([]);
+    expect(validateSheet(given({ diode: true }))).toEqual([]);
+    // A body bias says nothing about the drain, and a connection switched off is no connection.
+    expect(validateSheet(given({ vsb: '0' })).map((w) => w.message)).toEqual([NO_DRAIN]);
+    expect(validateSheet(given({ diode: false })).map((w) => w.message)).toEqual([NO_DRAIN]);
+    // A blank drain voltage states nothing.
+    expect(validateSheet(given({ vds: '  ' })).map((w) => w.message)).toEqual([NO_DRAIN]);
+    expect(evaluateSheet(given({ vds: '' }), dev).sizing?.needs).toEqual(['vds']);
+  });
+
+  it('takes only a literal true for a diode connection', () => {
+    // A document read as plain JSON can carry the flag as a string. It is not a connection: the
+    // device is not sized on the diagonal, and validation says the flag is malformed.
+    const quoted = given({ diode: 'false' as unknown as boolean });
+    expect(validateSheet(quoted).map((w) => [w.severity, w.message])).toEqual([
+      ['warning', NO_DRAIN],
+      ['error', 'given diode must be true or false'],
+    ]);
+    const res = evaluateSheet(quoted, dev);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.sizing?.needs).toEqual(['vds']);
+    // Beside a stated drain voltage the string is ignored by the sizing, not read as a diode.
+    const both = evaluateSheet(given({ vds: '0.6', diode: 'true' as unknown as boolean }), dev);
+    expect(both.sizing?.bias).toEqual({ vds: 0.6 });
+  });
+
+  it('names the block whose givens leave it out, and no other', () => {
+    const doc = composing([
+      { name: 'in', doc: given({ vds: '0.6' }) },
+      { name: 'load', doc: given({}) },
+      { name: 'ref', doc: given({ diode: true }) },
+    ]);
+    expect(onGivens(doc)).toEqual([
+      {
+        rule: 'sheet-givens',
+        severity: 'warning',
+        message: `block "load": ${NO_DRAIN}`,
+        location: 'load.givens',
+      },
+    ]);
+  });
+
+  it('names a nested block by its path', () => {
+    const doc = composing([{ name: 'stage', doc: composing([{ name: 'load', doc: given({}) }]) }]);
+    expect(onGivens(doc)).toEqual([
+      {
+        rule: 'sheet-givens',
+        severity: 'warning',
+        message: `block "stage": block "load": ${NO_DRAIN}`,
+        location: 'stage.load.givens',
+      },
+    ]);
+  });
+
+  it('reports the sheet’s own givens and a block’s separately', () => {
+    const doc: SheetDoc = { ...given({}), blocks: [{ name: 'load', doc: given({}) }] };
+    expect(onGivens(doc).map((w) => w.location)).toEqual(['givens', 'load.givens']);
+  });
+
+  it('says nothing about a sheet or a block that sizes no device', () => {
+    const bare = composing([]);
+    expect(onGivens(bare)).toEqual([]);
+    expect(onGivens(composing([{ name: 'k', doc: bare }]))).toEqual([]);
+  });
+
+  it('leaves the refusing to the sizing, which fails the run closed on the same words', () => {
+    const res = runSheet(given({}), dev);
+    expect(res.feasible).toBe(false);
+    expect(res.sizing?.error).toBe(NO_DRAIN);
+    expect(res.sizing?.needs).toEqual(['vds']);
+    // Validation and the sizing say it in the same words at the same place; the run carries it
+    // once, as the sizing's error.
+    expect(validateSheet(given({})).map((w) => [w.severity, w.message])).toEqual([
+      ['warning', NO_DRAIN],
+    ]);
+    expect(res.warnings.map((w) => [w.severity, w.message])).toEqual([['error', NO_DRAIN]]);
   });
 });
 
@@ -863,7 +983,7 @@ describe('composition — blocks and the scalars they provide', () => {
         { name: 'gm_id', value: 999 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' }, // gm/ID 999 ≫ ceiling ⇒ the child cannot size
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: '0.6' }, // gm/ID 999 ≫ ceiling ⇒ the child cannot size
       equations: [],
       checks: [],
       provides: ['id'],
@@ -902,7 +1022,7 @@ describe('composition — blocks and the scalars they provide', () => {
         { name: 'gm_id', value: 10 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: '0.6' },
       equations: [],
       checks: [],
       provides: ['id'],
@@ -915,7 +1035,8 @@ describe('composition — blocks and the scalars they provide', () => {
       checks: [],
       blocks: [{ name: 'k', doc: child, ...(device ? { device } : {}) }],
     });
-    const resolve = (id: string) => (id === 'wide' ? generateDemoDevice({ W: 40e-6 }) : undefined);
+    const wide = generateDemoDevice({ W: 40e-6, vds: { min: 0, max: 1.2, step: 0.3 } });
+    const resolve = (id: string) => (id === 'wide' ? wide : undefined);
     expect(runSheet(parent('wide'), dev, resolve).blocks![0].feasible).toBe(true); // resolved
     expect(runSheet(parent(undefined), dev, resolve).blocks![0].feasible).toBe(true); // inherited
 
@@ -966,7 +1087,7 @@ describe('composition — blocks and the scalars they provide', () => {
         { name: 'gm_id', value: 12 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: '0.6' },
       equations: [],
       checks: [],
       provides: ['id'],
@@ -1367,7 +1488,7 @@ describe('fail-closed hardening', () => {
   });
 
   it('an unphysical given (negative gm) fails closed instead of sizing a negative width', () => {
-    const doc = boundDoc({ givens: { L: 'L', gm: '0 - 1e-3', gm_id: 'gm_id' } });
+    const doc = boundDoc({ givens: { L: 'L', gm: '0 - 1e-3', gm_id: 'gm_id', vds: '0.6' } });
     const res = evaluateSheet(doc, dev);
     expect(res.sizing?.ok).toBe(false);
     expect(res.values.W).toBeUndefined();
@@ -1400,9 +1521,9 @@ describe('bias declared in the givens (vds/vsb)', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(res.sizing?.bias).toEqual({ vds: 0.6 });
     // equals sizing on a hand-sliced table
-    const ref = evaluateSheet(boundDoc(), fixTable(dev3, { vds: 0.6 }));
-    expect(res.sizing?.W).toBeCloseTo(ref.sizing?.W as number, 12);
-    expect(res.values.gds).toBeCloseTo(ref.values.gds, 15);
+    const ref = sizeBound(fixTable(dev3, { vds: 0.6 }));
+    expect(res.sizing?.W).toBeCloseTo(ref.W, 12);
+    expect(res.values.gds).toBeCloseTo(ref.quantities.gds, 15);
   });
 
   it('the declaration accepts an expression over params', () => {
@@ -1415,10 +1536,10 @@ describe('bias declared in the givens (vds/vsb)', () => {
     expect(res.sizing?.bias).toEqual({ vds: 0.6 });
   });
 
-  it('an undeclared live vds fails closed and flags the axis for the in-place fixer', () => {
-    const res = evaluateSheet(boundDoc(), dev3); // dev3 has a live vds axis, none declared
+  it('an undeclared vds fails closed and flags the axis for the in-place fixer', () => {
+    const res = evaluateSheet(given({}), dev3); // no drain voltage stated
     expect(res.sizing?.ok).toBe(false);
-    expect(res.sizing?.error).toMatch(/declare the operating point/);
+    expect(res.sizing?.error).toMatch(/^the givens state no drain voltage/);
     expect(res.sizing?.needs).toEqual(['vds']);
     expect(res.feasible).toBe(false);
   });
@@ -1450,6 +1571,7 @@ describe('bias declared in the givens (vds/vsb)', () => {
     const res = evaluateSheet(doc, dev4);
     expect(res.sizing?.ok).toBe(false);
     expect(res.sizing?.needs).toEqual(['vsb']);
+    expect(res.sizing?.error).toMatch(/the table has that axis and sizing must fix it at a value$/);
     expect(res.feasible).toBe(false);
   });
 
@@ -1457,7 +1579,7 @@ describe('bias declared in the givens (vds/vsb)', () => {
     const doc = boundDoc({
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
     });
-    const res = evaluateSheet(doc, dev); // 2-D demo: no vds axis
+    const res = evaluateSheet(doc, generateDemoDevice()); // sweeps only l and vgs: no vds axis
     // Not sized on the table as it stands: that would answer for whatever drain voltage the
     // table happened to be taken at, under a report that says 0.6 V.
     expect(res.sizing?.ok).toBe(false);
@@ -1489,12 +1611,22 @@ describe('bias declared in the givens (vds/vsb)', () => {
       params: [],
       equations: [],
       checks: [],
-      blocks: [{ name: 'cs', doc: boundDoc({ provides: ['id'] }) }], // child's givens omit vds
+      blocks: [{ name: 'cs', doc: given({}, { provides: ['id'] }) }], // child's givens omit vds
     };
     const res = evaluateSheet(parent, dev3);
     expect(res.blocks?.[0].feasible).toBe(false);
     expect(res.blocks?.[0].sizing?.needs).toEqual(['vds']);
     expect(res.feasible).toBe(false);
+    // The one error is the child's, under its block's name.
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([
+      {
+        rule: 'sheet-givens',
+        severity: 'error',
+        message: `block "cs": ${res.blocks?.[0].sizing?.error}`,
+        location: 'cs.givens',
+      },
+    ]);
+    expect(res.blocks?.[0].sizing?.error).toMatch(/^the givens state no drain voltage/);
   });
 
   it('a child that declares its own vds sizes cleanly through composition', () => {
@@ -1530,9 +1662,9 @@ describe('a device is sized only on a table that carries what its givens use', (
   //    (vsb = 0), a missing vds column says nothing at all.
   // A refusal is a failed sizing — an error on the givens and a report that is not ok — never
   // numbers with a warning beside them.
-  const GM = '2*pi*GBW_target*CL';
-  const given = (extra: Record<string, unknown>): SheetDoc =>
-    boundDoc({ givens: { L: 'L', gm: GM, gm_id: 'gm_id', ...extra } });
+  //
+  // The drain voltage is always stated, as `vds` or as a diode connection: a device whose givens
+  // state neither is not sized on any of those tables, and its report asks for `vds`.
   const errorsOf = (res: SheetResult): string[] =>
     res.warnings.filter((w) => w.severity === 'error').map((w) => w.message);
   /** Refused: not sized, fails closed, and the one error is the sizing's own reason. */
@@ -1550,23 +1682,71 @@ describe('a device is sized only on a table that carries what its givens use', (
   };
 
   // One table per shape. A sweep written with min = max generates an axis with a single node —
-  // the shape a file holding one drain voltage (or one body bias) on every row imports to.
-  const vdsSwept = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
+  // the shape a file holding one drain voltage (or one body bias) on every row imports to. The
+  // tables that are about the body bias sweep the drain voltage, so a device can state one.
+  const VDS = { min: 0, max: 1.2, step: 0.3 };
+  const noVds = generateDemoDevice();
+  const vdsSwept = generateDemoDevice({ vds: VDS });
   const vdsOnce = generateDemoDevice({ vds: { min: 0.6, max: 0.6, step: 0.1 } });
-  const vsbOnce = generateDemoDevice({ vsb: { min: 0.3, max: 0.3, step: 0.1 } });
-  const bothSwept = generateDemoDevice({
-    vds: { min: 0, max: 1.2, step: 0.3 },
-    vsb: { min: 0, max: 0.6, step: 0.3 },
-  });
+  const vsbOnce = generateDemoDevice({ vds: VDS, vsb: { min: 0.3, max: 0.3, step: 0.1 } });
+  const vsbZero = generateDemoDevice({ vds: VDS, vsb: { min: 0, max: 0, step: 0.1 } });
+  const bothSwept = generateDemoDevice({ vds: VDS, vsb: { min: 0, max: 0.6, step: 0.3 } });
 
   it('the fixtures have the shapes the cases below name', () => {
     const axes = (t: DeviceTable): string =>
       t.grid.axes.map((a) => `${a.name}×${a.values.length}`).join(' ');
-    expect(axes(dev)).toBe('l×4 vgs×121');
+    expect(axes(noVds)).toBe('l×4 vgs×121');
     expect(axes(vdsOnce)).toBe('l×4 vds×1 vgs×121');
-    expect(axes(vsbOnce)).toBe('l×4 vsb×1 vgs×121');
+    expect(axes(vsbOnce)).toBe('l×4 vds×5 vsb×1 vgs×121');
+    expect(axes(vsbZero)).toBe('l×4 vds×5 vsb×1 vgs×121');
     expect(axes(vdsSwept)).toBe('l×4 vds×5 vgs×121');
     expect(axes(bothSwept)).toBe('l×4 vds×5 vsb×3 vgs×121');
+  });
+
+  describe('a drain voltage the givens do not state', () => {
+    // Neither a `vds` nor a diode connection. What the table holds makes no difference: a sweep
+    // cannot be collapsed without a value, and a table taken at one drain voltage, or with no
+    // vds column, would answer from a point nobody wrote down.
+    for (const [shape, table] of [
+      ['sweeps vds', vdsSwept],
+      ['was taken at one drain voltage', vdsOnce],
+      ['has no vds column', noVds],
+    ] as const) {
+      it(`is not sized on a table that ${shape}, and the report asks for vds`, () => {
+        const res = evaluateSheet(given({}), table);
+        expectRefused(res, /^the givens state no drain voltage, so the device is not sized/);
+        // What to state, both ways of stating it.
+        expect(res.sizing?.error).toMatch(
+          /give vds, or declare a diode connection \(diode: true\)/,
+        );
+        expect('W' in res.values).toBe(false);
+        // Asked for, so the fix can be offered in place — and not a refusal of the table, which
+        // is a verdict only a stated drain voltage can earn.
+        expect(res.sizing?.needs).toEqual(['vds']);
+        expect(res.sizing?.unswept).toBeUndefined();
+      });
+    }
+
+    it('says the same on every table, in the words validation uses', () => {
+      const said = [vdsSwept, vdsOnce, noVds].map((t) => evaluateSheet(given({}), t).sizing?.error);
+      expect(new Set(said).size).toBe(1);
+      expect(validateSheet(given({})).map((w) => w.message)).toEqual([said[0]]);
+    });
+
+    it('is still unstated beside a body bias, or a diode connection switched off', () => {
+      for (const extra of [{ vsb: '0' }, { diode: false }]) {
+        const res = evaluateSheet(given(extra), vdsSwept);
+        expectRefused(res, /^the givens state no drain voltage/);
+        expect(res.sizing?.needs).toEqual(['vds']);
+      }
+    });
+
+    it('is stated by a vds or by a diode connection, and the device then sizes', () => {
+      expectSilent(evaluateSheet(given({ vds: '0.6' }), vdsSwept));
+      const diode = evaluateSheet(given({ diode: true }), vdsSwept);
+      expect(diode.sizing?.ok, diode.sizing?.error).toBe(true);
+      expect(diode.sizing?.needs).toBeUndefined();
+    });
   });
 
   describe('an axis the table sweeps', () => {
@@ -1575,9 +1755,9 @@ describe('a device is sized only on a table that carries what its givens use', (
       expectSilent(res);
       expect(res.sizing?.bias).toEqual({ vds: 0.6, vsb: 0.3 });
       // The same numbers as the table sliced by hand at that point.
-      const ref = evaluateSheet(boundDoc(), fixTable(bothSwept, { vds: 0.6, vsb: 0.3 }));
-      expect(res.sizing?.W).toBe(ref.sizing?.W);
-      expect(res.sizing?.vgs).toBe(ref.sizing?.vgs);
+      const ref = sizeBound(fixTable(bothSwept, { vds: 0.6, vsb: 0.3 }));
+      expect(res.sizing?.W).toBe(ref.W);
+      expect(res.sizing?.vgs).toBe(ref.vgs);
     });
 
     it('still clamps a value past the swept range with a warning — a clamp, not a refusal', () => {
@@ -1597,20 +1777,23 @@ describe('a device is sized only on a table that carries what its givens use', (
       const res = evaluateSheet(given({ vds: '0.6' }), vdsOnce);
       expectSilent(res);
       // Nothing was sliced, so nothing is reported as sliced; and the answer is the one the
-      // same table gives a device that states no drain voltage.
+      // sizer gives on that same table, read as it stands.
       expect(res.sizing?.bias).toBeUndefined();
-      const ref = evaluateSheet(boundDoc(), vdsOnce);
-      expect(res.sizing?.W).toBe(ref.sizing?.W);
-      expect(res.sizing?.vgs).toBe(ref.sizing?.vgs);
+      const ref = sizeBound(vdsOnce);
+      expect(res.sizing?.W).toBe(ref.W);
+      expect(res.sizing?.vgs).toBe(ref.vgs);
 
-      expectSilent(evaluateSheet(given({ vsb: '0.3' }), vsbOnce));
+      // The same on the body-bias axis: only the swept drain voltage is sliced.
+      const body = evaluateSheet(given({ vds: '0.6', vsb: '0.3' }), vsbOnce);
+      expectSilent(body);
+      expect(body.sizing?.bias).toEqual({ vds: 0.6 });
     });
 
     it('takes float rounding for the value it was aiming at', () => {
       // 0.4 + 0.2 is one ULP above 0.6, and 0.1 + 0.2 one above 0.3.
       expect(0.4 + 0.2).not.toBe(0.6);
       expectSilent(evaluateSheet(given({ vds: '0.4 + 0.2' }), vdsOnce));
-      expectSilent(evaluateSheet(given({ vsb: '0.1 + 0.2' }), vsbOnce));
+      expectSilent(evaluateSheet(given({ vds: '0.6', vsb: '0.1 + 0.2' }), vsbOnce));
     });
 
     it('refuses a device given any other value', () => {
@@ -1620,7 +1803,11 @@ describe('a device is sized only on a table that carries what its givens use', (
         /no vds sweep/,
       );
       // A source tied to its body is no better off on a table taken with the body biased.
-      expectRefused(evaluateSheet(given({ vsb: '0' }), vsbOnce), /given vsb = 0 /, /no vsb sweep/);
+      expectRefused(
+        evaluateSheet(given({ vds: '0.6', vsb: '0' }), vsbOnce),
+        /given vsb = 0 /,
+        /no vsb sweep/,
+      );
       // Close is not equal: a millivolt away is a different operating point, and so is ten
       // nanovolts — the allowance is float rounding, nothing wider.
       expectRefused(evaluateSheet(given({ vds: '0.601' }), vdsOnce), /given vds = 0\.601/);
@@ -1650,12 +1837,12 @@ describe('a device is sized only on a table that carries what its givens use', (
       // A supply expression cancels to zero only up to rounding at the size of its terms, which
       // is larger than rounding at zero itself.
       expect(Math.abs(3.3 - 1.1 * 3)).toBeGreaterThan(Number.EPSILON);
-      const vsbZero = generateDemoDevice({ vsb: { min: 0, max: 0, step: 0.1 } });
-      expectSilent(evaluateSheet(given({ vsb: '3.3 - 1.1*3' }), vsbZero));
-      expectSilent(evaluateSheet(given({ vsb: '3.3 - 1.1*3' }), dev));
+      const body = (vsb: string): SheetDoc => given({ vds: '0.6', vsb });
+      expectSilent(evaluateSheet(body('3.3 - 1.1*3'), vsbZero));
+      expectSilent(evaluateSheet(body('3.3 - 1.1*3'), vdsSwept));
       // A microvolt is not rounding.
-      expectRefused(evaluateSheet(given({ vsb: '1e-6' }), vsbZero), /given vsb = 0\.000001/);
-      expectRefused(evaluateSheet(given({ vsb: '1e-6' }), dev), /given vsb = 0\.000001/);
+      expectRefused(evaluateSheet(body('1e-6'), vsbZero), /given vsb = 0\.000001/);
+      expectRefused(evaluateSheet(body('1e-6'), vdsSwept), /given vsb = 0\.000001/);
     });
 
     it('asks for a body bias the givens leave out when the table was taken away from the default', () => {
@@ -1668,46 +1855,46 @@ describe('a device is sized only on a table that carries what its givens use', (
       expect(res.feasible).toBe(false);
       expect(res.sizing?.needs).toEqual(['vsb']);
       expect(errorsOf(res)).toEqual([res.sizing?.error]);
-      expect(res.sizing?.error).toMatch(/declare the operating point \(vsb\) in the givens/);
+      expect(res.sizing?.error).toMatch(/^declare the operating point \(vsb\) in the givens/);
       expect(res.sizing?.error).toMatch(/taken at vsb = 0\.3, not at the default vsb = 0$/);
       // A declaration answers it, so it is not a refusal: stated where the table was taken, the
       // device sizes; stated at the body, the table cannot give it.
       expect(res.sizing?.unswept).toBeUndefined();
-      expectSilent(evaluateSheet(given({ vsb: '0.3' }), vsbOnce));
-      expectRefused(evaluateSheet(given({ vsb: '0' }), vsbOnce), /no vsb sweep/);
+      expectSilent(evaluateSheet(given({ vds: '0.6', vsb: '0.3' }), vsbOnce));
+      expectRefused(evaluateSheet(given({ vds: '0.6', vsb: '0' }), vsbOnce), /no vsb sweep/);
       // A table taken AT the default needs nothing said.
-      expectSilent(
-        evaluateSheet(boundDoc(), generateDemoDevice({ vsb: { min: 0, max: 0, step: 0.1 } })),
-      );
+      expectSilent(evaluateSheet(boundDoc(), vsbZero));
 
-      // Beside a swept axis that also needs declaring, both are asked for, each in its words.
-      const both = evaluateSheet(
-        boundDoc(),
-        generateDemoDevice({
-          vds: { min: 0, max: 1.2, step: 0.3 },
-          vsb: { min: 0.3, max: 0.3, step: 0.1 },
-        }),
-      );
+      // Beside a drain voltage that is also left out, both are asked for, each in its words.
+      const both = evaluateSheet(given({}), vsbOnce);
       expect(both.sizing?.needs).toEqual(['vds', 'vsb']);
-      expect(both.sizing?.error).toMatch(/\(vds, vsb\)/);
-      expect(both.sizing?.error).toMatch(/the table has that axis and sizing must fix it/);
-      expect(both.sizing?.error).toMatch(/; the table was taken at vsb = 0\.3,/);
+      expect(errorsOf(both)).toEqual([both.sizing?.error]);
+      expect(both.sizing?.error).toMatch(/^the givens state no drain voltage/);
+      expect(both.sizing?.error).toMatch(
+        /; declare the operating point \(vsb\) in the givens — the table was taken at vsb = 0\.3,/,
+      );
     });
   });
 
   describe('a table with no vsb column', () => {
     it('is taken as characterized with the source at the body: vsb = 0 sizes silently', () => {
-      const res = evaluateSheet(given({ vsb: '0' }), dev);
+      const res = evaluateSheet(given({ vds: '0.6', vsb: '0' }), vdsSwept);
       expectSilent(res);
-      expect(res.sizing?.bias).toBeUndefined();
-      expect(res.sizing?.W).toBe(evaluateSheet(boundDoc(), dev).sizing?.W);
+      // Only the drain voltage was sliced, and the answer is the one a device that says nothing
+      // about its body gets.
+      expect(res.sizing?.bias).toEqual({ vds: 0.6 });
+      expect(res.sizing?.W).toBe(evaluateSheet(boundDoc(), vdsSwept).sizing?.W);
       // An expression that rounds to a few ULP off zero is still a source at the body.
       expect(0.3 - (0.1 + 0.2)).not.toBe(0);
-      expectSilent(evaluateSheet(given({ vsb: '0.3 - (0.1 + 0.2)' }), dev));
+      expectSilent(evaluateSheet(given({ vds: '0.6', vsb: '0.3 - (0.1 + 0.2)' }), vdsSwept));
     });
 
     it('refuses a device whose source sits above its body', () => {
-      expectRefused(evaluateSheet(given({ vsb: '0.3' }), dev), /given vsb = 0\.3/, /no vsb sweep/);
+      expectRefused(
+        evaluateSheet(given({ vds: '0.6', vsb: '0.3' }), vdsOnce),
+        /given vsb = 0\.3/,
+        /no vsb sweep/,
+      );
       // The drain sweep being there does not stand in for the body sweep.
       expectRefused(
         evaluateSheet(given({ vds: '0.6', vsb: '0.3' }), vdsSwept),
@@ -1719,18 +1906,28 @@ describe('a device is sized only on a table that carries what its givens use', (
 
   describe('a table with no vds column', () => {
     it('refuses a device given a drain voltage — there is no default to take it at', () => {
-      expectRefused(evaluateSheet(given({ vds: '0.6' }), dev), /given vds = 0\.6/, /no vds sweep/);
+      const res = evaluateSheet(given({ vds: '0.6' }), noVds);
+      expectRefused(res, /given vds = 0\.6/, /no vds sweep/);
+      expect(res.sizing?.unswept).toEqual(['vds']);
+      expect(res.sizing?.needs).toBeUndefined();
       // Zero is a drain voltage like any other: nothing says the table was taken there.
-      expectRefused(evaluateSheet(given({ vds: '0' }), dev), /given vds = 0 /, /no vds sweep/);
+      expectRefused(evaluateSheet(given({ vds: '0' }), noVds), /given vds = 0 /, /no vds sweep/);
     });
 
-    it('sizes a device that states no drain voltage, on the table as it is', () => {
-      expectSilent(evaluateSheet(boundDoc(), dev));
-      expectSilent(evaluateSheet(given({ vsb: '0' }), dev));
+    it('sizes no device at all: stated, the drain voltage is refused; left out, it is asked for', () => {
+      // So no design sheet sizes a device from such a table. The sizer on its own still does —
+      // it is handed a table and reads it as it stands.
+      for (const extra of [{ vds: '0.6' }, { diode: true }, {}, { vsb: '0' }])
+        expect(evaluateSheet(given(extra), noVds).sizing?.ok).toBe(false);
+      expect(sizeBound(noVds).W).toBeGreaterThan(0);
     });
 
     it('refuses a diode connection, which is read along a sweep the table does not have', () => {
-      expectRefused(evaluateSheet(given({ diode: true }), dev), /diode connection/, /no vds sweep/);
+      expectRefused(
+        evaluateSheet(given({ diode: true }), noVds),
+        /diode connection/,
+        /no vds sweep/,
+      );
       // One characterized drain voltage is one point of the diagonal, not the diagonal.
       expectRefused(
         evaluateSheet(given({ diode: true }), vdsOnce),
@@ -1743,21 +1940,24 @@ describe('a device is sized only on a table that carries what its givens use', (
   });
 
   it('says everything the table lacks in one refusal', () => {
-    const res = evaluateSheet(given({ vds: '0.6', vsb: '0.3' }), dev);
+    const res = evaluateSheet(given({ vds: '0.6', vsb: '0.3' }), noVds);
     expectRefused(res, /given vds = 0\.6/, /no vds sweep/, /given vsb = 0\.3/, /no vsb sweep/);
   });
 
   it('keeps an axis that still needs declaring on offer beside a refusal', () => {
-    // The table sweeps vds, which these givens leave out, and has no vsb sweep, which they ask
+    // These givens leave the drain voltage out, and ask for a body bias the table has no sweep
     // for. No declaration would make the table answer, so the refusal is the error; the axis to
-    // declare still rides along for the in-place fixer.
-    const res = evaluateSheet(given({ vsb: '0.3' }), vdsSwept);
-    expectRefused(res, /given vsb = 0\.3/, /no vsb sweep/);
-    expect(res.sizing?.needs).toEqual(['vds']);
+    // declare still rides along for the in-place fixer — whatever the table holds on it.
+    for (const table of [vdsSwept, vdsOnce, noVds]) {
+      const res = evaluateSheet(given({ vsb: '0.3' }), table);
+      expectRefused(res, /^given vsb = 0\.3/, /no vsb sweep/);
+      expect(res.sizing?.unswept).toEqual(['vsb']);
+      expect(res.sizing?.needs).toEqual(['vds']);
+    }
   });
 
   describe('the length', () => {
-    const oneLength = generateDemoDevice({ lengths: [0.5e-6] });
+    const oneLength = generateDemoDevice({ lengths: [0.5e-6], vds: VDS });
 
     it('on a table taken at one length: that length sizes silently, any other is refused', () => {
       expect(oneLength.grid.axes.find((a) => a.name === 'l')?.values).toHaveLength(1);
@@ -1796,7 +1996,7 @@ describe('a device is sized only on a table that carries what its givens use', (
       // Nothing on such a table records a length — no axis, and no metadata the importer reads
       // — so there is no value to hold the given against. The lookup has always refused it.
       const noLength = fixTable(dev, { l: 0.5e-6 });
-      expect(noLength.grid.axes.map((a) => a.name)).toEqual(['vgs']);
+      expect(noLength.grid.axes.map((a) => a.name)).toEqual(['vds', 'vgs']);
       const res = evaluateSheet(boundDoc(), noLength);
       expect(res.sizing?.ok).toBe(false);
       expect(res.feasible).toBe(false);
@@ -2049,7 +2249,7 @@ describe('composition semantics (ratified)', () => {
       { name: 'L', value: 0.5e-6 },
       { name: 'gm_id', value: 12 },
     ],
-    givens: { L: 'L', id: I, gm_id: 'gm_id' },
+    givens: { L: 'L', id: I, gm_id: 'gm_id', vds: '0.6' },
     equations: [],
     checks: [],
     provides: ['id', 'gm', 'W'],
@@ -2105,7 +2305,7 @@ describe('composition semantics (ratified)', () => {
         { name: 'gm_id', value: 12 },
         { name: 'I_bias', value: 20e-6 },
       ],
-      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: '0.6' },
       equations: [],
       checks: [],
       blocks: [{ name: 'c', doc: leaf('I_bias'), params: { I_bias: 'W * 1e-3' } }],
@@ -2353,7 +2553,7 @@ describe('override and bias reporting fail closed (adversarial review regression
         { name: 'L', value: 0.5e-6 },
         { name: 'gm_id', value: 12 },
       ],
-      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id' },
+      givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: '0.6' },
       equations: [],
       checks: [],
       provides: ['id'],
@@ -3092,7 +3292,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
   /** A child that SIZES. The identity is checked against the voltage the SIZING resolved to, so
    *  the number under test is the sizing's own answer — `provides` are deliberately absent
    *  here, because nothing the child publishes upward takes part in the check. */
-  const boundChild = (polarity: 'n' | 'p' = 'n', gmId = 10): SheetDoc => ({
+  const boundChild = (polarity: 'n' | 'p' = 'n', gmId = 10, vds = '0.6'): SheetDoc => ({
     title: 'dev',
     polarity,
     params: [
@@ -3100,7 +3300,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
       { name: 'gm_id', value: gmId },
       { name: 'Ib', value: 20e-6 },
     ],
-    givens: { L: 'L', id: 'Ib', gm_id: 'gm_id' },
+    givens: { L: 'L', id: 'Ib', gm_id: 'gm_id', vds },
     equations: [],
     checks: [],
   });
@@ -3168,7 +3368,8 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     for (const polarity of ['n', 'p'] as const) {
       for (const device of [undefined, 'signed'] as const) {
         const where = `${polarity} child, ${device ?? 'N-convention'} table`;
-        const child = boundChild(polarity);
+        // A drain voltage is signed like the axis it is read on, whatever the device's polarity.
+        const child = boundChild(polarity, 10, device === 'signed' ? '-0.6' : '0.6');
         const v = sizedVgs(wired('0', 'VDD', child, {}, device), dev, resolve);
         // The four cells really are different data: only the signed export returns a negative
         // axis value, and the identity below never looks at that sign.
@@ -3228,7 +3429,10 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
     // A child that could not size has no operating point to check against, and the sizing error
     // says so already — under the child's PATH (`m.givens`), not the bare block name. Advising the
     // author about the wiring here would stack a second, wrong finding on the real one.
-    const broken: SheetDoc = { ...boundChild(), givens: { L: 'L', id: 'Ib', gm_id: 'nope' } };
+    const broken: SheetDoc = {
+      ...boundChild(),
+      givens: { L: 'L', id: 'Ib', gm_id: 'nope', vds: '0.6' },
+    };
     const res = evaluateSheet(wired('0.65', '0', broken), dev);
     expect(res.warnings.some((w) => w.severity === 'error' && w.location === 'm.givens')).toBe(
       true,
@@ -3691,8 +3895,8 @@ describe('sheetSensitivities — which knob moves which margin', () => {
 });
 
 describe('a given gate-source voltage in a sheet', () => {
-  // The mirror needs a device whose current actually depends on the drain, so the vds-swept
-  // demo rather than the module's 2-D `dev`.
+  // The mirror needs a device whose current actually depends on the drain: the demo swept over
+  // vds, here on a finer grid than the module's `dev`.
   const devVds = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
   /** Early voltage of the demo model at the length these sheets use. */
   const VA = VA_PER_L * 1e-6;
@@ -3773,7 +3977,7 @@ describe('a given gate-source voltage in a sheet', () => {
         { name: 'L', value: 0.5e-6 },
         { name: 'W_o', value: 4e-6 },
       ],
-      givens: { L: 'L', W: 'W_o', vgs: '1.5' },
+      givens: { L: 'L', W: 'W_o', vgs: '1.5', vds: '0.6' },
       equations: [{ name: 'v_read', expr: 'vgs' }],
       checks: [],
     };
@@ -3794,7 +3998,7 @@ describe('a given gate-source voltage in a sheet', () => {
     // Two selectors over-determine the gate voltage, whichever two they are.
     const both: SheetDoc = {
       ...mirror({}),
-      givens: { L: 'L', vgs: 'ref__vgs', gm_id: 'gm_id_m' },
+      givens: { L: 'L', vgs: 'ref__vgs', gm_id: 'gm_id_m', vds: 'V_out' },
     };
     expect(validateSheet(both).some((w) => /both set the operating point/.test(w.message))).toBe(
       true,
@@ -3853,7 +4057,7 @@ describe('validateSheet — gates declared on one wire but sized apart', () => {
       { name: 'g', value: 10 },
       { name: 'vg', value: 0.7 },
     ],
-    givens: { L: 'L', ...givens } as SheetDoc['givens'],
+    givens: { L: 'L', vds: '0.6', ...givens } as SheetDoc['givens'],
     equations: [],
     checks: [],
     provides: ['vgs', 'W'],

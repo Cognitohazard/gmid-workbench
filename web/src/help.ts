@@ -109,11 +109,11 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   userSheets:
     'Sheets you imported (.json). They join the picker and the reference library: a sheet can name one as user/<name> (or its bare name) in a `ref`. Kept across reloads.',
   givensBias:
-    'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device states its own; body bias (vsb) defaults to 0. Edit to override; clear to revert.',
+    'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device states its own; body bias (vsb) defaults to 0. Edit to override. Clearing the body bias reverts it to 0; the drain bias cannot be left empty.',
   givensAssumed:
     'A coordinate marked ? was not declared by this block — the engine filled it in. That is right for a common-source device or a rail-referenced mirror, and wrong for a differential pair, cascode or source follower, where the source floats above the bulk. Declare vsb in the givens if this device is one of those.',
   givensNeeds:
-    'This block must state this bias but hasn’t, so sizing fails closed. A drain bias (vds) the table sweeps has no safe default. A body bias (vsb) left out means 0, and the table was not taken there. Set a value here to size it in place.',
+    'This block must state this bias but hasn’t, so sizing fails closed. A drain bias (vds) has no default on any table: every sized device states one, or declares a diode connection. A body bias (vsb) left out means 0, and the table was not taken there. Set a value here; the table has to sweep that bias, or have been taken at exactly that value.',
   solvedParam:
     'Solved, not set. This estimate stands in for a value only the evaluated sheet knows, closing a bias loop the block order cannot express: it is iterated until the two agree. The stored number is just a starting guess, so the field is read-only and the parameter cannot be swept.',
   constrainedParam:

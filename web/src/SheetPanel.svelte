@@ -688,8 +688,15 @@
   // it must still state (needs). Reading them off the report, not the panel device, keeps the
   // control correct when a composed child sizes against a different loaded table than its parent.
   // BIAS_AXES (the core's namespace-derived canonical list) fixes the display order.
+  // An axis the table does not sweep stays listed too (unswept): a value typed there that the
+  // table cannot answer for must remain editable, not vanish with the refusal.
   const biasAxesFor = (r: SizingReport | undefined): string[] =>
-    BIAS_AXES.filter((a) => (r?.bias != null && a in r.bias) || (r?.needs?.includes(a) ?? false));
+    BIAS_AXES.filter(
+      (a) =>
+        (r?.bias != null && a in r.bias) ||
+        (r?.needs?.includes(a) ?? false) ||
+        (r?.unswept?.includes(a) ?? false),
+    );
   // The authored declaration string for a bias axis (SheetGivens's vds/vsb are optional strings).
   const biasField = (givens: SheetGivens | undefined, axis: string): string | undefined =>
     (givens as unknown as Record<string, string | undefined> | undefined)?.[axis];
