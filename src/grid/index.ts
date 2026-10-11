@@ -444,11 +444,16 @@ const EDGE_SNAP_REL = 1e-9;
  * tolerance `interp1` snaps in. An expression such as `0.3 - (0.1 + 0.2)` lands a few ULP below
  * zero; reading the axis's first node for it is not reading the table somewhere else, and must
  * not be reported as if it were.
+ *
+ * An axis with a single value answers a narrower question — is `v` the one coordinate the table
+ * was taken at — and has no span to scale the rounding allowance by, so that value's own
+ * magnitude stands in: `1.1 * 3` is 3.3 here exactly as `0.1 * 3` is 0.3.
  */
 export function offHull(values: ArrayLike<number>, v: number): boolean {
   const lo = values[0];
   const hi = values[values.length - 1];
-  const tol = (hi - lo) * EDGE_SNAP_REL + Number.EPSILON;
+  const scale = hi > lo ? hi - lo : Math.abs(lo);
+  const tol = scale * EDGE_SNAP_REL + Number.EPSILON;
   return v < lo - tol || v > hi + tol;
 }
 

@@ -120,6 +120,12 @@ export interface BaseQuantity {
    * honest default and must be pinned explicitly. The default applies only when the table
    * actually characterizes that point; otherwise sizing fails closed rather than silently
    * sliding to the nearest slice.
+   *
+   * It is also where a table that has no such column at all is taken to have been
+   * characterized: a file with no `vsb` column is a body-grounded characterization, so a device
+   * given `vsb = 0` is sized on it and one given any other body bias is refused. An axis without
+   * a default has no such reading — a table with no `vds` column says nothing about the drain
+   * voltage it was taken at.
    */
   readonly defaultBias?: number;
 }

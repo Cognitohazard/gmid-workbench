@@ -281,9 +281,13 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await expect(sp.locator('[data-corner-row="ss@-40"]')).toContainText('nch_lvt');
   await expect(sp.locator('[data-corner-row="ss@-40"]')).not.toContainText('does not comply');
   // Feasibility is still asked at tt, where the design is sized, and nowhere else. With the
-  // child on that device the tt run starts and does not complete, so the badge says no answer —
-  // with no check beside it, since nothing was measured — and the count keeps the point that
-  // could not be answered apart from the one that was never asked.
+  // child on that device the tt run starts and does not complete — the child states a drain
+  // voltage and that table sweeps only length and gate voltage, so the block is refused, and
+  // its row says so — so the badge says no answer, with no check beside it, since nothing was
+  // measured, and the count keeps the point that could not be answered apart from the one that
+  // was never asked.
+  await expect(sp.locator('[data-corner-row="tt"] .ccd')).toContainText('block "cs": given vds');
+  await expect(sp.locator('[data-corner-row="tt"] .ccd')).toContainText('no vds sweep');
   await expect(sp.locator('.feasb')).toHaveText('no answer at tt');
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 2 points · 1 no answer · 1 not run',

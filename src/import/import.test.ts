@@ -31,6 +31,36 @@ describe('importMostab', () => {
     expect(r.dataset.warnings.some((w) => w.rule === 'vgs-step')).toBe(true);
   });
 
+  it('says at import what a file without the bias sweeps can be used for', () => {
+    // The file above has no VDS and no VSB column: valid data, so the findings are information.
+    const bare = importMostab(SAMPLE);
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) return;
+    const sweeps = (ws: typeof bare.dataset.warnings): [string, string][] =>
+      ws.filter((w) => /^no-\w+-sweep$/.test(w.rule)).map((w) => [w.rule, w.severity]);
+    expect(sweeps(bare.dataset.warnings)).toEqual([
+      ['no-vds-sweep', 'info'],
+      ['no-vsb-sweep', 'info'],
+    ]);
+
+    // One drain voltage on every row is a column, not a sweep: the axis is kept with its one
+    // value, and the finding names it. A VBS column is a body-bias sweep under its other sign.
+    const oneDrain = importMostab(
+      'L,VDS,VBS,VGS,ID,GM\n' +
+        '1e-7,0.9,0,0.4,1e-6,1e-5\n1e-7,0.9,0,0.41,2e-6,2e-5\n' +
+        '1e-7,0.9,-0.3,0.4,1e-6,1e-5\n1e-7,0.9,-0.3,0.41,2e-6,2e-5\n',
+    );
+    expect(oneDrain.ok).toBe(true);
+    if (!oneDrain.ok) return;
+    const t = oneDrain.dataset.tables[0];
+    expect([...(t.grid.axes.find((a) => a.name === 'vds')?.values ?? [])]).toEqual([0.9]);
+    expect([...(t.grid.axes.find((a) => a.name === 'vsb')?.values ?? [])]).toEqual([0, 0.3]);
+    expect(sweeps(oneDrain.dataset.warnings)).toEqual([['no-vds-sweep', 'info']]);
+    expect(oneDrain.dataset.warnings.find((w) => w.rule === 'no-vds-sweep')?.message).toContain(
+      'vds = 0.9',
+    );
+  });
+
   it('returns the parser errors on malformed input', () => {
     const r = importMostab('not,a,table\n1,2,3');
     expect(r.ok).toBe(false);

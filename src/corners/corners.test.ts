@@ -977,6 +977,108 @@ describe('runCondition', () => {
     });
   });
 
+  it("gives no answer at a condition whose table was taken at one drain voltage, not the design's", () => {
+    // Both conditions carry a vds column holding a single value, so they sweep the same axes
+    // and are one device. The nominal one was taken at 0.9 V, where the design sits: it is
+    // sized there with nothing to say. The other was taken at 0.6 V, so the held device has no
+    // table to be read from — refused, which at a compliance point is no answer, not a failure.
+    const takenAt = (vds: number): DeviceTable =>
+      generateDemoDevice({ vds: { min: vds, max: vds, step: 0.1 } });
+    expect(takenAt(0.6).grid.axes.map((a) => a.values.length)).toEqual([4, 1, 121]);
+    const doc: SheetDoc = {
+      ...gainDoc(0),
+      givens: { L: 'L', gm_id: '12', id: '2e-5', vds: '0.9' },
+    };
+    const runs = runConditions(
+      doc,
+      soleDevice([retag(takenAt(0.9), 'tt', 27), retag(takenAt(0.6), 'ss', -40)]),
+      [key('tt'), key('ss', -40)],
+      noDevices,
+      undefined,
+      key('tt'),
+    );
+    const [tt, ss] = runs;
+    expect(tt.state === 'evaluated' && tt.design).toBe('sized');
+    expect(tt.result?.warnings).toEqual([]);
+    expect(tt.points).toEqual([{ state: 'complies' }]);
+
+    expect(ss.state).toBe('not-evaluated');
+    expect(ss.design).toBe('held');
+    expect(ss.points).toHaveLength(1);
+    expect(ss.points[0].state).toBe('no-answer');
+    expect(ss.points[0].error).toMatch(/^given vds = 0\.9/);
+    expect(ss.points[0].error).toMatch(/no vds sweep/);
+    expect(ss.state === 'not-evaluated' && ss.issues.map((i) => i.kind)).toEqual([
+      'runtime-evaluation',
+    ]);
+    expect(ss.result?.sizing?.ok).toBe(false);
+    expect(aggregateConditionRuns(runs).compliance).toEqual({
+      complies: 1,
+      doesNotComply: 0,
+      noAnswer: 1,
+      notRun: 0,
+      total: 2,
+    });
+    // Feasibility is the sized run's and is untouched by the condition that could not answer.
+    expect(aggregateConditionRuns(runs).feasibility).toBe('feasible');
+  });
+
+  it('names the block a held condition cannot size, and gives no answer there', () => {
+    // A composed design whose `pair` sits with its source at the body. The nominal table was
+    // taken body-grounded and the other with the body biased 0.3 V — one vsb value each, so
+    // one device. Held at the second, `pair` asks for vsb = 0 on a table taken at 0.3.
+    const takenAt = (vsb: number): DeviceTable =>
+      generateDemoDevice({
+        vds: { min: 0, max: 1.2, step: 0.3 },
+        vsb: { min: vsb, max: vsb, step: 0.1 },
+      });
+    const doc: SheetDoc = {
+      title: 'composed',
+      polarity: 'n',
+      params: [],
+      equations: [],
+      checks: [{ id: 'headroom', kind: 'physical', lhs: 'pair__vstar', op: '>=', rhs: '0.1' }],
+      blocks: [
+        {
+          name: 'pair',
+          doc: {
+            title: 'pair',
+            polarity: 'n',
+            params: [],
+            givens: { L: '5e-7', gm_id: '12', id: '2e-5', vds: '0.6', vsb: '0' },
+            equations: [],
+            checks: [],
+            provides: ['vstar'],
+          },
+        },
+      ],
+    };
+    const runs = runConditions(
+      doc,
+      soleDevice([retag(takenAt(0), 'tt', 27), retag(takenAt(0.3), 'ss', -40)]),
+      [key('tt'), key('ss', -40)],
+      noDevices,
+      undefined,
+      key('tt'),
+    );
+    const [tt, ss] = runs;
+    expect(tt.state === 'evaluated' && tt.feasible).toBe(true);
+    expect(tt.points).toEqual([{ state: 'complies' }]);
+
+    expect(ss.state).toBe('not-evaluated');
+    expect(ss.points[0].state).toBe('no-answer');
+    expect(ss.points[0].error).toMatch(/^block "pair": given vsb = 0 /);
+    expect(ss.points[0].error).toMatch(/no vsb sweep/);
+    expect(ss.result?.blocks?.[0].feasible).toBe(false);
+    expect(aggregateConditionRuns(runs).compliance).toEqual({
+      complies: 1,
+      doesNotComply: 0,
+      noAnswer: 1,
+      notRun: 0,
+      total: 2,
+    });
+  });
+
   it('gives no answer at a condition whose table does not reach the bias the design sits at', () => {
     // The design is biased at vds = 1.0 V. The second condition was characterized only to
     // 0.8 V, so the held device is read 0.2 V away from where it sits. The run completes and
@@ -1192,9 +1294,12 @@ describe('runCondition', () => {
     const entry = loadLibrary().find((s) => s.file === 'stages/cs-amp-current-source-load.json');
     expect(entry).toBeDefined();
     if (!entry) return;
+    // Both of its devices state a drain voltage, so the conditions carry a vds sweep: a device
+    // is sized only on a table that has the sweeps its givens use.
+    const withDrain = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
     const device = soleDevice([
-      retag(dev, 'tt', 27),
-      retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40),
+      retag(withDrain, 'tt', 27),
+      retag(scaleQuantities(withDrain, { gds: 2 }), 'ss', -40),
     ]);
     const fast = runCondition(entry.doc, device, key('tt'), noDevices);
     const slow = runCondition(entry.doc, device, key('ss', -40), noDevices);

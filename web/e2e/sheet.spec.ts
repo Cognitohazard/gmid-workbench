@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
-import { loadDemo, pickSheet } from './helpers';
+import { loadDemo, loadDemoNoVsb, pickSheet } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -123,10 +123,16 @@ test('device swap preserves the user’s tabs (an authored sheet is not wiped)',
 
   // Swap the active device by loading a DIFFERENT device. The user's panels — including the
   // sheet — must survive the reseat; before the fix this re-seeded the canonical preset and
-  // dropped them back to 5.
-  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  // dropped them back to 5. The second device carries the bias sweeps the sheet states, so the
+  // sheet that survives is still a working one: it is sized on the new device and gives its
+  // verdict there.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
+  await expect(page.locator('header .device')).toContainText('nmos_half');
   await expect(page.locator('.grid .panel')).toHaveCount(6);
-  await expect(page.locator('.grid .panel').last().locator('.sheet')).toBeVisible();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.sheet')).toBeVisible();
+  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('.bind')).toContainText('W=');
 });
 
 test('device swap keeps an EDITED canonical panel (editing clears its auto marker)', async ({
@@ -255,9 +261,11 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
 
   await page.goto('/');
   await loadDemo(page);
-  // Load a second device so children have a choice. The import accumulates and becomes active,
-  // so switch back to the demo (the cascode's defaults size cleanly on it).
-  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
+  // Load a second device so children have a choice — one that sweeps the drain and body bias
+  // the cascode's devices state, so a child pointed at it is really sized on it. The import
+  // accumulates and becomes active, so switch back to the demo (the cascode's defaults size
+  // cleanly on it).
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   await page.locator('.devices .dev').first().locator('.dname').click(); // demo active
   await expect(page.locator('header .device')).toContainText('nmos_demo');
@@ -271,25 +279,32 @@ test('design sheet: a composed child sizes against a chosen loaded device (multi
   await expect(child.locator('.dsel')).toBeVisible();
 
   // The child inherits the active (demo) device; point it at the imported device → a different
-  // table re-sizes the block (here the small fixture can't size it, so the card changes).
-  const before = (await child.textContent())?.trim();
-  await child.locator('.dsel').selectOption({ index: 2 }); // the imported nch_lvt
-  await expect.poll(async () => (await child.textContent())?.trim()).not.toBe(before);
+  // table re-sizes the block. That device carries half the current per unit width, so the same
+  // 20 µA needs twice the width: the block still sizes, and its card shows different numbers.
+  await expect(child).toHaveClass(/st-pass/);
+  const before = (await child.locator('.susebind').textContent())?.trim();
+  await child.locator('.dsel').selectOption({ index: 2 }); // the imported nmos_half
+  await expect
+    .poll(async () => (await child.locator('.susebind').textContent())?.trim())
+    .not.toBe(before);
+  await expect(child).toHaveClass(/st-pass/);
+  await expect(sp.locator('.feasb')).toHaveText(/^(in)?feasible/); // a verdict, on both devices
 
   // Both the choice AND the device survive a reload (tables restore from local storage),
   // so the child keeps sizing against the picked table.
   await page.reload();
   await expect(page.locator('.devices .dev')).toHaveCount(2);
   const sp2 = page.locator('.grid .panel').last();
-  await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toHaveValue(/nch_lvt/);
-  await expect(sp2.locator('.pwarn', { hasText: 'nch_lvt' })).toHaveCount(0);
+  await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toHaveValue(/nmos_half/);
+  await expect(sp2.locator('.pwarn', { hasText: 'nmos_half' })).toHaveCount(0);
+  await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
 
   // Removing the chosen device leaves the choice set-but-absent: the run is refused before the
   // engine sees it and says which device is missing — not a design that fails, and never a
   // silent fallback to the active device. The block still renders its device control, since
   // that is what the refusal is fixed with.
-  await page.locator('.devices .dev', { hasText: 'nch_lvt' }).locator('.drm').click();
-  await expect(sp2.locator('[data-not-evaluated]')).toContainText('nch_lvt');
+  await page.locator('.devices .dev', { hasText: 'nmos_half' }).locator('.drm').click();
+  await expect(sp2.locator('[data-not-evaluated]')).toContainText('nmos_half');
   await expect(sp2.locator('.feasb')).toHaveText('not evaluated');
   await expect(sp2.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-skip/);
   await expect(sp2.locator('.suse', { hasText: 'cs' }).locator('.dsel')).toContainText(
@@ -331,13 +346,55 @@ test('design sheet: two loaded devices sharing a label are each individually sel
   await expect(opts.filter({ hasText: 'nch_lvt' })).toHaveCount(2);
   await expect(opts.filter({ hasText: 'otherfab' })).toHaveCount(1);
 
-  // Selecting the namespaced one takes effect (the child now sizes against that fixture, which
-  // can't reach gm/ID=12, so it goes infeasible — proving the selection is not inherit/demo)
-  // AND the device RESOLVES (no "device … did not resolve"; the binding named the right one).
+  // Selecting the namespaced one takes effect AND the device RESOLVES (no "device … did not
+  // resolve"; the binding named the right one). The child states a drain voltage and that
+  // fixture sweeps only length and gate voltage, so the block is refused there — its card says
+  // why, which it could only do having been asked on that table and not on the demo it inherits.
   const second = await opts.filter({ hasText: 'otherfab' }).getAttribute('value');
   await dsel.selectOption(second!);
   await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-fail/);
+  await expect(sp.locator('.suse', { hasText: 'cs' }).locator('.perr')).toContainText(
+    'no vds sweep',
+  );
   await expect(sp.locator('.pwarn', { hasText: 'device "' })).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a table that lacks a sweep the sheet uses refuses the device, with the reason and no verdict', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // The demo device characterized body-grounded only: it sweeps the drain voltage and has no
+  // body-bias column. The import says what that rules out, as information beside the QA.
+  await loadDemoNoVsb(page);
+  await expect(page.locator('.qa .w.info', { hasText: 'no-vsb-sweep' })).toBeVisible();
+  await expect(page.locator('.qa')).not.toContainText('no-vds-sweep');
+
+  // A sheet whose device sits with its source at its body does not use the missing sweep: it
+  // is sized on this table and gets its verdict.
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'Single NMOS gm/ID sizing');
+  await expect(sp.locator('.feasb')).toHaveText(/^(in)?feasible/);
+  await expect(sp.locator('.shead .bind')).toContainText('W=');
+  await expect(sp.locator('[data-not-evaluated]')).toHaveCount(0);
+
+  // The cascode stands its upper device on the node between the two, 0.3 V above its body.
+  // This table cannot answer for that bias, so the device is not sized: no verdict and no
+  // sized line — the reason instead, naming the given and the sweep the table lacks.
+  await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
+  await expect(sp.locator('.feasb')).toHaveText('no answer');
+  await expect(sp.locator('[data-not-evaluated]')).toContainText('given vsb = 0.3');
+  await expect(sp.locator('[data-not-evaluated]')).toContainText('no vsb sweep');
+  await expect(sp.locator('.shead .bind')).toHaveCount(0);
+  await expect(sp.locator('.shead .perr')).toContainText('no vsb sweep');
+  // The block under it has its source at its body, and still sizes.
+  await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
 
   expect(errors).toEqual([]);
 });

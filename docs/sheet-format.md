@@ -257,6 +257,27 @@ default (it is set by the circuit node, not the device), so an undeclared live `
 sizing with guidance to declare it. A declared value always wins, and a declared value outside
 the table's range is clamped to the nearest edge with a warning.
 
+**The table has to carry what the givens use.** A device is sized only from a table that sweeps
+every axis its givens state a value on. An axis the table does not sweep was taken at one
+point: the single value in that column, or `vsb = 0` for a table with no `vsb` column at all (it
+is read as a characterization with the source tied to the body). A table with no `vds` column
+records no drain voltage, and there is no default. On such an axis:
+
+- a given that states the point the table was taken at is sized there, with nothing said;
+- a given that states any other value **refuses the device**. So does `diode: true` on a table
+  with no `vds` sweep, because the connection is read along the `vds = vgs` diagonal;
+- a bias the givens do not state is not held against anything: the device is sized from the
+  table as it is.
+
+`L` follows the same rule on a table taken at a single length. A refusal is a failed sizing,
+not a warning beside a result: the device gets no numbers, the sheet does not evaluate on that
+table, and the message says which given asks for what, what the table has in place of the
+sweep, and what to do — re-export the table with that sweep, or evaluate on a table that has
+it. In a composed sheet the message names the block, the other blocks still size, and a sheet
+that does not use the missing sweep runs on the same table untouched. What each kind of table
+can be used for is set out in the table format:
+[What each use needs](mostab-format.md#what-each-use-needs).
+
 **Declare `vsb` whenever the source does not sit at the bulk.** The default is correct for a
 common-source device or a rail-referenced mirror, and wrong for every differential pair, cascode
 and source follower — where the source floats and body bias is a real, often large, effect. A 5T
@@ -926,11 +947,15 @@ result (validation refuses them).
     at that range's edge — an advisory at the design's own operating point, but at a range end
     an answer read somewhere else is no answer, however its checks came out and even when the
     lookup then failed on the clamped data. (Float rounding is not a clamp: a value within
-    10⁻⁹ of the axis span of an end node reads that node.) One case is NOT covered: a bias
-    declared on an axis the table does not have at all — a `vsb` on a table swept at one body
-    bias. The table is then used as it is, at the centre and at every range end alike, with a
-    warning on each run; a range end that moves such a bias is answered from data that cannot
-    show the move, so read its warning before trusting the chip;
+    10⁻⁹ of the axis span of an end node reads that node.)
+  - the table has no sweep for a bias the held design sits at there, and was not taken at that
+    bias — a range end that lifts a source above its body on a table with no `vsb` sweep. The
+    device is refused (see [The operating point](#the-operating-point-vds-vsb)), and `error`
+    carries the refusal, under the block's name when the device is a block's. Where the
+    refused device hangs under a node the engine re-solves, `error` is the solver's message
+    that its relation did not evaluate, and the refusal is among that end's `warnings`. Where
+    the same thing happens at the design's own operating point the base run does not stand,
+    and every end is `not-run`;
   - a held device's current density falls below the bottom of the swept `vgs` range: it would
     sit at a gate voltage nobody characterized;
   - the design rests on a voltage classed `assumed`. Then every range end is declined without
@@ -1082,7 +1107,9 @@ silently repairs one.
 1. **Declare the operating point of every device.** Bias axes (`vds`, `vsb`) are expressions
    over named node parameters, stated in the givens (see *The operating point*). A bias axis
    the author did not declare is taken from the namespace default and reported in the sizing's
-   `assumed` list — visible, never silently adopted.
+   `assumed` list — visible, never silently adopted. Backstop: a declared bias is read where it
+   was declared or not at all — on a table that does not sweep that axis and was not taken at
+   that value, the device is refused with the reason, never sized on the table as it stands.
 2. **Name internal nodes as parameters and write every `vds` as a subtraction of nodes.**
    Node form makes branch sums checkable and inconsistencies expressible. A source sitting
    above the bulk means `vsb` is declared from the same node that sets the source — body
@@ -1094,10 +1121,11 @@ silently repairs one.
    is not flagged, unless the child is diode-connected: the sheet has said it types the level,
    the check is how the assumption is tested, and the result lists it among its assumptions.
 4. **Declare wiring identities instead of copying their consequence.** A diode-connected
-   device is `diode: true` — resolved exactly on the table's `vds = vgs` diagonal — not a
-   hand-copied drop that goes stale when the operating point moves. A device on another
-   device's gate wire, sharing its source node, binds `vgs` to that block's own gate voltage —
-   not the same inversion level typed into both, which agrees only at one table and one bias.
+   device is `diode: true` — resolved exactly on the table's `vds = vgs` diagonal, which takes
+   a table that sweeps `vds` — not a hand-copied drop that goes stale when the operating point
+   moves. A device on another device's gate wire, sharing its source node, binds `vgs` to that
+   block's own gate voltage — not the same inversion level typed into both, which agrees only
+   at one table and one bias.
    (`diode: true` and a bound `vgs` are independent and may both appear: the connection chooses
    the diagonal, the bound `vgs` chooses the point on it. A declared `vds` is what the connection
    excludes.) Backstop: the `sheet-gate-tie` validation rule flags two blocks whose `wiring`
@@ -1200,9 +1228,10 @@ GBW (so it is not a tautology on a given value):
 
 Reading it: `gm` is fixed from the spec and `gm/ID` chosen, so the givens size the device and
 surface `vstar`, `cgg`, `ceiling`, and the γ-model noise density `vnth_m`. The givens also fix
-the operating point with `vds` (from `V_ds`) and `vsb` (0, body-grounded), so on a table with
-live `vds`/`vsb` axes the sizing slices at a stated point instead of borrowing the caller's
-bias. The two physical checks
+the operating point with `vds` (from `V_ds`) and `vsb` (0, body-grounded), so the sizing
+slices the table at a stated point instead of borrowing the caller's bias. Stating a drain
+voltage means the sheet runs on a table that sweeps `vds`; `vsb = 0` is also what a table with
+no `vsb` column is read as. The two physical checks
 enforce a physical `gm/ID` ceiling and a saturation-headroom floor. The spec check holds the
 input noise under target. The advisory check compares the *actual* GBW — which includes the sized
 `cgg` loading — against the target, so it reports how much the gate capacitance eats the

@@ -114,7 +114,7 @@ but the grid must be complete: missing points, duplicate points, or ragged sweep
 | `vgs` | V | **required** (axis) |
 | `id` | A | **required** |
 | `gm` | S | **required** |
-| `l`, `vds`, `vsb` | m, V, V | optional axes (strongly recommended for real design work) |
+| `l`, `vds`, `vsb` | m, V, V | optional axes — each one decides what the file can be used for; see [What each use needs](#what-each-use-needs) |
 | `gds` | S | recommended (intrinsic gain, ro) |
 | `cgg` | F | recommended (fT) |
 | `cgs`, `cgd`, `cgb`, `cdb`, `csb` | F | optional capacitances |
@@ -131,6 +131,48 @@ but the grid must be complete: missing points, duplicate points, or ragged sweep
 Every cell must parse as a finite number: decimal or scientific notation (`1.5e-07`).
 Empty cells, `NaN`, `inf`, text, and rows with the wrong cell count all reject the
 import — corruption is refused, not silently zeroed.
+
+## What each use needs
+
+A file is accepted with `vgs`, `id` and `gm` alone. What it can then be used for depends on
+which sweeps it carries. A **sweep** is an axis column with two or more values. An axis
+column that holds one value on every row is not a sweep: it records the one point the table
+was taken at.
+
+| Use | What the file needs |
+|-|-|
+| Plotting | Nothing more. Every accepted file plots, whatever it lacks. |
+| Sizing one device | An `l` column, because a device is sized at a length, and the characterization width (`# W:`). |
+| A design sheet that gives a device a drain voltage (`vds`) or connects it as a diode (`diode: true`) | A `vds` sweep. |
+| A design sheet that puts a device's source above its body (`vsb` other than 0) | A `vsb` sweep. |
+
+A design sheet sizes a device only from a table that carries every sweep the device's givens
+use. Where the table does not, that device is **refused** — it is not sized, and the sheet
+says why — so the sheet is not evaluated on that table. It is never sized on the table as it
+stands with a warning beside the numbers: those numbers would belong to a different
+operating point than the one the sheet states. A sheet that does not use the missing sweep
+still runs on the same table.
+
+The rule, for each of `vds`, `vsb` and the length that a device's givens state:
+
+- **The file sweeps the axis.** The table is read at the stated value. A value outside the
+  swept range is read at the nearest swept value, with a warning.
+- **The file has the column with a single value.** That value is where the table was taken.
+  A device given exactly that value is sized there; a device given any other value is
+  refused.
+- **The file has no `vsb` column.** It is taken to have been characterized with the source
+  tied to the body, `vsb = 0`. A device given `vsb = 0` is sized from it; a device given any
+  other body bias is refused.
+- **The file has no `vds` column.** Nothing says what drain voltage it was taken at, and
+  there is no default. A device given a `vds` is refused. A device whose givens state no
+  drain voltage is sized from the table as it is.
+- **A diode-connected device** is read where `vds = vgs`, which needs a `vds` sweep. It is
+  refused on a file with no `vds` column and on one with a single `vds` value.
+- **The file has no `l` column.** No device can be sized from it; it plots.
+
+When a file is loaded, the importer's QA pass says which of these applies to it: a
+`no-vds-sweep` or `no-vsb-sweep` finding, reported as information rather than as a warning,
+because such a file is valid data. Neither is raised on a file that has the sweep.
 
 ## Units and sign conventions
 
@@ -192,10 +234,19 @@ L,VDS,VGS,ID,GM,GDS,CGG
 (A real export sweeps vgs over the full operating range, not 3 points; the truncated
 sweep above is only to keep the example short.)
 
+This file has a `VDS` column with one value and no `VSB` column, so it was taken at
+`vds = 0.9` and is read as `vsb = 0`. It plots, and a design sheet can size a device from it
+when the device's givens state `vds = 0.9` (or no drain voltage) and `vsb = 0` (or no body
+bias). A device given any other drain voltage, a diode-connected device, or a device whose
+source sits above its body needs a file that sweeps `vds` or `vsb` — see
+[What each use needs](#what-each-use-needs).
+
 ## Writing an exporter: checklist
 
-1. Sweep DC operating points over a rectangular `L × VDS × VSB × VGS` grid (or a
-   subset of those axes), one simulation grid per (device, corner, temperature).
+1. Sweep DC operating points over a rectangular `L × VDS × VSB × VGS` grid, one
+   simulation grid per (device, corner, temperature). A subset of those axes is accepted,
+   and each axis left out narrows what the file can be used for — see
+   [What each use needs](#what-each-use-needs).
 2. Emit UTF-8 CSV: `# key: value` metadata block, one header row, one data row per
    grid point. Comma delimiter, no quoting, no blank cells.
 3. Include at least `vgs`, `id`, `gm`; add `gds` and `cgg` if at all possible, and

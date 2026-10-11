@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { validate, canonicalizeTable } from './index';
-import { generateDemoDevice } from '../demo';
+import { generateDemoDevice, signedMirrorDemo } from '../demo';
 import type { Axis, DeviceTable, Grid, TableMeta } from '../types';
 
 // --- builders ----------------------------------------------------------------
@@ -320,6 +320,78 @@ describe('validate: clean demo triggers none of the deepened checks', () => {
       'gamma-range',
     ]);
     expect(w.filter((x) => noisy.has(x.rule))).toEqual([]);
+  });
+});
+
+describe('validate: the bias sweeps a table does not carry', () => {
+  // What a table can be used for, said at import: information about valid data, so never a
+  // warning, and never said of a table that has the sweep.
+  const VDS = { min: 0, max: 1.2, step: 0.3 };
+  const VSB = { min: 0, max: 0.6, step: 0.3 };
+  const sweepFindings = (t: DeviceTable) =>
+    validate(t).filter((w) => w.rule === 'no-vds-sweep' || w.rule === 'no-vsb-sweep');
+
+  it('is silent on a table that sweeps both, in either polarity', () => {
+    const swept = generateDemoDevice({ vds: VDS, vsb: VSB });
+    expect(sweepFindings(swept)).toEqual([]);
+    // A signed PMOS table sweeps vds downward from zero; a negative sweep is still a sweep.
+    const pmos = signedMirrorDemo(swept);
+    expect(pmos.grid.axes.find((a) => a.name === 'vds')?.values[0]).toBeLessThan(0);
+    expect(sweepFindings(pmos)).toEqual([]);
+    expect(sweepFindings(canonicalizeTable(pmos))).toEqual([]);
+  });
+
+  it('says what a table with no vds column cannot size — as information, not a warning', () => {
+    const w = sweepFindings(generateDemoDevice({ vsb: VSB }));
+    expect(w.map((x) => [x.rule, x.severity, x.location])).toEqual([
+      ['no-vds-sweep', 'info', 'vds'],
+    ]);
+    // What it rules out: a device given a drain voltage, and a diode-connected one.
+    expect(w[0].message).toMatch(/no vds sweep/);
+    expect(w[0].message).toMatch(/drain voltage/);
+    expect(w[0].message).toMatch(/diode/);
+  });
+
+  it('says a table with no vsb column is taken as vsb = 0, and what that rules out', () => {
+    const w = sweepFindings(generateDemoDevice({ vds: VDS }));
+    expect(w.map((x) => [x.rule, x.severity, x.location])).toEqual([
+      ['no-vsb-sweep', 'info', 'vsb'],
+    ]);
+    expect(w[0].message).toMatch(/no vsb sweep/);
+    expect(w[0].message).toMatch(/vsb = 0(?![.\d])/);
+  });
+
+  it('raises both on a table that sweeps only length and gate voltage', () => {
+    expect(sweepFindings(generateDemoDevice()).map((x) => x.rule)).toEqual([
+      'no-vds-sweep',
+      'no-vsb-sweep',
+    ]);
+  });
+
+  it('names the one value of an axis that is there but not swept', () => {
+    const once = generateDemoDevice({
+      vds: { min: 0.9, max: 0.9, step: 0.1 },
+      vsb: { min: 0.3, max: 0.3, step: 0.1 },
+    });
+    const w = sweepFindings(once);
+    expect(w.map((x) => [x.rule, x.severity])).toEqual([
+      ['no-vds-sweep', 'info'],
+      ['no-vsb-sweep', 'info'],
+    ]);
+    expect(w[0].message).toMatch(/no vds sweep/);
+    expect(w[0].message).toMatch(/vds = 0\.9/);
+    // A table taken with the body biased is not a body-grounded table, and is not called one.
+    expect(w[1].message).toMatch(/no vsb sweep/);
+    expect(w[1].message).toMatch(/vsb = 0\.3/);
+    expect(w[1].message).not.toMatch(/vsb = 0(?![.\d])/);
+  });
+
+  it('adds nothing above information severity to a table that lacks the sweeps', () => {
+    const bare = validate(generateDemoDevice());
+    const swept = validate(generateDemoDevice({ vds: VDS, vsb: VSB }));
+    const loud = (ws: readonly { severity: string; rule: string }[]): string[] =>
+      ws.filter((w) => w.severity !== 'info').map((w) => w.rule);
+    expect(loud(bare)).toEqual(loud(swept));
   });
 });
 

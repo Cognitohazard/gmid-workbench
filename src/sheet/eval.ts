@@ -231,12 +231,102 @@ const diodeTableCached = (t: DeviceTable): { table: DeviceTable; clamped: boolea
   });
 
 /**
+ * One thing a device's givens use that its table does not sweep: the reason in words, and the
+ * sweep a table would need to answer it.
+ *
+ * A table that sweeps an axis can be read anywhere along it. One that does not was taken at a
+ * single point, and a device is sized on it only if that is the point its givens state:
+ *
+ *  - an axis with ONE value says where the table was taken;
+ *  - no axis at all says nothing — except body bias, where a table with no `vsb` column is taken
+ *    as characterized with the source tied to the body (the namespace default, vsb = 0).
+ *
+ * Anything else is REFUSED rather than read off the table as it stands: the numbers would belong
+ * to a different operating point than the one written down, and a warning beside them does not
+ * make them right.
+ */
+interface Unswept {
+  reason: string;
+  sweep: string;
+}
+
+/** What each axis the givens can state is called in a refusal: the quantity it asks for, and
+ *  the sweep that would answer it. */
+const AXIS_WORDS: Readonly<Record<string, { asks: string; sweep: string }>> = {
+  vds: { asks: 'a drain voltage', sweep: 'vds sweep' },
+  vsb: { asks: 'a body bias', sweep: 'vsb sweep' },
+  l: { asks: 'a length', sweep: 'length sweep' },
+};
+
+/** What a table has in place of a sweep of `axis`, in the words a refusal quotes. */
+function inPlaceOfSweep(table: DeviceTable, axis: string): string {
+  const own = table.grid.axes.find((a) => a.name === axis);
+  if (own) return `a single value, ${axis} = ${own.values[0]}`;
+  const def = AXIS_DEFAULT_BIAS.get(axis);
+  return def === undefined
+    ? `no ${axis} column`
+    : `no ${axis} column, so it is taken as characterized at ${axis} = ${def}`;
+}
+
+/**
+ * A given that states `v` on an axis its table does NOT sweep: undefined — the device is sized
+ * there, silently — when `v` is the point the table was taken at, else why it is refused.
+ * `given` is the givens key as the author wrote it (`L`, where the axis is `l`).
+ */
+function unsweptGiven(
+  table: DeviceTable,
+  given: string,
+  axis: string,
+  v: number,
+): Unswept | undefined {
+  const own = table.grid.axes.find((a) => a.name === axis);
+  const at = own ? own.values[0] : AXIS_DEFAULT_BIAS.get(axis);
+  // Beyond float rounding only (see offHull): `0.3 - (0.1 + 0.2)` is a source at the body.
+  if (at !== undefined && !offHull([at], v)) return undefined;
+  const { asks, sweep } = AXIS_WORDS[axis] ?? {
+    asks: `a value of ${axis}`,
+    sweep: `${axis} sweep`,
+  };
+  return {
+    reason:
+      `given ${given} = ${v} asks for ${asks} the table cannot give: it has no ${sweep} ` +
+      `(${inPlaceOfSweep(table, axis)})`,
+    sweep: `a ${sweep} that covers ${v}`,
+  };
+}
+
+/** A diode connection on a table with no vds sweep. The connection is read along the whole
+ *  vds = vgs diagonal, which only a sweep holds: one characterized drain voltage meets it at a
+ *  single gate voltage, so a table taken at one vds is refused like a table with none. */
+function unsweptDiode(table: DeviceTable): Unswept {
+  return {
+    reason:
+      `the givens declare a diode connection, which is read where vds = vgs, and the table ` +
+      `cannot give that: it has no vds sweep (${inPlaceOfSweep(table, 'vds')})`,
+    sweep: 'a vds sweep',
+  };
+}
+
+/** The refusal of one device, said once for everything its table lacks — so its author learns
+ *  what to re-export in one message rather than one re-export at a time. */
+function sweepRefusal(lacking: readonly Unswept[]): string {
+  return (
+    `${lacking.map((u) => u.reason).join('; ')}. The device is not sized — re-export the ` +
+    `table with ${lacking.map((u) => u.sweep).join(' and ')}, or evaluate on a table that has ` +
+    (lacking.length > 1 ? 'them' : 'one')
+  );
+}
+
+/**
  * Collapse the table's bias axes (vds/vsb) to the operating point before sizing: a value
  * DECLARED in the givens wins; a live axis the givens do not declare takes the namespace
  * default when the table characterizes that point, and is reported as ASSUMED so the
  * coordinate is never silently invented; with neither, the axis stays live and sizing fails
- * with guidance. Returns the sliced table, the applied coordinates, and which of them were
- * assumed rather than authored — all three reach the SizingReport.
+ * with guidance. A value declared on an axis the table does not sweep is held against the one
+ * point the table was taken at, and sized there or refused (see Unswept); `lacking` arrives
+ * holding what the caller already found missing, so one device is refused in one message.
+ * Returns the sliced table, the applied coordinates, and which of them were assumed rather than
+ * authored — all three reach the SizingReport.
  */
 function applyGivensBias(
   b: SheetGivens,
@@ -244,6 +334,7 @@ function applyGivensBias(
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
+  lacking: Unswept[],
 ):
   | {
       table: DeviceTable;
@@ -292,15 +383,7 @@ function applyGivensBias(
           location: 'givens',
         });
       t = fold.table;
-    } else
-      warn({
-        rule: 'sheet-givens',
-        severity: 'warning',
-        message:
-          'the givens declare a diode connection, but the table has no live vds axis to fold onto the ' +
-          'vds = vgs diagonal — using the table as-is',
-        location: 'givens',
-      });
+    } else lacking.push(unsweptDiode(t));
   }
 
   for (const axis of BIAS_AXES) {
@@ -314,14 +397,11 @@ function applyGivensBias(
       if (v === undefined || !Number.isFinite(v))
         return { error: `given ${axis} did not resolve to a finite number` };
       if (!live) {
-        // The declaration is an assertion the table cannot honor (axis absent or already
-        // collapsed — possibly at a DIFFERENT point we cannot see). Advisory, not fatal.
-        warn({
-          rule: 'sheet-givens',
-          severity: 'warning',
-          message: `given ${axis} = ${v} declared, but the table has no live ${axis} axis to slice — using the table as-is`,
-          location: 'givens',
-        });
+        // Nothing to slice: the table was taken at one point on this axis. Where the given
+        // states that point there is nothing to do and nothing to say; anywhere else the device
+        // is refused, because the table as it stands would answer for a different bias.
+        const refused = unsweptGiven(t, axis, axis, v);
+        if (refused) lacking.push(refused);
         continue;
       }
       // sliceGrid clamps to the hull; apply the clamp HERE so the report and the slice
@@ -354,6 +434,9 @@ function applyGivensBias(
       } else needs.push(axis);
     }
   }
+  // What the table lacks comes first: no declaration the author could add would make it answer.
+  // An axis that still needs declaring rides along as data, so the fix for it stays on offer.
+  if (lacking.length) return { error: sweepRefusal(lacking), ...(needs.length ? { needs } : {}) };
   if (needs.length) {
     const list = needs.join(', ');
     return {
@@ -400,7 +483,18 @@ function runSizing(
   if (L === undefined || !Number.isFinite(L))
     return fail('given L did not resolve to a finite number');
 
-  const sliced = applyGivensBias(b, table, values, scope, warn);
+  // A table taken at ONE length says which: a device is sized on it at that length and refused
+  // at any other, like a bias on an axis the table does not sweep (see Unswept). A table with no
+  // length axis at all records no length anywhere, so there is nothing to hold the given against;
+  // the lookup refuses that table in its own words below.
+  const lacking: Unswept[] = [];
+  const lAxis = table.grid.axes.find((a) => a.name === 'l');
+  if (lAxis?.values.length === 1) {
+    const refused = unsweptGiven(table, 'L', 'l', L);
+    if (refused) lacking.push(refused);
+  }
+
+  const sliced = applyGivensBias(b, table, values, scope, warn, lacking);
   if ('error' in sliced) return fail(sliced.error, sliced.needs);
 
   const q: SizeQuery = { table: sliced.table, L };
@@ -448,7 +542,6 @@ function runSizing(
     // means: a lookup that ran out of range on a table slice taken at its hull — a clamped
     // bias axis, a length off the hull, a diode diagonal that leaves the vds range — failed on
     // data from somewhere else, and says nothing certain about the point that was asked for.
-    const lAxis = sliced.table.grid.axes.find((a) => a.name === 'l');
     const off = [
       ...sliced.clamped,
       ...(lAxis && lAxis.values.length > 0 && offHull(lAxis.values, L) ? ['l'] : []),

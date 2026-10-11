@@ -48,7 +48,8 @@ export const AXIS_KEYS: ReadonlySet<string> = new Set(
 );
 
 /** Bias axes that carry a safe default operating point (see BaseQuantity.defaultBias),
- *  keyed by axis name — the one place an undeclared bias axis is allowed to size. */
+ *  keyed by axis name — the one place an undeclared bias axis is allowed to size, and the point
+ *  a table with no such column at all is taken to have been characterized at. */
 export const AXIS_DEFAULT_BIAS: ReadonlyMap<string, number> = new Map(
   BASE_QUANTITIES.filter((q) => q.axis && q.defaultBias !== undefined).map((q) => [
     q.key,

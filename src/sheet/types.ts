@@ -214,6 +214,12 @@ export interface SheetEquation {
  * mid-supply value, so an undeclared bias silently overstates gain). An axis left undeclared
  * takes its namespace default and is reported as ASSUMED (see SizingReport.assumed), or — for
  * vds, which has no honest default — fails the sizing.
+ *
+ * A device is sized only on a table that carries what its givens use. A bias declared on an
+ * axis the table does not sweep is sized where the table was taken — its one value on that axis,
+ * or vsb = 0 for a table with no `vsb` column — and nowhere else: any other value, and a diode
+ * connection on a table with no vds sweep, fails the sizing with the reason. `L` on a table
+ * taken at one length is held to the same rule.
  */
 export interface SheetGivens {
   L: string;

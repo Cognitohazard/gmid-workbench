@@ -17,7 +17,7 @@ import {
 } from '../corners';
 import { PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
-import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
+import { AXIS_DEFAULT_BIAS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 
 // --- physical thresholds -----------------------------------------------------
 
@@ -426,6 +426,46 @@ export function validate(table: DeviceTable): QAWarning[] {
           location: `gm @ ${fmtL(lValue)}`,
         });
       }
+    });
+  }
+
+  // --- what the table can be used for: the bias sweeps it does not carry ---
+  // Information, not a defect: a table taken at one drain voltage, or with the source tied to
+  // the body, is valid data and plots as it is. What it cannot do is answer for a bias it was
+  // not taken at, and a design sheet refuses to size a device that asks it to. Saying so here
+  // puts the limit in front of whoever imports the table, before a sheet is the first to
+  // mention it. Never raised on a table that sweeps the axis, whatever the sweep's sign.
+  const unswept = (axis: string): string | undefined => {
+    const own = grid.axes.find((a) => a.name === axis);
+    if (!own) return `no ${axis} column`;
+    return own.values.length === 1 ? `a single value, ${axis} = ${own.values[0]}` : undefined;
+  };
+  const noVds = unswept('vds');
+  if (noVds !== undefined) {
+    out.push({
+      rule: 'no-vds-sweep',
+      severity: 'info',
+      message:
+        `the table has no vds sweep (${noVds}): it plots, but a device that a design sheet ` +
+        `gives ${axisIndex(grid, 'vds') < 0 ? 'a drain voltage' : 'any other drain voltage'}, ` +
+        `or connects as a diode, cannot be sized from it`,
+      location: 'vds',
+    });
+  }
+  const noVsb = unswept('vsb');
+  if (noVsb !== undefined) {
+    const grounded = AXIS_DEFAULT_BIAS.get('vsb');
+    out.push({
+      rule: 'no-vsb-sweep',
+      severity: 'info',
+      message:
+        axisIndex(grid, 'vsb') < 0 && grounded !== undefined
+          ? `the table has no vsb sweep (${noVsb}), so it is taken as characterized with the ` +
+            `source tied to the body, vsb = ${grounded}: it plots, but a device whose source a ` +
+            `design sheet puts above its body cannot be sized from it`
+          : `the table has no vsb sweep (${noVsb}): it plots, but a device that a design sheet ` +
+            `gives any other body bias cannot be sized from it`,
+      location: 'vsb',
     });
   }
 

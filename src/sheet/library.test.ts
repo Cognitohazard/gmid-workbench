@@ -113,14 +113,14 @@ describe('sheet library: generic contract', () => {
   }
 
   it('is evaluated on a table that reaches every bias the library asks for', () => {
-    // The goldens read each device where its sheet puts it. A body bias the table has no axis
-    // for is read body-grounded, and a drain or body bias past the swept range is read at the
-    // table's edge — either way the number comes from somewhere else. The engine says so each
-    // time, with a warning on the givens and the coordinate listed as clamped, so the shared
-    // table is held to it here: at every sheet's defaults and at every end of its operating
-    // range, no device is read off an axis the table lacks or off its hull.
+    // The goldens read each device where its sheet puts it. A bias the table has no sweep for
+    // refuses the device outright, and a drain or body bias past the swept range is read at the
+    // table's edge — a number from somewhere else. The engine says so each time, in the refusal
+    // or with a warning on the givens and the coordinate listed as clamped, so the shared table
+    // is held to it here: at every sheet's defaults and at every end of its operating range, no
+    // device asks for a sweep the table lacks or is read off its hull.
     const elsewhere =
-      /has no live \w+ axis|is outside the table's \w+ range|does not reach this point/;
+      /it has no \w+ sweep|is outside the table's \w+ range|does not reach this point/;
     const off: string[] = [];
     const bodyBiased = new Set<string>();
     const walk = (

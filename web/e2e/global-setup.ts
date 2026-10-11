@@ -12,8 +12,8 @@ import { importMostab, type DeviceTable } from '../../src/index';
 //
 // The table the suite loads carries a body-bias sweep as well, because the sheets the tests
 // open use one: a design sheet declares `vsb` for every device whose source sits above its body
-// (an input pair on its tail node, a cascode on the node under it), and a table without the
-// axis would have each of them read body-grounded. The sweep is coarse — four slices, 0 to
+// (an input pair on its tail node, a cascode on the node under it), and a device is sized only
+// on a table that sweeps every bias its givens state. The sweep is coarse — four slices, 0 to
 // 0.9 V in 0.3 V steps — to keep the file a quarter of the size the core suite's 0.05 V step
 // would make it: these tests check what the app SAYS, not the numbers to four digits. The range
 // is the core suite's, which reaches past every body bias a library sheet asks for at its
@@ -28,8 +28,20 @@ export default function globalSetup(): void {
   const demo = generateDemoDevice({ vds: VDS, vsb: VSB });
   writeFixture(demo, 'demo.mostab.csv');
   // The same device characterized body-grounded only: three axes, so the bench shows ONE bias
-  // slider. For the chart tests whose subject is that slider row; no sheet is evaluated on it.
+  // slider. For the chart tests whose subject is that slider row, and for the sheet test about
+  // a table that lacks a sweep: a sheet with every source at its body runs on it, and one that
+  // lifts a source is refused.
   writeFixture(generateDemoDevice({ vds: VDS }), 'demo-no-vsb.mostab.csv');
+  // A SECOND device a sheet can really be sized on, for the tests about choosing between loaded
+  // devices: another name, both bias sweeps (vds in coarse 0.3 V steps — those tests check what
+  // the app says, and the bias points they use fall on these nodes), and half the current per
+  // unit width at every gate voltage. A block pointed at it therefore sizes to twice the width
+  // it has on the demo device, so the choice shows in the block's own numbers.
+  const half = scaleQuantities(
+    generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 }, vsb: VSB }),
+    { id: 0.5, gm: 0.5 },
+  );
+  writeFixture({ ...half, id: { ...half.id, device: 'nmos_half' } }, 'demo-half.mostab.csv');
   // The same oracle recast as a signed-convention PMOS table (negative vgs/vds axes),
   // for the cross-polarity overlay test.
   writeFixture(signedMirrorDemo(demo), 'pmos-demo.mostab.csv');

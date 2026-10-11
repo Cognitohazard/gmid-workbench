@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { makeGrid, flatIndex, interpolate, sliceGrid } from './index';
+import { makeGrid, flatIndex, interpolate, offHull, sliceGrid } from './index';
 import type { Axis } from '../types';
 
 const ax = (name: string, vals: number[]): Axis => ({
@@ -128,5 +128,37 @@ describe('sliceGrid', () => {
     const s = sliceGrid(g, { vds: 99 }); // clamps to vds=2
     // f(vgs, vds=2) = 10*vgs + 2 -> [2, 12]
     expect([...s.quantities.get('f')!]).toEqual([2, 12]);
+  });
+});
+
+describe('offHull', () => {
+  it('is the range plus float rounding on a swept axis', () => {
+    const vsb = [0, 0.3, 0.6];
+    expect(offHull(vsb, 0.3)).toBe(false);
+    expect(offHull(vsb, 0)).toBe(false);
+    // 0.3 - (0.1 + 0.2) lands a few ULP below zero: still the first node.
+    expect(0.3 - (0.1 + 0.2)).toBeLessThan(0);
+    expect(offHull(vsb, 0.3 - (0.1 + 0.2))).toBe(false);
+    expect(offHull(vsb, -1e-6)).toBe(true);
+    expect(offHull(vsb, 0.61)).toBe(true);
+  });
+
+  it('on an axis with one value, asks whether this is that value — at any magnitude', () => {
+    // No span to scale the rounding allowance by, so the value's own size stands in: one ULP
+    // off 3.3 is 4.4e-16, twice what one ULP off 0.3 is, and both are the value aimed at.
+    expect(1.1 * 3).not.toBe(3.3);
+    expect(offHull([3.3], 1.1 * 3)).toBe(false);
+    expect(0.1 + 0.2).not.toBe(0.3);
+    expect(offHull([0.3], 0.1 + 0.2)).toBe(false);
+    expect(offHull([-3.3], -(1.1 * 3))).toBe(false);
+    // A length is some seven orders smaller than a volt: rounding is still rounding there, and
+    // a length a fraction of a percent away is still a different length.
+    expect(offHull([5e-7], 5e-7 * (1 + 1e-12))).toBe(false);
+    expect(offHull([5e-7], 5.01e-7)).toBe(true);
+    // Anything that is a different operating point is off it, on either side.
+    expect(offHull([3.3], 3.301)).toBe(true);
+    expect(offHull([3.3], 3.299)).toBe(true);
+    expect(offHull([0], 1e-9)).toBe(true);
+    expect(offHull([0], 0.3 - (0.1 + 0.2))).toBe(false);
   });
 });

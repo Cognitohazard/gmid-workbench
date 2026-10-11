@@ -36,6 +36,7 @@ release/
 # e2e demo fixtures (regenerated from the EKV oracle by web/e2e/global-setup.ts)
 web/e2e/fixtures/demo.mostab.csv
 web/e2e/fixtures/demo-no-vsb.mostab.csv
+web/e2e/fixtures/demo-half.mostab.csv
 web/e2e/fixtures/pmos-demo.mostab.csv
 web/e2e/fixtures/demo-ss.mostab.csv
 web/e2e/fixtures/demo-tt-alt.mostab.csv
