@@ -70,7 +70,7 @@ export const REFS: SheetRefIndex = buildSheetRefIndex(libraryEntries());
 // 0.2 mV of gate voltage. Both ranges reach past everything the library asks for, at its
 // defaults and at every range end: the largest body bias is 0.76 V (the folded cascode's input
 // pair at the top of its common-mode range) and the largest drain-source voltage 1.19 V (the
-// current-mirror and symmetrical OTAs' PMOS output device whose drain is the NMOS diode's node,
+// current-mirror OTA's PMOS output device whose drain is the NMOS diode's node,
 // one diode drop above ground under a 1.8 V supply). A library test holds the table to that.
 export const table = generateDemoDevice({
   vds: { min: 0, max: 1.2, step: 0.05 },

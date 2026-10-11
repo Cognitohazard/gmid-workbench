@@ -442,7 +442,7 @@ describe('sheet library: the published interface', () => {
     // The set is the picker's own curation predicate, not a copy of it: a sheet that joins or
     // leaves the search has to arrive here at the same moment.
     const searched = EVALUATED.filter(({ file }) => searchable(file.replace(/\.json$/, '')));
-    expect(searched).toHaveLength(25);
+    expect(searched).toHaveLength(24);
     const missing: string[] = [];
     for (const { file, doc, res } of searched) {
       if (!(doc.provides ?? []).includes('I_q')) missing.push(`${file}: not published`);

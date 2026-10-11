@@ -722,8 +722,8 @@ here, `wideswing_node = ref__vdsat + node_margin`), a child's provided scalar, o
 sized operating point. The source follower is a second live example: its drain-source voltage is
 `VDD - V_in + vgs_est`, and `vgs_est` solves for the device's own `vgs`. It does not put a design
 constraint on its output node instead, because that node's valid range moves with the supply and a
-design constraint's bracket is fixed numbers that cannot follow it. The current-mirror and
-symmetrical OTAs are a third, with a child's provided scalar as the target: a PMOS mirror output
+design constraint's bracket is fixed numbers that cannot follow it. The current-mirror OTA
+is a third, with a child's provided scalar as the target: a PMOS mirror output
 device has its drain on the node of an NMOS diode, the current it delivers there is the diode's,
 and the diode's gate-source voltage at that current is the node, so `V_nmir` solves for
 `nmir__vgs`. `value` is only the starting

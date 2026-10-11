@@ -59,7 +59,7 @@ describe('the searchable set', () => {
   // A tripwire, deliberately: a new sheet under stages/, otas/ or multistage/ has to be
   // decided about — searchable or not — rather than joining the search by being filed there.
   it('is the set the picker is specified against', () => {
-    expect(SEARCHABLE).toHaveLength(25);
+    expect(SEARCHABLE).toHaveLength(24);
   });
 
   // The curation is written in library ids, and nothing about a string forces one to exist.
@@ -704,7 +704,7 @@ describe('over the whole searchable set', () => {
   // deep the search gets, and starving it is what puts both outcomes in one run.
   it('never leaves a cause blank beside a verdict that is not closed', () => {
     const all = pickAll({ VDD: 1.8, CL: 2e-12, Av_target: 200 }, SEARCHABLE, 20);
-    expect(all).toHaveLength(25);
+    expect(all).toHaveLength(24);
     const silent = all.filter((c) => c.verdict !== 'closed' && !c.cause?.trim());
     expect(silent.map((c) => c.path)).toEqual([]);
     expect([...new Set(all.map((c) => c.verdict))].sort()).toEqual(['closed', 'did-not-close']);

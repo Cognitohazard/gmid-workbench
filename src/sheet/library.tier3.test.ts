@@ -395,9 +395,8 @@ describe('tier-3 goldens: folded cascode OTA', () => {
 });
 
 /**
- * The goldens the current-mirror OTA and the symmetrical OTA share. The two sheets are one
- * circuit under two names, differing in the name of the PMOS diode block (`diode`) and of the
- * PMOS mirror-node pole equation (`pmosPole`); registered per describe.
+ * The goldens of the current-mirror OTA, which is also called the symmetrical OTA. `diode` is
+ * the name of its PMOS diode block and `pmosPole` of its PMOS mirror-node pole equation.
  *
  * Defaults: I_tail 20 µA, K_m 2, gm/ID in 12 / mirror diodes 10, every L 0.5 µm, V_out_dc 0.9 V,
  * VDD 1.8 V. Only the PMOS diode's current is typed, half the tail current. The input device is
@@ -414,8 +413,8 @@ describe('tier-3 goldens: folded cascode OTA', () => {
 const itIsAMirrorOta = (
   doc: SheetDoc,
   res: SheetResult,
-  diode: 'mload' | 'mloadp',
-  pmosPole: 'f_pole' | 'f_pole_p',
+  diode: 'mload',
+  pmosPole: 'f_pole',
 ): void => {
   const I_HALF = 10e-6;
   const K_M = 2;
@@ -584,8 +583,7 @@ describe('tier-3 goldens: current-mirror OTA', () => {
     // gate voltage, and the design sized on the first asked about on the second. Every width is
     // the sized one. The PMOS diode keeps the half tail current it is handed, so at half the
     // current density it needs a higher gate voltage, and both PMOS output devices are on that
-    // gate: they follow it there instead of being handed K_m times a typed current. Asked of this
-    // sheet only — the symmetrical OTA is the same circuit under other names.
+    // gate: they follow it there instead of being handed K_m times a typed current.
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
       id: { ...t.id, corner, temp },
@@ -645,32 +643,6 @@ describe('tier-3 goldens: current-mirror OTA', () => {
     expect(relErr(h.values.moutp__id / iRef - 1, (va(L) + 0.9) / refDrop - 1)).toBeLessThan(1e-2);
     expect(relErr(h.values.mfold__id / iRef - 1, foldRatio - 1)).toBeLessThan(1e-2);
     expect(relErr(h.values.moutn__id / h.values.mfold__id - 1, outRatioN - 1)).toBeLessThan(1e-2);
-  });
-});
-
-describe('tier-3 goldens: symmetrical OTA', () => {
-  const doc = sheet('symmetrical-ota.json');
-  const res = runSheet(doc, table);
-
-  itIsAMirrorOta(doc, res, 'mloadp', 'f_pole_p');
-
-  itIsOneInputGate(res);
-
-  it('PM pays the PMOS node as a FULL pole and the intermediate NMOS node as a DOUBLET', () => {
-    // Same structure golden as the current-mirror OTA — the symmetrical OTA shares the
-    // asymmetric path accounting (every branch passes a PMOS mirror; half pass the NMOS one).
-    const v = res.values;
-    const pm =
-      90 -
-      ((Math.atan(v.GBW / v.f_pole_p) +
-        Math.atan(v.GBW / v.f_pole_n) -
-        Math.atan(v.GBW / (2 * v.f_pole_n))) *
-        180) /
-        Math.PI;
-    expect(relErr(v.PM, pm)).toBeLessThan(1e-9);
-    const nAsFullPole =
-      90 - ((Math.atan(v.GBW / v.f_pole_p) + Math.atan(v.GBW / v.f_pole_n)) * 180) / Math.PI;
-    expect(v.PM - nAsFullPole).toBeGreaterThan(1e-4);
   });
 });
 
