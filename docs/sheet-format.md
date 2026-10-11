@@ -719,10 +719,14 @@ bias generator parks the mirror node at the mirror device's own `vdsat` plus a m
 
 The target is any name resolvable in this sheet's namespace once its body has run — an equation (as
 here, `wideswing_node = ref__vdsat + node_margin`), a child's provided scalar, or the sheet's own
-sized operating point. The source follower is the other live example: its drain-source voltage is
+sized operating point. The source follower is a second live example: its drain-source voltage is
 `VDD - V_in + vgs_est`, and `vgs_est` solves for the device's own `vgs`. It does not put a design
 constraint on its output node instead, because that node's valid range moves with the supply and a
-design constraint's bracket is fixed numbers that cannot follow it. `value` is only the starting
+design constraint's bracket is fixed numbers that cannot follow it. The current-mirror and
+symmetrical OTAs are a third, with a child's provided scalar as the target: a PMOS mirror output
+device has its drain on the node of an NMOS diode, the current it delivers there is the diode's,
+and the diode's gate-source voltage at that current is the node, so `V_nmir` solves for
+`nmir__vgs`. `value` is only the starting
 guess: where the loop contracts to a single fixed point, every guess lands on the same answer. A
 guess still matters when it decides *which* fixed point you reach (contraction is local, so a loop
 can have more than one) or whether the iteration gets there at all, so keep it near the value you
@@ -1043,9 +1047,10 @@ exactly — an author reading a green chip should know what it is and is not a s
   wrote, so a range-end `gm` — and every quantity derived from it — sits an interpolation
   residual below the base's, about 0.1% on the demo model, even where nothing about the condition
   changed. Read a base-against-end comparison with that floor already under it.
-- **The authored current expression IS the hardware model.** `I_o = K_m*I_tail/2` re-evaluates
-  at the range end, and that ratio is the mirror. What a typed current does not model is a real
-  source's own output resistance re-settling the current as its drain moves: a device handed
+- **The authored current expression IS the hardware model.** `I_f = I_branch - in__id`
+  re-evaluates at the range end, and that difference is the folding node's current law. What a
+  typed current does not model is a real source's own output resistance re-settling the current
+  as its drain moves: a device handed
   `I_tail` carries exactly `I_tail` wherever its drain goes. A device written as a copy of its
   reference — the reference's width on the reference's gate, as the 5T OTA's tail device is —
   has its current read off the table at the drain voltage it sits at, so that re-settling is in

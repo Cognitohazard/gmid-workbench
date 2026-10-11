@@ -8,10 +8,16 @@
 //    so gds = id/(VA + vds) and the intrinsic gain av0 = (gm/ID)·(VA + vds). Analytic
 //    single-stage gains therefore land within interpolation error (< 1e-2).
 //  - Thermal density vnth_m = sqrt(4kTγ/gm) with γ = GAMMA_DEFAULT.
+//  - A device given another device's gate voltage and a multiple K of its width carries K times
+//    that device's current times (VA + vds)/(VA + vds_ref): id and gm both scale with
+//    (1 + vds/VA) at fixed vgs and W. A diode-connected reference has vds_ref equal to its own
+//    vgs, read along an interpolated diagonal, so mirror-ratio goldens hold to about 1e-4.
 
 import { describe, it, expect } from 'vitest';
+import { scaleQuantities } from '../demo';
+import type { DeviceTable } from '../types';
 import { runSheet, withParams } from './index';
-import type { SizingReport, SheetResult } from './types';
+import type { SizingReport, SheetDoc, SheetResult } from './types';
 import {
   table,
   relErr,
@@ -22,12 +28,16 @@ import {
   gmbOf,
   cggOf,
   sheet as libSheet,
+  REFS,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
   VGS_GMID14_L05,
   sourceNodeUnder,
   vgsAtBody,
 } from './library.fixtures';
+// Test-only reach across to the condition runs: holding one sized design at a second
+// characterization is that module's transition, and one golden below asks it of a sheet.
+import { groupDevices, runConditions } from '../corners';
 
 /** Intrinsic gain av0 = (gm/ID)·(VA + vds) at length `L`, declared vds. */
 const av0Of = (gm_id: number, L: number, vds: number): number => gm_id * (va(L) + vds);
@@ -384,26 +394,168 @@ describe('tier-3 goldens: folded cascode OTA', () => {
   itIsOneInputGate(res);
 });
 
+/**
+ * The goldens the current-mirror OTA and the symmetrical OTA share. The two sheets are one
+ * circuit under two names, differing in the name of the PMOS diode block (`diode`) and of the
+ * PMOS mirror-node pole equation (`pmosPole`); registered per describe.
+ *
+ * Defaults: I_tail 20 µA, K_m 2, gm/ID in 12 / mirror diodes 10, every L 0.5 µm, V_out_dc 0.9 V,
+ * VDD 1.8 V. Only the PMOS diode's current is typed, half the tail current. The input device is
+ * in its branch and reads it; each output device is a multiple of its diode device's width on
+ * that device's gate, so what it carries is read off the table at its own drain voltage. Both
+ * diodes are sized at gm/ID 10 and the one table stands for both polarities, so both sit at
+ * vgs(10) = 0.610063 V and the mirror ratios follow from the closed form in the header, with
+ * nothing read back from the run:
+ *   PMOS output at the output      (2.5 + 0.9)/(2.5 + 0.610063)      = 1.093225   rOut
+ *   PMOS output on the NMOS diode  (2.5 + 1.189937)/(2.5 + 0.610063) = 1.186451   rFold
+ *                                  (its drain is that diode's node, vgs(10) above ground)
+ *   NMOS output at the output      (2.5 + 0.9)/(2.5 + 0.610063)      = 1.093225   rOut again
+ */
+const itIsAMirrorOta = (
+  doc: SheetDoc,
+  res: SheetResult,
+  diode: 'mload' | 'mloadp',
+  pmosPole: 'f_pole' | 'f_pole_p',
+): void => {
+  const I_HALF = 10e-6;
+  const K_M = 2;
+  const gmIn = 12 * I_HALF; // (gm/ID)·id; the input device reads the diode's typed current
+  const refDrop = va(L) + VGS_GMID10_L05;
+  const rOut = (va(L) + 0.9) / refDrop;
+  const rFold = (va(L) + (1.8 - VGS_GMID10_L05)) / refDrop;
+  const v = res.values;
+
+  it('one current is typed, and each mirror is one gate wire', () => {
+    // Half the tail current goes into the PMOS diode and nowhere else. The input device below it
+    // and the NMOS diode under the second PMOS output device are HANDED the current of the device
+    // above them, to the last bit.
+    expect(block(res, diode).id).toBe(I_HALF);
+    expect(block(res, 'in').id).toBe(block(res, diode).id);
+    expect(block(res, 'nmir').id).toBe(v.mfold__id);
+    // A mirror is a multiple of the diode's width on the diode's gate. The width is passed
+    // through untouched; the gate voltage is reported as the table's own vgs coordinate at the
+    // point it was read, so two devices on one wire agree to rounding rather than always to the
+    // last bit.
+    expect(block(res, 'moutp').W).toBe(K_M * block(res, diode).W);
+    expect(block(res, 'mfold').W).toBe(K_M * block(res, diode).W);
+    expect(block(res, 'moutn').W).toBe(block(res, 'nmir').W);
+    for (const [out, ref] of [
+      ['moutp', diode],
+      ['mfold', diode],
+      ['moutn', 'nmir'],
+    ])
+      expect([out, relErr(block(res, out).vgs, block(res, ref).vgs) < 1e-12]).toEqual([out, true]);
+  });
+
+  it('the NMOS diode node is solved to the gate-source voltage of the diode on it', () => {
+    // The one bias loop on the sheet: the second PMOS output device has its drain on this node,
+    // the current it delivers there is the NMOS diode's, and the diode's gate-source voltage at
+    // that current is the node. Sized for its inversion level, the diode sits at vgs(10)
+    // whatever it carries, so the node lands there and the PMOS device sits
+    // 1.8 − 0.610063 = 1.189937 V below the supply.
+    expect(relErr(v.V_nmir, block(res, 'nmir').vgs)).toBeLessThan(1e-6);
+    expect(relErr(v.V_nmir, VGS_GMID10_L05)).toBeLessThan(1e-5);
+    expect(block(res, 'mfold').bias?.vds).toBeCloseTo(1.8 - VGS_GMID10_L05, 5);
+    // Solved, not typed: the value the sheet stores is a starting guess, 0.19 V away from the
+    // answer here, and another guess lands on the same node.
+    const guess = doc.params.find((p) => p.name === 'V_nmir');
+    expect(guess?.solveFor).toBe('nmir__vgs');
+    expect(Math.abs(guess!.value - v.V_nmir)).toBeGreaterThan(0.1);
+    const other = runSheet(withParams(doc, { V_nmir: 0.5 }), table);
+    expect(relErr(other.values.V_nmir, v.V_nmir)).toBeLessThan(1e-6);
+  });
+
+  it('each mirror misses its reference by the drain-voltage ratio of the demo model', () => {
+    // Compared as errors, the way the mirror goldens compare theirs. The output sits 0.9 V from
+    // either rail, further than a diode drop, so both copies made at the output over-deliver by
+    // 9.32 %; the copy made onto the NMOS diode's node sits 1.19 V below the supply and
+    // over-delivers by 18.65 %. 1e-3 of those errors is 0.3 mV and 0.6 mV of drain voltage.
+    expect(relErr(v.moutp__id / (K_M * I_HALF) - 1, rOut - 1)).toBeLessThan(1e-3);
+    expect(relErr(v.mfold__id / (K_M * I_HALF) - 1, rFold - 1)).toBeLessThan(1e-3);
+    expect(relErr(v.moutn__id / v.mfold__id - 1, rOut - 1)).toBeLessThan(1e-3);
+    // The NMOS output device is a copy of a copy, so it asks for rFold times what the PMOS one
+    // does, and the difference has to come from the input. Referred through the transconductance
+    // of the next golden, the currents, K_m and rOut all cancel:
+    // vos_sys = (2/12)·(rFold − 1)/(rFold + 1) = 14.21 mV.
+    expect(relErr(v.vos_sys, ((2 / 12) * (rFold - 1)) / (rFold + 1))).toBeLessThan(1e-3);
+    expect(relErr(v.vos_sys, Math.abs(v.moutn__id - v.moutp__id) / v.Gm_out)).toBeLessThan(1e-12);
+  });
+
+  it('transconductance and GBW follow the gain the two mirror paths deliver', () => {
+    // gm scales with (VA + vds) exactly as id does, so each mirror's small-signal current gain is
+    // its current ratio: K_m·rOut straight to the output, K_m·rFold·rOut through the NMOS mirror.
+    // The gm of a device on another's gate rides the interpolated gm curve, so these two hold to
+    // interpolation order. Each input device takes half the differential input, so
+    // Gm_out = gm_in·K_m·rOut·(1 + rFold)/2 = 120 µS × 2.390283 = 286.83 µS, against the 240 µS
+    // of two exact copies.
+    expect(relErr(v.Ai_p / K_M - 1, rOut - 1)).toBeLessThan(1e-2);
+    expect(relErr(v.Ai_n / K_M - 1, rFold * rOut - 1)).toBeLessThan(1e-2);
+    const gmOut = (gmIn * K_M * rOut * (1 + rFold)) / 2;
+    expect(relErr(v.Gm_out, gmOut)).toBeLessThan(1e-3);
+    expect(relErr(v.GBW, gmOut / (TWO_PI * CL))).toBeLessThan(1e-3);
+    // Which quantities each equation reads, exactly.
+    expect(relErr(v.Gm_out, (v.in__gm * (v.Ai_p + v.Ai_n)) / 2)).toBeLessThan(1e-12);
+    expect(relErr(v.GBW, v.Gm_out / (TWO_PI * CL))).toBeLessThan(1e-12);
+  });
+
+  it('slew is twice what the slower output device carries at rest', () => {
+    // The PMOS output device carries K_m·I_half·rOut = 21.86 µA and the NMOS one rFold times
+    // that, so the rising direction is the slower: 2 × 21.86 µA into 2 pF, not the 40 µA of two
+    // exact copies.
+    expect(v.moutp__id).toBeLessThan(v.moutn__id);
+    expect(relErr(v.SR, (2 * K_M * I_HALF * rOut) / CL)).toBeLessThan(1e-3);
+    expect(relErr(v.SR, (2 * v.moutp__id) / CL)).toBeLessThan(1e-12);
+  });
+
+  it('the supply carries both input branches and the two PMOS output branches', () => {
+    // 2·I_half through the two PMOS diodes plus K_m·I_half·(rOut + rFold) through the two PMOS
+    // output devices: 20 µA + 20 µA × 2.279676 = 65.59 µA, against the 60 µA of exact copies.
+    // The NMOS mirror is not a further branch: it carries to ground what the PMOS side delivers.
+    expect(relErr(v.I_q, 2 * I_HALF + K_M * I_HALF * (rOut + rFold))).toBeLessThan(1e-3);
+    expect(relErr(v.I_q, 2 * v[`${diode}__id`] + v.moutp__id + v.mfold__id)).toBeLessThan(1e-12);
+  });
+
+  it('DC gain is K_m-independent: gain = (gm/ID_in)·(VA + V_out)/2', () => {
+    // gds = idSat/VA in the demo model and an output device copies its diode's saturation current
+    // per width, so the drain voltage an output device sits at cancels out of its gds: it is its
+    // diode's current, times the width ratio, over (VA + vgs(10)). The PMOS output device copies
+    // K_m·I_half and the NMOS one rFold times that, so Rout = 71.12 kΩ.
+    const rout =
+      1 / (gdsOf(K_M * I_HALF, L, VGS_GMID10_L05) + gdsOf(K_M * I_HALF * rFold, L, VGS_GMID10_L05));
+    expect(relErr(v.Rout, rout)).toBeLessThan(1e-3);
+    // Against the transconductance above, the currents, K_m and (1 + rFold) all cancel:
+    // Av = 12·rOut·(VA + vgs(10))/2 = 12·(VA + 0.9)/2 = 20.4, the gain of two exact copies at
+    // the output's drain voltage. The output sits mid-supply, which is what makes the two rOut
+    // one number.
+    expect(relErr(v.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-3);
+    expect(relErr(v.Av, v.Gm_out * v.Rout)).toBeLessThan(1e-12);
+    // K_m scales every output-side width and current together, so it cancels on the table too.
+    const wider = runSheet(withParams(doc, { K_m: 4 }), table);
+    expect(relErr(wider.values.Av, v.Av)).toBeLessThan(1e-9);
+  });
+
+  it('each mirror-node pole is the diode gm over the gates on its node', () => {
+    // A diode device's gm is (gm/ID)·id, both given, and cgg = W·L·Cox at the width the sizing
+    // landed on. The PMOS node carries the diode's gate and one K_m times as wide.
+    const fP = (10 * I_HALF) / (TWO_PI * (1 + K_M) * cggOf(v[`${diode}__W`], L));
+    expect(relErr(v[pmosPole], fP)).toBeLessThan(1e-9);
+    // The NMOS node carries two gates of its diode's width, and that diode carries what the
+    // second PMOS output device delivers.
+    const fN = (10 * v.mfold__id) / (TWO_PI * 2 * cggOf(v.nmir__W, L));
+    expect(relErr(v.f_pole_n, fN)).toBeLessThan(1e-9);
+    // Both diodes sit at the same inversion level and the same diode drop, so the NMOS one is
+    // the PMOS one widened in proportion to its current and the currents cancel between the two
+    // poles: they differ only in how many diode widths of gate hang on each node, 1 + K_m
+    // against 2.
+    expect(relErr(v.f_pole_n / v[pmosPole], (1 + K_M) / 2)).toBeLessThan(1e-3);
+  });
+};
+
 describe('tier-3 goldens: current-mirror OTA', () => {
-  const res = runSheet(sheet('current-mirror-ota.json'), table);
-  // Defaults: I_tail 20 µA, K_m 2, gm/ID in 12 / mirror-out 8, L_mir 0.5 µm, V_out 0.9.
-  const gmIn = 10e-6 * 12;
+  const doc = sheet('current-mirror-ota.json');
+  const res = runSheet(doc, table);
 
-  it('GBW and slew carry the mirror ratio K_m exactly', () => {
-    expect(relErr(res.values.GBW, (2 * gmIn) / (TWO_PI * CL))).toBeLessThan(1e-9);
-    expect(relErr(res.values.SR, (2 * 20e-6) / CL)).toBeLessThan(1e-9);
-  });
-
-  it('K_m is paid for out of the supply: the input branch plus two K_m-scaled output branches', () => {
-    // The mirror ratio buys GBW and slew above at a current price the gain equation never shows:
-    // I_tail + 2·(K_m·I_tail/2) = I_tail·(1 + K_m) = 60 µA at the shipped K_m of 2.
-    expect(relErr(res.values.I_q, 20e-6 * 3)).toBeLessThan(1e-9);
-  });
-
-  it('DC gain is K_m-independent: gain = (gm/ID_in)·(VA + V_out)/2 for the matched output pair', () => {
-    // Both output devices sit at L_mir, vds 0.9, so gds_p = gds_n and K_m cancels.
-    expect(relErr(res.values.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
-  });
+  itIsAMirrorOta(doc, res, 'mload', 'f_pole');
 
   itIsOneInputGate(res);
 
@@ -426,25 +578,81 @@ describe('tier-3 goldens: current-mirror OTA', () => {
       90 - ((Math.atan(v.GBW / v.f_pole) + Math.atan(v.GBW / v.f_pole_n)) * 180) / Math.PI;
     expect(v.PM - nAsFullPole).toBeGreaterThan(1e-4); // …but less than a lone pole would
   });
+
+  it('held at another condition, each mirror follows its diode and the node is solved again', () => {
+    // A second characterization with half the current and half the transconductance at every
+    // gate voltage, and the design sized on the first asked about on the second. Every width is
+    // the sized one. The PMOS diode keeps the half tail current it is handed, so at half the
+    // current density it needs a higher gate voltage, and both PMOS output devices are on that
+    // gate: they follow it there instead of being handed K_m times a typed current. Asked of this
+    // sheet only — the symmetrical OTA is the same circuit under other names.
+    const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
+      ...t,
+      id: { ...t.id, corner, temp },
+    });
+    const weak = scaleQuantities(table, { id: 0.5, gm: 0.5 });
+    const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
+    const tt = { corner: 'tt', temp: 27 };
+    const [sized, held] = runConditions(
+      doc,
+      device,
+      [tt, { corner: 'ss', temp: -40 }],
+      () => undefined,
+      REFS,
+      tt,
+    );
+    expect([sized.design, held.design]).toEqual(['sized', 'held']);
+    expect([sized.state, held.state]).toEqual(['evaluated', 'evaluated']);
+    if (sized.state !== 'evaluated' || held.state !== 'evaluated') return;
+    const [s, h] = [sized.result, held.result];
+
+    for (const name of ['mload', 'in', 'moutp', 'mfold', 'nmir', 'moutn'])
+      expect([name, block(h, name).W]).toEqual([name, block(s, name).W]);
+    expect(block(h, 'mload').id).toBe(10e-6);
+    expect(block(h, 'in').id).toBe(block(h, 'mload').id);
+    expect(block(h, 'mload').vgs).toBeGreaterThan(block(s, 'mload').vgs);
+    expect(relErr(block(h, 'moutp').vgs, block(h, 'mload').vgs)).toBeLessThan(1e-12);
+    expect(relErr(block(h, 'mfold').vgs, block(h, 'mload').vgs)).toBeLessThan(1e-12);
+    expect(relErr(block(h, 'moutn').vgs, block(h, 'nmir').vgs)).toBeLessThan(1e-12);
+
+    // The NMOS diode is held at its width too, so here its gate-source voltage does depend on
+    // the current it is handed, and that current on the node: the loop is a real one, and it
+    // closes on the diode's own gate-source voltage with the diode carrying exactly what the
+    // PMOS device above it delivers at that node.
+    expect(relErr(h.values.V_nmir, block(h, 'nmir').vgs)).toBeLessThan(1e-6);
+    expect(block(h, 'nmir').id).toBe(h.values.mfold__id);
+    expect(block(h, 'mfold').bias?.vds).toBeCloseTo(1.8 - h.values.V_nmir, 9);
+    // Where the node lands has no closed form (it inverts the model's current law at a fixed
+    // width), but it is bracketed from both sides. From below: at the gate voltage it was sized
+    // at, the diode carries half its sized current on this table, while the device above still
+    // hands it most of that — a mirror ratio moves by a few percent, not by half — so the node
+    // has to rise. From above: the two diodes were sized at one gate voltage, so their widths are
+    // in the ratio of their sized currents, K_m·rFold; at the PMOS diode's gate voltage here the
+    // NMOS diode would therefore carry K_m·rFold times the PMOS diode's current, and with both
+    // diode drops higher the copy made onto this node is worth less than rFold. So the node
+    // settles below the PMOS diode's drop, carrying less than where the design was sized.
+    expect(h.values.V_nmir).toBeGreaterThan(s.values.V_nmir);
+    expect(h.values.V_nmir).toBeLessThan(block(h, 'mload').vgs);
+    expect(h.values.mfold__id).toBeLessThan(s.values.mfold__id);
+    expect(h.values.mfold__id).toBeGreaterThan(s.values.mfold__id / 2);
+
+    // Every copy is the same closed form, read at this condition's voltages: scaling the current
+    // column by a constant leaves its (VA + vds) dependence alone.
+    const iRef = 2 * 10e-6; // K_m times the diode's current
+    const refDrop = va(L) + block(h, 'mload').vgs;
+    const foldRatio = (va(L) + 1.8 - h.values.V_nmir) / refDrop;
+    const outRatioN = (va(L) + 0.9) / (va(L) + h.values.V_nmir);
+    expect(relErr(h.values.moutp__id / iRef - 1, (va(L) + 0.9) / refDrop - 1)).toBeLessThan(1e-2);
+    expect(relErr(h.values.mfold__id / iRef - 1, foldRatio - 1)).toBeLessThan(1e-2);
+    expect(relErr(h.values.moutn__id / h.values.mfold__id - 1, outRatioN - 1)).toBeLessThan(1e-2);
+  });
 });
 
 describe('tier-3 goldens: symmetrical OTA', () => {
-  const res = runSheet(sheet('symmetrical-ota.json'), table);
-  // Defaults mirror the current-mirror OTA: I_tail 20 µA, K_m 2, gm/ID in 12, out 8.
-  const gmIn = 10e-6 * 12;
+  const doc = sheet('symmetrical-ota.json');
+  const res = runSheet(doc, table);
 
-  it('GBW and symmetric slew carry K_m exactly', () => {
-    expect(relErr(res.values.GBW, (2 * gmIn) / (TWO_PI * CL))).toBeLessThan(1e-9);
-    expect(relErr(res.values.SR, (2 * 20e-6) / CL)).toBeLessThan(1e-9);
-  });
-
-  it('DC gain matches the current-mirror OTA form (K_m-independent)', () => {
-    expect(relErr(res.values.Av, (12 * (va(L) + 0.9)) / 2)).toBeLessThan(1e-2);
-  });
-
-  it('the supply current matches the current-mirror OTA form, I_tail·(1 + K_m)', () => {
-    expect(relErr(res.values.I_q, 20e-6 * 3)).toBeLessThan(1e-9);
-  });
+  itIsAMirrorOta(doc, res, 'mloadp', 'f_pole_p');
 
   itIsOneInputGate(res);
 

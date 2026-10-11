@@ -350,9 +350,7 @@ describe('sheet library: vetting lints', () => {
     // that has stopped and is still listed.
     const TYPED_INTO_SEVERAL: readonly string[] = [
       'multistage/fd-telescopic-ota.json',
-      'otas/current-mirror-ota.json',
       'otas/folded-cascode-ota.json',
-      'otas/symmetrical-ota.json',
       'otas/telescopic-cascode-ota.json',
     ];
     const found = RESOLVED.map(({ file, doc }) => ({ file, typed: programs(doc) })).filter(
