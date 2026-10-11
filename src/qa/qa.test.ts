@@ -384,6 +384,23 @@ describe('validate: the bias sweeps a table does not carry', () => {
     expect(w[1].message).toMatch(/no vsb sweep/);
     expect(w[1].message).toMatch(/vsb = 0\.3/);
     expect(w[1].message).not.toMatch(/vsb = 0(?![.\d])/);
+    // Nor does it answer for a sheet that says nothing about the body, which means vsb = 0.
+    expect(w[1].message).toMatch(/leaves the body bias out has to state it/);
+    const atBody = sweepFindings(generateDemoDevice({ vsb: { min: 0, max: 0, step: 0.1 } }));
+    expect(atBody.at(-1)?.message).not.toMatch(/has to state it/);
+  });
+
+  it('says what a table with one length, or none, can size', () => {
+    const lengthFindings = (t: DeviceTable) => validate(t).filter((w) => w.rule === 'no-l-sweep');
+    expect(lengthFindings(generateDemoDevice())).toEqual([]);
+    const one = lengthFindings(generateDemoDevice({ lengths: [0.5e-6] }));
+    expect(one.map((x) => [x.severity, x.location])).toEqual([['info', 'l']]);
+    expect(one[0].message).toMatch(/l = 5e-7\): it plots, and .* at that length only/);
+    const none = lengthFindings(
+      makeTable([axis('vgs', [0.1, 0.2, 0.3])], { gm: [1e-3, 1e-3, 1e-3] }),
+    );
+    expect(none.map((x) => x.severity)).toEqual(['info']);
+    expect(none[0].message).toMatch(/no l column\): it plots, but no device can be sized from it/);
   });
 
   it('adds nothing above information severity to a table that lacks the sweeps', () => {

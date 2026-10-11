@@ -23,6 +23,7 @@ import {
   limitingCheck,
   MARGIN_PCT_CAP,
   measurable,
+  refusedIn,
   resolvedSheet,
   runSheet,
   sheetSensitivities,
@@ -824,8 +825,16 @@ export function pickTopology(
    *  sheet that could not be searched, an addendum to the binding check for one that was. */
   let stopNote: string | undefined;
 
+  // A device the table cannot answer for (see SizingReport.unswept). No knob sizes it, and the
+  // checks that fail beside it were evaluated on a design with that device missing — so there
+  // is nothing to search and no binding check to report: the refusal is the whole answer.
+  const refused = refusedIn(res0);
+
   if (res0.feasible) {
     verdict = 'closed';
+  } else if (refused.length) {
+    verdict = 'could-not-be-searched';
+    stopNote = refused.join('; ');
   } else if (bindingCheck(res0) === undefined) {
     // Nothing failing to descend on. The interior checks that DO evaluate are all passing here,
     // so a search would improve a number that was never the problem and report progress.
@@ -876,7 +885,8 @@ export function pickTopology(
   // Nothing is ever dropped in any branch — only the framing differs, and it differs because a
   // sheet that was never searched has no "last point searched" to speak of.
   let cause: string | undefined;
-  if (!res.feasible) {
+  if (refused.length) cause = stopNote;
+  else if (!res.feasible) {
     const found = causeOf(res);
     if (stopNote === undefined) cause = found;
     else if (verdict === 'did-not-close')
@@ -884,8 +894,8 @@ export function pickTopology(
     else cause = `${stopNote}; ${found}`;
   }
 
-  const worst = limitingCheck(res);
-  const binding = bindingCheck(res);
+  const worst = refused.length ? undefined : limitingCheck(res);
+  const binding = refused.length ? undefined : bindingCheck(res);
   const iq = res.values['I_q'];
   return {
     path: sheet.path,

@@ -141,6 +141,11 @@ describe('offHull', () => {
     expect(offHull(vsb, 0.3 - (0.1 + 0.2))).toBe(false);
     expect(offHull(vsb, -1e-6)).toBe(true);
     expect(offHull(vsb, 0.61)).toBe(true);
+    // The allowance is rounding, not closeness: a hundred-millionth of the span past an end is
+    // off the axis, a ten-billionth is the end.
+    expect(offHull(vsb, 0.6 + 6e-9)).toBe(true);
+    expect(offHull(vsb, -6e-9)).toBe(true);
+    expect(offHull(vsb, 0.6 + 6e-11)).toBe(false);
   });
 
   it('on an axis with one value, asks whether this is that value — at any magnitude', () => {

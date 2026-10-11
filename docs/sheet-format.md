@@ -257,17 +257,24 @@ default (it is set by the circuit node, not the device), so an undeclared live `
 sizing with guidance to declare it. A declared value always wins, and a declared value outside
 the table's range is clamped to the nearest edge with a warning.
 
-**The table has to carry what the givens use.** A device is sized only from a table that sweeps
-every axis its givens state a value on. An axis the table does not sweep was taken at one
-point: the single value in that column, or `vsb = 0` for a table with no `vsb` column at all (it
-is read as a characterization with the source tied to the body). A table with no `vds` column
-records no drain voltage, and there is no default. On such an axis:
+**The table has to carry what the givens use.** A device is sized only from a table that can
+answer for every value its givens state: one that sweeps that axis, or one that was taken at
+exactly that value. An axis the table does not sweep was taken at one point: the single value
+in that column, or `vsb = 0` for a table with no `vsb` column at all (it is read as a
+characterization with the source tied to the body). A table with no `vds` column records no
+drain voltage, and there is no default. On such an axis:
 
-- a given that states the point the table was taken at is sized there, with nothing said;
+- a given that states the point the table was taken at is sized there, with nothing said.
+  "At" means equal up to float rounding (within 10⁻⁹ V for a bias), so `3.3 - 1.1*3` is a
+  source at the body and a microvolt is not;
 - a given that states any other value **refuses the device**. So does `diode: true` on a table
   with no `vds` sweep, because the connection is read along the `vds = vgs` diagonal;
-- a bias the givens do not state is not held against anything: the device is sized from the
-  table as it is.
+- a `vsb` the givens do not state means its default, a source at the body, and is held to the
+  same rule. On a table with no `vsb` column, or one taken at `vsb = 0`, the device is sized. On
+  a table taken at any other single body bias the sizing fails and asks for `vsb` to be stated
+  — so removing a `vsb` line can never turn a refusal into a result;
+- a `vds` the givens do not state has no default and claims nothing: the device is sized from
+  the table as it is.
 
 `L` follows the same rule on a table taken at a single length. A refusal is a failed sizing,
 not a warning beside a result: the device gets no numbers, the sheet does not evaluate on that
@@ -951,11 +958,13 @@ result (validation refuses them).
   - the table has no sweep for a bias the held design sits at there, and was not taken at that
     bias — a range end that lifts a source above its body on a table with no `vsb` sweep. The
     device is refused (see [The operating point](#the-operating-point-vds-vsb)), and `error`
-    carries the refusal, under the block's name when the device is a block's. Where the
-    refused device hangs under a node the engine re-solves, `error` is the solver's message
-    that its relation did not evaluate, and the refusal is among that end's `warnings`. Where
-    the same thing happens at the design's own operating point the base run does not stand,
-    and every end is `not-run`;
+    carries the refusal, under the block's name when the device is a block's. A refusal comes
+    before anything else that went wrong at that end: with a device missing, a solve that then
+    did not land, or another device that then ran out of table, is a consequence and not a
+    finding. Where the refused device hangs under a node the engine re-solves, the solver's
+    message among that end's `warnings` says a device was not sized there. Where the same thing
+    happens at the design's own operating point the base run does not stand, and every end is
+    `not-run`;
   - a held device's current density falls below the bottom of the swept `vgs` range: it would
     sit at a gate voltage nobody characterized;
   - the design rests on a voltage classed `assumed`. Then every range end is declined without
@@ -1107,9 +1116,11 @@ silently repairs one.
 1. **Declare the operating point of every device.** Bias axes (`vds`, `vsb`) are expressions
    over named node parameters, stated in the givens (see *The operating point*). A bias axis
    the author did not declare is taken from the namespace default and reported in the sizing's
-   `assumed` list — visible, never silently adopted. Backstop: a declared bias is read where it
-   was declared or not at all — on a table that does not sweep that axis and was not taken at
-   that value, the device is refused with the reason, never sized on the table as it stands.
+   `assumed` list — visible, never silently adopted. Backstop: a bias is read where it was
+   declared, or where its default puts it, or not at all — on a table that does not sweep that
+   axis and was not taken at that value, a declared bias refuses the device with the reason and
+   an undeclared `vsb` fails the sizing until it is declared, never sized on the table as it
+   stands.
 2. **Name internal nodes as parameters and write every `vds` as a subtraction of nodes.**
    Node form makes branch sums checkable and inconsistencies expressible. A source sitting
    above the bulk means `vsb` is declared from the same node that sets the source — body

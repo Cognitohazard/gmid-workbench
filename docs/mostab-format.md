@@ -159,7 +159,8 @@ The rule, for each of `vds`, `vsb` and the length that a device's givens state:
   swept range is read at the nearest swept value, with a warning.
 - **The file has the column with a single value.** That value is where the table was taken.
   A device given exactly that value is sized there; a device given any other value is
-  refused.
+  refused. A device that states no `vsb` means `vsb = 0`: on a file taken at another body
+  bias its sizing fails until the sheet states `vsb`.
 - **The file has no `vsb` column.** It is taken to have been characterized with the source
   tied to the body, `vsb = 0`. A device given `vsb = 0` is sized from it; a device given any
   other body bias is refused.
@@ -171,8 +172,9 @@ The rule, for each of `vds`, `vsb` and the length that a device's givens state:
 - **The file has no `l` column.** No device can be sized from it; it plots.
 
 When a file is loaded, the importer's QA pass says which of these applies to it: a
-`no-vds-sweep` or `no-vsb-sweep` finding, reported as information rather than as a warning,
-because such a file is valid data. Neither is raised on a file that has the sweep.
+`no-vds-sweep`, `no-vsb-sweep` or `no-l-sweep` finding, reported as information rather than
+as a warning, because such a file is valid data. None is raised on a file that has the
+sweep.
 
 ## Units and sign conventions
 

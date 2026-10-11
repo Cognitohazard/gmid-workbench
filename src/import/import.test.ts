@@ -55,7 +55,11 @@ describe('importMostab', () => {
     const t = oneDrain.dataset.tables[0];
     expect([...(t.grid.axes.find((a) => a.name === 'vds')?.values ?? [])]).toEqual([0.9]);
     expect([...(t.grid.axes.find((a) => a.name === 'vsb')?.values ?? [])]).toEqual([0, 0.3]);
-    expect(sweeps(oneDrain.dataset.warnings)).toEqual([['no-vds-sweep', 'info']]);
+    // It also holds a single length, which is said the same way.
+    expect(sweeps(oneDrain.dataset.warnings)).toEqual([
+      ['no-l-sweep', 'info'],
+      ['no-vds-sweep', 'info'],
+    ]);
     expect(oneDrain.dataset.warnings.find((w) => w.rule === 'no-vds-sweep')?.message).toContain(
       'vds = 0.9',
     );

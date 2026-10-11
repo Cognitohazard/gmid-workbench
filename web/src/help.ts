@@ -113,7 +113,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   givensAssumed:
     'A coordinate marked ? was not declared by this block — the engine filled it in. That is right for a common-source device or a rail-referenced mirror, and wrong for a differential pair, cascode or source follower, where the source floats above the bulk. Declare vsb in the givens if this device is one of those.',
   givensNeeds:
-    'This block must state its drain bias (vds) but hasn’t — the table has a vds axis and there is no safe default, so sizing fails closed. Set a value here to size it in place.',
+    'This block must state this bias but hasn’t, so sizing fails closed. A drain bias (vds) the table sweeps has no safe default. A body bias (vsb) left out means 0, and the table was not taken there. Set a value here to size it in place.',
   solvedParam:
     'Solved, not set. This estimate stands in for a value only the evaluated sheet knows, closing a bias loop the block order cannot express: it is iterated until the two agree. The stored number is just a starting guess, so the field is read-only and the parameter cannot be swept.',
   constrainedParam:

@@ -1621,8 +1621,77 @@ describe('a device is sized only on a table that carries what its givens use', (
       );
       // A source tied to its body is no better off on a table taken with the body biased.
       expectRefused(evaluateSheet(given({ vsb: '0' }), vsbOnce), /given vsb = 0 /, /no vsb sweep/);
-      // Close is not equal: a millivolt away is a different operating point.
+      // Close is not equal: a millivolt away is a different operating point, and so is ten
+      // nanovolts — the allowance is float rounding, nothing wider.
       expectRefused(evaluateSheet(given({ vds: '0.601' }), vdsOnce), /given vds = 0\.601/);
+      expectRefused(evaluateSheet(given({ vds: '0.6 + 1e-8' }), vdsOnce), /no vds sweep/);
+    });
+
+    it('quotes the value the author wrote, not the float it rounded to', () => {
+      expect(String(0.1 + 0.2)).toBe('0.30000000000000004');
+      const res = evaluateSheet(given({ vds: '0.1 + 0.2' }), vdsOnce);
+      expectRefused(res, /given vds = 0\.3 asks/, /a vds sweep that covers 0\.3,/);
+    });
+
+    it('holds a signed axis to its signed value', () => {
+      // A PMOS export keeps its swept axes signed: taken at vds = -0.6, it answers for -0.6.
+      const pmos = signedMirrorDemo(vdsOnce);
+      expect([...pmos.grid.axes.find((a) => a.name === 'vds')!.values]).toEqual([-0.6]);
+      expectSilent(evaluateSheet(given({ vds: '-0.6' }), pmos));
+      expectSilent(evaluateSheet(given({ vds: '-(0.4 + 0.2)' }), pmos));
+      expectRefused(
+        evaluateSheet(given({ vds: '0.6' }), pmos),
+        /given vds = 0\.6 asks/,
+        /a single value, vds = -0\.6\)/,
+      );
+    });
+
+    it('takes a zero reached through volt-scale arithmetic for zero', () => {
+      // A supply expression cancels to zero only up to rounding at the size of its terms, which
+      // is larger than rounding at zero itself.
+      expect(Math.abs(3.3 - 1.1 * 3)).toBeGreaterThan(Number.EPSILON);
+      const vsbZero = generateDemoDevice({ vsb: { min: 0, max: 0, step: 0.1 } });
+      expectSilent(evaluateSheet(given({ vsb: '3.3 - 1.1*3' }), vsbZero));
+      expectSilent(evaluateSheet(given({ vsb: '3.3 - 1.1*3' }), dev));
+      // A microvolt is not rounding.
+      expectRefused(evaluateSheet(given({ vsb: '1e-6' }), vsbZero), /given vsb = 0\.000001/);
+      expectRefused(evaluateSheet(given({ vsb: '1e-6' }), dev), /given vsb = 0\.000001/);
+    });
+
+    it('asks for a body bias the givens leave out when the table was taken away from the default', () => {
+      // Left out, vsb takes its default — a source at the body. A table taken at vsb = 0.3 on
+      // every row does not answer for that, and sizing on it as it stands would put the device
+      // at a body bias nobody wrote down. So the author states it, and deleting a correct
+      // `vsb` line can never turn a refusal into a result.
+      const res = evaluateSheet(boundDoc(), vsbOnce);
+      expect(res.sizing?.ok).toBe(false);
+      expect(res.feasible).toBe(false);
+      expect(res.sizing?.needs).toEqual(['vsb']);
+      expect(errorsOf(res)).toEqual([res.sizing?.error]);
+      expect(res.sizing?.error).toMatch(/declare the operating point \(vsb\) in the givens/);
+      expect(res.sizing?.error).toMatch(/taken at vsb = 0\.3, not at the default vsb = 0$/);
+      // A declaration answers it, so it is not a refusal: stated where the table was taken, the
+      // device sizes; stated at the body, the table cannot give it.
+      expect(res.sizing?.unswept).toBeUndefined();
+      expectSilent(evaluateSheet(given({ vsb: '0.3' }), vsbOnce));
+      expectRefused(evaluateSheet(given({ vsb: '0' }), vsbOnce), /no vsb sweep/);
+      // A table taken AT the default needs nothing said.
+      expectSilent(
+        evaluateSheet(boundDoc(), generateDemoDevice({ vsb: { min: 0, max: 0, step: 0.1 } })),
+      );
+
+      // Beside a swept axis that also needs declaring, both are asked for, each in its words.
+      const both = evaluateSheet(
+        boundDoc(),
+        generateDemoDevice({
+          vds: { min: 0, max: 1.2, step: 0.3 },
+          vsb: { min: 0.3, max: 0.3, step: 0.1 },
+        }),
+      );
+      expect(both.sizing?.needs).toEqual(['vds', 'vsb']);
+      expect(both.sizing?.error).toMatch(/\(vds, vsb\)/);
+      expect(both.sizing?.error).toMatch(/the table has that axis and sizing must fix it/);
+      expect(both.sizing?.error).toMatch(/; the table was taken at vsb = 0\.3,/);
     });
   });
 
@@ -1702,7 +1771,12 @@ describe('a device is sized only on a table that carries what its givens use', (
       const same = at(0.5e-6);
       expectSilent(same);
       expect(same.sizing?.W).toBe(evaluateSheet(boundDoc(), dev).sizing?.W);
-      expectRefused(at(1e-6), /given L = 0\.000001/, /no length sweep/);
+      // One name for the length throughout, the one the givens use.
+      expectRefused(
+        at(1e-6),
+        /given L = 0\.000001/,
+        /no length sweep \(a single value, L = 5e-7\)/,
+      );
     });
 
     it('on a table that sweeps length: a length past the range is still clamped with a warning', () => {
@@ -1826,6 +1900,141 @@ describe('a device is sized only on a table that carries what its givens use', (
       const full = runSheet(doc, bothSwept);
       expect(full.rangeEnds?.map((e) => e.state)).toEqual(['complies', 'complies']);
       expect(full.complies).toBe(true);
+    });
+
+    it('holds a block to the table that block is bound to', () => {
+      const onItsOwn = (doc: SheetDoc): SheetDoc => ({
+        ...doc,
+        blocks: doc.blocks!.map((b) => (b.name === 'pair' ? { ...b, device: 'own' } : b)),
+      });
+      const resolveTo =
+        (t: DeviceTable) =>
+        (id: string): DeviceTable | undefined =>
+          id === 'own' ? t : undefined;
+      // The sheet's table has the body-bias sweep; the pair's own table does not.
+      const lacking = runSheet(onItsOwn(composed()), bothSwept, resolveTo(vdsSwept));
+      expect(lacking.blocks?.map((b) => b.sizing?.ok)).toEqual([false, true]);
+      expect(lacking.blocks?.[0].sizing?.unswept).toEqual(['vsb']);
+      expect(errorsOf(lacking)).toEqual([`block "pair": ${lacking.blocks?.[0].sizing?.error}`]);
+      // The other way round, the sheet's table would refuse it and the pair's own answers.
+      const carried = runSheet(onItsOwn(composed()), vdsSwept, resolveTo(bothSwept));
+      expect(errorsOf(carried)).toEqual([]);
+      expect(carried.feasible).toBe(true);
+    });
+
+    it('says a device was not sized where that is why a constrained node did not evaluate', () => {
+      // The engine chooses the tail node from a bracket. Everywhere on it the pair's source sits
+      // above its body, which this table cannot answer for — so no bracket would do, and the
+      // solver's message carries the refusal in place of its usual advice.
+      const constrainedTail = composed({
+        params: [
+          {
+            name: 'V_tail',
+            value: 0.3,
+            unit: 'V',
+            min: 0.2,
+            max: 0.4,
+            designConstraint: { lhs: 'pair__vstar', rhs: '0.15' },
+          },
+        ],
+      });
+      const solve = (res: SheetResult): string[] =>
+        res.warnings
+          .filter((w) => w.rule === 'sheet-solve' && w.severity === 'error')
+          .map((w) => w.message);
+      const [said, ...rest] = solve(runSheet(constrainedTail, vdsSwept));
+      expect(rest).toEqual([]);
+      expect(said).toMatch(/did not evaluate at the low end of its bracket \(V_tail = 0\.2\)/);
+      expect(said).toMatch(/a device was not sized there: block "pair": given vsb = 0\.2 asks/);
+      expect(said).not.toMatch(/tighten/);
+      // With the device sized, a bracket end that does not evaluate still gets the advice.
+      const [plain] = solve(
+        runSheet(
+          composed({
+            params: [
+              {
+                name: 'V_tail',
+                value: 0.3,
+                unit: 'V',
+                min: 0.2,
+                max: 0.4,
+                designConstraint: { lhs: 'sqrt(V_tail - 0.3)', rhs: '0.1' },
+              },
+            ],
+          }),
+          bothSwept,
+        ),
+      );
+      expect(plain).toMatch(/did not evaluate at the low end .* tighten min\/max/);
+    });
+
+    it('gives no answer where a held node would be followed onto a body bias the table lacks', () => {
+      // A device whose source node is held under its gate: sized with the node at the body, and
+      // re-solved at each range end with the gate where the sizing put it. Less current lowers
+      // the gate-source voltage, so the node rises — off the one body bias this table was
+      // taken at. The solver's own message says a device was not sized there, and the end is
+      // unanswered rather than failed.
+      const follower: SheetDoc = {
+        title: 'follower',
+        polarity: 'n',
+        params: [
+          { name: 'L', value: 0.5e-6 },
+          { name: 'I', value: 20e-6, unit: 'A' },
+          { name: 'X', value: 0, unit: 'V', min: 0, max: 0.4, hold: 'X + vgs' },
+        ],
+        givens: { L: 'L', id: 'I', gm_id: '12', vds: '0.6', vsb: 'X' },
+        equations: [],
+        checks: [],
+        operatingRange: [{ name: 'less-current', set: { I: '5e-6' } }],
+      };
+      const res = runSheet(follower, vdsSwept);
+      expect(errorsOf(res)).toEqual([]);
+      expect(res.feasible).toBe(true);
+      const [end] = res.rangeEnds!;
+      expect(end.state).toBe('no-answer');
+      expect(end.error).toMatch(/^given vsb = 0\.4 asks for a body bias the table cannot give/);
+      const solve = end.warnings.filter((w) => w.rule === 'sheet-solve' && w.severity === 'error');
+      expect(solve.map((w) => w.message)).toEqual([
+        expect.stringMatching(
+          /^held param "X": .* did not evaluate at the high end of its bracket \(X = 0\.4\) — a device was not sized there: given vsb = 0\.4 asks/,
+        ),
+      ]);
+      // On a table with the sweep the same end is answered.
+      expect(runSheet(follower, bothSwept).rangeEnds?.[0].state).toBe('complies');
+    });
+
+    it('gives no answer at a range end with a refused device, whatever else failed there', () => {
+      // At `both` the pair is refused AND the load, held at its width, is asked for a thousand
+      // times its current — more than its table reaches. Alone, that second failure is a verdict
+      // on the design. Beside a device that was never sized it is not, and which of the two the
+      // run reports last depends only on the order the blocks are written in.
+      const [pair, load] = composed().blocks!;
+      const driven = { ...load, params: { I: 'I_load' } };
+      const doc = (blocks: NonNullable<SheetDoc['blocks']>): SheetDoc =>
+        composed({
+          params: [
+            { name: 'V_tail', value: 0, unit: 'V', class: 'independent' },
+            { name: 'I_load', value: 20e-6, unit: 'A' },
+          ],
+          blocks,
+          operatingRange: [
+            { name: 'load-only', set: { I_load: '20e-3' } },
+            { name: 'both', set: { V_tail: '0.3', I_load: '20e-3' } },
+          ],
+        });
+      for (const blocks of [
+        [pair, driven],
+        [driven, pair],
+      ]) {
+        const res = runSheet(doc(blocks), vdsSwept);
+        expect(errorsOf(res)).toEqual([]);
+        const [loadOnly, both] = res.rangeEnds!;
+        expect(loadOnly.state).toBe('does-not-comply');
+        expect(loadOnly.error).toMatch(/cannot carry its current/);
+        expect(both.state).toBe('no-answer');
+        expect(both.error).toMatch(/^block "pair": given vsb = 0\.3 asks/);
+        expect(both.error).not.toMatch(/cannot carry its current/);
+      }
     });
   });
 });

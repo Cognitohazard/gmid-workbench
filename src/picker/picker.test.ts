@@ -11,6 +11,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { libraryEntries, loadLibrary, sheet, table, REFS } from '../sheet/library.fixtures';
+import { generateDemoDevice } from '../demo';
 import {
   runSheet,
   bindingCheck,
@@ -599,6 +600,38 @@ describe('the search', () => {
     expect(c.cause).toContain('does not change sign');
     expect(c.evals).toBe(1);
     expect(c.budgetExhausted).toBe(false);
+  });
+
+  // A device its table cannot answer for. The sheet has a knob and a failing check — everything
+  // a search needs — and neither is the problem: no value of the knob sizes the device, and the
+  // check failed on a design with that device missing. So nothing is searched, and the failing
+  // check is not offered as what binds.
+  it('does not search a sheet whose device the table cannot answer for', () => {
+    const doc: SheetDoc = {
+      title: 'source above the body',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6, unit: 'm' },
+        { name: 'I', value: 20e-6, unit: 'A', min: 5e-6, max: 80e-6, role: 'choice' },
+        { name: 'V_s', value: 0.3, unit: 'V', class: 'independent' },
+      ],
+      givens: { L: 'L', id: 'I', gm_id: '12', vds: '0.6', vsb: 'V_s' },
+      equations: [],
+      checks: [{ id: 'budget', kind: 'spec', lhs: 'I', op: '<=', rhs: '10e-6' }],
+    };
+    const noBody = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
+    const c = pickTopology({}, { path: 'synthetic/refused', doc }, noBody, undefined, {});
+    expect(c.verdict).toBe('could-not-be-searched');
+    expect(c.cause).toMatch(/^given vsb = 0\.3 asks for a body bias the table cannot give/);
+    expect(c.cause).not.toContain('budget fails by');
+    expect(c.bindingCheck).toBeUndefined();
+    expect(c.worstMargin).toBeUndefined();
+    expect(c.evals).toBe(1);
+
+    // On a table that carries the sweep, the same sheet is searched and its check is what binds.
+    const searched = pickTopology({}, { path: 'synthetic/refused', doc }, table, undefined, {});
+    expect(searched.verdict).not.toBe('could-not-be-searched');
+    expect(searched.evals).toBeGreaterThan(1);
   });
 });
 

@@ -219,7 +219,8 @@ export interface SheetEquation {
  * axis the table does not sweep is sized where the table was taken — its one value on that axis,
  * or vsb = 0 for a table with no `vsb` column — and nowhere else: any other value, and a diode
  * connection on a table with no vds sweep, fails the sizing with the reason. `L` on a table
- * taken at one length is held to the same rule.
+ * taken at one length is held to the same rule, and so is the default an undeclared `vsb`
+ * takes: on a table taken at one other body bias, the sizing fails until `vsb` is declared.
  */
 export interface SheetGivens {
   L: string;
@@ -762,6 +763,10 @@ export interface SizingReport {
    *  At the design's own operating point that is an advisory; where a held design is being
    *  asked whether it still works, an answer read somewhere else is no answer (see clampedIn). */
   clamped?: string[];
+  /** Axes the givens use and the table does not sweep (`vds`, `vsb`, `l`) — present only on a
+   *  failed sizing, and what marks it as REFUSED: the table cannot answer for this device at
+   *  all, which no knob, bracket or re-bias changes (see refusedIn). `error` says why. */
+  unswept?: string[];
   error?: string;
 }
 
@@ -854,6 +859,20 @@ export function clampedIn(
   const out = (res.sizing?.clamped ?? []).map((axis) => `${path || 'givens'} ${axis}`);
   for (const c of res.blocks ?? [])
     out.push(...clampedIn(c, path ? `${path}${PATH_SEP}${c.name}` : c.name));
+  return out;
+}
+
+/** Every device, anywhere in one evaluation's tree, that was refused because its table lacks a
+ *  sweep its givens use (see SizingReport.unswept) — each in the words the run's own error
+ *  carries it in, `block "pair": given vsb = 0.3 asks for …`. Empty when every device had the
+ *  data it asked for. Consulted before any reading of the run's other failures: with a device
+ *  missing, what the rest of the design then did is not a finding about the design. */
+export function refusedIn(res: {
+  sizing?: SizingReport;
+  blocks?: readonly SheetBlockReport[];
+}): string[] {
+  const out = res.sizing?.unswept?.length ? [res.sizing.error ?? 'the device is not sized'] : [];
+  for (const c of res.blocks ?? []) out.push(...refusedIn(c).map((m) => `block "${c.name}": ${m}`));
   return out;
 }
 
