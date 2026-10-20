@@ -18,7 +18,7 @@
 * The circuit section below is identical in ota_op.cir, ota_ac.cir and ota_noise.cir.
 .param mc_mm_switch=0
 .param mc_pr_switch=0
-.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+.include .pdk/sky130A/libs.tech/ngspice/corners/tt.spice
 
 VDD  vdd  0    1.8
 IB   vdd  nb   20u

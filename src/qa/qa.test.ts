@@ -455,6 +455,30 @@ describe('validate: deepened sign / noise / gamma checks', () => {
     expect(w.every((x) => x.severity === 'error')).toBe(true);
   });
 
+  it('allows flicker noise of exactly 0 where no drain current flows, and nowhere else', () => {
+    // A table swept from vds = 0 carries points with id = 0, where a simulator's flicker noise
+    // is exactly 0. That is the data, not a defect; thermal noise never reads 0.
+    const atZero = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [0, 2e-3, 3e-3],
+      sth: [1e-25, 1e-25, 1e-25],
+      sfl: [0, 1e-20, 1e-20],
+    });
+    expect(validate(atZero).filter((x) => x.rule === 'noise-psd')).toEqual([]);
+    // Zero flicker noise where current flows is still an error, as is zero thermal noise at id 0.
+    const flowing = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      gm: [1e-3, 1e-3, 1e-3],
+      id: [0, 2e-3, 3e-3],
+      sth: [0, 1e-25, 1e-25],
+      sfl: [0, 0, 1e-20],
+    });
+    expect(
+      validate(flowing)
+        .filter((x) => x.rule === 'noise-psd')
+        .map((x) => x.location),
+    ).toEqual(['sth', 'sfl']);
+  });
+
   it('flags an out-of-band gamma but allows a high short-channel gamma', () => {
     const bad = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
       gm: [1e-3, 1e-3, 1e-3],

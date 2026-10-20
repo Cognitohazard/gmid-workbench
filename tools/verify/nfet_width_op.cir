@@ -19,7 +19,7 @@
 .param mc_mm_switch=0
 .param mc_pr_switch=0
 .option wnflag=1
-.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+.include .pdk/sky130A/libs.tech/ngspice/corners/tt.spice
 
 VG   g    0    0.7184
 VDM  dm   0    0.9

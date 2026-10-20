@@ -3,12 +3,16 @@
 
 This is the reproducible recipe behind the shipped tables. For every
 ``(device, corner, temp, L, vsb)`` in the matrix below it:
-  1. builds a self-running ngspice deck (``gmid_decks.build_deck(..., wrdata_to=)``),
+  1. builds a self-running ngspice deck (``gmid_decks.build_deck(..., wrdata_to=)``)
+     that sweeps the DC grid twice — the full drain-voltage range at the PDK's step,
+     then 0..0.3 V at 25 mV — and runs a 1 Hz noise analysis at every grid point,
   2. runs it under ``ngspice -b`` (a project ``.spiceinit`` sets ``ngbehavior=hsa``
      so the PDKs' sectioned ``.lib`` parse correctly),
-  3. parses the headerless ``wrdata`` egress positionally,
+  3. parses the headerless ``wrdata`` egress positionally, merges the two sweeps into
+     one drain-voltage axis, and joins each point's noise to it by its (vgs, vds),
   4. assembles one ``mostab`` table per device with Apache-2.0 attribution, and
-  5. runs a generation-side sanity gate (grid, finiteness, polarity, gm/Id range).
+  5. runs a generation-side sanity gate (grid, finiteness, polarity, gm/Id range,
+     noise sign and noise factor).
 
 Requires only python + ngspice + a fetched PDK. Point ``PDK_ROOT`` at it.
 
@@ -23,6 +27,7 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import math
 import os
 import subprocess
 import sys
@@ -30,6 +35,7 @@ import tempfile
 
 from gmid_decks import (
     GF180,
+    NOISE_PARAMS,
     SAVE_PARAMS,
     SKY130,
     _g,
@@ -53,10 +59,29 @@ SOURCES = {
 
 VGS_STEP = 0.008  # 10 mV is the workbench's gm/ID-fidelity bar; 8 mV clears it with margin.
 
+# (step, stop) of the fine drain-voltage sweep added below each PDK's coarse vds step.
+# A device's current bends hardest between vds = 0 and a little above its saturation
+# voltage, and interpolating a coarse grid there reads it low: for the sky130 nfet at
+# L = 0.5 um, vgs = 0.81 V, vds = 0.186 V (vdsat 0.16 V), the 0.2 V grid reads id 5.6 %
+# low and gds 45 % high, the 25 mV grid 0.1 % low and 3 % high.
+VDS_FINE = (0.025, 0.3)
+
+BOLTZMANN = 1.380649e-23  # J/K, for the noise-factor sanity check
+
+# Noise columns a device's tables leave out, with the reason. The sky130 5 V nfet's model
+# cards declare BSIM4 version 4.5, and for that version ngspice evaluates the channel
+# thermal noise (tnoimod = 1) to NaN over the strong-inversion triode region at
+# L <= 1 um (at L = 0.5 um, vgs above 2.3-2.8 V with vds below 1.0-1.2 V, at each of
+# tt/27 C, ss/-40 C and ff/125 C); the same cards with the version set to 4.8 give finite
+# values there. A mostab cell must be a finite number, so its tables carry sfl, which is
+# finite everywhere, but no sth.
+NOISE_OMIT = {"sky130_fd_pr__nfet_g5v0d10v5": {"sth"}}
+
 # The matrix IS the spec: per device a valid-L grid (respecting each device's
 # model-bin min L); per PDK the corner LIST, temperature LIST, char width, vsb
-# sweep, and vds step. Every (device x corner x temp) combination yields one
-# mostab table (named <device>__<corner>__<temp>C.mostab.csv).
+# sweep, and coarse vds step (VDS_FINE adds the dense points near zero). Every
+# (device x corner x temp) combination yields one mostab table (named
+# <device>__<corner>__<temp>C.mostab.csv).
 #
 # Corners: only the process corners that change the FET model (tt/ss/ff for the
 # transistor itself; sky130's sf/fs are N-vs-P skew, _mm/mc are statistical, and
@@ -95,23 +120,38 @@ MATRIX = {
 
 
 def _run_one(pdk, subckt, t, vdd, corner, temp, L_um, W_um, vsb, vds_step, workdir, ngspice):
-    """Run one deck, return [(vgs, vds, [params...])] parsed from its wrdata."""
-    cir, out = os.path.join(workdir, "d.cir"), os.path.join(workdir, "d.csv")
+    """Run one deck, return [(vgs, vds, [params..., sth, sfl])] for every grid point."""
+    cir, out, nout = (os.path.join(workdir, n) for n in ("d.cir", "d.csv", "n.txt"))
     deck = build_deck(pdk, subckt=subckt, dev_type=t, vdd=vdd, corner=corner, temp=temp,
                       L_um=L_um, W_um=W_um, vsb=vsb, vgs_step=VGS_STEP, vds_step=vds_step,
-                      wrdata_to="d.csv")
+                      vds_fine=VDS_FINE, wrdata_to="d.csv", noise_to="n.txt")
     with open(cir, "w") as f:
         f.write(deck)
-    if os.path.exists(out):
-        os.remove(out)
+    for path in (out, nout):  # the deck appends to both, so start each run without them
+        if os.path.exists(path):
+            os.remove(path)
     r = subprocess.run([ngspice, "-b", "d.cir"], cwd=workdir, capture_output=True,
                        text=True, timeout=600)
-    if not os.path.exists(out):
-        raise RuntimeError(f"{subckt} L={L_um} vsb={vsb}: ngspice wrote no output\n{r.stderr[-600:]}")
-    # Decode wrdata (headerless (scale,value) pairs) via the layout owner in gmid_decks.
-    ncol = wrdata_columns()
+    where = f"{subckt} L={L_um} vsb={vsb}"
+    if not os.path.exists(out) or not os.path.exists(nout):
+        raise RuntimeError(f"{where}: ngspice wrote no output\n{r.stderr[-600:]}")
+    rows, skipped = _read_rows(out, wrdata_columns(), parse_wrdata_row)
+    noise, nskipped = _read_rows(nout, 2 + len(NOISE_PARAMS),
+                                 lambda v: ((_g(v[0]), _g(v[1])), v[2:]))
+    if not rows:
+        raise RuntimeError(f"{where}: empty wrdata")
+    if skipped or nskipped:  # surface silent data loss rather than shipping a short table as valid
+        print(f"   note: {where}: skipped {skipped} unparseable wrdata line(s) and "
+              f"{nskipped} unparseable noise line(s)", file=sys.stderr)
+    return _join(rows, dict(noise), where)
+
+
+def _read_rows(path, ncol, decode):
+    """Parse a whitespace-separated numeric egress file: each line with at least
+    ``ncol`` numbers is passed (its first ``ncol``) to ``decode``. Returns
+    ``(decoded rows, count of non-blank lines that were not)``."""
     rows, skipped = [], 0
-    with open(out) as f:
+    with open(path) as f:
         for line in f:
             parts = line.split()
             if len(parts) < ncol:
@@ -123,29 +163,71 @@ def _run_one(pdk, subckt, t, vdd, corner, temp, L_um, W_um, vsb, vds_step, workd
             except ValueError:
                 skipped += 1
                 continue
-            rows.append(parse_wrdata_row(v))
-    if not rows:
-        raise RuntimeError(f"{subckt} L={L_um} vsb={vsb}: empty wrdata")
-    if skipped:  # surface silent data loss rather than shipping a short table as valid
-        print(f"   note: {subckt} L={L_um} vsb={vsb}: skipped {skipped} unparseable "
-              f"wrdata line(s)", file=sys.stderr)
-    return rows
+            rows.append(decode(v))
+    return rows, skipped
 
 
-def _qa(path, dev_type):
+def _join(rows, noise, where=""):
+    """Merge one run's DC rows into one grid and attach each point's noise.
+
+    ``rows`` are ``(vgs, vds, params)`` in file order: the coarse sweep, then the fine
+    sweep appended. A grid point is its formatted (vgs, vds) coordinate; where both
+    sweeps visit one (vds = 0, and coarse values inside the fine range) the coarse row,
+    which comes first, is kept, so every point of the coarse grid carries exactly the
+    values a coarse-only sweep gives. ``noise`` maps each coordinate to its noise
+    values. The two must cover the same points: a point with DC data and no noise, or
+    the reverse, is an error, never a gap filled in. Returns the merged rows ordered by
+    |vds| then |vgs| (the coarse sweep's own order), each with the noise appended.
+    """
+    pts = {}
+    for vgs, vds, params in rows:
+        pts.setdefault((_g(vgs), _g(vds)), (vgs, vds, params))
+    no_noise, no_dc = pts.keys() - noise.keys(), noise.keys() - pts.keys()
+    if no_noise or no_dc:
+        example = min(no_noise or no_dc)
+        raise RuntimeError(f"{where}: noise and DC grids disagree: {len(no_noise)} DC "
+                           f"point(s) without noise, {len(no_dc)} noise point(s) without "
+                           f"DC (e.g. vgs={example[0]} vds={example[1]})")
+    ordered = sorted(pts.items(), key=lambda kv: (abs(kv[1][1]), abs(kv[1][0])))
+    # Flicker noise is zero where no drain current flows. At a point with id exactly 0 the
+    # simulator can return a non-finite flicker value instead (0/0 inside the model); that is
+    # the one non-finite value with a physical reading, and it is written as 0 and counted
+    # aloud. Every other non-finite value stays as it is, for the sanity gate to refuse.
+    i_id, i_sfl = SAVE_PARAMS.index("id"), NOISE_PARAMS.index("sfl")
+    zeroed = 0
+    merged = []
+    for key, (vgs, vds, params) in ordered:
+        nz = list(noise[key])
+        if (len(params) > i_id and len(nz) > i_sfl and params[i_id] == 0
+                and not math.isfinite(nz[i_sfl])):
+            nz[i_sfl] = 0.0
+            zeroed += 1
+        merged.append((vgs, vds, [*params, *nz]))
+    if zeroed:
+        print(f"   note: {where}: {zeroed} flicker value(s) at zero drain current were "
+              f"non-finite and are written as 0")
+    return merged
+
+
+def _qa(path, dev_type, noise=tuple(NOISE_PARAMS)):
     """Sanity-check one assembled mostab. Returns ``(faults, warns)`` — two message
     lists. Any ``faults`` is a HARD problem — a missing column, a non-finite value, a
-    duplicated or incomplete grid, a dead device, or a sweep-axis polarity mix-up — and
-    fails the generator's exit code. ``warns`` are soft suspicions (a gm/Id peak outside
-    the sane window) that a valid corner device can trip, so they don't fail. The real
-    data-trust gate is the workbench importer + ``qa``; this catches gross generation
-    faults before anything ships. Severity is decided by which list a check appends to.
+    duplicated or incomplete grid, a dead device, a sweep-axis polarity mix-up, or a
+    noise PSD of the wrong sign — and fails the generator's exit code. ``warns`` are
+    soft suspicions (a gm/Id peak or a noise factor outside its sane window) that a
+    valid corner device can trip, so they don't fail. The real data-trust gate is the
+    workbench importer + ``qa``; this catches gross generation faults before anything
+    ships. Severity is decided by which list a check appends to. ``noise`` names the
+    noise columns the table must carry (all of them unless ``NOISE_OMIT`` drops one).
     """
     with open(path) as f:
-        rows = [r for r in csv.reader(f) if r and not r[0].startswith("#")]
+        lines = f.read().splitlines()
+    temp = next((float(ln.split(":", 1)[1]) for ln in lines
+                 if ln.lower().startswith("# temp:")), 27.0)
+    rows = [r for r in csv.reader(lines) if r and not r[0].startswith("#")]
     head, data = rows[0], rows[1:]
     col = {name: i for i, name in enumerate(head)}
-    for k in ("L", "VDS", "VSB", "VGS", "ID", "GM", "GDS"):
+    for k in ("L", "VDS", "VSB", "VGS", "ID", "GM", "GDS", *(n.upper() for n in noise)):
         if k not in col:
             return [f"missing column {k}"], []
     faults, warns = [], []
@@ -153,6 +235,21 @@ def _qa(path, dev_type):
     bad = sum(1 for r in data for v in r if v in ("nan", "inf", "-inf"))
     if bad:
         faults.append(f"{bad} non-finite values")
+    # noise sign: channel thermal noise is present at every bias, even with no current
+    # (vds = 0); flicker noise scales with the drain current, so it is 0 exactly where
+    # none flows and positive everywhere else.
+    if "sth" in noise:
+        sth_bad = sum(1 for r in data if not float(r[col["STH"]]) > 0)
+        if sth_bad:
+            faults.append(f"STH has {sth_bad} non-positive value(s)")
+    if "sfl" in noise:
+        sfl_neg = sum(1 for r in data if float(r[col["SFL"]]) < 0)
+        if sfl_neg:
+            faults.append(f"SFL has {sfl_neg} negative value(s)")
+        sfl_zero = sum(1 for r in data
+                       if float(r[col["SFL"]]) == 0 and float(r[col["ID"]]) != 0)
+        if sfl_zero:
+            faults.append(f"SFL is 0 at {sfl_zero} point(s) that carry drain current")
     # grid completeness: every (L,VSB) block must be a duplicate-free, complete
     # rectangular VGS x VDS grid. Every coordinate lies in xs*ys by construction, so a
     # unique count below len(xs)*len(ys) means a missing point, and a row count above the
@@ -191,6 +288,15 @@ def _qa(path, dev_type):
             pk = max(ratios)
             if not (5 < pk < 60):
                 warns.append(f"gm/Id peak {pk:.1f} outside [5,60] (suspect)")
+        # noise factor sth/(4kT gm) at full drive: between about 0.2 and 12 for these
+        # models, so a value far outside the window is a unit slip (a density left
+        # unsquared is off by about 1e12, a lost 4kT by about 1e20).
+        gmv = abs(float(drive[col["GM"]]))
+        if "sth" in noise and gmv > 0:
+            nf = float(drive[col["STH"]]) / (4 * BOLTZMANN * (temp + 273.15) * gmv)
+            if not (0.01 < nf < 100):
+                warns.append(f"noise factor sth/(4kT gm) {nf:.3g} at full drive outside "
+                             f"[0.01,100] (suspect)")
     return faults, warns
 
 
@@ -199,6 +305,9 @@ def main(argv=None) -> None:
     ap.add_argument("pdk", choices=list(MATRIX))
     ap.add_argument("--out", default="data/pdk")
     ap.add_argument("--ngspice", default=os.environ.get("NGSPICE", "ngspice"))
+    ap.add_argument("--only", default=None, metavar="SUBSTRING",
+                    help="generate only the tables whose <device>__<corner>__<temp>C name "
+                         "contains SUBSTRING (one table re-run after a fix)")
     args = ap.parse_args(argv)
 
     spec = MATRIX[args.pdk]
@@ -222,7 +331,13 @@ def main(argv=None) -> None:
         # product() iterates leftmost-slowest, so corner/temp stay outer and the
         # nominal (tt/typical, 27C) tables still generate first.
         for corner, temp, (subckt, t, vdd, LS) in itertools.product(corners, temps, spec["devices"]):
+            if args.only and args.only not in f"{subckt}__{corner}__{int(temp)}C":
+                continue
             vds_step = spec["vds_step"](vdd)
+            # Every run yields SAVE_PARAMS then NOISE_PARAMS; keep all but the omitted.
+            noise = [n for n in NOISE_PARAMS if n not in NOISE_OMIT.get(subckt, ())]
+            cols = [*SAVE_PARAMS, *NOISE_PARAMS]
+            keep = [i for i, c in enumerate(cols) if c in SAVE_PARAMS or c in noise]
             rows = []
             for L in LS:
                 for vsb in spec["vsb"]:
@@ -236,7 +351,7 @@ def main(argv=None) -> None:
                         continue
                     for vgs, vds, params in pts:
                         rows.append([_g(L * 1e-6), _g(vds), _g(vsb), _g(vgs)]
-                                    + [_g(p) for p in params])
+                                    + [_g(params[i]) for i in keep])
             # Polarity is stamped explicitly for BOTH device types, and pdk names the
             # technology: together with the device name they are the identity the app
             # groups corner variants by, so an undeclared field would fall back to
@@ -246,8 +361,8 @@ def main(argv=None) -> None:
                     "source": SOURCES.get(pdk.name, pdk.name),
                     "pdk": pdk.name, "polarity": t}
             out = os.path.join(outdir, f"{subckt}__{corner}__{int(temp)}C.mostab.csv")
-            write_mostab(out, ["l", "vds", "vsb", "vgs", *SAVE_PARAMS], rows, meta)
-            faults, warns = _qa(out, t)
+            write_mostab(out, ["l", "vds", "vsb", "vgs", *(cols[i] for i in keep)], rows, meta)
+            faults, warns = _qa(out, t, noise)
             if faults:
                 qa_faults += 1
             tag = "FAIL" if faults else ("WARN" if warns else "ok ")

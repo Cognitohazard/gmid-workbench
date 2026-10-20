@@ -11,9 +11,11 @@ the tables, or after changing the five-transistor OTA sheet:
 Each deck prints a short labelled list of numbers and writes no files. The header
 comment of each deck states what the tables or the sheet predict for those numbers.
 
-Each deck `.include`s the sky130A tt corner file from a volare install
-(`~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice`). ngspice expands the leading
-`~` but not environment variables, so if your PDK lives elsewhere, edit the `.include`
+Each deck `.include`s the sky130A tt corner file from the PDK the table generator uses,
+fetched into the repository's `.pdk/` directory
+(`.pdk/sky130A/libs.tech/ngspice/corners/tt.spice`). ngspice resolves the path from the
+directory it is started in, so run the decks from the repository root
+(`ngspice -b tools/verify/ota_op.cir`). If your PDK lives elsewhere, edit the `.include`
 line near the top of each deck. No `.spiceinit` is needed. The noise decks also print
 `Source conductance reset to 1.0e3 mho` warnings; that is expected with these models.
 

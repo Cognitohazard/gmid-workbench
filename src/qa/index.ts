@@ -335,15 +335,27 @@ export function validate(table: DeviceTable): QAWarning[] {
   signCheck(q.get('cgg'), 'cap-sign', 'cgg', 'the total gate capacitance should be a magnitude');
 
   // A non-positive sth/sfl poisons every input-referred noise quantity (sqrt of ≤0, or a 0 in fco).
+  // Flicker noise is the exception where no current flows: a simulator gives exactly 0 at
+  // vds = 0, and a table that sweeps the drain voltage from 0 carries those points. A zero sth
+  // is never physical (the channel's thermal noise does not vanish at zero current).
+  const idCol = q.get('id');
   for (const key of ['sth', 'sfl'] as const) {
     const col = q.get(key);
     if (!col) continue;
-    const bad = countWhere(col, (x) => !(x > 0));
+    let bad = 0;
+    for (let i = 0; i < col.length; i++) {
+      const x = col[i];
+      if (x > 0) continue;
+      if (key === 'sfl' && x === 0 && idCol !== undefined && idCol[i] === 0) continue;
+      bad++;
+    }
     if (bad > 0) {
       out.push({
         rule: 'noise-psd',
         severity: 'error',
-        message: `${key} has ${bad} non-positive value(s) — a noise PSD must be > 0`,
+        message:
+          `${key} has ${bad} non-positive value(s) — a noise PSD must be > 0` +
+          (key === 'sfl' ? ' (except flicker noise where the drain current is exactly 0)' : ''),
         location: key,
       });
     }

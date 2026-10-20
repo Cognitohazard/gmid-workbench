@@ -105,7 +105,9 @@ Columns named `l`, `vds`, `vsb`, `vgs` are sweep axes. At least one must be pres
 the unique sorted values of each axis, with **exactly one data row per grid point**.
 Row order in the file does not matter — each row is placed by its axis coordinates —
 but the grid must be complete: missing points, duplicate points, or ragged sweeps
-(e.g. a different vgs range per length) are rejected.
+(e.g. a different vgs range per length) are rejected. An axis's values need not be
+evenly spaced: the bundled open-PDK tables step `vds` by 25 mV from 0 to 0.3 V, where
+the drain current bends into saturation, and by their coarser step above that.
 
 ### Value columns
 
@@ -125,6 +127,11 @@ but the grid must be complete: missing points, duplicate points, or ragged sweep
 | `gamma` | 1 | optional: thermal-noise factor γ |
 | `igd`, `igs` | A | optional gate leakage |
 | `w` | m | optional (usually `# W:` metadata instead) |
+
+The bundled open-PDK tables carry `sth` and `sfl` at every grid point (the sky130 5 V
+nfet's carry `sfl` alone; see `data/pdk/PROVENANCE.md`): `tools/gen_gmid.py` runs a
+noise analysis at 1 Hz at each point, so `sfl` is taken at exactly 1 Hz, and it is 0
+where no drain current flows (`vds = 0`).
 
 ### Data cells
 

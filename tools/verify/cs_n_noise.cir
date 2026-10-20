@@ -13,7 +13,7 @@
 * 1 kHz and index 800 is 100 MHz.
 .param mc_mm_switch=0
 .param mc_pr_switch=0
-.include ~/.volare/sky130A/libs.tech/ngspice/corners/tt.spice
+.include .pdk/sky130A/libs.tech/ngspice/corners/tt.spice
 
 VG   g    0    dc 0.82563 ac 1
 VD   d    0    0.62563

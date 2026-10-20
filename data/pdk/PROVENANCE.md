@@ -1,10 +1,12 @@
 # gm/ID dataset — provenance & licensing
 
 These CSV tables are **simulated** transistor gm/ID characterization data (id, gm, gds,
-vth, vdsat, gmbs, and gate capacitances versus a `L · VSB · VDS · VGS` operating grid).
-They were produced by running **ngspice-42** DC operating-point sweeps over the SPICE
-compact models shipped in two open-source Process Design Kits. They are **derived data**,
-not the original PDK model files — the upstream models are used unmodified.
+vth, vdsat, gmbs, gate capacitances, and the drain thermal- and flicker-noise current
+PSDs `sth` and `sfl`, versus a `L · VSB · VDS · VGS` operating grid). They were produced
+by running **ngspice-42** DC operating-point sweeps, and a noise analysis at every grid
+point, over the SPICE compact models shipped in two open-source Process Design Kits. They
+are **derived data**, not the original PDK model files — the upstream models are used
+unmodified.
 
 Each table is in the `mostab` interchange format (a metadata comment block, then a column
 header, then one row per grid point; SI units; `vsb = -vbs`). Regenerate them from scratch
@@ -32,13 +34,33 @@ named `<device>__<corner>__<temp>C.mostab.csv`:
 Native/zero-Vt and ESD devices are intentionally excluded: they ship as discrete
 fixed-geometry models and cannot carry a continuous gm/ID length sweep.
 
+Each table is a full grid over:
+
+- **`vgs`:** from 0 up to the device's supply in 8 mV steps (negative for PMOS).
+- **`vds`:** 0 to 0.3 V in 25 mV steps, where the drain current bends into saturation,
+  then the coarser step to the supply: 0.2 V for sky130, VDD/12 for gf180mcu (0.275 V
+  for the 3.3 V devices, 0.5 V for the 6 V ones). Negative for PMOS.
+- **`vsb`:** 0, 0.3, 0.6 and 0.9 V.
+- **`L`:** per device, from its minimum length to 2 µm.
+
+**Noise.** `sth` and `sfl` come from a single-frequency ngspice noise analysis at 1 Hz at
+every grid point: the squares of the device's channel thermal-noise and flicker-noise
+drain-current densities. `sfl` is 0 where no drain current flows (`vds = 0`); at one such point (`nfet_01v8_lvt`,
+ss, −40 °C, L = 2 µm, every terminal at 0 V) the simulator returns not-a-number for it, and
+the generator writes 0 there, which it reports when it does. The sky130
+`nfet_g5v0d10v5` tables carry `sfl` but no `sth`: that model's cards declare BSIM4
+version 4.5, for which ngspice evaluates the channel thermal noise to not-a-number over
+part of the strong-inversion triode region at L ≤ 1 µm, and a table cell must be a
+finite number.
+
 ## Sources & attribution
 
 Both PDKs are licensed under the **Apache License, Version 2.0** (full text in
 `Apache-2.0.txt`). Apache-2.0 §2 grants the right to reproduce and distribute the work and
 derivative works, including commercially; this dataset is redistributed under that grant
-with the attribution below. The statement that the data was produced by DC sweeps (rather
-than being the original files) also satisfies Apache-2.0 §4(b) ("state changes").
+with the attribution below. The statement that the data was produced by DC sweeps and
+noise analyses (rather than being the original files) also satisfies Apache-2.0 §4(b)
+("state changes").
 
 ### sky130 (`data/pdk/sky130/`)
 - **SkyWater Open Source PDK**, variant `sky130A`.
@@ -62,4 +84,5 @@ than being the original files) also satisfies Apache-2.0 §4(b) ("state changes"
 - The **gf180mcu** PDK is published by its authors as *not intended for production* use; that
   caveat carries through to data derived from it.
 
-Generated 2026-06-30 with ngspice-42.
+First generated 2026-06-30 with ngspice-42; regenerated with ngspice-42 to add the noise
+columns and the 25 mV drain-voltage steps.

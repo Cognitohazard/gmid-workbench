@@ -21,9 +21,21 @@ Conventions (verified live):
 
 PMOS is swept negative (the mostab importer canonicalises sign); vsb applies a
 bulk bias (NMOS bulk below source, PMOS bulk above); temperature via ``.temp``.
+
+Two optional additions to the self-running deck:
+- ``vds_fine=(step, stop)`` runs a second nested ``dc`` over ``vd = 0 … stop`` at the
+  finer step and appends it to the same ``wrdata`` file, so the drain-voltage axis is
+  dense near zero (the saturation knee) and coarse above.
+- ``noise_to=`` runs one single-frequency ``noise`` analysis at every (vgs, vds) point
+  of that axis. ``HO`` turns the drain current into ``v(o)`` at 1 V/A, so the output
+  noise is the drain noise current and its per-device parts give the thermal and the
+  flicker drain-current densities in A/√Hz; their squares at 1 Hz are the mostab
+  ``sth`` and ``sfl`` columns. A noise analysis cannot run inside a ``dc`` sweep, so
+  the deck loops over the grid with ``alter`` and echoes one line per point.
 """
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,13 +47,53 @@ from mostab_io import fmt_num
 # unrecognized-save relay (a fake 0.0 column), so we keep to the common set.
 SAVE_PARAMS = ["gm", "gds", "id", "vth", "vdsat", "gmbs", "cgg", "cgs", "cgd"]
 
+# The noise columns, in the order the deck echoes them: the drain thermal-noise and
+# flicker-noise current PSDs [A^2/Hz], both taken from a noise analysis at 1 Hz.
+NOISE_PARAMS = ["sth", "sfl"]
+
+
+def _device_path(pdk: "Pdk", subckt: str) -> str:
+    """The device's hierarchical name: ``<prefix>.xm1.<internal>`` for a subckt device,
+    bare ``m1`` otherwise. The single owner of the device addressing that the saved
+    op-point params and the noise vectors share."""
+    return f"{pdk.save_prefix}.xm1.{pdk.internal(subckt)}" if pdk.is_subckt else "m1"
+
+
 def _op_vectors(pdk: "Pdk", subckt: str) -> list[str]:
-    """The bare ``@<addr>[param]`` vector name for each saved op-point param. The
-    address is hierarchical for a subckt device (``<prefix>.xm1.<internal>``), bare
-    ``m1`` otherwise. Referenced bare because the i()/v() wrappers seen in the rawfile
-    are not nutmeg functions. This is the single owner of the save/wrdata addressing."""
-    dev = f"{pdk.save_prefix}.xm1.{pdk.internal(subckt)}" if pdk.is_subckt else "m1"
-    return [f"@{dev}[{p}]" for p in SAVE_PARAMS]
+    """The bare ``@<addr>[param]`` vector name for each saved op-point param.
+    Referenced bare because the i()/v() wrappers seen in the rawfile are not nutmeg
+    functions. This is the single owner of the save/wrdata addressing."""
+    return [f"@{_device_path(pdk, subckt)}[{p}]" for p in SAVE_PARAMS]
+
+
+def noise_vectors(pdk: "Pdk", subckt: str) -> list[str]:
+    """The noise-plot vectors behind ``NOISE_PARAMS``, in that order: the device's
+    channel thermal noise (``.id``) and flicker noise (``.1overf``), each the
+    output-referred density in A/rtHz at the analysis frequency."""
+    dev = _device_path(pdk, subckt)
+    return [f"onoise.{dev}.id", f"onoise.{dev}.1overf"]
+
+
+def sweep_values(stop: float, step: float) -> list[float]:
+    """The magnitudes a ``dc`` sweep from 0 to ``stop`` at ``step`` visits: ``k*step``
+    for k = 0, 1, …, up to and including ``stop`` (ngspice keeps an end point the
+    accumulated step reaches within rounding, and stops short of one it overshoots,
+    so 0..3.3 at 8 mV ends at 3.296)."""
+    n = math.floor(stop / step + 1e-6)
+    return [k * step for k in range(n + 1)]
+
+
+def drain_voltages(vdd: float, vds_step: float,
+                   vds_fine: tuple[float, float] | None = None) -> list[float]:
+    """The drain-voltage axis magnitudes: the coarse ``0..vdd`` sweep at ``vds_step``,
+    plus, with ``vds_fine=(step, stop)``, the fine ``0..stop`` sweep, merged in order.
+    Two values that format to the same table coordinate are one point, and the coarse
+    one is kept, matching the generator's merge of the two sweeps."""
+    axis = {_g(v): v for v in sweep_values(vdd, vds_step)}
+    if vds_fine:
+        for v in sweep_values(vds_fine[1], vds_fine[0]):
+            axis.setdefault(_g(v), v)
+    return sorted(axis.values())
 
 
 def wrdata_signals(pdk: "Pdk", subckt: str) -> list[str]:
@@ -97,11 +149,17 @@ def build_deck(
     nf: int = 1,
     vgs_step: float = 0.025,
     vds_step: float = 0.15,
+    vds_fine: tuple[float, float] | None = None,
     wrdata_to: str | None = None,
+    noise_to: str | None = None,
 ) -> str:
-    """Return the deck string for one operating-grid sweep."""
+    """Return the deck string for one operating-grid sweep. ``vds_fine`` and
+    ``noise_to`` (see the module docstring) apply only to a self-running deck, so
+    they need ``wrdata_to``."""
     if dev_type not in ("n", "p"):
         raise ValueError(f"dev_type must be 'n'|'p', got {dev_type!r}")
+    if (vds_fine or noise_to) and not wrdata_to:
+        raise ValueError("vds_fine and noise_to need a self-running deck (wrdata_to)")
     s = 1.0 if dev_type == "n" else -1.0       # polarity: PMOS sweeps negative
     vmax = _g(s * vdd)
     gstep, dstep = _g(s * vgs_step), _g(s * vds_step)
@@ -120,15 +178,44 @@ def build_deck(
         f"vb b 0 {vb}",
         f"{inst} d g 0 b {subckt} L={lw(L_um)} W={lw(W_um)} nf={nf}",
         "vd d 0 0",
-        "vg g 0 0",
+        # The noise analysis takes its input at vg and reads the drain current as v(o).
+        "vg g 0 0 ac 1" if noise_to else "vg g 0 0",
+        *(["ho o 0 vd 1"] if noise_to else []),
         f".dc vg 0 {vmax} {gstep} vd 0 {vmax} {dstep}",
         f".save {save_line(pdk, subckt)}",
     ]
     if wrdata_to:
         # Self-running deck for standalone `ngspice -b`: run the .dc, then dump the
         # signals to a headerless CSV the generator parses positionally.
-        lines += [".control", "run",
-                  f"wrdata {wrdata_to} {' '.join(wrdata_signals(pdk, subckt))}", ".endc"]
+        wrdata = f"wrdata {wrdata_to} {' '.join(wrdata_signals(pdk, subckt))}"
+        lines += [".control", "run", wrdata]
+        if vds_fine:
+            # The fine sweep is appended after the coarse one, so where the two share a
+            # drain voltage the coarse rows come first in the file.
+            fstep, fstop = vds_fine
+            lines += ["set appendwrite",
+                      f"dc vg 0 {vmax} {gstep} vd 0 {_g(s * fstop)} {_g(s * fstep)}", wrdata]
+        if noise_to:
+            # One 1 Hz noise analysis per grid point. A single-frequency noise analysis
+            # makes one plot, the spectrum, and leaves it current, so the vectors are read
+            # from it directly; `destroy all` then drops it so the plots do not pile up.
+            th, fl = noise_vectors(pdk, subckt)
+            gates = " ".join(_g(s * v) for v in sweep_values(vdd, vgs_step))
+            drains = " ".join(_g(s * v) for v in drain_voltages(vdd, vds_step, vds_fine))
+            lines += [
+                f"foreach dv {drains}",
+                "alter vd dc = $dv",
+                f"foreach gv {gates}",
+                "alter vg dc = $gv",
+                "noise v(o) vg lin 1 1 1 1",
+                f"let sth = {th}^2",
+                f"let sfl = {fl}^2",
+                f'echo "$gv $dv $&sth $&sfl" >> {noise_to}',
+                "destroy all",
+                "end",
+                "end",
+            ]
+        lines.append(".endc")
     lines.append(".end")
     return "\n".join(lines) + "\n"
 
@@ -188,6 +275,36 @@ def _selftest() -> None:
     assert "XM1 d g 0 b nfet_03v3 L=0.28u W=10u nf=1" in g          # SI: u-suffixed
     assert "@m.xm1.m0[gm]" in g                                      # gf180 inner device m0
     assert ".dc vg 0 3.3 0.025 vd 0 3.3 0.15" in g
+    # Without noise_to the deck is the plain DC sweep: no AC input, no HO, no loop.
+    assert "vg g 0 0\n" in d and "ho o" not in d and "noise" not in d
+    # Self-running deck with the fine vds sweep and the per-point noise loop.
+    n = build_deck(SKY130, subckt="sky130_fd_pr__nfet_01v8", dev_type="n", vdd=1.8,
+                   corner="tt", L_um=0.5, W_um=1.0, vgs_step=0.008, vds_step=0.2,
+                   vds_fine=(0.025, 0.3), wrdata_to="d.csv", noise_to="n.txt")
+    assert "vg g 0 0 ac 1" in n and "ho o 0 vd 1" in n
+    assert ".dc vg 0 1.8 0.008 vd 0 1.8 0.2" in n                    # coarse sweep unchanged
+    assert n.index("wrdata d.csv") < n.index("set appendwrite") < n.index(
+        "dc vg 0 1.8 0.008 vd 0 0.3 0.025") < n.rindex("wrdata d.csv")   # fine sweep appended
+    assert ("foreach dv 0 0.025 0.05 0.075 0.1 0.125 0.15 0.175 0.2 0.225 0.25 0.275 0.3 "
+            "0.4 0.6 0.8 1 1.2 1.4 1.6 1.8\n") in n
+    assert "foreach gv 0 0.008 0.016 " in n and " 1.792 1.8\n" in n
+    assert "let sth = onoise.m.xm1.msky130_fd_pr__nfet_01v8.id^2" in n
+    assert "let sfl = onoise.m.xm1.msky130_fd_pr__nfet_01v8.1overf^2" in n
+    assert 'echo "$gv $dv $&sth $&sfl" >> n.txt' in n
+    # PMOS: the fine sweep and the loop run negative.
+    pn = build_deck(SKY130, subckt="sky130_fd_pr__pfet_01v8", dev_type="p", vdd=1.8,
+                    corner="tt", L_um=0.5, W_um=1.0, vgs_step=0.008, vds_step=0.2,
+                    vds_fine=(0.025, 0.3), wrdata_to="d.csv", noise_to="n.txt")
+    assert "dc vg 0 -1.8 -0.008 vd 0 -0.3 -0.025" in pn
+    assert "foreach dv 0 -0.025 -0.05 " in pn and "foreach gv 0 -0.008 " in pn
+    assert noise_vectors(GF180, "nfet_03v3") == ["onoise.m.xm1.m0.id", "onoise.m.xm1.m0.1overf"]
+    try:
+        build_deck(SKY130, subckt="sky130_fd_pr__nfet_01v8", dev_type="n", vdd=1.8,
+                   corner="tt", L_um=0.5, W_um=1.0, noise_to="n.txt")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("noise_to without wrdata_to built a deck")
     # temp directive only when != 27
     assert ".temp" not in d and ".temp 125" in build_deck(
         SKY130, subckt="sky130_fd_pr__nfet_01v8", dev_type="n", vdd=1.8, corner="tt",
@@ -200,7 +317,8 @@ def _selftest() -> None:
     assert len(row) == wrdata_columns()
     vgs, vds, ps = parse_wrdata_row(row)
     assert vgs == 0.5 and vds == 1.8 and ps == pv
-    print("ok: sky130 (bare-um, .include, m<subckt>) + gf180 (SI-u, sectioned .lib, m0) decks build correctly")
+    print("ok: sky130 (bare-um, .include, m<subckt>) + gf180 (SI-u, sectioned .lib, m0) decks "
+          "build correctly, with the fine vds sweep and the noise loop")
 
 
 if __name__ == "__main__":
