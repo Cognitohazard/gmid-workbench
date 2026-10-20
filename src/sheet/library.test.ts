@@ -619,12 +619,12 @@ describe('exemplar goldens: 5T OTA', () => {
     expect(relErr(in__id + inr__id, tail__id)).toBeLessThan(1e-12);
     expect(relErr(block(res, 'ldr').id, inr__id)).toBeLessThan(1e-12);
     expect(relErr(res.values.out_share, res.values.pair_split)).toBeLessThan(1e-12);
-    // For the same reason the stored value is only a starting guess: from 0.3 or from 0.7 the
-    // split lands where it does from one half.
-    for (const guess of [0.3, 0.7]) {
-      const from = runSheet(withParams(doc, { out_share: guess }), table);
-      expect(relErr(from.values.pair_split, res.values.pair_split)).toBeLessThan(1e-12);
-      expect(relErr(from.values.in__W, res.values.in__W)).toBeLessThan(1e-12);
+    // The stored value is never read: from 0.3 or from 0.7 the split lands exactly where it does
+    // from one half.
+    for (const stored of [0.3, 0.7]) {
+      const from = runSheet(withParams(doc, { out_share: stored }), table);
+      expect(from.values.pair_split).toBe(res.values.pair_split);
+      expect(from.values.in__W).toBe(res.values.in__W);
     }
     // A 1:1 mirror is the same width on the same gate. The width is passed through untouched;
     // the gate voltage is reported as the table's own vgs coordinate at the point it was read,
@@ -880,10 +880,10 @@ describe('exemplar goldens: 5T OTA', () => {
   });
 
   it('the design constraint lands the common mode exactly where the spec asked', () => {
-    // The tail node is solved, not typed: the engine bisects V_tail until CM_in equals CM_dc.
+    // The tail node is solved, not typed: the engine searches V_tail until CM_in equals CM_dc.
     // This is the whole two-door design — internal coordinate canonical, external one typed.
-    // 5 decimals: the bracket closes at CONSTRAINT_TOL_REL x its span (~0.7 µV on V_tail), which
-    // the CM relation's slope stretches to just under a µV — 6 decimals would ride on luck.
+    // 5 decimals: the search closes at SOLVE_TOL_REL x the range's span (~0.7 µV on V_tail),
+    // which the CM relation's slope stretches to just under a µV — 6 decimals would ride on luck.
     expect(res.values.CM_in).toBeCloseTo(1.1, 5);
   });
 
@@ -896,7 +896,7 @@ describe('exemplar goldens: 5T OTA', () => {
 
   it('the claimed CM range is checked at its ENDS by its range ends', () => {
     // Structure golden: the sheet re-evaluates at CM_dc = CM_lo and CM_hi on every run, each
-    // range end re-solving the tail node from the full bracket on the design the base run produced.
+    // range end re-solving the tail node over its full range on the design the base run produced.
     // The landed nodes must bracket the base solve (CM_in is monotone in V_tail), and the
     // linearized reach advisory checks the range ends replaced must stay gone. Whether the demo
     // device COMPLIES at those ends is deliberately not asserted — budgets are tuned for real

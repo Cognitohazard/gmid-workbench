@@ -91,6 +91,10 @@ function collectTreeChecks(doc: SheetDoc, prefix: string, into: SheetSweepCheck[
     if (prefix === '' || isHardCheck(r.kind))
       into.push({ id: prefix + r.id, kind: r.kind, marginPct: [] });
   }
+  // The check a declared region adds to the device is a physical check of this doc like the
+  // authored ones (see SheetGivens.region), so it rides the sweep beside them.
+  if (doc.givens?.region !== undefined)
+    into.push({ id: `${prefix}region`, kind: 'physical', marginPct: [] });
   // A docless (unresolved-ref) block has no visible checks; the sweep is all-infeasible
   // there anyway via eval's fail-closed guard.
   for (const u of doc.blocks ?? []) {
@@ -321,9 +325,9 @@ export const SWEEP2_POINTS = 21;
  * whole gm_id range?"). Each infeasible cell also names the WORST failing hard check —
  * walking the composition tree, so a child's check is attributed by path.
  * Cost is n² full-tree evaluations (sub-millisecond each on real tables). A sheet the engine
- * SOLVES costs far more per cell: every sample converges its own fixed point or bisects its own
- * design constraint (~20 probes, each a full tree evaluation) AND lands on biases the slice cache
- * has not seen. Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~50-60
+ * SOLVES costs far more per cell: every sample searches each of its solved params (several
+ * probes each, every probe a full tree evaluation) AND lands on biases the slice cache has not
+ * seen. Measured on a three-child 5T OTA over sky130: 0.47 ms/cell unsolved against ~50-60
  * ms/cell once a design constraint and both declared bias axes are in play, i.e. ~21-27 s for the
  * default 21x21. The map is a FEASIBILITY map, so the sheet's operating range is never evaluated
  * here: a range end is a compliance question and cannot move a cell. This runs synchronously; a
@@ -332,10 +336,10 @@ export const SWEEP2_POINTS = 21;
  * only because a frozen estimate re-slices at the same handful of biases; the honest
  * computation is the slower one.
  *
- * Each sample is solved INDEPENDENTLY, from the doc's authored starting guess. Seeding a sample
- * from its neighbour's converged estimate is the obvious optimisation and is deliberately not
- * done: contraction does not imply a unique fixed point, so a carried seed makes the map
- * hysteretic — a swept cell can then report a different verdict than the same parameters
+ * Each sample is solved INDEPENDENTLY, from its stated ranges alone. Starting a sample from its
+ * neighbour's answer is the obvious optimisation and is deliberately not done: a relation with
+ * more than one root in its range would land wherever the neighbour led it, so the map would be
+ * hysteretic — a swept cell could then report a different verdict than the same parameters
  * evaluated standalone, which is a worse defect than the time it saves.
  *
  * Structural validation runs once, with both swept params overridden. Pure; never throws.

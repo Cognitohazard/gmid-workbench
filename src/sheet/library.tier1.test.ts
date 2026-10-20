@@ -237,20 +237,17 @@ describe('tier1 goldens: Source follower', () => {
   });
 
   it('the gate drop is solved to the sized vgs and places the drain, with no warnings', () => {
-    // The solve closes when the estimate equals what it names, to the engine's own tolerance
-    // (relative to the larger of the two); the authored 0.57 is only where it starts.
-    expect(Math.abs(res.values.vgs_est - res.values.vgs)).toBeLessThanOrEqual(
-      SOLVE_TOL_REL * Math.max(Math.abs(res.values.vgs_est), Math.abs(res.values.vgs)),
-    );
+    // The solve closes when the param equals what it names, to the search's own tolerance:
+    // SOLVE_TOL_REL of the 1.6 V range it is searched in. The authored 0.57 is never read.
+    expect(Math.abs(res.values.vgs_est - res.values.vgs)).toBeLessThanOrEqual(SOLVE_TOL_REL * 1.6);
     // The fixture vgs is the closed-form inversion; the table interpolates gm/ID on a 10 mV vgs
     // grid, so the solved drop agrees with it to about 1e-4 relative, inside the 1e-3 used here.
     expect(relErr(res.values.vgs_est, VGS_GMID12_L05)).toBeLessThan(1e-3);
-    // The gap below is vgs_est - vgs, which the solve closes to SOLVE_TOL_REL relative to the
-    // larger of the two; vds is larger than both, so relative to vds it is smaller still. It is
-    // zero to rounding on the demo device only because its vgs does not depend on vds.
-    expect(relErr(res.sizing?.bias?.vds ?? NaN, 1.8 - 1.2 + res.values.vgs)).toBeLessThanOrEqual(
-      SOLVE_TOL_REL,
-    );
+    // The gap below is vgs_est - vgs, which the solve closes to the same tolerance. It is zero to
+    // rounding on the demo device only because its vgs does not depend on vds.
+    expect(
+      Math.abs((res.sizing?.bias?.vds ?? NaN) - (1.8 - 1.2 + res.values.vgs)),
+    ).toBeLessThanOrEqual(SOLVE_TOL_REL * 1.6);
     expect(res.feasible).toBe(true);
     expect(res.warnings).toHaveLength(0);
     expect(res.assumptions).toEqual([]);
@@ -266,11 +263,11 @@ describe('tier1 goldens: Source follower', () => {
     );
     expect(relErr(moved.values.vgs_est, VGS_GMID8_L05)).toBeLessThan(1e-3);
     expect(Math.abs(moved.values.vgs_est - moved.values.vgs)).toBeLessThanOrEqual(
-      SOLVE_TOL_REL * Math.max(Math.abs(moved.values.vgs_est), Math.abs(moved.values.vgs)),
+      SOLVE_TOL_REL * 1.6,
     );
     expect(
-      relErr(moved.sizing?.bias?.vds ?? NaN, 1.8 - 1.3 + moved.values.vgs),
-    ).toBeLessThanOrEqual(SOLVE_TOL_REL);
+      Math.abs((moved.sizing?.bias?.vds ?? NaN) - (1.8 - 1.3 + moved.values.vgs)),
+    ).toBeLessThanOrEqual(SOLVE_TOL_REL * 1.6);
     expect(moved.warnings).toHaveLength(0);
   });
 

@@ -46,7 +46,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and both of its drain-source voltages in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers. Both bracket ends must size: the max has to leave the output-side input device a drain-source voltage under the second stage's gate. Its diode-side partner is read from the table, not sized, so a bracket end that leaves that one almost no drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail — does not stop the solve; raising gm_id_ld1 (a smaller diode drop) is the knob that gives it room"
+      "note": "the input pair's tail node. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. Fixes the pair's body bias and both of its drain-source voltages in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers. An end of the range where the relation does not evaluate is stepped inward silently, and the searched range is reported only if the search then fails. Its diode-side partner is read from the table, not sized, so an end that leaves that one almost no drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail — does not stop the solve; raising gm_id_ld1 (a smaller diode drop) is the knob that gives it room"
     },
     {
       "name": "Cc",
@@ -78,10 +78,12 @@
     {
       "name": "out_share",
       "value": 0.5,
+      "min": 0.01,
+      "max": 0.99,
       "unit": "1",
       "role": "choice",
       "solveFor": "pair_split",
-      "note": "the share of the tail current the pair's output-side device carries with the inputs balanced — solved, not set. The pair's two devices are one width at one gate-source voltage, but one drain is the stage-1 output and the other the mirror node, so they do not carry equal currents and the tail current does not split in half. The engine substitutes until this equals the output-side device's fraction of the pair's current as the table reads the two (the pair_split row), which is the current law at the tail node: the two currents add up to what the tail delivers. The stored value is only the starting guess. Where the output-side device is sized for its inversion level its gate-source voltage does not depend on its current and both currents scale with its width, so the first substitution lands; with the design held at its widths — at another process condition — it takes two or three"
+      "note": "the share of the tail current the pair's output-side device carries with the inputs balanced — solved, not set. The pair's two devices are one width at one gate-source voltage, but one drain is the stage-1 output and the other the mirror node, so they do not carry equal currents and the tail current does not split in half. The engine searches for the share at which this equals the output-side device's fraction of the pair's current as the table reads the two (the pair_split row), which is the current law at the tail node: the two currents add up to what the tail delivers. The stored value is never read. It is searched between 0.01 and 0.99, a share of the tail current that leaves each device some of it"
     },
     {
       "name": "gm_id_in",
@@ -441,7 +443,7 @@
       "name": "CM_in",
       "expr": "V_tail + ino__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "V_mir",

@@ -33,10 +33,12 @@
     {
       "name": "k_x",
       "value": 1,
+      "min": 0,
+      "max": 2,
       "unit": "1",
       "role": "choice",
       "solveFor": "k_casc",
-      "note": "where the node between the two output devices — the output mirror device's drain and the output cascode's source — sits, as a multiple of the reference device's diode drop. Solved, not set: the current the mirror device delivers at that node is the current the cascode carries, and the gate-source voltage the cascode needs for that current hangs the node under the top of the reference stack. The engine iterates until the two agree, so the stored value is only the starting guess. It is stated as a multiple of the diode drop rather than in volts so that the guess of 1 starts the node on the reference device's diode drop whatever the table. That is where the node sits when the output is level with the top of the reference stack; it settles a few to a few tens of millivolts below or above that where the output sits lower or higher. The V_x row gives the node in volts"
+      "note": "where the node between the two output devices — the output mirror device's drain and the output cascode's source — sits, as a multiple of the reference device's diode drop. Solved, not set: the current the mirror device delivers at that node is the current the cascode carries, and the gate-source voltage the cascode needs for that current hangs the node under the top of the reference stack. The engine searches for the node at which the two agree; the stored value is never read. It is stated as a multiple of the diode drop rather than in volts so that its range means the same thing whatever the table: 1 is the reference device's diode drop, which is where the node sits when the output is level with the top of the reference stack; it settles a few to a few tens of millivolts below or above that where the output sits lower or higher. The V_x row gives the node in volts. It is searched between 0, the node at ground, and 2, the cascode gate two diode drops up"
     },
     {
       "name": "L",

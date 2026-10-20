@@ -90,7 +90,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the tail node — the tail device's drain, where the two degeneration resistors meet. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. The input device's source sits one resistor drop above it. The bracket reaches below the tail device's saturation voltage on purpose: a common mode that leaves the tail too little drain-source voltage then lands and fails the tail-saturated check, where a higher floor would leave the question unanswered"
+      "note": "the tail node — the tail device's drain, where the two degeneration resistors meet. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. The input device's source sits one resistor drop above it. The range reaches below the tail device's saturation voltage on purpose: a common mode that leaves the tail too little drain-source voltage then lands and fails the tail-saturated check, where a higher floor would leave the question unanswered"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -274,7 +274,7 @@
       "name": "CM_in",
       "expr": "V_s + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the design constraint is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the design constraint is a well-posed one-unknown search"
     },
     {
       "name": "n_deg",
@@ -408,7 +408,7 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve from the full bracket, every device held at the geometry it was sized to — and every hard rule must hold there"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard rule must hold there"
     },
     {
       "name": "cm-hi",

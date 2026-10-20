@@ -27,19 +27,21 @@ export interface SheetVar {
   role?: 'spec' | 'choice';
   note?: string;
   /**
-   * Marks this param as a TEARING VARIABLE and names the value it must agree with, closing
-   * a bias loop the composition DAG cannot express. Children evaluate in document order and
-   * can only read earlier siblings, so a real circuit's cyclic bias (the input pair's drain
-   * sits below the mirror's VGS, while the pair's own VGS sets the tail node it stands on)
-   * has to be cut somewhere; the author cuts it with an estimate, and this field says what
-   * the estimate is an estimate OF. Evaluation then iterates the sheet to a fixed point
-   * instead of leaving a human to retune the slider until an advisory check goes green.
+   * Marks this param as SOLVED FOR the value it must agree with, closing a bias loop the
+   * composition DAG cannot express. Children evaluate in document order and can only read
+   * earlier siblings, so a real circuit's cyclic bias (a mirror device's drain sits on the node
+   * its own current sets) has to be cut somewhere; the author cuts it with a param, and this
+   * field says what the param stands for. The engine then chooses the param so that
+   * `param - solveFor` reads zero, instead of leaving a human to retune the slider until an
+   * advisory check goes green.
    *
    * The target is any name resolvable in THIS sheet's namespace once its body has run —
    * typically a child's provided scalar (`in__vgs`), but an equation or the sheet's own sized
-   * operating point works too. `value` is only the starting guess. A target that does not
-   * resolve, or an iteration that does not settle, fails closed rather than reporting a
-   * design sized against a stale estimate.
+   * operating point works too. It is solved exactly as a `designConstraint` is (see below): by a
+   * one-unknown search between `min` and `max`, both required. `value` is what the panel shows
+   * before a run and nothing more; the answer never depends on it. A target that does not
+   * resolve inside the range, or a relation the search cannot settle, fails closed rather than
+   * reporting a design sized against a stale value.
    *
    * A solved param is no longer a free variable, so it is not sweepable.
    */
@@ -51,19 +53,18 @@ export interface SheetVar {
    * tables are indexed by; externally the designer types the quantity the application presents,
    * and the design constraint is the declared inversion between them.
    *
-   * Solved by BISECTION on [min, max] (both required — they are the bracket, not slider bounds).
-   * Bisection needs no contraction, cannot overshoot, and cannot depend on a starting guess, so
-   * the failure modes substitution has (two-cycles, rotation, damping heuristics) do not exist
-   * for it. Its honesty condition is stated instead of hidden: `lhs - rhs` must change sign
-   * across the bracket, and the solve fails closed when it does not, when an end does not
-   * evaluate, or when the crossing turns out to be a jump. If the relation folds inside the
-   * bracket the root found is determined by the authored bracket alone — never by history.
+   * Solved by a one-unknown search that keeps the root enclosed, on [min, max] (both required —
+   * they are the range searched, not slider bounds). Such a search needs no contraction, cannot
+   * overshoot, and cannot depend on a starting guess. Its honesty condition is stated instead of
+   * hidden: `lhs - rhs` must change sign across the range, and the solve fails closed when it
+   * does not, when nothing in the range evaluates, or when the crossing turns out to be a jump.
+   * If the relation folds inside the range the root found is determined by the stated range
+   * alone — never by history.
    *
    * `value` is only the displayed default; the solved value replaces it. A constrained param is not
-   * sweepable (sweep the spec on the other side of the constraint instead). A sheet may constrain
-   * several params when they can be solved one after another — each one's relation reading only
-   * params solved before it (see constraintPlan); two that depend on each other are a coupled
-   * system, which is refused.
+   * sweepable (sweep the spec on the other side of the constraint instead). A sheet may solve
+   * several params; ones that depend on each other are settled by repeating the one-unknown
+   * searches a fixed number of times (see solvePlan, and SOLVE_SWEEPS in eval.ts).
    *
    * `held` is set by the engine, never authored: it marks the constraint a fixed-hardware run
    * generates from a `hold` (see below).
@@ -78,7 +79,7 @@ export interface SheetVar {
    * and swept, and the engine reports what the held expression evaluates to (the gate bias the
    * design needs; see SheetResult.held). Wherever the hardware is held — a range end's
    * fixed-hardware run — the roles swap: the expression is held at that nominal value and the
-   * param is re-solved, by the same bisection a `designConstraint` uses on [min, max]. That is what
+   * param is re-solved, by the same search a `designConstraint` uses on [min, max]. That is what
    * silicon does: a bias line holds the gate, and the node under it moves with the condition.
    *
    * The expression must be a sum of terms in which this param appears exactly once, bare or
@@ -113,7 +114,7 @@ export interface SheetVar {
 export type ParamClass = 'independent' | 'assumed';
 export const PARAM_CLASSES: ReadonlySet<string> = new Set<ParamClass>(['independent', 'assumed']);
 
-/** Type guard: a CONSTRAINED param — one the engine solves by bracketed inversion (see
+/** Type guard: a CONSTRAINED param — one the engine solves against an authored relation (see
  *  SheetVar.designConstraint). */
 export function constrained(
   p: SheetVar,
@@ -153,28 +154,28 @@ export function constraintProblem(params: readonly SheetVar[]): string | null {
   const both = constrainedParams.find((p) => torn(p));
   if (both)
     return (
-      `param "${both.name}" has a design constraint and is also a tearing variable — the two would fight over ` +
-      `it; keep one solver`
+      `param "${both.name}" has a design constraint and also carries solveFor — the two would fight over ` +
+      `it; keep one relation`
     );
-  const bracketed = (p: SheetVar): boolean =>
+  const ranged = (p: SheetVar): boolean =>
     Number.isFinite(p.min) && Number.isFinite(p.max) && (p.min as number) < (p.max as number);
-  const unbracketed = constrainedParams.find((p) => !bracketed(p));
-  if (unbracketed)
+  const unranged = params.find((p) => engineSolved(p) && !ranged(p));
+  if (unranged)
     return (
-      `constrained param "${unbracketed.name}" needs finite min < max — they are the bisection ` +
-      `bracket, not slider bounds`
+      `solved param "${unranged.name}" needs finite min < max — they are the range it is searched ` +
+      `in, not slider bounds`
     );
   const held = params.filter(holds);
   const twice = held.find((p) => p.designConstraint !== undefined || torn(p));
   if (twice)
     return (
-      `param "${twice.name}" carries hold and also has a design constraint or is a tearing variable — a param ` +
+      `param "${twice.name}" carries hold and also has a design constraint or carries solveFor — a param ` +
       `takes one of the three`
     );
-  const loose = held.find((p) => !bracketed(p));
+  const loose = held.find((p) => !ranged(p));
   if (loose)
     return (
-      `held param "${loose.name}" needs finite min < max — the bracket it is re-solved in ` +
+      `held param "${loose.name}" needs finite min < max — the range it is re-solved in ` +
       `where the hardware is held`
     );
   const shapeless = held.find((p) => additiveCoefficient(p.hold, p.name) === undefined);
@@ -268,7 +269,20 @@ export interface SheetGivens {
    * connection already fixes it.
    */
   diode?: boolean;
+  /**
+   * The region the device is meant to operate in. Declaring one adds a physical check with the id
+   * `region` to the device's own check results: `abs(vds) >= vdsat` for `saturation`, and
+   * `abs(vds) <= vdsat` for `triode` (a switch), with `vds` the drain-source voltage the device was
+   * sized at and `vdsat` the sizing's own. It gates like an authored physical check, and reads
+   * `na` on a table with no `vdsat` column. Not allowed beside `diode: true`, where the drain is
+   * the gate and the question does not arise.
+   */
+  region?: Region;
 }
+
+/** The regions a device may declare (see SheetGivens.region). */
+export type Region = 'saturation' | 'triode';
+export const REGIONS: ReadonlySet<string> = new Set<Region>(['saturation', 'triode']);
 
 /** The bias axes the givens may declare — every namespace sweep axis except the inversion
  *  sweep (vgs) and the geometry axis (l). Derived from the axis flags so a table axis
@@ -294,6 +308,15 @@ export const GIVENS_KEYS: ReadonlySet<string> = new Set<string>([...BINDABLE, ..
  *  to type-check them differently, and because a flag silently failing a string test is the same
  *  reload-eating bug GIVENS_KEYS was introduced to stop. */
 export const GIVENS_FLAGS: ReadonlySet<string> = new Set<string>(['diode']);
+
+/** Givens keys whose value is one word from a fixed list rather than an expression (see
+ *  SheetGivens.region). Kept apart from the expression keys for the reason GIVENS_FLAGS is: every
+ *  walk that reads a given as an expression would otherwise read `saturation` as a name. */
+export const GIVENS_WORDS: ReadonlySet<string> = new Set<string>(['region']);
+
+/** Whether the givens key `k` holds an expression: every key but the flags and the words. */
+export const givenIsExpression = (k: string): boolean =>
+  !GIVENS_FLAGS.has(k) && !GIVENS_WORDS.has(k);
 
 /**
  * Why givens that leave the drain voltage out size no device, stated ONCE — the sizing fails on
@@ -424,21 +447,21 @@ export interface SheetBlock {
  *  cycle guard). Shared by the evaluator and the validator. */
 export const MAX_BLOCK_DEPTH = 8;
 
-/** Maximum tearing variables (params carrying `solveFor`) one sheet may declare. The scope rule
- *  permits "small, explicit, designer-named fixed points" and forbids a nodal solver; tearing
- *  many unknowns at once crosses that line into relaxation over a node set. Shared by the
- *  validator and the format docs so the limit is stated once. */
+/** Maximum params carrying `solveFor` one sheet may declare. The scope rule finds every unknown
+ *  by a one-unknown search and forbids solving a node set; cutting many loops at once crosses
+ *  that line into relaxation over a node set. Shared by the validator and the format docs so the
+ *  limit is stated once. */
 export const MAX_TORN_PARAMS = 4;
 
-/** A param the engine solves for rather than the author setting — the ONE definition of
+/** A param solved for the value it names (see SheetVar.solveFor) — the ONE definition of
  *  "torn", mirroring how `sweepable` owns the notion of a free slider variable. A type guard,
  *  so a caller that narrows gets `solveFor` as a plain string instead of casting it. */
 export function torn(p: SheetVar): p is SheetVar & { solveFor: string } {
   return typeof p.solveFor === 'string' && p.solveFor !== '';
 }
 
-/** A param the ENGINE resolves rather than the author setting — torn (substitution) or constrained
- *  (bisection). The one predicate for every surface that renders "solved, not set": read-only
+/** A param the ENGINE resolves rather than the author setting — torn or constrained, both found by
+ *  the same one-unknown search. The one predicate for every surface that renders "solved, not set": read-only
  *  fields, slider suppression. (`sweepable` keeps its own structural test on purpose: it must
  *  also refuse to sweep a MALFORMED design constraint, which the shape guards here deliberately
  *  reject so constraintProblem can name it.) */
@@ -449,9 +472,8 @@ export function engineSolved(p: SheetVar): boolean {
 /** True when a param is a finitely-bounded slider variable (sweepable). The ONE
  *  definition of a free, finitely-bounded variable — the sweep UIs and the sensitivity
  *  step-scaler both read it, so they can never disagree about what "bounded" means. A param
- *  under `solveFor` or `designConstraint` is solved by the engine, not set by anyone — and a
- *  constrained param's min/max are its bisection bracket, not slider bounds — so both are
- *  excluded. */
+ *  under `solveFor` or `designConstraint` is solved by the engine, not set by anyone — and its
+ *  min/max are the range it is searched in, not slider bounds — so both are excluded. */
 export function sweepable(
   v: { min?: number; max?: number; solveFor?: string; designConstraint?: unknown } | undefined,
 ): v is { min: number; max: number } {
@@ -537,7 +559,7 @@ export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
  * whose outcome is reported as compliance, beside feasibility and never folded into it (see
  * RangeEndReport.state). The canonical use is the claimed common-mode range:
  * `{name: "cm-lo", set: {CM_dc: "CM_lo"}}` asks whether the design the base run produced still
- * holds at the low end, EXACTLY (its own constraint solve from the full authored bracket, its own
+ * holds at the low end, EXACTLY (its own constraint solve over the full stated range, its own
  * children) where a linearized advisory check could only estimate it. The devices are held at the
  * geometry the base run sized and only the bias re-settles, so the answer is about that design
  * and no other. Range ends check the ENDS, not the interior — the sweep remains the interval
@@ -628,7 +650,7 @@ export function docExpressions(doc: SheetDoc): string[] {
   const out: string[] = [];
   if (doc.givens) {
     for (const [k, v] of Object.entries(doc.givens)) {
-      if (!GIVENS_FLAGS.has(k) && typeof v === 'string') out.push(v);
+      if (givenIsExpression(k) && typeof v === 'string') out.push(v);
     }
   }
   for (const p of doc.params) {
@@ -671,11 +693,11 @@ export interface SheetBlockReport {
  * (`set` — WHICH point was checked; the authored side may be an expression), its own check
  * results (and children, so a failure below the top doc keeps its path), the engine-solved
  * params where the range end landed (e.g. V_tail at CM_lo — empty when the run did not stand,
- * so a bracket end is never reported as a landing), the run's own warnings VERBATIM (a
+ * so a range end's probe is never reported as a landing), the run's own warnings VERBATIM (a
  * bias clamp fires exactly at a claim's extreme, and a green chip must not rest on
  * silently clamped data), and — when the run could not be evaluated at all — the solver's
- * message in `error`, so a budget starvation stays tellable from "the bracket cannot
- * reach it". Check-level failures live in `checks`, never in `error`.
+ * message in `error`, so a budget starvation stays tellable from "nothing in the range
+ * reaches it". Check-level failures live in `checks`, never in `error`.
  */
 export interface RangeEndReport {
   name: string;
@@ -788,7 +810,7 @@ export interface SizingReport {
   clamped?: string[];
   /** Axes the givens use and the table does not sweep (`vds`, `vsb`, `l`) — present only on a
    *  failed sizing, and what marks it as REFUSED: the table cannot answer for this device at
-   *  all, which no knob, bracket or re-bias changes (see refusedIn). `error` says why. */
+   *  all, which no knob, search range or re-bias changes (see refusedIn). `error` says why. */
   unswept?: string[];
   error?: string;
 }

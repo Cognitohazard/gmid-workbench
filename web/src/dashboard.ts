@@ -10,6 +10,7 @@ import {
   MAX_BLOCK_DEPTH,
   GIVENS_KEYS,
   GIVENS_FLAGS,
+  GIVENS_WORDS,
   DOC_KEYS,
   VAR_KEYS,
   inCurrentKeys,
@@ -493,6 +494,9 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         // A flag (the diode connection) is a boolean, and would fail the string test above —
         // which would delete the connection and leave the device unbiased on every reload.
         else if (GIVENS_FLAGS.has(k) && typeof b[k] === 'boolean') into[k] = b[k];
+        // A word from a fixed list (the region a device must stay in) is a string like an
+        // expression, kept as written; validation is what refuses a word off the list.
+        else if (GIVENS_WORDS.has(k) && typeof b[k] === 'string') into[k] = b[k];
         else dropField(true, `givens.${k}`);
       }
       givens = cand;

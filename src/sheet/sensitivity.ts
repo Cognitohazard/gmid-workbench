@@ -75,8 +75,8 @@ interface Selected {
  * Which knobs to probe. The default set is the author's 'choice' params — the implementation
  * knobs a designer re-balances, as opposed to 'spec' params, which state the requirement and
  * are not free to move. Engine-solved params are excluded from BOTH the default set and an
- * explicit request: a torn or constrained param's authored value is a starting guess the solver
- * discards, so perturbing it measures the solver's tolerance, not the design.
+ * explicit request: a solved param's authored value is never read — the engine searches its
+ * range — so perturbing it measures nothing about the design.
  */
 function select(doc: SheetDoc, names?: readonly string[]): Selected[] {
   if (!names) return choiceKnobs(doc).map((p) => ({ name: p.name, param: p }));
@@ -87,8 +87,8 @@ function select(doc: SheetDoc, names?: readonly string[]): Selected[] {
       return {
         name,
         error:
-          `the engine solves "${name}", so its authored value is only a starting guess — ` +
-          `perturbing it measures the solver, not the design`,
+          `the engine solves "${name}" by searching its range, so its authored value is never ` +
+          `read — perturbing it measures nothing about the design`,
       };
     return { name, param: p };
   });

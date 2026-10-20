@@ -11,10 +11,10 @@ import type { QAWarning } from '../types';
 import { compileExpr, metaScalars } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
 import { BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
-import { HELD_AT_A_RANGE_END, heldShape } from './coverage';
+import { HELD_AT_A_RANGE_END } from './coverage';
 import {
   BIAS_AXES,
-  GIVENS_FLAGS,
+  givenIsExpression,
   RANGE_END_SEP,
   PATH_SEP,
   blockPath,
@@ -30,6 +30,7 @@ import {
   drainProblem,
   PARAM_CLASSES,
   PROVIDE_SEP,
+  REGIONS,
   CHECK_KINDS,
   CHECK_OPS,
   WIRING_KEYS,
@@ -524,9 +525,9 @@ type Reads = {
 /** How a traversal reads the edges. One set of edges answers three questions — the policies below
  *  — and every way their answers differ is one of these fields; an absent one is off. */
 interface TraversalPolicy {
-  /** Follow a parent's override of a child param the engine solves. The engine discards it (a
-   *  design constraint chooses from its own bracket, a solveFor only seeds from it), so following
-   *  it over-approximates. */
+  /** Follow a parent's override of a child param the engine solves. The engine discards it (the
+   *  param is searched in its own range whatever the parent wires), so following it
+   *  over-approximates. */
   solvedOverrides?: boolean;
   /** Follow a range end's `set` from the top-level param it replaces. */
   rangeEndSets?: boolean;
@@ -540,8 +541,12 @@ interface TraversalPolicy {
   /** Resolve a name in the phase it is evaluated in: after its level's sizing, `w` is the sized
    *  device's, not the table's. */
   phased?: boolean;
-  /** Stop at a constrained param and record it, instead of following its relation. */
-  stopAtConstraints?: boolean;
+  /** Read the walk's own level (`self`'s) the way that level is solved: its params are inputs
+   *  whatever a parent wires into them, so an override there is not followed, and an engine-solved
+   *  param of that level is recorded and stopped at instead of followed through its relation. A
+   *  solved param of any OTHER level is followed: a child solves its own inside every evaluation
+   *  of its parent, so it is a function of what its relation reads. */
+  ownLevel?: boolean;
 }
 
 /** What a device's sizing — or any expression — rests on: dcInputs, and exprRoots's
@@ -558,12 +563,11 @@ const MOVEMENT: TraversalPolicy = {
   held: HELD_AT_A_RANGE_END,
 };
 
-/** Which other constrained params a constraint's residual depends on — the order in which
- *  constraints can be solved one at a time. A device quantity its givens name (`in__id` with `id`
- *  given as `I_tail/2`) depends on that expression alone; a constrained param is a stop, while a
- *  torn one is followed through the name it solves for. A range end's `set` is evaluated against a
- *  finished run, never inside one, so it is not followed. */
-const RESIDUAL: TraversalPolicy = { givenQuantities: true, phased: true, stopAtConstraints: true };
+/** Which other solved params of its own level a solved param's relation depends on — the edges
+ *  solvePlan orders and groups that level's solves by. A device quantity its givens name
+ *  (`in__id` with `id` given as `I_tail/2`) depends on that expression alone. A range end's `set`
+ *  is evaluated against a finished run, never inside one, so it is not followed. */
+const RESIDUAL: TraversalPolicy = { givenQuantities: true, phased: true, ownLevel: true };
 
 const equationEdge = (lv: Level, r: SheetEquation): Edge => ({
   kind: 'equation',
@@ -619,7 +623,7 @@ function provideEdges(kid: Level, key: string, policy: TraversalPolicy): Edge[] 
 /** A device's own links: each given expression, keyed by the quantity it gives. */
 const givensEdges = (lv: Level): Reads[] =>
   Object.entries(lv.doc.givens ?? {}).flatMap(([k, v]): Reads[] =>
-    !GIVENS_FLAGS.has(k) && typeof v === 'string'
+    givenIsExpression(k) && typeof v === 'string'
       ? [{ kind: 'given', lv, names: namesOf(v), key: k }]
       : [],
   );
@@ -676,9 +680,9 @@ type Roots = Map<string, { p: SheetVar; devices: Set<string> }>;
  * Each name and device is entered once per mode, open or closed, so a loop on an open path is never
  * hidden behind the same node reached closed first. Reaching a node already on the path is a
  * cycle, recorded with whether a solved relation or `set` lies on it, and not followed; reaching
- * `origin` again is a loop, kept only when the path is open. `self`, the constraint's own unknown,
- * sets `selfRead` wherever it is reached in its own level — before any override of it is looked at
- * — and is followed no further.
+ * `origin` again is a loop, kept only when the path is open. `self`, the solved param's own
+ * unknown, sets `selfRead` wherever it is reached in its own level — before any override of it is
+ * looked at — and is followed no further.
  */
 function walkBack(
   policy: TraversalPolicy,
@@ -730,7 +734,15 @@ function walkBack(
     const qualified = `${lv.path}${name}`;
     const sized = !!policy.phased && post && SIZED_META.has(name);
     if (!enter(`${sized ? 's' : 'n'}${qualified}`, closed, qualified)) return;
-    const edges = edgesOf(lv, name, sized, policy);
+    const own = !!policy.ownLevel && lv === self?.lv;
+    let edges = edgesOf(lv, name, sized, policy);
+    // The own level's params are inputs to its solve: what a parent wires into one is a number by
+    // the time the level is solved, so the param is a root there.
+    if (own && edges.some((e) => e.kind === 'override')) {
+      const p = lv.doc.params.find((q) => q.name === name) as SheetVar;
+      edges = edges.filter((e) => e.kind !== 'override');
+      if (!edges.some((e) => e.kind === 'root')) edges.unshift({ kind: 'root', p });
+    }
     if (edges.length === 0) found.unresolved.add(qualified);
     for (const e of edges) {
       if (e.kind === 'meta') continue;
@@ -740,7 +752,7 @@ function walkBack(
         roots.set(qualified, entry);
       } else if (e.kind === 'device') {
         device(e.lv, policy.givenQuantities ? e.key : undefined, closed);
-      } else if (e.kind === 'solved' && policy.stopAtConstraints && constrained(e.p)) {
+      } else if (e.kind === 'solved' && own) {
         found.constraints.add(qualified);
       } else {
         const cross = e.kind === 'solved' || e.kind === 'set';
@@ -821,8 +833,8 @@ export interface DcInputs {
  * PROVENANCE walk run back from every device's givens — the bias axes and the rest alike, so a
  * `vgs` tie is followed too — across the whole tree (edgesOf says what each name reads):
  *  - a child param the parent overrides continues into the override's names, in the parent's
- *    scope — unless the engine solves it: a design constraint ignores the override, a solveFor only
- *    seeds from it, so it stays a root;
+ *    scope — unless the engine solves it: the param is searched in its own range and the
+ *    override is ignored, so it stays a root;
  *  - a `child__key` is an alias into that child, never a root: it continues into the child's
  *    equation, its param, or — for a quantity its sizing publishes — its own givens;
  *  - an equation continues into its expression;
@@ -870,8 +882,8 @@ export function dcInputs(doc: SheetDoc): DcInputs {
   return out;
 }
 
-/** The two readings exprRoots offers: the DC-input walk's, or the residual of a constraint on the
- *  named param of the level the expression is read at. */
+/** The two readings exprRoots offers: the DC-input walk's, or the relation of the named solved
+ *  param of the level the expression is read at. */
 export type RootsPolicy = 'provenance' | { residual: string };
 
 /** What an expression rests on (see exprRoots). Every name is qualified by block path; devices are
@@ -887,15 +899,18 @@ export interface ExprRoots {
 
 /**
  * The roots an expression read at `level` (a block path, `''` for the top) transitively rests on,
- * by class, under one policy: `provenance`, or `{ residual: X }` for the residual of a constraint
- * on that level's param X. The expression is read where a residual is evaluated: after the level's
+ * by class, under one policy: `provenance`, or `{ residual: X }` for the relation that solves that
+ * level's param X. The expression is read where a relation is evaluated: after the level's
  * sizing. Also reported: the names that resolve to nothing, the devices, equations (`equation`) and
  * solved relations crossed on the way, and each cycle reached, with whether a solved relation lies
- * on it. Under `residual`, `constraints` holds the OTHER constrained params reached — the
- * constraint's ordering edges, never X — and `selfRead` whether X itself was reached in its own
- * level. A name that resolves to nothing may be one only the live value set can place, such as a
- * table's pass-through column, so it fails closed: `constraints` then holds every other constrained
- * param in the tree. Structural and table-free, like dcInputs.
+ * on it. Under `residual` the level is read as it is solved — its params are inputs, whatever a
+ * parent wires into them — and `constraints` holds the OTHER solved params of that level reached
+ * (constrained, or carrying solveFor): the relation's ordering edges, never X. A solved param of a
+ * child is crossed rather than stopped at, because the child solves it inside every evaluation of
+ * the level. `selfRead` says whether X itself was reached in its own level. A name that resolves to
+ * nothing may be one only the live value set can place, such as a table's pass-through column, so
+ * it fails closed: `constraints` then holds every other solved param of the level. Structural and
+ * table-free, like dcInputs.
  */
 export function exprRoots(
   doc: SheetDoc,
@@ -920,9 +935,7 @@ export function exprRoots(
   }
 
   const { unresolved, device, equation, solved, constraints, cycles, selfRead } = found;
-  const every = levels.flatMap((l) =>
-    l.doc.params.filter(constrained).map((p) => `${l.path}${p.name}`),
-  );
+  const every = (lv?.doc.params ?? []).filter(engineSolved).map((p) => `${path}${p.name}`);
   const own = typeof policy === 'object' ? `${path}${policy.residual}` : undefined;
   const out: ExprRoots = {
     roots: { independent: [], assumed: [], solved: [], held: [], unclassified: [] },
@@ -937,73 +950,72 @@ export function exprRoots(
   return out;
 }
 
+/** The relation that solves `p`, as one expression that reads zero at the answer: `lhs - rhs` for
+ *  a design constraint, the param less the value it names for a solveFor. */
+export function solvedRelation(p: SheetVar): { lhs: string; rhs: string } | undefined {
+  if (constrained(p)) return { lhs: p.designConstraint.lhs, rhs: p.designConstraint.rhs };
+  return torn(p) ? { lhs: p.name, rhs: p.solveFor } : undefined;
+}
+
 /**
- * The order in which a tree's constrained params can be solved one at a time: each after every
- * other constrained param its relation reads (the RESIDUAL policy's edges), names qualified by
- * block path. Solving in that order is exact — a relation never reads a param solved after it, so
- * nothing has to be revisited. When no such order exists, two or more constraints depend on each
- * other: a coupled system, which this engine reports and does not solve, at one level or across
- * levels alike. The `problem` names the params on the loop.
+ * How one level of a tree solves its own solved params (the top level of `doc`): grouped into the
+ * sets that depend on each other, in an order where every set comes after the ones its relations
+ * read. Each set is a list of param names in document order; a set of one is solved by one search,
+ * a set of several by repeated sweeps (see solveNode in eval.ts).
  *
- * `held: true` reads the document as a fixed-hardware run will (heldShape) — every `hold` a design
- * constraint and every device's givens in their fixed-width form — so that run's order can be
- * checked before any run exists. It is a different document from the authored one, not a superset
- * of it, so a caller checking a sheet asks about both.
- *
- * A relation that reads a name nothing on the sheet provides cannot be placed in the order at
- * all (exprRoots fails closed on it); the problem then names that name, not the loop it would
- * otherwise be reported as.
+ * The edges are the RESIDUAL reading of each relation (exprRoots): which other solved params of
+ * this level it reaches. Children are not part of it — a child solves its own params inside every
+ * evaluation of this level, so they are functions of this level's values, never unknowns beside
+ * them. The sets are the strongly connected components of those edges; with no edge between two
+ * sets, document order decides, so the plan is a function of the document alone.
  */
-export function constraintPlan(
-  doc: SheetDoc,
-  opts: { held?: boolean } = {},
-): { order: string[] } | { problem: string } {
-  const tree = opts.held ? heldShape(doc) : doc;
+export function solvePlan(doc: SheetDoc): string[][] {
+  const solved = doc.params.filter(engineSolved);
+  const names = solved.map((p) => p.name);
   const reads = new Map<string, string[]>();
-  const unplaced = new Map<string, string[]>();
-  for (const lv of levelsOf(tree)) {
-    for (const p of lv.doc.params.filter(constrained)) {
-      const level = lv.path.endsWith(PATH_SEP) ? lv.path.slice(0, -PATH_SEP.length) : lv.path;
-      const { constraints, unresolved } = exprRoots(
-        tree,
-        level,
-        `(${p.designConstraint.lhs}) - (${p.designConstraint.rhs})`,
-        {
-          residual: p.name,
-        },
-      );
-      reads.set(`${lv.path}${p.name}`, constraints);
-      if (unresolved.length) unplaced.set(`${lv.path}${p.name}`, unresolved);
-    }
+  for (const p of solved) {
+    const rel = solvedRelation(p) as { lhs: string; rhs: string };
+    const { constraints } = exprRoots(doc, '', `(${rel.lhs}) - (${rel.rhs})`, {
+      residual: p.name,
+    });
+    const deps = new Set(constraints);
+    // Document order, so the walk below visits neighbours deterministically.
+    reads.set(
+      p.name,
+      names.filter((n) => deps.has(n)),
+    );
   }
-  const order: string[] = [];
-  const state = new Map<string, 'open' | 'done'>();
-  const visit = (name: string, trail: string[]): string[] | undefined => {
-    if (state.get(name) === 'done') return undefined;
-    if (state.get(name) === 'open') return [...trail.slice(trail.indexOf(name)), name];
-    state.set(name, 'open');
-    for (const dep of reads.get(name) ?? []) {
-      const loop = visit(dep, [...trail, name]);
-      if (loop) return loop;
+  // Tarjan's algorithm. A component is emitted once everything it reads has been, which is the
+  // order to solve in.
+  const out: string[][] = [];
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const connect = (v: string): void => {
+    index.set(v, index.size);
+    low.set(v, index.get(v) as number);
+    stack.push(v);
+    onStack.add(v);
+    for (const w of reads.get(v) ?? []) {
+      if (!index.has(w)) {
+        connect(w);
+        low.set(v, Math.min(low.get(v) as number, low.get(w) as number));
+      } else if (onStack.has(w)) low.set(v, Math.min(low.get(v) as number, index.get(w) as number));
     }
-    state.set(name, 'done');
-    order.push(name);
-    return undefined;
+    if (low.get(v) === index.get(v)) {
+      const set = new Set<string>();
+      let w: string;
+      do {
+        w = stack.pop() as string;
+        onStack.delete(w);
+        set.add(w);
+      } while (w !== v);
+      out.push(names.filter((n) => set.has(n)));
+    }
   };
-  for (const name of reads.keys()) {
-    const loop = visit(name, []);
-    if (!loop) continue;
-    const lost = loop.find((n) => unplaced.has(n));
-    return {
-      problem: lost
-        ? `the relation that solves "${lost}" reads ${quoted(unplaced.get(lost) ?? [])}, which ` +
-          `nothing on the sheet provides — so the order to solve its constrained params in cannot ` +
-          `be established`
-        : `constrained params depend on each other (${loop.join(' → ')}) — a coupled system, which ` +
-          `is not solved; give one of them a value the other does not read`,
-    };
-  }
-  return { order };
+  for (const n of names) if (!index.has(n)) connect(n);
+  return out;
 }
 
 /** How a DC-input finding names a device: the sheet's own, or a child by block path. */
@@ -1179,6 +1191,8 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
     for (const { path, givens, reached } of allGivens) {
       const readsMoved = (expr: unknown): boolean =>
         typeof expr === 'string' && namesOf(expr).some((n) => reached.has(n));
+      const keyMoved = (k: string): boolean =>
+        givenIsExpression(k) && readsMoved(givens[k as never]);
       const where = path === 'givens' ? "this sheet's own givens" : `the givens at "${path}"`;
       if (givens.W !== undefined) {
         // Width-first givens are left exactly as authored at a range end, which makes two
@@ -1198,9 +1212,7 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
         // given its width and its partner's gate voltage is read at exactly that voltage, so a
         // partner that settles somewhere else at the range end is the mirror working, and the
         // note below says what follows from it.
-        const via = Object.keys(givens).filter(
-          (k) => k !== 'vds' && k !== 'vgs' && readsMoved(givens[k as never]),
-        );
+        const via = Object.keys(givens).filter((k) => k !== 'vds' && k !== 'vgs' && keyMoved(k));
         const geometry = via.filter((k) => k === 'W' || k === 'L');
         if (geometry.length)
           out.push({
@@ -1232,9 +1244,7 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
         // operating point — a mirror's output device. Where the range end moves that point, the
         // current is different there. `vds` counts here: a drain move is exactly how a tail's
         // current follows the tail node.
-        const point = Object.keys(givens).filter(
-          (k) => k !== 'W' && k !== 'L' && readsMoved(givens[k as never]),
-        );
+        const point = Object.keys(givens).filter((k) => k !== 'W' && k !== 'L' && keyMoved(k));
         if (givens.id === undefined && point.length && !geometry.length)
           out.push({
             rule: 'sheet-range',
@@ -1306,9 +1316,9 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         location: p.name,
       });
     }
-    // A tearing variable that solves for itself is a fixed point trivially, and hides the
-    // loop it was meant to close. Only the self-reference is checkable here — whether the
-    // target resolves at all depends on the live value set, which is eval's job.
+    // A param that solves for itself reads zero everywhere in its range, and hides the loop it
+    // was meant to close. Only the self-reference is checkable here — whether the target
+    // resolves at all depends on the live value set, which is eval's job.
     if (p.solveFor === p.name) {
       out.push({
         rule: 'sheet-param',
@@ -1317,11 +1327,28 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         location: p.name,
       });
     }
+    // A relation that never reads its own param cannot single it out: whatever it reads is the
+    // same at every value of the param, so a search would land on `min` and call it found. Only
+    // asserted where the walk could place every name the relation reads — a table column it
+    // cannot place might be the param's own device, so an unplaced name is not taken as proof.
+    const rel = solvedRelation(p);
+    if (rel && p.solveFor !== p.name) {
+      const reads = exprRoots(doc, '', `(${rel.lhs}) - (${rel.rhs})`, { residual: p.name });
+      if (!reads.selfRead && reads.unresolved.length === 0)
+        out.push({
+          rule: 'sheet-param',
+          severity: 'error',
+          message:
+            `param "${p.name}": its relation ${rel.lhs} - (${rel.rhs}) does not read ${p.name}, so ` +
+            `it cannot single ${p.name} out — write the relation in terms of the param it solves`,
+          location: p.name,
+        });
+    }
   }
 
-  // The architecture allows "small, explicit, designer-named fixed points" and no nodal solver.
-  // A sheet tearing many unknowns at once stops being that and becomes relaxation over a node
-  // set, so the word "small" is enforced here rather than left as an aspiration.
+  // The architecture finds every unknown by a one-unknown search and never solves a node set. A
+  // sheet cutting many loops at once stops being a few named unknowns and becomes relaxation over
+  // a node set, so the limit is enforced here rather than left as an aspiration.
   const unknowns = doc.params.filter(torn);
   if (unknowns.length > MAX_TORN_PARAMS) {
     out.push({
@@ -1377,6 +1404,37 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
         message: 'given diode must be true or false',
         location: 'givens',
       });
+    }
+    // A region names the check the engine adds; any other word would add none, silently.
+    const region: unknown = doc.givens.region;
+    if (region !== undefined) {
+      if (typeof region !== 'string' || !REGIONS.has(region))
+        out.push({
+          rule: 'sheet-givens',
+          severity: 'error',
+          message: 'given region must be "saturation" or "triode"',
+          location: 'givens',
+        });
+      else if (doc.givens.diode === true)
+        out.push({
+          rule: 'sheet-givens',
+          severity: 'error',
+          message:
+            'the givens declare a region beside a diode connection — the drain is the gate, so ' +
+            'whether vds clears vdsat is not a question the design leaves open. Drop region',
+          location: 'givens',
+        });
+      // The region check is reported under its own id beside the authored ones, and results are
+      // keyed by id.
+      if (doc.checks.some((r) => r.id === 'region'))
+        out.push({
+          rule: 'sheet-check',
+          severity: 'error',
+          message:
+            'check id "region" is the id of the check the givens\' region adds — rename the ' +
+            'authored check, or drop it in favour of the region',
+          location: 'region',
+        });
     }
   }
 
@@ -1541,17 +1599,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     });
   }
 
-  if (_depth === 0) {
-    out.push(...dcInputProblems(doc));
-    // Tree-wide like the rule above, and for the same reason: a design constraint's relation can
-    // read a constrained param of another level. Asked of the sheet as authored and as a
-    // fixed-hardware run will see it — two documents, each with its own constraints and givens.
-    const problems = new Set<string>();
-    for (const plan of [constraintPlan(doc), constraintPlan(doc, { held: true })])
-      if ('problem' in plan) problems.add(plan.problem);
-    for (const message of problems)
-      out.push({ rule: 'sheet-param', severity: 'error', message, location: 'params' });
-  }
+  if (_depth === 0) out.push(...dcInputProblems(doc));
 
   // The composition interface, both ways: names read across a block boundary, and names this
   // sheet declares it exposes. Runs for every doc — a leaf with no children still publishes.

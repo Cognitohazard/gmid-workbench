@@ -58,15 +58,17 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the tail node — the pair's source and the tail device's drain. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage, and the tail device's drain-source voltage, in one stroke. The max must stay below the diode-loaded drain (VDD minus the mirror's |vgs|) — both bracket ends have to size"
+      "note": "the tail node — the pair's source and the tail device's drain. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage, and the tail device's drain-source voltage, in one stroke. Above the diode-loaded drain (VDD minus the mirror's |vgs|) the pair has no drain-source voltage. An end of the range where the relation does not evaluate is stepped inward silently, and the searched range is reported only if the search then fails"
     },
     {
       "name": "V_nmir",
       "value": 0.8,
+      "min": 0,
+      "max": 1.8,
       "unit": "V",
       "role": "choice",
       "solveFor": "nmir__vgs",
-      "note": "the NMOS diode's node — the gate and drain of the bottom mirror's diode device, and the drain of the PMOS output device that feeds it. Solved, not set: that PMOS device's drain-source voltage is what is left between the supply and this node, the current it delivers there is the current the diode carries, and the diode's own gate-source voltage at that current is this node. The engine iterates until the two agree, so the stored value is only the starting guess. Where the diode is sized for its inversion level its gate-source voltage does not depend on the current and the first substitution lands; with the diode held at its width — at a range end or at another process condition — it does"
+      "note": "the NMOS diode's node — the gate and drain of the bottom mirror's diode device, and the drain of the PMOS output device that feeds it. Solved, not set: that PMOS device's drain-source voltage is what is left between the supply and this node, the current it delivers there is the current the diode carries, and the diode's own gate-source voltage at that current is this node. The engine searches for the node at which the two agree; the stored value is never read. It is searched between its two neighbours, ground and the 1.8 V supply"
     },
     {
       "name": "sign_p",
@@ -433,7 +435,7 @@
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "Ai_p",
@@ -613,7 +615,7 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve from the full bracket, every device held at the geometry it was sized to — and every hard rule must hold there"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard rule must hold there"
     },
     {
       "name": "cm-hi",

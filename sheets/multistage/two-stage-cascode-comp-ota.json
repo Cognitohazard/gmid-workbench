@@ -46,7 +46,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke. Both bracket ends must leave the pair drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail, the pin will say so. This variant stacks the cascode node in the same budget, so raising gm_id_ld1 for a smaller diode drop is the right direction but does not get there alone: on a sky130 tt realization it closes only past the knob's own maximum. Lowering V_casc toward its floor is the second knob, and the two together are what reopen the budget"
+      "note": "the input pair's tail node. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke. An end of the range where the relation does not evaluate — on a process whose PMOS diode eats most of the rail, the top of the range, where the pair has no drain-source voltage under the mirror diode drop — is stepped inward silently, and the searched range is reported only if the search then fails. This variant stacks the cascode node in the same budget, so raising gm_id_ld1 for a smaller diode drop is the right direction but does not get there alone: on a sky130 tt realization it closes only past the knob's own maximum. Lowering V_casc toward its floor is the second knob, and the two together are what reopen the budget"
     },
     {
       "name": "Cc",
@@ -177,7 +177,7 @@
         "lhs": "V1 - V_casco + casco__vgs",
         "rhs": "V_mir - V_casc + casc__vgs"
       },
-      "note": "drain-source voltage of the output-side cascode, whose drain is the stage-1 output and whose source is the low-impedance node Cc returns through. Solved rather than set: the two cascodes share one gate, so this is bisected between min and max (the BRACKET) until the output-side cascode's gate voltage equals the diode-side cascode's. Both bracket ends must size, so the max has to leave the input device under this cascode a positive drain-source voltage"
+      "note": "drain-source voltage of the output-side cascode, whose drain is the stage-1 output and whose source is the low-impedance node Cc returns through. Solved rather than set: the two cascodes share one gate, so this is searched between min and max (the range it is searched in, not slider bounds) until the output-side cascode's gate voltage equals the diode-side cascode's. An end of the range where the relation does not evaluate — the max, where it leaves the input device under this cascode no drain-source voltage — is stepped inward silently, and the searched range is reported only if the search then fails"
     },
     {
       "name": "out_sign",
@@ -482,7 +482,7 @@
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "V_mir",

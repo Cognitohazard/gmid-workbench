@@ -53,7 +53,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the input pair's tail node. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers"
+      "note": "the input pair's tail node. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. Fixes the pair's body bias and drain-source voltage in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers"
     },
     {
       "name": "I_cmfb",
@@ -395,7 +395,7 @@
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "gm1",

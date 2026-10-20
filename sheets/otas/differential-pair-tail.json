@@ -1,6 +1,6 @@
 {
   "title": "Differential pair + tail",
-  "description": "The bare differential-pair transconductor sized by half-circuit: one input device, the tail source under it, and the diode-connected reference that biases the tail. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; and each side of the pair carries half of what the tail delivers. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. The engine bisects $V_{tail}$ until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
+  "description": "The bare differential-pair transconductor sized by half-circuit: one input device, the tail source under it, and the diode-connected reference that biases the tail. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; and each side of the pair carries half of what the tail delivers. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. The engine searches $V_{tail}$ in its range until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -71,7 +71,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the tail node — the one free bias variable, solved rather than set: the engine bisects between min and max (the BRACKET, not slider bounds) until the produced common mode equals CM_dc. The shown value is where it landed"
+      "note": "the tail node — the one free bias variable, solved rather than set: the engine searches between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. The shown value is where it landed"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -232,7 +232,7 @@
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "Gm",

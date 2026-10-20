@@ -386,7 +386,7 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
     expect(end.W).toBe(base.W); // the same transistor
     const landed = res.rangeEnds![0].solved.X;
     expect(end.bias!.vsb).toBeCloseTo(landed, 12); // the node the device actually sat on
-    // The gate is where it was, to the bisection's landing tolerance on a 0.4 V bracket.
+    // The gate is where it was, to the search's landing tolerance on a 0.4 V range.
     expect(landed + end.vgs).toBeCloseTo(res.held!.X, 5);
     // And the node moved by the law above; the slack is interpolation between vsb nodes.
     expect(relErr(landed - X0, d / (1 + BODY_FACTOR))).toBeLessThan(5e-3);
@@ -395,7 +395,7 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
   it('refuses a held expression that its own param does not move', () => {
     // In the required form, yet the equation cancels the param: R is -X, so X + R is zero
     // everywhere and no value of X is singled out. The relation reads exactly zero at the low end
-    // of the bracket, which a bisection takes for a root — it would report the node at 0 V and
+    // of the range, which a search takes for a root — it would report the node at 0 V and
     // cover.
     const doc = underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: 'X + R' }, drainHi);
     doc.equations = [{ name: 'R', expr: '0 - X' }];
@@ -407,7 +407,7 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
   });
 
   it('still solves a held expression whose own term is tiny', () => {
-    // 1e-9·X moves by 4e-10 across the bracket — all of it the param's own term, so the node is
+    // 1e-9·X moves by 4e-10 across the range — all of it the param's own term, so the node is
     // determined however small the numbers are: X stays 0.2 because nothing else moved.
     const res = runSheet(
       underGate({ name: 'X', value: X0, min: 0, max: 0.4, hold: '1e-9*X' }, drainHi),
@@ -944,6 +944,23 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
       state: 'no-answer',
       error: 'constrained param x: does not change sign',
     });
+  });
+
+  it("reads a solve's failure as no answer even when it quotes a device past the top of its range", () => {
+    // A solve's message can quote the device failure that bounded its search — here the end where
+    // a held device could not carry 2 mA. That quote is why the range was searched where it was,
+    // not this point's verdict: the solve found nothing, so the point is unanswered. The same text
+    // as the run's own sizing error is a verdict (above).
+    const quoted =
+      'solved param "V" found no solution in the searched range [0.2, 0.8] V (the relation does ' +
+      'not evaluate below V = 0.2 V: block "m": sizing failed: inverse lookup: id 0.002 out of ' +
+      'range [1e-9, 0.001] for L=5e-7): CM_in - (CM_dc) does not change sign across it';
+    const solve: Parameters<typeof heldOutcome>[0] = {
+      ...run(),
+      feasible: false,
+      warnings: [{ rule: 'sheet-solve', severity: 'error', message: quoted }],
+    };
+    expect(heldOutcome(solve)).toEqual({ state: 'no-answer', error: quoted });
   });
 });
 

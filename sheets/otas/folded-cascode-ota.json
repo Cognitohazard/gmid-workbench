@@ -64,7 +64,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the tail node — the pair's source. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc"
+      "note": "the tail node — the pair's source. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc"
     },
     {
       "name": "V_fold",
@@ -362,7 +362,7 @@
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "tail_headroom",
@@ -517,7 +517,7 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve from the full bracket, every device held at the geometry it was sized to — and every hard rule must hold there"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard rule must hold there"
     },
     {
       "name": "cm-hi",

@@ -574,7 +574,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // for. The top of the tail bracket produces 0.8 + vgs(14) + 0.2 × 0.8 = 1.492 V; an
     // application that presents 1.6 V asks for more than that. The tail-node constraint then
     // finds no sign change anywhere in the bracket, so nothing was measured at that end: it is
-    // no answer, not a failure. Whatever the bisection was holding when it gave up is the last
+    // no answer, not a failure. Whatever the search was holding when it gave up is the last
     // PROBE, not a landing — locking those numbers would be asserting an operating point the run
     // never reached, and `solved` is left empty precisely so no consumer can go looking for one.
     expect(0.8 + vgsAtBody(VGS_GMID14_L05, 0.8)).toBeLessThan(1.6);
@@ -665,8 +665,8 @@ const itIsAMirrorOta = (
     expect(relErr(v.V_nmir, block(res, 'nmir').vgs)).toBeLessThan(1e-6);
     expect(relErr(v.V_nmir, VGS_GMID10_L05)).toBeLessThan(1e-5);
     expect(block(res, 'mfold').bias?.vds).toBeCloseTo(1.8 - VGS_GMID10_L05, 5);
-    // Solved, not typed: the value the sheet stores is a starting guess, 0.19 V away from the
-    // answer here, and another guess lands on the same node.
+    // Solved, not typed: the value the sheet stores is only what the panel shows, 0.19 V away
+    // from the answer here, and the solve never reads it.
     const guess = doc.params.find((p) => p.name === 'V_nmir');
     expect(guess?.solveFor).toBe('nmir__vgs');
     expect(Math.abs(guess!.value - v.V_nmir)).toBeGreaterThan(0.1);

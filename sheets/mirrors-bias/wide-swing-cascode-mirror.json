@@ -63,10 +63,12 @@
     {
       "name": "vds_lo",
       "value": 0.3,
+      "min": 0,
+      "max": 1.8,
       "unit": "V",
       "role": "choice",
       "solveFor": "wideswing_node",
-      "note": "the wide-swing mirror node. Solved, not retuned — the engine iterates it to the mirror device's own reported vdsat plus node_margin (the bias a real wide-swing generator is designed to produce), so the stored value is only a starting guess"
+      "note": "the wide-swing mirror node. Solved, not retuned — the engine searches for the node equal to the mirror device's own reported vdsat plus node_margin (the bias a real wide-swing generator is designed to produce); the stored value is never read. It is searched between its neighbours at their widest, ground and the 1.8 V supply"
     },
     {
       "name": "node_margin",

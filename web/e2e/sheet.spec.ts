@@ -685,11 +685,11 @@ test('design sheet: an imported solveFor survives import and reload (not silentl
   await page.goto('/');
   await loadDemo(page);
 
-  // `vstar_est` is a tearing variable: it drives gm/ID, and solves for the vstar that results.
-  // Its authored value of 0.3 deliberately FAILS the physical check; the fixed point (~0.22) passes
-  // it. So the check chip reports whether the loop was actually closed — and if the sanitizer
-  // drops solveFor on the way in or out of storage, the sheet silently reverts to the stale
-  // estimate and this check fails.
+  // `vstar_est` is solved: it drives gm/ID, and solves for the vstar that results, searched in
+  // its [min, max]. Its authored value of 0.3 deliberately FAILS the physical check; the root
+  // (~0.22) passes it. So the check chip reports whether the loop was actually closed — and if the
+  // sanitizer drops solveFor on the way in or out of storage, the sheet silently reverts to the
+  // stale value and this check fails.
   await page.locator('.load input[type=file]').setInputFiles({
     name: 'solved-loop.json',
     mimeType: 'application/json',
@@ -700,7 +700,7 @@ test('design sheet: an imported solveFor survives import and reload (not silentl
         params: [
           { name: 'L', value: 5e-7 },
           { name: 'Ib', value: 1e-5 },
-          { name: 'vstar_est', value: 0.3, solveFor: 'vstar_actual' },
+          { name: 'vstar_est', value: 0.3, min: 0.05, max: 0.6, solveFor: 'vstar_actual' },
         ],
         givens: { L: 'L', id: 'Ib', gm_id: '8 + 5*vstar_est', vds: '0.9' },
         equations: [{ name: 'vstar_actual', expr: 'vstar' }],

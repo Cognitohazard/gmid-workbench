@@ -7,7 +7,9 @@ import { describe, it, expect } from 'vitest';
 import { compileExpr } from '../derive';
 import { additiveCoefficient } from '../expr';
 import { dcInputs, EXAMPLES, exprRoots, runSheet, validateSheet } from './index';
-import { constraintPlan, reachedGivens, type ReachedGivens } from './validate';
+import { reachedGivens, solvePlan, type ReachedGivens } from './validate';
+import { heldShape } from './coverage';
+import { holdAsConstraint, holds } from './types';
 import { GIVENS_FLAGS, type SheetGivens, type SheetDoc, type SheetVar } from './types';
 import { loadLibrary, REFS, sheet, table } from './library.fixtures';
 import { resolveSheetRefs } from './resolve';
@@ -146,7 +148,7 @@ const tornDrain = (up: Partial<SheetVar>): SheetDoc => ({
   ...leaf({ vds: 'V_x' }),
   params: [
     ...leaf().params,
-    { name: 'V_x', value: 0.5, unit: 'V', solveFor: 'tgt' },
+    { name: 'V_x', value: 0.5, min: 0, max: 1.2, unit: 'V', solveFor: 'tgt' },
     { name: 'V_up', value: 0.7, unit: 'V', ...up },
   ],
   equations: [{ name: 'tgt', expr: 'V_up - 0.1' }],
@@ -378,8 +380,8 @@ describe('sheet-dc-inputs — solved is derived, never authored', () => {
   });
 
   it('a parent override of a constrained child param is no input: the constraint and its far side are', () => {
-    // The engine chooses k's source node V_s from the constraint's own bracket and ignores the
-    // override, so V_p decides nothing. V_s is solved, and CM_k — the voltage the constraint aims
+    // The engine searches k's source node V_s in its own range and ignores the override, so V_p
+    // decides nothing. V_s is solved, and CM_k — the voltage the constraint aims
     // the source at — is the real input, unclassified here.
     const r = dcInputs(overriding(constrainedSource(), 'V_s'));
     expect(r.solved).toEqual(['k.V_s']);
@@ -387,9 +389,10 @@ describe('sheet-dc-inputs — solved is derived, never authored', () => {
     expect(r.unclassified.map((u) => u.param)).toEqual(['k.CM_k']);
   });
 
-  it('a parent override of a torn child param only seeds it: the target behind it is the input', () => {
-    // A solveFor override is the iteration's starting point; the converged value wins. So V_p
-    // is no input, V_x is solved, and V_up — which the target equation reads — must be classified.
+  it('a parent override of a torn child param is ignored: the target behind it is the input', () => {
+    // A solveFor param is searched in its own range like a constrained one, whatever is wired in.
+    // So V_p is no input, V_x is solved, and V_up — which the target equation reads — must be
+    // classified.
     const r = dcInputs(overriding(tornDrain({}), 'V_x'));
     expect(r.solved).toEqual(['k.V_x']);
     expect(r.assumed).toEqual([]);
@@ -423,8 +426,7 @@ describe('hold — a node under a gate is stated at the nominal run and re-solve
     expect(errors(onNode({ hold: 'X + vgs', class: 'assumed' }))).toContainEqual(
       expect.stringMatching(/param "X" carries hold, so its class is derived/),
     );
-    const three =
-      /param "X" carries hold and also has a design constraint or is a tearing variable/;
+    const three = /param "X" carries hold and also has a design constraint or carries solveFor/;
     expect(
       errors(onNode({ hold: 'X + vgs', designConstraint: { lhs: 'X', rhs: 'vd' } })),
     ).toContainEqual(expect.stringMatching(three));
@@ -433,7 +435,7 @@ describe('hold — a node under a gate is stated at the nominal run and re-solve
     );
   });
 
-  it('needs a bracket to re-solve the node in', () => {
+  it('needs a range to re-solve the node in', () => {
     expect(errors(onNode({ hold: 'X + vgs', min: undefined }))).toContainEqual(
       expect.stringMatching(/held param "X" needs finite min < max/),
     );
@@ -466,18 +468,22 @@ describe('hold — a node under a gate is stated at the nominal run and re-solve
     );
   });
 
-  it('checks the order the held nodes will be solved in before any run exists', () => {
+  it('groups held nodes that are held through each other into one set, and refuses nothing', () => {
     // Two nodes each held through the other's device: X through a quantity biased from Y, Y
-    // through an equation that reads X. Typed, the sheet evaluates; held, the two form a coupled
-    // pair.
+    // through an equation that reads X. Typed, the sheet evaluates; held, the two depend on each
+    // other, and a held run settles them together by repeated sweeps.
     const doc = leaf({ vds: 'vd - X', vsb: 'Y' }, [
       { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, hold: 'X + vgs' },
       { name: 'Y', value: 0.1, unit: 'V', min: 0, max: 0.4, hold: 'Y + r' },
     ]);
     doc.equations = [{ name: 'r', expr: '2*X' }];
-    expect(errors(doc)).toContainEqual(
-      expect.stringMatching(/constrained params depend on each other \((X → Y → X|Y → X → Y)\)/),
-    );
+    doc.params = doc.params.map((p) => (p.name === 'vd' ? { ...p, class: 'independent' } : p));
+    expect(errors(doc)).toEqual([]);
+    const held = {
+      ...doc,
+      params: doc.params.map((p) => (holds(p) ? holdAsConstraint(p, '0.5') : p)),
+    };
+    expect(solvePlan(held)).toEqual([['X', 'Y']]);
   });
 });
 
@@ -541,19 +547,17 @@ describe('hold — the solve order is checked on the document a range end really
   it('reads the givens as a range end rewrites them, not as authored', () => {
     // As authored, the pair's current comes out of its sizing, which reads the tail; the cascode
     // carries that current, so its gate-source voltage would wait on the tail while the tail
-    // waits on the cascode node: a loop. A range end holds the pair's width and current as
-    // numbers, so there the cascode reads no tail at all and the order is node, then tail.
+    // waits on the cascode node. A range end holds the pair's width and current as numbers, so
+    // there the cascode reads no tail at all: two sets of one, the node, then the tail.
     expect(errors(stack({ hold: 'V_a + casc__vgs' }))).toEqual([]);
-    expect(constraintPlan(stack({ hold: 'V_a + casc__vgs' }), { held: true })).toEqual({
-      order: ['V_a', 'V_tail'],
-    });
+    expect(solvePlan(stack({ hold: 'V_a + casc__vgs' }))).toEqual([['V_tail']]);
+    expect(solvePlan(heldShape(stack({ hold: 'V_a + casc__vgs' })))).toEqual([['V_a'], ['V_tail']]);
   });
 
-  it('checks the sheet as authored as well: the two views are different documents', () => {
+  it('refuses nothing across levels: a child solves its own inside every probe of its parent', () => {
     // The parent constrains P against the child's Q; the child constrains Q against X/2; the parent
-    // wires X = P. As authored that is a coupled pair across the two levels. Held, X becomes a
-    // constraint of its own and the override that closed the loop is no longer read — so the
-    // fixed-hardware view alone would pass a sheet whose design-point solve is coupled.
+    // wires X = P. Each level's plan holds only its own solved params, so neither the sheet as
+    // authored nor its fixed-hardware form has anything to refuse.
     const doc: SheetDoc = {
       title: 'parent',
       polarity: 'n',
@@ -581,9 +585,9 @@ describe('hold — the solve order is checked on the document a range end really
         },
       ],
     };
-    expect(errors(doc)).toContainEqual(
-      expect.stringMatching(/constrained params depend on each other/),
-    );
+    expect(errors(doc)).toEqual([]);
+    expect(solvePlan(doc)).toEqual([['P']]);
+    expect(solvePlan(heldShape(doc))).toEqual([['P']]);
   });
 
   it('counts a held expression among the expressions a sheet reads', () => {
@@ -704,8 +708,8 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     // are on the sheet. Nor does the pair's diode-side transistor: its gate-source voltage is its
     // partner's and its drain is the load's diode node, one load gate-source voltage below the
     // supply. The share of the tail current the output-side pair transistor carries is the
-    // second solved value: it is substituted until the pair's two currents add up to what the
-    // tail delivers.
+    // second solved value: it is searched until the pair's two currents add up to what the tail
+    // delivers.
     expect(classes('otas/five-transistor-ota.json')).toEqual({
       independent: ['CM_dc', 'CM_hi', 'CM_lo', 'VDD', 'V_out_dc'],
       assumed: [],
@@ -899,7 +903,7 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
   });
 
   it('an override of a constrained child param reaches nothing — a case reachedGivens does not model', () => {
-    // The engine ignores the override (the constraint picks the value from its own bracket), so the
+    // The engine ignores the override (it searches the value in its own range), so the
     // parent's V_p reaches no device. Only the backward side is asserted: reachedGivens seeds a
     // child param from any override that reads a moved name, constrained or not, and so reports V_p
     // as reaching k's source — a known over-approximation in an advisory walk.
@@ -949,11 +953,9 @@ describe('SheetResult.assumptions', () => {
   });
 });
 
-// exprRoots under the residual reading: which OTHER constrained params a constraint's residual
-// reads, so constraints can be solved one at a time in that order. Each expectation follows the
-// fixture's own expressions by hand. Some fixtures hold design constraints that depend on each
-// other, which validation refuses; exprRoots is a structural query and reads a document as
-// written.
+// exprRoots under the residual reading: which OTHER solved params of its own level a solved
+// param's relation reads, the edges a level's solves are ordered and grouped by. Each expectation
+// follows the fixture's own expressions by hand.
 
 /** A drain-biased leaf whose source node P is constrained against the equation rq, which reads the
  *  constrained Q; Q's own relation reads R. */
@@ -978,9 +980,10 @@ const constraintPair = (): SheetDoc => ({
 describe('exprRoots — the residual reading', () => {
   const residual = (name: string) => ({ residual: name });
 
-  it('depends on another constrained param it reads, directly or through an equation, and stops there', () => {
-    // P + vgs - Q names Q itself; P + vgs - rq reaches it through rq = Q + 0.1. Q is constrained,
-    // so the walk records it and does not cross its relation: R, on Q's far side, is never reached.
+  it('depends on another solved param it reads, directly or through an equation, and stops there', () => {
+    // P + vgs - Q names Q itself; P + vgs - rq reaches it through rq = Q + 0.1. Q is solved on the
+    // same level, so the walk records it and does not cross its relation: R, on Q's far side, is
+    // never reached.
     for (const expr of ['P + vgs - Q', 'P + vgs - rq']) {
       const r = exprRoots(constraintPair(), '', expr, residual('P'));
       expect(r.constraints).toEqual(['Q']);
@@ -988,26 +991,33 @@ describe('exprRoots — the residual reading', () => {
     }
   });
 
-  it('sees the dependency through a parent override', () => {
+  it("reads its own level as it is solved: a parent's override there is a number, not an edge", () => {
     // m's drain level vd is overridden by the parent as V_out - V_tail, and V_tail is the
-    // parent's constrained node.
-    expect(exprRoots(constrainedTail(), 'm', 'vd', residual('vs')).constraints).toEqual(['V_tail']);
+    // parent's constrained node — but m is solved inside every probe of V_tail, with vd already a
+    // number, so vd is a root of m's level and V_tail is no edge of it.
+    const r = exprRoots(constrainedTail(), 'm', 'vd', residual('vs'));
+    expect(r.constraints).toEqual([]);
+    expect(r.roots.unclassified).toEqual(['m.vd']);
   });
 
-  it('sees the dependency through a child provide, of the param or of the device', () => {
+  it("crosses a child's solved param, provided or read through its device: the child solves it", () => {
     // k publishes its constrained source node V_s, and foo — none of k's params or equations, so a
     // column of the table read at k's operating point, which rests on the whole of k's givens,
-    // whose vsb is V_s.
+    // whose vsb is V_s. k solves V_s inside every evaluation of this level, so the walk crosses
+    // its relation instead of stopping: it is no unknown beside V_p.
     const doc = overriding({ ...constrainedSource(), provides: ['foo', 'V_s'] }, 'vd');
-    expect(exprRoots(doc, '', 'k__V_s', residual('V_p')).constraints).toEqual(['k.V_s']);
+    const param = exprRoots(doc, '', 'k__V_s', residual('V_p'));
+    expect(param.constraints).toEqual([]);
+    expect(param.crossings.solved).toEqual(['k.V_s']);
     const column = exprRoots(doc, '', 'k__foo', residual('V_p'));
-    expect(column.constraints).toEqual(['k.V_s']);
+    expect(column.constraints).toEqual([]);
+    expect(column.crossings.solved).toEqual(['k.V_s']);
     expect(column.unresolved).toEqual([]);
   });
 
-  it('follows a torn estimate through its target to the constrained param behind it', () => {
-    // P + V_x: V_x is torn against tgt = V_up - 0.1, and V_up is constrained. A walk that stopped
-    // at the torn V_x would see no constraint at all.
+  it('stops at a solveFor param of its own level exactly as at a constrained one', () => {
+    // P + V_x: V_x solves for tgt = V_up - 0.1, and V_up is constrained. Both are solved params of
+    // P's level, so the walk stops at the one P reads, V_x, and never reaches V_up behind it.
     const doc = tornDrain({ min: 0, max: 1, designConstraint: { lhs: 'V_up', rhs: '0.7' } });
     doc.params.push({
       name: 'P',
@@ -1018,8 +1028,9 @@ describe('exprRoots — the residual reading', () => {
       designConstraint: { lhs: 'P + V_x', rhs: '1' },
     });
     const r = exprRoots(doc, '', 'P + V_x', residual('P'));
-    expect(r.constraints).toEqual(['V_up']);
-    expect(r.crossings.solved).toEqual(['V_x']);
+    expect(r.constraints).toEqual(['V_x']);
+    expect(r.crossings.solved).toEqual([]);
+    expect(solvePlan(doc)).toEqual([['V_up'], ['V_x'], ['P']]);
   });
 
   it('follows a quantity the givens name through that expression alone: a branch current is not its tail node', () => {
@@ -1103,8 +1114,8 @@ describe('exprRoots — the residual reading', () => {
   });
 
   it("ignores what one evaluation ignores: an override of a solved child param, a range end's set", () => {
-    // A design constraint chooses V_s from its own bracket and a solveFor only seeds V_x from the
-    // override, so the parent's assumed V_p decides neither. The lo range end's V_lo replaces V_c
+    // The engine searches V_s and V_x each in its own range whatever the parent wires, so the
+    // parent's assumed V_p decides neither. The lo range end's V_lo replaces V_c
     // only in a run of its own, evaluated against the finished base run; the provenance reading
     // counts it as an input like the centre it replaces.
     for (const [child, key] of [
@@ -1140,16 +1151,23 @@ describe('exprRoots — the residual reading', () => {
 
   it('reports a name that resolves to nothing, apart from a constant, and fails closed on it', () => {
     // k constrains its source node V_s and provides vgs and id, not vth; nope names nothing; pi is
-    // a constant, not a name. Nothing that resolves reaches V_s, but a name that resolves to
-    // nothing could stand for anything, so the residual depends on every other constrained param in
-    // the tree.
+    // a constant, not a name. A name that resolves to nothing could stand for anything, so the
+    // relation depends on every other solved param of its own level: here the parent's W_p.
+    // k's V_s is no such param — k solves it inside every probe of this level.
     const doc = overriding(constrainedSource(), 'vd');
+    doc.params.push({
+      name: 'W_p',
+      value: 1,
+      min: 0,
+      max: 2,
+      designConstraint: { lhs: 'W_p', rhs: '1' },
+    });
     const r = exprRoots(doc, '', 'V_p + k__vth + nope + pi', residual('V_p'));
     expect(r.unresolved).toEqual(['k__vth', 'nope']);
-    expect(r.constraints).toEqual(['k.V_s']);
+    expect(r.constraints).toEqual(['W_p']);
     expect(exprRoots(doc, '', 'V_p + pi', residual('V_p')).constraints).toEqual([]);
-    // Read from inside k against its own constrained V_s, the only constrained param in the tree is
-    // the constraint's own, so there is no other for the unresolved name to stand for.
+    // Read from inside k against its own constrained V_s, the only solved param of that level is
+    // the relation's own, so there is no other for the unresolved name to stand for.
     expect(exprRoots(doc, 'k', 'V_s + vgs + nope', residual('V_s')).constraints).toEqual([]);
   });
 

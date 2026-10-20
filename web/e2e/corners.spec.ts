@@ -260,18 +260,15 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await expect(sp.locator('[data-corner-row="tt"] .cdes')).toHaveText('sized here');
   await expect(sp.locator('[data-corner-row="ss@-40"] .cdes')).toHaveText('held');
   await expect(sp.locator('[data-corner-row="tt"] .ccl')).toHaveText('✓ feasible');
-  // Held at ss, the cascode's drain sits past where that table was characterized: asked, and
-  // the data cannot answer — an open question, never a red or green one.
-  await expect(sp.locator('[data-corner-row="ss@-40"] .ccl')).toHaveText('? no answer');
-  await expect(sp.locator('[data-corner-row="ss@-40"]')).toHaveClass(/st-skip/);
-  await expect(sp.locator('[data-corner-row="ss@-40"] .ccd')).toContainText(
-    'the table does not reach this point',
-  );
+  // Held at ss, the node under the cascode's gate is re-found inside its range and every device
+  // reads where it was asked for; the design then misses its gain target there. A verdict,
+  // named by the check that fails — not an open question.
+  await expect(sp.locator('[data-corner-row="ss@-40"] .ccl')).toHaveText('✗ does not comply');
+  await expect(sp.locator('[data-corner-row="ss@-40"]')).not.toHaveClass(/st-skip/);
+  await expect(sp.locator('[data-corner-row="ss@-40"] .ccd')).toContainText('gain-spec');
   // Two badges: feasibility stamped with where it was asked, compliance as a count of points.
   await expect(sp.locator('.feasb')).toHaveText('feasible at tt');
-  await expect(sp.locator('[data-compliance]')).toHaveText(
-    'complies at 1 of 2 points · 1 no answer',
-  );
+  await expect(sp.locator('[data-compliance]')).toHaveText('complies at 1 of 2 points · 1 fail');
 
   // A child bound to a device that is not characterized at every condition: that condition is
   // NOT EVALUATED and says which device is missing — never counted as a design that fails.

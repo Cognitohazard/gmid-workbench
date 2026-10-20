@@ -52,7 +52,7 @@
       "max": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. The slider stops where the stack does: with V_a holding the pair's drain low, the tail node cannot climb past the bracket and the topology genuinely cannot take a higher CM — the telescopic's known input-range ceiling",
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. The slider stops where the stack does: with V_a holding the pair's drain low, the tail node cannot climb past its range and the topology genuinely cannot take a higher CM — the telescopic's known input-range ceiling",
       "class": "independent"
     },
     {
@@ -63,7 +63,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the tail node — the pair's source. Solved rather than set: bisected between min and max (the BRACKET) until the produced common mode equals CM_dc. The max must stay far enough below V_a for the pair to size at the top end — the input-sat guardrail owns saturation; the bracket only has to keep both ends on the table"
+      "note": "the tail node — the pair's source. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. An end of the range where the relation does not evaluate — the top end, where it leaves the pair too little room below V_a to size — is stepped inward silently, and the searched range is reported only if the search then fails; the input-sat guardrail owns saturation"
     },
     {
       "name": "V_a",
@@ -346,7 +346,7 @@
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed bisection"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "tail_headroom",
@@ -493,7 +493,7 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve from the full bracket, every device held at the geometry it was sized to — and every hard rule must hold there"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard rule must hold there"
     },
     {
       "name": "cm-hi",

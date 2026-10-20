@@ -112,6 +112,13 @@ That rewrite belongs to the app's loader: a program that calls the core directly
 document through `inCurrentKeys` first, at each level, and the core itself reads the current
 keys alone.
 
+A parameter carrying `solveFor` now needs `min` and `max`, the range it is searched in (see
+[Closing a bias loop](#closing-a-bias-loop-solvefor)). An older file whose `solveFor` parameter
+has neither still loads and is shown as written; nothing is filled in for it, because a range is
+a statement about the circuit only its author can make. Validation refuses it, naming the
+parameter and what to add — `solved param "vgs_est" needs finite min < max — they are the range
+it is searched in, not slider bounds` — and the sheet does not evaluate until the range is there.
+
 ## Parameters
 
 Each entry in `params` is a named scalar input:
@@ -120,11 +127,11 @@ Each entry in `params` is a named scalar input:
 |-|-|-|
 | `name` | string | The identifier used in expressions. |
 | `value` | number | The current value (SI units). |
-| `min`, `max` | number, optional | Bound the GUI slider **and** make the parameter sweepable. |
+| `min`, `max` | number, optional | Bound the GUI slider **and** make the parameter sweepable. On a parameter the engine solves (`solveFor`, `designConstraint`, `hold`) they are instead the range it is searched in, and required. |
 | `unit` | string, optional | Display unit. |
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
-| `solveFor` | string, optional | Makes this parameter a tearing variable and names the value it must agree with, closing a bias loop (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
+| `solveFor` | string, optional | Makes this parameter solved: it names the value the parameter must agree with, closing a bias loop, and the engine searches the parameter between `min` and `max` until the two agree (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
 | `hold` | string, optional | Marks a node voltage that hangs under a transistor's gate and names the quantity that stays fixed where the design is held: the gate voltage, written as the node plus the device's gate-source voltage (see [A node under a gate](#a-node-under-a-gate-hold)). The parameter stays an ordinary, sweepable input at the design point. |
 | `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: nothing on the sheet determines it, so the designer states it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe, an output level that a feedback loop outside the sheet holds, a voltage across a device whose surrounding circuit is not on the sheet). `assumed`: the sheet's own parts determine it, but the sheet types a value for now instead of deriving it (an internal stack node, a guessed gate-source drop). An assumed voltage is not a permanent state: it marks a value the sheet still has to derive, and deriving it removes the assumption. Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a range end's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `designConstraint` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `designConstraint` or `solveFor` is *solved*, and one that carries `hold` is *held*; those classes are derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
 
@@ -301,7 +308,26 @@ nine in ten of the library's sized devices leave `vsb` undeclared and are right 
 that hit rate teaches authors to ignore the channel.
 
 A device whose `vsb` depends on its own `VGS` — an input pair standing on a tail node — is a bias
-loop, so declare it through a tearing variable (see [Closing a bias loop](#closing-a-bias-loop-solvefor)).
+loop, so close it with a solved parameter (see [Closing a bias loop](#closing-a-bias-loop-solvefor)).
+
+### The region (`region`)
+
+A device that must stay in saturation — or a switch that must stay in triode — can say so:
+
+```json
+{ "L": "L", "id": "I_bias", "gm_id": "gm_id", "vds": "V_out - V_x", "region": "saturation" }
+```
+
+`region` is `"saturation"` or `"triode"`, a word rather than an expression. It adds one check to
+the device's own results, with the id `region` and the kind `physical`: `abs(vds) >= vdsat` in
+saturation and `abs(vds) <= vdsat` in triode, where `vds` is the drain-source voltage the givens
+state — not the value a table that does not reach it was read at; that clamp is reported on its
+own — and `vdsat` is the sizing's own. It gates feasibility, has a margin, can be the binding or limiting
+check, rides sweeps, and is asked again at every range end and process condition, exactly as an
+authored physical check would. On a table with no `vdsat` column it reads `na`, which a hard check
+fails closed on: the design reads infeasible until the table carries the column. Validation
+refuses any other word, a `region` beside `diode: true` (the drain is the gate, so the question
+does not arise), and an authored check with the id `region` on a device that declares one.
 
 ### Gate wiring (`wiring`)
 
@@ -508,8 +534,8 @@ by construction. First, a check that tests the very quantity the givens fixed: b
 `gm = 2*pi*GBW_target*CL` and then write `GBW_target*CL*2*pi <= gm`, and the two sides are
 algebraically identical, landing within floating-point rounding of the boundary. Second, a check
 evaluated AT a claimed range end: the design constraint's solve lands `CM_in` within its landing
-tolerance (10⁻⁶ of the bracket span, stretched by the relation's slope — microvolts on a volt-scale
-node) of the very value `cm-not-below` compares it against. Without the snap either verdict would
+tolerance (10⁻⁶ of its stated range's span, stretched by the relation's slope — microvolts on a
+volt-scale node) of the very value `cm-not-below` compares it against. Without the snap either verdict would
 coin-flip; with it, both read as a deterministic `amber`. The threshold sits two orders below the
 ~0.1% the sizer resolves between grid nodes, so a check "failing" by less than the data can
 distinguish is read for what it is: sitting on the boundary.
@@ -718,9 +744,9 @@ bias generator parks the mirror node at the mirror device's own `vdsat` plus a m
 `vdsat` is only known once the device is sized at that very node:
 
 ```json
-{ "name": "vds_lo", "value": 0.3, "unit": "V", "role": "choice",
+{ "name": "vds_lo", "value": 0.3, "min": 0, "max": 1.8, "unit": "V", "role": "choice",
   "solveFor": "wideswing_node",
-  "note": "the wide-swing mirror node, iterated to the mirror's own vdsat + node_margin" }
+  "note": "the wide-swing mirror node, solved to the mirror's own vdsat + node_margin" }
 ```
 
 The target is any name resolvable in this sheet's namespace once its body has run — an equation (as
@@ -728,7 +754,8 @@ here, `wideswing_node = ref__vdsat + node_margin`), a child's provided scalar, o
 sized operating point. The source follower is a second live example: its drain-source voltage is
 `VDD - V_in + vgs_est`, and `vgs_est` solves for the device's own `vgs`. It does not put a design
 constraint on its output node instead, because that node's valid range moves with the supply and a
-design constraint's bracket is fixed numbers that cannot follow it. The current-mirror OTA
+search range is fixed numbers that cannot follow it, while a gate-source voltage stays between the
+threshold region and the supply. The current-mirror OTA
 is a third, with a child's provided scalar as the target: a PMOS mirror output
 device has its drain on the node of an NMOS diode, the current it delivers there is the diode's,
 and the diode's gate-source voltage at that current is the node, so `V_nmir` solves for
@@ -737,13 +764,18 @@ current the input pair's output-side transistor carries, solved to that transist
 of the pair's current, so the two transistors add up to what the tail delivers although they
 sit at different drain voltages. The cascode current mirror solves the node between its output
 device and the cascode above it, as a multiple of the reference device's gate-source voltage
-(`k_x` solves for `k_casc`), so the two devices in series carry one current. `value` is only the starting
-guess: where the loop contracts to a single fixed point, every guess lands on the same answer. A
-guess still matters when it decides *which* fixed point you reach (contraction is local, so a loop
-can have more than one) or whether the iteration gets there at all, so keep it near the value you
-expect. Because the parameter is solved rather than set, the GUI shows it read-only, reporting what
-it converged to rather than what was authored — and there is no companion advisory check to retune,
-because there is no estimate left to drift.
+(`k_x` solves for `k_casc`), so the two devices in series carry one current.
+
+A solved parameter is found the way a design constraint is (see
+[Entering from a spec](#entering-from-a-spec-designconstraint)): the engine searches it between
+`min` and `max` until `param − solveFor` reads zero. Both are required, and they are the range
+searched, not slider bounds. State the range the answer is physically bound to lie in — a share
+between 0 and 1, a node between its neighbours, a gate-source voltage between the threshold region
+and the supply — and say so in the note. `value` is what the panel shows before a run and nothing
+more: the search starts from the range alone, so no stored value reaches the answer, and a sheet
+gives the same number whatever value it was saved with. Because the parameter is solved rather than
+set, the GUI shows it read-only, reporting where it landed — and there is no companion advisory
+check to retune, because there is no estimate left to drift.
 
 **Without `solveFor` the estimate is whatever the author last typed**, and nothing forces it to
 agree with the design. That is not a small error: an early revision of the library's 5T OTA
@@ -756,53 +788,38 @@ follower's, where the node a design constraint would solve has a range that move
 
 ### What it does and does not guarantee
 
-Iteration is plain substitution: replace each estimate with the value the sheet resolved for it,
-repeat until every one agrees. That converges when the loop **contracts** — when a small change in
-the estimate produces a smaller change in what it names. Real bias loops do: an estimated node
-voltage perturbs a drain bias, which moves the sized `VGS` only slightly.
-
-Every failure mode is closed, never silent:
+A `solveFor` parameter is held to every rule of the search a design constraint uses — its three
+outcomes, its messages, and what it does at an end of the range where the relation does not
+evaluate (see [Entering from a spec](#entering-from-a-spec-designconstraint)). The rules that are
+its own:
 
 | situation | result |
 |-|-|
-| the named target does not resolve to a finite number | infeasible, `sheet-solve` error naming the estimate |
-| the gap to the target grows for several passes running | infeasible, `sheet-solve` error reporting the loop as diverging |
-| the loop runs out of passes while still closing | infeasible, `sheet-solve` error reporting how far the disagreement fell — the loop is stable, just too weakly damped to finish |
-| the loop runs out of passes without a trend either way | infeasible, `sheet-solve` error asking whether each `solveFor` names the right value |
-| a param solves for itself | validation error (it is a fixed point trivially, and hides the loop) |
+| the named target does not resolve to a finite number at either end of the range or at its middle | infeasible, `sheet-solve` error: the solve did not settle, because nothing of the range could be evaluated, and why |
+| `min`/`max` missing or inverted | validation error — the range is required, and evaluation fails closed in the same words |
+| a param solves for itself by name | validation error (the relation reads zero everywhere, and hides the loop) |
+| a param solves for itself through an equation, or its relation reads the same everywhere | infeasible, `sheet-solve` error: the same value at both ends of the range and at its middle — the relation does not depend on the param, so no value of it is singled out |
+| the parameter also carries `designConstraint` | validation error — one relation per parameter |
 | more than four params carry `solveFor` | validation error — see the scope note below |
 
-Convergence is judged **relative** (to about 1e-7), deliberately with no absolute floor: the core
-is SI throughout, so a tearing variable is as likely to be a capacitance near `1e-15` as a voltage
-near 1, and any fixed absolute floor would be satisfied instantly at the small end and report a
-wildly wrong estimate as converged.
-
-A loop that does not converge is telling you the tearing choice is unstable, not that the circuit
-is. Two fixes usually apply, in this order:
-
-1. **Reparametrize so the loop disappears.** Many are artifacts of which variable was declared
-   independent. Taking the tail node voltage as an input makes the input device's `vds` explicit
-   and turns the input common-mode range into an output the checks test — same physics, no loop.
-2. **Cut the cycle somewhere else**, at a quantity the rest of the design depends on more weakly.
-
-Note that *under*-relaxation (`x + λ·(f(x) − x)` with `0 < λ ≤ 1`) cannot rescue a divergent loop:
-its effective slope is `1 + λ·(f' − 1)`, still above 1 whenever `f' > 1`. Only a secant/Wegstein
-step, which derives a negative `λ = 1/(1 − f')`, would — and that is deliberately not implemented,
-because a divergent loop is worth reporting rather than solving around.
+The search's tolerance is relative to the stated range, never to the value, and has no absolute
+floor: the core is SI throughout, so a solved parameter is as likely to be a capacitance near
+`1e-15` as a voltage near 1, and the range scales the tolerance to whichever it is.
 
 ### Scope: a few named loops, not a circuit solver
 
-At most **four** params per sheet may carry `solveFor`. The architecture permits "small, explicit,
-designer-named fixed points" and forbids a nodal solver; tearing many unknowns at once stops being
-the former and becomes relaxation over a node set. The limit makes that boundary checkable rather
-than aspirational. Nested loops also share one evaluation budget for the whole composed tree,
-since a parent's iteration re-converges each child's loop and the cost would otherwise multiply
-with depth.
+At most **four** params per sheet may carry `solveFor`. The architecture finds every unknown by a
+one-unknown search and never solves a node set; cutting many loops at once stops being a few named
+unknowns and becomes relaxation over a node set. The limit makes that boundary checkable rather
+than aspirational. Nested solves also share one evaluation budget for the whole composed tree
+(10 000 evaluations of any document in it), since a parent's every probe re-solves each child and
+the cost would otherwise multiply with depth; a solve that runs out of it says so, and says that it
+was not shown to be unsolvable.
 
 ### Consequences for checks and sweeps
 
 A `*-consistent` advisory check comparing an estimate against its target becomes an **assertion** —
-it should now always pass, and a trip means the fixed point did not hold. Keeping it is cheap
+it should now always pass, and a trip means the solve did not land. Keeping it is cheap
 confirmation; it is no longer something to retune by hand.
 
 A solved parameter is **not sweepable**: it is no longer a free variable, so the sweep pickers and
@@ -810,13 +827,14 @@ both sweep engines exclude it however its `min`/`max` are written. Sweeping othe
 works, and each sample closes its own loop — which is what makes a composed sweep quantitatively
 trustworthy, since one slider value cannot be correct across a whole plane.
 
-Every sample is solved **independently**, from the authored starting guess; a sample is never
-seeded from its neighbour's answer. That optimisation is tempting and wrong: contraction does not
-imply a unique fixed point, so a carried seed makes the sweep hysteretic, and a cell could then
-report a different verdict than the same parameters evaluated on their own. The honest version
-costs real time — about 25 ms per sample for a three-child sheet that solves a loop and declares
-both bias axes on a real PDK table, so roughly 11 s for a 21×21 map, run synchronously. Each
-declared bias axis adds a slice per pass, so most of that is the cost of not assuming.
+Every sample is solved **independently**, from its stated ranges alone; a sample is never started
+from its neighbour's answer. That optimisation is tempting and wrong: a relation with more than one
+root in its range would land wherever the neighbour led it, so the sweep would be hysteretic, and a
+cell could report a different verdict than the same parameters evaluated on their own. The honest
+version costs real time: a 41-point common-mode sweep of the library's 5T OTA, which settles two
+solved parameters that depend on each other and asks both range ends at every sample, takes about
+15 s on the demo table, run synchronously. Each declared bias axis adds a table slice per
+evaluation, so much of that is the cost of not assuming.
 
 ## Entering from a spec (`designConstraint`)
 
@@ -830,55 +848,119 @@ the designer still gets to type the external quantity the application hands them
   "note": "the tail node, chosen so the produced common mode equals CM_dc" }
 ```
 
-The engine chooses the parameter so that `lhs == rhs`, by **bisection between `min` and `max`** —
-for a constrained parameter they are the bracket, not slider bounds. Bisection needs no contraction,
-cannot overshoot, and owes nothing to a starting guess, so none of the substitution solver's care
-applies; its honesty conditions are stated instead: `lhs − rhs` must evaluate at both bracket ends
-and change sign between them, and must actually reach zero at the root. Each violation fails
-closed with the reason:
+The engine chooses the parameter so that `lhs == rhs`, by a **one-unknown search between `min` and
+`max`** — for a solved parameter they are the range searched, not slider bounds. The search is
+Brent's method: bisection, with secant and inverse-quadratic steps taken only while they stay
+inside the bracket and shrink it faster than halving would. The root stays enclosed from the first
+probe to the last, so the search needs no contraction, cannot overshoot, and owes nothing to a
+starting guess. Its honesty conditions are stated instead: `lhs − rhs` must change sign across the
+range — or read within its tolerance of zero at an end, which is then the root — and must actually
+reach zero at the root.
+
+An end of the range where the relation does not evaluate — a device with no headroom there, a
+lookup out of range, a device its table cannot answer for — says the design has no operating point
+at that end, not that the search failed. The search halves its way in from that end toward the
+other, eight times, to the nearest point that evaluates (within 1/256 of the range of the edge),
+and searches what is left. This is silent: a search that then lands says nothing about it. Only a
+search that fails reports the range it actually searched and, where an end moved, why: `the
+searched range [0.23, 0.8] V (the relation does not evaluate below V_tail = 0.23 V: block "in":
+…)`.
+
+A point inside the bracket where the relation does not evaluate — a band where a child's own solve
+finds nothing, say — is stepped round the same way. A sign change across the bracket is evidence of
+a root, so the search halves from that point toward each end of the bracket to the nearest point
+that evaluates, and goes on in a half that still changes sign. When neither half does, the two
+points it found still bracket the crossing, and halving may have stepped over a stretch that
+evaluates, so it searches between them once more. Only when a later probe falls back inside a
+stretch already stepped round, and neither half changes sign again, is the crossing taken to be
+out of reach; that is reported as the solve not settling, naming the stretch where the points tried
+do not evaluate, never as no solution.
+
+**The tolerance is in the parameter's terms.** A parameter is settled when it is within 10⁻⁶ of
+the span of its stated range of its root. Where the relation is read again — every member of a set
+at the end of a sweep, every solved parameter at the final check — it must read no more than its
+slope at the root times that tolerance, which is the same statement converted into the relation's
+units by the slope the search read. A tolerance in the relation's own units would be loose exactly
+where it matters: an exponential, the way a current behaves below threshold, reads a large number a
+hair from its root, so a fraction of its spread across the range lets the parameter sit percent
+level off.
+
+Every solve ends in one of **three outcomes**, and each of the two failures is a `sheet-solve`
+error that names the parameter and the range:
+
+| outcome | when | the message |
+|-|-|-|
+| settled and verified | the bracket closed to 10⁻⁶ of the stated span; the relation at the accepted point — the end of the final bracket where it reads nearer zero — reads within its tolerance by the slope just outside the bracket: on that point's side, and on the other side too where that one is missing or too shallow, the steeper kept, so a kink beside the root is not taken for a step; where one side lies beyond an end of the range, the bracket is halved up to four more times first, which brings a kink's reading within tolerance and leaves a step's at its height; and every solved parameter's relation, read from the evaluation that is returned, is within its tolerance. An end of the range whose relation reads within its tolerance of zero, by the slope there, is the root, so a root on an end is not lost to a rounding error on the wrong side | none |
+| no solution found in its range | `lhs − rhs` does not change sign across the searched range, and neither end reads within its tolerance of zero — none, or an even number, of roots there; the bracket closes on a step — on both sides of it the relation barely moves, so the slope there leaves no room for the step's height (a table edge or a fold); the relation reads the same at both ends and the middle, so it does not appear to depend on the parameter | `solved param "V_tail" found no solution in [0.1, 0.55] V: …` |
+| did not settle | nothing of the range could be evaluated — both ends and the middle fail, which shows nothing about the stretch between them; the sign changes across a stretch inside the bracket where the points tried do not evaluate, even after stepping round it, so the crossing could not be followed; a member of a set still found nothing when searched again, or the set still moves after six sweeps (below); a relation read from the final evaluation is out of tolerance; the shared evaluation budget ran out first, here or in a child it reads (the parameter was not shown to be unsolvable); the probe backstop of 200 per search was hit | `solved params "V_tail" in [0.15, 0.8] V and "out_share" in [0.01, 0.99] did not settle in 6 sweeps: …` |
+
+Where the hardware is held — a range end, another process condition — either failure is
+`no-answer`: nothing was measured there. Validation adds:
 
 | situation | result |
 |-|-|
-| `lhs − rhs` does not evaluate at a bracket end | infeasible, error naming the end — tighten the bracket to where the design sizes |
-| `lhs − rhs` stops evaluating INSIDE the bracket | infeasible — the relation is not defined everywhere between `min` and `max` |
-| no sign change across the bracket | infeasible — the bracket does not straddle the target, or the table cannot reach it |
-| the bracket closes but the residual stays large | infeasible — the relation steps across the target (a table edge or a fold) without touching it |
-| the shared iteration budget runs out first | infeasible — spent by the loops each probe re-closes or by an expensive sibling; the design constraint itself was not shown unsolvable |
-| the probe backstop (200) is hit | infeasible — cannot occur before the width tolerance on a finite bracket; a backstop, not a tuning knob |
-| the parameter also carries `solveFor` | validation error — one solver per parameter |
-| two constrained parameters whose relations read each other, on one sheet or across a parent and a child | validation error, and infeasible if evaluated — a coupled system, which is not solved |
+| the parameter also carries `solveFor` | validation error — one relation per parameter |
 | `designConstraint` missing `lhs` or `rhs` | validation error — a half-written design constraint would freeze the parameter without solving it |
-| `min`/`max` missing or inverted | validation error — the bracket is required |
+| the relation does not read the parameter it solves at all | validation error — it cannot single the parameter out |
+| `min`/`max` missing or inverted | validation error — the range is required |
 
-The residual test is **form-invariant**: it is scaled by the relation's range over the authored
-bracket, so `lhs: "CM_in", rhs: "CM_dc"` and `lhs: "CM_in - CM_dc", rhs: "0"` get the same
-verdict. The bracket closes at 10⁻⁶ of its own span (a volt-scale node resolves to a microvolt),
-which also means a root sitting exactly at zero converges like any other.
+Messages print the relation as `lhs - (rhs)`, so `Q = A/2 + 0.8` reads `Q - (A/2 + 0.8)`. The
+tolerance is **form-invariant**: scaling the relation scales its slope with it, so `lhs: "CM_in",
+rhs: "CM_dc"` and `lhs: "CM_in - CM_dc", rhs: "0"` get the same verdict, and a root sitting
+exactly at zero is found like any other.
 
-If the relation folds inside the bracket there may be more than one root; the one found is
-determined by the authored bracket alone, never by history, so repeated evaluations always agree.
+If the relation folds inside the range there may be more than one root; the one found is
+determined by the stated range alone, never by history, so repeated evaluations always agree.
 A constrained parameter is solved rather than set: the GUI shows it read-only with the value it
 landed on, and it is not sweepable — sweep the spec on the other side of the design constraint
 instead. The library's 5T OTA is the worked example: the tail node is constrained so the produced
-common mode equals `CM_dc`, which makes the common-mode axis a sweep of `CM_dc` with one bisection
+common mode equals `CM_dc`, which makes the common-mode axis a sweep of `CM_dc` with one search
 per point.
 
 
-### Several design constraints on one sheet
+### Several solved parameters on one sheet
 
-A sheet may constrain more than one parameter when they can be solved **one after another**: the
-engine orders them so that each relation reads only parameters solved before it, solves the first
-on its bracket, holds it, and moves to the next. The telescopic OTA at a range end is the
-example — its tail node is solved after the cascode node its relation reads; the other cascode
-node, which nothing else reads, can fall anywhere in the order. Document order does not matter. Because no relation reads a parameter solved after it,
-nothing is revisited and the result is exact; the cost is one bisection per design constraint.
+A sheet may solve more than one parameter — design constraints, `solveFor` parameters and, where
+the hardware is held, held nodes alike. The engine reads which other solved parameters of the same
+sheet each relation reads, groups the ones that read each other into sets, and solves the sets in
+an order where each comes after the ones its relations read. A set of one is one search, with every
+earlier set held at the values it landed on. The telescopic OTA at a range end is the example — its
+tail node is solved after the cascode node its relation reads; the other cascode node, which
+nothing else reads, can fall anywhere in the order. Between sets, document order does not matter.
 
-Two design constraints that each read the other have no such order. That is a coupled system, and
-the engine does not solve one: the sheet fails validation naming the parameters on the loop, and
-evaluating it anyway returns infeasible with the same message. The same holds between a parent's
-design constraint and a child's — a child solves its own design constraints inside each of its
-parent's probes, which is exact only while the child's relations do not read the parent's
-constrained parameter.
+A set of several — parameters that read each other, like the 5T's tail node and the share of the
+tail current its output-side pair transistor carries — is settled by **sweeps**. Each sweep
+searches every member in turn, in document order, the others at their current values. The set has
+settled when every member's relation, read from the sweep's last evaluation — where every member
+sits at the value it landed on — is within its tolerance: each member within 10⁻⁶ of the span of
+its range of its root, by its slope, given where the others ended up. The library's pairs settle in
+one sweep at the design point and in two or three where the hardware is held; the 5T on a low-
+threshold table, held at 125 °C and asked at the top of its common-mode range, takes four. The
+number of sweeps is fixed at six, never tuned: a set still moving after six depends on itself too
+strongly for repeated one-unknown searches, and the solve says so — `did not settle in 6 sweeps`,
+naming the members and the largest move in the last sweep, in its own unit — rather than iterating
+further. Every member starts at the middle of its range, never at its stored value, so the answer
+does not depend on what the sheet was saved with.
+
+A member that finds nothing inside a set — no root, or nothing that evaluates — found it with the
+others wherever they happened to stand. On the first sweep, where members it reads may still sit at
+the middle of their ranges, it is put back at the end of that sweep's order and searched again once
+others have landed, and again after that while something new has landed since it was last put
+back; each putting back needs a new landing, so this ends. So the member a document lists first is
+not judged at values only its partners' starting points gave it, and the library's pairs and the
+three-member sets tried settle at the same answer in any order. A member that still finds nothing
+when nothing more can land says nothing about the set either, so it is reported as the set not
+settling, with the member's own reason inside the message, never as that member having no
+solution. A budget that ran out is never put back: nothing the others do gives it back. Each member is searched with its own relation,
+and a relation that reads its parameter only through another member — one the parameter does not
+move while the others stand still — cannot be searched at all: pair each parameter with a relation
+it moves.
+
+A child solves its own parameters inside every probe of its parent, which is exact, so a parent's
+design constraint over a child's is solved even when the child's relation reads the parent's
+parameter: `P + Q = 1` above and `Q = P/2` below land on `P = 2/3`, `Q = 1/3`. A child whose own
+solve failed at a probe publishes nothing there, so the parent's relation does not evaluate at that
+point rather than steering by the numbers a failed solve left behind.
 
 ## A node under a gate (`hold`)
 
@@ -898,7 +980,7 @@ At the design point nothing is solved. The parameter keeps its value, it can be 
 and the result reports what the held expression came to (`held`: here the cascode gate bias the
 design needs). Wherever the design is **held fixed and re-checked** — a range end's
 fixed-hardware run — the roles swap: the expression is held at that value and the node is
-re-solved between `min` and `max`, by the same bisection a `designConstraint` uses. That is what the circuit
+re-solved between `min` and `max`, by the same search a `designConstraint` uses. That is what the circuit
 does: a bias line holds the gate, and the node under it moves with the condition. Without the
 `hold`, a range end would keep the node and let the gate voltage drift.
 
@@ -910,14 +992,14 @@ parameter's own term is there to read. Any other relation is a `designConstraint
 | situation | result |
 |-|-|
 | the parameter appears twice, inside a function, divided, or not at all | validation error — write the relation as a `designConstraint` |
-| the parameter also carries `designConstraint`, `solveFor` or `class` | validation error — a parameter takes one of the three solvers, and a held node's class is derived |
-| `min`/`max` missing or inverted | validation error — the bracket is required |
+| the parameter also carries `designConstraint`, `solveFor` or `class` | validation error — a parameter takes one of the three, and a held node's class is derived |
+| `min`/`max` missing or inverted | validation error — the range is required |
 | a range end sets the parameter | validation error — the range end re-solves it, so the override would be discarded |
 | a parent wires a value into a node its child holds | warning — the value is used at the design point, but a range end re-solves the node inside the child and the parent's own value does not follow. Hold the node on the parent |
-| the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at); validation says the solve order cannot be established and names the name |
+| the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at), and validation names the name |
 | the held expression does not evaluate at the design point | infeasible — there is nothing to hold it at |
-| at a range end, the expression barely moves across the bracket | that end is `no-answer`, "numerically unresolved" — the rest of the expression cancels the node's own term, so no node voltage is singled out |
-| at a range end, the node cannot be bracketed | that end is `no-answer`, with the bisection's own message |
+| at a range end, the expression barely moves across the range | that end is `no-answer`, "numerically unresolved" — the rest of the expression cancels the node's own term, so no node voltage is singled out |
+| at a range end, the node has no solution in its range or does not settle | that end is `no-answer`, with the search's own message |
 
 A `hold` keeps the **design point's** gate voltage. A gate bias that itself moves with the
 condition — a replica that tracks the device — is a provided bias: write it as an expression and
@@ -941,7 +1023,7 @@ Each range end re-evaluates the WHOLE sheet once more with the named params' val
 or provided scalars. It is a compliance point, so the run is not free to build a new design
 there: every device in the tree is held at the width and length the base run sized it to, and
 what re-settles is the bias. That re-settling is the machinery the engine already has — the
-design-constraint solve runs again from the full authored bracket, `vds` subtractions re-evaluate
+solves run again over their full stated ranges, `vds` subtractions re-evaluate
 against the moved nodes, each transformed device's `vgs` comes back out of the lookup at its held
 width — with its own children and its own solver budget. Both tree-key separators are reserved:
 check ids, range-end names, AND block names may contain neither `@` nor `.` — every one of them
@@ -959,9 +1041,9 @@ result (validation refuses them).
   transconductance, "cannot reach its transconductance here"), with the lookup's own message
   and reach numbers kept behind it in `error`.
 - `no-answer` — the question was asked and could not be answered, and `error` says why:
-  - a solve did not land at that end — the bracket cannot reach `CM_lo` because no tail-node
-    position inside it produces it. Nothing was measured, so this is not a failure of the
-    design; widen the bracket, or read it as the tool's limit rather than the circuit's;
+  - a solve found no solution there, or did not settle — no tail-node position inside its range
+    produces `CM_lo`. Nothing was measured, so this is not a failure of the design; widen the
+    range, or read it as the tool's limit rather than the circuit's;
   - a `set` expression did not resolve to a number;
   - the table does not reach the bias the held design sits at. A `vds`, `vsb`, length or
     supplied gate voltage off the table's hull is read at the nearest characterized value, and
@@ -985,9 +1067,9 @@ result (validation refuses them).
   - the design rests on a voltage classed `assumed`. Then every range end is declined without
     being evaluated.
 - `not-run` — the question was never asked, because the base run produced no design to hold:
-  it raised an error-severity warning — givens that did not size, a design constraint whose solve
-  never landed. The distinction from a failure is load-bearing rather than cosmetic: a design
-  constraint that fails leaves its last bisection probe behind in the result with every device's
+  it raised an error-severity warning — givens that did not size, a solve that never landed. The
+  distinction from a failure is load-bearing rather than cosmetic: a solve that fails leaves its
+  last probe behind in the result with every device's
   sizing still reading `ok`, so a verdict computed from that point would describe hardware the
   engine never landed on.
 
@@ -1015,7 +1097,7 @@ the full landscape. Costs and semantics to know:
 - The report carries the full story per range end: `state` (the four-way outcome above), `set`
   (the NUMERIC point that was asked about — the authored side may be an expression), `checks`
   and `blocks` (path-attributable outcomes), `solved` (where the engine-solved params landed;
-  EMPTY whenever `error` is set, so a bracket end is never reported as a landing), `warnings`
+  EMPTY whenever `error` is set, so a failed solve's probe is never reported as a landing), `warnings`
   (the run's own diagnostics, verbatim), `error` (present whenever the end's check outcomes are
   not findings about that point: the solver's message, the table's reach, the refusal), and
   `assumedSource` (see the fidelity notes below). A `not-run` end carries no outcomes: nothing
@@ -1137,7 +1219,9 @@ silently repairs one.
    silently adopted. Backstop: a bias is read where it was declared, or where its default puts
    it, or not at all — on a table that does not sweep that axis and was not taken at that
    value, a declared bias refuses the device with the reason and an undeclared `vsb` fails the
-   sizing until it is declared, never sized on the table as it stands.
+   sizing until it is declared, never sized on the table as it stands. Where a device must stay
+   in saturation — or, as a switch, in triode — say so with `region` in its givens, and the engine
+   adds the `vds`-against-`vdsat` physical check to that device (see *The region*).
 2. **Name internal nodes as parameters and write every `vds` as a subtraction of nodes.**
    Node form makes branch sums checkable and inconsistencies expressible. A source sitting
    above the bulk means `vsb` is declared from the same node that sets the source — body
@@ -1160,10 +1244,10 @@ silently repairs one.
    puts them on one gate and one source while each is sized at its own operating point.
 5. **Close a genuine loop explicitly, or do not close it at all.** `solveFor` is for a
    quantity defined in terms of the device's own answer; `designConstraint` is for a typed specification
-   an internal node must produce, with a bracket that must size at both ends (see *Closing a
-   bias loop* and *Entering from a spec*). Backstop: both solvers fail closed with named
-   reasons — divergence, overshoot, a bracket that never straddles, a residual that never
-   reaches zero — and a failed solve is never reported as a sized design.
+   an internal node must produce. Both state the range the answer must lie in, and the note says
+   why (see *Closing a bias loop* and *Entering from a spec*). Backstop: every solve ends in one
+   of three named outcomes — settled and verified, no solution in its range, did not settle — and
+   only the first is ever reported as a sized design.
 6. **A claimed operating range is a claim to check.** Declare `operatingRange` so both ends are
    re-checked on every run — on the design that run produced, with its devices held — and say
    in the note that the ends are checked exactly while the sweep owns the interior (see

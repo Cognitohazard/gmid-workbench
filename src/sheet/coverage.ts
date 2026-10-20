@@ -5,7 +5,7 @@
 // still works at the ends of its claimed range (which must not).
 //
 // Pure and structural: no expression is introspected, and nothing here evaluates. The mechanism
-// is entirely "rewrite the givens, then let the existing machinery run" — the constraint bisection,
+// is entirely "rewrite the givens, then let the existing machinery run" — the solved-param search,
 // the vds subtractions and the (W, id) inversion all already re-settle a fixed device at a new
 // bias, so no new solver appears anywhere in this file. Internal to the engine — the range-end runs
 // in eval.ts and the condition runs in corners/ are the callers — and not on the public barrel,

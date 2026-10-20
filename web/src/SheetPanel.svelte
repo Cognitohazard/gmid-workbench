@@ -144,20 +144,11 @@
     return [...rest, ...collapsed];
   });
 
-  // The solver's pass-count note is INFO, not a warning: the loop closed and the verdict stands,
-  // so it must not sit among the things that went wrong — but a loop that needed that many
-  // substitutions is contracting weakly, which is worth knowing before the sheet is trusted at
-  // another operating point. Its own quiet line, in the core's words.
-  //
-  // The range-end notes ride the same line for the same reason: a mirrored current that is
-  // different at a range end is the circuit behaving as drawn, not a fault — and an author
-  // claiming that range should still see it.
+  // The range-end notes are INFO, not warnings: a mirrored current that is different at a
+  // range end is the circuit behaving as drawn, not a fault — and an author claiming that range
+  // should still see it. Their own quiet line, in the core's words.
   const solveNotes = $derived(
-    allWarn
-      .filter(
-        (w) => w.severity === 'info' && (w.rule === 'sheet-solve' || w.rule === 'sheet-range'),
-      )
-      .map((w) => w.message),
+    allWarn.filter((w) => w.severity === 'info' && w.rule === 'sheet-range').map((w) => w.message),
   );
 
   // Onboarding hints lead the same list the diagnostics land in — they are the likeliest cause of
@@ -901,8 +892,8 @@
   const childFails = (c: SheetBlockReport | undefined): CheckResult[] =>
     c && !c.feasible ? c.checks.filter((r) => r.kind !== 'advisory' && r.status === 'fail') : [];
 
-  // A design constraint whose bisection never landed leaves `values[name]` at the last PROBE — a
-  // bracket end, not a solved node — so the field must not present it as the value the design used.
+  // A design constraint whose search never landed leaves `values[name]` at whatever its last probe
+  // tried, not a solved node — so the field must not present it as the value the design used.
   // The solver marks that failure as an error warning naming the param (solveFailed in the core's
   // eval).
   const constraintFailed = (p: SheetVar): boolean =>
@@ -1003,9 +994,9 @@
     <span class="vn"
       >{@html qLabel(p.name)}{#if p.unit}<i>{p.unit}</i>{/if}</span
     >
-    <!-- A tearing variable is solved, not set: show what it converged to (the authored value is
-         only a starting guess) and refuse edits, rather than offering a knob the next
-         evaluation discards. A constraint whose solve did not land has nothing to show, so it reads "—". -->
+    <!-- A solved param is found, not set: show where the search landed (the authored value is
+         never read) and refuse edits, rather than offering a knob the next evaluation ignores.
+         A solve that did not land has nothing to show, so it reads "—". -->
     <input
       class="num"
       class:solved={engineSolved(p)}

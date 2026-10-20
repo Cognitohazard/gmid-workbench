@@ -10,6 +10,7 @@ import { diodeGrid, makeGrid } from '../grid';
 import { lookup } from '../lookup';
 import {
   evaluateSheet,
+  heldOutcome,
   runSheet,
   validateSheet,
   sweepSheet,
@@ -22,6 +23,8 @@ import {
   withParams,
   isHardCheck,
   MAX_TORN_PARAMS,
+  SOLVE_EVALUATIONS,
+  SOLVE_SWEEPS,
   SOLVE_TOL_REL,
   WIRING_TOL,
 } from './index';
@@ -293,16 +296,12 @@ describe('evaluateSheet — an assumed bias coordinate is reported, not invented
   });
 });
 
-describe('evaluateSheet — bias-loop closure (solveFor)', () => {
-  // A loop shaped like a real one: an estimate standing in for a value only the evaluated
-  // sheet knows, perturbing the operating point WEAKLY. Here the loop runs through an equation
-  // rather than a bias declaration — `gm/ID` is nudged by the estimate, and the estimate solves
-  // for the vstar that results.
-  //
-  // The weak coefficient is what makes it converge, and that is the honest shape: measured
-  // |f'| here is ~0.12, against ~0.01 for the input-bias loop of a real 5T OTA. Coupling the
-  // estimate tightly instead (`gm_id: '2/vstar_est'`, i.e. x -> vstar(2/x)) gives f' = 1.10 and
-  // legitimately does not converge — covered by the divergence test below.
+describe('evaluateSheet — closing a bias loop (solveFor)', () => {
+  // A loop shaped like a real one: a param standing in for a value only the evaluated sheet
+  // knows, perturbing the operating point WEAKLY. Here the loop runs through an equation rather
+  // than a bias declaration — `gm/ID` is nudged by the param, and the param solves for the vstar
+  // that results. The engine finds it by a one-unknown search of vstar_est - vstar_actual
+  // between min and max.
   function loopDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
     return {
       title: 'loop',
@@ -310,7 +309,7 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       params: [
         { name: 'L', value: 0.5e-6 },
         { name: 'id', value: 10e-6 },
-        { name: 'vstar_est', value: 0.3, solveFor: 'vstar_actual' },
+        { name: 'vstar_est', value: 0.3, min: 0.05, max: 0.6, solveFor: 'vstar_actual' },
       ],
       givens: { L: 'L', id: 'id', gm_id: '8 + 5*vstar_est', vds: '0.6' },
       equations: [{ name: 'vstar_actual', expr: 'vstar' }],
@@ -318,25 +317,32 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       ...overrides,
     };
   }
+  /** loopDoc with its solved param replaced. */
+  const solving = (p: SheetVar, over: Partial<SheetDoc> = {}): SheetDoc =>
+    loopDoc({
+      params: [{ name: 'L', value: 0.5e-6 }, { name: 'id', value: 10e-6 }, p],
+      ...over,
+    });
+  const solveErrors = (res: SheetResult): string[] =>
+    res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message);
 
-  it('iterates the estimate until it agrees with what it names', () => {
+  it('solves the param until it agrees with what it names', () => {
     const res = evaluateSheet(loopDoc(), dev);
     expect(res.feasible).toBe(true);
-    // The converged estimate must equal the value it solves for — that IS the contract, held
-    // to the engine's own tolerance rather than an arbitrary decimal count.
+    // The landed value equals the value it solves for — that IS the contract — to the search's
+    // own tolerance: SOLVE_TOL_REL of the 0.55 V range, stretched by the relation's slope of about 1.
     expect(Math.abs(res.values.vstar_est - res.values.vstar_actual)).toBeLessThanOrEqual(
-      SOLVE_TOL_REL * Math.abs(res.values.vstar_actual),
+      2 * SOLVE_TOL_REL * 0.55,
     );
-    // ...and the sheet must actually have moved off its authored starting guess, or the test
-    // would pass just as well without any solving.
+    // ...and the answer is not the stored value, or the test would pass without any solving.
     expect(Math.abs(res.values.vstar_est - 0.3)).toBeGreaterThan(1e-2);
     expect(res.warnings.filter((w) => w.severity === 'error')).toHaveLength(0);
   });
 
-  it('lands on the same point the sized device reports, not the authored guess', () => {
+  it('lands on the same point the sized device reports', () => {
     const res = evaluateSheet(loopDoc(), dev);
-    // Independently re-size at the converged estimate: the engine's answer must be the true
-    // fixed point of the map, not merely a value that stopped changing.
+    // Independently re-size at the landed value: the engine's answer must be the true root of
+    // the relation, not merely a value the search stopped at.
     const point = sizeDevice({
       table: devAt,
       L: 0.5e-6,
@@ -346,92 +352,135 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     expect(point.quantities.vstar).toBeCloseTo(res.values.vstar_est, 6);
   });
 
-  it('is unaffected by the authored starting guess', () => {
+  it('does not depend on the stored value at all, inside or outside the range', () => {
+    // The search starts from the stated range alone, so the stored value reaches no evaluation:
+    // the answer is the same number to the last bit.
     const from = (v: number): number =>
       evaluateSheet(
-        loopDoc({
-          params: [
-            { name: 'L', value: 0.5e-6 },
-            { name: 'id', value: 10e-6 },
-            { name: 'vstar_est', value: v, solveFor: 'vstar_actual' },
-          ],
-        }),
+        solving({ name: 'vstar_est', value: v, min: 0.05, max: 0.6, solveFor: 'vstar_actual' }),
         dev,
       ).values.vstar_est;
-    expect(from(0.15)).toBeCloseTo(from(0.45), 6);
+    const answer = from(0.3);
+    for (const v of [0.06, 0.15, 0.45, 0.59, 5, -1]) expect(from(v)).toBe(answer);
   });
 
-  it('fails closed when the estimate names something that never resolves', () => {
+  it('fails closed when the param names something that never resolves, as not shown', () => {
+    // Three failed points — both ends and the middle — show nothing about the rest of the range,
+    // so this is reported as a solve that did not settle, never as "no solution".
     const res = evaluateSheet(
-      loopDoc({
-        params: [
-          { name: 'L', value: 0.5e-6 },
-          { name: 'id', value: 10e-6 },
-          { name: 'vstar_est', value: 0.2, solveFor: 'no_such_value' },
-        ],
-      }),
+      solving({ name: 'vstar_est', value: 0.2, min: 0.05, max: 0.6, solveFor: 'no_such_value' }),
       dev,
     );
     expect(res.feasible).toBe(false);
-    expect(res.warnings.some((w) => w.rule === 'sheet-solve' && w.severity === 'error')).toBe(true);
+    expect(solveErrors(res)).toEqual([
+      expect.stringMatching(
+        /^solved param "vstar_est" in \[0\.05, 0\.6\] did not settle: nothing of the range could be evaluated: vstar_est - \(no_such_value\) does not evaluate at either end of it or at its middle/,
+      ),
+    ]);
   });
 
-  it('fails closed on a loop with no fixed point at all', () => {
-    // `run = run + 1` is satisfied by no value, so the estimate walks away in ONE direction
-    // forever. No step length rescues that — shortening only slows the escape — so this is the
-    // shape the divergence verdict exists for, and the sheet must say so rather than return
-    // whichever iterate it stopped on.
+  it('says a relation that does not cross its target in the range found no solution there, and no more', () => {
+    // run = 0.5*run + 20 has its root at 40, outside [-10, 10]. What the search saw is a relation
+    // with one sign across the range, which is none, or an even number, of roots — said as such.
     const res = evaluateSheet(
-      loopDoc({
-        params: [
-          { name: 'L', value: 0.5e-6 },
-          { name: 'id', value: 10e-6 },
-          { name: 'run', value: 1, solveFor: 'onward' },
-        ],
-        givens: undefined,
-        equations: [{ name: 'onward', expr: 'run + 1' }],
-      }),
+      solving(
+        { name: 'run', value: 1, min: -10, max: 10, unit: 'V', solveFor: 'onward' },
+        { givens: undefined, equations: [{ name: 'onward', expr: '0.5*run + 20' }] },
+      ),
       dev,
     );
     expect(res.feasible).toBe(false);
-    expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(true);
-    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(/diverging/);
+    expect(solveErrors(res)).toEqual([
+      'solved param "run" found no solution in [-10, 10] V: run - (onward) does not change sign ' +
+        'across it (-2.500e+1 at -10, -1.500e+1 at 10) — none, or an even number, of roots ' +
+        'there. Move or widen min/max to bracket one, or the relation does not reach its target ' +
+        'on this table',
+    ]);
   });
 
-  it('closes an OVERSHOOTING loop by shortening the step, instead of bouncing over the answer', () => {
-    // `flip = -2*osc + 3` has the fixed point 3/(1+2) = 1, but a full substitution step lands
-    // twice as far past it on the other side, so plain substitution oscillates with a GROWING
-    // amplitude and never arrives — the answer exists, is unique, and is unreachable at that
-    // step length. Shortening the step turns the overshoot into a contraction. This is the whole
-    // reason the solver adapts its step, and the real bias loops it was found on behave this way
-    // at weak inversion.
+  it('refuses a relation that does not depend on its param, however it got that way', () => {
+    // `run = run + 1` reads -1 at every run; `x` solving for an equation that is x itself reads 0
+    // at every x. Neither singles its param out, and the first value tried is not an answer: the
+    // same number at both ends and the middle says so.
+    for (const [eq, reads] of [
+      ['run + 1', '-1.000e+0'],
+      ['run', '0.000e+0'],
+    ] as const) {
+      const res = evaluateSheet(
+        solving(
+          { name: 'run', value: 1, min: -10, max: 10, unit: 'V', solveFor: 'onward' },
+          { givens: undefined, equations: [{ name: 'onward', expr: eq }] },
+        ),
+        dev,
+      );
+      expect(res.feasible).toBe(false);
+      expect(solveErrors(res)).toEqual([
+        `solved param "run" is not determined by its relation: run - (onward) reads ${reads} at ` +
+          'both ends of [-10, 10] V and at its middle — it does not appear to depend on run, so no value ' +
+          'of it is singled out',
+      ]);
+    }
+  });
+
+  it('finds the root of a loop that substitution overshoots, since a search never steps through the map', () => {
+    // `flip = -2*osc + 3` has its root at 1, and a substitution step lands twice as far past it
+    // on the other side every time. The relation osc - flip = 3*osc - 3 is simply searched.
     const res = evaluateSheet(
-      loopDoc({
-        params: [
-          { name: 'L', value: 0.5e-6 },
-          { name: 'id', value: 10e-6 },
-          { name: 'osc', value: 5, solveFor: 'flip' },
-        ],
-        givens: undefined,
-        equations: [{ name: 'flip', expr: '-2*osc + 3' }],
-      }),
+      solving(
+        { name: 'osc', value: 5, min: -10, max: 10, solveFor: 'flip' },
+        { givens: undefined, equations: [{ name: 'flip', expr: '-2*osc + 3' }] },
+      ),
       dev,
     );
-    // It CLOSES — no solve failure — and the closure it needed is exactly the kind the
-    // pass-count note exists to surface, damping and all.
-    expect(res.warnings.filter((w) => w.rule === 'sheet-solve' && w.severity === 'error')).toEqual(
-      [],
-    );
+    expect(solveErrors(res)).toEqual([]);
     expect(res.values.osc).toBeCloseTo(1, 6);
-    const note = res.warnings.find((w) => w.rule === 'sheet-solve' && w.severity === 'info');
-    expect(note?.message).toMatch(/substitution passes/);
-    expect(note?.message).toMatch(/damped/);
+  });
+
+  it('finds a root at zero: the tolerance is relative to the range, not to the value', () => {
+    // `flip = -flip` has its only root at 0, where a value-relative test never closes.
+    const res = evaluateSheet(
+      solving(
+        { name: 'flip', value: 1, min: -1, max: 3, solveFor: 'negated' },
+        { givens: undefined, equations: [{ name: 'negated', expr: '-flip' }] },
+      ),
+      dev,
+    );
+    expect(solveErrors(res)).toEqual([]);
+    expect(Math.abs(res.values.flip)).toBeLessThanOrEqual(SOLVE_TOL_REL * 4);
+  });
+
+  it('finds a capacitance-scale root, not just a volt-scale one', () => {
+    // The core is SI throughout, so a solved param is as likely to be ~1e-15 F as ~1 V. The
+    // tolerance scales with the stated range, so it is as tight at either end. The root of
+    // c = 2e-15 - 0.5*c is 4/3 fF.
+    const doc: SheetDoc = {
+      title: 'tiny',
+      polarity: 'n',
+      params: [{ name: 'c_est', value: 0.5e-15, min: 0, max: 1e-14, solveFor: 'c_actual' }],
+      equations: [{ name: 'c_actual', expr: '2e-15 - 0.5*c_est' }],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    expect(Math.abs(res.values.c_est - (4 / 3) * 1e-15)).toBeLessThanOrEqual(SOLVE_TOL_REL * 1e-14);
+  });
+
+  it('finds the root of a loop substitution would need hundreds of passes for, quietly', () => {
+    // x = k*x + 1 - k contracts at |f'| = k: 0.999 is about 16000 passes of substitution to 1e-7.
+    // To a search the relation (1 - k)(x - 1) is a straight line through 1, whatever k is, and a
+    // solve that lands says nothing more.
+    for (const k of [0.6, 0.95, 0.999]) {
+      const res = evaluateSheet(geometric(k), dev);
+      expect(res.feasible).toBe(true);
+      expect(res.values.x).toBeCloseTo(1, 6);
+      expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    }
   });
 
   it('refuses a param that solves for itself', () => {
     const w = validateSheet(
       loopDoc({
-        params: [{ name: 'x', value: 1, solveFor: 'x' }],
+        params: [{ name: 'x', value: 1, min: 0, max: 2, solveFor: 'x' }],
         givens: undefined,
         equations: [],
       }),
@@ -441,9 +490,28 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     );
   });
 
-  it('closes a loop inside a composed child', () => {
-    // evalBlocks recurses through evaluateSheet, so a child's own tearing variable must be
-    // solved without the parent knowing anything about it.
+  it('refuses a param that solves for something with no range to search in', () => {
+    // Without min and max there is nothing to search; the stored value would become a guess the
+    // answer depends on, which is exactly what a solve must never have.
+    for (const range of [{}, { min: 0.05 }, { min: 0.6, max: 0.05 }, { min: 0.3, max: 0.3 }]) {
+      const doc = solving({ name: 'vstar_est', value: 0.3, ...range, solveFor: 'vstar_actual' });
+      const message =
+        'solved param "vstar_est" needs finite min < max — they are the range it is searched in, ' +
+        'not slider bounds';
+      expect(
+        validateSheet(doc)
+          .filter((w) => w.severity === 'error')
+          .map((w) => w.message),
+      ).toEqual([message]);
+      const res = evaluateSheet(doc, dev);
+      expect(res.feasible).toBe(false);
+      expect(solveErrors(res)).toEqual([message]);
+    }
+  });
+
+  it('solves a loop inside a composed child', () => {
+    // evalBlocks recurses through evaluateNode, so a child's own solved param must be found
+    // without the parent knowing anything about it.
     const parent: SheetDoc = {
       title: 'parent',
       polarity: 'n',
@@ -461,154 +529,38 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
     );
   });
 
-  it('converges a capacitance-scale estimate, not just a volt-scale one', () => {
-    // The core is SI throughout, so a tearing variable is as likely to be ~1e-15 F as ~1 V.
-    // Any ABSOLUTE convergence floor is met on the first comparison at that scale and would
-    // report a wildly wrong estimate as converged — the exact failure solveFor exists to stop.
-    // Fixed point of c = 2e-15 - 0.5*c is 4/3e-15; the authored guess is far from it.
-    const doc: SheetDoc = {
-      title: 'tiny',
-      polarity: 'n',
-      params: [{ name: 'c_est', value: 0.5e-15, solveFor: 'c_actual' }],
-      equations: [{ name: 'c_actual', expr: '2e-15 - 0.5*c_est' }],
-      checks: [],
-    };
-    const res = evaluateSheet(doc, dev);
-    expect(res.feasible).toBe(true);
-    expect(res.values.c_est).toBeCloseTo((4 / 3) * 1e-15, 21);
-  });
-
-  it('bounds nested fixed points with one budget for the whole tree', () => {
-    // A parent iteration re-evaluates its children, each re-converging its own loop, so nested
-    // tearing variables multiply. Without a shared budget the cost is cap^depth; with one, a
-    // pathological nest fails closed instead of hanging.
+  it('bounds nested solves with one evaluation budget for the whole tree', () => {
+    // A parent's every probe re-solves its child, so nested solves multiply: a search of a
+    // cubic costs about eight probes, and eight levels of them would cost 8^8. With a shared
+    // budget the nest fails closed, quickly, and says the budget ran out rather than that any
+    // level has no solution.
     const leaf = (): SheetDoc => ({
       title: 'leaf',
       polarity: 'n',
-      // |f'| = 0.995: converges in principle, far too slowly to finish inside the budget.
-      params: [{ name: 'x', value: 1, solveFor: 'y' }],
-      equations: [{ name: 'y', expr: '1 + 0.995*x' }],
+      params: [{ name: 'x', value: 1, min: 0, max: 2, solveFor: 'y' }],
+      equations: [{ name: 'y', expr: '0.1*x^3 + 1' }],
       checks: [],
       provides: ['y'],
     });
     let doc = leaf();
-    for (let i = 0; i < 4; i++) {
-      doc = { ...leaf(), blocks: [{ name: `c${i}`, doc }] };
-    }
+    for (let i = 0; i < 7; i++) doc = { ...leaf(), blocks: [{ name: `c${i}`, doc }] };
     const t0 = performance.now();
     const res = evaluateSheet(doc, dev);
-    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(performance.now() - t0).toBeLessThan(5000);
     expect(res.feasible).toBe(false);
-    expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(true);
+    const messages = solveErrors(res);
+    expect(messages.length).toBeGreaterThan(0);
+    for (const m of messages) {
+      expect(m).toMatch(
+        new RegExp(`shared evaluation budget \\(${SOLVE_EVALUATIONS} evaluations\\) ran out`),
+      );
+      expect(m).toMatch(/It was not shown to be unsolvable/);
+    }
   });
 
-  it('closes a period-2 oscillation, whose error neither shrinks nor grows', () => {
-    // `flip = -flip` from 1 bounces 1, -1, 1, -1 … at CONSTANT amplitude. That is the case no
-    // error-watching test can catch — the gap never shrinks, so it never settles, and never
-    // grows, so a divergence test correctly stays quiet — and it is why the step length adapts
-    // on the DIRECTION of the step reversing rather than on the size of the error moving.
-    // A half step lands on 0 EXACTLY here, which matters: the convergence test is purely
-    // relative, so a fixed point at zero is certifiable only when the gap reaches exactly zero.
-    const res = evaluateSheet(
-      loopDoc({
-        params: [{ name: 'flip', value: 1, solveFor: 'negated' }],
-        givens: undefined,
-        equations: [{ name: 'negated', expr: '-flip' }],
-      }),
-      dev,
-    );
-    expect(res.warnings.some((w) => w.rule === 'sheet-solve')).toBe(false);
-    expect(res.values.flip).toBeCloseTo(0, 6);
-  });
-
-  it('reports the disagreement, not a value compared with itself', () => {
-    // The failure message is the only handle an author has on a loop that will not close, so it
-    // must show the estimate AND what the sheet resolved for it — which means reading both
-    // before the iterate is committed.
-    const res = evaluateSheet(
-      loopDoc({
-        params: [{ name: 'osc', value: 1, solveFor: 'flip' }],
-        givens: undefined,
-        equations: [{ name: 'flip', expr: '-2*osc' }],
-      }),
-      dev,
-    );
-    const m = res.warnings.find((w) => w.rule === 'sheet-solve')?.message ?? '';
-    const [, a, b] = /osc → flip: (\S+) vs (\S+)/.exec(m) ?? [];
-    expect(a).toBeDefined();
-    expect(Number(a)).not.toBe(Number(b));
-  });
-
-  it('converges a loop whose error rotates while it contracts', () => {
-    // Two coupled unknowns — a tail node and a mirror drain are exactly that pair — give the
-    // iteration complex eigenvalues, so the error SPIRALS in: one component's gap grows for
-    // several passes running while the error as a whole shrinks. Judging each estimate
-    // separately and OR-ing the growths declares this convergent loop divergent.
-    const t = 0.9;
-    const r = 0.9; // spectral radius < 1, so it genuinely converges
-    const c = (Math.cos(t) * r).toFixed(12);
-    const s = (Math.sin(t) * r).toFixed(12);
-    const res = evaluateSheet(
-      {
-        title: 'rotating',
-        polarity: 'n',
-        params: [
-          { name: 'x', value: 3, solveFor: 'fx' },
-          { name: 'y', value: -2, solveFor: 'fy' },
-        ],
-        equations: [
-          { name: 'fx', expr: `${c}*x - ${s}*y + 1` },
-          { name: 'fy', expr: `${s}*x + ${c}*y + 1` },
-        ],
-        checks: [],
-      },
-      dev,
-    );
-    expect(res.warnings.filter((w) => w.rule === 'sheet-solve' && w.severity === 'error')).toEqual(
-      [],
-    );
-    expect(res.feasible).toBe(true);
-    // The map's true fixed point, reached independently.
-    let x = 0;
-    let y = 0;
-    const C = Math.cos(t) * r;
-    const S = Math.sin(t) * r;
-    for (let i = 0; i < 500; i++) [x, y] = [C * x - S * y + 1, S * x + C * y + 1];
-    expect(res.values.x).toBeCloseTo(x, 6);
-    expect(res.values.y).toBeCloseTo(y, 6);
-  });
-
-  /** Fixed point 1, contracting at exactly |f'| = k per pass. */
-  const geometric = (k: number): SheetDoc => ({
-    title: `contract ${k}`,
-    polarity: 'n',
-    params: [{ name: 'x', value: 5, solveFor: 'fx' }],
-    equations: [{ name: 'fx', expr: `${k}*x + ${1 - k}` }],
-    checks: [],
-    provides: ['fx'],
-  });
-
-  it('converges a weak contraction that needs many passes', () => {
-    // |f'| = 0.95 reaches the tolerance only after ~256 passes. Any cap chosen as the
-    // divergence test rejects it and blames the author for an unstable loop.
-    const res = evaluateSheet(geometric(0.95), dev);
-    expect(res.feasible).toBe(true);
-    expect(res.values.x).toBeCloseTo(1, 5);
-  });
-
-  it('says a loop is converging slowly rather than blaming the author', () => {
-    // Too weak to finish, but the gap shrank on every pass — reporting it as unstable, or as
-    // "neither converging nor diverging", would be false. The engine holds the evidence.
-    const res = evaluateSheet(geometric(0.999), dev);
-    expect(res.feasible).toBe(false);
-    const m = res.warnings.find((w) => w.rule === 'sheet-solve')?.message ?? '';
-    expect(m).toMatch(/IS converging/);
-    expect(m).not.toMatch(/diverging/);
-  });
-
-  it('does not let sibling loops starve each other', () => {
-    // Feasibility must not depend on document order. With one flat budget for the tree, eight
-    // siblings that each converge alone saw the last few fail for want of passes.
+  it('does not let sibling solves starve each other', () => {
+    // Feasibility must not depend on document order: eight siblings that each solve alone all
+    // solve together.
     const res = evaluateSheet(
       {
         title: 'eight',
@@ -625,8 +577,8 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
   });
 
   it('warns when a parent overrides a param the child solves for', () => {
-    // The override only seeds the iteration; the fixed point decides. Silently demoting an
-    // explicit wiring to a hint is the surprise the unmatched-key error already guards against.
+    // The child searches its own range whatever is wired in, so the override does nothing.
+    // Silently dropping an explicit wiring is the surprise the unmatched-key error guards against.
     const res = evaluateSheet(
       {
         title: 'wired',
@@ -638,17 +590,25 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
       },
       dev,
     );
-    expect(res.warnings.some((w) => /only seeds the iteration/.test(w.message))).toBe(true);
+    expect(
+      res.warnings.some((w) =>
+        /override "x" sets a param the child SOLVES — the engine searches it in its own range, so the override is ignored/.test(
+          w.message,
+        ),
+      ),
+    ).toBe(true);
     expect(res.values.c__fx).toBeCloseTo(1, 6); // solved, not 42
   });
 
-  it('refuses more tearing variables than the scope rule allows', () => {
+  it('refuses more solveFor params than the scope rule allows', () => {
     const doc: SheetDoc = {
       title: 'too many',
       polarity: 'n',
       params: Array.from({ length: MAX_TORN_PARAMS + 1 }, (_, i) => ({
         name: `e${i}`,
         value: 1,
+        min: 0,
+        max: 2,
         solveFor: `t${i}`,
       })),
       equations: [],
@@ -661,11 +621,23 @@ describe('evaluateSheet — bias-loop closure (solveFor)', () => {
   });
 
   it('excludes a solved param from the sweepable set', () => {
-    // It is no longer a free variable, so no sweep may drive it — whatever bounds it carries.
+    // It is no longer a free variable, so no sweep may drive it — whatever range it carries.
     expect(sweepable({ min: 0.1, max: 0.3 })).toBe(true);
     expect(sweepable({ min: 0.1, max: 0.3, solveFor: 'vstar_actual' })).toBe(false);
   });
 });
+
+/** Root 1, where substitution would contract at exactly |f'| = k per pass. */
+function geometric(k: number): SheetDoc {
+  return {
+    title: `contract ${k}`,
+    polarity: 'n',
+    params: [{ name: 'x', value: 5, min: -10, max: 10, solveFor: 'fx' }],
+    equations: [{ name: 'fx', expr: `${k}*x + ${1 - k}` }],
+    checks: [],
+    provides: ['fx'],
+  };
+}
 
 describe('evaluateSheet — degrades instead of throwing', () => {
   it('catches an out-of-range gm/ID as a failed sizing, not an exception', () => {
@@ -2123,9 +2095,9 @@ describe('a device is sized only on a table that carries what its givens use', (
     });
 
     it('says a device was not sized where that is why a constrained node did not evaluate', () => {
-      // The engine chooses the tail node from a bracket. Everywhere on it the pair's source sits
-      // above its body, which this table cannot answer for — so no bracket would do, and the
-      // solver's message carries the refusal in place of its usual advice.
+      // The engine searches the tail node in its range. Everywhere in it the pair's source sits
+      // above its body, which this table cannot answer for — so no range would do, and the
+      // solver's message carries the refusal as its reason.
       const constrainedTail = composed({
         params: [
           {
@@ -2144,36 +2116,38 @@ describe('a device is sized only on a table that carries what its givens use', (
           .map((w) => w.message);
       const [said, ...rest] = solve(runSheet(constrainedTail, vdsSwept));
       expect(rest).toEqual([]);
-      expect(said).toMatch(/did not evaluate at the low end of its bracket \(V_tail = 0\.2\)/);
-      expect(said).toMatch(/a device was not sized there: block "pair": given vsb = 0\.2 asks/);
-      expect(said).not.toMatch(/tighten/);
-      // With the device sized, a bracket end that does not evaluate still gets the advice.
-      const [plain] = solve(
-        runSheet(
-          composed({
-            params: [
-              {
-                name: 'V_tail',
-                value: 0.3,
-                unit: 'V',
-                min: 0.2,
-                max: 0.4,
-                designConstraint: { lhs: 'sqrt(V_tail - 0.3)', rhs: '0.1' },
-              },
-            ],
-          }),
-          bothSwept,
-        ),
+      expect(said).toMatch(
+        /^solved param "V_tail" in \[0\.2, 0\.4\] V did not settle: nothing of the range could be evaluated: pair__vstar - \(0\.15\) does not evaluate at either end of it or at its middle — block "pair": given vsb = 0\.2 asks/,
       );
-      expect(plain).toMatch(/did not evaluate at the low end .* tighten min\/max/);
+      // With the device sized, an end that does not evaluate is stepped past: sqrt(V_tail - 0.3)
+      // first evaluates at 0.3, and reads 0.1 at V_tail = 0.31.
+      const stepped = runSheet(
+        composed({
+          params: [
+            {
+              name: 'V_tail',
+              value: 0.3,
+              unit: 'V',
+              min: 0.2,
+              max: 0.4,
+              designConstraint: { lhs: 'sqrt(V_tail - 0.3)', rhs: '0.1' },
+            },
+          ],
+        }),
+        bothSwept,
+      );
+      expect(solve(stepped)).toEqual([]);
+      expect(stepped.values.V_tail).toBeCloseTo(0.31, 5);
     });
 
     it('gives no answer where a held node would be followed onto a body bias the table lacks', () => {
       // A device whose source node is held under its gate: sized with the node at the body, and
       // re-solved at each range end with the gate where the sizing put it. Less current lowers
       // the gate-source voltage, so the node rises — off the one body bias this table was
-      // taken at. The solver's own message says a device was not sized there, and the end is
-      // unanswered rather than failed.
+      // taken at. Stepping in from the top of the range finds nothing but the body itself
+      // that evaluates — which shows nothing about the rest of the range, so the solve says it did
+      // not settle, and why: a device was not sized anywhere above it. The end is unanswered
+      // rather than failed.
       const follower: SheetDoc = {
         title: 'follower',
         polarity: 'n',
@@ -2192,13 +2166,13 @@ describe('a device is sized only on a table that carries what its givens use', (
       expect(res.feasible).toBe(true);
       const [end] = res.rangeEnds!;
       expect(end.state).toBe('no-answer');
-      expect(end.error).toMatch(/^given vsb = 0\.4 asks for a body bias the table cannot give/);
       const solve = end.warnings.filter((w) => w.rule === 'sheet-solve' && w.severity === 'error');
       expect(solve.map((w) => w.message)).toEqual([
         expect.stringMatching(
-          /^held param "X": .* did not evaluate at the high end of its bracket \(X = 0\.4\) — a device was not sized there: given vsb = 0\.4 asks/,
+          /^held param "X" in \[0, 0\.4\] V did not settle: nothing of the range but X = 0 V could be evaluated, and X \+ vgs - \(\S+\) reads \S+ there — the relation does not evaluate above X = 0 V: given vsb = 0\.0015625 asks for a body bias the table cannot give/,
         ),
       ]);
+      expect(end.error).toBe(solve[0].message);
       // On a table with the sweep the same end is answered.
       expect(runSheet(follower, bothSwept).rangeEnds?.[0].state).toBe('complies');
     });
@@ -2371,21 +2345,23 @@ describe('composition semantics (ratified)', () => {
   });
 });
 
-describe('a loop starved by a SIBLING is not accused of failing', () => {
-  // The pass budget is shared so nesting cannot multiply the work without bound. The cost of that
-  // is real: a loop that NESTS another re-converges the child on every one of its own passes, and
-  // the product can spend the pool before a later sibling iterates at all. What must not happen is
-  // the innocent sibling being told IT failed — an author would go and rewrite a sheet that is fine.
-  const torn = (name: string, f: number, blocks?: SheetDoc['blocks']): SheetDoc => ({
+describe('a solve starved by a SIBLING is not accused of failing', () => {
+  // The evaluation budget is shared so nesting cannot multiply the work without bound. The cost
+  // of that is real: a solve that NESTS another re-solves the child on every one of its own
+  // probes, and the product can spend the pool before a later sibling probes at all. What must
+  // not happen is the innocent sibling being told IT has no solution — an author would go and
+  // rewrite a sheet that is fine.
+  const solved = (name: string, blocks?: SheetDoc['blocks']): SheetDoc => ({
     title: name,
     polarity: 'n',
-    params: [{ name: 'x', value: 1, solveFor: 'fx' }],
-    // |f'| just under 1: converging, but far too slowly to finish inside any cap.
-    equations: [{ name: 'fx', expr: `${f}*x + 1` }],
+    params: [{ name: 'x', value: 1, min: 0, max: 2, solveFor: 'fx' }],
+    equations: [{ name: 'fx', expr: '0.1*x^3 + 1' }],
     checks: [],
     provides: ['fx'],
     ...(blocks ? { blocks } : {}),
   });
+  let eater = solved('eater');
+  for (let i = 0; i < 6; i++) eater = solved('eater', [{ name: `sub${i}`, doc: eater }]);
 
   const res = evaluateSheet(
     {
@@ -2395,30 +2371,29 @@ describe('a loop starved by a SIBLING is not accused of failing', () => {
       equations: [],
       checks: [],
       blocks: [
-        { name: 'eater', doc: torn('eater', 0.999, [{ name: 'sub', doc: torn('sub', 0.999) }]) },
-        // Alone this closes in a handful of passes: |f'| = 0.3.
-        { name: 'victim', doc: torn('victim', 0.3) },
+        { name: 'eater', doc: eater },
+        // Alone this lands in a handful of probes.
+        { name: 'victim', doc: solved('victim') },
       ],
     },
     dev,
   );
   const victim = res.warnings.find(
-    (w) => w.rule === 'sheet-solve' && w.message.includes('"victim"'),
+    (w) => w.rule === 'sheet-solve' && w.message.startsWith('block "victim"'),
   )?.message;
 
-  it('is starved to zero passes by the nested loop ahead of it', () => {
+  it('is told the budget went elsewhere, not that it has no solution or did not settle', () => {
+    // The message must not ACCUSE a specific spender: an expensive sibling and a solve nesting
+    // this one under its probes are indistinguishable here.
     expect(victim).toBeDefined();
-    expect(victim).toMatch(/stopped after 0 pass/);
+    expect(victim).toMatch(/evaluation budget \(\d+ evaluations\) ran out/);
+    expect(victim).toMatch(/It was not shown to be unsolvable/);
+    expect(victim).not.toMatch(/has no solution/);
+    expect(victim).not.toMatch(/did not settle in/);
   });
 
-  it('is told the budget went elsewhere, not that it failed to converge', () => {
-    // The message must not ACCUSE a specific spender: an expensive sibling and a design constraint
-    // nesting this loop under its probes are indistinguishable here, and "another loop, not this
-    // one" was provably false for the constraint-over-torn case.
-    expect(victim).toMatch(/budget ran out/);
-    expect(victim).toMatch(/not shown to diverge/);
-    expect(victim).not.toMatch(/diverging/);
-    expect(victim).not.toMatch(/did not reach tolerance/);
+  it('solves alone', () => {
+    expect(evaluateSheet(solved('victim'), dev).feasible).toBe(true);
   });
 });
 
@@ -2692,7 +2667,7 @@ describe('diode-connected givens', () => {
   });
 });
 
-describe('constrained params — bracketed inversion of a monotone relation', () => {
+describe('constrained params — a one-unknown search inside the stated range', () => {
   const mk = (
     expr: string,
     constraint: { lhs: string; rhs: string },
@@ -2708,21 +2683,21 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
     checks: [],
   });
 
-  // Precision below is CONSTRAINT_TOL_REL x the bracket's span (1e-6 x 10): the root lands anywhere
-  // inside the final bracket, so 4 digits is what a volt-scale bracket honestly guarantees.
+  // Precision below is SOLVE_TOL_REL x the range's span (1e-6 x 10): the root lands anywhere
+  // inside the final bracket, so 4 digits is what a volt-scale range honestly guarantees.
   it('inverts an increasing relation to the root, from no starting guess at all', () => {
     const res = evaluateSheet(mk('2*x + 1', { lhs: 'y', rhs: 'T' }), dev);
     expect(res.feasible).toBe(true);
     expect(res.values.x).toBeCloseTo(2, 4);
   });
 
-  it('handles a DECREASING relation identically — bisection only needs a sign change', () => {
+  it('handles a DECREASING relation identically — the search only needs a sign change', () => {
     const res = evaluateSheet(mk('9 - x', { lhs: 'y', rhs: 'T' }), dev);
     expect(res.values.x).toBeCloseTo(4, 4);
   });
 
   it('accepts a correct root written in RESIDUAL form (rhs = 0)', () => {
-    // The residual scale is the relation's range over the bracket, not |lhs| at the root —
+    // The residual scale is the relation's range over the searched range, not |lhs| at the root —
     // scaling by |lhs| rejected every design constraint whose lhs IS the residual (it vanishes at
     // the root).
     const res = evaluateSheet(mk('2*x + 1', { lhs: 'y - T', rhs: '0' }), dev);
@@ -2730,7 +2705,7 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
     expect(res.values.x).toBeCloseTo(2, 4);
   });
 
-  it('closes on a root at ZERO — the bracket test is span-relative, not iterate-relative', () => {
+  it('closes on a root at ZERO — the width test is span-relative, not iterate-relative', () => {
     // A width test relative to |lo|,|hi| never fires when the root is 0 (the ratio stays ~1
     // while the width shrinks); a symmetric node whose answer is 0 V is not exotic.
     const doc = mk('2*x', { lhs: 'y', rhs: 'T' }, { min: -10, max: 9.5 });
@@ -2767,7 +2742,7 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
     ).toBe(true);
   });
 
-  it('fails closed when the bracket does not straddle the target', () => {
+  it('fails closed when the range does not straddle the target', () => {
     const res = evaluateSheet(mk('x + 20', { lhs: 'y', rhs: 'T' }), dev);
     expect(res.feasible).toBe(false);
     expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
@@ -2776,7 +2751,7 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
   });
 
   it('refuses a JUMP: the bracket closes but nothing in it produces the target', () => {
-    // A discontinuity steps across the target; bisection converges to the step, and shipping
+    // A discontinuity steps across the target; the search converges to the step, and shipping
     // that point would size the design at an operating point that does not exist.
     const res = evaluateSheet(mk('x < 3 ? 0 : 10', { lhs: 'y', rhs: 'T' }), dev);
     expect(res.feasible).toBe(false);
@@ -2785,22 +2760,41 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
     );
   });
 
-  it('names the bracket end where the relation stops evaluating', () => {
+  it('steps in from a range end where the relation does not evaluate, and finds the root there', () => {
+    // sqrt(x - 1) does not evaluate below x = 1, so the low end of [0, 10] says the design has no
+    // operating point there, not that the search failed. The search halves its way in to the
+    // nearest point that evaluates and searches what is left: sqrt(x - 1) = 0.5 at x = 1.25.
     const res = evaluateSheet(mk('sqrt(x - 1)', { lhs: 'y', rhs: '0.5' }), dev);
-    expect(res.feasible).toBe(false);
-    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(/low end/);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(res.feasible).toBe(true);
+    expect(res.values.x).toBeCloseTo(1.25, 4);
   });
 
-  it('is not sweepable, and its min/max are the bracket rather than slider bounds', () => {
+  it('reports the range it actually searched, and why an end moved', () => {
+    // No x in [0, 10] gives sqrt(x - 1) = 5. Eight halvings from 0 toward 10 find the nearest
+    // point that evaluates on a grid of 10/2^8: 1.015625, the first point of it above 1. The
+    // message quotes that range and the reason the low end moved.
+    const res = evaluateSheet(mk('sqrt(x - 1)', { lhs: 'y', rhs: '5' }), dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message)).toEqual([
+      'solved param "x" found no solution in the searched range [1.015625, 10] (the relation ' +
+        'does not evaluate below x = 1.015625: equation "y" evaluated to a non-finite number from ' +
+        'resolved inputs): y - (5) does not change sign across it (-4.875e+0 at 1.015625, ' +
+        '-2.000e+0 at 10) — none, or an even number, of roots there. Move or widen min/max to ' +
+        'bracket one, or the relation does not reach its target on this table',
+    ]);
+  });
+
+  it('is not sweepable, and its min/max are the search range rather than slider bounds', () => {
     const p = mk('2*x + 1', { lhs: 'y', rhs: 'T' }).params[0];
     expect(sweepable(p)).toBe(false);
   });
 
-  it('validation refuses a missing bracket and a constrained param that is also torn', () => {
+  it('validation refuses a missing range and a constrained param that also carries solveFor', () => {
     const noBracket = mk('2*x + 1', { lhs: 'y', rhs: 'T' }, {});
     expect(
       validateSheet(noBracket).some(
-        (w) => w.severity === 'error' && /bisection bracket/.test(w.message),
+        (w) => w.severity === 'error' && /the range it is searched in/.test(w.message),
       ),
     ).toBe(true);
     const both: SheetDoc = {
@@ -2818,7 +2812,9 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
       ],
     };
     expect(
-      validateSheet(both).some((w) => w.severity === 'error' && /keep one solver/.test(w.message)),
+      validateSheet(both).some(
+        (w) => w.severity === 'error' && /keep one relation/.test(w.message),
+      ),
     ).toBe(true);
   });
 
@@ -2854,24 +2850,71 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
     expect(res.values.b).toBeCloseTo(8, 4);
   });
 
-  it('refuses two design constraints whose relations read each other, in validation and in evaluation', () => {
-    // x is fitted through a (which reads x) against T; make z's relation c = x - z and x's
-    // relation read z as well, and each needs the other's answer first: a coupled pair.
-    const doc = pair({ lhs: 'c', rhs: '1' });
-    doc.params[1] = {
-      name: 'x',
-      value: 1,
-      min: 0,
-      max: 10,
-      designConstraint: { lhs: 'b', rhs: 'T' },
+  it('settles two solved params that depend on each other by repeated sweeps, to the closed form', () => {
+    // x is constrained to 1 + 0.01*y and y solves for 2 + 0.01*x: one design constraint and one
+    // solveFor, the one kind of solved param, each reading the other. Together
+    // x = (1 + 0.02)/(1 - 0.0001) and y = 2 + 0.01*x. A single pass of one search each leaves x
+    // fitted against a y that then moved by about 0.01, so only repeated sweeps reach it.
+    const doc: SheetDoc = {
+      title: 'pair',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 4, designConstraint: { lhs: 'x', rhs: '1 + 0.01*y' } },
+        { name: 'y', value: 7, min: 0, max: 4, solveFor: 'fy' },
+      ],
+      equations: [{ name: 'fy', expr: '2 + 0.01*x' }],
+      checks: [],
     };
-    const coupled = /constrained params depend on each other \((x → z → x|z → x → z)\)/;
-    expect(validateSheet(doc).some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(
-      true,
-    );
+    expect(validateSheet(doc).filter((w) => w.severity === 'error')).toEqual([]);
+    const res = evaluateSheet(doc, dev);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(res.feasible).toBe(true);
+    const x = 1.02 / 0.9999;
+    expect(Math.abs(res.values.x - x)).toBeLessThanOrEqual(1e-5);
+    expect(Math.abs(res.values.y - (2 + 0.01 * x))).toBeLessThanOrEqual(1e-5);
+  });
+
+  it('reports a pair too strongly dependent to settle, naming both and the last move', () => {
+    // x - (c*x - s*y + 1) and y - (s*x + c*y + 1), with c = 0.9 cos 0.9 and s = 0.9 sin 0.9, have
+    // one answer — x = (1 - c - s)/((1 - c)^2 + s^2), y = (1 - c + s)/((1 - c)^2 + s^2) — but each
+    // one-unknown search moves its own unknown by s/(1 - c), about 1.6 times the other's last move,
+    // so the sweeps grow instead of settling. Outcome 3: the members did not settle, never a
+    // value presented as an answer. (The substitution solver this engine replaced converged this
+    // pair; repeating one-unknown searches a fixed number of times does not, and says so.)
+    const C = 0.9 * Math.cos(0.9);
+    const S = 0.9 * Math.sin(0.9);
+    const doc: SheetDoc = {
+      title: 'rotating',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 3, min: -1000, max: 1000, unit: 'V', solveFor: 'fx' },
+        { name: 'y', value: -2, min: -1000, max: 1000, unit: 'V', solveFor: 'fy' },
+      ],
+      equations: [
+        { name: 'fx', expr: `${C}*x - ${S}*y + 1` },
+        { name: 'fy', expr: `${S}*x + ${C}*y + 1` },
+      ],
+      checks: [],
+    };
     const res = evaluateSheet(doc, dev);
     expect(res.feasible).toBe(false);
-    expect(res.warnings.some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(true);
+    const solve = res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message);
+    expect(solve).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          `^solved params "x" in \\[-1000, 1000\\] V and "y" in \\[-1000, 1000\\] V did not ` +
+            `settle in ${SOLVE_SWEEPS} sweeps: in the last one ` +
+            `[xy] still moved by \\S+ V — they depend on each other too strongly`,
+        ),
+      ),
+    ]);
+    // The answer exists, inside both ranges; it is the method that did not reach it, which is what
+    // the message says — so this is outcome 3, never "no solution".
+    const det = (1 - C) ** 2 + S ** 2;
+    const [x, y] = [(1 - C - S) / det, (1 - C + S) / det];
+    expect([Math.abs(x) < 1000, Math.abs(y) < 1000]).toEqual([true, true]);
+    expect(Math.abs(x - (C * x - S * y + 1))).toBeLessThan(1e-12);
+    expect(Math.abs(y - (S * x + C * y + 1))).toBeLessThan(1e-12);
   });
 
   /** A parent's design constraint over a child's: P + c__Q = 1 above, Q = A/2 below, A wired by the
@@ -2912,36 +2955,36 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
     expect(res.values.P).toBeCloseTo(0.6, 4);
   });
 
-  it("refuses a parent's and a child's design constraints that depend on each other", () => {
+  it("solves a parent's and a child's design constraints that depend on each other, across levels", () => {
     // Wire A = P and the child's Q = P/2 reads the parent's unknown while the parent's
-    // P = 1 - Q reads the child's. Nested bisection would close it (P = 2/3, Q = 1/3) by
-    // iterating a coupled system, which is what the engine does not do.
+    // P = 1 - Q reads the child's. The child solves Q inside every probe of P, which is exact:
+    // P + P/2 = 1, so P = 2/3 and Q = 1/3. Nothing is refused, in validation or in evaluation.
     const doc = nested('P');
-    const coupled = /constrained params depend on each other \((P → c\.Q → P|c\.Q → P → c\.Q)\)/;
-    expect(validateSheet(doc).some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(
-      true,
-    );
+    expect(validateSheet(doc).filter((w) => w.severity === 'error')).toEqual([]);
     const res = evaluateSheet(doc, dev);
-    expect(res.feasible).toBe(false);
-    expect(res.warnings.some((w) => w.severity === 'error' && coupled.test(w.message))).toBe(true);
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+    expect(res.feasible).toBe(true);
+    expect(res.values.P).toBeCloseTo(2 / 3, 5);
+    expect(res.values.c__Q).toBeCloseTo(1 / 3, 5);
   });
 
-  it('refuses the coupled parent and child on a sheet that claims a range, too', () => {
-    // A range claim sends the base run down a different path; the refusal has to be on it.
+  it('solves the parent and child on a sheet that claims a range, too', () => {
+    // A range claim sends the base run down a different path, and each range end re-solves both.
     const doc: SheetDoc = { ...nested('P'), operatingRange: [{ name: 'e', set: { A0: '0.9' } }] };
-    const res = evaluateSheet(doc, dev);
-    expect(res.feasible).toBe(false);
-    expect(
-      res.warnings.some(
-        (w) => w.severity === 'error' && /constrained params depend on each other/.test(w.message),
-      ),
-    ).toBe(true);
+    const res = runSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    expect(res.values.P).toBeCloseTo(2 / 3, 5);
+    expect(res.rangeEnds?.map((e) => [e.state, e.solved.P])).toEqual([
+      ['complies', expect.closeTo(2 / 3, 5)],
+    ]);
   });
 
-  it('names the missing name when a design constraint cannot be placed in the order at all', () => {
-    // x is fitted through b = a + z, so it really does wait on z. z's relation reads a name
-    // nothing provides, so what z waits on is unknown — the report is about that name, not about
-    // a loop between two params that only one of them created.
+  it('names the missing name a relation reads, and does not call it no solution', () => {
+    // x is fitted through b = a + z, so it really does wait on z, and z's relation — failing
+    // closed on a name it cannot place — waits on x: one set. z's relation reads a name nothing
+    // provides: validation has nothing to refuse — a table column could supply it — and the solve
+    // says nothing of the range could be evaluated, naming the name. Inside a set that is the set
+    // not settling.
     const doc = pair({ lhs: 'z + nope', rhs: '1' });
     doc.params[1] = {
       name: 'x',
@@ -2950,37 +2993,856 @@ describe('constrained params — bracketed inversion of a monotone relation', ()
       max: 10,
       designConstraint: { lhs: 'b', rhs: 'T' },
     };
-    const messages = validateSheet(doc)
-      .filter((w) => w.severity === 'error')
-      .map((w) => w.message);
-    expect(messages).toContainEqual(
+    expect(validateSheet(doc).filter((w) => w.severity === 'error')).toEqual([]);
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message)).toEqual([
       expect.stringMatching(
-        /the relation that solves "z" reads "nope", which nothing on the sheet provides/,
+        /^solved params "z" in \[0, 10\] and "x" in \[0, 10\] did not settle: solved param "z" in \[0, 10\] did not settle: nothing of the range could be evaluated: z \+ nope - \(1\) does not evaluate at either end of it or at its middle — relation z: "nope" is not defined \(searched with x = 5\)$/,
       ),
-    );
-    expect(messages.filter((m) => /depend on each other/.test(m))).toEqual([]);
+    ]);
   });
 
-  it('solves the design constraint AND an inner torn loop together, off one budget', () => {
-    // The constraint is the outer solver; each probe re-closes the substitution loop inside.
+  it('reports a set whose member reads its own param only through another as not settling — never as no solution', () => {
+    // The pair x = 4, e = 8 exists, and the solver this one replaced found it by solving e inside
+    // every probe of x. Here each member is searched with its own relation: x is constrained by
+    // y = T, but y = fe - x + 1 = 0.5*e + 1 does not move with x while e stands still — it reads x
+    // only through e. So x's search, with e at the middle of its range, finds a relation that
+    // does not depend on x. Where x was searched depended on where e happened to stand, so the
+    // outcome is the SET not settling (with x's reason, and e's value, inside it), not x having
+    // no solution. Pairing x with e's relation and e with x's would settle it; the pairing is the
+    // author's.
     const doc: SheetDoc = {
       title: 'both',
       polarity: 'n',
       params: [
         { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
         { name: 'T', value: 5 },
-        { name: 'e', value: 0, solveFor: 'fe' },
+        { name: 'e', value: 0, min: 0, max: 20, solveFor: 'fe' },
       ],
       equations: [
-        { name: 'fe', expr: '0.5*e + x' }, // fixed point: e = 2x
-        { name: 'y', expr: 'fe - x + 1' }, // = x + 1 at the fixed point → x = 4
+        { name: 'fe', expr: '0.5*e + x' },
+        { name: 'y', expr: 'fe - x + 1' },
       ],
       checks: [],
     };
     const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message)).toEqual([
+      expect.stringMatching(
+        /^solved params "x" in \[0, 10\] and "e" in \[0, 20\] did not settle: solved param "x" is not determined by its relation: y - \(T\) reads 1\.000e\+0 at both ends of \[0, 10\] and at its middle — it does not appear to depend on x, so no value of it is singled out \(searched with e = 10\)$/,
+      ),
+    ]);
+  });
+});
+
+describe('solved params — what the search guarantees', () => {
+  /** One constrained param x on [lo, hi] whose relation is y = T, with y the expression given. */
+  const one = (expr: string, T: number, lo: number, hi: number, value = 1): SheetDoc => ({
+    title: 'one',
+    polarity: 'n',
+    params: [
+      { name: 'x', value, min: lo, max: hi, designConstraint: { lhs: 'y', rhs: 'T' } },
+      { name: 'T', value: T },
+    ],
+    equations: [{ name: 'y', expr }],
+    checks: [],
+  });
+  /** Plain bisection of f on [lo, hi] until the bracket is `width` wide, the midpoint returned —
+   *  the method the search replaced, written out so the two can be compared. */
+  const bisect = (f: (x: number) => number, lo: number, hi: number, width: number): number => {
+    const up = f(lo) < 0;
+    while (hi - lo > width) {
+      const mid = (lo + hi) / 2;
+      if (f(mid) < 0 === up) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  };
+
+  it('lands where bisection does, to the tolerance, on a curved relation', () => {
+    // x^3 + x = 3 has one real root; the search's interpolation steps and halving bisection both
+    // close on it, the search in far fewer probes. Both answers sit within the final bracket of
+    // SOLVE_TOL_REL x the 4-wide range around the same root.
+    const res = evaluateSheet(one('x^3 + x', 3, -1, 3), dev);
     expect(res.feasible).toBe(true);
-    expect(res.values.x).toBeCloseTo(4, 4);
-    expect(res.values.e).toBeCloseTo(8, 4);
+    const ref = bisect((x) => x ** 3 + x - 3, -1, 3, SOLVE_TOL_REL * 4);
+    expect(Math.abs(res.values.x - ref)).toBeLessThanOrEqual(2 * SOLVE_TOL_REL * 4);
+    // The closed form (Cardano) agrees with both.
+    const q = 1.5;
+    const root =
+      Math.cbrt(q + Math.sqrt(q * q + 1 / 27)) + Math.cbrt(q - Math.sqrt(q * q + 1 / 27));
+    expect(Math.abs(res.values.x - root)).toBeLessThanOrEqual(SOLVE_TOL_REL * 4);
+  });
+
+  it('does not read the stored value of a constrained param either', () => {
+    // A design constraint is searched from its range alone: any stored value, in the range or
+    // outside it, gives the same number to the last bit.
+    const at = (v: number): number => evaluateSheet(one('x^3 + x', 3, -1, 3, v), dev).values.x;
+    const answer = at(1);
+    for (const v of [-0.9, 0, 2.9, 100]) expect(at(v)).toBe(answer);
+  });
+
+  it("verifies the answer it returns, in the param's terms: a dependency the plan could not see is reported, never returned settled", () => {
+    // The param `gm` is overwritten by the sized device's own gm (10 x I) once the device is
+    // sized, so A's relation exp(20*A) = exp(10 + 50*gm) reads the device — which reads I — while
+    // the structural plan reads the param and sees no edge from A to I. A is searched first, with
+    // I at the middle of its range (5.05e-5 A, so A lands at 0.5 + 50*5.05e-4/20 = 0.50126); I
+    // then lands at 2e-5 A, which moves A's root to 0.5005. A is 7.6e-4 of its range off — and
+    // the relation, an exponential, reads about 3.4e2 there against a whole-range spread of
+    // 4.9e8, which a tolerance in the relation's own units would wave through. In the param's
+    // terms (its slope at the root times 1e-6 of its range, about 0.45) it is far off, and the
+    // solve says it did not settle instead of returning it.
+    const doc: SheetDoc = {
+      title: 'shadow',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'gm', value: 1 },
+        {
+          name: 'A',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'exp(20*A)', rhs: 'exp(10 + 50*gm)' },
+        },
+        { name: 'I', value: 0, min: 1e-6, max: 1e-4, designConstraint: { lhs: 'I*1e5', rhs: '2' } },
+      ],
+      givens: { L: 'L', id: 'I', gm_id: '10', vds: '0.6' },
+      equations: [],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.feasible).toBe(false);
+    const solve = res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message);
+    expect(solve).toEqual([
+      expect.stringMatching(
+        /^solved param "A" in \[0, 1\] did not settle: read from the final evaluation, exp\(20\*A\) - \(exp\(10 \+ 50\*gm\)\) reads 3\.\d{3}e\+2 against a tolerance of 4\.\d{3}e-1 \(its slope there times 0\.000001 of its range\) — the values it was solved with moved after it landed$/,
+      ),
+    ]);
+  });
+
+  it("settles a dependent pair to its root in the param's terms, even on a steep relation", () => {
+    // a: exp(20a) = exp(10 + 0.7b), b: b = 0.3 + 0.01*a, so a = 0.5 + 0.035b and the pair's
+    // root is a = (0.5 + 0.035*0.3)/(1 - 0.035*0.01). After two sweeps a still sits about 2.5e-6
+    // of its range off that root, which only the tolerance — SOLVE_TOL_REL of the range by the
+    // slope — sends round a third sweep: three times looser and the set stops there, short of the
+    // 1e-6 a must land within. A tolerance in the relation's units (a fraction of the
+    // exponential's spread across the range) let a stop percent-level away.
+    const doc: SheetDoc = {
+      title: 'steep pair',
+      polarity: 'n',
+      params: [
+        {
+          name: 'a',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'exp(20*a)', rhs: 'exp(10 + 0.7*b)' },
+        },
+        {
+          name: 'b',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'b', rhs: '0.3 + 0.01*a' },
+        },
+      ],
+      equations: [],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(res.feasible).toBe(true);
+    const a = (0.5 + 0.035 * 0.3) / (1 - 0.035 * 0.01);
+    expect(Math.abs(res.values.a - a)).toBeLessThanOrEqual(SOLVE_TOL_REL);
+    expect(Math.abs(res.values.b - (0.3 + 0.01 * a))).toBeLessThanOrEqual(SOLVE_TOL_REL);
+  });
+
+  it('settles a set that needs five sweeps, inside the fixed six', () => {
+    // a = 0.05 + k(b - 0.5) and b = 0.95 + k(a - 0.5) with k = 0.2236: each sweep shrinks what is
+    // left by k^2 = 0.05, from a start about 0.4 of the range off. Five sweeps settle it; the
+    // fixed SOLVE_SWEEPS leaves that margin over the library's worst case of four.
+    const k = 0.2236;
+    const doc: SheetDoc = {
+      title: 'five sweeps',
+      polarity: 'n',
+      params: [
+        {
+          name: 'a',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'a', rhs: `0.05 + ${k}*(b - 0.5)` },
+        },
+        {
+          name: 'b',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'b', rhs: `0.95 + ${k}*(a - 0.5)` },
+        },
+      ],
+      equations: [],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(res.feasible).toBe(true);
+    const a = (0.05 + 0.45 * k - 0.5 * k * k) / (1 - k * k);
+    expect(Math.abs(res.values.a - a)).toBeLessThanOrEqual(2 * SOLVE_TOL_REL);
+    expect(Math.abs(res.values.b - (0.95 + k * (a - 0.5)))).toBeLessThanOrEqual(2 * SOLVE_TOL_REL);
+  });
+
+  it('reads the slope at an exact root from just beside it, not from the bracket around it', () => {
+    // A's relation 100(A - r)^3 + 0.01(A - r) is hit exactly at A = r = 0.5 by the search's first
+    // halving, while the bracket still spans half the range — across it the slope is 25, at the
+    // root it is 0.01. r reads the shadowed `gm` (10 x I, see the verification test), which I
+    // then moves, so r ends 1.0e-4 lower and A sits that far off its root. By the slope at the
+    // root that is far outside A's tolerance and the solve says it did not settle; by the slope
+    // across the bracket it would pass, and a design 1e-4 of the range off would read settled.
+    const I0 = (1e-6 + 1e-4) / 2; // where I sits while A is searched: the middle of its range
+    const doc: SheetDoc = {
+      title: 'exact root',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'gm', value: 1 },
+        { name: 'I0', value: I0 },
+        {
+          name: 'A',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: '100*(A - r)^3 + 0.01*(A - r)', rhs: '0' },
+        },
+        { name: 'I', value: 0, min: 1e-6, max: 1e-4, designConstraint: { lhs: 'I*1e5', rhs: '2' } },
+      ],
+      givens: { L: 'L', id: 'I', gm_id: '10', vds: '0.6' },
+      equations: [{ name: 'r', expr: '0.5 + (gm - 10*I0)/3' }],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.values.A).toBe(0.5);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message)).toEqual([
+      expect.stringMatching(
+        /^solved param "A" in \[0, 1\] did not settle: read from the final evaluation, .* reads 1\.017e-6 against a tolerance of 1\.000e-8/,
+      ),
+    ]);
+  });
+
+  it('settles a solvable set the same way whichever member the document lists first', () => {
+    // Each set has one answer inside every range, and in each some member finds nothing on the
+    // first sweep while members it reads still sit at the middle of their ranges: a = 2b - 1.5
+    // has no root with b at 0.5; V's relation none with s at 0.5 (a tail node and split shaped
+    // like the 5T's); sqrt(b - 0.7) does not evaluate at all with b at 0.5; and in the set of
+    // three, c = 3a - 0.2 has none with a at 0.5 either. A member that finds nothing is searched
+    // again once others have landed, so every order settles, and settles to the rule: each
+    // member's relation, read from the result, within SOLVE_TOL_REL of its range (every relation
+    // here has a slope of 1 in its own param).
+    const P = (name: string, min: number, max: number, lhs: string, rhs: string): SheetVar => ({
+      name,
+      value: 0,
+      min,
+      max,
+      designConstraint: { lhs, rhs },
+    });
+    type Case = [SheetVar[], Record<string, (v: Record<string, number>) => number>];
+    const cases: Case[] = [
+      [
+        [P('a', 0, 1, 'a', '2*b - 1.5'), P('b', 0, 1, 'b', '0.8 + 0.001*a')],
+        { a: (v) => v.a - (2 * v.b - 1.5), b: (v) => v.b - (0.8 + 0.001 * v.a) },
+      ],
+      [
+        [P('V', 0.1, 0.8, 'V + 0.5*(s - 0.5)*10', '0.9'), P('s', 0, 1, 's', '0.6 + 0.01*V')],
+        { V: (v) => v.V + 5 * (v.s - 0.5) - 0.9, s: (v) => v.s - (0.6 + 0.01 * v.V) },
+      ],
+      [
+        [P('a', 0, 1, 'sqrt(b - 0.7) + a', '0.4'), P('b', 0, 1, 'b', '0.8 + 0.01*a')],
+        { a: (v) => Math.sqrt(v.b - 0.7) + v.a - 0.4, b: (v) => v.b - (0.8 + 0.01 * v.a) },
+      ],
+      [
+        [
+          P('a', 0, 1, 'a', '2*b - 1.5'),
+          P('b', 0, 1, 'b', '0.8 + 0.001*a + 0.001*c'),
+          P('c', 0, 1, 'c', '3*a - 0.2'),
+        ],
+        {
+          a: (v) => v.a - (2 * v.b - 1.5),
+          b: (v) => v.b - (0.8 + 0.001 * v.a + 0.001 * v.c),
+          c: (v) => v.c - (3 * v.a - 0.2),
+        },
+      ],
+    ];
+    const orders = <T>(xs: T[]): T[][] =>
+      xs.length <= 1
+        ? [xs]
+        : xs.flatMap((x, i) =>
+            orders([...xs.slice(0, i), ...xs.slice(i + 1)]).map((r) => [x, ...r]),
+          );
+    for (const [params, relation] of cases)
+      for (const order of orders(params)) {
+        const r = evaluateSheet(
+          { title: 'set', polarity: 'n', params: order, equations: [], checks: [] },
+          dev,
+        );
+        const label = order.map((q) => q.name).join('');
+        expect([label, r.warnings.filter((w) => w.rule === 'sheet-solve')]).toEqual([label, []]);
+        expect([label, r.feasible]).toEqual([label, true]);
+        for (const q of order)
+          expect([
+            label,
+            q.name,
+            Math.abs(relation[q.name](r.values)) <=
+              SOLVE_TOL_REL * ((q.max as number) - (q.min as number)),
+          ]).toEqual([label, q.name, true]);
+      }
+  });
+
+  it('reports a member that finds nothing inside a set as the set not settling, in either document order', () => {
+    // a = 2b - 1.5 and b = 0.8 + 0.1a have one answer inside both ranges (a = 0.125, b = 0.8125).
+    // With a listed first, a is searched with b at the middle of its range and finds no root; with
+    // b first, the sweeps contract by 0.2 each and run out. Neither says a has no solution: both
+    // are the set not settling, because where a was searched depended on where b stood.
+    const a = {
+      name: 'a',
+      value: 0,
+      min: 0,
+      max: 1,
+      designConstraint: { lhs: 'a', rhs: '2*b - 1.5' },
+    };
+    const b = {
+      name: 'b',
+      value: 0,
+      min: 0,
+      max: 1,
+      designConstraint: { lhs: 'b', rhs: '0.8 + 0.1*a' },
+    };
+    for (const params of [
+      [a, b],
+      [b, a],
+    ]) {
+      const res = evaluateSheet(
+        { title: 'pair', polarity: 'n', params, equations: [], checks: [] },
+        dev,
+      );
+      expect(res.feasible).toBe(false);
+      const solve = res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message);
+      expect(solve).toHaveLength(1);
+      expect(solve[0]).toMatch(
+        new RegExp(
+          `^solved params "${params[0].name}" in \\[0, 1\\] and "${params[1].name}" in \\[0, 1\\] did not settle`,
+        ),
+      );
+    }
+  });
+
+  it('takes a root that sits on an end of the range, a rounding error to the wrong side, as the root', () => {
+    // x + 0.2 - 0.3 reads 5.6e-17 at x = 0.1, the same sign as at the other end: the sign test
+    // alone calls that no solution. Within its tolerance of zero by the slope there, it is the root.
+    const res = evaluateSheet(one('x + 0.2', 0.3, 0.1, 1), dev);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(res.values.x).toBe(0.1);
+  });
+
+  it('refuses a jump however large one end of the range reads', () => {
+    // A step of 2e-3 across the target, with the far end reading 1e3: a tolerance scaled by the
+    // relation's range would call the step a root. Beside the step the relation is flat, so the
+    // slope just outside the final bracket gives no room for its height.
+    const res = evaluateSheet(
+      one('(x < 0.5 ? -0.001 : 0.001) + (x > 0.99 ? 1000 : 0)', 0, 0, 1),
+      dev,
+    );
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+      /steps across the target without touching it/,
+    );
+  });
+
+  it('tells a symmetric relation from one that does not depend on its param by its middle', () => {
+    // (x - 0.5)^2 - 0.01 reads 0.24 at both ends, to the last bit, but -0.01 at the middle: it
+    // depends on x — it has two roots — and is reported as not changing sign across the range,
+    // never as not depending on x.
+    const msg = evaluateSheet(one('(x - 0.5)^2 - 0.01', 0, 0, 1), dev).warnings.find(
+      (w) => w.rule === 'sheet-solve',
+    )?.message;
+    expect(msg).toMatch(/does not change sign across it/);
+    expect(msg).not.toMatch(/does not appear to depend/);
+  });
+
+  it('takes a root on either end of the range, whichever reads nearer zero', () => {
+    // min(1e4(1.0000001 - x), 1e-4 + 0.01x) reads 1e-4 at x = 0 and 1e-3 at x = 1, the same sign,
+    // but it is steep at x = 1 and its root lies 1e-7 beyond it: within the tolerance there. The
+    // end reading the smaller value is not the one that holds the root.
+    const res = evaluateSheet(one('min(1e4*(1.0000001 - x), 1e-4 + 0.01*x)', 0, 0, 1), dev);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(res.values.x).toBe(1);
+  });
+
+  it('accepts a root beside a kink, where one side of the crossing is ten times shallower', () => {
+    // y = x - r above the kink at 0.3 and 0.1(x - 0.3) + (0.3 - r) below it, with the root r
+    // 0.2 of a tolerance above the kink. Read only on the shallow side, the slope beside the
+    // crossing would leave the root no room and call the kink a step; read on both sides, the
+    // steep one is the relation's own.
+    const r = 0.3 + 0.2e-6;
+    const res = evaluateSheet(
+      one(`x < 0.3 ? 0.1*(x - 0.3) + (0.3 - ${r}) : (x - ${r})`, 0, 0, 1),
+      dev,
+    );
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(Math.abs(res.values.x - r)).toBeLessThanOrEqual(SOLVE_TOL_REL);
+  });
+
+  it('steps round a stretch that does not evaluate on either side, or over two, and finds the root', () => {
+    // Each relation changes sign across [0, 1] and does not evaluate on the stretches named. The
+    // first: the search's first probe lands in (0.8, 0.87), and only the half toward x = 0 still
+    // changes sign, with the root at 0.3. The other two have the root between two stretches; the
+    // halving from the first probe steps over the gap that holds it, and the search between the
+    // two points it found then lands in it.
+    const NaN_ = 'sqrt(-1)';
+    const holes = (stretches: [number, number][], expr: string): string =>
+      `${stretches.map(([a, b]) => `(x > ${a} && x < ${b})`).join(' || ')} ? ${NaN_} : (${expr})`;
+    for (const [stretches, expr, root] of [
+      [[[0.8, 0.87]], 'x < 0.3 ? (x - 0.3)/0.3 : 0.2*(x - 0.3)/0.7', 0.3],
+      [
+        [
+          [0.2, 0.3],
+          [0.45, 0.55],
+        ],
+        'x < 0.4 ? (x - 0.4)/0.4 : (x - 0.4)/0.6',
+        0.4,
+      ],
+      [
+        [
+          [0.45, 0.55],
+          [0.7, 0.8],
+        ],
+        'x < 0.6 ? (x - 0.6)/0.6 : (x - 0.6)/0.4',
+        0.6,
+      ],
+    ] as [[number, number][], string, number][]) {
+      const res = evaluateSheet(one(holes(stretches, expr), 0, 0, 1), dev);
+      expect([root, res.warnings.filter((w) => w.rule === 'sheet-solve')]).toEqual([root, []]);
+      expect([root, Math.abs(res.values.x - root) <= SOLVE_TOL_REL]).toEqual([root, true]);
+    }
+  });
+
+  it('says it could not follow a crossing inside a stretch that does not evaluate, naming the stretch', () => {
+    // The root 0.45 lies inside (0.4, 0.5), where the relation does not evaluate. The sign change
+    // across the range is evidence of a root, so this is not no solution; the search could not
+    // reach it, and says between which points it lies.
+    const res = evaluateSheet(one('x > 0.4 && x < 0.5 ? sqrt(-1) : (x - 0.45)', 0, 0, 1), dev);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message)).toEqual([
+      expect.stringMatching(
+        /^solved param "x" in \[0, 1\] did not settle: y - \(T\) changes sign across \[0, 1\], but the crossing could not be followed: it lies between x = 0\.399\d+ and 0\.500\d+, where the points tried do not evaluate/,
+      ),
+    ]);
+  });
+
+  it('accepts a kink less than a tolerance from a range end, where only its shallow side can be read', () => {
+    // The kink sits 0.8 of a tolerance below x = 1 and the root 0.2 above the kink, on the steep
+    // side; below the kink the relation is five times shallower. The bracket closes against the
+    // end, so beside it only the shallow side can be read, and that slope alone would call the
+    // crossing a step. Halving the bracket a few more times brings the reading within tolerance,
+    // as it never would beside a step.
+    const k = 1 - 0.8e-6;
+    const r = k + 0.2e-6;
+    const res = evaluateSheet(
+      one(`x < ${k} ? 0.2*(x - ${k}) + (${k} - ${r}) : (x - ${r})`, 0, 0, 1),
+      dev,
+    );
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    expect(Math.abs(res.values.x - r)).toBeLessThanOrEqual(SOLVE_TOL_REL);
+  });
+
+  it('refuses a step right at either end of the range, where one side of the bracket lies outside it', () => {
+    for (const expr of ['x < 3e-7 ? -0.5 : 1', 'x < 0.9999997 ? -1 : 0.5']) {
+      const res = evaluateSheet(one(expr, 0, 0, 1), dev);
+      expect(res.feasible).toBe(false);
+      expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+        /steps across the target without touching it/,
+      );
+    }
+  });
+
+  it('says what an even number of roots shows: no sign change, none or an even number of roots', () => {
+    // Two roots, 0.2 and 0.7: the relation has one sign at both ends.
+    const res = evaluateSheet(one('(x - 0.2)*(x - 0.7)', 0, 0, 1), dev);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+      /does not change sign across it \(.*\) — none, or an even number, of roots there/,
+    );
+  });
+
+  it('reports a range that evaluates only between its probes as not shown, never as no solution', () => {
+    // The relation evaluates only on [0.3, 0.45], with a root at 0.4. The ends and the middle all
+    // fail, which shows nothing about the stretch between them.
+    const res = evaluateSheet(one('x >= 0.3 && x <= 0.45 ? x - 0.4 : sqrt(-1)', 0, 0, 1), dev);
+    expect(res.warnings.find((w) => w.rule === 'sheet-solve')?.message).toMatch(
+      /^solved param "x" in \[0, 1\] did not settle: nothing of the range could be evaluated/,
+    );
+  });
+
+  it('prints the relation with its right-hand side in parentheses', () => {
+    // Q = A/2 + 0.8 is Q - (A/2 + 0.8); without the parentheses it would read Q - A/2 + 0.8.
+    const res = evaluateSheet(one('x', 0, 0, 1, 1), dev);
+    expect(res.warnings).toEqual([]);
+    const doc = one('x', 0, 0, 1);
+    doc.params[0].designConstraint = { lhs: 'x', rhs: 'T/2 + 5' };
+    const msg = evaluateSheet(doc, dev).warnings.find((w) => w.rule === 'sheet-solve')?.message;
+    expect(msg).toMatch(/: x - \(T\/2 \+ 5\) does not change sign/);
+  });
+
+  it('validation refuses a relation that does not read the param it solves', () => {
+    // T - 1 never reads x; neither does an equation chain that stops at a param. Whatever they
+    // read is the same at every x, so a search would land on min and call it found.
+    const doc = one('T', 1, 0, 1);
+    expect(
+      validateSheet(doc)
+        .filter((w) => w.severity === 'error')
+        .map((w) => w.message),
+    ).toEqual([
+      'param "x": its relation y - (T) does not read x, so it cannot single x out — write the ' +
+        'relation in terms of the param it solves',
+    ]);
+    // A relation that reads x, even one that cancels it, is left to the search, which says so.
+    const cancels = one('x - x + T', 1, 0, 1);
+    expect(validateSheet(cancels).filter((w) => w.severity === 'error')).toEqual([]);
+    expect(
+      evaluateSheet(cancels, dev).warnings.find((w) => w.rule === 'sheet-solve')?.message,
+    ).toMatch(/is not determined by its relation: .* it does not appear to depend on x/);
+  });
+});
+
+describe('a solve reads only a child whose own solve landed', () => {
+  it('steps round a band where a child does not solve, and finds the root beyond it', () => {
+    // The child solves Q = 0.5 except for A in (0.45, 0.55), where it has no solution and so
+    // publishes nothing. The parent's relation changes sign across [0, 1] with its root at
+    // P = 0.8; the search's first halving lands on 0.5, inside the band. A sign change is evidence
+    // of a root, so the search halves from that point toward each end to where the relation
+    // evaluates again, keeps the half that still changes sign, and lands on 0.8.
+    const child: SheetDoc = {
+      title: 'child',
+      polarity: 'n',
+      params: [
+        { name: 'A', value: 0 },
+        {
+          name: 'Q',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'Q', rhs: 'A > 0.45 && A < 0.55 ? 5 : 0.5' },
+        },
+      ],
+      equations: [],
+      checks: [],
+      provides: ['Q'],
+    };
+    const doc: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [
+        {
+          name: 'P',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: {
+            lhs: '(P < 0.8 ? (P - 0.8)/0.8 : (P - 0.8)/0.2) + 2*(c__Q - 0.5)',
+            rhs: '0',
+          },
+        },
+      ],
+      blocks: [{ name: 'c', doc: child, params: { A: 'P' } }],
+      equations: [],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+    expect(res.feasible).toBe(true);
+    expect(Math.abs(res.values.P - 0.8)).toBeLessThanOrEqual(SOLVE_TOL_REL);
+  });
+
+  it('reports the budget, not no solution, when it runs out inside the last probe a decision rests on', () => {
+    // P + 1 has no root in [0, 1], and the search's last probe reads the slope beside the far end
+    // to see whether that end is a root. The child chain under P is cheap everywhere (each level's
+    // root sits exactly at its low end) except within 0.1 of P = 1, where it nests a real solve
+    // four levels deep — so that one probe runs the budget out inside the child, which then
+    // publishes nothing. That probe says nothing about the far end, and the search says the budget
+    // ran out; it does not report the no-root it had nearly shown.
+    const level = (k: number): SheetDoc => {
+      const reads = k < 3 ? `(c${k}__X*0.5 + 0.3)` : '0.4';
+      return {
+        title: `L${k}`,
+        polarity: 'n',
+        params: [
+          { name: 'HOT', value: 0 },
+          {
+            name: 'X',
+            value: 0,
+            min: 0,
+            max: 1,
+            designConstraint: {
+              lhs: 'exp(4*X) + X^3',
+              rhs: `HOT > 0 ? exp(4*${reads}*0.9) + (${reads}*0.9)^3 : 1`,
+            },
+          },
+        ],
+        blocks: k < 3 ? [{ name: `c${k}`, doc: level(k + 1), params: { HOT: 'HOT' } }] : [],
+        equations: [],
+        checks: [],
+        provides: ['X'],
+      };
+    };
+    const doc: SheetDoc = {
+      title: 'top',
+      polarity: 'n',
+      params: [
+        {
+          name: 'P',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'P + 1 + 0*c__X', rhs: '0' },
+        },
+      ],
+      blocks: [{ name: 'c', doc: level(0), params: { HOT: 'P > 0.9 && P < 1 ? 1 : 0' } }],
+      equations: [],
+      checks: [],
+    };
+    const solve = evaluateSheet(doc, dev)
+      .warnings.filter((w) => w.rule === 'sheet-solve')
+      .map((w) => w.message);
+    expect(solve.length).toBeGreaterThan(0);
+    for (const m of solve) {
+      expect(m).toMatch(/shared evaluation budget \(\d+ evaluations\) ran out/);
+      expect(m).not.toMatch(/found no solution/);
+    }
+  });
+
+  it('reports a budget that runs out in a nested chain as the budget, at every level', () => {
+    // Four levels, each solving X with a relation that reads its child's X; the child's input is
+    // the parent's X. The nesting multiplies past the shared budget. Every level says the budget
+    // ran out and that it was not shown to be unsolvable — none says it found no solution, though
+    // the children it read stopped publishing when they ran out.
+    const level = (k: number): SheetDoc => {
+      const reads = k < 3 ? `(c${k}__X*0.5 + IN*0.3)` : '(0.2 + IN/3)';
+      return {
+        title: `L${k}`,
+        polarity: 'n',
+        params: [
+          { name: 'IN', value: 0.5 },
+          {
+            name: 'X',
+            value: 0,
+            min: 0,
+            max: 1,
+            designConstraint: {
+              lhs: 'exp(4*X) + X^3',
+              rhs: `exp(4*${reads}*0.9) + (${reads}*0.9)^3`,
+            },
+          },
+        ],
+        blocks: k < 3 ? [{ name: `c${k}`, doc: level(k + 1), params: { IN: 'X' } }] : [],
+        equations: [],
+        checks: [],
+        provides: ['X'],
+      };
+    };
+    const res = evaluateSheet(level(0), dev);
+    expect(res.feasible).toBe(false);
+    const solve = res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message);
+    expect(solve).toHaveLength(4);
+    for (const m of solve) {
+      expect(m).toMatch(/shared evaluation budget \(\d+ evaluations\) ran out/);
+      expect(m).toMatch(/It was not shown to be unsolvable$/);
+      expect(m).not.toMatch(/found no solution|could not be followed/);
+    }
+    expect(heldOutcome(res).state).toBe('no-answer');
+  });
+
+  it('finds the real root where a failed child would have shown it phantom ones', () => {
+    // The child solves Q = P/2 + 0.8 in [0, 1], which has no solution for P > 0.4. The parent's
+    // relation c__Q + (P < 0.4 ? P/2 - 1 : (0.6 - P)(0.8 - P) - 1) has a real root at P = 0.2 and
+    // two more at 0.6 and 0.8 that exist only on the numbers a failed child solve left behind. The
+    // failed child publishes nothing, so the parent's relation does not evaluate there, the search
+    // steps in from that end, and lands on 0.2.
+    const child: SheetDoc = {
+      title: 'child',
+      polarity: 'n',
+      params: [
+        { name: 'A', value: 0 },
+        { name: 'Q', value: 0, min: 0, max: 1, designConstraint: { lhs: 'Q', rhs: 'A/2 + 0.8' } },
+      ],
+      equations: [],
+      checks: [],
+      provides: ['Q'],
+    };
+    const doc: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [
+        {
+          name: 'P',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: {
+            lhs: 'c__Q + (P < 0.4 ? P/2 - 1 : (0.6 - P)*(0.8 - P) - 1)',
+            rhs: '0',
+          },
+        },
+      ],
+      blocks: [{ name: 'c', doc: child, params: { A: 'P' } }],
+      equations: [],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+    expect(res.feasible).toBe(true);
+    expect(res.values.P).toBeCloseTo(0.2, 5);
+    expect(res.values.c__Q).toBeCloseTo(0.9, 5);
+  });
+});
+
+describe('givens region — the saturation or triode check a device declares', () => {
+  /** A device at gm/ID `gmId` with its drain at `vds`, declaring `region`. */
+  const device = (
+    region: unknown,
+    vds: string,
+    gmId = '12',
+    extra: Partial<SheetDoc> = {},
+  ): SheetDoc =>
+    boundDoc({
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'I', value: 10e-6 },
+        { name: 'V_d', value: Number(vds), class: 'independent', unit: 'V' },
+      ],
+      givens: { L: 'L', id: 'I', gm_id: gmId, vds: 'V_d', region: region as 'saturation' },
+      ...extra,
+    });
+  const region = (res: SheetResult) => res.checks.find((c) => c.id === 'region');
+
+  it('adds a physical check that |vds| clears vdsat, read from the sizing, and it passes in saturation', () => {
+    const res = runSheet(device('saturation', '0.6'), dev);
+    const r = region(res);
+    expect(r).toMatchObject({
+      kind: 'physical',
+      op: '>=',
+      text: 'abs(vds) >= vdsat',
+      status: 'pass',
+    });
+    expect(r?.lhsValue).toBe(0.6);
+    expect(r?.rhsValue).toBe(res.values.vdsat);
+    expect(r?.margin).toBeCloseTo(0.6 - res.values.vdsat, 12);
+    expect(res.feasible).toBe(true);
+    // Only the device's own check list carries it; the document's checks are untouched.
+    expect(device('saturation', '0.6').checks).toEqual([]);
+  });
+
+  it('fails, and the design with it, where the given drain voltage pushes the device out of saturation', () => {
+    const res = runSheet(device('saturation', '0.1'), dev);
+    const r = region(res);
+    expect(r?.status).toBe('fail');
+    expect(r?.margin).toBeCloseTo(0.1 - res.values.vdsat, 12);
+    expect(res.feasible).toBe(false);
+    expect(bindingCheck(res)?.id).toBe('region');
+  });
+
+  it('checks a switch the other way: |vds| at or under vdsat in triode', () => {
+    // At gm/ID 4 the device is in strong inversion, with a vdsat far above the 50 mV it is asked
+    // to drop.
+    const res = runSheet(device('triode', '0.05', '4'), dev);
+    const r = region(res);
+    expect(r).toMatchObject({ op: '<=', text: 'abs(vds) <= vdsat', status: 'pass' });
+    expect(r?.margin).toBeCloseTo(res.values.vdsat - 0.05, 12);
+    expect(res.feasible).toBe(true);
+    // The same switch asked to sit in saturation fails.
+    expect(region(runSheet(device('saturation', '0.05', '4'), dev))?.status).toBe('fail');
+  });
+
+  it('compares the drain voltage the givens state, not the one a short table was read at', () => {
+    // This table's vds axis starts at 0.3 V, so a stated 0.05 V is read at 0.3 V and the clamp is
+    // reported. Judged at 0.3 V the device would pass; at the 0.05 V the design asks for it is out
+    // of saturation, and that is what the check says.
+    const short = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
+    const res = runSheet(device('saturation', '0.05'), short);
+    expect(res.sizing?.clamped).toContain('vds');
+    expect(res.sizing?.bias?.vds).toBe(0.3);
+    const r = region(res);
+    expect(r?.lhsValue).toBe(0.05);
+    expect(r?.status).toBe('fail');
+    expect(0.3 >= (r?.rhsValue ?? Infinity)).toBe(true); // the clamped value would have passed
+  });
+
+  it('reads the magnitude of a signed drain voltage', () => {
+    // A signed-export PMOS sweeps vds negative; -0.6 V is as far from saturation's edge as 0.6.
+    const signed = signedMirrorDemo(dev);
+    const res = runSheet(device('saturation', '-0.6'), signed);
+    expect(region(res)?.lhsValue).toBe(0.6);
+    expect(region(res)?.status).toBe('pass');
+  });
+
+  it('reads na on a table with no vdsat column, which a hard check fails closed on', () => {
+    // An na hard check makes the design infeasible, as any physical check that cannot be read
+    // does; the run itself completes.
+    const res = runSheet(device('saturation', '0.6'), withoutColumns(dev, ['vdsat']));
+    const r = region(res);
+    expect(r?.status).toBe('na');
+    expect(r?.detail).toBe('the table has no vdsat column');
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+  });
+
+  it('rides a sweep and a range end like an authored physical check', () => {
+    const swept = device('saturation', '0.6');
+    swept.params[2] = { ...swept.params[2], min: 0.05, max: 1.2 };
+    const sw = sweepSheet(swept, 'V_d', dev, 5);
+    const curve = sw.checks.find((c) => c.id === 'region');
+    expect(curve?.kind).toBe('physical');
+    expect(curve?.marginPct.map((m) => (m ?? NaN) > 0)).toEqual([false, true, true, true, true]);
+    // Held at the design point's hardware, a drain moved to 0.1 V takes the device out of
+    // saturation there: that end does not comply, and the region check is why.
+    const doc = device('saturation', '0.6', '12', {
+      operatingRange: [{ name: 'low-drain', set: { V_d: '0.1' } }],
+    });
+    const res = runSheet(doc, dev);
+    expect(res.feasible).toBe(true);
+    const [end] = res.rangeEnds!;
+    expect(end.state).toBe('does-not-comply');
+    expect(end.checks.find((c) => c.id === 'region')?.status).toBe('fail');
+  });
+
+  it('validation refuses another word, a region beside a diode connection, and an authored check named region', () => {
+    const errors = (doc: SheetDoc): string[] =>
+      validateSheet(doc)
+        .filter((w) => w.severity === 'error')
+        .map((w) => w.message);
+    expect(errors(device('saturation', '0.6'))).toEqual([]);
+    expect(errors(device('triode', '0.6'))).toEqual([]);
+    expect(errors(device('linear', '0.6'))).toEqual([
+      'given region must be "saturation" or "triode"',
+    ]);
+    const diode = boundDoc({
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'I', value: 10e-6 },
+      ],
+      givens: { L: 'L', id: 'I', gm_id: '12', diode: true, region: 'saturation' },
+    });
+    expect(errors(diode)).toEqual([
+      expect.stringMatching(/^the givens declare a region beside a diode connection/),
+    ]);
+    // Evaluated anyway, the region reads na — a hard check that cannot be read — never a pass.
+    expect(region(evaluateSheet(diode, dev))?.status).toBe('na');
+    const named = device('saturation', '0.6', '12', {
+      checks: [{ id: 'region', kind: 'advisory', lhs: '1', op: '>=', rhs: '0' }],
+    });
+    expect(errors(named)).toEqual([
+      expect.stringMatching(/^check id "region" is the id of the check/),
+    ]);
   });
 });
 
@@ -3465,7 +4327,7 @@ describe('gate wiring — the node a child sits on, declared and checked', () =>
   });
 
   it('reports the LANDED design once, not a bracket end and not every probe', () => {
-    // A constrained parent bisects its whole tree ~20 times. Wiring the gate to the constrained
+    // A constrained parent probes its whole tree several times. Wiring the gate to the constrained
     // node makes the reported numbers say WHERE the check ran: at the landing (0.4713) the delta is
     // the distance from there to the sized vgs, where the bracket ends (0 and 1) would give a very
     // different pair. So this pins the placement, not merely the count — a check running inside
@@ -3564,32 +4426,6 @@ describe('rawMargin — the honest distance beside the snapped one', () => {
   });
 });
 
-describe('solver pass count — a loop that closes slowly says so', () => {
-  /** Fixed point 1, contracting at exactly |f'| = k per pass, started 0.9 away. */
-  const geometric = (k: number): SheetDoc => ({
-    title: 'g',
-    polarity: 'n',
-    params: [{ name: 'x', value: 0.1, solveFor: 'f' }],
-    equations: [{ name: 'f', expr: `${k}*x + ${1 - k}` }],
-    checks: [],
-  });
-  const note = (doc: SheetDoc) =>
-    evaluateSheet(doc).warnings.find((w) => w.rule === 'sheet-solve' && w.severity === 'info');
-
-  it('notes a weak contraction that needed many passes', () => {
-    const slow = note(geometric(0.6)); // ~32 passes to SOLVE_TOL_REL
-    expect(slow?.message).toMatch(/inspect weak or oscillatory closure/);
-    const passes = Number(/needed (\d+) substitution/.exec(slow!.message)![1]);
-    expect(passes).toBeGreaterThan(16);
-    // Informational only: the design is sized and the verdict stands.
-    expect(evaluateSheet(geometric(0.6)).feasible).toBe(true);
-  });
-
-  it('stays quiet about a loop that closes briskly', () => {
-    expect(note(geometric(0.05))).toBeUndefined(); // ~6 passes
-  });
-});
-
 describe('limitingCheck — the check closest to breaking', () => {
   const child = (rhs: string): SheetDoc => ({
     title: 'c',
@@ -3656,7 +4492,7 @@ describe('limitingCheck — the check closest to breaking', () => {
   });
 
   it('never names a check from a range end whose solve never landed', () => {
-    // Such an end's checks were evaluated wherever its bisection stopped — a design point the
+    // Such an end's checks were evaluated wherever its search stopped — a design point the
     // engine never landed on. Naming a check measured there points the designer at a
     // phantom. The end's own `error` is the finding; its checks are not outcomes.
     const doc: SheetDoc = {

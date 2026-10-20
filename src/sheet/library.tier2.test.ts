@@ -72,10 +72,10 @@ describe('tier-2 goldens: cascode current mirror', () => {
     // here from the sized voltages rather than read from the sheet's own equation for it, so an
     // equation that stopped saying this fails.
     expect(relErr(node, vRef + vCasc - casc.vgs)).toBeLessThan(1e-6);
-    // What is solved is that node as a multiple of the reference device's diode drop, so that the
-    // starting guess of 1 follows the device; the node in volts is that multiple of the drop.
+    // What is solved is that node as a multiple of the reference device's diode drop, so that its
+    // range of 0 to 2 follows the device; the node in volts is that multiple of the drop.
     expect(relErr(node, res.values.k_x * vRef)).toBeLessThan(1e-12);
-    // The loop is a strong contraction, so it closes with nothing to report.
+    // The solve lands, so it has nothing to report.
     expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
   });
 
@@ -261,7 +261,7 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
 
   it('output resistance is the cascode boost on the OUTPUT branch, over the solved low node', () => {
     // Two traps, both live here. First, both branch resistances hang off vds_lo, which this sheet
-    // SOLVES to the mirror vdsat plus the margin (0.285 V, not the 0.3 V starting guess) — the
+    // SOLVES to the mirror vdsat plus the margin (0.285 V, not the 0.3 V stored value) — the
     // mirror leg sits at vds_lo and the cascode above it takes the rest of V_out, so the two move
     // opposite ways and a golden that typed 0.3 for both would nearly cancel its own error.
     // Second, the `casc` child is a REPRESENTATIVE device carrying the reference current, while
@@ -270,8 +270,8 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
     // of the sizing, not an approximation.
     //
     // The solved node is an INPUT to the arithmetic below, so the solve is pinned first, on its
-    // own terms: vds_lo is iterated until it equals wideswing_node, and a landed fixed point means
-    // that residual is zero. Everything after it is given (id and gm/ID on the cascode, the width
+    // own terms: vds_lo is searched until it equals wideswing_node, and a landed solve means that
+    // residual is zero. Everything after it is given (id and gm/ID on the cascode, the width
     // ratio on the mirror), so what follows is closed-form given the node.
     expect(relErr(res.values.vds_lo, res.values.wideswing_node)).toBeLessThan(1e-9);
     const node = res.values.vds_lo;

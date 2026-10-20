@@ -198,8 +198,8 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     // and that is what the input device in its branch carries: one current in one branch.
     expect(relErr(block(res, 'ld1').id, v.in__id)).toBeLessThan(1e-9);
     // Solved, not typed: the share is the output-side device's fraction of the pair's current as
-    // the table reads the two, and the value the sheet stores is only a starting guess — an even
-    // split, not the answer — from which any other guess lands on the same share.
+    // the table reads the two, and the value the sheet stores is only what the panel shows — an
+    // even split, not the answer, and never read by the solve.
     const guess = doc.params.find((p) => p.name === 'out_share');
     expect(guess?.solveFor).toBe('pair_split');
     expect(guess?.value).toBe(0.5);
@@ -367,21 +367,19 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     expect(relErr(hv.vos_sys, Math.abs(hv.ld1o__id - hv.ino__id) / hv.gm1)).toBeLessThan(1e-12);
   });
 
-  it('held at another condition, the split and the tail node land the same from any starting guess', () => {
+  it('held at another condition, the split and the tail node land the same from any stored value', () => {
     // Where the design is held the output-side device's gate-source voltage does depend on its
-    // current, so the substitution takes more than one pass — and where it ends must not depend
-    // on where it started. Three stored guesses, one answer: the same share, the same tail
-    // node, the same verdict on every hard check.
+    // current, so the split and the tail node depend on each other and are settled together by
+    // repeated sweeps — and where they land must not depend on the stored value. Three stored
+    // values, one answer to the last bit: the same share, the same tail node, the same verdict on
+    // every hard check.
     const hard = (r: SheetResult): string[] =>
       r.checks.filter((c) => c.kind !== 'advisory').map((c) => `${c.id}:${c.status}`);
     const [, even] = sizedAndHeld(doc);
     for (const start of [0.3, 0.7]) {
       const [, h] = sizedAndHeld(withParams(doc, { out_share: start }));
-      expect([start, relErr(h.values.out_share, even.values.out_share) < 1e-6]).toEqual([
-        start,
-        true,
-      ]);
-      expect([start, relErr(h.values.V_tail, even.values.V_tail) < 1e-5]).toEqual([start, true]);
+      expect([start, h.values.out_share]).toEqual([start, even.values.out_share]);
+      expect([start, h.values.V_tail]).toEqual([start, even.values.V_tail]);
       expect([start, hard(h)]).toEqual([start, hard(even)]);
       expect([start, h.feasible]).toEqual([start, even.feasible]);
     }
