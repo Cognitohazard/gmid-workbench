@@ -86,7 +86,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   sheetSweep2:
     'Add a second variable to sweep the design plane: a feasibility heatmap (green = feasible, red = a hard check fails) instead of the 1-D margin chart.',
   blockDevice:
-    'Size this block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load); “active device” inherits the parent’s.',
+    'Size this block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load). Left unset, a block inherits its parent’s device: the active device for a block on the sheet itself, the enclosing block’s for one nested inside another. A block inside a referenced sheet belongs to that sheet and cannot be rebound here — detach the reference to make it local.',
   // design-sheet vocabulary (check kinds, statuses, composition, bias, param roles)
   checkKind:
     'physical = a hard physical floor; spec = a hard application spec — both must hold for a feasible design. advisory = shown, never blocks.',

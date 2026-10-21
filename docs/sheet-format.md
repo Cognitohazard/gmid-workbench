@@ -587,7 +587,7 @@ exposes named scalars to the parent through its `provides`.
 | `name` | string | The child's handle in the parent (used in the join, below). Must not contain `__`. |
 | `doc` | object | The embedded child sheet. |
 | `ref` | string | A library-sheet id to include by reference (resolved before evaluation). A block needs `doc` or `ref`; carrying **both** is an already-resolved snapshot — the embedded copy wins and the ref remains as provenance. |
-| `device` | string, optional | The device the child sizes against (a resolver key); absent ⇒ the child inherits the parent's table. |
+| `device` | string, optional | The device the child sizes against; absent ⇒ the child inherits its parent's. What the string must look like depends on who evaluates the sheet — see [Naming a block's device](#naming-a-blocks-device). |
 | `params` | object, optional | Overrides of the child's param values, each an expression evaluated in the **parent** scope. |
 | `wiring` | object, optional | The nodes the child's gate and source are tied to, checked against the `vgs` its own givens sized it to (see [Gate wiring](#gate-wiring-wiring)). |
 
@@ -613,6 +613,49 @@ that does not resolve to a finite number is an error (it does not fall back to t
 default — that would size a different design than authored). A child that errors or reads
 infeasible drags the parent's feasibility down, and its warnings roll up attributed to its
 block. Composition is depth-capped at 8.
+
+### Naming a block's device
+
+A block's `device` is looked up when the sheet is evaluated, by whoever evaluates it, and the two
+places a sheet runs read the string differently.
+
+**From a script**, `runSheet` and the sweeps take a resolver, `(id) => DeviceTable | undefined`,
+and the string is whatever key that resolver answers to: `"pmos"`, a file name, anything (see the
+README's *Scripting the core*).
+
+**In the app**, the string must name a device that is loaded, in one of two forms:
+
+- **`family:` followed by the device's identity** — what the app writes when you pick a device
+  from a block's menu, and the form to write by hand. The identity is a JSON array of the
+  table's process namespace, device name and polarity: the `# pdk:` and `# device:` headers
+  trimmed and lower-cased (`""` for a table that declares no `pdk`), and `"n"`, `"p"`, or
+  `"unknown"` for a table that declares no polarity. It is matched as text, so write it exactly
+  as `JSON.stringify` would — no spaces:
+
+  ```json
+  { "name": "ld2", "ref": "multistage/stage2-current-source-load",
+    "device": "family:[\"sky130a\",\"pch\",\"p\"]" }
+  ```
+
+  This names the device at every corner and temperature loaded for it, so the block follows the
+  condition the sheet is asked at.
+- **A loaded table's own id** — the form documents saved by earlier versions of the app carry.
+  It is still read, and shown as *stored by table*, but it includes a hash of the table's
+  contents, so it is not something to write by hand.
+
+Any other string — a free key such as `"pmos"` that runs from a script — names nothing the app
+knows. The sheet is not evaluated: it reports that the block names a device that is not loaded,
+and the block's menu, where it has one (below), shows the binding as *(not loaded)*. Picking a
+device from the menu rewrites the binding in the `family:` form.
+
+**Which blocks the menu can rebind.** Every block whose entry is part of the open sheet has a
+device menu, at any depth, including a block nested inside another embedded block. Left unset, a
+block inherits its parent's device: the active device for a block on the sheet itself, the
+enclosing block's device for one nested inside another — so rebinding a block moves every
+descendant that names no device of its own. A block **inside a by-reference child** belongs to the
+library sheet that child points at, like the rest of that sheet's internals, and has no menu: to
+rebind it, detach the reference (the referenced block itself can always be rebound, because its
+binding is part of the sheet that includes it).
 
 ### References
 

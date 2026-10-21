@@ -670,15 +670,22 @@
     return f ? `${deviceLabel(f)} · stored by table` : `${describeBinding(binding)} (not loaded)`;
   };
 
-  // Point a composed child at a specific loaded device (a device binding), or '' to inherit the
-  // parent.
-  function setBlockDevice(i: number, uid: string): void {
-    const blocks = (cfg.blocks ?? []).map((u, j) => {
-      if (j !== i) return u;
-      const { device: _drop, ...rest } = u;
-      return uid ? { ...rest, device: uid } : rest;
+  // Point the composed block at `path` — []=top sheet is never one, [i]=child i, [i,j]=grandchild
+  // — at a specific loaded device (a device binding), or '' to inherit its parent's. The binding
+  // lives in the block entry of the doc that holds the block, so any block whose entry is local
+  // can be rebound; one inside a by-reference sheet belongs to that library sheet and has no
+  // control (detach the reference to make it local).
+  function setBlockDevice(path: number[], uid: string): void {
+    const edit = (doc: SheetDoc, depth: number): SheetDoc => ({
+      ...doc,
+      blocks: (doc.blocks ?? []).map((u, j) => {
+        if (j !== path[depth]) return u;
+        if (depth < path.length - 1) return u.doc ? { ...u, doc: edit(u.doc, depth + 1) } : u;
+        const { device: _drop, ...rest } = u;
+        return uid ? { ...rest, device: uid } : rest;
+      }),
     });
-    onChange({ ...cfg, blocks });
+    onChange(edit(cfg, 0));
   }
 
   // ── Per-block operating point. A sheet sizes each device at its OWN vds/vsb; a
@@ -1119,17 +1126,22 @@
           {/if}
         {/if}
       {/if}
-      {#if path.length === 1 && block && (bench.options.length > 0 || block.device)}
+      <!-- Any block whose entry is local gets the control, at any depth: the binding is written
+           into the doc that holds it. A block inside a live reference has none (authored is
+           undefined there) — its entry belongs to the library sheet. -->
+      {#if authored && (bench.options.length > 0 || authored.device)}
         <span class="dsl" title={CONTROL_HELP.blockDevice}>device</span>
         <select
           class="dsel"
           title={CONTROL_HELP.blockDevice}
-          value={block.device ?? ''}
-          onchange={(e) => setBlockDevice(path[0], (e.currentTarget as HTMLSelectElement).value)}
+          value={authored.device ?? ''}
+          onchange={(e) => setBlockDevice(path, (e.currentTarget as HTMLSelectElement).value)}
         >
-          <option value="">↳ active device</option>
-          {#if block.device && !bench.options.some((o) => o.binding === block.device)}
-            <option value={block.device}>{bindingOption(block.device)}</option>
+          <option value=""
+            >{path.length === 1 ? '↳ active device' : '↳ parent block’s device'}</option
+          >
+          {#if authored.device && !bench.options.some((o) => o.binding === authored.device)}
+            <option value={authored.device}>{bindingOption(authored.device)}</option>
           {/if}
           {#each bench.options as o}<option value={o.binding}>{o.label}</option>{/each}
         </select>

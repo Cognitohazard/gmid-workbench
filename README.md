@@ -187,8 +187,9 @@ const sweep = sweepSheet(sheet, 'gm_id', table);
 
 A composed sheet's block names its device by a resolver key (the block's `device`); pass a
 resolver — `(id) => DeviceTable | undefined` — as the third argument to map those keys to
-tables. The app keys tables by a content-stable uid, but in a script you choose the key, so
-long as each child's `device` matches. A child included **by reference** (the block's `ref`) needs a
+tables. In a script you choose the key, so long as each child's `device` matches; the app reads
+only the forms it writes itself (see "Naming a block's device" in the sheet format), so a sheet
+meant to open there should use those. A child included **by reference** (the block's `ref`) needs a
 sheet library to resolve against — build an index and pass it fourth; `flattenSheetDoc`
 inlines every reference into a self-contained document:
 

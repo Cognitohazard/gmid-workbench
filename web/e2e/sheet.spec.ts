@@ -593,6 +593,103 @@ test('design sheet: a by-reference child resolves live, flattens to a frozen exp
   expect(errors).toEqual([]);
 });
 
+test('design sheet: a nested block inherits its parent block’s device, and is rebound from its own menu once local', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  // A second device the leaf really sizes on, at half the current per unit width — the same
+  // current needs twice the width there, so which device a block reads shows in its own numbers.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+  await page.locator('.devices .dev').first().locator('.dname').click(); // demo active
+  await expect(page.locator('header .device')).toContainText('nmos_demo');
+
+  // A sub-sheet whose device is a block of its own, and a sheet that includes it by reference.
+  const sheetFile = (name: string, doc: object) => ({
+    name,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(doc)),
+  });
+  await page.locator('.load input[type=file]').setInputFiles(
+    sheetFile('nested-stage.json', {
+      title: 'Nested stage',
+      params: [],
+      equations: [],
+      checks: [],
+      blocks: [
+        {
+          name: 'cs',
+          doc: {
+            title: 'Leaf',
+            polarity: 'n',
+            params: [
+              { name: 'L', value: 5e-7 },
+              { name: 'Ib', value: 2e-5 },
+            ],
+            givens: { L: 'L', gm_id: '12', id: 'Ib', vds: '0.6' },
+            equations: [],
+            checks: [],
+          },
+        },
+      ],
+    }),
+  );
+  await page.locator('.load input[type=file]').setInputFiles(
+    sheetFile('nested-outer.json', {
+      title: 'Nested outer',
+      params: [],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'st', ref: 'user/nested-stage' }],
+    }),
+  );
+
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'Nested outer');
+  const st = sp.locator('.suse').first();
+  const stMenu = st.locator('.suseh').first().locator('.dsel');
+  const cs = sp.locator('.suse .suse');
+  const width = async () => (await cs.locator('.susebind').textContent())?.trim();
+  await expect(cs).toHaveCount(1);
+  await expect(cs).toHaveClass(/st-pass/);
+  const onDemo = await width();
+
+  // Inside the reference the leaf belongs to the library sheet: no menu of its own. It names no
+  // device, so it reads whatever its parent block does — rebinding `st` moves it.
+  await expect(cs.locator('.dsel')).toHaveCount(0);
+  await stMenu.selectOption({ label: 'nmos_half' });
+  await expect.poll(width).not.toBe(onDemo);
+  const onHalf = await width();
+  await stMenu.selectOption({ index: 0 }); // back to the active device
+  await expect.poll(width).toBe(onDemo);
+
+  // Detached, the leaf's entry is part of this sheet, so it gets a menu — inheriting from the
+  // enclosing block, not from the active device — and a binding of its own.
+  await st.locator('.detach').click();
+  const csMenu = cs.locator('.dsel');
+  await expect(csMenu).toBeVisible();
+  await expect(csMenu.locator('option').first()).toHaveText('↳ parent block’s device');
+  await csMenu.selectOption({ label: 'nmos_half' });
+  await expect.poll(width).toBe(onHalf);
+  await expect(cs).toHaveClass(/st-pass/);
+  await expect(stMenu).toHaveValue(''); // only the leaf moved
+
+  // The binding is written into the sheet, so it survives a reload.
+  await page.reload();
+  await expect(page.locator('.devices .dlabel').first()).toHaveText('devices (2)');
+  const cs2 = page.locator('.grid .panel').last().locator('.suse .suse');
+  await expect(cs2.locator('.dsel')).toHaveValue(/nmos_half/);
+  await expect(cs2.locator('.susebind')).toHaveText(onHalf as string);
+
+  expect(errors).toEqual([]);
+});
+
 test('composed sheet: a signed-PMOS child with its sign param still +1 gets a root-cause hint', async ({
   page,
 }) => {
