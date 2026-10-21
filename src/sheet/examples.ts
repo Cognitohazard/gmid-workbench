@@ -1,8 +1,8 @@
 // Vetted sheets shipped as no-typing starting points. Single-device leaves plus one
-// COMPOSED example (the cascode below). Composition here is strictly SCALAR:
-// a block exposes named scalars and the parent writes its own author math over them
-// (referenced as `child__name`). There is still NO node/port/KCL machinery and no member
-// access — those remain the deferred coupling channels. Pure data; zero DOM imports.
+// COMPOSED example (the cascode below). A block exposes named scalars and the parent writes its
+// own author math over them (referenced as `child__name`). Each sheet is in format version 2 and
+// names the wires its devices sit on, so the DC wiring check reads every one; the cascode wires
+// its child's device through the block's `nodes`. Pure data; zero DOM imports.
 
 import type { SheetDoc } from './types';
 
@@ -17,6 +17,7 @@ import type { SheetDoc } from './types';
  * (vnth_m), so no formula is re-typed here.
  */
 const NMOS_GMID_SIZING: SheetDoc = {
+  formatVersion: 2,
   title: 'Single NMOS gm/ID sizing',
   description:
     'Sizes one NMOS for a bandwidth spec: $g_m$ is fixed from GBW into $C_L$, $g_m/I_D$ is ' +
@@ -58,6 +59,11 @@ const NMOS_GMID_SIZING: SheetDoc = {
   // bind-any-2: gm from the spec, gm/ID the knob; ID is derived via gm = gm/ID · ID.
   // The operating point is pinned here so sizing never silently borrows the panel's bias.
   givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
+  // The device's wires: drain held at the stated bias, gate the input port, source and body on
+  // ground.
+  nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+  levels: { out: 'V_ds' },
+  ports: ['in'],
   equations: [
     { name: 'Cout', expr: 'cgg + CL', unit: 'F' },
     { name: 'GBW', expr: 'gm/(2*pi*Cout)', unit: 'Hz' },
@@ -85,6 +91,7 @@ const NMOS_GMID_SIZING: SheetDoc = {
  * window — noise fails at the low-gm/ID (low-gm) end, headroom at the high-gm/ID end.
  */
 const NMOS_NOISE_MATCHING: SheetDoc = {
+  formatVersion: 2,
   title: 'NMOS noise & matching',
   description:
     'One device at a fixed current budget: raise $g_m/I_D$ and the integrated input noise ' +
@@ -139,6 +146,9 @@ const NMOS_NOISE_MATCHING: SheetDoc = {
   ],
   // bind-any-2: fix ID (budget) and gm/ID (knob); gm is derived via gm = gm/ID · ID.
   givens: { L: 'L', id: 'I_bias', gm_id: 'gm_id', vds: 'V_ds', vsb: '0' },
+  nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+  levels: { out: 'V_ds' },
+  ports: ['in'],
   equations: [
     // The sizing reports every quantity at the SIZED width (svth/svfl included — the
     // parallel-composition rescale is the sizer's job, not author math), so the stored
@@ -206,6 +216,7 @@ const COMMON_SOURCE_INPUT: SheetDoc = {
  * grows with gm/ID while both stages' V* shrink, so a bounded feasible window emerges.
  */
 const NMOS_CASCODE: SheetDoc = {
+  formatVersion: 2,
   title: 'NMOS cascode (gain-boosted output)',
   description:
     'A composed sheet: a common-source input device (block "cs") with a cascode ' +
@@ -278,13 +289,19 @@ const NMOS_CASCODE: SheetDoc = {
       // Share the design knobs with the input device (param overrides resolve in this scope),
       // and put its drain on the node the cascode's source sits on.
       params: { L: 'L', gm_id: 'gm_id', I_bias: 'I_bias', V_ds: 'V_x' },
+      nodes: { d: 'x', g: 'in', s: 'gnd', b: 'gnd' },
     },
   ],
   // The cascode device sits in series with the input device, so it carries the same drain
-  // current cs__id (a child-provided scalar referenced right here in the parent's givens). Its
+  // current cs__id (a child-provided scalar referenced right here in the parent's givens).
   // It sits between the output and that node, with its body grounded, so its source — and
   // with it its body bias — is the node voltage.
   givens: { L: 'L', id: 'cs__id', gm_id: 'gm_id', vds: 'V_out - V_x', vsb: 'V_x' },
+  // Its wires: drain on the stated output, source on the node `x`, gate on `vcasc`, held at the
+  // bias that puts the node where the sheet states it.
+  nodes: { d: 'out', g: 'vcasc', s: 'x', b: 'gnd' },
+  levels: { out: 'V_out', vcasc: 'V_x + vgs' },
+  ports: ['in'],
   equations: [
     // Cascode gain ≈ product of the two stages' intrinsic gains (av0 is width-independent).
     { name: 'Av', expr: 'av0 * cs__av0', unit: 'V/V' },

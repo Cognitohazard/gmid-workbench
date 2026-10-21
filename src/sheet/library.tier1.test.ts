@@ -416,8 +416,10 @@ describe('tier1 goldens: CMOS inverter amplifier', () => {
     // The inversion level the PMOS lands at is an output, and nothing on the sheet sets it.
     expect(doc.params.map((q) => q.name)).not.toContain('gm_id_p');
     expect(relErr(res.values.p__gm_id, gmIdP)).toBeLessThan(1e-3);
-    // Nothing on the sheet describes the shared gate a second way, so the wiring check is quiet.
-    expect(res.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);
+    // The netlist puts the two gates on one wire and the two sources on the rails, and the loop
+    // through them closes: the input wire sits at the NMOS's gate-source voltage.
+    expect(res.nodes!.state).toBe('checked-clean');
+    expect(res.nodes!.levels.in.level).toBe(n.vgs);
   });
 
   it('the input-consistency checks read the tie: the PMOS gate is the input level, and the input level is held to the output level', () => {
@@ -439,16 +441,15 @@ describe('tier1 goldens: CMOS inverter amplifier', () => {
     // Where the gate the tie hands the PMOS lies past the table, the assertion trips. At gm/ID
     // 12 the input level is vgs(12) = 0.567 V, so the PMOS is asked for 1.233 V and read at the
     // table's 1.2 V edge: its gate is then 33 mV above the input level, and the check says so
-    // together with the gate-wiring check.
+    // together with the wiring check, whose loop through the two gates misses by the same amount.
     const clamped = runSheet(withParams(doc, { gm_id_n: 12 }), table);
     expect(blockOf(clamped, 'p').sizing!.clamped).toEqual(['vgs']);
     const tripped = checkOf(clamped, 'input-consistent-p');
     expect(tripped.status).toBe('fail');
     expect(relErr(tripped.lhsValue, 1.8 - 1.2)).toBeLessThan(1e-12);
     expect(relErr(tripped.rhsValue, VGS_GMID12_L05)).toBeLessThan(1e-4);
-    expect(
-      clamped.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location),
-    ).toEqual(['p']);
+    expect(clamped.nodes!.state).toBe('checked-with-findings');
+    expect(relErr(clamped.nodes!.closureError, 1.8 - 1.2 - clamped.values.V_in)).toBeLessThan(1e-9);
   });
 
   it('combined transconductance is I_bias*(gm/ID_n + gm/ID_p)', () => {

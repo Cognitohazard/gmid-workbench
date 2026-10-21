@@ -7,6 +7,7 @@
 
 import {
   buildSheetRefIndex,
+  unreadFormatIn,
   validateSheet,
   type SheetDoc,
   type SheetRefIndex,
@@ -86,6 +87,10 @@ export function importSheetJSON(filename: string, text: string): string | null {
   } catch (e) {
     return `not valid JSON (${e instanceof Error ? e.message : String(e)})`;
   }
+  // A document in a format this app does not read — the sheet, or a child embedded in it — is
+  // refused for that alone: its JSON is fine, and nothing else in it is read.
+  const unread = unreadFormatIn(parsed);
+  if (unread) return `${unread} — nothing was imported`;
   const lost: string[] = [];
   const doc = sanitizeSheet(parsed, 0, lost);
   // A document refused outright still says why when the loader knows — a key written in two

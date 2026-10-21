@@ -3,7 +3,7 @@
   "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The two resistors meet at the tail node, and the tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and each side of the pair carries half of what the tail delivers there. Entered from the COMMON MODE: the tail node $V_{tail}$ is the one free bias variable, solved so that the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. The device's source node sits one resistor drop above the tail node, $V_s = V_{tail} + I_D*R_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — and both bias coordinates follow from it ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), so the body effect is charged in full rather than only the resistor's few tens of millivolts. The resistor drop comes out of the tail device's drain-source voltage, so the low end of the common-mode range is where that device leaves saturation, and a check says so. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
     {
       "name": "Av_target",
@@ -101,7 +101,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the resistor drop, slew rate, linear range and supply current are computed from what is delivered, not from this number"
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the resistor drop, slew rate, linear range and supply current are computed from what is delivered, not from this number",
+      "class": "independent"
     },
     {
       "name": "R_s",
@@ -110,7 +111,8 @@
       "max": 50000,
       "unit": "ohm",
       "role": "choice",
-      "note": "per-side degeneration resistance; (gm + gmb)*R_s sets the linearization and offset improvement"
+      "note": "per-side degeneration resistance; (gm + gmb)*R_s sets the linearization and offset improvement",
+      "class": "independent"
     },
     {
       "name": "gm_id_in",
@@ -178,7 +180,8 @@
         "I_b": "I_tail",
         "L_b": "L_tail",
         "gm_id_b": "gm_id_tail"
-      }
+      },
+      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "tail",
@@ -220,7 +223,8 @@
         "vgs_t": "bias__vgs",
         "L_t": "L_tail",
         "vds_t": "V_tail"
-      }
+      },
+      "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "in",
@@ -267,7 +271,11 @@
         "gm_id_i": "gm_id_in",
         "vds_i": "V_out_dc - V_tail - (tail__id/2)*R_s",
         "vsb_i": "V_tail + (tail__id/2)*R_s"
-      }
+      },
+      "nodes": [
+        { "d": "outn", "g": "vinp", "s": "sp", "b": "gnd" },
+        { "d": "outp", "g": "vinn", "s": "sn", "b": "gnd" }
+      ]
     }
   ],
   "equations": [
@@ -415,5 +423,18 @@
       "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": {
+    "vinp": "CM_dc",
+    "vinn": "CM_dc",
+    "outn": "V_out_dc",
+    "outp": "V_out_dc",
+    "vdd": "VDD"
+  },
+  "elements": [
+    { "name": "rs_p", "kind": "R", "between": ["sp", "tail"], "value": "R_s" },
+    { "name": "rs_n", "kind": "R", "between": ["sn", "tail"], "value": "R_s" },
+    { "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }
+  ]
 }

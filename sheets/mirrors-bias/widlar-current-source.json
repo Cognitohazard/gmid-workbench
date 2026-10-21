@@ -1,6 +1,6 @@
 {
   "title": "Widlar current source",
-  "description": "A Widlar source generates a small, well-defined output current from a larger reference without a large resistor. The reference device is diode-connected at $I_{in}$; the output device shares the gate but has a source resistor $R_s$, so its gate-source voltage is lower than the reference's by exactly the IR drop it develops: $V_{GS,ref} - V_{GS,out} = I_{out}*R_s$. That single equation sets the output current. This sheet does not solve that loop, it CHECKS it: you pick the output current $I_{out}$ (a choice) and the resistor $R_s$, the output device is bound at that current, and a requirement rule tests whether the resulting gate-source difference actually equals $I_{out}*R_s$. Tune $I_{out}$ until it closes. That is the scope rule made visible, an explicit designer-named fixed point evaluated against the lookup tables rather than a nodal solve. Because the output runs at a lower current density than the reference, its $V_{GS}$ sits below the reference's, so the difference is positive only when $I_{out} < I_{in}$. The output device's source sits $I_{out}*R_s$ above ground, declared as its $V_{SB}$.",
+  "description": "A Widlar source generates a small, well-defined output current from a larger reference without a large resistor. The reference device is diode-connected at $I_{in}$; the output device shares the gate but has a source resistor $R_s$, so its gate-source voltage is lower than the reference's by exactly the IR drop it develops: $V_{GS,ref} - V_{GS,out} = I_{out}*R_s$. That single equation sets the output current, and it is the one unknown this sheet solves: you pick the resistor $R_s$ and the width ratio, and the engine searches $I_{out}$ between its min and max for the current at which the output device, bound at that current, sits exactly $I_{out}*R_s$ below the reference's gate-source voltage. It is one named unknown searched in a stated range against the lookup tables, not a nodal solve. The fixed-point rule reports the identity that search makes hold, and fails where the search does not settle. Because the output runs at a lower current density than the reference, its $V_{GS}$ sits below the reference's, so the difference is positive only when $I_{out} < I_{in}$. The output device's source sits $I_{out}*R_s$ above ground, declared as its $V_{SB}$.",
   "polarity": "n",
   "params": [
     {
@@ -8,7 +8,8 @@
       "value": 20e-6,
       "unit": "A",
       "role": "spec",
-      "note": "reference current into the diode device"
+      "note": "reference current into the diode device",
+      "class": "independent"
     },
     {
       "name": "I_out",
@@ -17,7 +18,8 @@
       "max": 20e-6,
       "unit": "A",
       "role": "choice",
-      "note": "target output current; tune it until the Widlar fixed point closes"
+      "solveFor": "delta_vgs/R_s",
+      "note": "the output current: the current at which the gate-source step from the reference to the output device equals the drop that current develops across R_s. Solved, not set: the engine searches for it between min and max, so the stored value is never read. A positive step needs it below I_in"
     },
     {
       "name": "R_s",
@@ -26,7 +28,8 @@
       "max": 200000,
       "unit": "ohm",
       "role": "choice",
-      "note": "output-device source resistor; sets the gate-source difference I_out*R_s"
+      "note": "output-device source resistor; sets the gate-source difference I_out*R_s",
+      "class": "independent"
     },
     {
       "name": "M_ratio",
@@ -69,7 +72,7 @@
       "value": 2,
       "unit": "%",
       "role": "spec",
-      "note": "how tightly the Widlar fixed point must close"
+      "note": "how tightly the Widlar fixed point must hold once I_out is solved"
     }
   ],
   "blocks": [
@@ -101,7 +104,8 @@
         "I_ref": "I_in",
         "L_r": "L",
         "gm_id_r2": "gm_id_r"
-      }
+      },
+      "nodes": { "d": "ngate", "g": "ngate", "s": "gnd", "b": "gnd" }
     }
   ],
   "givens": {
@@ -123,7 +127,7 @@
       "name": "vgs_drop",
       "expr": "I_out*R_s",
       "unit": "V",
-      "note": "the gate-source step the resistor must produce for the chosen output current"
+      "note": "the gate-source step the resistor develops at the output current"
     },
     {
       "name": "Rout",
@@ -154,7 +158,7 @@
       "op": "==",
       "rhs": "vgs_drop",
       "tolPct": 2,
-      "note": "the defining Widlar equation V_GS_ref - V_GS_out = I_out*R_s, checked not solved; tune I_out until it closes"
+      "note": "the defining Widlar equation V_GS_ref - V_GS_out = I_out*R_s. The search on I_out makes it hold, so this rule is the identity that search solves: it fails only where the search did not settle"
     },
     {
       "id": "widlar-steps-down",
@@ -165,5 +169,13 @@
       "note": "a Widlar source produces a fraction of the reference current; a positive gate-source step needs I_out < I_in"
     }
   ],
-  "provides": ["Rout"]
+  "provides": ["Rout"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "ngate", "s": "src", "b": "gnd" },
+  "levels": { "out": "V_out" },
+  "elements": [
+    { "name": "rs", "kind": "R", "between": ["src", "gnd"], "value": "R_s" },
+    { "name": "iref", "kind": "I", "between": ["vsup", "ngate"], "value": "I_in" }
+  ],
+  "ports": ["vsup"]
 }

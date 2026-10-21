@@ -1,15 +1,22 @@
-// A leaf design-sheet: a single self-contained block evaluated against ONE device's
-// lookup tables + PDK constants. Flat and declarative — named scalar params, an
-// optional bind-any-2 device, named author-expression equations, and named comparison
-// checks. NO circuit-domain nouns (no nodes/ports/KCL): a leaf has one block and no
-// shared node, so the coupling channels that would court a nodal solver are absent by
-// construction. Pure data; zero DOM imports.
+// A design sheet: a self-contained block evaluated against ONE device's lookup tables + PDK
+// constants. Flat and declarative — named scalar params, an optional bind-any-2 device, named
+// author-expression equations, and named comparison checks. A sheet in format version 2 also
+// names the wires its devices sit on (`nodes`) and the wires it holds (`levels`): a netlist of
+// identities, which the engine checks for DC consistency after sizing and never solves — no
+// level derived from it is fed back into the design. Pure data; zero DOM imports.
 
 import type { QAWarning } from '../types';
-import { compileExpr, type NoiseSource } from '../derive';
-import { BASE_QUANTITIES } from '../namespace';
+import { compileExpr, metaScalars, type NoiseSource } from '../derive';
+import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { BINDABLE } from '../device';
 import { additiveCoefficient } from '../expr';
+
+/** How a name is spelt: a param, an equation, a wire, an element. */
+export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Whether a value read from a document is an object with keys (not a list, not null). */
+export const isObject = (x: unknown): x is Record<string, unknown> =>
+  !!x && typeof x === 'object' && !Array.isArray(x);
 
 /**
  * A named scalar design input. `min`/`max` bound the GUI slider only. `role`
@@ -118,7 +125,22 @@ export interface SheetVar {
    * an error (the `sheet-dc-inputs` rule).
    */
   class?: ParamClass;
+  /**
+   * Declares this param an AXIS-SIGN SELECTOR: the +1 or -1 a p-type device's bias-axis
+   * expressions are multiplied by so the same sheet runs on a table in N-style convention (+1,
+   * positive axes) and on a signed p export (-1, negative axes). Declared, never inferred from a
+   * value: an ordinary param that happens to equal 1 (a gain, a count) is not one. The DC wiring
+   * walk reads a declared selector that multiplies a whole bias-axis expression as the table's
+   * axis direction, so `p_sign*(VDD - V_out)` is read as the physical voltage it stands for
+   * rather than as an unknown product. Its value must be exactly +1 or -1, it must equal the axis
+   * direction of every table a device using it is sized on, and it must appear in at least one
+   * bias-axis expression. A format-version-2 key (see SheetDoc.formatVersion).
+   */
+  convention?: 'axis-sign';
 }
+
+/** The values SheetVar.convention may take. */
+export const PARAM_CONVENTIONS: ReadonlySet<string> = new Set(['axis-sign']);
 
 /** The authorable DC-level classes (see SheetVar.class). `solved` is deliberately absent: it is
  *  derived from `designConstraint`/`solveFor`, never written. */
@@ -169,6 +191,29 @@ export function balancedBy(doc: SheetDoc, p: SheetVar): string[] {
     if (split && split[1] === 'id' && blocks.some((b) => b.name === split[0])) out.push(split[0]);
   }
   return out;
+}
+
+/**
+ * The device whose gate a param's `hold` keeps fixed where the design is held: the sheet's own
+ * (`givens`, for a hold that reads `vgs`) or a block's (`<block>__vgs`) — the first such name the
+ * hold reads. Undefined for a param with no hold, for a hold that balances a current (see
+ * balancedBy), and for one that reads no gate-source voltage. One statement of the rule, read by
+ * validation (which wires a hold may be held on) and by the wiring proposal (which it drafts).
+ */
+export function heldGateOf(doc: SheetDoc, p: SheetVar): string | undefined {
+  if (!holds(p) || balancedBy(doc, p).length) return undefined;
+  let names: readonly string[];
+  try {
+    names = compileExpr(p.hold).names;
+  } catch {
+    return undefined;
+  }
+  for (const n of names) {
+    if (n === 'vgs' && doc.givens) return 'givens';
+    const split = splitProvide(n);
+    if (split && split[1] === 'vgs') return split[0];
+  }
+  return undefined;
 }
 
 /** Every device of `doc` whose current one of its own holds balances (see balancedBy). */
@@ -449,51 +494,135 @@ export interface SheetCheck {
  *
  * The child exposes its `provide`d names to the parent as flat scalars `name__key`
  * (the engine has no member access, so the join is a `__` separator — neither the block
- * `name` nor a provided key may contain `__`). This is scalar composition only: the
- * parent references child outputs and writes its own author math over them. There is
- * NO node/port/KCL machinery — those remain the deferred coupling channels.
+ * `name` nor a provided key may contain `__`). The values that cross a block boundary are
+ * scalars only: the parent references child outputs and writes its own author math over them.
+ * A block's `nodes` say which of the parent's wires the child's device sits on; they are checked
+ * against the sized result and never change it.
  */
-/**
- * How a block's GATE is wired, declared so the engine can check the identity that
- * wiring imposes. A sheet already declares vds/vsb — differences the tables are indexed by —
- * but never the gate NODE, because vgs is an output of the sizing rather than an input. That
- * leaves a node that is free (some param names its level), implied (the child's vgs describes
- * the same wire), and unchecked, which is how two devices' givens can imply gate voltages hundreds
- * of millivolts apart with every check still green.
- *
- * Both `gate` and `source` are expressions in the PARENT's scope — the node the child's gate
- * is tied to, and the node its source sits on. The identity checked is
- * `gate == source + (the child is p-type ? -1 : +1) * abs(<the child's sized vgs>)`: a gate
- * sits one gate-source voltage ABOVE its source on an N device and one BELOW it on a P device,
- * which is the whole of the convention. Taking the magnitude and the direction separately is
- * what makes the check independent of how the table was exported — a signed PMOS export
- * (negative vgs axis) and one in N convention (positive) give the same answer — where an
- * author-written sign expression could silently INVERT the identity and report agreement on a
- * design wired backwards.
- *
- * The voltage compared against is the child's SIZED vgs, not a scalar it publishes: the sizing
- * always has it, so the check cannot be switched off by an authoring omission upstream.
- */
-export interface SheetWiring {
-  gate: string;
-  source: string;
-}
-
-/** The exact key set of a `wiring` declaration — strict, like GIVENS_KEYS/RANGE_END_KEYS, so a typo
- *  is named rather than silently dropping half of the identity. */
-export const WIRING_KEYS: ReadonlySet<string> = new Set<string>(['gate', 'source']);
-
 export interface SheetBlock {
   name: string;
   doc?: SheetDoc;
   ref?: string;
   device?: string;
   params?: Record<string, string>;
-  /** The node this child's gate and source are tied to; checked, never used to size (see
-   *  SheetWiring). Disagreement is a warning — a wiring declaration describes the schematic,
-   *  and QA surfaces what it finds instead of quietly repairing the design. */
-  wiring?: SheetWiring;
+  /**
+   * The wires the child's device sits on, named in THIS sheet's namespace: one placement
+   * `{d, g, s, b}`, or a list of placements of the one sizing (see DeviceNodes). Only a child
+   * that sizes a device takes it, and only when the child does not wire its own device itself.
+   * A format-version-2 key (see SheetDoc.formatVersion).
+   */
+  nodes?: SheetNodes;
+  /**
+   * How a sub-sheet that wires itself connects to this sheet: every port the child declares,
+   * mapped to a wire here or to `null` (left open). The child's wiring then joins this sheet's walk:
+   * a mapped port IS the wire it is mapped to, and every other wire of the child is its own,
+   * spelt `block__wire`. A child that does not wire itself is wired by `nodes` instead; a block
+   * may not carry both.
+   */
+  ports?: Record<string, string | null>;
 }
+
+/**
+ * The four terminals of one placement of a sized device, each named by a wire: drain, gate,
+ * source and body. A wire is an identifier in the sheet's namespace; `gnd` is the reference at
+ * potential 0 and every other wire is an ordinary name. The names are identities only — a wire's
+ * level is never written here: it is held in `levels` or derived, for checking, from the
+ * devices on it.
+ *
+ * Two wires being the same name is a statement about the circuit with consequences: `g == d` is
+ * a diode connection, which reads the device's table along its vds = vgs diagonal exactly as
+ * `diode: true` does; `g == s` is the real constraint vgs = 0, which `intent: "off"` declares
+ * deliberate (it silences only the accidental-short warning); `d == s` is refused.
+ */
+export interface DeviceNodes {
+  d: string;
+  g: string;
+  s: string;
+  b: string;
+  intent?: 'off';
+}
+
+/** One placement, or several placements of the same sizing (a matched pair written once). A
+ *  list shares one operating point only where the DC walk shows every placement at the same
+ *  gate, drain and body voltage; it may not mix diode-connected and other placements. */
+export type SheetNodes = DeviceNodes | DeviceNodes[];
+
+/** The terminals of a placement, in the order they are reported. */
+export const TERMINALS: readonly ('d' | 'g' | 's' | 'b')[] = ['d', 'g', 's', 'b'];
+
+/** The exact key set of a placement. */
+export const NODE_KEYS: ReadonlySet<string> = new Set([...TERMINALS, 'intent']);
+
+/** The reference wire: potential 0 everywhere, never listed in `levels`. */
+export const GROUND = 'gnd';
+
+/** The document format this engine writes. A document with no `formatVersion` is read in the
+ *  earlier format; one that states another number is not read (see SheetDoc.formatVersion). */
+export const FORMAT_VERSION = 2;
+
+/**
+ * A passive or ideal source between two wires. `I` drives `value` amperes from `between[0]` to
+ * `between[1]`; `V` holds V(between[0]) - V(between[1]) = value; `R` and `C` are symmetric. The
+ * value is a number or an expression that reads only configuration (see configEligibility). The
+ * wiring walk reads a `V` as a relation like a placement's and an `I` as a current in the balance;
+ * a wire an `R` or a `V` touches carries a current the walk cannot read and is not balanced.
+ */
+export interface SheetElement {
+  name: string;
+  kind: 'R' | 'C' | 'I' | 'V';
+  between: [string, string];
+  value: number | string;
+}
+
+export const ELEMENT_KEYS: ReadonlySet<string> = new Set(['name', 'kind', 'between', 'value']);
+export const ELEMENT_KINDS: ReadonlySet<string> = new Set(['R', 'C', 'I', 'V']);
+
+/** A small-signal analysis a sheet asks for by name. Accepted and shape-checked; not yet
+ *  evaluated. Coefficient maps are `{wire: number}` with literal numbers. */
+export type SheetAnalysis =
+  | {
+      name: string;
+      kind: 'gain';
+      in: Record<string, number>;
+      out: Record<string, number>;
+      at: number | string;
+      as?: 'mag' | 'db' | 'phase';
+    }
+  | {
+      name: string;
+      kind: 'impedance';
+      node: string;
+      at: number | string;
+      as?: 'mag' | 'real' | 'imag' | 'phase';
+    }
+  | {
+      name: string;
+      kind: 'noise_in';
+      in: Record<string, number>;
+      out: Record<string, number>;
+      at: number | string;
+      breakdown?: boolean;
+    };
+
+/** Per analysis kind: the keys it requires, the keys it may carry, and the words `as` takes. */
+export const ANALYSIS_SHAPES: Readonly<
+  Record<
+    string,
+    { required: readonly string[]; optional: readonly string[]; as?: readonly string[] }
+  >
+> = {
+  gain: {
+    required: ['name', 'kind', 'in', 'out', 'at'],
+    optional: ['as'],
+    as: ['mag', 'db', 'phase'],
+  },
+  impedance: {
+    required: ['name', 'kind', 'node', 'at'],
+    optional: ['as'],
+    as: ['mag', 'real', 'imag', 'phase'],
+  },
+  noise_in: { required: ['name', 'kind', 'in', 'out', 'at'], optional: ['breakdown'] },
+};
 
 /** Maximum composition nesting depth — a backstop against a pathologically deep
  *  authored tree (embedded docs form a finite tree, so this is a sanity cap, not a
@@ -542,6 +671,20 @@ export function sweepable(
   );
 }
 
+/**
+ * A parent's override of its child's param `name`, as the child reads it: own keys only (so a
+ * param named `constructor` is not read as overridden by every override object), a string, and
+ * not a param the engine solves — a solved param's value is the engine's answer whatever the
+ * parent writes. Undefined where there is none.
+ */
+export function blockOverride(block: SheetBlock, name: string): string | undefined {
+  const over = block.params;
+  if (!over || !Object.prototype.hasOwnProperty.call(over, name)) return undefined;
+  const src: unknown = over[name];
+  const p = block.doc?.params.find((q) => q.name === name);
+  return typeof src === 'string' && p && !engineSolved(p) ? src : undefined;
+}
+
 /** The author's implementation knobs: the params declared 'choice' that the engine does not
  *  solve — the set a designer re-balances, as opposed to 'spec' params, which state the
  *  requirement. The ONE definition, so the sensitivity readout and any search that ranks knobs
@@ -571,6 +714,35 @@ export const splitProvide = (name: string): [string, string] | undefined => {
  *  — its provides arrive at resolution. One spelling of "a block exposes only what it provides". */
 export const providedNames = (u: SheetBlock): string[] =>
   (u.doc?.provides ?? []).map((k) => joinProvide(u.name, k));
+
+/** The scope prefix of a chain of blocks from the top down: each name joined by PROVIDE_SEP, so a
+ *  name at the end of the chain reads `a__b__name` from the top. */
+export const providePrefix = (chain: readonly { name: string }[]): string =>
+  chain.map((b) => joinProvide(b.name, '')).join('');
+
+/** A block path one level down: `path` joined to `name` with PATH_SEP, or `name` at the top. */
+export const childPath = (path: string, name: string): string =>
+  path ? `${path}${PATH_SEP}${name}` : name;
+
+/** The table scalars a sizing re-reads into its scope beside the device quantities (metaScalars).
+ *  Read off metaScalars itself rather than listed again. The probe must supply EVERY metadata
+ *  field, because the key set follows the fields present: thermalScalars yields nothing for a
+ *  missing temp and `w` needs `W`, so a slimmer probe would silently shrink the set. */
+export const META_PUBLISHED: ReadonlySet<string> = new Set(
+  Object.keys(metaScalars({ W: 1, temp: 27 })),
+);
+
+/** Every name a sized device puts in its sheet's scope: the namespace quantities, the selectors,
+ *  what the sizer adds beside them (`w0`, `ceiling`, `feasible`), and the table's own scalars. */
+export const DEVICE_NAMES: ReadonlySet<string> = new Set([
+  ...BASE_KEYS,
+  ...DERIVED_QUANTITIES.map((d) => d.key),
+  ...BINDABLE,
+  'w0',
+  'ceiling',
+  'feasible',
+  ...META_PUBLISHED,
+]);
 
 /**
  * A private deep copy of a sheet document — the one clone every caller uses before editing a
@@ -602,7 +774,7 @@ export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
   return {
     ...w,
     message: `block "${blockName}": ${w.message}`,
-    location: `${blockName}.${w.location ?? ''}`,
+    location: `${blockName}${PATH_SEP}${w.location ?? ''}`,
   };
 }
 
@@ -649,6 +821,11 @@ export function idSepProblem(name: string): string | undefined {
 export const blockPath = (path: string): string =>
   path === '' ? 'givens' : path.slice(0, -PATH_SEP.length);
 
+/** How a finding names a device: the sheet's own, or a child by block path — the words a reader
+ *  matches across warnings. */
+export const deviceName = (d: string): string =>
+  d === 'givens' ? "this sheet's own device" : `"${d}"`;
+
 /** A sheet document — the authored model the GUI edits and persists verbatim. A leaf
  *  has no `blocks`; a composed sheet embeds blocks and references their `provide`d
  *  scalars. `provides` lists the names THIS sheet exposes to a parent (ignored at the top). */
@@ -665,6 +842,38 @@ export interface SheetDoc {
   blocks?: SheetBlock[];
   provides?: string[];
   operatingRange?: SheetRangeEnd[];
+  /**
+   * The document format. Absent: the earlier format, which knows none of the keys below — a
+   * document in it is still read, but a sized device in it is refused until it is migrated, since
+   * every device names its wiring (see wiringRefusal; a script drafts the migration with proposeWiring and applyWiringProposal).
+   * `2`: the format with a netlist — `nodes`, `levels`, `elements`, `ports`, `analyses` and a
+   * param's `convention`. Any other number is a format this app does not read: such a document is
+   * refused at import, and a stored copy is kept as it was stored and not evaluated. Stated per
+   * document; an embedded child that states none is read in the earlier format.
+   */
+  formatVersion?: number;
+  /**
+   * `"none"`: the sheet is not a circuit — an abstract budget or a block-level estimate — and has
+   * no wiring to check; exclusive with `levels`, `elements`, `analyses` and any block's `nodes`.
+   * Otherwise, on a sheet that sizes a device, the wires that device sits on (see DeviceNodes);
+   * a child's device is wired by its parent's block instead.
+   */
+  nodes?: SheetNodes | 'none';
+  /**
+   * The wires this sheet HOLDS, each at the level an expression gives it: supplies, references,
+   * inputs, a bias the application applies. Every other wire's level is derived, for checking,
+   * from the devices on it. Only a level the designer states may be written here (see
+   * levelEligibility); `gnd` is 0 and is not listed.
+   */
+  levels?: Record<string, string>;
+  /** Passives and ideal sources between wires (see SheetElement). */
+  elements?: SheetElement[];
+  /** The wires a parent may connect this sheet to (see SheetBlock.ports). A port is never
+   *  reported as floating — its other end is outside the sheet — and a port of the sheet the walk
+   *  runs on is not balanced, for the same reason. */
+  ports?: string[];
+  /** Small-signal analyses asked for by name (see SheetAnalysis). */
+  analyses?: SheetAnalysis[];
 }
 
 /**
@@ -674,27 +883,45 @@ export interface SheetDoc {
  * type (expression vs flag). A sanitizer keeping its own copy of this knowledge is the mechanism
  * that silently ate a legal fT given on reload — and would have eaten `designConstraint` and
  * `diode` — so any new field belongs HERE, in the same edit that adds it to its interface.
+ *
+ * The keys format version 2 adds come first, per container (WIRING_*_KEYS) — what a document in
+ * the earlier format may not carry (see SheetDoc.formatVersion) — and the key sets spread them in.
  */
+export const WIRING_DOC_KEYS: readonly string[] = [
+  'nodes',
+  'levels',
+  'elements',
+  'ports',
+  'analyses',
+];
+export const WIRING_BLOCK_KEYS: readonly string[] = ['nodes', 'ports'];
+export const WIRING_VAR_KEYS: readonly string[] = ['convention'];
 export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
   'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'designConstraint', 'hold', 'class',
+  ...WIRING_VAR_KEYS,
 ]); // prettier-ignore
 export const EQUATION_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
 export const CHECK_KEYS: ReadonlySet<string> = new Set<string>([
   'id', 'kind', 'lhs', 'op', 'rhs', 'tolPct', 'justification', 'note',
 ]); // prettier-ignore
 export const BLOCK_KEYS: ReadonlySet<string> = new Set<string>([
-  'name', 'doc', 'ref', 'device', 'params', 'wiring',
+  'name', 'doc', 'ref', 'device', 'params', ...WIRING_BLOCK_KEYS,
 ]); // prettier-ignore
 export const RANGE_END_KEYS: ReadonlySet<string> = new Set<string>(['name', 'set', 'note']);
 export const DOC_KEYS: ReadonlySet<string> = new Set<string>([
   'title', 'description', 'polarity', 'params', 'givens', 'equations', 'checks', 'blocks',
-  'provides', 'operatingRange',
+  'provides', 'operatingRange', 'formatVersion', ...WIRING_DOC_KEYS,
 ]); // prettier-ignore
+/** Keys a block no longer carries in any format: the gate `wiring` of documents written before the
+ *  netlist, which `nodes` state in format version 2. Named, so a document that still carries one
+ *  is told how to migrate rather than seeing an unknown key. */
+export const EARLIER_BLOCK_KEYS: readonly string[] = ['wiring'];
 
 /**
  * Every authored expression in a doc, in one flat list: the givens, constrained and solved params,
- * the equations, both sides of every check, each block's param overrides and wiring declaration,
- * and each range end's setting. Lives HERE for the same reason the key sets above do: a consumer
+ * the equations, both sides of every check, each block's param overrides,
+ * each range end's setting, each held level, and each element value and analysis frequency
+ * written as an expression. Lives HERE for the same reason the key sets above do: a consumer
  * keeping its own copy of which fields hold expressions goes silently stale the day a field
  * is added — so a new expression-bearing field joins this walk in the same edit that adds it
  * to its interface.
@@ -713,11 +940,16 @@ export function docExpressions(doc: SheetDoc): string[] {
   }
   for (const r of doc.equations) out.push(r.expr);
   for (const r of doc.checks) out.push(r.lhs, r.rhs);
-  for (const u of doc.blocks ?? []) {
-    out.push(...Object.values(u.params ?? {}));
-    if (u.wiring) out.push(u.wiring.gate, u.wiring.source);
-  }
+  for (const u of doc.blocks ?? []) out.push(...Object.values(u.params ?? {}));
   for (const e of doc.operatingRange ?? []) out.push(...Object.values(e.set));
+  // Read as `unknown` where a persisted document may carry the wrong shape; validation names it.
+  const levels: unknown = doc.levels;
+  if (isObject(levels))
+    for (const v of Object.values(levels)) if (typeof v === 'string') out.push(v);
+  for (const e of Array.isArray(doc.elements) ? doc.elements : [])
+    if (typeof e?.value === 'string') out.push(e.value);
+  for (const a of Array.isArray(doc.analyses) ? doc.analyses : [])
+    if (typeof a?.at === 'string') out.push(a.at);
   return out;
 }
 
@@ -739,6 +971,124 @@ export interface SheetBlockReport {
   blocks?: SheetBlockReport[];
   /** This block's own held expressions at this run (see SheetResult.held). */
   held?: Record<string, number>;
+  /** The block's device as the parent's wiring walk reads it — present where the parent's block
+   *  names the wires it sits on (see SheetResult.terminals). */
+  terminals?: DevicePoint;
+  /** The block's own wiring check, where it has one (see SheetResult.nodes). */
+  nodes?: NodesReport;
+  /** The block's held levels and element values, where its wiring joins its parent's walk (see
+   *  SheetResult.wiringValues). */
+  wiringValues?: WiringValues;
+}
+
+/** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
+ *  values to, in its own scope — the numbers the parent's walk cannot read itself. A level or an
+ *  element that did not evaluate is absent. */
+export interface WiringValues {
+  levels: Record<string, number>;
+  elements: Record<string, number>;
+}
+
+/**
+ * What the DC wiring walk reads of one sized device: its operating point as the sizing and the
+ * givens state it, in the table's axis convention, and what maps that onto physical terminal
+ * voltages. The drain and body voltages are the ones the givens STATE, not a value a table that
+ * does not reach them was read at — the walk checks the circuit the author wrote, and a clamp is
+ * reported where it happens.
+ */
+export interface DevicePoint {
+  /** The sized gate-source voltage, in the table's axis convention. */
+  vgs: number;
+  /** The drain-source voltage the givens state; the gate-source voltage for a diode connection. */
+  vds: number;
+  /** The source-body voltage the givens state, or 0 where they leave it to its default. */
+  vsb: number;
+  /** The drain current, a magnitude like every value column. */
+  id: number;
+  /** The small-signal sensitivities that turn a voltage residual into a current estimate. */
+  gm?: number;
+  gds?: number;
+  gmb?: number;
+  /** The direction of the table's vgs axis: +1 where it holds no negative value, -1 where it holds
+   *  no positive one (a signed p export); absent where it holds both. */
+  axis?: 1 | -1;
+  /** The direction of the table's vsb axis, read on its own: +1 where it holds no negative value —
+   *  a magnitude, the body above the source for a p device, the source above the body for an n
+   *  one, whatever the vgs axis does (a signed p export can store vgs and vds negative and vsb
+   *  positive) — and -1 where it holds a negative value, a signed axis that follows the vgs one.
+   *  +1 for a table with no vsb axis, where the stated vsb is 0. */
+  bodyAxis: 1 | -1;
+  polarity: 'n' | 'p';
+}
+
+/** The outcome of a sheet's DC wiring check. `not-applicable` is a sheet that declares
+ *  `nodes: "none"`. `not-evaluated` is a check that did not run, and its report is neither clean
+ *  nor with findings: the point has no sized design for it to read (see PointOutcome.sized), or the
+ *  document carries wiring keys in the earlier format, which does not read them. */
+export type NodesState =
+  'checked-clean' | 'checked-with-findings' | 'not-applicable' | 'not-evaluated';
+
+/**
+ * One sheet's DC wiring check: the relations its netlist states (each placement's gate, drain and
+ * body voltage above its source; each held wire's level), checked for consistency after sizing.
+ * Every number here is a reading of the sized design; none is fed back into it.
+ */
+export interface NodesReport {
+  state: NodesState;
+  /** Every wire reached from a seed (`gnd` and each held wire) through blocks that close, with the
+   *  level it is reported at and the relations it was derived along. A seed is reported at its
+   *  authored level. */
+  levels: Record<string, { level: number; seed: boolean; via: string[] }>;
+  /** Wires a seed reaches only through a block that does not close: never given a value. */
+  tainted: string[];
+  /** Groups of wires no seed reaches at all, each one missing statement. */
+  floating: string[][];
+  /** Each block of relations that does not close within NODE_TOL. */
+  disputes: {
+    relations: string[];
+    closureError: number;
+    chords: { relation: string; residual: number }[];
+    seeds: string[];
+  }[];
+  /** The largest loop residual over every block: what "closes" is measured against. */
+  closureError: number;
+  /**
+   * The constraints the netlist states beyond the sizing, counted by rank. `proven` counts the
+   * loop equations that are linear in params and device quantities; `bound` counts them all,
+   * including those with a term the count could not read (`undecided` names those terms). Each
+   * equation that survives the count is listed with the relations it closes over, whether it
+   * holds at this design point, and its residual.
+   */
+  dof: {
+    proven: number;
+    bound: number;
+    constraints: { relations: string[]; residual: number; satisfied: boolean; proven: boolean }[];
+    undecided: string[];
+  };
+  /**
+   * The signed current residual at every wire a drain or source terminal sits on: the sum of the
+   * currents flowing INTO the wire, from the devices and from ideal current sources. At a held wire
+   * (`held`) it is the current the ideal source holding the wire takes, so that source supplies its
+   * negative. A wire an element of unknown current touches (a resistor, a voltage source), or a port
+   * of the sheet the walk runs on, is not summed.
+   */
+  balance: {
+    wire: string;
+    residual: number;
+    held: boolean;
+    branches: { terminal: string; current: number }[];
+  }[];
+  /** Each device placed more than once: whether its placements share one operating point. */
+  placements: { device: string; shared: boolean; reason?: string }[];
+  /** Relations the walk could not form, and why. */
+  unresolved: string[];
+  /** Sized devices on this sheet that name no wires. */
+  unwired: string[];
+  /** How many warnings and errors the check raised, here and in the blocks below. */
+  findings: number;
+  /** What the numbers above mean, in words: the closure error's meaning wherever a loop exists,
+   *  the over-determination the rank count proves, and what it could not decide. */
+  notes: string[];
 }
 
 /**
@@ -777,6 +1127,9 @@ export interface RangeEndReport {
   solved: Record<string, number>;
   warnings: QAWarning[];
   error?: string;
+  /** The DC wiring check of this run, on a sheet that states wiring: `not-evaluated` wherever the
+   *  end has no answer (see NodesState). */
+  nodes?: NodesReport;
   /** Blocks whose givens named neither a width nor a current, so this run held the base current
    *  by ASSUMPTION — an ideal source, since the sheet never said where the current comes from.
    *  Paths as warnings spell them (`givens` for the sheet's own device, the block path for a
@@ -918,6 +1271,32 @@ export interface SheetResult {
    * this value. Absent when the sheet holds nothing; a child's own are on its report.
    */
   held?: Record<string, number>;
+  /** This sheet's own device as its parent's wiring walk reads it (see DevicePoint). Present only
+   *  where the parent's block names the wires the device sits on. */
+  terminals?: DevicePoint;
+  /** The sheet's DC wiring check (see NodesReport). Absent on a sheet that declares no wiring, and on
+   *  one whose wiring joins its parent's walk (its parent's report covers it). */
+  nodes?: NodesReport;
+  /** This sheet's held levels and element values, where its wiring joins its parent's walk (see
+   *  WiringValues). */
+  wiringValues?: WiringValues;
+  /** This run as one point of the compliance question (see pointOutcome): set on a top-level
+   *  evaluation. */
+  point?: PointOutcome;
+}
+
+/**
+ * One run as a point of the compliance question, classified once and read by every reader — the
+ * wiring walk's gate, a range end, a process condition. Two facts, kept apart:
+ *  - `sized`: the sizing at this point stood — no solve error, no device refused or unsized, and,
+ *    for a held design, no device read off its table's hull. Only then does the wiring check run.
+ *  - `state` (with `error` where the point is no verdict): the answer the point gives. A design
+ *    resting on an assumed level was sized, and still has no answer.
+ */
+export interface PointOutcome {
+  sized: boolean;
+  state: Exclude<PointState, 'not-run'>;
+  error?: string;
 }
 
 /**
@@ -1006,6 +1385,36 @@ export function withoutRestated(
         (e) => e.rule === w.rule && e.location === w.location && e.message === w.message,
       ),
   );
+}
+
+/**
+ * One evaluation with what resolving and validating its document found, as both seams that run a
+ * sheet report it (runSheet, and a condition run): the validation findings first — less those the
+ * evaluation repeats — then the evaluation's, and the wiring check's verdict counting the netlist's
+ * structural problems (a misspelt wire, a short, a level that may not be held) as findings, since
+ * they belong to that verdict as much as what the walk found. A walk that did not run stays
+ * not-evaluated, with the structural findings counted.
+ */
+export function withValidation(pre: readonly QAWarning[], res: SheetResult): SheetResult {
+  const structural = pre.filter(
+    (w) => w.rule === 'sheet-nodes' || w.rule === 'sheet-format',
+  ).length;
+  const nodes =
+    res.nodes && structural && res.nodes.state !== 'not-applicable'
+      ? {
+          ...res.nodes,
+          state:
+            res.nodes.state === 'not-evaluated'
+              ? ('not-evaluated' as const)
+              : ('checked-with-findings' as const),
+          findings: res.nodes.findings + structural,
+        }
+      : res.nodes;
+  return {
+    ...res,
+    warnings: [...withoutRestated(pre, res.warnings), ...res.warnings],
+    ...(nodes ? { nodes } : {}),
+  };
 }
 
 /** Index one evaluation's check outcomes under `prefix`, by the tree-key scheme the sweep's

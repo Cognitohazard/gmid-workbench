@@ -21,7 +21,8 @@
       "max": 500e3,
       "unit": "ohm",
       "role": "choice",
-      "note": "load resistor from the drain to VDD: sets the gain, and with the branch current the drain DC level"
+      "note": "load resistor from the drain to VDD: sets the gain, and with the branch current the drain DC level",
+      "class": "independent"
     },
     {
       "name": "Rin_target",
@@ -142,5 +143,10 @@
       "note": "actual GBW into CL plus the parasitic estimate"
     }
   ],
-  "provides": ["Rin", "Rout", "I_q"]
+  "provides": ["Rin", "Rout", "I_q"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "vg", "s": "in", "b": "gnd" },
+  "levels": { "vdd": "VDD", "in": "V_in" },
+  "elements": [{ "name": "rload", "kind": "R", "between": ["vdd", "out"], "value": "R_load" }],
+  "ports": ["vg"]
 }

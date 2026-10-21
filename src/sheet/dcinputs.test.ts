@@ -30,6 +30,11 @@ const leaf = (givens: Partial<SheetGivens> = {}, params: SheetVar[] = []): Sheet
   provides: ['vgs', 'id'],
 });
 
+/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
+ *  names no wires. The documents below that must validate clean exercise the DC-input walk, not a
+ *  netlist, so they say so rather than draw one. */
+const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
+
 /** The leaf with its drain-bias param `vd` amended. */
 const withVd = (patch: Partial<SheetVar>): SheetDoc => {
   const d = leaf();
@@ -301,10 +306,10 @@ describe('sheet-dc-inputs — what the walk follows, and what it does not', () =
     // A given is evaluated before its device is sized, when `w` is still the table's
     // characterization width, so `W: 4*w` reads the table, not this device's own operating point.
     // The sheet validates clean and sizes to exactly four table widths.
-    const doc: SheetDoc = {
+    const doc: SheetDoc = notACircuit({
       ...withVd({ class: 'independent' }),
       givens: { L: 'L', W: '4*w', gm_id: '10', vds: 'vd' },
-    };
+    });
     expect(validateSheet(doc).filter((w) => w.severity === 'error')).toEqual([]);
     const res = runSheet(doc, table);
     expect(res.sizing?.ok, res.sizing?.error).toBe(true);
@@ -403,9 +408,11 @@ describe('sheet-dc-inputs — solved is derived, never authored', () => {
 describe('hold — a node under a gate is stated at the nominal run and re-solved where held', () => {
   /** The leaf with its drain on node X: `vds = vd - X`, body on X, and X carrying `patch`. */
   const onNode = (patch: Partial<SheetVar>): SheetDoc =>
-    leaf({ vds: 'vd - X', vsb: 'X' }, [
-      { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, ...patch },
-    ]);
+    notACircuit(
+      leaf({ vds: 'vd - X', vsb: 'X' }, [
+        { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, ...patch },
+      ]),
+    );
   const errors = (doc: SheetDoc): string[] =>
     validateSheet(doc)
       .filter((w) => w.severity === 'error')
@@ -472,10 +479,12 @@ describe('hold — a node under a gate is stated at the nominal run and re-solve
     // Two nodes each held through the other's device: X through a quantity biased from Y, Y
     // through an equation that reads X. Typed, the sheet evaluates; held, the two depend on each
     // other, and a held run settles them together by repeated sweeps.
-    const doc = leaf({ vds: 'vd - X', vsb: 'Y' }, [
-      { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, hold: 'X + vgs' },
-      { name: 'Y', value: 0.1, unit: 'V', min: 0, max: 0.4, hold: 'Y + r' },
-    ]);
+    const doc = notACircuit(
+      leaf({ vds: 'vd - X', vsb: 'Y' }, [
+        { name: 'X', value: 0.2, unit: 'V', min: 0, max: 0.4, hold: 'X + vgs' },
+        { name: 'Y', value: 0.1, unit: 'V', min: 0, max: 0.4, hold: 'Y + r' },
+      ]),
+    );
     doc.equations = [{ name: 'r', expr: '2*X' }];
     doc.params = doc.params.map((p) => (p.name === 'vd' ? { ...p, class: 'independent' } : p));
     expect(errors(doc)).toEqual([]);
@@ -510,39 +519,40 @@ describe('hold — the solve order is checked on the document a range end really
   /** A pair device under a cascode. The pair is given gm and gm/ID, so its current is a result
    *  of its sizing; the cascode carries that current. The tail is constrained to the common mode
    *  and the cascode node carries `node`. */
-  const stack = (node: Partial<SheetVar>): SheetDoc => ({
-    title: 'stack',
-    polarity: 'n',
-    params: [
-      { name: 'CM', value: 0.9, unit: 'V', class: 'independent' },
-      { name: 'CM_hi', value: 1.0, unit: 'V', class: 'independent' },
-      { name: 'V_out', value: 0.9, unit: 'V', class: 'independent' },
-      {
-        name: 'V_tail',
-        value: 0.3,
-        unit: 'V',
-        min: 0.1,
-        max: 0.45,
-        designConstraint: { lhs: 'V_tail + in__vgs', rhs: 'CM' },
-      },
-      { name: 'V_a', value: 0.55, unit: 'V', min: 0.46, max: 0.85, ...node },
-    ],
-    equations: [],
-    checks: [],
-    blocks: [
-      {
-        name: 'in',
-        doc: dev({ L: 'L', gm: 'gmT', gm_id: '10', vds: 'vd', vsb: 'vs' }, ['vgs', 'id']),
-        params: { vd: 'V_a - V_tail', vs: 'V_tail' },
-      },
-      {
-        name: 'casc',
-        doc: dev({ L: 'L', id: 'I', gm_id: '10', vds: 'vd', vsb: 'vs' }, ['vgs']),
-        params: { I: 'in__id', vd: 'V_out - V_a', vs: 'V_a' },
-      },
-    ],
-    operatingRange: [{ name: 'hi', set: { CM: 'CM_hi' } }],
-  });
+  const stack = (node: Partial<SheetVar>): SheetDoc =>
+    notACircuit({
+      title: 'stack',
+      polarity: 'n',
+      params: [
+        { name: 'CM', value: 0.9, unit: 'V', class: 'independent' },
+        { name: 'CM_hi', value: 1.0, unit: 'V', class: 'independent' },
+        { name: 'V_out', value: 0.9, unit: 'V', class: 'independent' },
+        {
+          name: 'V_tail',
+          value: 0.3,
+          unit: 'V',
+          min: 0.1,
+          max: 0.45,
+          designConstraint: { lhs: 'V_tail + in__vgs', rhs: 'CM' },
+        },
+        { name: 'V_a', value: 0.55, unit: 'V', min: 0.46, max: 0.85, ...node },
+      ],
+      equations: [],
+      checks: [],
+      blocks: [
+        {
+          name: 'in',
+          doc: dev({ L: 'L', gm: 'gmT', gm_id: '10', vds: 'vd', vsb: 'vs' }, ['vgs', 'id']),
+          params: { vd: 'V_a - V_tail', vs: 'V_tail' },
+        },
+        {
+          name: 'casc',
+          doc: dev({ L: 'L', id: 'I', gm_id: '10', vds: 'vd', vsb: 'vs' }, ['vgs']),
+          params: { I: 'in__id', vd: 'V_out - V_a', vs: 'V_a' },
+        },
+      ],
+      operatingRange: [{ name: 'hi', set: { CM: 'CM_hi' } }],
+    });
 
   it('reads the givens as a range end rewrites them, not as authored', () => {
     // As authored, the pair's current comes out of its sizing, which reads the tail; the cascode
@@ -698,7 +708,7 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     };
   };
 
-  it('5T OTA: the tail node and the split of the tail current are solved; the supply, the common mode, its range ends and the output level are stated', () => {
+  it('5T OTA: the tail node and the split of the tail current are solved; the supply, the common mode, its range ends, the output level and the programmed current are stated', () => {
     // The design constraint moves V_tail until the produced common mode equals CM_dc; the range
     // ends substitute CM_lo and CM_hi for CM_dc. The output is a high-impedance node that only the
     // feedback the application closes around the amplifier holds, and that loop is not on the
@@ -709,9 +719,11 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     // its current is the rest of what the tail delivers, and its drain is the load's diode node,
     // one load gate-source voltage below the supply. The share of the tail current the
     // output-side pair transistor carries is the second solved value: it is searched until that
-    // transistor takes what the mirror's output side returns, the current law at the output.
+    // transistor takes what the mirror's output side returns, the current law at the output. The
+    // programmed tail current is stated too: the netlist draws it as a current source feeding the
+    // bias reference, and an element's value reads only what the designer states.
     expect(classes('otas/five-transistor-ota.json')).toEqual({
-      independent: ['CM_dc', 'CM_hi', 'CM_lo', 'VDD', 'V_out_dc'],
+      independent: ['CM_dc', 'CM_hi', 'CM_lo', 'I_tail', 'VDD', 'V_out_dc'],
       assumed: [],
       solved: ['V_tail', 'out_share'],
     });
@@ -723,11 +735,12 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     expect(r.independent).toContain('node_margin');
   });
 
-  it('source follower: the gate drop is solved, the supply and the input level are stated', () => {
+  it('source follower: the gate drop is solved, the supply, the input level and the bias current are stated', () => {
     // The drain bias is VDD - V_in + vgs_est, and vgs_est is solved to the device's own vgs, so
-    // the supply and the input level are the voltages that reach the device.
+    // the supply and the input level are the voltages that reach the device. The bias current is
+    // stated as well: the netlist draws it as the current source the output drives.
     expect(classes('stages/source-follower.json')).toEqual({
-      independent: ['VDD', 'V_in'],
+      independent: ['I_bias', 'VDD', 'V_in'],
       assumed: [],
       solved: ['vgs_est'],
     });
@@ -735,9 +748,10 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
 
   it('CS amp, resistive load: the supply is the only voltage; the drain level is derived', () => {
     // The drain bias is VDD - gm*R_load/gm_id: the supply is the one voltage it reads, and
-    // nothing typed stands in for the output level.
+    // nothing typed stands in for the output level. The load resistor is stated too: the netlist
+    // draws it as an element, whose value reads only what the designer states.
     expect(classes('stages/cs-amp-resistive-load.json')).toEqual({
-      independent: ['VDD'],
+      independent: ['R_load', 'VDD'],
       assumed: [],
       solved: [],
     });
@@ -745,9 +759,10 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
 
   it('common gate: the supply and the input level are stated; the drain level is derived', () => {
     // The drain bias is VDD - I_bias*R_load - V_in and the body bias is V_in, so those two
-    // voltages reach the device and nothing typed stands in for the output level.
+    // voltages reach the device and nothing typed stands in for the output level. The load
+    // resistor is stated too, as the element the netlist draws from the drain to the supply.
     expect(classes('stages/common-gate.json')).toEqual({
-      independent: ['VDD', 'V_in'],
+      independent: ['R_load', 'VDD', 'V_in'],
       assumed: [],
       solved: [],
     });

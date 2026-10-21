@@ -618,12 +618,17 @@ test('design sheet: a nested block inherits its parent block’s device, and is 
   await page.locator('.load input[type=file]').setInputFiles(
     sheetFile('nested-stage.json', {
       title: 'Nested stage',
+      formatVersion: 2,
       params: [],
       equations: [],
       checks: [],
+      // The leaf names no wires of its own, so the block that composes it does.
+      levels: { out: '0.6' },
+      ports: ['in'],
       blocks: [
         {
           name: 'cs',
+          nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
           doc: {
             title: 'Leaf',
             polarity: 'n',
@@ -745,12 +750,16 @@ test('design sheet: an imported fT given survives import and reload (not silentl
       JSON.stringify({
         title: 'Speed spec',
         polarity: 'n',
+        formatVersion: 2,
         params: [
           { name: 'L', value: 5e-7 },
           { name: 'ft_target', value: 2e9 },
           { name: 'Ib', value: 2e-5 },
         ],
         givens: { L: 'L', ft: 'ft_target', id: 'Ib', vds: '0.9' },
+        nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+        levels: { out: '0.9' },
+        ports: ['in'],
         equations: [{ name: 'speed', expr: 'ft' }],
         checks: [],
       }),
@@ -794,12 +803,16 @@ test('design sheet: an imported solveFor survives import and reload (not silentl
       JSON.stringify({
         title: 'Solved bias loop',
         polarity: 'n',
+        formatVersion: 2,
         params: [
           { name: 'L', value: 5e-7 },
           { name: 'Ib', value: 1e-5 },
           { name: 'vstar_est', value: 0.3, min: 0.05, max: 0.6, solveFor: 'vstar_actual' },
         ],
         givens: { L: 'L', id: 'Ib', gm_id: '8 + 5*vstar_est', vds: '0.9' },
+        nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+        levels: { out: '0.9' },
+        ports: ['in'],
         equations: [{ name: 'vstar_actual', expr: 'vstar' }],
         checks: [{ id: 'loop-closed', kind: 'physical', lhs: 'vstar_est', op: '<=', rhs: '0.25' }],
       }),
@@ -835,7 +848,8 @@ test('design sheet: an imported diode connection survives import and reload (not
   // sanitizer that type-checks every member as a string deletes it — leaving the device with no
   // vds at all. The check below reads the drop the diagonal produced: on the demo device a diode
   // sits well above 0.2 V, and a stripped connection makes the sizing fail outright rather than
-  // report a smaller number, so the chip catches either outcome.
+  // report a smaller number, so the chip catches either outcome. The wires state the same
+  // connection — the gate on the drain wire — and the flag agrees with them.
   await page.locator('.load input[type=file]').setInputFiles({
     name: 'diode-block.json',
     mimeType: 'application/json',
@@ -843,11 +857,14 @@ test('design sheet: an imported diode connection survives import and reload (not
       JSON.stringify({
         title: 'Diode connection',
         polarity: 'n',
+        formatVersion: 2,
         params: [
           { name: 'L', value: 5e-7 },
           { name: 'Ib', value: 1e-5 },
         ],
         givens: { L: 'L', id: 'Ib', gm_id: '10', diode: true },
+        nodes: { d: 'd', g: 'd', s: 'gnd', b: 'gnd' },
+        ports: ['d'],
         equations: [{ name: 'drop', expr: 'vgs' }],
         checks: [{ id: 'diode-drop', kind: 'physical', lhs: 'drop', op: '>=', rhs: '0.2' }],
       }),
@@ -859,6 +876,10 @@ test('design sheet: an imported diode connection survives import and reload (not
   const sheet = page.locator('.sheet').first();
   await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
   await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
+  // The imported copy keeps both statements of the connection: the flag and the wires.
+  const stored = await page.evaluate(() => localStorage.getItem('gmid.sheets.v2') ?? '');
+  expect(stored).toContain('"diode":true');
+  expect(stored).toContain('"nodes":{"d":"d","g":"d","s":"gnd","b":"gnd"}');
 
   await page.reload();
   const after = page.locator('.sheet').first();
@@ -1032,16 +1053,20 @@ test('design sheet: an imported design constraint survives import and reload (no
 });
 
 /** A one-device sheet whose drain bias is the voltage param `V_d`, given DC-level class `cls`
- *  (none when omitted). */
+ *  (none when omitted). The drain wire is a port rather than a held wire: a level an assumed
+ *  param states may not hold a wire, and the drain bias here is the assumption under test. */
 const vdSheet = (title: string, cls?: string) => ({
   title,
   polarity: 'n',
+  formatVersion: 2,
   params: [
     { name: 'L', value: 5e-7 },
     { name: 'Ib', value: 1e-5 },
     { name: 'V_d', value: 0.6, unit: 'V', ...(cls === undefined ? {} : { class: cls }) },
   ],
   givens: { L: 'L', id: 'Ib', gm_id: '10', vds: 'V_d' },
+  nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+  ports: ['in', 'out'],
   equations: [],
   checks: [],
 });
@@ -1534,7 +1559,7 @@ test('design sheet: the sensitivity readout ranks the knobs that move the bindin
   expect(errors).toEqual([]);
 });
 
-test('design sheet: an imported gate-wiring declaration survives import and reload (still checked)', async ({
+test('design sheet: an imported netlist survives import and reload (still checked)', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -1544,22 +1569,22 @@ test('design sheet: an imported gate-wiring declaration survives import and relo
   await page.goto('/');
   await loadDemo(page);
 
-  // `wiring` is an OBJECT on a block whose siblings are strings, so a sanitizer that rebuilds the
-  // block field by field deletes it — and the consistency check goes quiet on the next reload
-  // without anything on screen saying so. Here the declared gate node (0 V) contradicts the
-  // block's own sized V_GS by hundreds of millivolts, so a live check must say so out loud.
-  // The block publishes nothing: the check reads the sizing, so no `provides` are involved.
-  const wiredSheet = (wiring: unknown): string =>
+  // A block's `nodes` is an OBJECT on a block whose siblings are strings, so a sanitizer that
+  // rebuilds the block field by field deletes it — and the wiring check goes quiet on the next
+  // reload without anything on screen saying so. Here the sheet holds the device's gate wire at
+  // 0 V, which contradicts the block's own sized V_GS by hundreds of millivolts, so a live check
+  // must say so out loud: the loop through the gate does not close.
+  const wiredSheet = (nodes: unknown): string =>
     JSON.stringify({
       title: 'Wired gate',
       polarity: 'n',
-      params: [{ name: 'V_g', value: 0 }],
+      formatVersion: 2,
+      params: [{ name: 'V_g', value: 0, class: 'independent' }],
       equations: [],
       checks: [],
       blocks: [
         {
           name: 'n1',
-          wiring,
           doc: {
             title: 'input device',
             polarity: 'n',
@@ -1571,45 +1596,129 @@ test('design sheet: an imported gate-wiring declaration survives import and relo
             equations: [],
             checks: [],
           },
+          nodes,
         },
       ],
+      levels: { g: 'V_g', out: '0.9' },
     });
   const load = page.locator('.load input[type=file]');
   await load.setInputFiles({
     name: 'wired-gate.json',
     mimeType: 'application/json',
-    buffer: Buffer.from(wiredSheet({ gate: 'V_g', source: '0' })),
+    buffer: Buffer.from(wiredSheet({ d: 'out', g: 'g', s: 'gnd', b: 'gnd' })),
   });
 
   await page.locator('button.btn', { hasText: '+ sheet' }).click();
   await pickSheet(page, 'Wired gate');
   const warn = page.locator('.sheet .pwarn', { hasText: 'wiring' });
-  await expect(warn).toContainText('delta');
-  // The finding IS the two voltages and the delta at the end of the sentence, so the line has to
-  // survive to its last word — captured at panel scope, where a clipped one would show.
+  await expect(warn).toContainText('does not close');
+  // The wiring check's verdict sits beside the feasibility badge: one finding, the loop.
+  await expect(page.locator('.sheet [data-wiring]')).toHaveText('wiring: 1 finding');
+  // The finding IS the two claims and the residual of the loop, so the line has to survive to its
+  // last word — captured at panel scope, where a clipped one would show.
   await warn.scrollIntoViewIfNeeded();
   await page
     .locator('.grid .panel')
     .last()
     .screenshot({ path: `${SCREENS}/sheet-wiring.png` });
 
-  // A declaration that survives sanitization with NOTHING in it — `{}` here, or an object whose
-  // every key was rejected — is the same hole from the other side: the core errors on a
-  // half-written wiring, so a sheet that imported without it would read CLEANER than the core
-  // reads it. Fail closed at the door, naming the field.
+  // A placement of the wrong shape — a bare string where the four wires belong — is the same hole
+  // from the other side: carried as written it would be refused by the core, and dropped it would
+  // leave the sheet reading CLEANER than the core reads it. Fail closed at the door, naming the
+  // field.
   await load.setInputFiles({
     name: 'empty-wiring.json',
     mimeType: 'application/json',
-    buffer: Buffer.from(wiredSheet({})),
+    buffer: Buffer.from(wiredSheet('out')),
   });
   await expect(page.locator('.qa.error')).toContainText(
-    'malformed sheet content at blocks[0].wiring',
+    'malformed sheet content at blocks[0].nodes',
   );
   await expect(page.locator('.usheets .dev', { hasText: 'empty-wiring' })).toHaveCount(0);
 
   // And again after a reload, which restores the sheet through the same sanitizer.
   await page.reload();
-  await expect(page.locator('.sheet .pwarn', { hasText: 'wiring' })).toContainText('delta');
+  await expect(page.locator('.sheet .pwarn', { hasText: 'wiring' })).toContainText(
+    'does not close',
+  );
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a format this app does not read is refused at import, and a stored copy opens with the refusal alone', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // A document a later build wrote: its JSON is fine, so the refusal says what is wrong with it —
+  // the format — and nothing about malformed content or a stored copy that an import never made.
+  const future = {
+    title: 'From a later build',
+    polarity: 'n',
+    formatVersion: 3,
+    params: [],
+    equations: [],
+    checks: [],
+    wires3: { x: 1 },
+  };
+  const load = page.locator('.load input[type=file]');
+  const file = (name: string, doc: object) => ({
+    name,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(doc)),
+  });
+  const sentence =
+    'format version 3 is not one this app reads (it reads documents with no format version, and ' +
+    'format version 2)';
+  await load.setInputFiles(file('future.json', future));
+  const refusal = page.locator('.qa.error');
+  await expect(refusal).toContainText(`${sentence} — nothing was imported`);
+  await expect(refusal).not.toContainText('malformed');
+  await expect(refusal).not.toContainText('stored copy');
+
+  // A child in that format, embedded in a sheet this app reads, refuses the whole import alike.
+  await load.setInputFiles(
+    file('nested-future.json', {
+      title: 'Parent of a later child',
+      polarity: 'n',
+      formatVersion: 2,
+      nodes: 'none',
+      params: [],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'a', doc: future }],
+    }),
+  );
+  await expect(refusal).toContainText(`block "a": ${sentence} — nothing was imported`);
+  await expect(refusal).not.toContainText('malformed');
+  await expect(page.locator('.usheets .dev')).toHaveCount(0);
+
+  // A copy a later build stored is kept as stored. Its menu entry names its format, not its title,
+  // and the panel opened on it shows the refusal and reads nothing else from it.
+  await page.evaluate(
+    (doc) => localStorage.setItem('gmid.sheets.v2', JSON.stringify([{ name: 'future', doc }])),
+    future,
+  );
+  await page.reload();
+  await loadDemo(page);
+  await expect(page.locator('.usheets .dev', { hasText: 'future' })).toBeVisible();
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.shead select.rm option', { hasText: sentence })).toHaveCount(1);
+  await expect(
+    sp.locator('.shead select.rm option', { hasText: 'From a later build' }),
+  ).toHaveCount(0);
+  await pickSheet(sp, sentence);
+  const shown = sp.locator('[data-refused]');
+  await expect(shown).toContainText(sentence);
+  await expect(shown).toContainText('a stored copy is kept as it was stored');
+  await expect(sp.locator('.feasb')).toHaveCount(0);
+  await expect(sp.locator('.sheet strong')).toHaveCount(0);
 
   expect(errors).toEqual([]);
 });

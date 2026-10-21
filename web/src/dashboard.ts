@@ -18,10 +18,15 @@ import {
   CHECK_KEYS,
   BLOCK_KEYS,
   RANGE_END_KEYS,
-  WIRING_KEYS,
   CHECK_KINDS,
   CHECK_OPS,
   PARAM_CLASSES,
+  carriedBlockWiring,
+  carriedConvention,
+  carriedDocWiring,
+  cloneDoc,
+  EARLIER_BLOCK_KEYS,
+  sheetFormat,
   type ParamClass,
   type DeviceTable,
   type SheetDoc,
@@ -30,7 +35,6 @@ import {
   type SheetCheck,
   type SheetGivens,
   type SheetBlock,
-  type SheetWiring,
   type SheetRangeEnd,
   conditionKeyId,
   conditionKeyOf,
@@ -329,6 +333,15 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // is kept so the validator still sees a non-empty `blocks` at the cap and raises its
   // depth error rather than the truncation reading as a shallower (silently valid) tree.
   if (depth > MAX_BLOCK_DEPTH + 1) return undefined;
+  // A document in a format this app does not read is kept exactly as it was stored: rebuilding it
+  // key by key would drop whatever the newer format added and keep a version number that no longer
+  // describes the result. The reason is recorded, so an import refuses it; a restored copy opens
+  // with the same reason and is not evaluated (validation and evaluation both stop at it).
+  const format = sheetFormat(v);
+  if (format.format === 'unknown') {
+    lost?.push(`formatVersion: ${format.reason}`);
+    return cloneDoc(v as SheetDoc);
+  }
   // Earlier spellings of the keys are brought up to the current ones FIRST, before anything
   // below counts an unknown key or a lost piece — an older document must load, not be refused
   // key by key. A key written in both spellings is ambiguous, so that document is refused.
@@ -358,12 +371,16 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   // mechanism that silently ate a legal fT given (and would have eaten `designConstraint` and
   // `diode`) on reload, and the same hole stayed open on the doc, params, equations, checks and
   // blocks.
+  // A key no format reads any more (`kept`) is not lost: it is carried as stored (see the block
+  // below), so validation names the migration it needs.
   const unknownKeys = (
     obj: Record<string, unknown>,
     keys: ReadonlySet<string>,
     at: string,
+    kept: readonly string[] = [],
   ): void => {
-    for (const k of Object.keys(obj)) if (!keys.has(k)) lost?.push(`${at}${k}`);
+    for (const k of Object.keys(obj))
+      if (!keys.has(k) && !kept.includes(k)) lost?.push(`${at}${k}`);
   };
   for (const k of [
     'params',
@@ -425,6 +442,9 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         if (typeof pp.class === 'string' && PARAM_CLASSES.has(pp.class))
           out.class = pp.class as ParamClass;
         else dropField(pp.class !== undefined, `params[${i}].class`);
+        // The axis-sign marker: dropping it would turn a sign the wiring check reads as the table's
+        // axis direction back into an unknown product.
+        Object.assign(out, carriedConvention(pp, `params[${i}].`, lost));
         return [out];
       })
     : [];
@@ -516,7 +536,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         const uu = u as Record<string, unknown>;
         if (typeof uu.name !== 'string' || !uu.name) return drop(`blocks[${i}]`);
         // The block ITSELF only; `params` maps author-chosen param names, which no key set knows.
-        unknownKeys(uu, BLOCK_KEYS, `blocks[${i}].`);
+        // The gate `wiring` written before the netlist is read by no format, and is kept as stored:
+        // dropped here, a stored copy would reload with nothing to say how to migrate it, while
+        // kept, validation refuses it with the migration (its wires are `nodes` in format 2).
+        unknownKeys(uu, BLOCK_KEYS, `blocks[${i}].`, EARLIER_BLOCK_KEYS);
         const childLost: string[] = [];
         const childDoc = sanitizeSheet(uu.doc, depth + 1, childLost);
         // A child refused outright keeps its reason (a key in two spellings) beside its path.
@@ -541,30 +564,12 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
           const ov = strMap(uu.params as Record<string, unknown>, `blocks[${i}].params`);
           if (Object.keys(ov).length) block.params = ov;
         } else if (uu.params !== undefined) lost?.push(`blocks[${i}].params`);
-        // Gate wiring: an OBJECT of expression strings on a block whose other members are plain
-        // strings, so a pass that rebuilds field by field deletes it — and the consistency check
-        // the declaration exists for silently stops running on every reload, which is the one
-        // thing that check is there to prevent. Same stakes as `designConstraint` and the diode
-        // flag.
-        if (uu.wiring && typeof uu.wiring === 'object' && !Array.isArray(uu.wiring)) {
-          const w = uu.wiring as Record<string, unknown>;
-          // ONE keyed walk, exactly like the givens sanitizer above: each key checked against the
-          // core's own set, anything unrecognized or non-string recorded once. Written through an
-          // index view because the members are assigned by name.
-          const into: Record<string, string> = {};
-          for (const k of Object.keys(w)) {
-            if (WIRING_KEYS.has(k) && typeof w[k] === 'string') into[k] = w[k] as string;
-            else dropField(true, `blocks[${i}].wiring.${k}`);
-          }
-          // A HALF-declaration is carried through rather than completed or deleted: validateSheet
-          // raises a visible "half-written wiring" error the author can fix, whereas dropping the
-          // surviving half here would silently retire the check. A declaration that survives with
-          // NOTHING — `{}`, or only keys this rejected — is recorded as lost for the same reason:
-          // it is a structural error the core would name, and a sheet must never reload cleaner
-          // than the core reads it.
-          if (Object.keys(into).length) block.wiring = into as unknown as SheetWiring;
-          else lost?.push(`blocks[${i}].wiring`);
-        } else if (uu.wiring !== undefined) lost?.push(`blocks[${i}].wiring`);
+        // The wires the child's device sits on, and the child's port map: carried by the core's own
+        // walk, so the keys the netlist adds are known in one place.
+        Object.assign(block, carriedBlockWiring(uu, `blocks[${i}].`, lost));
+        for (const k of EARLIER_BLOCK_KEYS)
+          if (uu[k] !== undefined)
+            (block as unknown as Record<string, unknown>)[k] = JSON.parse(JSON.stringify(uu[k]));
         return [block];
       })
     : [];
@@ -610,6 +615,9 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
     ...(blocks.length ? { blocks } : {}),
     ...(provide.length ? { provides: provide } : {}),
     ...(rangeEnds.length ? { operatingRange: rangeEnds } : {}),
+    // The format version and the netlist (nodes, levels, elements, ports, analyses), carried by the
+    // core's own walk for the reason the key sets above are the core's.
+    ...carriedDocWiring(o, lost),
   };
 }
 

@@ -21,7 +21,8 @@ import { describe, it, expect } from 'vitest';
 import { createEngine } from '../expr';
 import { generateDemoDevice, scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
-import { runSheet, validateSheet, withParams, WIRING_TOL } from './index';
+import { runSheet, validateSheet, withParams } from './index';
+import { NODE_TOL, placementsOf, wiringRefusal } from './nodes';
 import { resolveSheetRefs } from './resolve';
 import {
   clampedIn,
@@ -229,20 +230,38 @@ describe('sheet library: vetting lints', () => {
     // its size and the tail node is re-solved for the new common mode; the cascode nodes are
     // re-solved too, each under its own gate. The check is the definition: node plus (for an
     // N cascode) or minus (for a P one) the cascode's gate-source voltage at the range end
-    // equals what that expression came to at the design point.
-    const cases: [string, Record<string, [string, 1 | -1]>][] = [
-      ['otas/telescopic-cascode-ota.json', { V_a: ['casc_n', 1], V_b: ['casc_p', -1] }],
-      ['otas/folded-cascode-ota.json', { V_c: ['ncasc', 1], V_fold: ['pcasc', -1] }],
+    // equals what that expression came to at the design point. The diode side's cascodes share
+    // those two gates, so the nodes under them land on the same gate voltages; the split of the
+    // tail current is solved again with them.
+    const cases: [string, Record<string, [string, 1 | -1, string]>][] = [
+      [
+        'otas/telescopic-cascode-ota.json',
+        {
+          V_a: ['casc_n', 1, 'V_a'],
+          V_b: ['casc_p', -1, 'V_b'],
+          V_ar: ['casc_nr', 1, 'V_a'],
+          V_br: ['casc_pr', -1, 'V_b'],
+        },
+      ],
+      [
+        'otas/folded-cascode-ota.json',
+        {
+          V_c: ['ncasc', 1, 'V_c'],
+          V_fold: ['pcasc', -1, 'V_fold'],
+          V_c_r: ['ncasc_r', 1, 'V_c'],
+          V_fold_r: ['pcasc_r', -1, 'V_fold'],
+        },
+      ],
     ];
     for (const [file, gates] of cases) {
       const res = runSheet(sheet(file), table, undefined, REFS);
       const end = res.rangeEnds?.find((e) => e.name === 'cm-lo');
       expect(Object.keys(end?.solved ?? {}).sort()).toEqual(
-        [...Object.keys(gates), 'V_tail'].sort(),
+        [...Object.keys(gates), 'V_tail', 'out_share'].sort(),
       );
-      for (const [node, [device, sign]] of Object.entries(gates)) {
+      for (const [node, [device, sign, gate]] of Object.entries(gates)) {
         const vgs = Math.abs(end!.blocks!.find((c) => c.name === device)!.sizing!.vgs);
-        expect(end!.solved[node] + sign * vgs).toBeCloseTo(res.held![node], 5);
+        expect(end!.solved[node] + sign * vgs).toBeCloseTo(res.held![gate], 5);
       }
     }
   });
@@ -289,6 +308,21 @@ describe('sheet library: vetting lints', () => {
         .map((p) => p.name);
       expect([file, holds.sort()]).toEqual([file, Object.keys(HELD_UNDER[file] ?? {}).sort()]);
       if (!holds.length) continue;
+      // The netlist states the same gate: the device's gate wire is held at exactly the hold
+      // expression, the level the hold keeps fixed where the design is held. A device placed twice
+      // holds each placement's gate wire there — one wire for two cascodes on one gate, two for a
+      // differential pair's inputs.
+      for (const [node, device] of Object.entries(HELD_UNDER[file])) {
+        const hold = doc.params.find((p) => p.name === node)!.hold;
+        const placed = placementsOf(
+          device ? doc.blocks?.find((u) => u.name === device)?.nodes : doc.nodes,
+        )!;
+        const held = Object.fromEntries(placed.map((n) => [n.g, hold]));
+        const levels = Object.fromEntries(
+          Object.entries(doc.levels ?? {}).filter(([w]) => placed.some((n) => n.g === w)),
+        );
+        expect([file, node, levels]).toEqual([file, node, held]);
+      }
       const res = runSheet(doc, withBody, undefined, REFS);
       for (const [node, device] of Object.entries(HELD_UNDER[file])) {
         const block = doc.blocks?.find((u) => u.name === device);
@@ -1085,34 +1119,152 @@ describe('exemplar goldens: 5T OTA', () => {
   });
 });
 
-// What a gate-wiring declaration reports on the library. Both sheets that carry one derive the
-// node it names from the device that owns it, so the declaration re-states an identity: it is
-// silent while the identity holds, and it reports the residual the moment a device is read
-// anywhere else. Locked here so that a sheet losing either behaviour shows up as a test failure
-// rather than as silence.
-describe('what the gate-wiring check reports on the library at its shipped defaults', () => {
-  const wiringWarnings = (res: SheetResult): string[] =>
-    res.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location ?? '');
+// Every library sheet names its wiring in the netlist format, or says it is not a circuit. The
+// netlist describes what the sheet already states — which wire each terminal of each sized device
+// sits on, which wires the sheet holds — and the DC wiring check reads it after sizing: the loops
+// the statements close, the currents at each wire, and whether a device placed twice sits at one
+// operating point. Nothing it derives feeds back into the design, so a sheet that names its wiring
+// evaluates to the numbers it would without it.
+describe('sheet library: the netlist', () => {
+  // The sheets that size one device inside an abstraction rather than in a circuit: a budget or
+  // application sheet that stands a single device in for a block (an integrator, a pass device, a
+  // comparator, a switch measured at a test bias), and the rail-to-rail input stage, which sizes its
+  // two pairs at stated drain-source voltages with the tails, the common mode and the summing
+  // circuit off the sheet. Written down by reading each sheet, not read off the files.
+  const NOT_A_CIRCUIT = [
+    'applications/gm-c-filter-pole.json',
+    'applications/ldo-pass-device-error-amp.json',
+    'applications/preamp-latch-comparator.json',
+    'applications/sc-settling-to-ota-spec.json',
+    'applications/strongarm-comparator.json',
+    'applications/track-and-hold-budget.json',
+    'multistage/rail-to-rail-input-stage.json',
+    'stages/sampling-switch.json',
+  ];
+  const RESOLVED = LIBRARY.map(({ file, doc }) => ({ file, doc: resolveSheetRefs(doc, REFS).doc }));
 
-  /** The residual the engine ITSELF reported for one block, in volts — read back out of the
-   *  finding rather than recomputed alongside it, so what is asserted is the number a designer
-   *  reads, arithmetic and all. */
-  const reportedDelta = (res: SheetResult, block: string): number => {
-    const found = res.warnings.filter((w) => w.rule === 'sheet-wiring' && w.location === block);
-    expect(found).toHaveLength(1);
-    const m = /delta (-?[\d.]+e[+-]\d+) V/.exec(found[0].message);
-    expect(m).not.toBeNull();
-    return Number((m as RegExpExecArray)[1]);
-  };
+  it('every sheet is in the netlist format, and either names its wiring or says it is not a circuit', () => {
+    const off: string[] = [];
+    for (const { file, doc } of LIBRARY) {
+      if (doc.formatVersion !== 2) off.push(`${file}: formatVersion ${String(doc.formatVersion)}`);
+      const wired = placementsOf(doc.nodes) || (doc.blocks ?? []).some((u) => u.nodes || u.ports);
+      if (doc.nodes !== 'none' && !wired) off.push(`${file}: names no wiring`);
+      if (doc.nodes === 'none' && (doc.levels || doc.elements || doc.ports))
+        off.push(`${file}: is not a circuit and carries wiring`);
+    }
+    expect(off).toEqual([]);
+    // The sheets that declare no circuit are exactly the abstractions listed above.
+    const none = LIBRARY.filter(({ doc }) => doc.nodes === 'none').map(({ file }) => file);
+    expect(none.sort()).toEqual([...NOT_A_CIRCUIT].sort());
+  });
 
+  it('no sheet carries the earlier gate wiring: a gate tie is a wire two gates share', () => {
+    const carried: string[] = [];
+    for (const { file, doc } of LIBRARY)
+      walkDocs(doc, file, (d, path) => {
+        for (const u of d.blocks ?? []) if ('wiring' in u) carried.push(`${path}.${u.name}`);
+      });
+    expect(carried).toEqual([]);
+  });
+
+  it('no sheet leaves a sized device unwired', () => {
+    const refused = RESOLVED.flatMap(({ file, doc }) =>
+      wiringRefusal(doc).map((w) => `${file}: ${w.message}`),
+    );
+    expect(refused).toEqual([]);
+  });
+
+  it('every circuit closes on the demo device, at its defaults and at every end of its range', () => {
+    // Clean means every loop closes within NODE_TOL, every wire's currents balance, no wire
+    // floats, and a device placed twice sits at one operating point. A sheet that is not a circuit
+    // reports that the check does not apply, and raises nothing.
+    const states: string[] = [];
+    const raised: string[] = [];
+    for (const { file, doc, res } of EVALUATED) {
+      if (!res) continue; // an evaluation that threw already fails its own contract test
+      const want = doc.nodes === 'none' ? 'not-applicable' : 'checked-clean';
+      if (res.nodes?.state !== want)
+        states.push(`${file}: ${res.nodes?.state ?? 'no wiring report'}`);
+      // A range end re-runs the check on the design held there; what it finds rides its warnings.
+      // An end the solve gives no answer at (a common mode this table cannot produce) landed
+      // nowhere, so there is no operating point there to check.
+      const runs = [
+        { at: 'defaults', warnings: res.warnings },
+        ...(res.rangeEnds ?? [])
+          .filter((e) => e.state !== 'no-answer')
+          .map((e) => ({ at: e.name, warnings: e.warnings })),
+      ];
+      for (const { at, warnings } of runs)
+        for (const w of warnings)
+          if (w.rule === 'sheet-nodes') raised.push(`${file} @ ${at}: ${w.message}`);
+    }
+    expect(states).toEqual([]);
+    expect(raised).toEqual([]);
+  });
+
+  it('a wrong wire and a placement list at two operating points are each reported', () => {
+    // Two breaks made on copies, never on the files. Not vacuous: the clean verdicts above come
+    // from a check that does report a netlist that is not the circuit.
+    const rewired = (file: string, block: string, nodes: unknown): SheetDoc => {
+      const doc = sheet(file);
+      return {
+        ...doc,
+        blocks: doc.blocks!.map((u) => (u.name === block ? { ...u, nodes } : u)),
+      } as SheetDoc;
+    };
+    const nodesWarnings = (r: SheetResult): string[] =>
+      r.warnings.filter((w) => w.rule === 'sheet-nodes').map((w) => w.message);
+    // The 5T's diode-side pair transistor with its drain on the output instead of the load's diode
+    // node: its drain-source voltage puts that node one load gate-source voltage below the supply,
+    // and the output is held at V_out_dc, so the loop misses by the difference.
+    const wrong = runSheet(
+      rewired('otas/five-transistor-ota.json', 'inr', { d: 'out', g: 'vinp', s: 'tail', b: 'gnd' }),
+      table,
+      undefined,
+      REFS,
+    );
+    expect(wrong.nodes!.state).toBe('checked-with-findings');
+    const vdd = wrong.values.VDD;
+    const miss = vdd - Math.abs(wrong.values.ldr__vgs) - wrong.values.V_out_dc;
+    expect(miss).toBeGreaterThan(NODE_TOL);
+    expect(relErr(wrong.nodes!.closureError, miss)).toBeLessThan(1e-6);
+    expect(nodesWarnings(wrong).some((m) => m.startsWith('the wiring does not close'))).toBe(true);
+    // The gain-boosted OTA's pair placed twice, with the second transistor's drain moved onto the
+    // PMOS internal node: one sizing then claims two drain-source voltages. The loop through that
+    // drain does not close, and the placements cannot be shown at one operating point.
+    const split = runSheet(
+      rewired('otas/gain-boosted-cascode-ota.json', 'in', [
+        { d: 'a', g: 'vinn', s: 'tail', b: 'gnd' },
+        { d: 'br', g: 'vinp', s: 'tail', b: 'gnd' },
+      ]),
+      table,
+      undefined,
+      REFS,
+    );
+    expect(split.nodes!.state).toBe('checked-with-findings');
+    expect(split.nodes!.placements.find((p) => p.device === 'in')).toEqual({
+      device: 'in',
+      shared: false,
+      reason: expect.stringMatching(/cannot be shown to share one operating point/),
+    });
+    const vds = split.values.V_a - split.values.V_tail;
+    const drop = split.values.V_b - split.values.V_tail;
+    expect(relErr(split.nodes!.closureError, drop - vds)).toBeLessThan(1e-6);
+    expect(nodesWarnings(split).some((m) => m.startsWith('the wiring does not close'))).toBe(true);
+  });
+});
+
+// What the wiring check reports on the library where a sheet states one wire two ways. The CMOS
+// inverter's two gates share the input wire: the NMOS's gate-source voltage is the input level,
+// and the PMOS is handed the gate-source voltage the supply leaves above it, so the loop through
+// the two gates and the two rails closes by construction — until the PMOS is read somewhere else.
+describe('what the wiring check reports on the library at its shipped defaults', () => {
   it('the CMOS inverter ties its two gates, and reports only a gate read off the table', () => {
     const doc = sheet('stages/cmos-inverter-amp.json');
     const res = runSheet(doc, table);
-    // One gate and one current. The NMOS is sized for gm/ID 7, so its gate-source voltage is the
-    // input level; the PMOS is handed the NMOS's current at the gate-source voltage the supply
-    // leaves above that level. On the demo table gm/ID 7 at 0.5 µm takes 0.70691 V (the model's
-    // gm/ID curve, inverted), and the PMOS's gate lands on the same node to rounding, so the
-    // declaration on it re-states the tie and reports nothing.
+    // The NMOS is sized for gm/ID 7, so its gate-source voltage is the input level; on the demo
+    // table gm/ID 7 at 0.5 µm takes 0.70691 V (the model's gm/ID curve, inverted). The input wire
+    // is reported at that level, derived along the NMOS's gate.
     let [lo, hi] = [VGS_GMID8_L05, 1.2];
     for (let i = 0; i < 60; i++) {
       const mid = (lo + hi) / 2;
@@ -1121,7 +1273,8 @@ describe('what the gate-wiring check reports on the library at its shipped defau
     }
     expect(relErr(res.values.V_in, lo)).toBeLessThan(1e-3);
     expect(relErr(res.values.V_in_p, res.values.V_in)).toBeLessThan(1e-12);
-    expect(wiringWarnings(res)).toEqual([]);
+    expect(res.nodes!.state).toBe('checked-clean');
+    expect(relErr(res.nodes!.levels.in.level, res.values.V_in)).toBeLessThan(1e-12);
     // The two advisory checks read V_in on the right: the trip point, where the input level
     // equals the 0.9 V output level, and the tie. A '==' margin is (tolPct/100)*|rhs| - |lhs -
     // rhs|. This table's thresholds are low, so the input sits 193 mV under the trip point and
@@ -1138,23 +1291,26 @@ describe('what the gate-wiring check reports on the library at its shipped defau
       res.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
     ).toEqual(['gain-spec']);
     // At gm/ID 12 the input level falls to vgs(12) and the PMOS would need 1.8 − 0.567 = 1.233 V,
-    // past the 1.2 V the table sweeps. It is read at the table's edge, and the declaration says
-    // so: the PMOS's gate sits that far off the shared node, and nothing else reports it.
+    // past the 1.2 V the table sweeps. It is read at the table's edge, so the loop through the two
+    // gates misses by the difference between the input level and 1.8 − 1.2 V, and the check says so.
     const strong = runSheet(withParams(doc, { gm_id_n: 12 }), table);
     expect(relErr(strong.values.V_in, VGS_GMID12_L05)).toBeLessThan(1e-3);
-    expect(wiringWarnings(strong)).toEqual(['p']);
-    expect(relErr(reportedDelta(strong, 'p'), strong.values.V_in - (1.8 - 1.2))).toBeLessThan(1e-3);
-    expect(reportedDelta(strong, 'p')).toBeLessThan(-WIRING_TOL);
+    expect(strong.nodes!.state).toBe('checked-with-findings');
+    const [dispute] = strong.nodes!.disputes;
+    expect(relErr(dispute.closureError, 1.8 - 1.2 - strong.values.V_in)).toBeLessThan(1e-6);
+    expect(dispute.closureError).toBeGreaterThan(NODE_TOL);
+    expect(dispute.relations).toEqual(expect.arrayContaining(['n.gs', 'p.gs']));
   });
 
   it('the flipped voltage follower derives its internal node instead of declaring one', () => {
     const res = runSheet(sheet('multistage/flipped-voltage-follower.json'), table);
     // Node X is the feedback device's gate above its grounded source, so the node IS that
     // device's own sized gate-source voltage — vgs(10) on the demo table — and the input device's
-    // drain-source voltage is what is left of it above the output. Nothing is typed, so the
-    // declaration re-states an identity and reports nothing.
+    // drain-source voltage is what is left of it above the output. The netlist puts both on one
+    // wire, and the loop through it closes.
     expect(relErr(res.values.V_x, VGS_GMID10_L05)).toBeLessThan(1e-3);
-    expect(wiringWarnings(res)).toEqual([]);
+    expect(res.nodes!.state).toBe('checked-clean');
+    expect(relErr(res.nodes!.levels.x.level, res.values.V_x)).toBeLessThan(1e-9);
     expect(res.feasible).toBe(true);
   });
 });

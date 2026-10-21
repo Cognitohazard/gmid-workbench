@@ -98,7 +98,8 @@
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis"
+      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis",
+      "convention": "axis-sign"
     }
   ],
   "blocks": [
@@ -138,7 +139,8 @@
         "L_i": "L",
         "gm_id_i": "gm_id_in",
         "vds_i": "V_x"
-      }
+      },
+      "nodes": { "d": "x", "g": "in", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "load",
@@ -182,7 +184,8 @@
         "L_l": "L_load",
         "gm_id_l": "gm_id_load",
         "vds_l": "load_sign*(VDD - V_out)"
-      }
+      },
+      "nodes": { "d": "out", "g": "vbp", "s": "vdd", "b": "vdd" }
     }
   ],
   "givens": {
@@ -259,5 +262,9 @@
       "note": "input gm over the load capacitance"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "vcasc", "s": "x", "b": "gnd" },
+  "levels": { "vdd": "VDD", "out": "V_out", "vcasc": "V_x + vgs" },
+  "ports": ["in", "vbp"]
 }

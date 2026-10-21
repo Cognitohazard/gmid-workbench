@@ -1,6 +1,6 @@
 {
   "title": "Beta-multiplier bias",
-  "description": "The constant-$g_m$ (beta-multiplier) self-biased reference. A top current mirror forces equal currents down two legs; the bottom devices are a diode-connected small device and a K-times-wider device with a source resistor $R_{bias}$. Because both carry the same current but the wide device runs at a lower current density, the wide device needs less gate-source voltage, and the difference is dropped across $R_{bias}$. Setting that up makes the reference's transconductance depend only on the resistor and the ratio, not on the current or the process: the square-law hand identity is $g_m = (2/R_{bias})*(1 - 1/\\sqrt{K_{bm}})$. Like a Widlar, the loop is a fixed point this sheet CHECKS rather than solves: you pick the current and resistor and a requirement tests that the gate-source difference equals $I_{bias}*R_{bias}$, tuning until it closes. The $g_m$ identity is offered as a guardrail, an estimate, because it comes from the square-law model while the lookup $g_m$ is the truth; the guardrail shows how far the classic formula is off at this inversion level. The circuit has a second, zero-current stable state, so a startup subcircuit is required in practice; it is a simulation-only concern and is not sized here. The resistor-side device's source sits $I_{bias}*R_{bias}$ above ground, declared as its $V_{SB}$.",
+  "description": "The constant-$g_m$ (beta-multiplier) self-biased reference. A top current mirror forces equal currents down two legs; the bottom devices are a diode-connected small device and a K-times-wider device with a source resistor $R_{bias}$. Because both carry the same current but the wide device runs at a lower current density, the wide device needs less gate-source voltage, and the difference is dropped across $R_{bias}$. Setting that up makes the reference's transconductance depend only on the resistor and the ratio, not on the current or the process: the square-law hand identity is $g_m = (2/R_{bias})*(1 - 1/\\sqrt{K_{bm}})$. Like a Widlar, the loop is a fixed point with one unknown, and the sheet solves it: you pick the resistor, the ratio and the diode device's inversion level, and the engine searches $I_{bias}$ between its min and max for the current at which the gate-source difference equals $I_{bias}*R_{bias}$. It is one named unknown searched in a stated range, not a nodal solve; the fixed-point rule reports the identity the search makes hold, and the search range starts above zero, so it finds the operating state and never the zero-current one. The $g_m$ identity is offered as a guardrail, an estimate, because it comes from the square-law model while the lookup $g_m$ is the truth; the guardrail shows how far the classic formula is off at this inversion level. The circuit has a second, zero-current stable state, so a startup subcircuit is required in practice; it is a simulation-only concern and is not sized here. The resistor-side device's source sits $I_{bias}*R_{bias}$ above ground, declared as its $V_{SB}$.",
   "polarity": "n",
   "params": [
     {
@@ -10,7 +10,8 @@
       "max": 100e-6,
       "unit": "A",
       "role": "choice",
-      "note": "loop current in each leg; set by the resistor and ratio, so CHECK the fixed point rather than treat this as free"
+      "solveFor": "delta_vgs/R_bias",
+      "note": "loop current in each leg, set by the resistor and the ratio: the current at which the gate-source step from the diode device to the resistor-side device equals the drop that current develops across R_bias. Solved, not set: the engine searches for it between min and max, so the stored value is never read"
     },
     {
       "name": "K_bm",
@@ -28,7 +29,8 @@
       "max": 100000,
       "unit": "ohm",
       "role": "choice",
-      "note": "the bias resistor; sets the reference transconductance"
+      "note": "the bias resistor; sets the reference transconductance",
+      "class": "independent"
     },
     {
       "name": "VDD",
@@ -94,7 +96,8 @@
         "I1": "I_bias",
         "L1": "L",
         "gm_id_1": "gm_id_bm"
-      }
+      },
+      "nodes": { "d": "ngate", "g": "ngate", "s": "gnd", "b": "gnd" }
     }
   ],
   "givens": {
@@ -122,7 +125,7 @@
       "name": "vgs_drop",
       "expr": "I_bias*R_bias",
       "unit": "V",
-      "note": "the gate-source step the resistor must produce for the loop to close"
+      "note": "the gate-source step the resistor develops at the loop current"
     }
   ],
   "checks": [
@@ -141,7 +144,7 @@
       "op": "==",
       "rhs": "vgs_drop",
       "tolPct": 3,
-      "note": "the constant-gm loop equation V_GS1 - V_GS2 = I_bias*R_bias, checked not solved; tune I_bias/R_bias until it closes"
+      "note": "the constant-gm loop equation V_GS1 - V_GS2 = I_bias*R_bias. The search on I_bias makes it hold, so this rule is the identity that search solves: it fails only where the search did not settle"
     },
     {
       "id": "gm-identity",
@@ -153,5 +156,10 @@
       "note": "the classic square-law gm = (2/R)(1 - 1/sqrt(K)); the LUT gm is the truth, so this shows how far the hand formula drifts at this inversion. Estimate-grade"
     }
   ],
-  "provides": ["gm_target"]
+  "provides": ["gm_target"],
+  "formatVersion": 2,
+  "nodes": { "d": "dm2", "g": "ngate", "s": "src", "b": "gnd" },
+  "levels": { "dm2": "V_dm2" },
+  "elements": [{ "name": "rbias", "kind": "R", "between": ["src", "gnd"], "value": "R_bias" }],
+  "ports": ["ngate"]
 }

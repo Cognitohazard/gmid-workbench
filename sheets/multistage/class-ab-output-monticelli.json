@@ -64,7 +64,8 @@
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign of the PMOS device table: +1 for the N-style demo axis, -1 for a signed-PMOS axis"
+      "note": "vds sign of the PMOS device table: +1 for the N-style demo axis, -1 for a signed-PMOS axis",
+      "convention": "axis-sign"
     }
   ],
   "blocks": [
@@ -93,7 +94,8 @@
         ],
         "provides": ["gm", "id", "vgs", "vdsat", "gds"]
       },
-      "params": { "Ix": "I_q", "Lx": "L_n", "gx": "gm_id_n", "vx": "V_out" }
+      "params": { "Ix": "I_q", "Lx": "L_n", "gx": "gm_id_n", "vx": "V_out" },
+      "nodes": { "d": "out", "g": "gn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "mp",
@@ -126,7 +128,8 @@
         ],
         "provides": ["gm", "id", "vgs", "vdsat", "gds"]
       },
-      "params": { "Ix": "mn__id", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*(VDD - V_out)" }
+      "params": { "Ix": "mn__id", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*(VDD - V_out)" },
+      "nodes": { "d": "out", "g": "gp", "s": "vdd", "b": "vdd" }
     }
   ],
   "equations": [
@@ -186,5 +189,8 @@
       "note": "the rail-to-rail output swing meets the target"
     }
   ],
-  "provides": ["Rout", "I_q"]
+  "provides": ["Rout", "I_q"],
+  "formatVersion": 2,
+  "levels": { "vdd": "VDD", "out": "V_out" },
+  "ports": ["gn", "gp"]
 }

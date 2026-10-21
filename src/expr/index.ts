@@ -53,13 +53,16 @@ interface ConditionalExpression {
   consequent: Node;
   alternate: Node;
 }
-type Node =
+/** The parsed shape of an expression: the node kinds the engine evaluates. Read-only to every
+ *  consumer — a parse may be shared. */
+export type ExprNode =
   | Literal
   | Identifier
   | UnaryExpression
   | BinaryExpression
   | CallExpression
   | ConditionalExpression;
+type Node = ExprNode;
 
 // --- known function names ----------------------------------------------------
 
@@ -116,6 +119,20 @@ function preprocess(src: string): string {
     // sign fused into the rewritten literal.
     return `${pre}(${String(v)})`;
   });
+}
+
+/**
+ * Parse an expression the way the engine does — engineering-notation literals rewritten first, so
+ * `VDD - 100m` is a number subtracted from a name — and return its tree. Throws ExprError where the
+ * parser refuses it. The one parse step every reader of an expression's structure shares.
+ */
+export function parse(src: string): ExprNode {
+  try {
+    return jsep(preprocess(src)) as unknown as ExprNode;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ExprError(`parse error in "${src}": ${msg}`);
+  }
 }
 
 // --- value helpers -----------------------------------------------------------
@@ -193,6 +210,31 @@ const UNARY_IMPL: Readonly<Record<string, (x: number) => number>> = {
   atan: Math.atan,
   sign: Math.sign,
 };
+
+/**
+ * The scalar implementation of a function the engine evaluates — a built-in or a registered one —
+ * for a reader that folds constant calls (the normal form of linear.ts). Called with an argument
+ * count the engine would refuse, it returns NaN; a function name the engine does not know is
+ * undefined.
+ */
+export function scalarFunction(name: string): ((...args: number[]) => number) | undefined {
+  const unary = UNARY_IMPL[name];
+  if (unary && UNARY_FNS.has(name)) return (...x) => (x.length === 1 ? unary(x[0]) : NaN);
+  if (VARIADIC_FNS.has(name))
+    return (...x) => (x.length ? (name === 'min' ? Math.min(...x) : Math.max(...x)) : NaN);
+  if (name === 'par')
+    return (...x) => (x.length >= 2 ? 1 / x.reduce((sum, v) => sum + 1 / v, 0) : NaN);
+  const reg = Object.prototype.hasOwnProperty.call(REGISTERED, name) ? REGISTERED[name] : undefined;
+  if (!reg) return undefined;
+  return (...x) => {
+    if (x.length !== reg.arity) return NaN;
+    try {
+      return reg.impl(...x);
+    } catch {
+      return NaN;
+    }
+  };
+}
 
 // --- evaluation --------------------------------------------------------------
 
@@ -375,13 +417,7 @@ function collectInto(
  */
 export function createEngine(constants: Record<string, number> = { ...CONSTANTS }): ExprEngine {
   function compile(src: string): CompiledExpr {
-    let ast: Node;
-    try {
-      ast = jsep(preprocess(src)) as unknown as Node;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new ExprError(`parse error in "${src}": ${msg}`);
-    }
+    const ast = parse(src);
     const nameSet = new Set<string>();
     const calls = new Map<string, ReadonlySet<string>[]>();
     collectInto(ast, constants, [nameSet], calls);
@@ -418,7 +454,7 @@ export function createEngine(constants: Record<string, number> = { ...CONSTANTS 
 export function additiveCoefficient(src: string, name: string): number | undefined {
   let ast: Node;
   try {
-    ast = jsep(preprocess(src)) as unknown as Node;
+    ast = parse(src);
   } catch {
     return undefined;
   }

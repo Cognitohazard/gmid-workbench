@@ -174,5 +174,7 @@
       "rhs": "tau_budget",
       "note": "the gain's cost: the output pole must still settle in the budget; estimate-grade"
     }
-  ]
+  ],
+  "formatVersion": 2,
+  "nodes": "none"
 }

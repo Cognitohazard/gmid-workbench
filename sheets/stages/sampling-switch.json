@@ -164,5 +164,7 @@
       "note": "estimate-grade charge-injection step; a narrower switch or dummy/bottom-plate sampling reduces it"
     }
   ],
-  "provides": ["Ron"]
+  "provides": ["Ron"],
+  "formatVersion": 2,
+  "nodes": "none"
 }

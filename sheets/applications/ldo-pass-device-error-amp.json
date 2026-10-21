@@ -140,5 +140,7 @@
       "rhs": "A_loop_min",
       "note": "DC loop gain for regulation accuracy; estimate-grade"
     }
-  ]
+  ],
+  "formatVersion": 2,
+  "nodes": "none"
 }

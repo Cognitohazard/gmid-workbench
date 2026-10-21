@@ -3,7 +3,14 @@
   "description": "A K:1 cascode current mirror. Four unit devices: the bottom reference (diode-connected), the reference-branch cascode (diode-connected, stacked on it), the output mirror device, and the output cascode. The cascodes hold the two mirror devices at nearly the same drain voltage, so the channel-length-modulation ($\\lambda$) mismatch between them is small and the systematic ratio error with it. That matched bias is the whole point of cascoding a mirror: unlike the simple mirror, the output current barely moves with the output node voltage. The cost is output compliance: with the cascode gates riding the diode stack, the output cascode's source sits about a full $V_{GS}$ up, so the output must clear roughly $V_{GS} + V_{dsat}$ — a threshold more than the two stacked $V_{dsat}$ a wide-swing bias achieves, and the reason the wide-swing variant exists. Both output devices are unit-device multiples: K times the width of the matching reference device. The output mirror device shares the reference device's gate wire and its ground, so it sits at the reference device's $V_{GS}$, and its current is read off the table at its own drain voltage. The output cascode is in series with it and carries that same current. Its gate is the top of the reference stack, and its source — the node between the two output devices — is solved: it sits where the voltage left between the top of the reference stack and the node is exactly the gate-source voltage the cascode needs to carry that current. That node equals the reference device's diode drop only where the output sits level with the top of the reference stack; elsewhere it settles a few to a few tens of millivolts away, and the systematic-error row reports what that costs. The two reference devices are diode-connected, so their drops are read off the table rather than estimated, and the output devices are biased from what the reference actually sits at. The sheet's own device is the output cascode; the other three are blocks. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
   "polarity": "n",
   "params": [
-    { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
+    {
+      "name": "I_in",
+      "value": 20e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "reference current",
+      "class": "independent"
+    },
     {
       "name": "K",
       "value": 4,
@@ -18,7 +25,8 @@
       "value": 1.8,
       "unit": "V",
       "role": "spec",
-      "note": "supply; the reference diode stack must fit under it"
+      "note": "supply; the reference diode stack must fit under it",
+      "class": "independent"
     },
     {
       "name": "V_out",
@@ -141,7 +149,8 @@
         "I_ref": "I_in",
         "L_r": "L",
         "gm_id_r": "gm_id_m"
-      }
+      },
+      "nodes": { "d": "nref", "g": "nref", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "ref_casc",
@@ -185,7 +194,8 @@
         "L_rc": "L_c",
         "gm_id_rc": "gm_id_c",
         "vsb_rc": "ref__vgs"
-      }
+      },
+      "nodes": { "d": "ncas", "g": "ncas", "s": "nref", "b": "gnd" }
     },
     {
       "name": "out",
@@ -233,7 +243,8 @@
         "vgs_o": "ref__vgs",
         "L_o": "L",
         "vds_o": "k_x*ref__vgs"
-      }
+      },
+      "nodes": { "d": "x", "g": "nref", "s": "gnd", "b": "gnd" }
     }
   ],
   "givens": {
@@ -337,5 +348,9 @@
       "note": "the two stacked diode drops of the reference branch must fit under the supply"
     }
   ],
-  "provides": ["Rout"]
+  "provides": ["Rout"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "ncas", "s": "x", "b": "gnd" },
+  "levels": { "out": "V_out", "vdd": "VDD" },
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "ncas"], "value": "I_in" }]
 }

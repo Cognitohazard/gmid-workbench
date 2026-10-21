@@ -3,7 +3,7 @@
   "description": "The flipped voltage follower (FVF): a source follower whose bias current is held constant by a shunt feedback device, so the input device's gate-source voltage barely moves and the buffer is highly linear with very low output resistance. Because the current through the input device is fixed, its $V_{GS}$ is constant and the output tracks the input with little level-shift variation — the reason the FVF is the workhorse buffer inside low-dropout regulators and switched-capacitor drivers. The feedback device closes a local loop that multiplies the follower's already-low output resistance down to $R_{out} \\approx g_{ds,in}/(g_{m,in}*g_{m,fb})$. This sheet sizes the DC operating point and low-frequency output resistance; the local loop's stability is a small-signal AC check the simulator owns. The branch's internal node is derived rather than declared: node X is the feedback device's gate, one gate-source voltage above its grounded source, and the input device's drain-source voltage is whatever remains of that above the output. Deriving it is also what makes the sheet state the cell's real output ceiling — see V_out. On the demo NMOS table both devices size against the same data.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     {
       "name": "V_out",
       "value": 0.3,
@@ -28,7 +28,8 @@
       "max": 500e-6,
       "unit": "A",
       "role": "choice",
-      "note": "fixed current through the input device — the feedback holds it constant, which is what linearizes the buffer"
+      "note": "fixed current through the input device — the feedback holds it constant, which is what linearizes the buffer",
+      "class": "independent"
     },
     {
       "name": "I_fb",
@@ -87,7 +88,7 @@
         "provides": ["gm", "vgs", "vdsat"]
       },
       "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "V_out" },
-      "wiring": { "gate": "V_x", "source": "0" }
+      "nodes": { "d": "out", "g": "x", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "in",
@@ -128,7 +129,8 @@
         "gx": "gm_id_in",
         "vx": "fb__vgs - V_out",
         "vsbx": "V_out"
-      }
+      },
+      "nodes": { "d": "x", "g": "vin", "s": "out", "b": "gnd" }
     }
   ],
   "equations": [
@@ -194,5 +196,8 @@
       "note": "the supply must cover the output level plus the stacked saturation voltages of the FVF branch"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": { "vin": "V_out + in__vgs", "vdd": "VDD" },
+  "elements": [{ "name": "ix", "kind": "I", "between": ["vdd", "x"], "value": "I_in" }]
 }

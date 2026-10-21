@@ -169,6 +169,7 @@ if (!res.ok) throw new Error(res.errors.map((e) => e.message).join('; '));
 const table = res.dataset.tables[0];
 
 const sheet = {
+  formatVersion: 2,
   title: 'Single NMOS gm/ID sizing',
   polarity: 'n',
   params: [
@@ -178,6 +179,11 @@ const sheet = {
     { name: 'L', value: 0.5e-6, unit: 'm', role: 'choice' },
   ],
   givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.9' },
+  // The wires the device sits on, the wire whose voltage is stated, and the wire left open
+  // for whatever drives the gate. A sheet that is not a circuit declares `nodes: 'none'`.
+  nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+  levels: { out: '0.9' },
+  ports: ['in'],
   equations: [{ name: 'GBW', expr: 'gm/(2*pi*(cgg + CL))', unit: 'Hz' }],
   checks: [{ id: 'inversion', kind: 'physical', lhs: 'gm_id', op: '<=', rhs: 'ceiling' }],
 };
@@ -201,6 +207,21 @@ inlines every reference into a self-contained document:
 const byKey = new Map(res.dataset.tables.map((t) => [t.id.device, t]));
 const refs = buildSheetRefIndex([{ path: 'blocks/cs-load', doc: loadSheet }]);
 runSheet(sheet, table, (id) => byKey.get(id), refs);
+```
+
+A sheet saved before the format carried wiring (no `formatVersion`) is still read, but a
+transistor in it is refused until the sheet names the wires it sits on. The core drafts that
+wiring from the givens; the author reads the draft, corrects what it marks as inferred or
+unknown, and imports the copy:
+
+```js
+import { proposeWiring, applyWiringProposal, formatWiringProposal } from '@gmid/mostab-core';
+import { writeFileSync } from 'node:fs';
+
+const proposal = proposeWiring(oldSheet);
+console.log(formatWiringProposal(proposal)); // each wire marked certain, inferred or unknown
+const migrated = applyWiringProposal(oldSheet, proposal); // a format-version-2 copy; oldSheet is untouched
+writeFileSync('sheet.v2.json', JSON.stringify(migrated, null, 2));
 ```
 
 See [docs/sheet-format.md](docs/sheet-format.md) for the full design-sheet model.

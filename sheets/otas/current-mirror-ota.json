@@ -1,6 +1,6 @@
 {
   "title": "Current-mirror OTA",
-  "description": "A current-mirror OTA, also called a symmetrical OTA or a current-amplifier OTA: the input pair drives diode-connected PMOS mirror loads, and each mirror is copied with ratio $K_m$ to an output branch — one side straight to the output, the other down through a bottom NMOS mirror — so the effective output transconductance is $K_m*g_{m,in}$ to first order. This buys bandwidth and slew almost for free — GBW = $K_m*g_{m,in}/(2*\\pi*C_L)$ and SR = $K_m*I_{tail}/C_L$, to the same order — but not DC gain: raising $K_m$ scales both the output transconductance and the output conductance together, so the low-frequency gain is nearly independent of $K_m$. The mirrors are stated the way the circuit has them: each output device sits on its diode device's gate at a multiple of that device's width, and its current is read from the table at its own drain voltage. Nothing is trimmed to make a copy exact, so the ratios the rows report are $K_m$ moved by each mirror's drain-voltage error, the two output devices do not ask for the same current, and the systematic-offset row reports what that costs. One current is typed — the tail current, into a diode-connected bias reference — and every other device reads another device's current or takes it through a shared gate: the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and each side of the pair, with the PMOS diode device above it, carries half of what the tail delivers. One node is solved besides the tail node: the NMOS diode's, which sits at that diode's own gate-source voltage at the current the PMOS output device above it delivers there. The catch of the topology shows up in noise: to hit a fixed GBW at larger $K_m$ the input pair shrinks ($g_{m,in}$ falls as $1/K_m$), so its input-referred thermal density grows as $\\sqrt{K_m}$. Two mirror nodes carry poles: the PMOS node every branch passes (a full pole), and the bottom NMOS node only the folded branch passes (a pole-zero doublet). Both estimates are shown; settling is sim-owned.",
+  "description": "A current-mirror OTA, also called a symmetrical OTA or a current-amplifier OTA: the input pair drives diode-connected PMOS mirror loads, and each mirror is copied with ratio $K_m$ to an output branch — one side straight to the output, the other down through a bottom NMOS mirror — so the effective output transconductance is $K_m*g_{m,in}$ to first order. This buys bandwidth and slew almost for free — GBW = $K_m*g_{m,in}/(2*\\pi*C_L)$ and SR = $K_m*I_{tail}/C_L$, to the same order — but not DC gain: raising $K_m$ scales both the output transconductance and the output conductance together, so the low-frequency gain is nearly independent of $K_m$. The amplifier is drawn at rest: the feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirrors are stated the way the circuit has them: each output device sits on its diode device's gate at a multiple of that device's width, and its current is read from the table at its own drain voltage. Nothing is trimmed to make a copy exact, so the ratios the rows report are $K_m$ moved by each mirror's drain-voltage error, and the two output devices would not carry the same current if the two sides of the pair did. One current is typed — the tail current, into a diode-connected bias reference — and every other device reads another device's current or takes it through a shared gate: the tail device sits on that reference's gate at that reference's width with the tail node as its drain; the pair's two transistors are one width, and so are the two PMOS diode devices, each side carrying its own share of what the tail delivers. The share is solved so that the currents at the output node balance — the PMOS output device sources exactly what the NMOS one sinks — and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. One node is solved besides the tail node and the share: the NMOS diode's, which sits at that diode's own gate-source voltage at the current the PMOS output device above it delivers there. The catch of the topology shows up in noise: to hit a fixed GBW at larger $K_m$ the input pair shrinks ($g_{m,in}$ falls as $1/K_m$), so its input-referred thermal density grows as $\\sqrt{K_m}$. Two mirror nodes carry poles: the PMOS node every branch passes (a full pole), and the bottom NMOS node only the folded branch passes (a pole-zero doublet). Both estimates are shown; settling is sim-owned.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -21,7 +21,7 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the vds of the two mirror output devices that meet at the output. They push and pull against each other at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here. The two do not ask for the same current at this level, and the systematic-offset row reports what that costs",
+      "note": "output DC level; sets the vds of the two mirror output devices that meet at the output. They push and pull against each other at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here, and the share of the tail current each side of the pair carries is what balances them at this level",
       "class": "independent"
     },
     {
@@ -29,7 +29,7 @@
       "value": 0.95,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.94-1.45 V on sky130 tt at the shipped choices, the low end set by the tail device leaving saturation). The range end checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.96-1.41 V on sky130 tt at the shipped choices, the low end set by the tail device leaving saturation). The range end checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -71,11 +71,22 @@
       "note": "the NMOS diode's node — the gate and drain of the bottom mirror's diode device, and the drain of the PMOS output device that feeds it. Solved, not set: that PMOS device's drain-source voltage is what is left between the supply and this node, the current it delivers there is the current the diode carries, and the diode's own gate-source voltage at that current is this node. The engine searches for the node at which the two agree; the stored value is never read. It is searched between its two neighbours, ground and the 1.8 V supply"
     },
     {
+      "name": "out_share",
+      "value": 0.5,
+      "min": 0.01,
+      "max": 0.99,
+      "unit": "1",
+      "role": "choice",
+      "designConstraint": { "lhs": "moutp__id", "rhs": "moutn__id" },
+      "note": "the share of the tail current the pair transistor on the output-driving side carries at rest — solved, not set. The output is a high-impedance node that the feedback around the amplifier holds at V_out_dc, so in the resting circuit what the PMOS output device sources is exactly what the NMOS output device sinks: the engine searches for the share at which the two are equal, the current law at the output node. The other side carries the rest, so the two add up to what the tail delivers by construction. It is searched between 0.01 and 0.99; the stored value is never read"
+    },
+    {
       "name": "sign_p",
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign convention of the PMOS-side tables: +1 for an N-style axis, -1 for a signed-PMOS axis. Only the two PMOS output devices read it — the diode device's drain follows its own gate in whichever convention its table uses. Read all three PMOS devices from the same table: the gate voltage they share is passed in that table's convention"
+      "note": "vds sign convention of the PMOS-side tables: +1 for an N-style axis, -1 for a signed-PMOS axis. Only the two PMOS output devices read it — a diode device's drain follows its own gate in whichever convention its table uses. Read all four PMOS devices from the same table: the gate voltage they share is passed in that table's convention",
+      "convention": "axis-sign"
     },
     {
       "name": "I_tail",
@@ -84,7 +95,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop). Each side of the pair carries half of what the tail delivers and every mirror output device takes its current through the gate it shares, so transconductance, slew rate and supply current are computed from what the devices deliver, not from this number"
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop). Each side of the pair carries half of what the tail delivers and every mirror output device takes its current through the gate it shares, so transconductance, slew rate and supply current are computed from what the devices deliver, not from this number",
+      "class": "independent"
     },
     {
       "name": "K_m",
@@ -102,7 +114,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "input-pair inversion: sets gm per current and the input-referred noise floor"
+      "note": "input-pair inversion, set on the transistor on the output-driving side; its partner copies its width and carries the rest of the tail current. Sets gm per current and the input-referred noise floor"
     },
     {
       "name": "gm_id_ml",
@@ -111,7 +123,7 @@
       "max": 16,
       "unit": "1/V",
       "role": "choice",
-      "note": "mirror inversion, set on the two diode devices (the PMOS one and the bottom NMOS one) and inherited by each output device through the gate it shares: sets the mirror-node poles, and lower gm/ID gives the output devices a higher output resistance"
+      "note": "mirror inversion, set on the PMOS diode device on the output-driving side and on the bottom NMOS diode, and inherited by each output device through the gate it shares (the other PMOS diode device copies the first one's width): sets the mirror-node poles, and lower gm/ID gives the output devices a higher output resistance"
     },
     {
       "name": "gm_id_tail",
@@ -171,7 +183,8 @@
         "I_b": "I_tail",
         "L_b": "L_tail",
         "gm_id_b": "gm_id_tail"
-      }
+      },
+      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "tail",
@@ -213,20 +226,21 @@
         "vgs_t": "bias__vgs",
         "L_t": "L_tail",
         "vds_t": "V_tail"
-      }
+      },
+      "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "mload",
       "doc": {
-        "title": "Input mirror device (diode)",
-        "description": "Diode-connected mirror load carrying half of what the tail delivers, read from the tail device rather than typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated; its gate node carries the mirror pole. The circuit has one of these on each side of the pair, identical at balance, so this block stands for both. It publishes its width and its gate voltage, which is all a PMOS output device needs to copy it.",
+        "title": "Input mirror device (diode), output-driving side",
+        "description": "Diode-connected mirror load on the side whose mirror drives the output directly, carrying that side's share of what the tail delivers, read from the tail device rather than typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated; its gate node carries the mirror pole. It publishes its width, which the other side's diode device copies, and its gate voltage, which the PMOS output device at the output copies.",
         "polarity": "p",
         "params": [
-          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_m", "value": 10, "unit": "1/V", "role": "choice" }
         ],
-        "givens": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "diode": true },
+        "givens": { "L": "L_m", "id": "I_side", "gm_id": "gm_id_m", "diode": true },
         "equations": [],
         "checks": [
           {
@@ -240,19 +254,20 @@
         "provides": ["gm", "gds", "vgs", "vdsat", "cgg", "W", "vnth_m", "id"]
       },
       "params": {
-        "I_half": "tail__id/2",
+        "I_side": "tail__id*out_share",
         "L_m": "L_mir",
         "gm_id_m": "gm_id_ml"
-      }
+      },
+      "nodes": { "d": "mirp", "g": "mirp", "s": "vdd", "b": "vdd" }
     },
     {
       "name": "in",
       "doc": {
-        "title": "Input-pair device",
-        "description": "Half-circuit input device, carrying half of what the tail delivers; the diode mirror load above it is in the same branch and carries the same current. Its source sits at the tail node — that is its body bias — and its drain one diode drop below the supply, so its drain-source voltage is what is left between the two.",
+        "title": "Input-pair device, output-driving side",
+        "description": "The pair transistor under the output-driving side's diode device, sized at that side's share of what the tail delivers; the diode device above it is in the same branch and carries the same current. Its source sits at the tail node — that is its body bias — and its drain one diode drop below the supply, so its drain-source voltage is what is left between the two. It publishes its width, which its partner copies, and its gate-source voltage, which differs from its partner's by the input offset that holds the output where it is.",
         "polarity": "n",
         "params": [
-          { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
           { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vds_i", "value": 0.77, "unit": "V", "role": "spec" },
@@ -260,7 +275,7 @@
         ],
         "givens": {
           "L": "L_i",
-          "id": "I_half",
+          "id": "I_side",
           "gm_id": "gm_id_i",
           "vds": "vds_i",
           "vsb": "vsb_i",
@@ -279,12 +294,82 @@
         "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
-        "I_half": "tail__id/2",
+        "I_side": "tail__id*out_share",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
         "vds_i": "VDD - abs(mload__vgs) - V_tail",
         "vsb_i": "V_tail"
-      }
+      },
+      "nodes": { "d": "mirp", "g": "vinp", "s": "tail", "b": "gnd" }
+    },
+    {
+      "name": "mload_f",
+      "doc": {
+        "title": "Input mirror device (diode), folded side",
+        "description": "Diode-connected mirror load on the side whose mirror feeds the bottom mirror: the other diode device's width, carrying the rest of what the tail delivers. Its drain is its gate, so the table is read along that diagonal at that current for the gate-source voltage it takes. It publishes its gate voltage, which the PMOS output device feeding the bottom mirror copies.",
+        "polarity": "p",
+        "params": [
+          {
+            "name": "W_m",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the other diode device's width — a matched pair"
+          },
+          { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_m", "value": 0.5e-6, "unit": "m", "role": "choice" }
+        ],
+        "givens": { "L": "L_m", "W": "W_m", "id": "I_side", "diode": true },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "vgs", "cgg", "W", "vnth_m"]
+      },
+      "params": {
+        "W_m": "mload__W",
+        "I_side": "tail__id*(1 - out_share)",
+        "L_m": "L_mir"
+      },
+      "nodes": { "d": "mirn", "g": "mirn", "s": "vdd", "b": "vdd" }
+    },
+    {
+      "name": "in_f",
+      "doc": {
+        "title": "Input-pair device, folded side",
+        "description": "The pair transistor under the folded side's diode device: the other transistor's width, carrying the rest of what the tail delivers. A matched pair is one width, so its width is copied, and its current is given, which makes this a width-and-current sizing: the table is inverted at that current density for the gate-source voltage it takes. Its body bias is the tail node and its drain one diode drop below the supply. Wherever its current differs from its partner's, so does its gate-source voltage, and that difference is the input offset the sheet reports.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_i",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the other transistor's width — a matched pair"
+          },
+          { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "vds_i", "value": 0.77, "unit": "V", "role": "spec" },
+          { "name": "vsb_i", "value": 0.33, "unit": "V", "role": "spec" }
+        ],
+        "givens": {
+          "L": "L_i",
+          "W": "W_i",
+          "id": "I_side",
+          "vds": "vds_i",
+          "vsb": "vsb_i",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "vgs", "vdsat", "vnth_m", "cgg", "id"]
+      },
+      "params": {
+        "W_i": "in__W",
+        "I_side": "tail__id*(1 - out_share)",
+        "L_i": "L_in",
+        "vds_i": "VDD - abs(mload_f__vgs) - V_tail",
+        "vsb_i": "V_tail"
+      },
+      "nodes": { "d": "mirn", "g": "vinn", "s": "tail", "b": "gnd" }
     },
     {
       "name": "moutp",
@@ -332,13 +417,14 @@
         "vgs_o": "mload__vgs",
         "L_o": "L_mir",
         "vds_o": "sign_p*(VDD - V_out_dc)"
-      }
+      },
+      "nodes": { "d": "out", "g": "mirp", "s": "vdd", "b": "vdd" }
     },
     {
       "name": "mfold",
       "doc": {
         "title": "Output mirror device (PMOS side, feeding the bottom mirror)",
-        "description": "The other PMOS mirror's output device: the same $K_m$-wide copy on the diode device's gate, with its drain on the NMOS diode's node instead of at the output. It sits at $V_{DD} - V_{nmir}$, not at the output's drain voltage, so it delivers a different current from the device at the output, and that current is what the bottom mirror is handed. Its drain voltage and the current it delivers there set each other through the NMOS diode below it, which is the one loop this sheet closes.",
+        "description": "The other PMOS mirror's output device: $K_m$ times the folded side's diode device's width on that device's gate, with its drain on the NMOS diode's node instead of at the output. It sits at $V_{DD} - V_{nmir}$, not at the output's drain voltage, so it delivers a different current from the device at the output, and that current is what the bottom mirror is handed. Its drain voltage and the current it delivers there set each other through the NMOS diode below it, which is the one loop this sheet closes.",
         "polarity": "p",
         "params": [
           {
@@ -376,11 +462,12 @@
         "provides": ["gm", "gds", "vdsat", "cgg", "id", "vnth_m"]
       },
       "params": {
-        "W_o": "K_m*mload__W",
-        "vgs_o": "mload__vgs",
+        "W_o": "K_m*mload_f__W",
+        "vgs_o": "mload_f__vgs",
         "L_o": "L_mir",
         "vds_o": "sign_p*(VDD - V_nmir)"
-      }
+      },
+      "nodes": { "d": "nmir", "g": "mirn", "s": "vdd", "b": "vdd" }
     },
     {
       "name": "nmir",
@@ -410,7 +497,8 @@
         "I_o": "mfold__id",
         "L_n": "L_mir",
         "gm_id_n": "gm_id_ml"
-      }
+      },
+      "nodes": { "d": "nmir", "g": "nmir", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "moutn",
@@ -452,15 +540,22 @@
         "vgs_o": "nmir__vgs",
         "L_o": "L_mir",
         "vds_o": "V_out_dc"
-      }
+      },
+      "nodes": { "d": "out", "g": "nmir", "s": "gnd", "b": "gnd" }
     }
   ],
   "equations": [
     {
       "name": "CM_in",
-      "expr": "V_tail + in__vgs",
+      "expr": "V_tail + (in__vgs + in_f__vgs)/2",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two pair transistors' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
+    },
+    {
+      "name": "gm_pair",
+      "expr": "2*in_f__gm*in__gm/(in_f__gm + in__gm)",
+      "unit": "S",
+      "note": "the pair's differential transconductance: a differential input sees the two transistors in series through their common source, so this is the series combination of their two $g_m$, doubled — either transistor's own $g_m$ when the two are equal"
     },
     {
       "name": "Ai_p",
@@ -470,15 +565,15 @@
     },
     {
       "name": "Ai_n",
-      "expr": "(mfold__gm/mload__gm)*(moutn__gm/nmir__gm)",
+      "expr": "(mfold__gm/mload_f__gm)*(moutn__gm/nmir__gm)",
       "unit": "1",
       "note": "small-signal current gain of the path through the bottom mirror: the other PMOS mirror's gain times the NMOS mirror's. Two copies in series, so it carries two drain-voltage errors"
     },
     {
       "name": "Gm_out",
-      "expr": "in__gm*(Ai_p + Ai_n)/2",
+      "expr": "gm_pair*(Ai_p + Ai_n)/2",
       "unit": "S",
-      "note": "output transconductance: each input device turns half the differential input into current, and each half reaches the output through its own mirror path. It is K_m times the input gm where both paths copy exactly"
+      "note": "output transconductance: the pair turns the differential input into one signal current, carried equal and opposite by its two sides, and each side's half reaches the output through its own mirror path. It is K_m times the input gm where both paths copy exactly"
     },
     {
       "name": "Rout",
@@ -506,9 +601,9 @@
     },
     {
       "name": "vn_in",
-      "expr": "sqrt(2*in__vnth_m^2 + ((mload__vnth_m*mload__gm)^2*(Ai_p^2 + Ai_n^2) + (moutp__vnth_m*moutp__gm)^2 + ((mfold__vnth_m*mfold__gm)^2 + (nmir__vnth_m*nmir__gm)^2)*(moutn__gm/nmir__gm)^2 + (moutn__vnth_m*moutn__gm)^2)/Gm_out^2)",
+      "expr": "sqrt(in__vnth_m^2 + in_f__vnth_m^2 + ((mload__vnth_m*mload__gm*Ai_p)^2 + (mload_f__vnth_m*mload_f__gm*Ai_n)^2 + (moutp__vnth_m*moutp__gm)^2 + ((mfold__vnth_m*mfold__gm)^2 + (nmir__vnth_m*nmir__gm)^2)*(moutn__gm/nmir__gm)^2 + (moutn__vnth_m*moutn__gm)^2)/Gm_out^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "every device that puts noise current into the output, each at its own density, referred to the input through the path it takes. A device's density times its gm is its drain noise current, and a noise current at the output divided by Gm_out is an input voltage. The two input devices: a pair device's noise current splits evenly between the two sides at the tail node and reaches the output through both mirror paths, exactly as the signal does, so each counts once at its own density, 2*vn_pair^2. The two PMOS diode devices: one is copied to the output by its mirror, gain Ai_p, the other through both mirrors, gain Ai_n. The PMOS output device at the output and the NMOS output device put their noise current straight into the output. The PMOS output device that feeds the bottom mirror and the NMOS diode device under it put theirs into the NMOS diode's node, and the bottom mirror copies it to the output with its own gain, gm_moutn/gm_nmir. The tail device and its bias reference are left out: their noise reaches both sides equally and cancels at the output to first order"
+      "note": "every device that puts noise current into the output, each at its own density, referred to the input through the path it takes. A device's density times its gm is its drain noise current, and a noise current at the output divided by Gm_out is an input voltage. The two input devices: a pair device's noise current splits evenly between the two sides at the tail node and reaches the output through both mirror paths, exactly as the signal does, so each counts once at its own density. The two PMOS diode devices, each at its own current: one is copied to the output by its mirror, gain Ai_p, the other through both mirrors, gain Ai_n. The PMOS output device at the output and the NMOS output device put their noise current straight into the output. The PMOS output device that feeds the bottom mirror and the NMOS diode device under it put theirs into the NMOS diode's node, and the bottom mirror copies it to the output with its own gain, gm_moutn/gm_nmir. The tail device and its bias reference are left out: their noise reaches both sides equally and cancels at the output to first order"
     },
     {
       "name": "vn_gbw",
@@ -536,9 +631,9 @@
     },
     {
       "name": "vos_sys",
-      "expr": "abs(moutn__id - moutp__id)/Gm_out",
+      "expr": "abs(in_f__vgs - in__vgs)",
       "unit": "V",
-      "note": "estimate: input-referred systematic offset. The output node takes the PMOS output device's current in and the NMOS output device's current out. Each is a copy made at a drain voltage that is not its diode device's, and the NMOS one is a copy of a copy, so the two do not ask for the same current at $V_{out,dc}$. With $V_{out,dc}$ held by a loop outside this sheet, that difference has to come from an input imbalance of this size. Reported only; no check reads it"
+      "note": "input-referred systematic offset — the difference of the two pair transistors' gate-source voltages at rest, read directly: the input offset the feedback holding the output at $V_{out,dc}$ has to apply. The output node takes the PMOS output device's current in and the NMOS output device's current out; each is a copy made at a drain voltage that is not its diode device's, and the NMOS one is a copy of a copy, so at an even split the two would not carry the same current. The share is solved so that they do, and the two pair transistors then carry different currents and need different gate-source voltages. Reported only; no check reads it"
     },
     {
       "name": "tail_headroom",
@@ -548,9 +643,9 @@
     },
     {
       "name": "cgg_in",
-      "expr": "in__cgg",
+      "expr": "(in__cgg + in_f__cgg)/2",
       "unit": "F",
-      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single pair transistor, as the mean of the two, which differ a little because their currents do. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
     },
     {
       "name": "I_q",
@@ -582,7 +677,7 @@
     {
       "id": "input-sat-margin",
       "kind": "advisory",
-      "lhs": "VDD - abs(mload__vgs) - V_tail - in__vdsat",
+      "lhs": "min(VDD - abs(mload__vgs) - V_tail - in__vdsat, VDD - abs(mload_f__vgs) - V_tail - in_f__vdsat)",
       "op": ">=",
       "rhs": "0.1",
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the diode load — lower gm/ID on the mirror spends less diode drop"
@@ -616,5 +711,9 @@
       "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": { "vdd": "VDD", "out": "V_out_dc" },
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }],
+  "ports": ["vinp", "vinn"]
 }

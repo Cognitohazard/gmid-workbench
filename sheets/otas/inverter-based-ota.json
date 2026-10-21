@@ -37,7 +37,8 @@
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "sign convention of the PMOS table's voltage axes: +1 for an N-style axis, -1 for a signed-PMOS axis. The PMOS's drain-source and gate-source voltages are both passed in it"
+      "note": "sign convention of the PMOS table's voltage axes: +1 for an N-style axis, -1 for a signed-PMOS axis. The PMOS's drain-source and gate-source voltages are both passed in it",
+      "convention": "axis-sign"
     },
     {
       "name": "I_bias",
@@ -98,7 +99,8 @@
         "L_d": "L_n",
         "gm_id_d": "gm_id_n",
         "vds_d": "V_out_dc"
-      }
+      },
+      "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "p",
@@ -135,7 +137,7 @@
         "vgs_d": "sign_p*(VDD - n__vgs)",
         "vds_d": "sign_p*(VDD - V_out_dc)"
       },
-      "wiring": { "gate": "V_in", "source": "VDD" }
+      "nodes": { "d": "out", "g": "in", "s": "vdd", "b": "vdd" }
     }
   ],
   "equations": [
@@ -226,5 +228,8 @@
       "note": "estimate: very high composite gm/ID means weak inversion and strong VDD dependence of the bias — budget a common-mode bias loop; sim owns PSRR"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": { "vdd": "VDD", "out": "V_out_dc" },
+  "ports": ["in"]
 }

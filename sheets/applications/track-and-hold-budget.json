@@ -152,5 +152,7 @@
       "rhs": "qinj_target",
       "note": "channel-charge dump onto C_s; estimate-grade, sim signs off with the real clock"
     }
-  ]
+  ],
+  "formatVersion": 2,
+  "nodes": "none"
 }

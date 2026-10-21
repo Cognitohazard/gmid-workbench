@@ -152,3 +152,15 @@ export const gmIdDemo = (vgs: number, L = 0.5e-6): number => {
   const x = (vgs - vthDemo(L)) / (2 * N_SLOPE * UT);
   return 1 / (1 + Math.exp(-x)) / (N_SLOPE * UT * softplus(x));
 };
+
+/** The body-grounded gate-source voltage the demo model needs for a gm/ID at length `L`: gm/ID
+ *  falls monotonically with vgs, so bisection on gmIdDemo finds it to the last bit. */
+export const vgsAtGmId = (gmId: number, L = 0.5e-6): number => {
+  let [lo, hi] = [0, 1.8];
+  for (let i = 0; i < 80; i++) {
+    const mid = (lo + hi) / 2;
+    if (gmIdDemo(mid, L) > gmId) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+};

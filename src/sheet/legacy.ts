@@ -2,6 +2,8 @@
 // that brings such a document up to the current ones. Loading is the only place they are read:
 // everything past the loader — validation, evaluation, export — knows the current keys alone.
 
+import { isObject as obj } from './types';
+
 /** Document keys: the earlier spelling → the current one. */
 export const LEGACY_DOC_KEYS: Readonly<Record<string, string>> = {
   uses: 'blocks',
@@ -58,8 +60,6 @@ export function inCurrentKeys(raw: Record<string, unknown>): {
 } {
   const both: string[] = [];
   const doc = renamed(raw, LEGACY_DOC_KEYS, both, '');
-  const obj = (x: unknown): x is Record<string, unknown> =>
-    !!x && typeof x === 'object' && !Array.isArray(x);
   if (Array.isArray(doc.params))
     doc.params = doc.params.map((p: unknown, i) =>
       obj(p) ? renamed(p, LEGACY_VAR_KEYS, both, `params[${i}].`) : p,

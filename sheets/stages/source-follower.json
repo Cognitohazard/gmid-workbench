@@ -42,7 +42,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "bias current the follower carries"
+      "note": "bias current the follower carries",
+      "class": "independent"
     },
     {
       "name": "gm_id",
@@ -144,5 +145,9 @@
       "note": "the stage is actually buffering only while the load it drives is well above its own output resistance. Ten to one is the convention for that regime, not physics: at exactly ten to one the loaded gain still sits within about ten percent of what an unloaded follower would give, and below it the load, not the device, sets the gain"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "nodes": { "d": "vdd", "g": "in", "s": "out", "b": "out" },
+  "levels": { "vdd": "VDD", "in": "V_in" },
+  "elements": [{ "name": "ibias", "kind": "I", "between": ["out", "gnd"], "value": "I_bias" }]
 }

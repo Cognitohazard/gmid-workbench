@@ -1,6 +1,6 @@
 {
   "title": "Gain-boosted cascode OTA",
-  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$, and the internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. The tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and the pair carries half of what the tail delivers there — so the low end of the common-mode range is where the tail device runs out of drain-source voltage, and a check says so. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes.",
+  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$, and the internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. The tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and the pair carries half of what the tail delivers there — so the low end of the common-mode range is where the tail device runs out of drain-source voltage, and a check says so. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes. The output is single-ended, through a current-mirror load whose two devices share a gate on the diode side's output node — where the diode side's two cascodes meet — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$, held there by the feedback the application closes around the amplifier. The diode side's cascodes sit on the same node levels as the output side's, their sources held at $V_a$ and $V_b$ like their partners' (the diode side's output node is low-impedance, so those cascodes are biased there rather than boosted for gain), and they are drawn as blocks of their own because their drains sit at that node rather than at the output. Everything under and over them is the same on both sides: the two pair transistors share a drain level, a source and a current, and so do the two mirror devices, so each pair is one sizing placed twice, the tail current splits evenly, and there is no systematic offset to report.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -13,14 +13,14 @@
       "value": 25e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget; with each device's noise read from the tables, the row lands near 25.7 nV/rtHz on a sky130 tt realization with the PMOS devices on the pfet table, the pair receiving less than the programmed tail current — just over this budget. No simulated floor exists for this topology"
+      "note": "input-referred thermal density budget; with each device's noise read from the tables, the row lands near 26.9 nV/rtHz on a sky130 tt realization with the PMOS devices on the pfet table, the pair receiving less than the programmed tail current — just over this budget. No simulated floor exists for this topology"
     },
     {
       "name": "CM_lo",
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.83-1.19 V on sky130 tt at the shipped choices, the low end set by the tail device leaving saturation). The range end checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.87-1.24 V on sky130 tt with the PMOS devices on the pfet table, at the shipped choices, the low end set by the tail device leaving saturation and the high end by the pair). The range end checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -71,12 +71,12 @@
     },
     {
       "name": "V_b",
-      "value": 1.3,
+      "value": 1.52,
       "min": 0.8,
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source. The mirror vds is VDD - V_b and the cascode's is V_b - V_out_dc, by construction. The PMOS-side booster holds this node: it is an amplifier with its own reference voltage, applied from outside this sheet, and this value is that reference",
+      "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source, on both sides. The mirror vds is VDD - V_b and the output-side cascode's is V_b - V_out_dc, by construction; the diode-side cascode's is what is left above the mirror's gate, one mirror V_GS below the supply, which has to cover its saturation voltage — the default sits high for that. The PMOS-side booster holds this node: it is an amplifier with its own reference voltage, applied from outside this sheet, and this value is that reference",
       "class": "independent"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
@@ -86,7 +86,8 @@
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign convention of the PMOS-side tables: +1 for an N-style axis, -1 for a signed-PMOS axis"
+      "note": "vds sign convention of the PMOS-side tables: +1 for an N-style axis, -1 for a signed-PMOS axis",
+      "convention": "axis-sign"
     },
     {
       "name": "I_tail",
@@ -95,7 +96,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the bias reference is programmed to — the one tail current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number"
+      "note": "the current the bias reference is programmed to — the one tail current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number",
+      "class": "independent"
     },
     {
       "name": "I_boost",
@@ -126,12 +128,12 @@
     },
     {
       "name": "gm_id_mir",
-      "value": 8,
+      "value": 13,
       "min": 4,
       "max": 14,
       "unit": "1/V",
       "role": "choice",
-      "note": "load-mirror inversion: lower gm/ID gives higher mirror ro"
+      "note": "load-mirror inversion: lower gm/ID gives higher mirror ro, but the mirror's gate is the diode side's output node, one mirror V_GS below the supply, and the diode side's NMOS cascode needs its saturation voltage between that node and V_a — at 8 a PMOS table's V_GS leaves it in triode, so the default sits at 13"
     },
     {
       "name": "gm_id_bo",
@@ -218,7 +220,8 @@
         "I_b": "I_tail",
         "L_b": "L_tail",
         "gm_id_b": "gm_id_tail"
-      }
+      },
+      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "tail",
@@ -260,13 +263,14 @@
         "vgs_t": "bias__vgs",
         "L_t": "L_tail",
         "vds_t": "V_tail"
-      }
+      },
+      "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "in",
       "doc": {
-        "title": "Input-pair device",
-        "description": "Half-circuit input device, carrying half of what the tail delivers; its ro is boosted by the NMOS cascode and its booster.",
+        "title": "Input-pair devices",
+        "description": "The two pair transistors, one sizing placed twice: each carries half of what the tail delivers, and the boosters hold both drains at V_a, so the two sit at one operating point. The output side's ro is boosted by its NMOS cascode and that cascode's booster.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -301,7 +305,11 @@
         "gm_id_i": "gm_id_in",
         "vds_i": "V_a - V_tail",
         "vsb_i": "V_tail"
-      }
+      },
+      "nodes": [
+        { "d": "a", "g": "vinn", "s": "tail", "b": "gnd" },
+        { "d": "ar", "g": "vinp", "s": "tail", "b": "gnd" }
+      ]
     },
     {
       "name": "casc_n",
@@ -334,7 +342,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat", "gm"]
+        "provides": ["av0", "gds", "vdsat", "gm", "W"]
       },
       "params": {
         "I_half": "in__id",
@@ -342,7 +350,8 @@
         "gm_id_c": "gm_id_casc",
         "vds_c": "V_out_dc - V_a",
         "vsb_c": "V_a"
-      }
+      },
+      "nodes": { "d": "out", "g": "vgn", "s": "a", "b": "gnd" }
     },
     {
       "name": "casc_p",
@@ -375,7 +384,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat"]
+        "provides": ["av0", "gds", "vdsat", "W"]
       },
       "params": {
         "I_half": "in__id",
@@ -383,13 +392,14 @@
         "gm_id_c": "gm_id_casc",
         "vds_c": "sign_p*(V_b - V_out_dc)",
         "vsb_c": "VDD - V_b"
-      }
+      },
+      "nodes": { "d": "out", "g": "vgp", "s": "b", "b": "vdd" }
     },
     {
       "name": "mir",
       "doc": {
-        "title": "Load mirror device",
-        "description": "PMOS load-mirror side, carrying the current of the input device in its branch; its ro, cascoded and boosted, sets the PMOS-side output resistance.",
+        "title": "Load mirror devices",
+        "description": "The two sides of the PMOS load mirror, one sizing placed twice: each carries the current of the pair transistor in its branch, both drains are held at V_b, and both gates sit on the diode side's output node, one $V_{GS}$ below the supply. The output side's ro, cascoded and boosted, sets the PMOS-side output resistance.",
         "polarity": "p",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -414,14 +424,98 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vdsat", "W", "vnth_m"]
+        "provides": ["gm", "gds", "vdsat", "W", "vnth_m", "vgs"]
       },
       "params": {
         "I_half": "in__id",
         "L_m": "L_mir",
         "gm_id_m": "gm_id_mir",
         "vds_m": "sign_p*(VDD - V_b)"
-      }
+      },
+      "nodes": [
+        { "d": "b", "g": "x", "s": "vdd", "b": "vdd" },
+        { "d": "br", "g": "x", "s": "vdd", "b": "vdd" }
+      ]
+    },
+    {
+      "name": "casc_nr",
+      "doc": {
+        "title": "NMOS cascode, diode side",
+        "description": "The diode side's NMOS cascode: the output-side cascode's width, carrying the diode-side pair transistor's current, its source held at V_a like its partner's. Its drain is the diode side's output node — the mirror's gate, one mirror $V_{GS}$ below the supply — rather than the output, so its gate-source voltage is read off the table at that drain voltage, and its saturation is checked there.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_c",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the output-side cascode's width"
+          },
+          { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "vds_c", "value": 0.55, "unit": "V", "role": "spec" },
+          { "name": "vsb_c", "value": 0.55, "unit": "V", "role": "spec" }
+        ],
+        "givens": {
+          "L": "L_c",
+          "W": "W_c",
+          "id": "I_side",
+          "vds": "vds_c",
+          "vsb": "vsb_c",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [],
+        "provides": ["vgs", "vdsat"]
+      },
+      "params": {
+        "W_c": "casc_n__W",
+        "I_side": "tail__id/2",
+        "L_c": "L_casc",
+        "vds_c": "VDD - abs(mir__vgs) - V_a",
+        "vsb_c": "V_a"
+      },
+      "nodes": { "d": "x", "g": "vgnr", "s": "ar", "b": "gnd" }
+    },
+    {
+      "name": "casc_pr",
+      "doc": {
+        "title": "PMOS cascode, diode side",
+        "description": "The diode side's PMOS cascode: the output-side cascode's width, carrying the diode side's current, its source held at V_b like its partner's. Its drain is the diode side's output node, which is the mirror's gate, so its drain-source voltage is what is left between V_b and one mirror $V_{GS}$ below the supply, and its saturation is checked there. Its body bias is VDD - V_b (the PMOS tables' vsb axis carries that magnitude).",
+        "polarity": "p",
+        "params": [
+          {
+            "name": "W_c",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the output-side cascode's width"
+          },
+          { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
+          { "name": "L_c", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "vds_c", "value": 0.2, "unit": "V", "role": "spec" },
+          { "name": "vsb_c", "value": 0.5, "unit": "V", "role": "spec" }
+        ],
+        "givens": {
+          "L": "L_c",
+          "W": "W_c",
+          "id": "I_side",
+          "vds": "vds_c",
+          "vsb": "vsb_c",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [],
+        "provides": ["vgs", "vdsat"]
+      },
+      "params": {
+        "W_c": "casc_p__W",
+        "I_side": "tail__id/2",
+        "L_c": "L_casc",
+        "vds_c": "sign_p*(V_b - (VDD - abs(mir__vgs)))",
+        "vsb_c": "VDD - V_b"
+      },
+      "nodes": { "d": "x", "g": "vgpr", "s": "br", "b": "vdd" }
     },
     {
       "name": "boost",
@@ -459,7 +553,8 @@
         "L_b": "L_bo",
         "gm_id_b": "gm_id_bo",
         "vds_b": "vds_bo"
-      }
+      },
+      "nodes": { "d": "bo", "g": "bi", "s": "gnd", "b": "gnd" }
     }
   ],
   "equations": [
@@ -586,5 +681,19 @@
       "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": {
+    "vdd": "VDD",
+    "out": "V_out_dc",
+    "vinp": "CM_dc",
+    "vinn": "CM_dc",
+    "a": "V_a",
+    "ar": "V_a",
+    "b": "V_b",
+    "br": "V_b",
+    "bo": "vds_bo"
+  },
+  "ports": ["vgn", "vgp", "vgnr", "vgpr", "bi"],
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }]
 }

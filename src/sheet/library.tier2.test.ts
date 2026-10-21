@@ -39,6 +39,8 @@ import {
   roMirrored,
   pelgromIrelRatio,
   vgsAtBody,
+  vgsForCurrentRatio,
+  vgsAtGmId,
   sheet as libSheet,
 } from './library.fixtures';
 
@@ -549,22 +551,59 @@ describe('tier-2 goldens: degenerated current mirror', () => {
   });
 });
 
+/** The root of a function that changes sign once on [lo, hi], by bisection. */
+const rootOf = (f: (x: number) => number, lo: number, hi: number): number => {
+  const sLo = Math.sign(f(lo));
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (Math.sign(f(mid)) === sLo) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+};
+
 describe('tier-2 goldens: Widlar current source', () => {
   const res = runSheet(sheet('widlar-current-source.json'), table);
-  // Defaults: I_in 20 µA, I_out 5 µA, R_s 10 kΩ, M_ratio 1, L = 1 µm.
+  // Defaults: I_in 20 µA, R_s 10 kΩ, M_ratio 1, L = 1 µm, gm/ID 8 on the reference, V_out 0.9 V.
+  // The output current is solved: it is the current at which the output device, the reference's
+  // width on the reference's gate, sits exactly I_out*R_s below the reference's gate-source
+  // voltage. On the demo model that fixed point is closed form apart from one root:
+  //   reference   vgs_ref = vgs at gm/ID 8 (L 1 µm), a diode, so vds_ref = vgs_ref
+  //   output      saturation current I_out/(1 + vds_out/VA) at the reference's width, with
+  //               vds_out = V_out − I_out·R_s and the source lifted I_out·R_s above the body, so
+  //               vgs_out = vgsForCurrentRatio(vgs_ref, ratio) + BODY_FACTOR·I_out·R_s, where the
+  //               ratio is that saturation current over the reference's, I_in/(1 + vds_ref/VA)
+  //   fixed point vgs_ref − vgs_out = I_out·R_s
+  const L = 1e-6;
+  const VA = va(L);
+  const vgsRef = vgsAtGmId(8, L);
+  const vgsOut = (I: number): number => {
+    const ratio = I / (1 + (0.9 - I * 10000) / VA) / (20e-6 / (1 + vgsRef / VA));
+    return vgsForCurrentRatio(vgsRef, ratio, L) + BODY_FACTOR * I * 10000;
+  };
+  const I_OUT = rootOf((I) => vgsRef - vgsOut(I) - I * 10000, 1e-6, 20e-6);
 
-  it('sizes the output device exactly at the chosen output current', () => {
+  it('solves the output current at the Widlar fixed point', () => {
+    // 8.04 µA here: the reference's 20 µA stepped down by the gate-source difference R_s develops.
     expect(res.sizing?.ok).toBe(true);
-    expect(relErr(res.values.id, 5e-6)).toBeLessThan(1e-9);
+    expect(relErr(res.values.I_out, I_OUT)).toBeLessThan(1e-3);
+    expect(res.values.id).toBe(res.values.I_out);
+    // The identity the search makes hold, to the search's own tolerance, and the rule reading it.
+    expect(Math.abs(res.values.delta_vgs - res.values.vgs_drop)).toBeLessThan(1e-6);
+    expect(res.checks.find((c) => c.id === 'widlar-fixed-point')!.status).toBe('pass');
+    expect(res.feasible).toBe(true);
   });
 
   it('sizes the output device at M_ratio times the reference width', () => {
     expect(relErr(res.values.W / res.values.ref__W, 1)).toBeLessThan(1e-9);
   });
 
-  it('the output device steps down: its vgs sits below the reference vgs', () => {
-    // Same width, one quarter the current ⇒ lower density ⇒ lower vgs ⇒ positive step.
+  it('the output device steps down: its vgs sits below the reference vgs by the IR drop', () => {
+    // Same width, less than half the current ⇒ lower density ⇒ lower vgs ⇒ positive step.
+    expect(relErr(res.values.ref__vgs, vgsRef)).toBeLessThan(1e-3);
+    expect(relErr(res.values.vgs, vgsOut(I_OUT))).toBeLessThan(1e-3);
     expect(res.values.delta_vgs).toBeGreaterThan(0);
+    expect(res.values.I_out).toBeLessThan(res.values.I_in);
   });
 
   it('output resistance carries the degeneration boost, same form as the degenerated mirror', () => {
@@ -573,7 +612,8 @@ describe('tier-2 goldens: Widlar current source', () => {
     // this test owns is the model's gds (id/(VA + vds), with the source lifted I_out*R_s) and the
     // Rout algebra: the boost factor carries BOTH source-referred generators, and the resistor's
     // own series contribution is added back.
-    const ro = (VA_PER_L * 1e-6 + (0.9 - 5e-6 * 10000)) / 5e-6;
+    const I = res.values.I_out;
+    const ro = (VA + (0.9 - I * 10000)) / I;
     const boost = 1 + (res.values.gm + gmbOf(res.values.gm)) * 10000;
     expect(relErr(res.values.Rout, ro * boost + 10000)).toBeLessThan(1e-3);
   });
@@ -581,7 +621,21 @@ describe('tier-2 goldens: Widlar current source', () => {
 
 describe('tier-2 goldens: beta-multiplier bias', () => {
   const res = runSheet(sheet('beta-multiplier-bias.json'), table);
-  // Defaults: I_bias 10 µA, K_bm = 4, R_bias 5 kΩ, L = 1 µm, gm/ID 8.
+  // Defaults: K_bm = 4, R_bias 5 kΩ, L = 1 µm, gm/ID 8 on the diode device, V_dm2 0.9 V. The loop
+  // current is solved. The diode device is sized at gm/ID 8 whatever its current, so its
+  // gate-source voltage is vgs(8) at 1 µm and only its width follows the current; the
+  // resistor-side device is four of those widths at the same current, a quarter of the current
+  // density, with its source lifted I·R above the body:
+  //   vgs_2 = vgsForCurrentRatio(vgs_1, (1 + vgs_1/VA)/(4·(1 + vds_2/VA))) + BODY_FACTOR·I·R,
+  //   vds_2 = V_dm2 − I·R
+  //   fixed point vgs_1 − vgs_2 = I·R
+  const L = 1e-6;
+  const VA = va(L);
+  const vgs1 = vgsAtGmId(8, L);
+  const vgs2 = (I: number): number =>
+    vgsForCurrentRatio(vgs1, (1 + vgs1 / VA) / (4 * (1 + (0.9 - I * 5000) / VA)), L) +
+    BODY_FACTOR * I * 5000;
+  const I_BIAS = rootOf((I) => vgs1 - vgs2(I) - I * 5000, 1e-6, 100e-6);
 
   it('the constant-gm identity is pure param arithmetic', () => {
     // gm_target = (2/R_bias)(1 − 1/√K_bm) = (2/5000)(1 − 1/2) = 2e-4 S.
@@ -594,8 +648,18 @@ describe('tier-2 goldens: beta-multiplier bias', () => {
     expect(relErr(res.values.W / res.values.m1__W, 4)).toBeLessThan(1e-9);
   });
 
-  it('both legs carry the loop current exactly', () => {
-    expect(relErr(res.values.id, 10e-6)).toBeLessThan(1e-9);
+  it('solves the loop current at the self-bias fixed point, and both legs carry it', () => {
+    // 22.2 µA here. The diode device's gm is then gm/ID 8 times that current, 178 µS, inside the
+    // 25 % band of the square-law identity's 200 µS. The root moves by the table's interpolation
+    // error in the two gate-source voltages over R·(1 + BODY_FACTOR) — about 0.2 mV over the
+    // 0.13 V the loop drops here, so it is held to 2e-3, not to the 1e-3 a sized current gets.
+    expect(relErr(res.values.I_bias, I_BIAS)).toBeLessThan(2e-3);
+    expect(res.values.id).toBe(res.values.I_bias);
+    expect(res.values.m1__id).toBe(res.values.I_bias);
+    expect(Math.abs(res.values.delta_vgs - res.values.vgs_drop)).toBeLessThan(1e-6);
+    expect(relErr(res.values.m1__gm, 8 * res.values.I_bias)).toBeLessThan(1e-9);
+    expect(res.checks.find((c) => c.id === 'gm-identity')!.status).toBe('pass');
+    expect(res.feasible).toBe(true);
   });
 });
 

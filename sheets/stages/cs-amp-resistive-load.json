@@ -54,7 +54,8 @@
       "max": 500e3,
       "unit": "ohm",
       "role": "choice",
-      "note": "load resistor: higher R raises the gain but drops more of the supply (less headroom)"
+      "note": "load resistor: higher R raises the gain but drops more of the supply (less headroom)",
+      "class": "independent"
     }
   ],
   "givens": {
@@ -137,5 +138,10 @@
       "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" },
+  "levels": { "vdd": "VDD" },
+  "elements": [{ "name": "rload", "kind": "R", "between": ["vdd", "out"], "value": "R_load" }],
+  "ports": ["in"]
 }

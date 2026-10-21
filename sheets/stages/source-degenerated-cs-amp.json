@@ -61,7 +61,8 @@
       "max": 50e3,
       "unit": "ohm",
       "role": "choice",
-      "note": "degeneration resistor: larger R_s linearizes the stage (Gm -> 1/R_s) but lowers gain and adds 4kT*R_s noise"
+      "note": "degeneration resistor: larger R_s linearizes the stage (Gm -> 1/R_s) but lowers gain and adds 4kT*R_s noise",
+      "class": "independent"
     }
   ],
   "givens": {
@@ -141,5 +142,10 @@
       "note": "read from the table's own noise where it carries it, and from the γ = 1 estimate otherwise; the simulator owns noise sign-off"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "in", "s": "src", "b": "gnd" },
+  "levels": { "out": "V_out" },
+  "elements": [{ "name": "rs", "kind": "R", "between": ["src", "gnd"], "value": "R_s" }],
+  "ports": ["in"]
 }

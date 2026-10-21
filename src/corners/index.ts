@@ -38,6 +38,7 @@ import type { DeviceTable, QAWarning, TableId } from '../types';
 import type {
   DeviceResolver,
   NamedBinding,
+  NodesReport,
   SheetDoc,
   PointState,
   SheetRefIndex,
@@ -47,12 +48,11 @@ import {
   clampMargin,
   dcInputs,
   evaluateSheet,
-  heldOutcome,
   limitingCheck,
   namedBindings,
   resolvedSheet,
   stands,
-  withoutRestated,
+  withValidation,
   validateSheet,
 } from '../sheet';
 import {
@@ -61,6 +61,7 @@ import {
   withNominalRange,
   type HeldHardware,
 } from '../sheet/coverage';
+import { unwalkedReport } from '../sheet/nodes';
 
 // --- condition identity --------------------------------------------------------
 
@@ -468,6 +469,10 @@ export type ConditionRun =
       /** Kept when an evaluation ran and did not stand, so its diagnostics survive the
        *  refusal — the numbers are how an author finds out why. */
       readonly result?: SheetResult;
+      /** On a condition asked about and declined with no answer, before anything ran: the DC
+       *  wiring report saying the check did not run (see unwalkedReport), as a range end declined
+       *  the same way carries it. */
+      readonly nodes?: NodesReport;
     };
 
 /** A device binding as written in a sheet → the device it names, or `undefined` when nothing
@@ -708,12 +713,14 @@ function refused(
     ...(error === undefined ? {} : { error }),
   });
   const ends = Array.isArray(prepared.doc.operatingRange) ? prepared.doc.operatingRange : [];
+  const nodes = state === 'no-answer' ? unwalkedReport(prepared.doc) : undefined;
   return {
     state: 'not-evaluated',
     key,
     design,
     issues,
     points: [point(), ...ends.map((e) => point(e.name))],
+    ...(nodes ? { nodes } : {}),
   };
 }
 
@@ -749,23 +756,22 @@ function runPrepared(
     held?.doc ?? prepared.doc,
     primary,
     projectingResolver(deviceOf, key),
+    { held: held !== undefined, assumed: prepared.assumptions },
   );
   const result: SheetResult = {
-    ...evaluated,
-    warnings: [...withoutRestated(prepared.warnings, evaluated.warnings), ...evaluated.warnings],
+    ...withValidation(prepared.warnings, evaluated),
     assumptions: [...prepared.assumptions],
   };
   const completed = stands(result);
 
-  // The centre. A design resting on an assumed level has no compliance answer anywhere (the
-  // engine has already declined its range ends for the same reason). A held design is read like
-  // a range end. The sized design answers for itself: it complies where it is feasible.
-  let centre: CompliancePoint;
-  if (prepared.assumptions.length)
-    centre = { state: 'no-answer', error: assumedLevelRefusal(prepared.assumptions) };
-  else if (held) centre = heldOutcome(result);
-  else if (completed) centre = { state: result.feasible ? 'complies' : 'does-not-comply' };
-  else centre = { state: 'no-answer', error: runtimeIssues(result)[0].message };
+  // The centre, classified once by the engine (pointOutcome): a design resting on an assumed level
+  // has no compliance answer anywhere (the engine has already declined its range ends for the same
+  // reason); a held design is read like a range end; the sized design answers for itself — it
+  // complies where it is feasible.
+  const outcome = evaluated.point;
+  const centre: CompliancePoint = outcome
+    ? { state: outcome.state, ...(outcome.error === undefined ? {} : { error: outcome.error }) }
+    : { state: 'no-answer', error: runtimeIssues(result)[0].message };
   const points: CompliancePoint[] = [
     centre,
     ...(result.rangeEnds ?? []).map((e): CompliancePoint => ({

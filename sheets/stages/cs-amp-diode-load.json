@@ -100,7 +100,8 @@
         "I_load": "2*pi*GBW_target*CL*(1 + gbw_margin)/gm_id",
         "L_ld": "L_load",
         "gm_id_ld": "gm_id_load"
-      }
+      },
+      "nodes": { "d": "out", "g": "out", "s": "vdd", "b": "vdd" }
     }
   ],
   "givens": {
@@ -182,5 +183,9 @@
       "note": "actual GBW into CL plus the parasitic estimate; the over-design factor should keep this green"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" },
+  "levels": { "vdd": "VDD" },
+  "ports": ["in"]
 }

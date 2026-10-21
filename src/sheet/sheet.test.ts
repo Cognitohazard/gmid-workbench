@@ -37,7 +37,6 @@ import {
   SOLVE_EVALUATIONS,
   SOLVE_SWEEPS,
   SOLVE_TOL_REL,
-  WIRING_TOL,
   noiseSourcesIn,
 } from './index';
 import { EXAMPLES } from './examples';
@@ -70,10 +69,15 @@ const devBias = generateDemoDevice({
 /** gm/gds on the 0.5 µm slice at a chosen vgs — used to pick a sizing target off-node. */
 const lookupAt = (vgs: number): number => lookup(devAt, { l: 0.5e-6, vgs }).gm_gds;
 
+/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
+ *  names no wires. The synthetic sheets in this file exercise sizing, evaluation and validation,
+ *  not a netlist, so the ones that size a device say so rather than draw one. */
+const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
+
 /** A minimal sheet with givens at a known in-range operating point (gm/ID = 12, L = 0.5 µm,
- *  vds = 0.6 V). */
+ *  vds = 0.6 V), declared not a circuit. */
 function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
-  return {
+  return notACircuit({
     title: 't',
     polarity: 'n',
     params: [
@@ -87,7 +91,7 @@ function boundDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
     equations: [],
     checks: [],
     ...overrides,
-  };
+  });
 }
 
 /** boundDoc sizing its device with exactly the bias `bias` states — none at all when it is
@@ -316,7 +320,7 @@ describe('evaluateSheet — closing a bias loop (solveFor)', () => {
   // that results. The engine finds it by a one-unknown search of vstar_est - vstar_actual
   // between min and max.
   function loopDoc(overrides: Partial<SheetDoc> = {}): SheetDoc {
-    return {
+    return notACircuit({
       title: 'loop',
       polarity: 'n',
       params: [
@@ -328,7 +332,7 @@ describe('evaluateSheet — closing a bias loop (solveFor)', () => {
       equations: [{ name: 'vstar_actual', expr: 'vstar' }],
       checks: [],
       ...overrides,
-    };
+    });
   }
   /** loopDoc with its solved param replaced. */
   const solving = (p: SheetVar, over: Partial<SheetDoc> = {}): SheetDoc =>
@@ -1350,36 +1354,37 @@ describe('pass-through columns reach the sheet scope', () => {
 
 describe('validateSheet — hand-tuned assumptions about a device operating point', () => {
   // A child whose given vds comes from a parent param, and which provides its own vgs back.
-  const withCheck = (lhs: string, biasExpr = 'guess'): SheetDoc => ({
-    title: 'p',
-    polarity: 'n',
-    params: [
-      { name: 'guess', value: 0.7 },
-      { name: 'V_node', value: 0.9 },
-    ],
-    equations: [],
-    checks: [{ id: 'check', kind: 'advisory', lhs, op: '<=', rhs: '0.05' }],
-    blocks: [
-      {
-        name: 'k',
-        doc: {
-          title: 'c',
-          polarity: 'n',
-          params: [
-            { name: 'L', value: 0.5e-6 },
-            { name: 'id', value: 10e-6 },
-            { name: 'gm_id', value: 10 },
-            { name: 'vd', value: 0.7 },
-          ],
-          givens: { L: 'L', id: 'id', gm_id: 'gm_id', vds: 'vd' },
-          equations: [],
-          checks: [],
-          provides: ['vgs', 'vdsat'],
+  const withCheck = (lhs: string, biasExpr = 'guess'): SheetDoc =>
+    notACircuit({
+      title: 'p',
+      polarity: 'n',
+      params: [
+        { name: 'guess', value: 0.7 },
+        { name: 'V_node', value: 0.9 },
+      ],
+      equations: [],
+      checks: [{ id: 'check', kind: 'advisory', lhs, op: '<=', rhs: '0.05' }],
+      blocks: [
+        {
+          name: 'k',
+          doc: {
+            title: 'c',
+            polarity: 'n',
+            params: [
+              { name: 'L', value: 0.5e-6 },
+              { name: 'id', value: 10e-6 },
+              { name: 'gm_id', value: 10 },
+              { name: 'vd', value: 0.7 },
+            ],
+            givens: { L: 'L', id: 'id', gm_id: 'gm_id', vds: 'vd' },
+            equations: [],
+            checks: [],
+            provides: ['vgs', 'vdsat'],
+          },
+          params: { vd: biasExpr },
         },
-        params: { vd: biasExpr },
-      },
-    ],
-  });
+      ],
+    });
   const assumptionFindings = (d: SheetDoc): string[] =>
     validateSheet(d)
       .filter((w) => w.rule === 'sheet-assumption')
@@ -2256,21 +2261,22 @@ describe('a device is sized only on a table that carries what its givens use', (
       checks: [],
       provides: ['id', 'vstar'],
     });
-    const composed = (over: Partial<SheetDoc> = {}): SheetDoc => ({
-      title: 'pair on a tail node',
-      polarity: 'n',
-      params: [{ name: 'V_tail', value: 0.3, unit: 'V', class: 'independent' }],
-      equations: [],
-      checks: [
-        { id: 'pair-headroom', kind: 'physical', lhs: 'pair__vstar', op: '>=', rhs: '0.1' },
-        { id: 'load-headroom', kind: 'physical', lhs: 'load__vstar', op: '>=', rhs: '0.1' },
-      ],
-      blocks: [
-        { name: 'pair', doc: device('V_s'), params: { V_s: 'V_tail' } },
-        { name: 'load', doc: device('0') },
-      ],
-      ...over,
-    });
+    const composed = (over: Partial<SheetDoc> = {}): SheetDoc =>
+      notACircuit({
+        title: 'pair on a tail node',
+        polarity: 'n',
+        params: [{ name: 'V_tail', value: 0.3, unit: 'V', class: 'independent' }],
+        equations: [],
+        checks: [
+          { id: 'pair-headroom', kind: 'physical', lhs: 'pair__vstar', op: '>=', rhs: '0.1' },
+          { id: 'load-headroom', kind: 'physical', lhs: 'load__vstar', op: '>=', rhs: '0.1' },
+        ],
+        blocks: [
+          { name: 'pair', doc: device('V_s'), params: { V_s: 'V_tail' } },
+          { name: 'load', doc: device('0') },
+        ],
+        ...over,
+      });
 
     it('a refused block fails the sheet closed and is named; the other block still sizes', () => {
       const res = runSheet(composed(), vdsSwept);
@@ -2412,7 +2418,7 @@ describe('a device is sized only on a table that carries what its givens use', (
       // that evaluates — which shows nothing about the rest of the range, so the solve says it did
       // not settle, and why: a device was not sized anywhere above it. The end is unanswered
       // rather than failed.
-      const follower: SheetDoc = {
+      const follower = notACircuit({
         title: 'follower',
         polarity: 'n',
         params: [
@@ -2424,7 +2430,7 @@ describe('a device is sized only on a table that carries what its givens use', (
         equations: [],
         checks: [],
         operatingRange: [{ name: 'less-current', set: { I: '5e-6' } }],
-      };
+      });
       const res = runSheet(follower, vdsSwept);
       expect(errorsOf(res)).toEqual([]);
       expect(res.feasible).toBe(true);
@@ -2494,7 +2500,7 @@ describe('composition semantics (ratified)', () => {
   });
 
   it('a LATER sibling may reference an EARLIER sibling provide (document order)', () => {
-    const doc: SheetDoc = {
+    const doc = notACircuit({
       title: 'p',
       polarity: 'n',
       params: [],
@@ -2504,7 +2510,7 @@ describe('composition semantics (ratified)', () => {
         { name: 'a', doc: leaf('I_bias') },
         { name: 'b', doc: leaf('I_bias'), params: { I_bias: 'a__id / 2' } },
       ],
-    };
+    });
     const res = runSheet(doc, dev);
     expect(res.feasible).toBe(true);
     expect(res.values.b__id).toBeCloseTo(res.values.a__id / 2, 12);
@@ -2833,18 +2839,19 @@ describe('override and bias reporting fail closed (adversarial review regression
 });
 
 describe('diode-connected givens', () => {
-  const diodeDoc = (extra: Record<string, unknown> = {}): SheetDoc => ({
-    title: 'd',
-    polarity: 'n',
-    params: [
-      { name: 'L', value: 0.5e-6 },
-      { name: 'I', value: 10e-6 },
-      { name: 'gm_id', value: 10 },
-    ],
-    givens: { L: 'L', id: 'I', gm_id: 'gm_id', diode: true, ...extra },
-    equations: [],
-    checks: [],
-  });
+  const diodeDoc = (extra: Record<string, unknown> = {}): SheetDoc =>
+    notACircuit({
+      title: 'd',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'I', value: 10e-6 },
+        { name: 'gm_id', value: 10 },
+      ],
+      givens: { L: 'L', id: 'I', gm_id: 'gm_id', diode: true, ...extra },
+      equations: [],
+      checks: [],
+    });
 
   it('lands on the vds = vgs diagonal, matching a fixed slice taken at the answer', () => {
     const res = runSheet(diodeDoc(), devBias);
@@ -4441,250 +4448,6 @@ describe('operating range — the held design asked at each range end, apart fro
   });
 });
 
-describe('gate wiring — the node a child sits on, declared and checked', () => {
-  /** A child that SIZES. The identity is checked against the voltage the SIZING resolved to, so
-   *  the number under test is the sizing's own answer — `provides` are deliberately absent
-   *  here, because nothing the child publishes upward takes part in the check. */
-  const boundChild = (polarity: 'n' | 'p' = 'n', gmId = 10, vds = '0.6'): SheetDoc => ({
-    title: 'dev',
-    polarity,
-    params: [
-      { name: 'L', value: 0.5e-6 },
-      { name: 'gm_id', value: gmId },
-      { name: 'Ib', value: 20e-6 },
-    ],
-    givens: { L: 'L', id: 'Ib', gm_id: 'gm_id', vds },
-    equations: [],
-    checks: [],
-  });
-
-  /** A parent tying one such child between two nodes. */
-  const wired = (
-    gate: string,
-    source: string,
-    child: SheetDoc,
-    extra: Partial<SheetDoc> = {},
-    device?: string,
-  ): SheetDoc => ({
-    title: 'p',
-    polarity: 'n',
-    params: [{ name: 'VDD', value: 1.8 }],
-    equations: [],
-    checks: [],
-    blocks: [{ name: 'm', doc: child, ...(device ? { device } : {}), wiring: { gate, source } }],
-    ...extra,
-  });
-
-  const wiringWarnings = (r: SheetResult): string[] =>
-    r.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.message);
-
-  /** The vgs the child's sizing actually landed on — the quantity the check reads. */
-  const sizedVgs = (doc: SheetDoc, table = dev, resolve?: (id: string) => DeviceTable): number =>
-    evaluateSheet(doc, table, resolve).blocks![0].sizing!.vgs;
-
-  it('passes just inside the tolerance and reports just outside it', () => {
-    // 10 mV absolute (WIRING_TOL): the real disagreements this catches are tens to hundreds of
-    // millivolts, and a bias plan is written to about this resolution.
-    expect(WIRING_TOL).toBe(0.01);
-    const child = boundChild();
-    const v = sizedVgs(wired('0', '0', child));
-    expect(v).toBeGreaterThan(0.4);
-
-    expect(wiringWarnings(evaluateSheet(wired(`${v + 0.0099}`, '0', child), dev))).toEqual([]);
-
-    const off = evaluateSheet(wired(`${v + 0.0101}`, '0', child), dev);
-    expect(wiringWarnings(off)).toHaveLength(1);
-    // Both numbers AND the delta — a warning that only says "disagrees" cannot be acted on.
-    expect(wiringWarnings(off)[0]).toContain((v + 0.0101).toExponential(4));
-    expect(wiringWarnings(off)[0]).toContain(v.toExponential(4));
-    expect(wiringWarnings(off)[0]).toContain('delta 1.010e-2 V');
-  });
-
-  it('checks a child that publishes NOTHING — the sizing is what it reads', () => {
-    // The identity used to be arithmetic over a `<block>__vgs` scalar, which quietly made the check
-    // depend on an author remembering to add 'vgs' to that block's provides. This child
-    // provides nothing at all, and is checked anyway.
-    const child = boundChild();
-    expect(child.provides).toBeUndefined();
-    const v = sizedVgs(wired('0', '0', child));
-    expect(wiringWarnings(evaluateSheet(wired(`${v}`, '0', child), dev))).toEqual([]);
-    expect(wiringWarnings(evaluateSheet(wired(`${v + 0.5}`, '0', child), dev))).toHaveLength(1);
-  });
-
-  it('reads the same node in all four polarity/table-convention combinations', () => {
-    // The direction comes from the child's declared polarity and the magnitude from its sizing, so
-    // a signed PMOS export (negative vgs axis) and one in N convention (positive) check
-    // identically. That is the whole reason no author-written sign expression exists: a wrong one
-    // would silently INVERT the identity and report agreement on a design wired backwards.
-    const pmos = signedMirrorDemo(dev);
-    const resolve = (id: string): DeviceTable => (id === 'signed' ? pmos : dev);
-    for (const polarity of ['n', 'p'] as const) {
-      for (const device of [undefined, 'signed'] as const) {
-        const where = `${polarity} child, ${device ?? 'N-convention'} table`;
-        // A drain voltage is signed like the axis it is read on, whatever the device's polarity.
-        const child = boundChild(polarity, 10, device === 'signed' ? '-0.6' : '0.6');
-        const v = sizedVgs(wired('0', 'VDD', child, {}, device), dev, resolve);
-        // The four cells really are different data: only the signed export returns a negative
-        // axis value, and the identity below never looks at that sign.
-        expect(`${where}: ${v < 0}`).toBe(`${where}: ${device === 'signed'}`);
-
-        const dir = polarity === 'p' ? -1 : 1;
-        const node = 1.8 + dir * Math.abs(v);
-        const agrees = evaluateSheet(wired(`${node}`, 'VDD', child, {}, device), dev, resolve);
-        expect(`${where}: ${wiringWarnings(agrees).length}`).toBe(`${where}: 0`);
-        // Wired the other way — the error the removed sign expression made possible — is reported.
-        const flipped = evaluateSheet(
-          wired(`${1.8 - dir * Math.abs(v)}`, 'VDD', child, {}, device),
-          dev,
-          resolve,
-        );
-        expect(`${where}: ${wiringWarnings(flipped).length}`).toBe(`${where}: 1`);
-      }
-    }
-  });
-
-  it('never touches the verdict — a disagreement is a warning, never a feasibility flip', () => {
-    // The escalation path is documented instead: an author who wants it to gate writes a hard
-    // check on the same two numbers.
-    const res = evaluateSheet(wired('1.2', '0', boundChild()), dev);
-    expect(wiringWarnings(res)).toHaveLength(1);
-    expect(res.warnings.every((w) => w.severity !== 'error')).toBe(true);
-    expect(res.feasible).toBe(true);
-  });
-
-  it('reaches a gate node the sheet defines as an EQUATION, not only as a param', () => {
-    // Equations run AFTER children, so a node the parent derives from a child's own output only
-    // exists at the end of the evaluation. The check runs there for exactly this reason.
-    const child = { ...boundChild(), provides: ['vgs'] };
-    const doc = wired('V_in', '0', child, { equations: [{ name: 'V_in', expr: 'm__vgs' }] });
-    const res = evaluateSheet(doc, dev);
-    expect(wiringWarnings(res)).toEqual([]);
-    expect(res.values.V_in).toBeCloseTo(sizedVgs(doc), 12);
-  });
-
-  it('says the block has no sized gate-source voltage when it declares no givens', () => {
-    const noGivens: SheetDoc = {
-      title: 'dev',
-      polarity: 'n',
-      params: [],
-      equations: [{ name: 'vgs', expr: '0.65' }],
-      checks: [],
-      provides: ['vgs'],
-    };
-    // The block publishes a `vgs` scalar and is STILL not checked against it: an equation named vgs
-    // is an author's arithmetic, not a sized operating point.
-    const res = evaluateSheet(wired('0.65', '0', noGivens), dev);
-    expect(wiringWarnings(res)[0]).toMatch(/no givens, so it has no sized gate-source voltage/);
-    expect(res.values.m__vgs).toBeCloseTo(0.65, 12);
-  });
-
-  it('stays silent about a block whose own evaluation already failed', () => {
-    // A child that could not size has no operating point to check against, and the sizing error
-    // says so already — under the child's PATH (`m.givens`), not the bare block name. Advising the
-    // author about the wiring here would stack a second, wrong finding on the real one.
-    const broken: SheetDoc = {
-      ...boundChild(),
-      givens: { L: 'L', id: 'Ib', gm_id: 'nope', vds: '0.6' },
-    };
-    const res = evaluateSheet(wired('0.65', '0', broken), dev);
-    expect(res.warnings.some((w) => w.severity === 'error' && w.location === 'm.givens')).toBe(
-      true,
-    );
-    expect(wiringWarnings(res)).toEqual([]);
-  });
-
-  it('reports an unresolvable wiring expression instead of failing the sheet', () => {
-    const res = evaluateSheet(wired('nope', '0', boundChild()), dev);
-    expect(wiringWarnings(res)[0]).toMatch(/gate "nope" did not resolve/);
-    // The dedicated evaluator emits ONLY sheet-wiring warnings — no undeclared-name error
-    // leaks out of it to fail the design closed.
-    expect(res.warnings.every((w) => w.severity === 'warning')).toBe(true);
-    expect(res.feasible).toBe(true);
-  });
-
-  it('degrades instead of throwing on malformed wiring', () => {
-    const half = wired('0.65', '0', boundChild());
-    half.blocks![0].wiring = { gate: 5 } as unknown as { gate: string; source: string };
-    expect(() => evaluateSheet(half, dev)).not.toThrow();
-    expect(wiringWarnings(evaluateSheet(half, dev))[0]).toMatch(/gate is not an expression/);
-
-    const garbage = wired('0.65', '0', boundChild());
-    garbage.blocks![0].wiring = 'garbage' as unknown as { gate: string; source: string };
-    expect(() => evaluateSheet(garbage, dev)).not.toThrow();
-    expect(wiringWarnings(evaluateSheet(garbage, dev))).toEqual([]); // nothing to check
-    expect(validateSheet(garbage).some((w) => /wiring must be an object/.test(w.message))).toBe(
-      true,
-    );
-  });
-
-  it('reports the LANDED design once, not a bracket end and not every probe', () => {
-    // A constrained parent probes its whole tree several times. Wiring the gate to the constrained
-    // node makes the reported numbers say WHERE the check ran: at the landing (0.4713) the delta is
-    // the distance from there to the sized vgs, where the bracket ends (0 and 1) would give a very
-    // different pair. So this pins the placement, not merely the count — a check running inside
-    // the solve would report a probe's voltage.
-    const doc = wired('x', '0', boundChild(), {
-      params: [
-        { name: 'x', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'x2', rhs: '0.4713' } },
-      ],
-      equations: [{ name: 'x2', expr: 'x' }],
-    });
-    const res = evaluateSheet(doc, dev);
-    expect(res.values.x).toBeCloseTo(0.4713, 5);
-    expect(wiringWarnings(res)).toHaveLength(1);
-    expect(wiringWarnings(res)[0]).toMatch(/gate reads 4\.713\de-1 V/);
-    expect(wiringWarnings(res)[0]).toContain((0.4713 - sizedVgs(doc)).toExponential(3));
-  });
-
-  it('reports once per RUN when the sheet also claims a range through range ends', () => {
-    // Base plus one range end = two lines about the same declaration, and that is the intent: a
-    // range end re-settles the same hardware at a different bias, so its residual is a measurement
-    // of the same wire under different conditions. A range-end run's warnings ride its own report
-    // verbatim, so the second copy is not a duplicate of the first — it belongs to a different
-    // evaluation.
-    const doc = wired('0', '0', boundChild(), {
-      params: [
-        { name: 'VDD', value: 1.8 },
-        { name: 'I_lo', value: 10e-6 },
-      ],
-      operatingRange: [{ name: 'lo', set: { VDD: 'I_lo' } }],
-    });
-    const res = evaluateSheet(doc, dev);
-    expect(wiringWarnings(res)).toHaveLength(1);
-    expect(res.rangeEnds![0].warnings.filter((w) => w.rule === 'sheet-wiring')).toHaveLength(1);
-  });
-
-  it('makes structural wiring problems validation ERRORS', () => {
-    const errs = (w: unknown): string[] =>
-      validateSheet(
-        wired('0.65', '0', boundChild(), {
-          blocks: [{ name: 'm', doc: boundChild(), wiring: w as { gate: string; source: string } }],
-        }),
-      )
-        .filter((v) => v.rule === 'sheet-wiring' && v.severity === 'error')
-        .map((v) => v.message);
-
-    // Half-declared: the design-constraint discipline — a declaration missing a side checks nothing
-    // while looking like it does.
-    expect(errs({ gate: 'VDD' }).join()).toMatch(
-      /needs both gate and source \(source is missing\)/,
-    );
-    expect(errs({ source: 'VDD' }).join()).toMatch(/\(gate is missing\)/);
-    // Strict keys, like GIVENS_KEYS/RANGE_END_KEYS: a typo must not silently drop half the identity —
-    // and a `sign` expression, which this check deliberately does not take, is named rather
-    // than ignored.
-    expect(errs({ gate: 'VDD', source: '0', polarity: 'p' }).join()).toMatch(
-      /unknown key "polarity"/,
-    );
-    expect(errs({ gate: 'VDD', source: '0', sign: '-1' }).join()).toMatch(/unknown key "sign"/);
-    expect(errs({ gate: '1 +', source: '0' }).join()).toMatch(
-      /gate expression "1 \+" does not parse/,
-    );
-    // A well-formed declaration raises none of them.
-    expect(errs({ gate: 'VDD', source: '0' })).toEqual([]);
-  });
-});
-
 describe('rawMargin — the honest distance beside the snapped one', () => {
   it('survives the near-zero snap', () => {
     const doc: SheetDoc = {
@@ -5044,20 +4807,21 @@ describe('a given gate-source voltage in a sheet', () => {
   });
 
   /** A K:1 mirror whose output device is given `partner` as its second quantity. */
-  const mirror = (partner: Record<string, string>): SheetDoc => ({
-    title: 'mirror',
-    polarity: 'n',
-    params: [
-      { name: 'L', value: 1e-6 },
-      { name: 'K', value: 3 },
-      { name: 'V_out', value: 0.9 },
-      { name: 'gm_id_m', value: 10 },
-    ],
-    givens: { L: 'L', W: 'K*ref__W', ...partner, vds: 'V_out' },
-    equations: [{ name: 'ratio', expr: 'id/(K*20e-6)' }],
-    checks: [],
-    blocks: [{ name: 'ref', doc: reference() }],
-  });
+  const mirror = (partner: Record<string, string>): SheetDoc =>
+    notACircuit({
+      title: 'mirror',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 1e-6 },
+        { name: 'K', value: 3 },
+        { name: 'V_out', value: 0.9 },
+        { name: 'gm_id_m', value: 10 },
+      ],
+      givens: { L: 'L', W: 'K*ref__W', ...partner, vds: 'V_out' },
+      equations: [{ name: 'ratio', expr: 'id/(K*20e-6)' }],
+      checks: [],
+      blocks: [{ name: 'ref', doc: reference() }],
+    });
 
   it('sizes the output device at the reference gate voltage, not at a target it re-solves', () => {
     const res = runSheet(mirror({ vgs: 'ref__vgs' }), devVds);
@@ -5097,7 +4861,7 @@ describe('a given gate-source voltage in a sheet', () => {
     // must come back as 1.2 V everywhere it is reported — the sizing report, the merged scope, and
     // an equation reading it — with the request surviving only in the warning. And the sheet must
     // still size: a clamp is a note about where the data ends, not an infeasibility.
-    const doc: SheetDoc = {
+    const doc = notACircuit({
       title: 'c',
       polarity: 'n',
       params: [
@@ -5107,7 +4871,7 @@ describe('a given gate-source voltage in a sheet', () => {
       givens: { L: 'L', W: 'W_o', vgs: '1.5', vds: '0.6' },
       equations: [{ name: 'v_read', expr: 'vgs' }],
       checks: [],
-    };
+    });
     const res = runSheet(doc, dev);
 
     expect(res.sizing?.ok).toBe(true);
@@ -5142,7 +4906,7 @@ describe('a given gate-source voltage in a sheet', () => {
     // A diode connection collapses vds onto the vds = vgs diagonal; naming vgs then picks the
     // point ON that diagonal. Two independent statements, both true — unlike a declared vds,
     // which would name the same coordinate twice.
-    const doc: SheetDoc = {
+    const doc = notACircuit({
       title: 'd',
       polarity: 'n',
       params: [
@@ -5153,7 +4917,7 @@ describe('a given gate-source voltage in a sheet', () => {
       givens: { L: 'L', W: 'W', vgs: 'v', diode: true },
       equations: [],
       checks: [],
-    };
+    });
     expect(validateSheet(doc)).toEqual([]);
     const res = runSheet(doc, devVds);
     expect(res.sizing?.ok).toBe(true);
@@ -5171,140 +4935,5 @@ describe('a given gate-source voltage in a sheet', () => {
         /both a diode connection and a vds/.test(w.message),
       ),
     ).toBe(true);
-  });
-});
-
-describe('validateSheet — gates declared on one wire but sized apart', () => {
-  const child = (givens: Record<string, unknown>): SheetDoc => ({
-    title: 'c',
-    polarity: 'n',
-    params: [
-      { name: 'L', value: 0.5e-6 },
-      { name: 'Ib', value: 20e-6 },
-      { name: 'g', value: 10 },
-      { name: 'vg', value: 0.7 },
-    ],
-    givens: { L: 'L', vds: '0.6', ...givens } as SheetDoc['givens'],
-    equations: [],
-    checks: [],
-    provides: ['vgs', 'W'],
-  });
-
-  const pair = (
-    a: { gate: string; source: string },
-    b: { gate: string; source: string },
-    givensB: Record<string, unknown> = { id: 'Ib', gm_id: 'g' },
-  ): SheetDoc => ({
-    title: 'p',
-    polarity: 'n',
-    params: [{ name: 'VDD', value: 1.8 }],
-    equations: [],
-    checks: [],
-    blocks: [
-      { name: 'one', doc: child({ id: 'Ib', gm_id: 'g' }), wiring: a },
-      { name: 'two', doc: child(givensB), wiring: b },
-    ],
-  });
-
-  const ties = (d: SheetDoc): string[] =>
-    validateSheet(d)
-      .filter((w) => w.rule === 'sheet-gate-tie')
-      .map((w) => w.message);
-
-  it('names two blocks that declare one gate and one source yet size independently', () => {
-    const found = ties(pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' }));
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('"one", "two"');
-    expect(found[0]).toContain('V_g');
-    expect(found[0]).toMatch(/each is sized at its own operating point/);
-    // It advises, it does not repair: the sheet still evaluates and stays feasible.
-    expect(
-      validateSheet(pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' })).every(
-        (w) => w.severity === 'warning',
-      ),
-    ).toBe(true);
-  });
-
-  /** Two on one node, the second sized on a gate voltage the parent supplies. */
-  const withPartner = (): SheetDoc =>
-    pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' }, { W: '2e-6', vgs: 'vg' });
-
-  it('says nothing once one of them is sized on the OTHER block gate voltage', () => {
-    // The fix, and the only thing that actually holds the two at one voltage.
-    const tied = withPartner();
-    tied.blocks![1].params = { vg: 'one__vgs' };
-    expect(ties(tied)).toEqual([]);
-  });
-
-  it('is not silenced by a gate voltage that couples nothing', () => {
-    // A typed number, and a gate voltage read off a block that is NOT on this node, leave the
-    // two devices exactly as unconnected as no vgs at all. Accepting any given vgs would turn
-    // the check off on the sheets that most look like they pass it.
-    expect(ties(withPartner())).toHaveLength(1); // vg is the child's own param, a literal 0.7
-
-    const elsewhere = withPartner();
-    elsewhere.blocks!.push({ name: 'far', doc: child({ id: 'Ib', gm_id: 'g' }) });
-    elsewhere.blocks![1].params = { vg: 'far__vgs' };
-    expect(ties(elsewhere)).toHaveLength(1);
-  });
-
-  it('needs two loose blocks, not one: something has to settle the voltage the rest follow', () => {
-    // Three on one node, the other two sized on the first: the first is the anchor, not a defect.
-    const three = withPartner();
-    three.blocks![1].params = { vg: 'one__vgs' };
-    three.blocks!.push({
-      name: 'third',
-      doc: child({ W: '3e-6', vgs: 'vg' }),
-      params: { vg: 'one__vgs' },
-      wiring: { gate: 'V_g', source: '0' },
-    });
-    expect(ties(three)).toEqual([]);
-
-    // Cut the third loose and it is named alongside the one it should have followed — and the
-    // one that IS tied stays out of the message.
-    three.blocks![2] = {
-      name: 'third',
-      doc: child({ id: 'Ib', gm_id: 'g' }),
-      wiring: { gate: 'V_g', source: '0' },
-    };
-    const found = ties(three);
-    expect(found).toHaveLength(1);
-    expect(found[0]).toContain('"one", "third"');
-    expect(found[0]).not.toContain('"two"');
-  });
-
-  it('says nothing when the sources differ — a shared gate is not a shared vgs there', () => {
-    // A complementary pair on one input, and a Widlar source, both share a gate node while
-    // sitting on different sources, so their gate-source voltages are genuinely different
-    // numbers. Matching on the gate alone would report the library's own inverter stage.
-    expect(ties(pair({ gate: 'V_in', source: '0' }, { gate: 'V_in', source: 'VDD' }))).toEqual([]);
-    expect(ties(pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: 'I_out*R_s' }))).toEqual(
-      [],
-    );
-  });
-
-  it('matches how the nodes are written, ignoring only whitespace', () => {
-    expect(
-      ties(pair({ gate: 'VDD - v', source: '0' }, { gate: 'VDD-v', source: ' 0' })),
-    ).toHaveLength(1);
-  });
-
-  it('rules on nothing it cannot see, without letting it hide what it can', () => {
-    const unresolved = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
-    unresolved.blocks![1] = {
-      name: 'two',
-      ref: 'somewhere/else',
-      wiring: { gate: 'V_g', source: '0' },
-    };
-    expect(ties(unresolved)).toEqual([]);
-
-    const unbound = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
-    delete unbound.blocks![1].doc!.givens;
-    expect(ties(unbound)).toEqual([]);
-
-    // But a third block nobody can rule on must not suppress the real pair beside it.
-    const beside = pair({ gate: 'V_g', source: '0' }, { gate: 'V_g', source: '0' });
-    beside.blocks!.push({ name: 'ref_only', ref: 'x/y', wiring: { gate: 'V_g', source: '0' } });
-    expect(ties(beside)).toHaveLength(1);
   });
 });

@@ -51,6 +51,11 @@ const dev = generateDemoDevice({
 // The transformation alone
 // ---------------------------------------------------------------------------------------
 
+/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
+ *  names no wires. The sheets below exercise holding, range ends and compliance, not a netlist, so
+ *  the ones that size a device say so rather than draw one. */
+const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
+
 describe('the fixed-hardware transformation — decided on which givens are present', () => {
   const report = (over: Partial<SizingReport> = {}): SizingReport => ({
     ok: true,
@@ -275,54 +280,54 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
   /** The inverter-based OTA's two devices, in the library's spelling: the NMOS sized from the
    *  bias current and its gm/ID, the PMOS given that current and the gate voltage the supply
    *  leaves. `hold` goes on the typed current. */
-  const inverter = (hold?: string): SheetDoc => ({
-    title: 'inverter',
-    polarity: 'n',
-    params: [
-      { name: 'VDD', value: VDD, unit: 'V', class: 'independent' },
-      { name: 'V_out', value: V0, unit: 'V', class: 'independent' },
-      { name: 'I_bias', value: 2e-5, min: 2e-6, max: 2e-4, unit: 'A', ...(hold ? { hold } : {}) },
-    ],
-    blocks: [
-      {
-        name: 'n',
-        doc: {
-          title: 'n',
-          polarity: 'n',
-          params: [
-            { name: 'I_d', value: 2e-5, unit: 'A' },
-            { name: 'vds_d', value: 0.5, unit: 'V' },
-          ],
-          givens: { L: String(L), id: 'I_d', gm_id: '12', vds: 'vds_d' },
-          equations: [],
-          checks: [],
-          provides: ['vgs', 'id', 'W'],
+  const inverter = (hold?: string): SheetDoc =>
+    notACircuit({
+      title: 'inverter',
+      polarity: 'n',
+      params: [
+        { name: 'VDD', value: VDD, unit: 'V', class: 'independent' },
+        { name: 'V_out', value: V0, unit: 'V', class: 'independent' },
+        { name: 'I_bias', value: 2e-5, min: 2e-6, max: 2e-4, unit: 'A', ...(hold ? { hold } : {}) },
+      ],
+      blocks: [
+        {
+          name: 'n',
+          doc: {
+            title: 'n',
+            polarity: 'n',
+            params: [
+              { name: 'I_d', value: 2e-5, unit: 'A' },
+              { name: 'vds_d', value: 0.5, unit: 'V' },
+            ],
+            givens: { L: String(L), id: 'I_d', gm_id: '12', vds: 'vds_d' },
+            equations: [],
+            checks: [],
+            provides: ['vgs', 'id', 'W'],
+          },
+          params: { I_d: 'I_bias', vds_d: 'V_out' },
         },
-        params: { I_d: 'I_bias', vds_d: 'V_out' },
-      },
-      {
-        name: 'p',
-        device: 'pmos',
-        doc: {
-          title: 'p',
-          polarity: 'p',
-          params: [
-            { name: 'I_d', value: 2e-5, unit: 'A' },
-            { name: 'vgs_d', value: 0.5, unit: 'V' },
-            { name: 'vds_d', value: 0.5, unit: 'V' },
-          ],
-          givens: { L: String(L), id: 'I_d', vgs: 'vgs_d', vds: 'vds_d' },
-          equations: [],
-          checks: [],
-          provides: ['vgs', 'id', 'W'],
+        {
+          name: 'p',
+          device: 'pmos',
+          doc: {
+            title: 'p',
+            polarity: 'p',
+            params: [
+              { name: 'I_d', value: 2e-5, unit: 'A' },
+              { name: 'vgs_d', value: 0.5, unit: 'V' },
+              { name: 'vds_d', value: 0.5, unit: 'V' },
+            ],
+            givens: { L: String(L), id: 'I_d', vgs: 'vgs_d', vds: 'vds_d' },
+            equations: [],
+            checks: [],
+            provides: ['vgs', 'id', 'W'],
+          },
+          params: { I_d: 'n__id', vgs_d: 'VDD - n__vgs', vds_d: 'VDD - V_out' },
         },
-        params: { I_d: 'n__id', vgs_d: 'VDD - n__vgs', vds_d: 'VDD - V_out' },
-        wiring: { gate: 'V_in', source: 'VDD' },
-      },
-    ],
-    equations: [{ name: 'V_in', expr: 'n__vgs', unit: 'V' }],
-    checks: [],
-  });
+      ],
+      equations: [{ name: 'V_in', expr: 'n__vgs', unit: 'V' }],
+      checks: [],
+    });
 
   const nHeld = shiftedThreshold(dev, DN);
   const pHeld = shiftedThreshold(dev, DP);
@@ -340,6 +345,46 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
   /** A device's current at a held width and gate voltage, read straight off a table. */
   const currentAt = (t: DeviceTable, W: number, vgs: number, vds: number): number =>
     sizeDevice({ table: fixTable(t, { vds, vsb: 0 }), L, W, vgs }).id;
+
+  it('reports the parted gates where the design is held, when the inverter is drawn as the circuit it is', () => {
+    // The same two devices on one gate wire and the two rails, the PMOS undeclared and so held as a
+    // current source. Held on tables whose thresholds moved by DN and +0.01 V (a positive shift,
+    // so the PMOS table's vgs axis keeps one sign), the gates part by DN - 0.01 V, and the loop
+    // through them says so: the cross-check a wired sheet carries to every condition.
+    const DPP = 0.01;
+    const drawn: SheetDoc = {
+      ...inverter(),
+      nodes: undefined,
+      levels: { vdd: 'VDD', out: 'V_out' },
+      blocks: inverter().blocks!.map((b) => ({
+        ...b,
+        nodes:
+          b.name === 'n'
+            ? { d: 'out', g: 'in', s: 'gnd', b: 'gnd' }
+            : { d: 'out', g: 'in', s: 'vdd', b: 'vdd' },
+      })),
+    };
+    expect(validateSheet(drawn).filter((w) => w.severity === 'error')).toEqual([]);
+    const base = evaluateSheet(drawn, dev, (id) => (id === 'pmos' ? dev : undefined));
+    expect(base.nodes?.state).toBe('checked-clean');
+    const pMoved = shiftedThreshold(dev, DPP);
+    const held = evaluateSheet(
+      holdHardware(drawn, base).doc,
+      nHeld,
+      (id) => (id === 'pmos' ? pMoved : undefined),
+      { held: true },
+    );
+    expect(held.point).toMatchObject({ sized: true });
+    expect(held.nodes?.state).toBe('checked-with-findings');
+    const parted = held.values.n__vgs + held.values.p__vgs - VDD;
+    expect(parted).toBeCloseTo(DN + DPP, 3);
+    expect(relErr(held.nodes!.closureError, Math.abs(parted))).toBeLessThan(1e-9);
+    expect(
+      held.warnings.some(
+        (w) => w.rule === 'sheet-nodes' && w.message.startsWith('the wiring does not close'),
+      ),
+    ).toBe(true);
+  });
 
   it('sizes the two halves alike at the design point, so the closed form applies', () => {
     // Alike to the gm/ID inversion's interpolation: the NMOS lands some 50 µV off V0, which
@@ -406,16 +451,13 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
 
   it('holds the PMOS as a current source where nothing declares the gate, and says so', () => {
     // Undeclared, the PMOS is held as it always was: its width and the NMOS's current. The two
-    // currents agree by construction and the gates part — which the PMOS's wiring declaration
-    // reports — and validation names the choice the sheet has not made, both ways out included.
+    // currents agree by construction and the gates part, and validation names the choice the
+    // sheet has not made, both ways out included.
     const { res } = heldRun(inverter());
     const v = res.values;
     expect(v.n__id).toBe(2e-5);
     expect(v.p__id).toBe(2e-5);
     expect(Math.abs(v.n__vgs + v.p__vgs - VDD)).toBeGreaterThan(0.01);
-    expect(res.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location)).toEqual([
-      'p',
-    ]);
     expect(flagged(inverter())).toEqual(['warning p']);
     const said = validateSheet(inverter()).find((w) => w.rule === 'sheet-held-current');
     expect(said?.message).toMatch(/hold that balances the two currents/);
@@ -471,14 +513,14 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
     // A lone device given its gate voltage and a current, with its own current balanced against
     // the param it was given: where the design is held the device keeps its gate, and the param
     // feeds nothing but the balance — solving it would set a number and move no current.
-    const lone: SheetDoc = {
+    const lone = notACircuit({
       title: 'lone',
       polarity: 'n',
       params: [{ name: 'I_set', value: 2e-5, min: 2e-6, max: 2e-4, unit: 'A', hold: 'I_set - id' }],
       givens: { L: String(L), id: 'I_set', vgs: '0.6', vds: '0.6' },
       equations: [],
       checks: [],
-    };
+    });
     const errors = validateSheet(lone).filter((w) => w.severity === 'error');
     expect(errors.map((w) => `${w.rule} ${w.location}`)).toEqual(['sheet-param I_set']);
     expect(errors[0].message).toMatch(/reaches no other device's current/);
@@ -517,7 +559,7 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
               },
               params: { ...b.params, vg: 'V_in' },
             }
-          : { ...b, params: { ...b.params, vgs_d: 'VDD - V_in' }, wiring: undefined },
+          : { ...b, params: { ...b.params, vgs_d: 'VDD - V_in' } },
       ),
     };
     expect(validateSheet(both).filter((w) => w.severity === 'error')).toEqual([]);
@@ -636,21 +678,22 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
     givens: { L: '0.5u', gm_id: '10', id: 'I_d', vds, vsb },
   });
 
-  const mk = (over: Partial<SheetDoc>): SheetDoc => ({
-    title: 'cov',
-    polarity: 'n',
-    params: [
-      { name: 'V_o', value: 0.6, min: 0.2, max: 1.2 },
-      { name: 'V_o_hi', value: 1.0 },
-      { name: 'VSB', value: 0.4, min: 0, max: 0.4 },
-      { name: 'VSB_lo', value: 0 },
-      { name: 'VDD', value: 1.3 },
-    ],
-    equations: [],
-    checks: [{ id: 'inverted', kind: 'physical', lhs: 'm__gm_id', op: '>=', rhs: '1' }],
-    blocks: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'VSB' } }],
-    ...over,
-  });
+  const mk = (over: Partial<SheetDoc>): SheetDoc =>
+    notACircuit({
+      title: 'cov',
+      polarity: 'n',
+      params: [
+        { name: 'V_o', value: 0.6, min: 0.2, max: 1.2 },
+        { name: 'V_o_hi', value: 1.0 },
+        { name: 'VSB', value: 0.4, min: 0, max: 0.4 },
+        { name: 'VSB_lo', value: 0 },
+        { name: 'VDD', value: 1.3 },
+      ],
+      equations: [],
+      checks: [{ id: 'inverted', kind: 'physical', lhs: 'm__gm_id', op: '>=', rhs: '1' }],
+      blocks: [{ name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'VSB' } }],
+      ...over,
+    });
 
   const sizingAt = (c: SheetBlockReport | undefined): SizingReport => c!.sizing!;
 
@@ -950,20 +993,21 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
 describe('compliance is only asked of a design that exists', () => {
   /** A sheet whose design constraint cannot reach its target, with givens that size at every probe.
    *  */
-  const unreachable = (T: number): SheetDoc => ({
-    title: 'g',
-    polarity: 'n',
-    params: [
-      { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Spec' } },
-      { name: 'Spec', value: T },
-      { name: 'Spec_lo', value: 3 },
-      { name: 'floor', value: 0.5 },
-    ],
-    equations: [{ name: 'y', expr: '2*x + 1' }],
-    checks: [{ id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'floor' }],
-    givens: { L: '0.5u', gm_id: '10', id: '20u', vds: '0.6', vsb: '0' },
-    operatingRange: [{ name: 'lo', set: { Spec: 'Spec_lo' } }],
-  });
+  const unreachable = (T: number): SheetDoc =>
+    notACircuit({
+      title: 'g',
+      polarity: 'n',
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'Spec' } },
+        { name: 'Spec', value: T },
+        { name: 'Spec_lo', value: 3 },
+        { name: 'floor', value: 0.5 },
+      ],
+      equations: [{ name: 'y', expr: '2*x + 1' }],
+      checks: [{ id: 'node-floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'floor' }],
+      givens: { L: '0.5u', gm_id: '10', id: '20u', vds: '0.6', vsb: '0' },
+      operatingRange: [{ name: 'lo', set: { Spec: 'Spec_lo' } }],
+    });
 
   it('skips the range ends when the base run did not stand, and says the question went unasked', () => {
     // The case that makes "did the devices size" the wrong test: a design constraint that fails
@@ -1421,29 +1465,30 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     givens,
   });
 
-  const parent = (over: Partial<SheetDoc>): SheetDoc => ({
-    title: 'p',
-    polarity: 'n',
-    params: [
-      { name: 'CM_dc', value: 0.9, min: 0.7, max: 1.3 },
-      { name: 'CM_hi', value: 1.2 },
-      {
-        name: 'V_t',
-        value: 0.4,
-        min: 0,
-        max: 1,
-        designConstraint: { lhs: 'CM_out', rhs: 'CM_dc' },
-      },
-    ],
-    // The constraint's own relation reads the param the range end overrides, so the node it solves
-    // for — and the equation that names it — move at the range end. That two-hop reach is what the
-    // checks below have to follow; a direct-reference test alone would pass on a validator that
-    // never closed.
-    equations: [{ name: 'CM_out', expr: 'V_t + 0.5' }],
-    checks: [],
-    operatingRange: [{ name: 'hi', set: { CM_dc: 'CM_hi' } }],
-    ...over,
-  });
+  const parent = (over: Partial<SheetDoc>): SheetDoc =>
+    notACircuit({
+      title: 'p',
+      polarity: 'n',
+      params: [
+        { name: 'CM_dc', value: 0.9, min: 0.7, max: 1.3 },
+        { name: 'CM_hi', value: 1.2 },
+        {
+          name: 'V_t',
+          value: 0.4,
+          min: 0,
+          max: 1,
+          designConstraint: { lhs: 'CM_out', rhs: 'CM_dc' },
+        },
+      ],
+      // The constraint's own relation reads the param the range end overrides, so the node it solves
+      // for — and the equation that names it — move at the range end. That two-hop reach is what the
+      // checks below have to follow; a direct-reference test alone would pass on a validator that
+      // never closed.
+      equations: [{ name: 'CM_out', expr: 'V_t + 0.5' }],
+      checks: [],
+      operatingRange: [{ name: 'hi', set: { CM_dc: 'CM_hi' } }],
+      ...over,
+    });
 
   /** The single-block shape every reach test below is a variation of. */
   const withK = (givens: SheetDoc['givens'], params: Record<string, string>): SheetDoc =>

@@ -64,7 +64,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the tail bias reference is programmed to — the one first-stage current that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the stage-1 slew limit, the bandwidth and the supply current are computed from what is delivered, not from this number"
+      "note": "the current the tail bias reference is programmed to — the one first-stage current that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the stage-1 slew limit, the bandwidth and the supply current are computed from what is delivered, not from this number",
+      "class": "independent"
     },
     {
       "name": "I2",
@@ -172,14 +173,16 @@
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign of the stage-2 device table (PMOS common source): +1 for the N-style demo axis, -1 for a signed-PMOS axis"
+      "note": "vds sign of the stage-2 device table (PMOS common source): +1 for the N-style demo axis, -1 for a signed-PMOS axis",
+      "convention": "axis-sign"
     },
     {
       "name": "ld1o_sign",
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign of the table the stage-1 mirror's output device reads: +1 for an N-style axis, -1 for a signed-PMOS axis. The diode side needs none — its drain follows its own gate in whichever convention its table uses. Read both sides of the mirror from the same table: the gate voltage they share is passed in that table's convention"
+      "note": "vds sign of the table the stage-1 mirror's output device reads: +1 for an N-style axis, -1 for a signed-PMOS axis. The diode side needs none — its drain follows its own gate in whichever convention its table uses. Read both sides of the mirror from the same table: the gate voltage they share is passed in that table's convention",
+      "convention": "axis-sign"
     },
     {
       "name": "vos_sys_target",
@@ -214,7 +217,8 @@
         ],
         "provides": ["W", "vgs"]
       },
-      "params": { "Ix": "I1", "Lx": "L_tail", "gx": "gm_id_tail" }
+      "params": { "Ix": "I1", "Lx": "L_tail", "gx": "gm_id_tail" },
+      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "tail",
@@ -245,7 +249,8 @@
         "checks": [],
         "provides": ["gds", "vdsat", "id"]
       },
-      "params": { "Wx": "bias__W", "vgsx": "bias__vgs", "Lx": "L_tail", "vx": "V_tail" }
+      "params": { "Wx": "bias__W", "vgsx": "bias__vgs", "Lx": "L_tail", "vx": "V_tail" },
+      "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "ld1",
@@ -271,7 +276,8 @@
         ],
         "provides": ["gm", "vgs", "vdsat", "id", "W"]
       },
-      "params": { "Ix": "tail__id*(1 - out_share)", "Lx": "L_ld1", "gx": "gm_id_ld1" }
+      "params": { "Ix": "tail__id*(1 - out_share)", "Lx": "L_ld1", "gx": "gm_id_ld1" },
+      "nodes": { "d": "mir", "g": "mir", "s": "vdd", "b": "vdd" }
     },
     {
       "name": "s2",
@@ -304,7 +310,8 @@
         ],
         "provides": ["gm", "gds", "cgg", "vgs", "vdsat", "id"]
       },
-      "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" }
+      "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" },
+      "nodes": { "d": "out", "g": "o1", "s": "vdd", "b": "vdd" }
     },
     {
       "name": "ld1o",
@@ -346,7 +353,8 @@
         "vgsx": "ld1__vgs",
         "Lx": "L_ld1",
         "vx": "ld1o_sign*abs(s2__vgs)"
-      }
+      },
+      "nodes": { "d": "o1", "g": "mir", "s": "vdd", "b": "vdd" }
     },
     {
       "name": "ino",
@@ -393,7 +401,8 @@
         "gx": "gm_id_in",
         "vx": "VDD - abs(s2__vgs) - V_tail",
         "vsbx": "V_tail"
-      }
+      },
+      "nodes": { "d": "o1", "g": "vinp", "s": "tail", "b": "gnd" }
     },
     {
       "name": "in",
@@ -455,12 +464,14 @@
         "Lx": "L_in",
         "vx": "VDD - abs(ld1__vgs) - V_tail",
         "vsbx": "V_tail"
-      }
+      },
+      "nodes": { "d": "mir", "g": "vinn", "s": "tail", "b": "gnd" }
     },
     {
       "name": "ld2",
       "ref": "multistage/stage2-current-source-load",
-      "params": { "Ix": "s2__id", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" }
+      "params": { "Ix": "s2__id", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" },
+      "ports": { "out": "out", "vb": "vbo" }
     }
   ],
   "equations": [
@@ -649,5 +660,9 @@
       "note": "the systematic input offset stays inside its budget. The stage-1 output sits at the second stage's gate, V1 = VDD - |vgs_s2|, while the mirror node sits at VDD - |vgs_ld1|, and the offset grows with the distance between the two — the classic W/L-ratio condition. Retune gm_id_s2, gm_id_ld1 or I2 until the two gate-source voltages agree and the offset falls to zero"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": { "vdd": "VDD", "out": "V_out2" },
+  "ports": ["vinp", "vinn", "vbo"],
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I1" }]
 }

@@ -563,6 +563,11 @@ describe('namedBindings', () => {
 
 // --- one run, one condition --------------------------------------------------
 
+/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
+ *  names no wires. The sheets below exercise conditions, projection and holding, not a netlist,
+ *  so the ones that size a device say so rather than draw one. */
+const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
+
 /** The constrained-node idiom the library writes: y = 2x + 1 solved to the typed spec T, with the
  *  claimed range [T_lo, T_hi] checked as range ends. Base T = 5 lands x = 2; the lo
  *  range end (T = 3) lands x = 1 and the hi range end (T = 7) lands x = 3. */
@@ -585,17 +590,18 @@ describe('runCondition', () => {
   const primary = soleDevice([retag(dev, 'tt', 27), retag(dev, 'tt', 85)]);
   const noDevices = (): undefined => undefined;
 
-  const gainDoc = (aMin: number): SheetDoc => ({
-    title: 'gain',
-    polarity: 'n',
-    params: [
-      { name: 'L', value: 0.5e-6 },
-      { name: 'A_min', value: aMin },
-    ],
-    givens: { L: 'L', gm_id: '12', id: '2e-5', vds: '0.5' },
-    equations: [{ name: 'A', expr: 'gm_gds' }],
-    checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'A_min' }],
-  });
+  const gainDoc = (aMin: number): SheetDoc =>
+    notACircuit({
+      title: 'gain',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'A_min', value: aMin },
+      ],
+      givens: { L: 'L', gm_id: '12', id: '2e-5', vds: '0.5' },
+      equations: [{ name: 'A', expr: 'gm_gds' }],
+      checks: [{ id: 'gain', kind: 'spec', lhs: 'A', op: '>=', rhs: 'A_min' }],
+    });
 
   /** gainDoc plus one composed child bound by name — the shape the child-projection tests
    *  share. */
@@ -851,7 +857,7 @@ describe('runCondition', () => {
       checks: [],
       provides: ['vgs', 'id'],
     });
-    const doc: SheetDoc = {
+    const doc = notACircuit({
       title: 'inverter',
       polarity: 'n',
       params: [
@@ -870,12 +876,11 @@ describe('runCondition', () => {
           device: 'pmos',
           doc: half('p', { L: '5e-7', id: 'I_d', vgs: 'vgs_d', vds: 'vds_d' }),
           params: { I_d: 'n__id', vgs_d: 'VDD - n__vgs', vds_d: 'VDD - V_out' },
-          wiring: { gate: 'V_in', source: 'VDD' },
         },
       ],
       equations: [{ name: 'V_in', expr: 'n__vgs', unit: 'V' }],
       checks: [],
-    };
+    });
     const [tt, ss] = runConditions(
       doc,
       nDevice,
@@ -894,7 +899,6 @@ describe('runCondition', () => {
     expect(v.V_in).toBeCloseTo((VDD + 0.04 + 0.02) / 2, 3);
     expect(v.I_bias).toBe(v.n__id);
     expect(v.I_bias).toBeLessThan(tt.result.values.I_bias);
-    expect(ss.result.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);
   });
 
   it('answers at the base first, even when the base is not one of the conditions asked about', () => {
@@ -1124,7 +1128,7 @@ describe('runCondition', () => {
         vds: { min: 0, max: 1.2, step: 0.3 },
         vsb: { min: vsb, max: vsb, step: 0.1 },
       });
-    const doc: SheetDoc = {
+    const doc = notACircuit({
       title: 'composed',
       polarity: 'n',
       params: [],
@@ -1144,7 +1148,7 @@ describe('runCondition', () => {
           },
         },
       ],
-    };
+    });
     const runs = runConditions(
       doc,
       soleDevice([retag(takenAt(0), 'tt', 27), retag(takenAt(0.3), 'ss', -40)]),
@@ -1333,7 +1337,7 @@ describe('runCondition', () => {
     // the held centre has no answer, and a centre that did not settle leaves nothing to ask at
     // the range end.
     const slow = retag(scaleQuantities(dev, { gds: 2 }), 'ss', -40);
-    const doc: SheetDoc = {
+    const doc = notACircuit({
       title: 'unsettled-held',
       polarity: 'n',
       params: [
@@ -1349,7 +1353,7 @@ describe('runCondition', () => {
       ],
       checks: [],
       operatingRange: [{ name: 'hi', set: { Spec: 'Spec_hi' } }],
-    };
+    });
     const [tt, ss] = runConditions(
       doc,
       soleDevice([retag(dev, 'tt', 27), slow]),

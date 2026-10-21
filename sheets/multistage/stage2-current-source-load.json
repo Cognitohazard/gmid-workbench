@@ -26,5 +26,9 @@
       "rhs": "ceiling"
     }
   ],
-  "provides": ["gds", "vdsat"]
+  "provides": ["gds", "vdsat"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "vb", "s": "gnd", "b": "gnd" },
+  "levels": { "out": "vx" },
+  "ports": ["out", "vb"]
 }

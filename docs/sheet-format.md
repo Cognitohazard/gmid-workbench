@@ -96,6 +96,10 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 | `blocks` | array, optional | Child sheets this sheet composes (see [Composition](#composition)). |
 | `provides` | array of string, optional | The names this sheet exposes to a parent. Inert to the engine at the top level, but load-bearing there as the sheet's declared interface (see [Port contracts](#port-contracts)). |
 | `operatingRange` | array, optional | The ends of the range the sheet claims to work across. The design this run produced is held fixed and asked at each one; the outcomes are its compliance, reported beside feasibility and never folded into it (see [The operating range](#the-operating-range-operatingrange)). |
+| `formatVersion` | `2`, optional | The document format. Absent: the earlier format, still read, though a sized device in it is refused until it is migrated (see [Every sheet names its wiring](#every-sheet-names-its-wiring)). `2`: the format with a netlist — the keys below (see [Wiring](#wiring-nodes-levels)). |
+| `nodes` | object, list, or `"none"`, optional | The wires the sheet's own device sits on, or `"none"` for a sheet that is not a circuit (see [Wiring](#wiring-nodes-levels)). |
+| `levels` | object, optional | The wires the sheet holds, each at the level an expression gives it (see [Held wires](#held-wires-levels)). |
+| `elements`, `ports`, `analyses` | optional | Passives and ideal sources, the wires a parent may connect, and small-signal analyses: accepted and shape-checked, not yet read (see [Elements, ports and analyses](#elements-ports-and-analyses)). |
 
 Evaluation runs in one pass: seed the params, compose any children, size the device, evaluate
 the equations in order, then run the checks. Everything a check or an equation can reference —
@@ -303,11 +307,14 @@ can be used for is set out in the table format:
 **Declare `vsb` whenever the source does not sit at the bulk.** The default is correct for a
 common-source device or a rail-referenced mirror, and wrong for every differential pair, cascode
 and source follower — where the source floats and body bias is a real, often large, effect. A 5T
-OTA's input pair measured **80 mV** of threshold shift against the body-grounded assumption. The
-engine cannot tell the cases apart, because a sheet describes devices and not nodes; it reports
-what it assumed and leaves the judgement to you. That is deliberately *not* a warning: about
-nine in ten of the library's sized devices leave `vsb` undeclared and are right to, and a warning at
-that hit rate teaches authors to ignore the channel.
+OTA's input pair measured **80 mV** of threshold shift against the body-grounded assumption. From
+the givens alone the engine cannot tell the cases apart, because they describe a device and not
+the wires around it; it reports what it assumed and leaves the judgement to you. That is
+deliberately *not* a warning: about nine in ten of the library's sized devices leave `vsb`
+undeclared and are right to, and a warning at that hit rate teaches authors to ignore the channel.
+A sheet that names its wiring does say where the body is (see [Wiring](#wiring-nodes-levels)): a
+body on ground under a source the netlist puts above it, with `vsb` left at 0, is a loop that does
+not close, and the wiring check reports it.
 
 A device whose `vsb` depends on its own `VGS` — an input pair standing on a tail node — is a bias
 loop, so close it with a solved parameter (see [Closing a bias loop](#closing-a-bias-loop-solvefor)).
@@ -334,76 +341,6 @@ of `-abs(vds)` and the reason. On a table with no `vdsat` column it reads `na`, 
 fails closed on: the design reads infeasible until the table carries the column. Validation
 refuses any other word, a `region` beside `diode: true` (the drain is the gate, so the question
 does not arise), and an authored check with the id `region` on a device that declares one.
-
-### Gate wiring (`wiring`)
-
-The givens slice two of a device's three terminal voltages as table axes — `vds` and `vsb`. The
-third, the gate, is usually an *output* of the sizing: `vgs` is the answer to "what drive does
-this current at this inversion level need". So a sheet can name the node a gate is tied to, size
-the device, and never compare the two. That is how a design ends up sized at one voltage and
-wired at another with every check still green.
-
-Binding `vgs` (see [The givens](#the-givens-givens)) turns that around for one specific case — a
-gate on the same wire *and* the same source node as another device, which is what a current mirror
-is. There the gate voltage is an input, and the identity holds by construction rather than by
-agreement. `wiring` remains the general channel: a gate tied to a rail, or to a node no other
-sized device sits on, still has nothing to bind to and is declared and checked here.
-
-The declaration therefore lives on the **block**, not in the givens — it is a fact about how the
-parent wired the child in, which is knowledge only the parent has:
-
-```json
-{ "name": "s2", "doc": { }, "params": { },
-  "wiring": { "gate": "V1", "source": "VDD" } }
-```
-
-| Key | Meaning |
-|-|-|
-| `gate` | Expression for the node the child's gate is tied to. |
-| `source` | Expression for the node its source sits on. |
-
-Both node expressions evaluate in the **parent's final scope**: unlike a param override, which
-sees only earlier siblings, the check runs once on the settled result, so every sibling's
-provides *and* the parent's own equations are in scope. A node the sheet derives as an equation is
-therefore as usable here as one it types as a param. The identity checked is
-
-```
-gate == source ± |the child's sized VGS|      (+ for an n child, - for a p one)
-```
-
-**No sign to write, and none to get wrong.** The magnitude comes from the child's own sizing and
-the direction from its declared `polarity`, so the check is the same on a signed PMOS export
-(negative `vgs` axis) and on one in N convention (positive) — the two conventions differ only in
-a sign the identity never reads. There is deliberately no author-supplied sign expression: a
-wrong one would silently invert the identity and report agreement on a design wired backwards,
-and the polarity the block already declares carries the same information with nothing to mistype.
-
-Because the voltage compared against is the **sizing's own answer**, not a scalar the child
-publishes, nothing in `provides` stands between the declaration and the number: a block that
-sizes can always be checked. A block with no givens has no sized gate-source voltage, and the
-evaluation says so rather than reading silently clean.
-
-**Warn, never fail.** A disagreement larger than **10 mV** (absolute, in the voltage domain —
-a relative tolerance would excuse a bigger error on a bigger supply) is reported as a
-`sheet-wiring` warning naming both voltages and the delta. It never changes the verdict and
-never repairs anything: the declaration and the sizing are two descriptions of one node, and
-which of them is wrong is a design question the author answers. An author who wants the
-disagreement to *gate* writes a hard check over the same two quantities — that is the escalation
-path, and it is a deliberate one, because a sheet mid-repair should still evaluate.
-
-**A half-declaration is a validation error.** `gate` without `source`, an unknown key, an
-expression that does not parse — none of these state an identity, and a sheet reported as
-wiring-checked when nothing was checked is exactly the silence this mechanism exists to break.
-Structural problems are the *only* route by which wiring reaches a verdict.
-
-A sheet may declare `wiring` on a child *and* claim operating ranges through `operatingRange`. The
-disagreement is then reported once per run — the base evaluation plus each range end — and that is
-intended, not a duplicate: a range end re-settles the SAME hardware at a different bias, so its
-residual is a measurement of the same identity under different conditions.
-
-The check is local to each node of the tree: a child sheet's own blocks are checked when that
-child evaluates. There is no cross-tree wiring graph and no KCL — this declares one identity
-per gate and checks it, nothing more.
 
 ## Equations (`equations`)
 
@@ -641,15 +578,16 @@ exposes named scalars to the parent through its `provides`.
 | `ref` | string | A library-sheet id to include by reference (resolved before evaluation). A block needs `doc` or `ref`; carrying **both** is an already-resolved snapshot — the embedded copy wins and the ref remains as provenance. |
 | `device` | string, optional | The device the child sizes against; absent ⇒ the child inherits its parent's. What the string must look like depends on who evaluates the sheet — see [Naming a block's device](#naming-a-blocks-device). |
 | `params` | object, optional | Overrides of the child's param values, each an expression evaluated in the **parent** scope. |
-| `wiring` | object, optional | The nodes the child's gate and source are tied to, checked against the `vgs` its own givens sized it to (see [Gate wiring](#gate-wiring-wiring)). |
+| `nodes` | object or list, optional | The wires, in this sheet's namespace, that the child's device sits on (see [Naming the wires](#naming-the-wires-nodes)). Format version 2. |
+| `ports` | object, optional | How the child's declared ports connect to this sheet's wires (see [Elements, ports and analyses](#elements-ports-and-analyses)). Format version 2. |
 
 A child's provided scalars surface in the parent namespace as flat names `name__key` (the
 engine has no member access, so `child.key` cannot parse — the join is a `__` separator).
 Neither the block `name` nor a provided key may contain `__`, with one exception: a child may
 re-export one of *its* children's provides (a name like `s1__Cin`) up the tree, so a deep
 quantity can surface at the top. The parent references these joined scalars and writes its own
-author math over them — this is scalar composition only; there is no node, port, or KCL
-machinery.
+author math over them. The values that cross a block boundary are scalars; which wires a child's
+device sits on is a separate, checked statement (see [Wiring](#wiring-nodes-levels)).
 
 **Document-order evaluation.** Children evaluate in the order they are listed, and each is
 evaluated *before* the parent's own givens. Two consequences:
@@ -747,7 +685,10 @@ but the app's sheet panel recognizes exactly this `<child>_sign` pattern and hin
 the bound table's recorded polarity (or a fully non-positive vgs axis) says the sign is
 still wrong. A few library sheets instead share one global sign param (e.g. `p_sign`)
 across several same-polarity children; those get no per-child hint, so prefer the
-per-child form when authoring.
+per-child form when authoring. In format version 2, mark such a param `"convention": "axis-sign"`:
+the wiring check then reads it as the table's axis direction where it multiplies a whole bias
+axis, and holds its value to the table each device using it is sized on (see
+[What the check reports](#what-the-check-reports)).
 
 ### Port contracts
 
@@ -799,6 +740,313 @@ block; a block with `givens` is instead taken at its word, because a sized devic
 table quantity including pass-through columns no table-independent check can enumerate.
 Re-export keys carry the `__` separator and are ruled on where the parent declares the block
 instead.
+
+## Wiring (`nodes`, `levels`)
+
+The givens state each device's own operating point — the drain and body voltages it is sized at
+— and nothing about which wire each terminal sits on. So a sheet can size two devices on one gate
+wire at two different gate voltages, write an inverter whose two gate voltages do not add up to
+the supply, or let one drawn device stand for two that sit at different drain voltages, with
+every check green. A sheet in format version 2 names its wiring: which wire each terminal of each
+sized device sits on, and which wires the sheet holds. The engine then checks, after sizing, that
+the voltages and currents those names imply agree with each other.
+
+The wiring is a **netlist of identities**. A wire's name says which terminals share it; a wire's
+level is never written beside it. Levels are *held* (supplies, references, inputs, a bias the
+application applies — listed in `levels`) or *derived*, for checking, from the devices on the wire.
+Nothing the check derives is fed back into the design: the sizing is exactly what it would be
+without the netlist, except that a diode connection the wires state is sized as one.
+
+### The format version (`formatVersion`)
+
+| `formatVersion` | read as |
+|-|-|
+| absent | the earlier format. It is read, but it can name no wires, so a sized device in it is refused with the migration message (see [Every sheet names its wiring](#every-sheet-names-its-wiring)); a diode is `diode: true`; every key of format 2 is refused by name, with the fix — add `"formatVersion": 2`; and `wiring` is not read |
+| `2` | the format with a netlist: `nodes`, `levels`, `elements`, `ports`, `analyses`, and a param's `convention` |
+| any other value | a format this app does not read. Importing it is refused — the document, or a sheet with a child embedded in that format — with a message naming its version, the versions this app reads, and the block of a child. A copy already stored is kept exactly as it was stored — not rebuilt key by key, which would drop what the newer format added — and opens with that message, not evaluated |
+
+The version belongs to a document. An embedded child states its own, and one that states none is
+read in the earlier format — so a library sheet written before the netlist composes into a new
+sheet unchanged, its device wired by the `nodes` of the block that composes it.
+
+A key of format version 2 is read only in a document of format version 2. In a document with no
+version, where validation refuses it, nothing reads it: its device is not sized as a diode by its
+wires, its levels hold nothing, and its wiring check does not run — the report says the document's
+wiring keys were not read (`not-evaluated`). A block's `nodes` and `ports` belong to the document
+that composes the block, and are read where that document is in format version 2.
+
+A block's `wiring` — the gate and source declaration documents carried before the netlist — is read
+by no format. A block that still carries one is refused in either format, by name, with the
+migration: the wires a block's device sits on are its `nodes` in format version 2, which a script
+can draft from the givens (see [The wiring proposal](#the-wiring-proposal)). A loader that rebuilds
+a document keeps a block's `wiring` as stored rather than dropping it, so a restored copy opens with
+that message and an import that carries one is refused saying what to write instead.
+
+### Naming the wires (`nodes`)
+
+A device sits on four wires, named in one **placement** — drain, gate, source and body:
+
+```json
+"nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" }
+```
+
+On a sheet that sizes a device, `nodes` names the wires of that sheet's own device. A child that
+does not wire itself — a single device, typically — is wired by the block that composes it, in the
+parent's namespace; the parent is the one that knows what it connected the child to:
+
+```json
+{ "name": "p", "doc": { }, "params": { }, "nodes": { "d": "out", "g": "in", "s": "vdd", "b": "vdd" } }
+```
+
+A child that **wires itself** — its own `nodes`, `levels`, elements, or blocks it wires — declares
+the wires a parent may connect in `ports`, and the parent connects it through the block's `ports`
+map, every declared port to one of its own wires or to `null` for one left open:
+
+```json
+{ "name": "ld2", "ref": "multistage/stage2-current-source-load",
+  "params": { "Ix": "s2__id", "vx": "V_out2" },
+  "ports": { "out": "out2", "vb": "vb2" } }
+```
+
+The child's wiring then joins the parent's check as one netlist: a mapped port **is** the parent
+wire it is mapped to, so the child's devices meet the parent's there, and every other wire of the
+child is its own, spelt `ld2__w` (a port mapped to `null` is `ld2__vb`, connected to nothing in the
+parent). `gnd` is the same wire everywhere. A child's levels hold the wires they name — through the
+map, a parent's — and a parent's override of a child param is read where the parent writes it. The
+child runs no check of its own; the parent's covers it. A block carries `nodes` or `ports`, never
+both; a child that wires itself and declares ports, composed by a sheet that names wiring, must be
+given the map.
+
+- A wire is an identifier — letters, digits and `_`, without the `__` that joins a child's names to
+  its block. `gnd` is the reference at 0 V; every other wire is an ordinary name.
+- **The gate on the drain wire is a diode connection.** `g == d` reads the device's table along its
+  vds = vgs diagonal before sizing, exactly as `diode: true` does, and adds no constraint of its
+  own. A sheet need not say `diode: true` as well; one that does must agree with its wires, and
+  `diode: false` beside `g == d`, `diode: true` beside a gate on another wire, and a stated `vds`
+  beside `g == d` are each refused.
+- **The gate on the source wire** holds vgs at 0 — a device that is off. It is a real constraint,
+  not a missing one, and is warned about as an accidental short unless the placement says
+  `"intent": "off"`.
+- **The drain on the source wire** shorts the device and is refused.
+- **A wire joins two terminals or more**, or is held in `levels`, or is a port. A wire one terminal
+  names is refused: a misspelt name is the usual cause.
+- **A wire only gates touch** draws no current and nothing on the sheet sets its level — the check
+  would read it off one gate's `vgs` and call it clean. It is warned about unless it is held or a
+  port: hold it, make it a port, or wire the device that drives it (a diode, a bias device).
+
+A **list of placements** places one sizing several times — the two halves of a balanced pair
+written once. One sizing is one operating point, so a list may not mix diode-connected and other
+placements, and after the check every placement must sit at the same gate, drain and body voltage
+within 10 mV. A list whose placements sit at different voltages is raised; one with a placement on
+a wire that has no trusted level is recorded as not shown to share a point — the loop that left the
+wire untrusted is what is raised. A mirror's
+reference and output differ in drain voltage: they are two blocks, tied by `W: "K*ref__W"` and
+`vgs: "ref__vgs"`.
+
+A sheet that is not a circuit — an abstract budget, a block-level estimate — says so with
+`"nodes": "none"`. It carries no wiring at all: no `levels`, `elements` or `analyses`, and no
+block `nodes`.
+
+### Held wires (`levels`)
+
+```json
+"levels": { "vdd": "VDD", "in": "CM_dc", "vbn": "V_a + casc_n__vgs" }
+```
+
+A held wire is one the designer states. Its level reads only numbers and params classed
+`independent`, and its dependencies cross nothing — no device quantity, no equation, no solved
+relation. Each way a level can fail that is refused by name:
+
+| the level reads | result |
+|-|-|
+| a number, or params classed `independent` | held |
+| a param the engine solves (`V_tail` under a design constraint) | refused — what a solve sets is derived |
+| a param classed `assumed` | refused — a typed guess held fixed becomes a fact |
+| a param with no class | refused — say whether it is independent |
+| a param a parent overrides from a device's quantity (`bias: "earlier__vgs"`) | refused — a level derived from a device is never held, however the path ends |
+| an equation | refused |
+| the node under a gate a `hold` re-solves (`V_a`) | refused — that wire is derived; hold the gate's wire instead |
+| exactly the `hold` expression of such a node (`V_a + casc_n__vgs`) | held: the gate's wire, at the level the hold keeps fixed |
+
+The last row is what `hold` already does (see [A node under a gate](#a-node-under-a-gate-hold)):
+where the design is held, the gate is kept at the value its hold expression took at the design
+point and the node under it is re-solved. Written as the hold itself, the gate's wire is held at a
+level derived at the design point; the node under it stays derived. It holds only a gate wire of
+the device whose `vgs` the hold reads — `"vbn": "V_a + casc_n__vgs"` where `casc_n`'s gate is on
+`vbn`, or each gate wire of a pair placed twice on the node — and is refused on any other wire. A hold that balances two currents holds no wire. `gnd`
+is 0 and is not listed.
+
+### What the check reports
+
+After the sheet is evaluated, every placement states three relations — its gate, drain and body
+voltage above its source, as the physical voltages its sizing and givens stand for — and every
+held wire one more: its level above a virtual reference. Kirchhoff's voltage law says those
+statements must agree around every loop they close. The check finds the loops, reports how far
+each misses, and derives every other wire's level from the held ones. It states the laws and
+propagates what they determine in one pass; it never solves for a value that would make them hold.
+
+- **Blocks and loops.** The relations split into blocks — the parts that stay connected when any
+  one wire is removed; the split is unique, so it depends on nothing but the netlist. In each
+  block a spanning tree is grown from the block's first held wire (by name), taking relations in a
+  fixed canonical order — the two wires, the kind, then the device and terminal pair — so the
+  verdict never depends on the order anything was written in. Each relation the tree leaves out
+  closes a loop, and its **residual** is that loop's misfit, in volts.
+- **Closes, or does not.** A block closes when every residual is within 10 mV (`NODE_TOL`) — the
+  resolution bias plans are written to. Its **closure error** is its largest residual. That is all the
+  closure error is: the largest misfit of a loop in this canonical basis. It is not an uncertainty
+  on any level. A path through several loops can add their misfits, so inside a block that closes,
+  a level read along another path can differ by more than 10 mV; each derived level is reported
+  with the relations it was derived along.
+- **Levels.** A held wire is always reported at the level it is held at. Every other wire is
+  derived from the first held wire (by name) that reaches it through blocks that close. A wire a
+  held wire reaches only through a block that does not close is **tainted** and given no value; a
+  group of wires no held wire reaches at all **floats** — one missing statement.
+- **Currents.** At every wire a drain or source terminal sits on, the check sums the currents
+  flowing into the wire — an n device draws its current in at the drain and returns it at the
+  source, a p device the other way, and an element as below — and reports the signed sum. One
+  terminal alone on a wire is its whole current: a device whose current has nowhere to go. At a
+  wire nothing holds, a sum past 0.1 % of the largest current there (below what interpolation
+  between table nodes resolves) is raised: a current with nowhere to go, or one current given to two
+  devices, as when one drawn input transistor carries half a tail current whose other half no device
+  draws. At a held wire the sum is what the ideal source holding it supplies. Where currents arrive
+  and leave — an output the application holds — a sum past 0.1 % is raised as "an ideal source
+  supplies X A": the devices do not agree on the current there, and holding the wire hides it.
+  Where every current flows the same way — a supply rail, ground — the sum is the supply current,
+  reported and not raised. A port of the sheet the check runs on is not summed; its other end is
+  outside.
+- **Constraints, counted by rank.** Each loop is also an equation over params and device
+  quantities. An equation that reduces to zero (two relations saying the same thing, as a diode's
+  gate and drain relations do, or a mirror given its reference's `vgs`) is an identity and is
+  dropped. One that merely holds at this design point is kept and reported as satisfied: it holds
+  because something makes it hold — a solve, a tuned value — and may stop. Two counts are reported
+  and never merged: **proven**, the rank of the equations that are linear in params and device
+  quantities, and **bound**, the rank of them all. "Over-determined by K" is stated only from the
+  proven count; where bound exceeds it, the terms the count could not read are named. Each
+  constraint is resolved by giving a device on a shared gate wire the other's `vgs`, by solving the
+  node with a `designConstraint` or `solveFor`, or by keeping it as an explicit check.
+- **Signs.** A p device's voltages on a table in N-style convention are magnitudes, and the check
+  maps them to physical differences through the device's polarity and the table's axis direction.
+  A param that multiplies a whole bias axis to follow the table's convention (`p_sign*(VDD -
+  V_out)`) is read as the axis direction only where it is declared `"convention": "axis-sign"`; its
+  value must then be exactly +1 or -1, must equal the axis direction of every table a device using
+  it is sized on, and must appear in a bias-axis expression. An undeclared param that happens to
+  equal 1 is never read as one. A declared selector is held to its table wherever it is read — on a
+  sheet that declares `"nodes": "none"` too, and through a block whose device its parent reads. The
+  body's direction is read from the table's own vsb axis: where
+  it holds no negative value it is a magnitude — the body above the source for a p device, below it
+  for an n one — whatever the gate and drain axes do (a signed p export can store vgs and vds
+  negative and vsb positive); a vsb axis with negative values follows the gate axis.
+
+Each loop that does not close, each floating group (one that reaches a port is connected outside
+and is not raised), each relation the check could not form (a device that did not size), each
+current imbalance and each placement list at different voltages is a `sheet-nodes` **warning**, giving both claims of a failing loop with what each was read
+along. Voltages are quoted in volts and currents with an SI prefix (`10 µA`). A warning never changes feasibility, and nothing is repaired: which of the two statements
+is not the circuit is the author's to say. The problems with the netlist itself — a misspelt wire,
+a short, a level that may not be held, a flag the wires contradict, a selector the table
+contradicts — are errors.
+
+The result carries the check as `nodes`: `state` (`checked-clean`, `checked-with-findings`,
+`not-applicable` for `"nodes": "none"`, or `not-evaluated`, below), every derived level with its
+path, the tainted and floating wires, each block that did not close with its residuals, the rank
+counts and their constraints, every current sum, and the placement verdicts. A composed child whose
+wiring joins its parent's is covered by the parent's report; one that runs its own check (its parent
+names no wiring) carries it on its block's report. Each range end's report carries its own run's
+check the same way.
+
+**The check runs once, on the settled design, and only where the sizing stood.** Every sheet's
+wiring in a composed tree — a child that runs its own check included — is read once the whole tree
+has settled, never at a solver's intermediate probe. And the check reads a sized design, so where a
+point has none it does not run: a run that did not stand (a solve that did not land, a device that
+did not size), or a range end or another process condition whose held run read a device off its
+table's hull or did not complete (see [The operating range](#the-operating-range-operatingrange)) —
+the same reason a block that did not size is skipped. Its report, and the report of every child in
+the tree that would have run its own check, is `not-evaluated`, with no levels and no findings:
+neither clean nor with findings, and nothing it would have read is reported as a wiring problem. A
+design sized under an assumed level was sized: it is checked, although its compliance points have
+no answer.
+
+### Elements, ports and analyses
+
+An element sits between two wires:
+
+```json
+"elements": [{ "name": "Iref", "kind": "I", "between": ["vdd", "bias_d"], "value": "I_tail" }]
+```
+
+`name` is an identifier, unique in the sheet; `kind` is `R`, `C`, `I` or `V`; `between` is
+`[from, to]`; `value` is a number or an expression. One convention covers every kind:
+
+- **Current flows from `between[0]` to `between[1]` inside the element** — it leaves the `from`
+  wire and arrives at the `to` wire. So the element above takes `I_tail` out of the supply and
+  delivers it into the diode's drain — the shape a programmed reference current is drawn in, which
+  balances the diode's drain current at `bias_d`. A negative value is a current the other way.
+- **Voltage is read from `between[0]` to `between[1]`**: a `V` element states V(from) − V(to) =
+  value. A floating battery — a level shift between two wires, neither of them held — is a `V`
+  element between them, written with `from` on the higher wire for a positive value: `"between":
+  ["vg_p", "vg_n"], "value": "V_shift"` states that `vg_p` sits `V_shift` above `vg_n`.
+
+How each kind is counted:
+
+| kind | in the check |
+|-|-|
+| `I` | an ideal current source: its value, signed by the convention above — taken out of the `from` wire's sum and added to the `to` wire's |
+| `V` | a relation like a placement's, V(from) − V(to) = value, in the loops; a loop through it that does not close is reported like any other. Its current is whatever the circuit needs, so the sums at its two wires are what it supplies: reported, and never raised as an imbalance |
+| `R` | its current, (V(from) − V(to)) / R from `from` to `to`, where the check gives both ends a trusted level (one derived through blocks that close); otherwise its current is unknown, its wires are not summed, and a note says so. R > 0 |
+| `C` | nothing at DC. C ≥ 0 |
+
+An element's value written as an expression may read params classed `independent` or `assumed`
+and equations of them, never a device quantity, a solved relation or an analysis.
+
+`ports` are the wires a parent may connect (see [Naming the wires](#naming-the-wires-nodes)): a port
+is never reported as floating, and a port of the sheet the check runs on is not summed. `analyses`
+(small-signal gain, impedance and noise asked for by name) are accepted and shape-checked, and not
+yet evaluated.
+
+### The wiring proposal
+
+Writing the netlist for a sheet that predates it starts from a draft, made by three functions of the
+core that a script calls — the app has no control for them (see "Scripting the core" in the
+README). `proposeWiring(doc)` reads the sheet's givens, overrides and holds and drafts each device's
+four wires and the held levels; `formatWiringProposal` prints the draft for an author to read, and
+`applyWiringProposal` writes it into a format-version-2 copy — the input is untouched — which the
+author confirms or corrects and then imports. The draft is read from the givens alone; a block's
+earlier `wiring` is not read, and the copy drops it, with a note saying so. Each wire is marked:
+
+- **certain** — only a diode connection: `diode: true` asserted a physical connection;
+- **inferred** — a shared `vgs` read as a shared gate and source, a body at its source's level (`vsb` left at 0), two terminals written at the same level (`vds = V_out -
+  V_tail` puts the drain on `V_out`'s wire and the source on `V_tail`'s), a gate one gate-source
+  voltage from its source, a gate a `hold` keeps fixed. The same level is not the same wire, so
+  every inferred join is a proposal to confirm;
+- **unknown** — a terminal nothing places, given a fresh name to confirm or replace.
+
+The draft reads a drain voltage as a level only where it says one: a difference of two levels
+places both ends; one value places the drain when it is a bare name or a number — over ground, or
+above the source an n device's `vsb` places (an n device's `vsb`, read whole, is its source's level
+over a grounded body); any other single expression (`VDD - V_in + vgs_est`) places nothing and is
+noted. Where it holds an output the application holds — a wire where currents arrive and leave — it
+notes that the check will report the current there. A hold on the node under a gate drafts that
+gate's wire held at the hold expression, for a block's device and for the sheet's own alike.
+
+A wire the draft leaves with one terminal would be a misspelt name to validation, so each is made
+something: held at the level the draft placed it at — a number, or the drain or body voltage that
+placed it — where that level may be held, and otherwise a port of the top sheet (`ports`), the wire
+a parent or the application connects; a note says which and why. On a sheet below the top, a port
+would need its parent block's port map too, so the wire is left to the author with a note. A child
+that wires itself is connected through its ports, which the draft leaves to the author.
+
+### Every sheet names its wiring
+
+A sheet either names the wires every sized device sits on, or declares `"nodes": "none"`. There is
+no third state in which wiring is simply not checked: a sheet that does neither is refused — a
+validation error, so it is never evaluated as a design — with the devices it leaves unwired named.
+
+**What the earlier format now means.** A document with no format version is still read, but it
+cannot name a wire, so a sized device in one is refused by this rule until the document is
+migrated: the refusal says so and names the two functions a script calls to draft the migration
+from the givens — `proposeWiring`, then `applyWiringProposal` for the format-version-2 copy to
+confirm (see [The wiring proposal](#the-wiring-proposal)). A block's earlier `wiring` is not read in
+any format. An earlier-format child composed into a
+format-version-2 sheet is not refused: the block that composes it names its device's wires.
 
 ## Closing a bias loop (`solveFor`)
 
@@ -1299,9 +1547,10 @@ exactly — an author reading a green chip should know what it is and is not a s
   voltage by a balance, reads its current from the table, so it carries a different one once the
   end moves its drain or its gate, and so does every device whose current is written as a share
   of it. That is the circuit behaving as drawn;
-  the note is there because a claim about the range rests on it. Separately, `validateSheet` names two blocks whose
-  `wiring` puts them on one gate and one source while each is sized at its own operating point —
-  the declaration is never allowed to drive the sizing, only to point out that nothing does.
+  the note is there because a claim about the range rests on it. Separately, where a netlist puts
+  two devices on one gate wire and one source wire while each is sized at its own operating point,
+  the wiring check reports the loop they leave open — the netlist is never allowed to drive the
+  sizing, only to point out that nothing does.
 - **Where the transformation rewrites a device's givens, the data-ceiling verdict carries no
   information.** For the same reason its `gm` drifts low, its operating point is read out of the
   table rather than requested, so `gm/ID` is at or below the data ceiling by construction — that
@@ -1339,7 +1588,7 @@ moved — the ranking a designer needs to know what to turn next.
 
 ## The author's contract
 
-The engine evaluates what a sheet declares; it never traverses a circuit. That division of
+The engine evaluates what a sheet declares; it never solves a circuit. That division of
 labor puts specific responsibilities on the sheet author. They are collected here in one
 place, each with the check that catches a violation. The pattern throughout: the author
 states the bias plan honestly, and the engine makes a false statement loud — it never
@@ -1374,8 +1623,9 @@ silently repairs one.
    at one table and one bias.
    (`diode: true` and a bound `vgs` are independent and may both appear: the connection chooses
    the diagonal, the bound `vgs` chooses the point on it. A declared `vds` is what the connection
-   excludes.) Backstop: the `sheet-gate-tie` validation rule flags two blocks whose `wiring`
-   puts them on one gate and one source while each is sized at its own operating point.
+   excludes.) The wires say it too: a gate on its drain wire is a diode connection, and two
+   devices on one gate wire and one source wire that are sized apart leave a loop the wiring check
+   measures. Backstop: the wiring check reports that loop's residual.
 5. **Close a genuine loop explicitly, or do not close it at all.** `solveFor` is for a
    quantity defined in terms of the device's own answer; `designConstraint` is for a typed specification
    an internal node must produce. Both state the range the answer must lie in, and the note says
@@ -1411,11 +1661,11 @@ silently repairs one.
     it: a solve, a derivation from another block's output, a bias network the application
     provides, or a deliberate choice a check tests. Writing the sentence is the point —
     "this node is set by …" has exactly one honest completion, and a node whose setter is a
-    device's own gate cannot honestly be typed as a free number. Backstop: declare the
-    child's `wiring` (see *Gate wiring*) and the engine checks that node against the same
-    device's sized `vgs` on every evaluation, reporting a disagreement past 10 mV. The note says
-    which description is authoritative; the check says whether the two still agree, so a
-    gate that must sit one `vgs` below a rail, or one gate shared by two devices, no longer
+    device's own gate cannot honestly be typed as a free number. Backstop: the node's wire
+    carries the check — a node the sheet holds is in `levels`, every other is derived from the
+    devices on it, and the wiring check reports wherever two of them disagree past 10 mV. The
+    note says which description is authoritative; the check says whether the two still agree, so
+    a gate that must sit one `vgs` below a rail, or one gate shared by two devices, no longer
     evaluates without complaint.
 12. **A programmed current sets one device.** The current a bias network programs — a reference
     current, a tail current — is the `id` of exactly one device on the sheet. Every other device
@@ -1434,6 +1684,16 @@ silently repairs one.
     reading another block's output, and fails on any curated sheet where that is more than
     one; `validateSheet` does not check this.
 
+13. **Name the wiring.** Every sized device names the four wires it sits on — the sheet's own in
+    its `nodes`, a child's on the block that composes it — and the sheet holds, in `levels`, only
+    the wires the designer states: supplies, references, inputs, an applied bias. A sheet that is
+    not a circuit says `"nodes": "none"`. A diode connection is the gate on the drain wire; two
+    devices on a shared gate are on one wire, not two wires typed at one voltage. Backstop: the
+    wiring check reports every loop the netlist closes that does not close within 10 mV, with both
+    claims, every wire no held wire reaches, and every current sum that does not balance (see
+    [Wiring](#wiring-nodes-levels)); a sheet that names no wiring and does not say `"none"` is
+    refused (see [Every sheet names its wiring](#every-sheet-names-its-wiring)).
+
 ## A complete worked example
 
 A single-NMOS sizing sheet: fix `gm` from a bandwidth spec, use `gm/ID` as the efficiency knob,
@@ -1443,6 +1703,7 @@ GBW (so it is not a tautology on a given value):
 
 ```json
 {
+  "formatVersion": 2,
   "title": "Single NMOS gm/ID sizing",
   "description": "Sizes one NMOS for a bandwidth spec: $g_m$ is fixed from GBW into $C_L$, $g_m/I_D$ is the efficiency knob, and $I_D/W$ falls out of the lookup. Change the spec params freely; tune the choice params and watch the headroom/noise trade.",
   "polarity": "n",
@@ -1459,6 +1720,9 @@ GBW (so it is not a tautology on a given value):
       "note": "drain bias the sizing slices at; body-grounded, so vsb = 0" }
   ],
   "givens": { "L": "L", "gm": "2*pi*GBW_target*CL", "gm_id": "gm_id", "vds": "V_ds", "vsb": "0" },
+  "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" },
+  "levels": { "out": "V_ds" },
+  "ports": ["in"],
   "equations": [
     { "name": "Cout", "expr": "cgg + CL", "unit": "F" },
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
@@ -1479,7 +1743,10 @@ surface `vstar`, `cgg`, `ceiling`, and the thermal-noise density `vnth_m`. The g
 the operating point with `vds` (from `V_ds`) and `vsb` (0, body-grounded), so the sizing
 slices the table at a stated point instead of borrowing the caller's bias. Stating a drain
 voltage means the sheet runs on a table that sweeps `vds`, or was taken at exactly that drain
-voltage; `vsb = 0` is also what a table with no `vsb` column is read as. The two physical checks
+voltage; `vsb = 0` is also what a table with no `vsb` column is read as. The netlist puts the
+drain on the wire `out`, held at `V_ds`, the gate on the input port `in`, and the source and body
+on ground, so the wiring check confirms that the drain voltage the sizing read is the level the
+sheet holds the wire at. The two physical checks
 enforce a physical `gm/ID` ceiling and a saturation-headroom floor. The spec check holds the
 input noise under target. The advisory check compares the *actual* GBW — which includes the sized
 `cgg` loading — against the target, so it reports how much the gate capacitance eats the

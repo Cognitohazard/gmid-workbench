@@ -3,7 +3,14 @@
   "description": "A source-degenerated current mirror: each leg puts a resistor in series with the source. Degeneration does two things. It raises the output resistance by the local-feedback factor $(1 + (g_m + g_{mb})*R_s)$ — the resistor sits in the source, so the source-body generator feeds back through it exactly as $g_m$ does — so the output current holds steadier against the output node voltage. And it improves matching: a threshold mismatch now competes with the IR drop across $R_s$, so its effect on the current divides by $(1 + (g_m + g_{mb})*R_s)$; the threshold generator sits at the gate, so only $g_m$ converts it to a current — but the source lift it causes feeds back through both source-referred generators, so the same $(g_m + g_{mb})$ factor divides it. The price is headroom, the resistor drops $I*R_s$ that the output node must clear on top of the device saturation voltage. Both legs are arranged to drop the same $I_{in}*R_s$ at the target ratio (the K-times output leg uses $R_s/K$), so the two source nodes would sit at one potential if the output leg carried exactly $K*I_{in}$. It does not: the output device sits at a different drain voltage from the diode-connected reference, so it carries a little more or less, and its resistor drops that current times $R_s/K$. So the output device's source is solved, not assumed: it is the node at which the device's own current, through $R_s/K$, drops exactly that node voltage. The output device shares the reference's gate wire, so its gate-source voltage is the reference's gate (its diode drop above its own lifted source) less that node, and its source-body bias is the node. That is the degeneration feedback acting on the systematic error itself: a current above target lifts the source, which takes gate-source voltage away and pulls the current back, so the systematic-error row reads the drain-voltage mismatch divided by roughly the local-feedback factor. The matching-improvement formula is exact only where threshold mismatch dominates; the LUT $g_{ds}$ and Pelgrom spread are the ground truth these rows annotate.",
   "polarity": "n",
   "params": [
-    { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
+    {
+      "name": "I_in",
+      "value": 20e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "reference current",
+      "class": "independent"
+    },
     {
       "name": "K",
       "value": 1,
@@ -11,7 +18,8 @@
       "max": 8,
       "unit": "1",
       "role": "choice",
-      "note": "mirror ratio W_out/W_ref; degeneration mirrors are usually 1:1, and the output leg scales its resistor to R_s/K to keep the IR drops matched"
+      "note": "mirror ratio W_out/W_ref; degeneration mirrors are usually 1:1, and the output leg scales its resistor to R_s/K to keep the IR drops matched",
+      "class": "independent"
     },
     {
       "name": "R_s",
@@ -20,7 +28,8 @@
       "max": 100000,
       "unit": "ohm",
       "role": "choice",
-      "note": "reference-leg source-degeneration resistor; the output leg uses R_s/K"
+      "note": "reference-leg source-degeneration resistor; the output leg uses R_s/K",
+      "class": "independent"
     },
     {
       "name": "V_out",
@@ -125,7 +134,8 @@
         "L_r": "L",
         "gm_id_r": "gm_id_m",
         "vsb_r": "I_in*R_s"
-      }
+      },
+      "nodes": { "d": "ngate", "g": "ngate", "s": "sref", "b": "gnd" }
     }
   ],
   "givens": {
@@ -229,5 +239,14 @@
       "rhs": "match_target"
     }
   ],
-  "provides": ["Rout"]
+  "provides": ["Rout"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "ngate", "s": "sout", "b": "gnd" },
+  "levels": { "out": "V_out" },
+  "elements": [
+    { "name": "rs_ref", "kind": "R", "between": ["sref", "gnd"], "value": "R_s" },
+    { "name": "rs_out", "kind": "R", "between": ["sout", "gnd"], "value": "R_s/K" },
+    { "name": "iref", "kind": "I", "between": ["vsup", "ngate"], "value": "I_in" }
+  ],
+  "ports": ["vsup"]
 }

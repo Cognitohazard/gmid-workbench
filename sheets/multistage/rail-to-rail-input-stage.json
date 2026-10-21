@@ -88,7 +88,8 @@
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign of the PMOS-pair table: +1 for the N-style demo axis, -1 for a signed-PMOS axis"
+      "note": "vds sign of the PMOS-pair table: +1 for the N-style demo axis, -1 for a signed-PMOS axis",
+      "convention": "axis-sign"
     }
   ],
   "blocks": [
@@ -233,5 +234,7 @@
       "note": "the total transconductance swings by this ratio across the CM range; constant-gm control (current switching to hold gm_n + gm_p constant) is the standard fix and is a simulation-level technique out of scope here"
     }
   ],
-  "provides": ["gm_min", "gm_mid", "gm_max", "I_q"]
+  "provides": ["gm_min", "gm_mid", "gm_max", "I_q"],
+  "formatVersion": 2,
+  "nodes": "none"
 }

@@ -3,7 +3,7 @@
   "description": "The bare differential-pair transconductor sized by half-circuit: one input device, the tail source under it, and the diode-connected reference that biases the tail. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; and each side of the pair carries half of what the tail delivers. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. The engine searches $V_{tail}$ in its range until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
   "polarity": "n",
   "params": [
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
     { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
     { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
@@ -82,7 +82,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number"
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number",
+      "class": "independent"
     },
     {
       "name": "gm_id_in",
@@ -142,7 +143,8 @@
         "I_b": "I_tail",
         "L_b": "L_tail",
         "gm_id_b": "gm_id_tail"
-      }
+      },
+      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "tail",
@@ -190,7 +192,8 @@
         "vgs_t": "bias__vgs",
         "L_t": "L_tail",
         "vds_t": "V_tail"
-      }
+      },
+      "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "in",
@@ -231,7 +234,11 @@
         "gm_id_i": "gm_id_in",
         "vds_i": "V_out_dc - V_tail",
         "vsb_i": "V_tail"
-      }
+      },
+      "nodes": [
+        { "d": "outn", "g": "vinp", "s": "tail", "b": "gnd" },
+        { "d": "outp", "g": "vinn", "s": "tail", "b": "gnd" }
+      ]
     }
   ],
   "equations": [
@@ -367,5 +374,14 @@
       "note": "the claimed high edge, checked the same way; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": {
+    "vinp": "CM_dc",
+    "vinn": "CM_dc",
+    "outn": "V_out_dc",
+    "outp": "V_out_dc",
+    "vdd": "VDD"
+  },
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }]
 }

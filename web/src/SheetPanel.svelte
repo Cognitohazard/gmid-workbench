@@ -25,6 +25,8 @@
     SENSITIVITY_REL_STEP,
     resolveSheetRefs,
     flattenSheetDoc,
+    sheetFormat,
+    unreadFormat,
     formatEng,
     formatSI,
     noiseSourceLabel,
@@ -69,7 +71,7 @@
 
   let {
     device,
-    cfg,
+    cfg: stored,
     sweep = '',
     sweep2 = '',
     cornerMode = 'nominal',
@@ -99,6 +101,14 @@
     onCornerKeys: (k: ConditionKey[]) => void;
   } = $props();
 
+  // A document in a format this app does not read is kept as it was stored and shown only as the
+  // reason it is refused. Nothing else is read from it — its keys may mean what this build does
+  // not know — so the panel works on an empty sheet in its place, evaluates nothing, and offers
+  // the picker; picking a sheet replaces it.
+  const REFUSED: SheetDoc = { title: '', polarity: 'n', params: [], equations: [], checks: [] };
+  const refusal = $derived(sheetFormat(stored).reason);
+  const cfg = $derived<SheetDoc>(refusal ? REFUSED : stored);
+
   // The live sheet library (curated ∪ user-imported) and its by-reference index.
   const menu = $derived(sheetMenu());
   const refs = $derived(sheetRefIndex());
@@ -122,7 +132,7 @@
     job: JobOf<K> | undefined,
     answer: (r: JobResults[K] | null) => void,
   ): void {
-    if (!job || !primary) {
+    if (!job || !primary || refusal) {
       evaluator.cancel(kind);
       answer(null);
       return;
@@ -133,9 +143,6 @@
   // One unresolved or mis-parameterized child makes every parent expression that
   // reads its provides "not defined" — a ~20-line wall for one root cause. Collapse
   // the fan-out to one line per child prefix; every other warning passes through.
-  /** One diagnostic line: what happened, and — where the finding needs a concept to read it —
-   *  the standing explanation of what the check is, carried into the tooltip. */
-  type WarnLine = { text: string; help?: string };
   /** Validation and evaluation diagnostics as one list — walked twice below (warnings, then the
    *  informational solver notes), so the concatenation is built once. */
   const allWarn = $derived.by(() => [...rr.warnings, ...(result?.warnings ?? [])]);
@@ -143,7 +150,7 @@
     const ws = allWarn.filter((w) => w.severity !== 'info');
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive grouping scratch, discarded on return
     const byChild = new Map<string, { count: number; first: string }>();
-    const rest: WarnLine[] = [];
+    const rest: string[] = [];
     for (const w of ws) {
       // The core reports the undefined name structurally; a child-provide symbol
       // (`ld__gm`) groups under its child prefix.
@@ -153,22 +160,13 @@
         const e = byChild.get(child) ?? { count: 0, first: w.message };
         e.count++;
         byChild.set(child, e);
-      } else {
-        // A gate-wiring disagreement states two voltages and nothing about WHY the tool is
-        // comparing them; the concept — a node the sizing and the schematic describe
-        // differently — rides along in the tooltip so the number has a meaning.
-        rest.push({
-          text: w.message,
-          ...(w.rule === 'sheet-wiring' ? { help: CONTROL_HELP.wiringWarning } : {}),
-        });
-      }
+      } else rest.push(w.message);
     }
-    const collapsed = [...byChild].map(([child, e]): WarnLine => ({
-      text:
-        e.count > 1
-          ? `block "${child}" resolves nothing yet — ${e.count} dependent expressions read n/a (assign its device and check its params)`
-          : e.first,
-    }));
+    const collapsed = [...byChild].map(([child, e]) =>
+      e.count > 1
+        ? `block "${child}" resolves nothing yet — ${e.count} dependent expressions read n/a (assign its device and check its params)`
+        : e.first,
+    );
     return [...rest, ...collapsed];
   });
 
@@ -180,10 +178,10 @@
   );
 
   // Onboarding hints lead the same list the diagnostics land in — they are the likeliest cause of
-  // the diagnostics below them — and carry no help of their own (they already name the remedy).
-  const warnLines = $derived.by(() => [
-    ...(evalError ? [{ text: evalError }] : []),
-    ...signHints.map((text): WarnLine => ({ text })),
+  // the diagnostics below them, and they already name the remedy.
+  const warnLines = $derived.by((): string[] => [
+    ...(evalError ? [evalError] : []),
+    ...signHints,
     ...shownWarnings,
   ]);
 
@@ -353,6 +351,22 @@
     firstRun
       ? 'evaluating…'
       : FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
+  );
+  /** The DC wiring check's verdict on the run shown, in a few words — none for a sheet that says it
+   *  is not a circuit or names no wiring (see NodesReport.state). */
+  const wiringText = $derived.by((): string | null => {
+    const n = result?.nodes;
+    if (!n || n.state === 'not-applicable') return null;
+    if (n.state === 'not-evaluated') return 'wiring: not evaluated';
+    if (n.state === 'checked-clean') return 'wiring: clean';
+    return `wiring: ${n.findings} ${n.findings === 1 ? 'finding' : 'findings'}`;
+  });
+  const wiringClass = $derived(
+    result?.nodes?.state === 'checked-clean'
+      ? 'ok'
+      : result?.nodes?.state === 'checked-with-findings'
+        ? 'warn'
+        : 'skip',
   );
   /** Whether the sheet claims an operating range at all — read from the doc, so the range
    *  column is there even when no condition could be evaluated. */
@@ -744,6 +758,9 @@
     if (!Number.isFinite(value)) return;
     onChange({ ...cfg, params: cfg.params.map((p) => (p.name === name ? { ...p, value } : p)) });
   }
+  /** A menu entry's label: a sheet in a format this app does not read is named by that alone. */
+  const menuLabel = (s: SheetDoc): string =>
+    sheetFormat(s).format === 'unknown' ? unreadFormat(s.formatVersion) : s.title;
   function pickSheet(e: Event): void {
     const sel = e.currentTarget as HTMLSelectElement;
     const [gi, si] = sel.value.split(':').map(Number);
@@ -1289,468 +1306,490 @@
   </div>
 {/snippet}
 
+{#snippet picker()}
+  <select class="rm" onchange={pickSheet} title={CONTROL_HELP.sheet}>
+    <option value="" selected>sheet…</option>
+    {#each menu as g, gi}
+      <optgroup label={g.label}>
+        {#each g.sheets as s, si}<option value={`${gi}:${si}`}>{menuLabel(s)}</option>{/each}
+      </optgroup>
+    {/each}
+  </select>
+{/snippet}
+
 <div class="sheet">
-  <div class="shead">
-    <select class="rm" onchange={pickSheet} title={CONTROL_HELP.sheet}>
-      <option value="" selected>sheet…</option>
-      {#each menu as g, gi}
-        <optgroup label={g.label}>
-          {#each g.sheets as s, si}<option value={`${gi}:${si}`}>{s.title}</option>{/each}
-        </optgroup>
-      {/each}
-    </select>
-    <strong>{cfg.title}</strong>
-    <!-- Two answers, never one. FEASIBILITY: the design where it was sized — stamped with that
+  {#if refusal}
+    <!-- A document in a format this app does not read: the reason, and the picker that replaces
+       it. Nothing else is read from it. -->
+    <div class="shead">{@render picker()}</div>
+    <p class="perr prefused" data-refused>{refusal}</p>
+  {:else}
+    <div class="shead">
+      {@render picker()}
+      <strong>{cfg.title}</strong>
+      <!-- Two answers, never one. FEASIBILITY: the design where it was sized — stamped with that
          condition whenever more than one is on the page. COMPLIANCE: how many of the points the
          design is promised to work at it was found to comply at, with the ones that failed, the
          ones that could not be answered and the ones never run each counted apart. -->
-    <span class="feasb {FEAS_CLASS[agg.feasibility]}" title={CONTROL_HELP.feasBadge}>
-      {feasText}{#if binding && agg.feasibility === 'infeasible'}<i
-          >{binding.id} {pct(binding.marginPct)}</i
-        >{/if}
-    </span>
-    {#if hasCompliance}
-      <span class="compb {complianceClass}" title={CONTROL_HELP.compliance} data-compliance
-        >{complianceText}</span
-      >
-    {/if}
-    {#if busyText}
-      <span class="sbusy" role="status" data-busy title={CONTROL_HELP.evaluating}>{busyText}</span>
-    {/if}
-    {#if refKey && !multi}
-      <span class="scond" data-condition={conditionLabel(refKey)} title={CONTROL_HELP.cornerMode}
-        >at {conditionLabel(refKey)}</span
-      >
-    {/if}
-    <!-- What the verdict rests on: a doc-level fact carried on the result, so it costs nothing
+      <span class="feasb {FEAS_CLASS[agg.feasibility]}" title={CONTROL_HELP.feasBadge}>
+        {feasText}{#if binding && agg.feasibility === 'infeasible'}<i
+            >{binding.id} {pct(binding.marginPct)}</i
+          >{/if}
+      </span>
+      {#if hasCompliance}
+        <span class="compb {complianceClass}" title={CONTROL_HELP.compliance} data-compliance
+          >{complianceText}</span
+        >
+      {/if}
+      {#if wiringText}
+        <span class="wireb {wiringClass}" title={CONTROL_HELP.wiringState} data-wiring
+          >{wiringText}</span
+        >
+      {/if}
+      {#if busyText}
+        <span class="sbusy" role="status" data-busy title={CONTROL_HELP.evaluating}>{busyText}</span
+        >
+      {/if}
+      {#if refKey && !multi}
+        <span class="scond" data-condition={conditionLabel(refKey)} title={CONTROL_HELP.cornerMode}
+          >at {conditionLabel(refKey)}</span
+        >
+      {/if}
+      <!-- What the verdict rests on: a doc-level fact carried on the result, so it costs nothing
          here and reads the same whichever condition the reference run is. -->
-    {#if evaluated && result?.assumptions?.length}
-      <span class="sassume" title={CONTROL_HELP.assumptions}
-        >sized under {result.assumptions.length}
-        {result.assumptions.length === 1 ? 'assumption' : 'assumptions'}: {result.assumptions.join(
-          ', ',
-        )}</span
-      >
-    {/if}
-    <!-- Which noise the noise rows are: the table's own, or the γ = 1.0 estimate. -->
-    {#if evaluated && noiseText}
-      <span class="snoise" title={CONTROL_HELP.noiseSource}>noise: {noiseText}</span>
-    {/if}
-    <!-- What each held expression came to at this run: the gate bias a node under a gate needs,
+      {#if evaluated && result?.assumptions?.length}
+        <span class="sassume" title={CONTROL_HELP.assumptions}
+          >sized under {result.assumptions.length}
+          {result.assumptions.length === 1 ? 'assumption' : 'assumptions'}: {result.assumptions.join(
+            ', ',
+          )}</span
+        >
+      {/if}
+      <!-- Which noise the noise rows are: the table's own, or the γ = 1.0 estimate. -->
+      {#if evaluated && noiseText}
+        <span class="snoise" title={CONTROL_HELP.noiseSource}>noise: {noiseText}</span>
+      {/if}
+      <!-- What each held expression came to at this run: the gate bias a node under a gate needs,
          or the zero a current balance reads. -->
-    {#if evaluated && result?.held && Object.keys(result.held).length}
-      <span class="sassume" data-held title={CONTROL_HELP.held}
-        >holds {Object.entries(result.held)
-          .map(
-            ([name, v]) => `${cfg.params.find((p) => p.name === name)?.hold ?? name} at ${fmt(v)}`,
-          )
-          .join(' · ')}</span
-      >
-    {/if}
-    <!-- On demand only: each knob costs two full evaluations, so this never runs with the badge. -->
-    <button
-      class="sensb"
-      class:on={sens !== null || sensBusy}
-      disabled={!sensReady && !shot && !sensBusy}
-      title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sensitivity}
-      onclick={toggleSens}>{sensBusy ? 'sensitivities…' : 'sensitivities'}</button
-    >
-    {#if result?.sizing && !multi}
-      {#if result.sizing.ok}
-        <span class="bind"
-          >W={fmt(result.sizing.W)}m · V<sub>GS</sub>={fmt(result.sizing.vgs)}V · I<sub>D</sub
-          >={fmt(result.sizing.id)}A</span
-        >
-        {#if biasText}
-          <span class="sbias" title={biasHelp(result.sizing?.assumed)}>@ {biasText}</span>
-        {/if}
-      {:else}
-        <span class="perr" title={result.sizing.error}>sizing: {result.sizing.error}</span>
-      {/if}
-      {@render biasCtl(cfg.givens, result.sizing, [])}
-    {/if}
-    {#if sweepable.length}
-      <label class="swsel" title={CONTROL_HELP.sheetSweep}>
-        sweep
-        <select
-          value={active}
-          onchange={(e) => onSweep((e.currentTarget as HTMLSelectElement).value)}
-        >
-          <option value="">off</option>
-          {#each sweepable as p}<option value={p.name}>{p.name}</option>{/each}
-        </select>
-      </label>
-    {/if}
-    {#if active && sweepable2.length}
-      <label
-        class="swsel2"
-        title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sheetSweep2}
-      >
-        ×
-        <select
-          value={active2}
-          disabled={multi}
-          onchange={(e) => onSweep2((e.currentTarget as HTMLSelectElement).value)}
-        >
-          <option value="">off</option>
-          {#each sweepable2 as p}<option value={p.name}>{p.name}</option>{/each}
-        </select>
-      </label>
-    {/if}
-    <span class="sexp">
-      <button title={CONTROL_HELP.copyResults} disabled={!result} onclick={copyResults}
-        >{copied ? 'copied ✓' : 'copy results'}</button
-      >
-      <button title={CONTROL_HELP.exportSheet} onclick={() => exportSheet(false)}>⤓ json</button>
-      {#if hasRefs}
-        <button
-          disabled={flatBlocked}
-          title={flatBlocked
-            ? 'a reference did not resolve (see warnings) — a flattened export could not be self-contained'
-            : CONTROL_HELP.exportFlat}
-          onclick={() => exportSheet(true)}>⤓ flat</button
+      {#if evaluated && result?.held && Object.keys(result.held).length}
+        <span class="sassume" data-held title={CONTROL_HELP.held}
+          >holds {Object.entries(result.held)
+            .map(
+              ([name, v]) =>
+                `${cfg.params.find((p) => p.name === name)?.hold ?? name} at ${fmt(v)}`,
+            )
+            .join(' · ')}</span
         >
       {/if}
-    </span>
-  </div>
-
-  <!-- Which conditions this panel asks about. Bench state, never written into the document:
-       the sheet describes the design; which corners are loaded is a property of this bench. -->
-  {#if showCornerCtl}
-    <div class="scorners">
-      <span class="glabel" title={CONTROL_HELP.cornerMode}>conditions</span>
-      <select
-        data-corner-mode
-        value={cornerMode}
-        onchange={(e) =>
-          onCornerMode((e.currentTarget as HTMLSelectElement).value as SheetCornerMode)}
+      <!-- On demand only: each knob costs two full evaluations, so this never runs with the badge. -->
+      <button
+        class="sensb"
+        class:on={sens !== null || sensBusy}
+        disabled={!sensReady && !shot && !sensBusy}
+        title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sensitivity}
+        onclick={toggleSens}>{sensBusy ? 'sensitivities…' : 'sensitivities'}</button
       >
-        <option value="nominal">nominal</option>
-        <option value="active">active table</option>
-        <option value="chosen">chosen</option>
-        <option value="all">all ({conditions.length})</option>
-      </select>
-      {#if cornerMode === 'chosen'}
-        {#each chosenOptions as c (conditionKeyId(c.key))}
-          <label class="ckey" class:absent={c.absent}>
-            <input
-              type="checkbox"
-              checked={c.on}
-              onchange={() => toggleKey(c.key)}
-            />{conditionLabel(c.key)}{#if c.absent}<i>not loaded</i>{/if}
-          </label>
-        {/each}
-      {/if}
-    </div>
-  {/if}
-
-  <!-- Nothing to evaluate. Each of these states says which choice is missing and offers the
-       control that makes it — never a quiet substitution of some other condition. -->
-  {#if blocked === 'undesignated' && primary}
-    <div class="snotev" data-blocked="nominal">
-      <p>
-        <b>{primary.device}</b> is loaded at {conditions.length}
-        {conditions.length === 1 ? 'condition' : 'conditions'} and none of them is designated nominal{#if primary.nominalSource === 'unresolved'}
-          — the designated table is no longer loaded{/if}. This panel evaluates at the nominal
-        condition, so it needs one named.
-      </p>
-      <div class="snomctl">
-        {#each primary.conditions as t (tableUid(t))}
-          <button onclick={() => bench.designate(primary.deviceUid, tableUid(t))}
-            >designate {conditionLabel(t.id)}</button
+      {#if result?.sizing && !multi}
+        {#if result.sizing.ok}
+          <span class="bind"
+            >W={fmt(result.sizing.W)}m · V<sub>GS</sub>={fmt(result.sizing.vgs)}V · I<sub>D</sub
+            >={fmt(result.sizing.id)}A</span
           >
-        {/each}
-      </div>
+          {#if biasText}
+            <span class="sbias" title={biasHelp(result.sizing?.assumed)}>@ {biasText}</span>
+          {/if}
+        {:else}
+          <span class="perr" title={result.sizing.error}>sizing: {result.sizing.error}</span>
+        {/if}
+        {@render biasCtl(cfg.givens, result.sizing, [])}
+      {/if}
+      {#if sweepable.length}
+        <label class="swsel" title={CONTROL_HELP.sheetSweep}>
+          sweep
+          <select
+            value={active}
+            onchange={(e) => onSweep((e.currentTarget as HTMLSelectElement).value)}
+          >
+            <option value="">off</option>
+            {#each sweepable as p}<option value={p.name}>{p.name}</option>{/each}
+          </select>
+        </label>
+      {/if}
+      {#if active && sweepable2.length}
+        <label
+          class="swsel2"
+          title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sheetSweep2}
+        >
+          ×
+          <select
+            value={active2}
+            disabled={multi}
+            onchange={(e) => onSweep2((e.currentTarget as HTMLSelectElement).value)}
+          >
+            <option value="">off</option>
+            {#each sweepable2 as p}<option value={p.name}>{p.name}</option>{/each}
+          </select>
+        </label>
+      {/if}
+      <span class="sexp">
+        <button title={CONTROL_HELP.copyResults} disabled={!result} onclick={copyResults}
+          >{copied ? 'copied ✓' : 'copy results'}</button
+        >
+        <button title={CONTROL_HELP.exportSheet} onclick={() => exportSheet(false)}>⤓ json</button>
+        {#if hasRefs}
+          <button
+            disabled={flatBlocked}
+            title={flatBlocked
+              ? 'a reference did not resolve (see warnings) — a flattened export could not be self-contained'
+              : CONTROL_HELP.exportFlat}
+            onclick={() => exportSheet(true)}>⤓ flat</button
+          >
+        {/if}
+      </span>
     </div>
-  {:else if blocked === 'none-chosen'}
-    <div class="snotev" data-blocked="chosen">
-      <p>no condition is chosen — tick one above, or switch back to nominal.</p>
-    </div>
-  {:else if blocked === 'no-device'}
-    <div class="snotev" data-blocked="device">
-      <p>no device is loaded for this panel.</p>
-    </div>
-  {/if}
 
-  <!-- Every selected condition, each with its own two answers and its own label. The aggregate
+    <!-- Which conditions this panel asks about. Bench state, never written into the document:
+       the sheet describes the design; which corners are loaded is a property of this bench. -->
+    {#if showCornerCtl}
+      <div class="scorners">
+        <span class="glabel" title={CONTROL_HELP.cornerMode}>conditions</span>
+        <select
+          data-corner-mode
+          value={cornerMode}
+          onchange={(e) =>
+            onCornerMode((e.currentTarget as HTMLSelectElement).value as SheetCornerMode)}
+        >
+          <option value="nominal">nominal</option>
+          <option value="active">active table</option>
+          <option value="chosen">chosen</option>
+          <option value="all">all ({conditions.length})</option>
+        </select>
+        {#if cornerMode === 'chosen'}
+          {#each chosenOptions as c (conditionKeyId(c.key))}
+            <label class="ckey" class:absent={c.absent}>
+              <input
+                type="checkbox"
+                checked={c.on}
+                onchange={() => toggleKey(c.key)}
+              />{conditionLabel(c.key)}{#if c.absent}<i>not loaded</i>{/if}
+            </label>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Nothing to evaluate. Each of these states says which choice is missing and offers the
+       control that makes it — never a quiet substitution of some other condition. -->
+    {#if blocked === 'undesignated' && primary}
+      <div class="snotev" data-blocked="nominal">
+        <p>
+          <b>{primary.device}</b> is loaded at {conditions.length}
+          {conditions.length === 1 ? 'condition' : 'conditions'} and none of them is designated nominal{#if primary.nominalSource === 'unresolved'}
+            — the designated table is no longer loaded{/if}. This panel evaluates at the nominal
+          condition, so it needs one named.
+        </p>
+        <div class="snomctl">
+          {#each primary.conditions as t (tableUid(t))}
+            <button onclick={() => bench.designate(primary.deviceUid, tableUid(t))}
+              >designate {conditionLabel(t.id)}</button
+            >
+          {/each}
+        </div>
+      </div>
+    {:else if blocked === 'none-chosen'}
+      <div class="snotev" data-blocked="chosen">
+        <p>no condition is chosen — tick one above, or switch back to nominal.</p>
+      </div>
+    {:else if blocked === 'no-device'}
+      <div class="snotev" data-blocked="device">
+        <p>no device is loaded for this panel.</p>
+      </div>
+    {/if}
+
+    <!-- Every selected condition, each with its own two answers and its own label. The aggregate
        in the header is a fold of exactly these rows, and never replaces them. -->
-  {#if multi}
-    <!-- The tightest reading over the points that were MEASURED, labelled as such and naming
+    {#if multi}
+      <!-- The tightest reading over the points that were MEASURED, labelled as such and naming
          where it was read: it is a display fold, and it must never be read as a margin over
          points that were not run or returned no answer. -->
-    {#if agg.worst}
-      <p class="scap" title={CONTROL_HELP.compliance} data-worst>
-        tightest hard check over every point measured: {agg.worst.id}
-        {pct(agg.worst.marginPct)} at {conditionLabel(agg.worst.key)}{#if agg.worst.rangeEnd}
-          · {agg.worst.rangeEnd}{/if}
-      </p>
+      {#if agg.worst}
+        <p class="scap" title={CONTROL_HELP.compliance} data-worst>
+          tightest hard check over every point measured: {agg.worst.id}
+          {pct(agg.worst.marginPct)} at {conditionLabel(agg.worst.key)}{#if agg.worst.rangeEnd}
+            · {agg.worst.rangeEnd}{/if}
+        </p>
+      {/if}
+      <table class="scorntab">
+        <tbody>
+          {#each runs as r (conditionKeyId(r.key))}
+            {@const detail = runDetail(r)}
+            <tr class="st-{runClass(r)}" data-corner-row={conditionLabel(r.key)}>
+              <td class="ccond">{conditionLabel(r.key)}</td>
+              <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
+              <td class="ccl">{centreCell(r)}</td>
+              {#if hasRange}<td class="ccv">{rangeCell(r)}</td>{/if}
+              <td class="ccd" title={detail}>{detail}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     {/if}
-    <table class="scorntab">
-      <tbody>
-        {#each runs as r (conditionKeyId(r.key))}
-          {@const detail = runDetail(r)}
-          <tr class="st-{runClass(r)}" data-corner-row={conditionLabel(r.key)}>
-            <td class="ccond">{conditionLabel(r.key)}</td>
-            <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
-            <td class="ccl">{centreCell(r)}</td>
-            {#if hasRange}<td class="ccv">{rangeCell(r)}</td>{/if}
-            <td class="ccd" title={detail}>{detail}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
 
-  <!-- A condition with no verdict — refused before the engine ran, or started and not completed:
+    <!-- A condition with no verdict — refused before the engine ran, or started and not completed:
        only the named reason, which is a different thing from a design that is infeasible. The
        words match the badge: "no answer" when a run started, "not evaluated" when none did. -->
-  {#if refRun && refRun.state === 'not-evaluated'}
-    <div class="snotev" data-not-evaluated={conditionLabel(refRun.key)}>
-      <p><b>{refRun.result ? 'no answer' : 'not evaluated'} at {conditionLabel(refRun.key)}</b></p>
-      {#each refRun.issues as issue}
-        <p class="sissue">{issue.message}</p>
-      {/each}
-      {#if refRun.result}
-        <p class="sissue">
-          The numbers below are what the run produced before it stopped — diagnostics, not a
-          verdict.
+    {#if refRun && refRun.state === 'not-evaluated'}
+      <div class="snotev" data-not-evaluated={conditionLabel(refRun.key)}>
+        <p>
+          <b>{refRun.result ? 'no answer' : 'not evaluated'} at {conditionLabel(refRun.key)}</b>
         </p>
-      {/if}
-    </div>
-  {/if}
-
-  {#if multi && result && refKey}
-    <p class="scap sstamp">
-      detail below is <b>{conditionLabel(refKey)}</b> — one of {runs.length} conditions
-    </p>
-  {/if}
-
-  {#if sensLines}
-    <div class="ssens">
-      <span class="glabel" title={CONTROL_HELP.sensitivity}>sensitivities</span>
-      {#if focusCheck}
-        <p class="scap">
-          how <b>{focusCheck.id}</b>’s margin moves per {SENSITIVITY_REL_STEP * 100}% step of each
-          knob, in that check’s own units — ↑ raises the knob, ↓ lowers it
-        </p>
-        {#each sensLines.knobs as k}
-          <div class="skline" title="step {fmt(k.step)} on {k.param}">
-            <code>{k.param}</code>
-            <span>↑ {signedFmt(k.plus)}</span>
-            <span>↓ {signedFmt(k.minus)}</span>
-          </div>
+        {#each refRun.issues as issue}
+          <p class="sissue">{issue.message}</p>
         {/each}
-        {#each sensLines.blocked as b}
-          <div class="skline dead"><code>{b.param}</code><span>{b.why}</span></div>
-        {/each}
-        {#if !sensLines.knobs.length && !sensLines.blocked.length}
-          <div class="skline dead">this sheet has no free design knob to probe</div>
+        {#if refRun.result}
+          <p class="sissue">
+            The numbers below are what the run produced before it stopped — diagnostics, not a
+            verdict.
+          </p>
         {/if}
-      {:else}
-        <div class="skline dead">no hard check reports a finite margin to rank knobs against</div>
-      {/if}
-    </div>
-  {/if}
-
-  {#if cfg.description}
-    <p class="sdesc">{@html mathText(cfg.description)}</p>
-  {/if}
-
-  {#if hasRoles}
-    {#if specParams.length}
-      <div class="sgroup">
-        <span class="glabel" title={CONTROL_HELP.paramRole}>spec</span>
-        <div class="svars">
-          {#each specParams as p}{@render paramRow(p)}{/each}
-        </div>
       </div>
     {/if}
-    {#if choiceParams.length}
-      <div class="sgroup">
-        <span class="glabel" title={CONTROL_HELP.paramRole}>choice</span>
-        <div class="svars">
-          {#each choiceParams as p}{@render paramRow(p)}{/each}
-        </div>
+
+    {#if multi && result && refKey}
+      <p class="scap sstamp">
+        detail below is <b>{conditionLabel(refKey)}</b> — one of {runs.length} conditions
+      </p>
+    {/if}
+
+    {#if sensLines}
+      <div class="ssens">
+        <span class="glabel" title={CONTROL_HELP.sensitivity}>sensitivities</span>
+        {#if focusCheck}
+          <p class="scap">
+            how <b>{focusCheck.id}</b>’s margin moves per {SENSITIVITY_REL_STEP * 100}% step of each
+            knob, in that check’s own units — ↑ raises the knob, ↓ lowers it
+          </p>
+          {#each sensLines.knobs as k}
+            <div class="skline" title="step {fmt(k.step)} on {k.param}">
+              <code>{k.param}</code>
+              <span>↑ {signedFmt(k.plus)}</span>
+              <span>↓ {signedFmt(k.minus)}</span>
+            </div>
+          {/each}
+          {#each sensLines.blocked as b}
+            <div class="skline dead"><code>{b.param}</code><span>{b.why}</span></div>
+          {/each}
+          {#if !sensLines.knobs.length && !sensLines.blocked.length}
+            <div class="skline dead">this sheet has no free design knob to probe</div>
+          {/if}
+        {:else}
+          <div class="skline dead">no hard check reports a finite margin to rank knobs against</div>
+        {/if}
       </div>
     {/if}
-    {#if otherParams.length}
-      <div class="svars">
-        {#each otherParams as p}{@render paramRow(p)}{/each}
-      </div>
+
+    {#if cfg.description}
+      <p class="sdesc">{@html mathText(cfg.description)}</p>
     {/if}
-  {:else}
-    <div class="svars">
-      {#each cfg.params as p}{@render paramRow(p)}{/each}
-    </div>
-  {/if}
 
-  <!-- The evaluated detail. It exists only when a run produced numbers: a condition that was
-       refused before the engine ran has none, and nothing here invents them. -->
-  <!-- Outside the evaluated gate: these carry each block's device choice, which is exactly what
-       a designer reaches for when a condition was refused for want of one. -->
-  {#if cfg.blocks?.length}
-    <div class="suses">
-      <span class="glabel" title={CONTROL_HELP.provide}>composed blocks</span>
-      {#each cfg.blocks as _u, i}
-        {@render childCard(result?.blocks?.[i], rr.doc.blocks?.[i], [i], false)}
-      {/each}
-    </div>
-  {/if}
-
-  {#if result}
-    {@const res = result}
-    {#if cfg.equations.length}
-      <div class="srows">
-        {#each cfg.equations as eq}
-          <div class="srow">
-            <span class="seq"
-              ><b>{@html qLabel(eq.name)}</b> = {@html qFormula(eq.expr)} =
-              <span class="sval">{fmt(res.values[eq.name])}{eq.unit ?? ''}</span></span
-            >
-            {#if eq.note}<span class="snote">{@html mathText(eq.note)}</span>{/if}
+    {#if hasRoles}
+      {#if specParams.length}
+        <div class="sgroup">
+          <span class="glabel" title={CONTROL_HELP.paramRole}>spec</span>
+          <div class="svars">
+            {#each specParams as p}{@render paramRow(p)}{/each}
           </div>
+        </div>
+      {/if}
+      {#if choiceParams.length}
+        <div class="sgroup">
+          <span class="glabel" title={CONTROL_HELP.paramRole}>choice</span>
+          <div class="svars">
+            {#each choiceParams as p}{@render paramRow(p)}{/each}
+          </div>
+        </div>
+      {/if}
+      {#if otherParams.length}
+        <div class="svars">
+          {#each otherParams as p}{@render paramRow(p)}{/each}
+        </div>
+      {/if}
+    {:else}
+      <div class="svars">
+        {#each cfg.params as p}{@render paramRow(p)}{/each}
+      </div>
+    {/if}
+
+    <!-- The evaluated detail. It exists only when a run produced numbers: a condition that was
+       refused before the engine ran has none, and nothing here invents them. -->
+    <!-- Outside the evaluated gate: these carry each block's device choice, which is exactly what
+       a designer reaches for when a condition was refused for want of one. -->
+    {#if cfg.blocks?.length}
+      <div class="suses">
+        <span class="glabel" title={CONTROL_HELP.provide}>composed blocks</span>
+        {#each cfg.blocks as _u, i}
+          {@render childCard(result?.blocks?.[i], rr.doc.blocks?.[i], [i], false)}
         {/each}
       </div>
     {/if}
 
-    <table class="srules">
-      <tbody>
-        {#each res.checks as r}
-          <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={checkTitle(r)}>
-            <td
-              class="chip"
-              title={r.status === 'amber'
-                ? CONTROL_HELP.amber
-                : r.status === 'na'
-                  ? CONTROL_HELP.checkNa
-                  : undefined}>{CHIP[r.status]}</td
-            >
-            <td class="rid">{r.id}<i title={CONTROL_HELP.checkKind}>{KIND_LABEL[r.kind]}</i></td>
-            <td class="rtext">
-              <span class="req">{@html qFormula(r.text)}</span>
-              {#if checkNote.get(r.id)}<span class="snote"
-                  >{@html mathText(checkNote.get(r.id) ?? '')}</span
-                >{/if}
-              {#if r.detail}<span class="snote sdetail">{r.detail}</span>{/if}
-            </td>
-            <td class="rnum">{fmt(r.lhsValue)} / {fmt(r.rhsValue)}</td>
-            <td class="rmar">{r.status === 'na' ? '—' : pct(r.marginPct)}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+    {#if result}
+      {@const res = result}
+      {#if cfg.equations.length}
+        <div class="srows">
+          {#each cfg.equations as eq}
+            <div class="srow">
+              <span class="seq"
+                ><b>{@html qLabel(eq.name)}</b> = {@html qFormula(eq.expr)} =
+                <span class="sval">{fmt(res.values[eq.name])}{eq.unit ?? ''}</span></span
+              >
+              {#if eq.note}<span class="snote">{@html mathText(eq.note)}</span>{/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
 
-    {#if res.rangeEnds?.length}
-      <div class="sedges">
-        <span class="glabel" title={CONTROL_HELP.operatingRange}>operating range</span>
-        {#each res.rangeEnds as e (e.name)}
-          {@const detail = rangeEndDetail(e)}
-          <span class="sedge {POINT_CLASS[e.state]}" title={rangeEndTitle(e, detail)}>
-            {POINT_MARK[e.state]}
-            {e.name}{#if rangeEndWarns(e).length}&nbsp;⚠{/if}
-            {#if detail}<i>{detail}</i>{/if}
-          </span>
-        {/each}
-      </div>
+      <table class="srules">
+        <tbody>
+          {#each res.checks as r}
+            <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={checkTitle(r)}>
+              <td
+                class="chip"
+                title={r.status === 'amber'
+                  ? CONTROL_HELP.amber
+                  : r.status === 'na'
+                    ? CONTROL_HELP.checkNa
+                    : undefined}>{CHIP[r.status]}</td
+              >
+              <td class="rid">{r.id}<i title={CONTROL_HELP.checkKind}>{KIND_LABEL[r.kind]}</i></td>
+              <td class="rtext">
+                <span class="req">{@html qFormula(r.text)}</span>
+                {#if checkNote.get(r.id)}<span class="snote"
+                    >{@html mathText(checkNote.get(r.id) ?? '')}</span
+                  >{/if}
+                {#if r.detail}<span class="snote sdetail">{r.detail}</span>{/if}
+              </td>
+              <td class="rnum">{fmt(r.lhsValue)} / {fmt(r.rhsValue)}</td>
+              <td class="rmar">{r.status === 'na' ? '—' : pct(r.marginPct)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+
+      {#if res.rangeEnds?.length}
+        <div class="sedges">
+          <span class="glabel" title={CONTROL_HELP.operatingRange}>operating range</span>
+          {#each res.rangeEnds as e (e.name)}
+            {@const detail = rangeEndDetail(e)}
+            <span class="sedge {POINT_CLASS[e.state]}" title={rangeEndTitle(e, detail)}>
+              {POINT_MARK[e.state]}
+              {e.name}{#if rangeEndWarns(e).length}&nbsp;⚠{/if}
+              {#if detail}<i>{detail}</i>{/if}
+            </span>
+          {/each}
+        </div>
+      {/if}
     {/if}
-  {/if}
 
-  {#if twoD && swept2 && swept2.x.length}
-    <div class="scap">
-      feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check (X
-      → right, Y ↑)
-    </div>
-    <div class="smap">
-      <div class="smy">
-        {active2}
-        {fmt(swept2.y[0])}…{fmt(swept2.y[swept2.y.length - 1])}{swept2.unitY}
+    {#if twoD && swept2 && swept2.x.length}
+      <div class="scap">
+        feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check (X
+        → right, Y ↑)
       </div>
-      <canvas class="smapc" bind:this={mapEl}></canvas>
-      <div class="smx">
-        {active}
-        {fmt(swept2.x[0])}…{fmt(swept2.x[swept2.x.length - 1])}{swept2.unitX}
+      <div class="smap">
+        <div class="smy">
+          {active2}
+          {fmt(swept2.y[0])}…{fmt(swept2.y[swept2.y.length - 1])}{swept2.unitY}
+        </div>
+        <canvas class="smapc" bind:this={mapEl}></canvas>
+        <div class="smx">
+          {active}
+          {fmt(swept2.x[0])}…{fmt(swept2.x[swept2.x.length - 1])}{swept2.unitX}
+        </div>
       </div>
-    </div>
-    <p class="feas">
-      {#if bindingIds.length}
-        region bounded by: {bindingIds.join(', ')}
-      {:else}
-        no hard check fails across this plane
-      {/if}
-    </p>
-  {:else if active && chartData && !twoD}
-    <div class="scap">
-      {#if multi}
-        worst hard-check margin (%) vs <b>{active}</b>{#if sweptUnit}
-          ({sweptUnit}){/if} — one curve per condition that was evaluated, each re-sizing the design at
-        that condition as the knob moves: where the design type is feasible there, not the held design.
-        The 0 line is where a check sits exactly on its limit, clipped at ±{MARGIN_CLIP}%. A
-        condition that could not be evaluated draws no curve and stays in the table above.
-      {:else}
-        margin (%) vs <b>{active}</b>{#if sweptUnit}
-          ({sweptUnit}){/if} — the 0 line is where a check sits exactly on its limit; dashed = advisory;
-        clipped at ±{MARGIN_CLIP}%{#if (cfg.operatingRange ?? []).length}
-          · each sample holds its OWN design at the range ends, so the range-end curves move with
-          the sweep and never change what is feasible{/if}
-      {/if}
-    </div>
-    <div class="pchart" bind:this={el}></div>
-    <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
+      <p class="feas">
+        {#if bindingIds.length}
+          region bounded by: {bindingIds.join(', ')}
+        {:else}
+          no hard check fails across this plane
+        {/if}
+      </p>
+    {:else if active && chartData && !twoD}
+      <div class="scap">
+        {#if multi}
+          worst hard-check margin (%) vs <b>{active}</b>{#if sweptUnit}
+            ({sweptUnit}){/if} — one curve per condition that was evaluated, each re-sizing the design
+          at that condition as the knob moves: where the design type is feasible there, not the held design.
+          The 0 line is where a check sits exactly on its limit, clipped at ±{MARGIN_CLIP}%. A
+          condition that could not be evaluated draws no curve and stays in the table above.
+        {:else}
+          margin (%) vs <b>{active}</b>{#if sweptUnit}
+            ({sweptUnit}){/if} — the 0 line is where a check sits exactly on its limit; dashed = advisory;
+          clipped at ±{MARGIN_CLIP}%{#if (cfg.operatingRange ?? []).length}
+            · each sample holds its OWN design at the range ends, so the range-end curves move with
+            the sweep and never change what is feasible{/if}
+        {/if}
+      </div>
+      <div class="pchart" bind:this={el}></div>
+      <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
          legend the way a data panel does. Index order matches what ChartAdapter strokes. An
          advisory check is dashed on the chart and tagged here, since an inline-styled swatch cannot
          carry the dash. -->
-    <div class="skey">
-      {#if multi}
-        {#each chartData.lineLabels ?? [] as label, i}
-          <span class="kitem"><i style="background:{PALETTE[i % PALETTE.length]}"></i>{label}</span>
-        {/each}
-      {:else}
-        {#each swept?.checks ?? [] as r, i}
-          <span class="kitem"
-            ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{checkLabel(
-              r,
-            )}{#if r.kind === 'advisory'}&nbsp;·&nbsp;adv{/if}</span
-          >
-        {/each}
-      {/if}
-    </div>
-    {#if feasWindow && !multi}
-      <p class="feas">
-        {#if feasWindow.none}
-          no feasible {active} in this range
+      <div class="skey">
+        {#if multi}
+          {#each chartData.lineLabels ?? [] as label, i}
+            <span class="kitem"
+              ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{label}</span
+            >
+          {/each}
         {:else}
-          feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(
-            feasWindow.hi,
-          )}{sweptUnit}{#if feasWindow.gap}
-            (non-contiguous){/if}
+          {#each swept?.checks ?? [] as r, i}
+            <span class="kitem"
+              ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{checkLabel(
+                r,
+              )}{#if r.kind === 'advisory'}&nbsp;·&nbsp;adv{/if}</span
+            >
+          {/each}
         {/if}
+      </div>
+      {#if feasWindow && !multi}
+        <p class="feas">
+          {#if feasWindow.none}
+            no feasible {active} in this range
+          {:else}
+            feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(
+              feasWindow.hi,
+            )}{sweptUnit}{#if feasWindow.gap}
+              (non-contiguous){/if}
+          {/if}
+        </p>
+      {/if}
+    {:else if active && sweeping}
+      <!-- The sweep is running in the background; the chart appears here when it is done. -->
+      <p class="feas sbusy" data-sweeping>sweeping {active}…</p>
+    {:else if active && refRun}
+      <!-- The sweep is a statement about a design, and there is no design here yet. -->
+      <p class="feas">
+        {multi
+          ? 'no condition in this set was evaluated, so there is nothing to sweep'
+          : `nothing to sweep at ${conditionLabel(refRun.key)} — this condition was not evaluated`}
       </p>
     {/if}
-  {:else if active && sweeping}
-    <!-- The sweep is running in the background; the chart appears here when it is done. -->
-    <p class="feas sbusy" data-sweeping>sweeping {active}…</p>
-  {:else if active && refRun}
-    <!-- The sweep is a statement about a design, and there is no design here yet. -->
-    <p class="feas">
-      {multi
-        ? 'no condition in this set was evaluated, so there is nothing to sweep'
-        : `nothing to sweep at ${conditionLabel(refRun.key)} — this condition was not evaluated`}
-    </p>
-  {/if}
 
-  <!-- Resolution failures (missing/ambiguous/cyclic refs) lead — they explain why a
+    <!-- Resolution failures (missing/ambiguous/cyclic refs) lead — they explain why a
        referenced block below reads infeasible. One dead child makes EVERY dependent
        equation "not defined"; that fan-out is collapsed to a single line per child so the
        root cause isn't buried under its own consequences. -->
-  {#each warnLines as w}
-    <p class="pwarn" title={w.help ? `${w.text}\n\n${w.help}` : w.text}>⚠ {w.text}</p>
-  {/each}
+    {#each warnLines as w}
+      <p class="pwarn" title={w}>⚠ {w}</p>
+    {/each}
 
-  <!-- Informational, and kept out of the warning list above: nothing went wrong, the loop closed
+    <!-- Informational, and kept out of the warning list above: nothing went wrong, the loop closed
        and the verdict stands. -->
-  {#each solveNotes as n}
-    <p class="pinfo">{n}</p>
-  {/each}
+    {#each solveNotes as n}
+      <p class="pinfo">{n}</p>
+    {/each}
+  {/if}
 </div>
 
 <style>
@@ -1780,6 +1819,7 @@
      treatment. */
   .feasb,
   .compb,
+  .wireb,
   .sedge {
     padding: 0.04rem 0.4rem;
     border-radius: 999px;
@@ -1811,8 +1851,18 @@
   }
   .feasb.ok,
   .compb.ok,
+  .wireb.ok,
   .sedge.ok {
     color: var(--ok);
+  }
+  /* The wiring chip beside the two verdicts: its words, smaller, and a finding in the warning
+     colour — a wiring finding never decides feasibility, so it is never the failure red. */
+  .wireb {
+    font-size: calc(0.66rem * var(--text-scale));
+    letter-spacing: 0.03em;
+  }
+  .wireb.warn {
+    color: var(--warn);
   }
   .feasb.no,
   .compb.no,
@@ -1824,6 +1874,7 @@
      red would each answer it. */
   .sedge.skip,
   .compb.skip,
+  .wireb.skip,
   .feasb.skip {
     color: var(--fg);
     opacity: 0.55;
@@ -2425,9 +2476,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* Warnings WRAP where the inline errors do not: a wiring disagreement's whole content is the
-     two voltages and the delta at the end of the sentence, which a single clipped line throws
-     away. Two or three lines in a scrolling panel is the cheaper cost. */
+  /* Warnings WRAP where the inline errors do not: a wiring finding's whole content is often the
+     numbers at the end of the sentence — a loop's residual, a wire's unbalanced current — which a
+     single clipped line throws away. Two or three lines in a scrolling panel is the cheaper cost. */
   .pwarn {
     opacity: 0.8;
     white-space: normal;
@@ -2436,6 +2487,10 @@
   .pinfo {
     color: inherit;
     opacity: 0.6;
+    white-space: normal;
+  }
+  /* The one line a document in a format this app does not read gets: the whole reason, wrapped. */
+  .prefused {
     white-space: normal;
   }
 </style>

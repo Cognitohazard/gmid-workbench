@@ -1020,24 +1020,22 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
 
   it('the stage-1 output level is what the stage-2 gate needs, not a typed number', () => {
     // V1 is the stage-2 gate, so it sits one stage-2 vgs below the supply: for gm/ID 12 at
-    // L 0.5 µm that is 1.8 - 0.567023 = 1.232977 V. Declared wiring on that block restates the
-    // same identity, so it agrees to the last digit and reports nothing.
+    // L 0.5 µm that is 1.8 - 0.567023 = 1.232977 V. The netlist puts each stage-1 output on the
+    // stage-2 gate of its side, and the loop through the stage-1 drains and that gate closes.
     expect(relErr(v.V1, V_1)).toBeLessThan(1e-3);
-    expect(res.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);
+    expect(res.nodes!.state).toBe('checked-clean');
+    expect(relErr(res.nodes!.levels.o1n.level, v.V1)).toBeLessThan(1e-9);
 
-    // That silence means nothing unless the check is LIVE on this sheet — a declaration this
-    // sheet derives its own node from cannot disagree with itself, which is exactly the shape
-    // that would hide a check that had quietly stopped running. Re-type the node 100 mV off,
-    // the way a hand-typed V1 used to be, and it is reported at once, on the block that owns
-    // the gate.
+    // That silence means nothing unless the check is LIVE on this sheet — a node this sheet
+    // derives from the device that owns it cannot disagree with itself, which is exactly the
+    // shape that would hide a check that had quietly stopped running. Put the input pair's drains
+    // 100 mV off that gate, the way a hand-typed V1 used to put them, and the loop misses by it.
     const retyped = sheet('fd-two-stage-ota');
-    const v1 = retyped.equations.find((r) => r.name === 'V1');
-    expect(v1).toBeDefined();
-    (v1 as { expr: string }).expr = 'VDD - abs(s2__vgs) + 0.1';
+    const pair = retyped.blocks!.find((u) => u.name === 'in')!;
+    pair.params = { ...pair.params, vx: '(VDD - abs(s2__vgs)) + 0.1 - V_tail' };
     const off = runSheet(retyped, table, undefined, REFS);
-    expect(off.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location)).toEqual([
-      's2',
-    ]);
+    expect(off.nodes!.state).toBe('checked-with-findings');
+    expect(relErr(off.nodes!.closureError, 0.1)).toBeLessThan(1e-9);
   });
 
   it('the output interface is the stage-2 node, named, plus the input gate', () => {

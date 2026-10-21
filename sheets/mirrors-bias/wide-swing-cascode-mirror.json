@@ -3,7 +3,14 @@
   "description": "The low-voltage cascode mirror. It keeps the matched-$V_{DS}$ accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full $V_{GS}$ above ground), an explicit bias $V_{bias}$ places the reference node one saturation voltage and a small margin above ground. The output then only has to clear two stacked saturation voltages and that margin, with no threshold overhead, so the output can swing far lower than a standard cascode's $V_{GS} + V_{dsat}$ floor. Four devices are drawn. In the reference branch the reference mirror device carries the input current with its drain on the reference node, and the reference cascode stands on that node with its gate on $V_{bias}$ and its drain on the gate the two mirror devices share, where the input current enters. The reference node is solved to the reference device's own saturation voltage plus node_margin, which is what a wide-swing bias generator is designed to produce, and $V_{bias}$ is the reference cascode's gate-source voltage above it; a rule checks the supply can produce it. The output branch is drawn as the cascode current mirror draws it: the output mirror device is K times the reference device's width on the reference device's gate, with its current read off the table at its own drain voltage; the output cascode is K times the reference cascode's width on $V_{bias}$, in series with it and carrying that current; and the node between them is solved so that the gate-source voltage the cascode needs for that current hangs the node under $V_{bias}$. That node equals the reference node only where the output sits level with the reference cascode's drain; elsewhere it settles a few millivolts away, and the systematic-error row reports what that costs. The sheet's own device is the output cascode; the other three are blocks. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
   "polarity": "n",
   "params": [
-    { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
+    {
+      "name": "I_in",
+      "value": 20e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "reference current",
+      "class": "independent"
+    },
     {
       "name": "K",
       "value": 4,
@@ -13,7 +20,14 @@
       "role": "choice",
       "note": "mirror ratio W_out/W_ref (a unit-device multiple)"
     },
-    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "note": "supply" },
+    {
+      "name": "VDD",
+      "value": 1.8,
+      "unit": "V",
+      "role": "spec",
+      "note": "supply",
+      "class": "independent"
+    },
     {
       "name": "V_out",
       "value": 0.6,
@@ -160,7 +174,8 @@
         "L_r": "L",
         "gm_id_r": "gm_id_m",
         "vds_r": "vds_lo"
-      }
+      },
+      "nodes": { "d": "nref", "g": "ngate", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "ref_casc",
@@ -213,7 +228,8 @@
         "gm_id_cc": "gm_id_c",
         "vds_cc": "ref__vgs - vds_lo",
         "vsb_cc": "vds_lo"
-      }
+      },
+      "nodes": { "d": "ngate", "g": "vbias", "s": "nref", "b": "gnd" }
     },
     {
       "name": "out",
@@ -261,7 +277,8 @@
         "vgs_o": "ref__vgs",
         "L_o": "L",
         "vds_o": "k_x*(ref_casc__vgs + vds_lo)"
-      }
+      },
+      "nodes": { "d": "x", "g": "ngate", "s": "gnd", "b": "gnd" }
     }
   ],
   "givens": {
@@ -368,5 +385,10 @@
       "rhs": "match_target"
     }
   ],
-  "provides": ["Rout"]
+  "provides": ["Rout"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "vbias", "s": "x", "b": "gnd" },
+  "levels": { "out": "V_out", "vdd": "VDD" },
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "ngate"], "value": "I_in" }],
+  "ports": ["vbias"]
 }

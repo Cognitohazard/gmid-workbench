@@ -190,5 +190,7 @@
       "note": "the sized device's fT must clear GBW_req with margin; a real derived check (the pinned gm hid the gate cap), estimate-grade, sim signs off"
     }
   ],
-  "provides": ["GBW_req", "A_req", "SR_req", "CL_eff"]
+  "provides": ["GBW_req", "A_req", "SR_req", "CL_eff"],
+  "formatVersion": 2,
+  "nodes": "none"
 }

@@ -8,10 +8,21 @@
 // the live value set stays evaluateSheet's job. DOM-free.
 
 import type { QAWarning } from '../types';
-import { compileExpr, metaScalars } from '../derive';
+import { compileExpr } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
-import { BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
+import { PER_WIDTH_KEYS } from '../namespace';
 import { HELD_AT_A_RANGE_END, heldShape } from './coverage';
+import {
+  blockWires,
+  deviceGateWires,
+  formatOf,
+  formatProblems,
+  namesOf,
+  nodesProblems,
+  parses,
+  structuralDiode,
+  wiringRefusal,
+} from './nodes';
 import {
   BIAS_AXES,
   givenIsExpression,
@@ -33,14 +44,18 @@ import {
   REGIONS,
   CHECK_KINDS,
   CHECK_OPS,
-  WIRING_KEYS,
   joinProvide,
   providedNames,
   prefixBlockWarning,
   splitProvide,
   balancedBy,
   balancesOf,
+  deviceName,
+  DEVICE_NAMES,
+  heldGateOf,
   heldOnGate,
+  isObject,
+  META_PUBLISHED,
   type ParamClass,
   type SheetDoc,
   type SheetGivens,
@@ -48,27 +63,6 @@ import {
   type SheetBlock,
   type SheetVar,
 } from './types';
-
-/** Whether an expression parses at all — distinct from namesOf, whose empty result also
- *  describes a legal literal like "0.9". */
-function parses(expr: string): boolean {
-  try {
-    compileExpr(expr);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Free identifiers of an expression, or [] when it does not parse (eval names the
- *  parse error at the failing site; the validator only needs the names). */
-function namesOf(expr: string): readonly string[] {
-  try {
-    return compileExpr(expr).names;
-  } catch {
-    return [];
-  }
-}
 
 /** Free names inside each `abs(...)` call of an expression. A consistency check reads
  *  `abs(child__vgs - vgs_est) <= tol`, so the two sides of the round trip appear inside ONE
@@ -193,137 +187,6 @@ function assumptionEstimates(doc: SheetDoc): QAWarning[] {
 }
 
 /**
- * Structural checks on a block's declared gate wiring — the ONLY route by which a wiring
- * declaration reaches a verdict. What the check finds at RUNTIME (an expression that will not
- * resolve, a disagreement past the tolerance) stays a warning: the declaration and the sizing
- * are two descriptions of one node, and picking a winner between them is the author's call, not
- * QA's. But a declaration that is not a declaration — half-written, misspelled, unparseable —
- * states no identity at all, and a sheet reported as wiring-checked when nothing was checked is
- * precisely the silence this mechanism exists to break.
- */
-function wiringProblems(block: SheetBlock): QAWarning[] {
-  // `unknown`, not SheetWiring: a persisted document arrives unverified, so the shape is what
-  // is being checked here rather than what may be assumed.
-  const w: unknown = block.wiring;
-  if (w === undefined) return [];
-  const out: QAWarning[] = [];
-  const bad = (message: string): void => {
-    out.push({
-      rule: 'sheet-wiring',
-      severity: 'error',
-      message: `block "${block.name}": ${message}`,
-      location: block.name,
-    });
-  };
-  if (typeof w !== 'object' || w === null || Array.isArray(w)) {
-    bad('wiring must be an object declaring the gate and source nodes');
-    return out;
-  }
-  const decl = w as Record<string, unknown>;
-  for (const k of Object.keys(decl)) {
-    if (!WIRING_KEYS.has(k)) {
-      bad(`wiring has unknown key "${k}" — only ${[...WIRING_KEYS].join(', ')} are declared`);
-    }
-  }
-  for (const k of ['gate', 'source'] as const) {
-    const e = decl[k];
-    if (typeof e !== 'string' || !e.trim()) {
-      bad(
-        `wiring needs both gate and source (${k} is missing) — half-declared, it names no ` +
-          `identity to check`,
-      );
-    } else if (!parses(e)) {
-      bad(`wiring ${k} expression "${e}" does not parse`);
-    }
-  }
-  return out;
-}
-
-/** A node expression reduced to a comparison key. Whitespace only — no algebra: this compares
- *  how two blocks NAME a node, not what the node evaluates to. */
-const nodeKey = (expr: string): string => expr.replace(/\s+/g, '');
-
-/**
- * Two blocks that declare the same gate node AND the same source node are on one wire and one
- * source, so their gate-source voltage is a single number — whatever the table, the corner or
- * the temperature. A sheet that then sizes each of them at its OWN operating point has written
- * that identity down and left the engine free to break it: each sizing settles wherever its own
- * target lands, and the two agree only while both read the same table at the same bias. Read
- * the design at another condition and the gates drift apart with every check still green.
- *
- * What makes them agree is giving one device's `vgs` as the other's — `{ W: "K*ref__W", vgs:
- * "ref__vgs" }` — which states the shared wire AS the sizing instead of beside it. So the
- * question here is whether each block on one (gate, source) pair is sized on a vgs that names
- * ANOTHER BLOCK ON THAT SAME PAIR. A given vgs alone is not enough: `vgs: "0.7"` is a typed
- * number, and a vgs read off a block somewhere else on the schematic is a different claim; both
- * would silence the finding while coupling nothing. One block must be left over — something has
- * to settle the voltage the rest follow — so the finding is raised when TWO or more are not
- * tied to a peer, and it names those.
- *
- * The reference can be written in either of the two places an author can put it: directly in
- * the child's own givens, or as a child param the parent overrides in its block (the usual
- * shape, since only the parent knows what its children are wired to). Both are read.
- *
- * Scope worth knowing: `wiring` is declared on a BLOCK, so this compares child to child. A sheet
- * whose gate-tied pair is its OWN device plus one child — which is how the library's mirrors are
- * written — declares no gate node for the parent device and is out of this rule's reach. Giving
- * the parent's givens a node declaration is a schema change, not a check.
- *
- * Both halves of the pair are required, and the source half is what keeps the check honest. A
- * complementary pair driven by one input (the library's CMOS inverter stage) shares a gate and
- * sits on different rails, so its two gate-source voltages are genuinely different numbers; so
- * does a Widlar source, whose whole design equation is the difference between them. Matching on
- * the gate alone would report both as defects.
- *
- * A declaration is never allowed to DRIVE the sizing, only to be checked against it. Re-sizing a
- * device from its wiring would replace a coupling the author can see with one they cannot,
- * which is the silence this mechanism exists to break — so this reports and repairs nothing.
- *
- * Nodes are matched on the expression TEXT, not on a value: a declaration names a node, and two
- * blocks on one wire are written the same way. A node spelled two different ways is missed
- * rather than misreported — the right direction for an advisory, the same trade reachedGivens
- * makes.
- */
-function untiedGates(doc: SheetDoc): QAWarning[] {
-  const out: QAWarning[] = [];
-  const groups = new Map<string, { gate: string; source: string; blocks: SheetBlock[] }>();
-  for (const block of doc.blocks ?? []) {
-    // `unknown`, as in wiringProblems: a persisted document arrives unverified. A half-written
-    // or unparseable declaration names no node pair, and wiringProblems already reports it.
-    const w = block.wiring as unknown as Record<string, unknown> | undefined;
-    if (!w || typeof w.gate !== 'string' || typeof w.source !== 'string') continue;
-    if (!w.gate.trim() || !w.source.trim()) continue;
-    const key = `${nodeKey(w.gate)}\u0000${nodeKey(w.source)}`;
-    const group = groups.get(key) ?? { gate: w.gate.trim(), source: w.source.trim(), blocks: [] };
-    group.blocks.push(block);
-    groups.set(key, group);
-  }
-  for (const { gate, source, blocks } of groups.values()) {
-    // A block with no embedded doc has unknown givens (a ref resolves later; runSheet
-    // revalidates the resolved doc), and one with no givens sizes no device. Neither can be ruled
-    // on, so drop it and rule on the rest — dropping the whole GROUP instead would let one
-    // unresolved sibling hide a real pair beside it.
-    const sized = blocks.filter((u) => u.doc?.givens);
-    if (sized.length < 2) continue;
-    const untied = sized.filter((u) => !tiedToPeer(u, sized));
-    if (untied.length < 2) continue;
-    const named = untied.map((u) => `"${u.name}"`).join(', ');
-    out.push({
-      rule: 'sheet-gate-tie',
-      severity: 'warning',
-      message:
-        `${named} declare the same gate node (${gate}) on the same source node (${source}), so ` +
-        `their gate-source voltage is one number — but each is sized at its own operating ` +
-        `point, so nothing holds them at it. They agree only while every one of them reads the ` +
-        `same table at the same bias. Give one block the other's vgs (\`"vgs": ` +
-        `"<block>__vgs"\`, with that block providing vgs) to make the shared wire the sizing`,
-      location: untied[0].name,
-    });
-  }
-  return out;
-}
-
-/**
  * A device given a gate voltage, a current and no width says two things about one transistor
  * that the design point cannot tell apart and a held design has to: whether its GATE is the fixed
  * thing (a gate on a shared wire, an inverter's PMOS) or its CURRENT is (a gate voltage typed as an
@@ -438,26 +301,6 @@ function looseBalances(doc: SheetDoc): QAWarning[] {
   }
   return out;
 }
-
-/** Whether `block` is sized on a gate voltage that names one of its `peers` — the reference read
- *  from the child's own givens and, when they name a child param, from the parent's override
- *  of it, which is where the cross-block name normally lives. */
-function tiedToPeer(block: SheetBlock, peers: readonly SheetBlock[]): boolean {
-  const expr = block.doc?.givens?.vgs;
-  if (expr === undefined) return false;
-  const override = block.params?.[expr.trim()];
-  const names = [...namesOf(expr), ...(override === undefined ? [] : namesOf(override))];
-  return peers.some((p) => p !== block && names.includes(joinProvide(p.name, 'vgs')));
-}
-
-/** Scalars every evaluation seeds from the table's metadata, givens or no givens — so a sheet may
- *  name one in `provides` without declaring it. Read off metaScalars itself rather than listed
- *  again here. The probe must supply EVERY metadata field, because the key set follows the
- *  fields present: thermalScalars yields nothing for a missing temp and `w` needs `W`, so a
- *  slimmer probe would silently shrink the published-name set. The expression constants
- *  (pi, k, gamma, …) are deliberately absent: they are in every scope already, so
- *  publishing one exposes nothing to a parent and stays worth saying. */
-const META_PUBLISHED: ReadonlySet<string> = new Set(Object.keys(metaScalars({ W: 1, temp: 27 })));
 
 /**
  * Both directions of the composition interface, which is one question asked twice: does the
@@ -603,19 +446,14 @@ function levelsOf(doc: SheetDoc): Level[] {
  *  refuses it) rather than here — never a wrong verdict. The residual walk resolves `w` by phase
  *  instead. */
 const DEVICE_QUANTITIES: ReadonlySet<string> = new Set(
-  [
-    ...BASE_KEYS,
-    ...DERIVED_QUANTITIES.map((d) => d.key),
-    ...BINDABLE,
-    'w0',
-    'ceiling',
-    'feasible',
-  ].filter((k) => !META_PUBLISHED.has(k)),
+  [...DEVICE_NAMES].filter((k) => !META_PUBLISHED.has(k)),
 );
 
 /** Every name a sizing writes into its level's scope (eval.ts, runSizing): the device quantities,
- *  and the table scalars it re-reads beside them. */
-const SIZING_PUBLISHES: ReadonlySet<string> = new Set([...DEVICE_QUANTITIES, ...META_PUBLISHED]);
+ *  and the table scalars it re-reads beside them (META_PUBLISHED — scalars every evaluation seeds
+ *  from the table's metadata, givens or no givens, so a sheet may name one in `provides` without
+ *  declaring it). */
+const SIZING_PUBLISHES: ReadonlySet<string> = DEVICE_NAMES;
 
 /** The metadata scalars sizing writes over with the sized device's own — the per-width ones,
  *  which is the width `w` (eval.ts, runSizing). Read after a level's sizing, such a name is that
@@ -1083,6 +921,219 @@ export function exprRoots(
   return out;
 }
 
+/** What one expression rests on, for deciding where it may be written (see exprProvenance). Every
+ *  name is qualified by block path; devices are named as warnings name them. */
+export interface ExprProvenance {
+  /** The root params reached, by class — `unclassified` holds every root that carries no class,
+   *  whatever its unit, never dropped. */
+  roots: Record<RootClass, string[]>;
+  /** Names that resolve to nothing on the sheet (distinct from constants, which are not names). */
+  unresolved: string[];
+  /** What the paths crossed: a sized device's published quantity, an equation, the relation of a
+   *  solved param, an analysis. */
+  crossings: { device: string[]; equation: string[]; solvedRelation: string[]; analysis: string[] };
+  /** Every dependency cycle reached, as the names on it. The walk terminates on every input; a
+   *  cycle is a result, not a silent cut. */
+  cycles: { via: string[]; closed: boolean }[];
+}
+
+/**
+ * The provenance of ONE expression read at `level` (a block path, `''` for the top): the root
+ * params it rests on by class, the names it cannot resolve, and the crossings on any path to them
+ * — answered by the same dependency edges the DC-input walk reads (params, a parent's overrides, a
+ * child's provides, equations, solved relations), but for an expression no device need read, and
+ * without dropping the fact that a path crossed a device. Two documents whose bias override is
+ * `VDD` and `producer__vgs` have the same roots under dcInputs and different provenance here: the
+ * second crosses a device. Structural and table-free.
+ */
+export function exprProvenance(doc: SheetDoc, level: string, expr: string): ExprProvenance {
+  const r = exprRoots(doc, level, expr, 'provenance');
+  // A name an analysis carries resolves to nothing for the dependency edges, which know no
+  // analyses; it is a crossing, not an unknown name.
+  const analyses = new Set(
+    levelsOf(doc).flatMap((lv) =>
+      (Array.isArray(lv.doc.analyses) ? lv.doc.analyses : []).flatMap((a) =>
+        typeof a?.name === 'string' ? [`${lv.path}${a.name}`] : [],
+      ),
+    ),
+  );
+  return {
+    roots: r.roots,
+    unresolved: r.unresolved.filter((n) => !analyses.has(n)),
+    crossings: {
+      device: r.crossings.device,
+      equation: r.crossings.equation,
+      solvedRelation: r.crossings.solved,
+      analysis: r.unresolved.filter((n) => analyses.has(n)),
+    },
+    cycles: r.cycles,
+  };
+}
+
+/** The reasons an expression's provenance keeps it out of a place that admits only the root
+ *  classes in `admit`, and the crossings not in `cross`. */
+function provenanceProblems(
+  p: ExprProvenance,
+  admit: readonly RootClass[],
+  cross: readonly (keyof ExprProvenance['crossings'])[],
+): string[] {
+  const out: string[] = [];
+  const why: Record<RootClass, string> = {
+    independent: 'is classed independent',
+    assumed: 'is classed assumed — a typed guess held fixed becomes a fact',
+    solved: 'is solved by the engine, so what it sets is derived',
+    held:
+      'is the node under a gate that a hold re-solves where the design is held — that wire is ' +
+      'derived; hold the gate wire at the hold expression instead',
+    unclassified: 'carries no class — say whether it is independent',
+  };
+  for (const cls of Object.keys(p.roots) as RootClass[])
+    if (!admit.includes(cls))
+      for (const n of p.roots[cls]) out.push(`it reads "${n}", which ${why[cls]}`);
+  for (const n of p.unresolved) out.push(`it reads "${n}", which names nothing on the sheet`);
+  for (const c of p.cycles) out.push(`its dependencies loop (${c.via.join(' → ')})`);
+  if (!cross.includes('device'))
+    for (const d of p.crossings.device)
+      out.push(
+        `it reads a quantity of ${deviceName(d)}, and a level derived from a device is never held`,
+      );
+  if (!cross.includes('equation'))
+    for (const e of p.crossings.equation) out.push(`it reads equation "${e}"`);
+  if (!cross.includes('solvedRelation'))
+    for (const q of p.crossings.solvedRelation)
+      if (!p.roots.solved.includes(q)) out.push(`it reads through the relation that solves "${q}"`);
+  if (!cross.includes('analysis'))
+    for (const a of p.crossings.analysis) out.push(`it reads analysis "${a}"`);
+  return out;
+}
+
+/** An expression with its whitespace removed — how a held level is compared with a hold. */
+export const spelled = (e: string): string => e.replace(/\s+/g, '');
+
+/**
+ * Whether `expr` may hold a wire in the `levels` of the sheet at `level` — the HOLD filter. A held
+ * level is one the designer states: its roots are independent params only (an unclassified root
+ * is refused by name), it names nothing unresolved, it reaches no cycle, and its paths cross
+ * nothing — no device, equation, solved relation or analysis. So a solved node (`V_tail`), an
+ * assumed param, a param a parent overrides from a device's quantity, and an equation are each
+ * refused by name, and a wire whose level a device sets is never held. `class: "assumed"` alone
+ * never creates a hold.
+ *
+ * One exception, which is exactly what `hold` does today: the gate of a device whose source node
+ * carries a `hold` is held, where the design is held, at the value its hold expression took at the
+ * design point. So the gate's wire may be held at that expression (`"vbn": "V_a + casc_n__vgs"`),
+ * written as the hold itself — a level derived at the design point and held fixed elsewhere, which
+ * the report names as such — and only that wire: the verdict names the device whose gate-source
+ * voltage the hold reads, and validation admits the level only on that device's gate wire. The node
+ * under the gate stays derived. A hold that balances currents holds no wire and admits nothing.
+ */
+export function levelEligibility(
+  doc: SheetDoc,
+  level: string,
+  expr: string,
+):
+  | { kind: 'held' }
+  | { kind: 'held-gate'; hold: string; device: string }
+  | { kind: 'refused'; problems: string[] } {
+  const lv = levelsOf(doc).find((l) => l.path === (level === '' ? '' : `${level}${PATH_SEP}`));
+  // The device whose gate-source voltage the hold reads: a block's (`casc__vgs`), or the sheet's
+  // own (`vgs`).
+  for (const p of lv?.doc.params ?? []) {
+    if (!holds(p) || spelled(p.hold) !== spelled(expr)) continue;
+    const device = heldGateOf((lv as Level).doc, p);
+    if (device) return { kind: 'held-gate', hold: p.name, device };
+  }
+  const problems = provenanceProblems(exprProvenance(doc, level, expr), ['independent'], []);
+  return problems.length ? { kind: 'refused', problems } : { kind: 'held' };
+}
+
+/**
+ * Whether `expr` may configure an analysis or an element at `level` — its frequency, a component
+ * value. Its roots are independent or assumed params (unclassified refused by name), it names
+ * nothing unresolved, reaches no cycle, and crosses no device, solved relation or analysis
+ * anywhere in its transitive reach; equations are allowed, taken once over the whole reach. So
+ * neither a configuration nor an element value can read an analysis, directly or through an
+ * equation. Returns the reasons it may not; none when it may.
+ */
+export function configEligibility(doc: SheetDoc, level: string, expr: string): string[] {
+  return provenanceProblems(
+    exprProvenance(doc, level, expr),
+    ['independent', 'assumed'],
+    ['equation'],
+  );
+}
+
+/** The netlist questions validation asks of a whole tree at its top: whether each held level may
+ *  be held, and whether each element value and analysis frequency reads only configuration. A
+ *  child's are asked here rather than in the child, because a parent's overrides decide what the
+ *  child's expressions rest on. Each problem is attributed to the block path it belongs to. */
+function treeNodesProblems(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
+  for (const lv of levelsOf(doc)) {
+    if (formatOf(lv.doc) !== 2) continue;
+    const level = lv.path === '' ? '' : lv.path.slice(0, -PATH_SEP.length);
+    const found: QAWarning[] = [];
+    const levels: unknown = lv.doc.levels;
+    if (isObject(levels))
+      for (const [w, e] of Object.entries(levels)) {
+        if (typeof e !== 'string') continue;
+        const verdict = levelEligibility(doc, level, e);
+        if (verdict.kind === 'refused')
+          found.push({
+            rule: 'sheet-nodes',
+            severity: 'error',
+            message:
+              `levels "${w}": "${e}" cannot hold the wire — ${verdict.problems.join('; ')}. A held ` +
+              `level is stated by the designer: a number, or params classed independent`,
+            location: 'levels',
+          });
+        else if (verdict.kind === 'held-gate') {
+          // The hold keeps one device's gates: only that device's gate wires may be held at it —
+          // each placement's, for a device placed several times (the placement rule shows them at
+          // one operating point, so one gate voltage holds them all) — as this sheet names them,
+          // through the port map of a child that wires itself.
+          const who = deviceName(verdict.device);
+          const gates = deviceGateWires(lv.doc, verdict.device) ?? [];
+          if (!gates.includes(w))
+            found.push({
+              rule: 'sheet-nodes',
+              severity: 'error',
+              message:
+                `levels "${w}": "${e}" is the gate voltage the hold on ${verdict.hold} keeps fixed ` +
+                `for ${who}, so it may hold only that device's gate ` +
+                (gates.length > 1 ? 'wires' : 'wire') +
+                ' — ' +
+                (gates.length
+                  ? `${who} has its gate${gates.length > 1 ? 's' : ''} on ${gates.map((g) => `"${g}"`).join(', ')}`
+                  : `${who} names no wires`),
+              location: 'levels',
+            });
+        }
+      }
+    const config = (expr: unknown, where: string): void => {
+      if (typeof expr !== 'string') return;
+      const problems = configEligibility(doc, level, expr);
+      if (problems.length)
+        found.push({
+          rule: 'sheet-nodes',
+          severity: 'error',
+          message:
+            `${where}: "${expr}" cannot configure it — ${problems.join('; ')}. A configuration reads ` +
+            `params classed independent or assumed, and equations of them`,
+          location: where.startsWith('element') ? 'elements' : 'analyses',
+        });
+    };
+    for (const e of Array.isArray(lv.doc.elements) ? lv.doc.elements : [])
+      config(e?.value, `element "${String(e?.name)}" value`);
+    for (const a of Array.isArray(lv.doc.analyses) ? lv.doc.analyses : [])
+      config(a?.at, `analysis "${String(a?.name)}" at`);
+    const segments = level === '' ? [] : level.split(PATH_SEP);
+    for (const w of found)
+      out.push(segments.reduceRight((acc, seg) => prefixBlockWarning(seg, acc), w));
+  }
+  return out;
+}
+
 /** The relation that solves `p`, as one expression that reads zero at the answer: `lhs - rhs` for
  *  a design constraint, the param less the value it names for a solveFor. */
 export function solvedRelation(p: SheetVar): { lhs: string; rhs: string } | undefined {
@@ -1150,9 +1201,6 @@ export function solvePlan(doc: SheetDoc): string[][] {
   for (const n of names) if (!index.has(n)) connect(n);
   return out;
 }
-
-/** How a DC-input finding names a device: the sheet's own, or a child by block path. */
-const deviceName = (d: string): string => (d === 'givens' ? "this sheet's own device" : `"${d}"`);
 
 /**
  * The `sheet-dc-inputs` rule over a whole tree: every voltage the design's sizing rests on must
@@ -1431,8 +1479,14 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
 /** Surface authoring problems as warnings; never throws, never mutates the doc. Structural
  *  and device-independent — identifier resolution against the live values is eval's job.
  *  Recurses into composed children, attributing each child's findings to its block. */
-export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
+export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QAWarning[] {
+  // A document in a format this app does not read is kept as stored and read no further: anything
+  // said about its keys would be said in the wrong format's terms.
+  if (formatOf(doc) === 'unknown') return formatProblems(doc);
   const out: QAWarning[] = [];
+  // A device whose wires put its gate on its drain is diode-connected whether or not its givens
+  // say so — its own `nodes`, or the parent block's (`_wiredBy`) — and is sized on the diagonal.
+  const wiredAsDiode = structuralDiode(doc, _wiredBy);
 
   for (const p of doc.params) {
     if (!Number.isFinite(p.value)) {
@@ -1545,7 +1599,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     // run on, so it is said here with no table in hand, in the words the sizing fails on. A
     // warning, not an error: the sizing is what refuses the device, and a sheet that is still
     // run reaches it — where the report names the axis to state, so the fix is offered in place.
-    const drain = drainProblem(doc.givens);
+    const drain = drainProblem(wiredAsDiode ? { ...doc.givens, diode: true } : doc.givens);
     if (drain) {
       out.push({ rule: 'sheet-givens', severity: 'warning', message: drain, location: 'givens' });
     }
@@ -1568,13 +1622,17 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
           message: 'given region must be "saturation" or "triode"',
           location: 'givens',
         });
-      else if (doc.givens.diode === true)
+      else if (doc.givens.diode === true || wiredAsDiode)
         out.push({
           rule: 'sheet-givens',
           severity: 'error',
           message:
-            'the givens declare a region beside a diode connection — the drain is the gate, so ' +
-            'whether vds clears vdsat is not a question the design leaves open. Drop region',
+            (doc.givens.diode === true
+              ? 'the givens declare a region beside a diode connection'
+              : 'the givens declare a region, and the wires put the gate on the drain — a diode ' +
+                'connection') +
+            ' — the drain is the gate, so whether vds clears vdsat is not a question the design ' +
+            'leaves open. Drop region',
           location: 'givens',
         });
       // The region check is reported under its own id beside the authored ones, and results are
@@ -1772,18 +1830,26 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   // are independent and both hold, exactly as a diode connection plus a given gm/ID already
   // does. It is vds that cannot also be declared, because that one names the same coordinate
   // twice with two different numbers.
-  if (doc.givens?.diode && doc.givens.vds !== undefined) {
+  if ((doc.givens?.diode || wiredAsDiode) && doc.givens?.vds !== undefined) {
     out.push({
       rule: 'sheet-givens',
       severity: 'error',
-      message:
-        'the givens declare both a diode connection and a vds — the connection ties vds to vgs, so a ' +
-        'separate vds cannot also hold. Drop one',
+      message: !wiredAsDiode
+        ? 'the givens declare both a diode connection and a vds — the connection ties vds to vgs, so a ' +
+          'separate vds cannot also hold. Drop one'
+        : 'the wires put the gate on the drain — a diode connection, which ties vds to vgs — and the ' +
+          'givens declare a vds, which cannot also hold. Drop the vds, or move the gate',
       location: 'givens',
     });
   }
 
-  if (_depth === 0) out.push(...dcInputProblems(doc));
+  // The format contract, and the netlist's own structure where the document is in the format
+  // that has one. The questions about the whole tree — what a held level rests on, whether every
+  // device is wired — are asked once, at the top.
+  out.push(...formatProblems(doc));
+  if (formatOf(doc) === 2) out.push(...nodesProblems(doc));
+  if (_depth === 0)
+    out.push(...treeNodesProblems(doc), ...wiringRefusal(doc), ...dcInputProblems(doc));
   out.push(...unsettledGates(doc, _depth === 0));
   out.push(...looseBalances(doc));
 
@@ -1822,7 +1888,6 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     }
 
     out.push(...assumptionEstimates(doc));
-    out.push(...untiedGates(doc));
 
     // Children evaluate in document order, and a block's param overrides may reference the
     // provides of EARLIER siblings only. A forward (or self) reference is statically
@@ -1949,7 +2014,6 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
           }
         }
       }
-      out.push(...wiringProblems(block));
       if (_depth >= MAX_BLOCK_DEPTH) {
         out.push({
           rule: 'sheet-block',
@@ -1972,7 +2036,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
             location: block.name,
           });
         }
-        for (const w of validateSheet(block.doc, _depth + 1)) {
+        for (const w of validateSheet(block.doc, _depth + 1, blockWires(doc, block))) {
           out.push(prefixBlockWarning(block.name, w));
         }
       }

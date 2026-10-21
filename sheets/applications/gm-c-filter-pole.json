@@ -196,5 +196,7 @@
       "rhs": "ft_margin*f_c",
       "note": "the transconductor's fT must clear the pole it sets with margin; estimate-grade"
     }
-  ]
+  ],
+  "formatVersion": 2,
+  "nodes": "none"
 }

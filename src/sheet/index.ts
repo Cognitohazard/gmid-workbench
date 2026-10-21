@@ -9,7 +9,7 @@ import {
   isHardCheck,
   sweepable,
   stands,
-  withoutRestated,
+  withValidation,
   treeCheckResults,
   withoutRange,
   withParams,
@@ -28,6 +28,7 @@ import type {
   SheetSweepCheck,
 } from './types';
 import { dcInputs, validateSheet } from './validate';
+import { formatOf } from './nodes';
 import { evaluateSheet, type DeviceResolver } from './eval';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 
@@ -37,17 +38,44 @@ export * from './eval';
 // Named rather than `export *`: validate.ts also exports reachedGivens, for a test that holds it
 // and dcInputs to the same reach, and that is not public API.
 export {
+  configEligibility,
   dcInputs,
+  exprProvenance,
   exprRoots,
+  levelEligibility,
   validateSheet,
   type DcInputs,
+  type ExprProvenance,
   type ExprRoots,
   type RootClass,
   type RootsPolicy,
 } from './validate';
+// The netlist's public surface: the format contract, the structural diode, the refusal, and the
+// constants the DC wiring walk reports against. The walk itself runs inside every
+// evaluation (see SheetResult.nodes).
+export {
+  CLOSURE_NOTE,
+  KCL_TOL_REL,
+  NODE_TOL,
+  NO_ANSWER_NOTE,
+  carriedBlockWiring,
+  carriedConvention,
+  carriedDocWiring,
+  earlierKeyFix,
+  formatOf,
+  placementsOf,
+  sheetFormat,
+  structuralDiodes,
+  unreadFormat,
+  unreadFormatIn,
+  unwiredDevices,
+  wiredDiode,
+  wiringRefusal,
+} from './nodes';
 export * from './resolve';
 export * from './sensitivity';
 export * from './examples';
+export * from './propose';
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a block's
@@ -63,15 +91,17 @@ export function runSheet(
   resolveDevice?: DeviceResolver,
   refs?: SheetRefIndex,
 ): SheetResult {
+  // A document in a format this app does not read is opened with that reason and not evaluated —
+  // nor resolved, since its blocks are written in terms this engine does not know.
+  if (formatOf(doc) === 'unknown') return evaluateSheet(doc);
   const r = resolvedSheet(doc, refs);
   const pre = [...r.warnings, ...validateSheet(r.doc)];
-  const res = evaluateSheet(r.doc, table, resolveDevice);
-  const blocked = pre.some((w) => w.severity === 'error');
+  const assumptions = dcInputs(r.doc).assumed;
+  const res = evaluateSheet(r.doc, table, resolveDevice, { assumed: assumptions });
   return {
-    ...res,
-    feasible: res.feasible && !blocked,
-    warnings: [...withoutRestated(pre, res.warnings), ...res.warnings],
-    assumptions: dcInputs(r.doc).assumed,
+    ...withValidation(pre, res),
+    feasible: res.feasible && !pre.some((w) => w.severity === 'error'),
+    assumptions,
   };
 }
 

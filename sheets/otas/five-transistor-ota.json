@@ -86,7 +86,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number"
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); slew rate, bandwidth and supply current are computed from what is delivered, not from this number",
+      "class": "independent"
     },
     {
       "name": "gm_id_in",
@@ -131,7 +132,8 @@
       "value": 1,
       "unit": "1",
       "role": "spec",
-      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis. Only the output side reads it — the diode side's drain follows its own gate in whichever convention its table uses. Read both sides of the mirror from the same table: the gate voltage they share is passed in that table's convention"
+      "note": "vds sign convention of the load table: +1 for an N-style axis, -1 for a signed-PMOS axis. Only the output side reads it — the diode side's drain follows its own gate in whichever convention its table uses. Read both sides of the mirror from the same table: the gate voltage they share is passed in that table's convention",
+      "convention": "axis-sign"
     }
   ],
   "blocks": [
@@ -163,7 +165,8 @@
         "I_b": "I_tail",
         "L_b": "L_tail",
         "gm_id_b": "gm_id_tail"
-      }
+      },
+      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "tail",
@@ -205,7 +208,8 @@
         "vgs_t": "bias__vgs",
         "L_t": "L_tail",
         "vds_t": "V_tail"
-      }
+      },
+      "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
       "name": "in",
@@ -246,7 +250,8 @@
         "gm_id_i": "gm_id_in",
         "vds_i": "V_out_dc - V_tail",
         "vsb_i": "V_tail"
-      }
+      },
+      "nodes": { "d": "out", "g": "vinn", "s": "tail", "b": "gnd" }
     },
     {
       "name": "ldr",
@@ -276,7 +281,8 @@
         "I_side": "tail__id*(1 - out_share)",
         "L_l": "L_ld",
         "gm_id_l": "gm_id_ld"
-      }
+      },
+      "nodes": { "d": "mir", "g": "mir", "s": "vdd", "b": "vdd" }
     },
     {
       "name": "inr",
@@ -337,7 +343,8 @@
         "L_i": "L_in",
         "vds_i": "VDD - abs(ldr__vgs) - V_tail",
         "vsb_i": "V_tail"
-      }
+      },
+      "nodes": { "d": "mir", "g": "vinp", "s": "tail", "b": "gnd" }
     },
     {
       "name": "ld",
@@ -385,7 +392,8 @@
         "vgs_l": "ldr__vgs",
         "L_l": "L_ld",
         "vds_l": "ld_sign*(VDD - V_out_dc)"
-      }
+      },
+      "nodes": { "d": "out", "g": "mir", "s": "vdd", "b": "vdd" }
     }
   ],
   "equations": [
@@ -533,5 +541,9 @@
       "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the interior is monotone for the saturation mechanisms here, and the CM_dc sweep remains the authority on the full landscape"
     }
   ],
-  "provides": ["Rout", "cgg_in", "I_q"]
+  "provides": ["Rout", "cgg_in", "I_q"],
+  "formatVersion": 2,
+  "levels": { "vdd": "VDD", "out": "V_out_dc" },
+  "ports": ["vinp", "vinn"],
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }]
 }

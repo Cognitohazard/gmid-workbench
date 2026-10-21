@@ -188,5 +188,7 @@
       "rhs": "T_clk_half",
       "note": "integration plus regeneration must resolve within the half clock; estimate, metastability is sim-owned"
     }
-  ]
+  ],
+  "formatVersion": 2,
+  "nodes": "none"
 }

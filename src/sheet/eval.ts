@@ -2,7 +2,8 @@
 // via sizeDevice, then evaluate author equations in document order and evaluate each check into
 // a signed-margin result. Reuses the expression engine (compileExpr), the bind-any-2
 // sizing (sizeDevice), and the constant scope verbatim — it adds no numeric or parser
-// logic and never traverses a circuit. Pure, deterministic, never throws. Zero DOM.
+// logic and solves no circuit: a declared netlist is checked against the finished result
+// (nodes.ts) and never feeds back into it. Pure, deterministic, never throws. Zero DOM.
 
 import { LOOKUP_RANGE_MESSAGE } from '../types';
 import type { DeviceTable, QAWarning, Scope, Value } from '../types';
@@ -16,7 +17,6 @@ import { diodeGrid, offHull } from '../grid';
 import {
   BIAS_AXES,
   MAX_BLOCK_DEPTH,
-  PATH_SEP,
   balancedBy,
   clampedIn,
   engineSolved,
@@ -32,7 +32,23 @@ import {
   withParams,
 } from './types';
 import { assumedLevelRefusal, holdHardware, type HeldHardware } from './coverage';
+// A value as a message quotes it: what the author wrote, without the float tail arithmetic leaves
+// on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004).
+import { shown } from './linear';
 import { dcInputs, solvePlan, solvedRelation } from './validate';
+import {
+  blockWires,
+  childFindingsOf,
+  flattened,
+  formatOf,
+  formatProblems,
+  readsParentSelector,
+  structuralDiodes,
+  unwalkedReport,
+  withNodes,
+  withoutWalk,
+  type WiringMode,
+} from './nodes';
 import type {
   SizingReport,
   CheckOp,
@@ -43,6 +59,7 @@ import type {
   SheetDoc,
   SheetRangeEnd,
   RangeEndReport,
+  PointOutcome,
   PointState,
   SheetResult,
   SheetVar,
@@ -81,16 +98,6 @@ const NO_WARN = (): void => {};
  * and the snap reads it as the deterministic near-miss (amber) that it is.
  */
 export const MARGIN_SNAP_REL = 1e-5;
-
-/**
- * How far a declared gate wiring may disagree with the child's own vgs before it is reported.
- * ABSOLUTE and in the voltage domain, not relative: a relative tolerance would excuse a larger
- * error on a higher supply, where the node budget is no roomier. 10 mV is the resolution bias
- * plans are actually written to — designers round node levels to about that — and it sits an
- * order of magnitude below the real disagreements this check exists to catch (the three found
- * by hand were 41, 350 and 690 mV).
- */
-export const WIRING_TOL = 0.01;
 
 /** How far a diode-connected device's drain voltage may sit from its gate voltage, relative to
  *  the gate voltage, before the difference is the table's hull rather than interpolation. */
@@ -251,10 +258,6 @@ interface Unswept {
   reason: string;
   sweep: string;
 }
-
-/** A value as a message quotes it: what the author wrote, without the float tail arithmetic
- *  leaves on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004). */
-const shown = (v: number): string => String(Number(v.toPrecision(12)));
 
 /** What each axis the givens can state is called in a refusal: the quantity it asks for, and
  *  the sweep that would answer it. */
@@ -920,7 +923,7 @@ function applyBlockParams(
  * the rolled-up error warning + the children-feasibility fold in evaluateSheet.
  */
 function evalBlocks(
-  blocks: SheetBlock[],
+  parent: SheetDoc,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   depth: number,
@@ -934,7 +937,7 @@ function evalBlocks(
   // this entrypoint is public): a duplicate or empty block name would silently overwrite
   // the earlier sibling's provides — skip it, fail closed.
   const seenNames = new Set<string>();
-  for (const block of blocks) {
+  for (const block of parent.blocks ?? []) {
     const dead = (message: string): void => {
       warn({ rule: 'sheet-block', severity: 'error', message, location: block.name });
       reports.push({
@@ -965,6 +968,11 @@ function evalBlocks(
       continue;
     }
     seenNames.add(block.name);
+    // A child document in a format this app does not read is kept as stored, never evaluated.
+    if (formatOf(srcDoc) === 'unknown') {
+      dead(`block "${block.name}": ${formatProblems(srcDoc)[0].message}`);
+      continue;
+    }
     if (depth >= MAX_BLOCK_DEPTH) {
       dead(`block "${block.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
       continue;
@@ -983,8 +991,16 @@ function evalBlocks(
 
     const { doc: childDoc, ok: paramsOk } = applyBlockParams(block, srcDoc, values, scope, warn);
     // evaluateNode, not evaluateSheet: a composed child never evaluates its own range ends —
-    // the parent owns range claims (validation says so at the block).
-    const res = evaluateNode(childDoc, childTable, resolveDevice, depth + 1, budget);
+    // the parent owns range claims (validation says so at the block). Its wiring is read once the
+    // whole tree has settled (see finishWiring), in the mode its parent asks for: a block that
+    // names the wires its child's device sits on, or whose device reads a selector the parent
+    // declares, asks for that device's operating point; a child whose wiring joins the parent's
+    // walk reports its held levels and element values instead of walking itself (see withNodes).
+    const mode: WiringMode = {
+      wired: blockWires(parent, block) !== undefined || readsParentSelector(parent, block),
+      flattened: flattened(parent, srcDoc, block),
+    };
+    const res = evaluateNode(childDoc, childTable, resolveDevice, depth + 1, { budget });
 
     // Roll up child warnings, attributed to the block (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
@@ -1009,7 +1025,7 @@ function evalBlocks(
         }
       }
     }
-    reports.push({
+    const report: SheetBlockReport = {
       name: block.name,
       title: srcDoc.title,
       feasible: paramsOk && res.feasible,
@@ -1018,114 +1034,85 @@ function evalBlocks(
       checks: res.checks,
       ...(res.blocks ? { blocks: res.blocks } : {}),
       ...(res.held ? { held: res.held } : {}),
-    });
+    };
+    PENDING_WIRING.set(report, { doc: childDoc, res, table: childTable, mode });
+    reports.push(report);
   }
   return reports;
 }
 
+/** A child's wiring, to be read once its tree has settled: what withNodes needs of it. Keyed by
+ *  the child's report, so only the reports of the evaluation a tree keeps are ever read. */
+interface PendingWiring {
+  doc: SheetDoc;
+  res: SheetResult;
+  table: DeviceTable | undefined;
+  mode: WiringMode;
+}
+const PENDING_WIRING = new WeakMap<SheetBlockReport, PendingWiring>();
+
 /**
- * Check every block that DECLARES its gate wiring against the identity that wiring imposes:
- * the gate sits one gate-source voltage from the source, above it for an N device and below it
- * for a P one (see SheetWiring). Runs once, on the FINAL result of a node — after its solve, and
- * after the parent's own equations, so a node the sheet defines as an equation
- * is as reachable as one it defines as a param, and a solver's probes never spam the diagnostic.
- *
- * The voltage compared against is the child's own SIZED vgs — the sizing's answer, which the sizing
- * always has — not a scalar the child publishes upward. That is what keeps the check
- * unswitchoffable: no `provides`, no parent expression, and no sign convention stands
- * between the declaration and the number it is checked against.
- *
- * A sheet that also claims operating ranges reports the disagreement once per RUN — the base
- * evaluation plus each range end, whose warnings ride its own report verbatim. That is
- * intended: a range end holds the SAME hardware at a different bias, and the identity is a
- * statement about voltages, so the residual there is a different measurement for a different reason
- * — not a duplicate of the first. A wiring declaration that holds at the center and breaks at a
- * range end is exactly the finding worth having twice.
- *
- * A DEDICATED evaluator, deliberately: every runtime problem here — an expression that does not
- * resolve, a block with no sized operating point, a disagreement past WIRING_TOL — is a
- * warning-severity 'sheet-wiring' diagnostic and nothing more. It never throws, never touches
- * feasibility, and never repairs anything. A wiring declaration describes the schematic the
- * author drew; when it disagrees with the sizing, which of the two is wrong is the author's
- * call, and an author who wants the disagreement to GATE writes a hard check on the same numbers.
- * (Structural problems — a half-declaration, an unknown key, an expression that does not parse —
- * are validation errors, which is the only way wiring reaches a verdict.)
+ * The wiring of every child in a settled tree, read once: the child's device point and held
+ * levels where its parent's walk reads them, and the walk or selector check of a child that runs
+ * its own — innermost first, so each check counts what its own children found. Every solver probe
+ * of the tree before this one is thrown away unread. Where the tree's point is not `sized`, nothing
+ * is walked or checked, and each child that would have run its own check reports not-evaluated
+ * (see unwalkedReport). A child's findings are attributed to its block path and follow the tree's
+ * own warnings; an error among them fails the child, every block above it, and the tree closed.
  */
-function checkWiring(doc: SheetDoc, res: SheetResult): SheetResult {
-  // Shape-guarded rather than trusted: evaluate never throws, so a malformed authored doc
-  // (blocks as a string, wiring as a string) has to degrade to "nothing to check".
-  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
-  const out: QAWarning[] = [];
-  const scope = scalarScope(res.values);
-  const sized = new Map((res.blocks ?? []).map((c) => [c.name, c.sizing]));
-  for (const block of blocks) {
-    // Read as `unknown`: a persisted doc reaches evaluation unverified, and the shape checks
-    // below are the same ones validate.ts reports on — stated here in the types, not assumed.
-    const w: unknown = block?.wiring;
-    if (typeof w !== 'object' || w === null) continue;
-    const decl = w as Record<string, unknown>;
-    const where = `block "${block.name}" wiring`;
-    const warn = (message: string): void => {
-      out.push({ rule: 'sheet-wiring', severity: 'warning', message, location: block.name });
-    };
-    // A block the evaluation already killed — an unresolved ref, a device that did not resolve, an
-    // override that would not evaluate, givens that could not size — has no operating point to
-    // check against, and the reason is already reported. A second line advising a fix to the
-    // wiring would be noise stacked on the finding, and worse, advice about the wrong thing. The
-    // prefix match is what makes that true for a child's INTERNAL errors: they roll up to this
-    // block under its path (`<block>.givens`, `<block>.<inner>`), not under the bare block name.
-    // That path spelling is a contract with ONE owner — prefixBlockWarning (types.ts) — so this
-    // match moves if and only if that function does.
-    if (
-      res.warnings.some(
-        (v) =>
-          v.severity === 'error' &&
-          (v.location === block.name || (v.location ?? '').startsWith(block.name + PATH_SEP)),
-      )
-    )
-      continue;
-    // The sized gate-source voltage first: without it there is no identity to form, and reporting
-    // each expression separately as well would turn one unsized block into three warnings.
-    const vgs = sized.get(block.name)?.vgs;
-    if (vgs === undefined || !Number.isFinite(vgs)) {
-      warn(
-        `${where}: the block declares no givens, so it has no sized gate-source voltage for the ` +
-          `wiring identity to be checked against`,
-      );
-      continue;
-    }
-    /** One wiring expression against the final scope. Diagnostics are swallowed (NO_WARN) and
-     *  re-raised here: this evaluator emits 'sheet-wiring' warnings only, never the parse
-     *  errors evalScalar would otherwise push at error severity. */
-    const at = (src: unknown, key: string): number | undefined => {
-      if (typeof src !== 'string') {
-        warn(`${where}: ${key} is not an expression`);
-        return undefined;
+function finishWiring(res: SheetResult, sized: boolean): SheetResult {
+  if (!res.blocks?.length) return res;
+  const extra: QAWarning[] = [];
+  const visit = (
+    reports: readonly SheetBlockReport[],
+    path: readonly string[],
+  ): { blocks: SheetBlockReport[]; failed: boolean } => {
+    let failed = false;
+    const blocks = reports.map((report) => {
+      const below = report.blocks ? visit(report.blocks, [...path, report.name]) : undefined;
+      let out: SheetBlockReport = below ? { ...report, blocks: below.blocks } : report;
+      let bad = below?.failed ?? false;
+      const pending = PENDING_WIRING.get(report);
+      if (pending && !sized) {
+        // The report the check would have written, saying it did not run: none where the parent's
+        // walk covers the child, or where the child is read only for its device point.
+        const covered =
+          pending.mode.flattened || (pending.mode.wired && formatOf(pending.doc) === 'earlier');
+        const nodes = covered ? undefined : unwalkedReport(pending.doc, childFindingsOf(out));
+        if (nodes) out = { ...out, nodes };
+      } else if (pending) {
+        const walked = withNodes(
+          pending.doc,
+          { ...pending.res, ...(out.blocks ? { blocks: out.blocks } : {}), warnings: [] },
+          pending.table,
+          pending.mode,
+        );
+        const at = [...path, report.name];
+        for (const w of walked.warnings)
+          extra.push(at.reduceRight((acc, seg) => prefixBlockWarning(seg, acc), w));
+        if (walked.warnings.some((w) => w.severity === 'error')) bad = true;
+        out = {
+          ...out,
+          ...(walked.terminals ? { terminals: walked.terminals } : {}),
+          ...(walked.nodes ? { nodes: walked.nodes } : {}),
+          ...(walked.wiringValues ? { wiringValues: walked.wiringValues } : {}),
+        };
       }
-      const v = evalScalar(src, res.values, scope, NO_WARN, where);
-      if (v === undefined || !Number.isFinite(v)) {
-        warn(`${where}: ${key} "${src}" did not resolve to a finite number — cannot check`);
-        return undefined;
+      if (bad) {
+        out = { ...out, feasible: false };
+        failed = true;
       }
-      return v;
-    };
-    const gate = at(decl.gate, 'gate');
-    const source = at(decl.source, 'source');
-    if (gate === undefined || source === undefined) continue;
-    // Magnitude plus direction, never the raw axis value: the sign lives in the child's declared
-    // polarity, so a signed PMOS export and one in N convention check identically.
-    const expected = source + (block.doc?.polarity === 'p' ? -1 : 1) * Math.abs(vgs);
-    const delta = gate - expected;
-    if (Math.abs(delta) > WIRING_TOL) {
-      warn(
-        `${where}: gate reads ${gate.toExponential(4)} V but the block's source and its own ` +
-          `sized V_GS put that node at ${expected.toExponential(4)} V — they describe the same ` +
-          `node, so the design is sized at one voltage and wired at another (delta ` +
-          `${delta.toExponential(3)} V, tolerance ${WIRING_TOL} V)`,
-      );
-    }
-  }
-  return out.length ? { ...res, warnings: [...res.warnings, ...out] } : res;
+      return out;
+    });
+    return { blocks, failed };
+  };
+  const { blocks, failed } = visit(res.blocks, []);
+  return {
+    ...res,
+    blocks,
+    warnings: [...res.warnings, ...extra],
+    ...(failed ? { feasible: false } : {}),
+  };
 }
 
 /**
@@ -1164,7 +1151,7 @@ function evaluateOnce(
   //    (name__key) in its own givens/equations/checks.
   const blocks =
     doc.blocks && doc.blocks.length > 0
-      ? evalBlocks(doc.blocks, table, resolveDevice, _depth, values, scope, warn, budget)
+      ? evalBlocks(doc, table, resolveDevice, _depth, values, scope, warn, budget)
       : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when givens are declared.
@@ -1305,35 +1292,80 @@ function solveFailed(res: SheetResult, message: string): SheetResult {
  * range dispatches to the range wrapper; everything else, and every step the engine takes
  * below the top of a tree (composed children, solver probes, the range-end runs themselves),
  * goes through evaluateNode — which structurally has no range branch, so "range ends evaluate
- * only at the top" holds with no runtime guard to maintain.
+ * only at the top" holds with no runtime guard to maintain. `opts.held` marks a held design asked
+ * about at another condition (see EvaluateOptions).
  */
 export function evaluateSheet(
-  doc: SheetDoc,
+  authored: SheetDoc,
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
+  opts: EvaluateOptions = {},
 ): SheetResult {
+  // A document in a format this app does not read is not evaluated: rebuilding its meaning from
+  // keys this engine does not know would report on a design nobody wrote.
+  if (formatOf(authored) === 'unknown')
+    return { values: {}, checks: [], feasible: false, warnings: formatProblems(authored) };
+  // A device whose wires put its gate on its drain is diode-connected, and is sized on the
+  // diode diagonal like one that says so (see structuralDiodes) — stated before anything sizes.
+  const doc = structuralDiodes(authored);
   // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (operatingRange as a
   // string or object — validation's problem) must degrade to a plain evaluation, not a
   // TypeError out of .map.
   return Array.isArray(doc.operatingRange) && doc.operatingRange.length
-    ? evaluateWithRange(doc, table, resolveDevice)
-    : evaluateNode(doc, table, resolveDevice, 0);
+    ? evaluateWithRange(doc, table, resolveDevice, opts)
+    : evaluateNode(doc, table, resolveDevice, 0, opts);
+}
+
+/** How a caller asks evaluateSheet about a document. */
+export interface EvaluateOptions {
+  /** The document is a held design (see holdHardware) asked about at another condition: its point
+   *  is classified like a range end's (heldOutcome). */
+  held?: boolean;
+  /** The assumed DC inputs the design rests on (dcInputs), where the caller has them: the point
+   *  then has no compliance answer, though its wiring is still checked (see pointOutcome). */
+  assumed?: readonly string[];
+}
+
+/** How one node of a tree is evaluated (see evaluateNode): the tree's evaluation budget, and, at
+ *  the top, how its point is classified. */
+interface NodeOptions extends EvaluateOptions {
+  budget?: SolveBudget;
 }
 
 /**
- * Evaluate one node of a sheet tree: solve it (below), then check the gate wiring its children
- * declare against the result. The wiring check sits HERE, outside the solve, so it sees the
- * settled design exactly once — a probe's intermediate value is not a wiring disagreement. A call
- * at the top of a tree (no budget passed) starts the tree's evaluation budget.
+ * Evaluate one node of a sheet tree: solve it (below). A node below the top returns its solved
+ * result as it is — its wiring is read when the whole tree has settled. At the top, the run is
+ * classified once as a compliance point (pointOutcome), and then, only where its sizing stood,
+ * every node's wiring is read on that settled design: the children's (finishWiring), then the
+ * top's own walk (withNodes) — so a solver probe's intermediate value is never a wiring
+ * disagreement, and a point with no sized design reports not-evaluated rather than findings (see
+ * withoutWalk). A call at the top of a tree (no budget passed) starts the tree's evaluation budget.
  */
 function evaluateNode(
   doc: SheetDoc,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
-  _depth: number,
-  budget: SolveBudget = { left: SOLVE_EVALUATIONS },
+  depth: number,
+  opts: NodeOptions = {},
 ): SheetResult {
-  return checkWiring(doc, withHeld(doc, solveNode(doc, table, resolveDevice, _depth, budget)));
+  const res = withHeld(
+    doc,
+    solveNode(doc, table, resolveDevice, depth, opts.budget ?? { left: SOLVE_EVALUATIONS }),
+  );
+  if (depth > 0) return res;
+  const point = pointOutcome(res, opts.held === true, opts.assumed);
+  if (!point.sized) return { ...withoutWalk(doc, finishWiring(res, false)), point };
+  const out = withNodes(doc, finishWiring(res, true), table, { wired: false, flattened: false });
+  // The point was classified before the wiring was read; a selector the table contradicts then
+  // leaves the run infeasible, so a centre that complied does not.
+  const raised = out.warnings.slice(res.warnings.length).find((w) => w.severity === 'error');
+  return {
+    ...out,
+    point:
+      raised && point.state === 'complies'
+        ? { ...point, state: 'does-not-comply', error: raised.message }
+        : point,
+  };
 }
 
 /**
@@ -2071,8 +2103,9 @@ function evaluateWithRange(
   doc: SheetDoc,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
+  opts: EvaluateOptions,
 ): SheetResult {
-  const base = evaluateNode(doc, table, resolveDevice, 0);
+  const base = evaluateNode(doc, table, resolveDevice, 0, opts);
   const rangeEnds = doc.operatingRange ?? [];
   if (!stands(base)) {
     const reports = rangeEnds.map((e): RangeEndReport => ({
@@ -2095,6 +2128,7 @@ function evaluateWithRange(
   const assumed = dcInputs(doc).assumed;
   if (assumed.length) {
     const error = assumedLevelRefusal(assumed);
+    const nodes = unwalkedReport(doc);
     const reports = rangeEnds.map((e): RangeEndReport => ({
       name: e.name,
       state: 'no-answer',
@@ -2103,6 +2137,7 @@ function evaluateWithRange(
       solved: {},
       warnings: [],
       error,
+      ...(nodes ? { nodes } : {}),
     }));
     return { ...base, rangeEnds: reports, complies: false };
   }
@@ -2189,6 +2224,39 @@ export function heldOutcome(res: SheetResult): {
   return { state: res.feasible ? 'complies' : 'does-not-comply' };
 }
 
+/**
+ * One run as a point of the compliance question (see PointOutcome), classified once: the wiring
+ * walk's gate reads `sized`, and a range end and a process condition read the answer. A held
+ * design (`held`) is read as heldOutcome reads it: sized where it raised no error and read no
+ * device off its table. A design sized here is sized where it stands (see stands), and answers for
+ * itself: it complies where it is feasible. A design resting on an assumed level (`assumed`) is
+ * still sized, and gives no answer.
+ */
+export function pointOutcome(
+  res: SheetResult,
+  held: boolean,
+  assumed: readonly string[] = [],
+): PointOutcome {
+  let sized: boolean;
+  let answer: Omit<PointOutcome, 'sized'>;
+  if (held) {
+    answer = heldOutcome(res);
+    sized = answer.error === undefined;
+  } else {
+    sized = stands(res);
+    answer = sized
+      ? { state: res.feasible ? 'complies' : 'does-not-comply' }
+      : {
+          state: 'no-answer',
+          error:
+            res.warnings.find((w) => w.severity === 'error')?.message ??
+            'the evaluation did not complete',
+        };
+  }
+  if (assumed.length) answer = { state: 'no-answer', error: assumedLevelRefusal(assumed) };
+  return { sized, ...answer };
+}
+
 /** One range end: resolve its `set` expressions against the base result, re-evaluate the
  *  FIXED-HARDWARE form of the doc with those values (through evaluateNode, so the run cannot
  *  recurse into range ends), and classify the outcome (see RangeEndReport.state):
@@ -2215,6 +2283,7 @@ function runRangeEnd(
   const scope = scalarScope(base.values);
   const over: Record<string, number> = {};
   /** Asked, and nothing was evaluated that could answer. */
+  const unwalked = unwalkedReport(held.doc);
   const unanswered = (error: string): RangeEndReport => ({
     name: rangeEnd.name,
     state: 'no-answer',
@@ -2223,6 +2292,7 @@ function runRangeEnd(
     solved: {},
     warnings: [],
     error,
+    ...(unwalked ? { nodes: unwalked } : {}),
     ...assumed,
   });
   // `?? {}`: a half-written range end (no set) is validation's error to name; evaluate never
@@ -2243,8 +2313,8 @@ function runRangeEnd(
       `range end "${rangeEnd.name}": no nominal value was recorded for the held expression of ` +
         held.unheld.join(', '),
     );
-  const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0);
-  const { state, error: err } = heldOutcome(res);
+  const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0, { held: true });
+  const { state, error: err } = res.point as PointOutcome;
   // The solved map is "where the range end LANDED" — a run with an `error` (a solve that never
   // landed, data read somewhere else) leaves values that must not be reported as a landing.
   const solved: Record<string, number> = {};
@@ -2263,6 +2333,7 @@ function runRangeEnd(
     solved,
     warnings: res.warnings,
     ...(err !== undefined ? { error: err } : {}),
+    ...(res.nodes ? { nodes: res.nodes } : {}),
     ...assumed,
   };
 }
