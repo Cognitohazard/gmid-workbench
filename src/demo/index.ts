@@ -294,7 +294,7 @@ export function withoutColumns(table: DeviceTable, keys: readonly string[]): Dev
 
 /**
  * A copy of `table` with columns added (or replaced), each a full column or one value for every
- * grid point — how a test gives a table something it does not carry, such as a column the
+ * grid point. For tests that need a table with a column it does not carry, such as one the
  * namespace has no name for. The grid is rebuilt through makeGrid, so a column of the wrong
  * length throws.
  */

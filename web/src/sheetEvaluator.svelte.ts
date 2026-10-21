@@ -12,8 +12,8 @@
 // (it is still newer than what the panel shows, which keeps a slider drag live), and only one
 // still running after it is cancelled.
 //
-// When no worker can be started at all, the same jobs run on the page instead — slower to feel,
-// never a different answer.
+// When no worker can be started at all, the same jobs run on the page instead. The page is less
+// responsive then, but the answers are the same.
 
 import {
   namedBindings,
@@ -61,7 +61,7 @@ interface Pending {
 
 interface Running extends Pending {
   id: number;
-  /** When its grace began: the post, or the worker's load if it came later. */
+  /** When its grace period began: when it was sent, or when the worker loaded if that was later. */
   started: number;
   /** A newer request of the same kind is queued behind it. */
   superseded: boolean;
@@ -118,7 +118,8 @@ export class SheetEvaluator {
   #seq = 0;
   #disposed = false;
   /** Which kinds of job are waiting or running, in PRIORITY order — the panel's busy indicator.
-   *  Replaced only when it changes, so a request that changes nothing invalidates nothing. */
+   *  Reassigned only when the set changes, so a request that changes nothing does not make the
+   *  panel update. */
   #busy = $state.raw<readonly JobKind[]>([]);
 
   /** Whether a job of `kind` (or, with no kind, any job) is waiting or running. */
@@ -131,10 +132,9 @@ export class SheetEvaluator {
    * receives the answer. Answers of one kind arrive in the order they were asked for, so the last
    * one delivered is always the latest that finished; a job that was cancelled (superseded past
    * its grace, or withdrawn) is never delivered. A request whose answer was the last one
-   * delivered is answered again at once, from that answer: asking a question again — because
-   * something it does not depend on changed, or because the user went back to it — never pays
-   * for a second run. `fail` hears of a job that could not run at all (the core itself never
-   * throws).
+   * delivered is answered again at once from that answer, so asking for the same thing again
+   * (after an unrelated change, or after going back to an earlier value) does not run it twice.
+   * `fail` is called for a job that could not run at all (the core itself never throws).
    */
   request<K extends JobKind>(
     job: JobOf<K>,
@@ -147,8 +147,8 @@ export class SheetEvaluator {
     const key = `${JSON.stringify(snap)}|${ctx.bench.revision}|${refsId(ctx.refs)}`;
     const done = this.#done.get(job.kind);
     if (done?.key === key) {
-      // Already answered. Whatever was asked for since is no longer the question, and must not
-      // land after this answer, so it is withdrawn.
+      // This request was already answered. Withdraw any newer request of this kind, so that its
+      // answer cannot arrive after this one.
       this.cancel(job.kind);
       deliver(done.result as JobResults[K]);
       return;
@@ -163,8 +163,8 @@ export class SheetEvaluator {
     };
     const running = this.#running;
     if (running?.kind === job.kind && running.key === key) {
-      // The same question is already being answered: answer this caller instead, and drop
-      // anything queued since — asking again means the question went back to this one.
+      // The running job already answers this request. Send its answer to this caller, and drop
+      // any request of this kind queued since, because this one replaces it.
       running.deliver = p.deliver;
       running.fail = p.fail;
       running.superseded = false;
@@ -178,23 +178,24 @@ export class SheetEvaluator {
     this.#settle();
   }
 
-  /** Withdraw the request of `kind`: its answer is no longer wanted. A running one is abandoned
-   *  with its worker (on the page, where nothing runs between tasks, it simply never starts). */
+  /** Withdraw the request of `kind`, because its answer is no longer needed. If that job is
+   *  running, its worker is stopped. On the page a job cannot be running when this is called, so
+   *  it simply never starts. */
   cancel(kind: JobKind): void {
     this.#queue.delete(kind);
     if (this.#running?.kind === kind) this.#restart();
     this.#settle();
   }
 
-  /** A newer request of the running job's kind is queued: cancel the running one once its grace
-   *  is spent, unless it has finished (or been asked for again) by then. */
+  /** A newer request of the running job's kind is queued. Cancel the running job when its grace
+   *  period ends, unless it has finished, or been requested again, by then. */
   #supersede(job: Running): void {
     if (job.superseded) return; // its cancellation is already timed
     job.superseded = true;
     if (!this.#worker) return; // on the page it cannot be stopped; #runInline skips it if unstarted
     const kill = (): void => {
       if (this.#running !== job || !job.superseded) return;
-      // The grace restarts when a fresh worker finishes loading, so check it again.
+      // The grace period restarts when a new worker finishes loading, so check it again.
       const left = GRACE_MS - (performance.now() - job.started);
       if (left > 0) {
         setTimeout(kill, left);
@@ -206,7 +207,7 @@ export class SheetEvaluator {
     kill();
   }
 
-  /** Stop everything: the panel is gone. */
+  /** Stop all work, because the panel has been closed. */
   dispose(): void {
     this.#disposed = true;
     this.#queue.clear();
@@ -245,14 +246,15 @@ export class SheetEvaluator {
       this.#inline = true;
       return null;
     }
-    // A worker that dies takes its job with it. One that died before it had even loaded cannot
-    // run here at all (a browser that refuses workers from this page), so the page evaluates
-    // from then on; one that died later (out of memory, say) fails its job and the rest go on.
+    // If the worker stops with an error, its job is lost. If it stopped before it finished
+    // loading, this browser cannot run the worker, so every later job runs on the page. If it
+    // stopped later (for example, out of memory), the job is reported as failed and the other
+    // jobs continue.
     let loaded = false;
     w.onmessage = (e: MessageEvent<JobReply | WorkerReady>) => {
       if (!('ready' in e.data)) return this.#reply(w, e.data);
       loaded = true;
-      // Loading is the restart's cost, not the job's: its grace starts now.
+      // Start the job's grace period now, so the time spent loading the worker is not counted.
       if (w === this.#worker && this.#running) this.#running.started = performance.now();
     };
     w.onerror = (e) => {
@@ -262,7 +264,7 @@ export class SheetEvaluator {
       this.#restart();
       if (!loaded) this.#inline = true;
       if (job) {
-        // Unable to run here: ask the page instead, unless a newer request already replaced it.
+        // Run the job on the page instead, unless a newer request of its kind replaced it.
         if (this.#inline) {
           if (!this.#queue.has(job.kind)) this.#queue.set(job.kind, job);
         } else job.fail(e.message || 'the evaluation worker stopped');
@@ -298,7 +300,7 @@ export class SheetEvaluator {
     this.#running = { ...p, id, started: performance.now(), superseded: false };
     const w = this.#spawn();
     if (!w) {
-      // On the page, one job per task, so the panel paints between jobs.
+      // On the page, run one job per task, so the panel can redraw between jobs.
       setTimeout(() => this.#runInline(id), 0);
       return;
     }
@@ -309,7 +311,7 @@ export class SheetEvaluator {
     const job = this.#running;
     if (!job || job.id !== id) return; // cancelled before it started
     if (job.superseded) {
-      // Not started, and no longer the question: the newer request queued behind it runs instead.
+      // This job never started and a newer request of its kind is queued, so skip it.
       this.#running = null;
       this.#settle();
       return;

@@ -1,7 +1,7 @@
 // The sheet panel's evaluations, as data: what to run, and the one function that runs it. The
 // worker (sheet.worker.ts) calls `runJob` off the page's thread; the evaluator falls back to
-// calling it on the page when no worker can be started. Either way the numerics are the core's —
-// this file only names which core call each job is, so the two paths cannot drift apart.
+// calling it on the page when no worker can be started. Either way the calculations are the
+// core's; this file only maps each job to one core call, so the two paths give the same results.
 //
 // No DOM and no Svelte: the worker bundle imports this file.
 

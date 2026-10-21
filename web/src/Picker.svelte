@@ -177,8 +177,8 @@
     // One sheet per slice, handed back to the event loop between sheets. That is what keeps
     // the cancel button (and the rest of the page) alive during a run: the per-sheet budget
     // bounds how long a single slice can hold the thread. Unlike the sheet panel's evaluations,
-    // the search does not run in a worker: the budget already caps each slice, so moving it
-    // would buy a smoother page during a search, not a page that stops freezing.
+    // the search does not run in a worker: the budget already limits each slice, so moving it
+    // would make the page smoother during a search but would not fix a freeze.
     const step = (): void => {
       if (mine !== token) return;
       const s = SEARCHABLE_SHEETS[i];

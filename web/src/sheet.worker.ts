@@ -1,8 +1,8 @@
 // The sheet evaluation worker: runs the panel's jobs (sheetjobs.ts) off the page's thread, so a
 // sheet that takes seconds to evaluate never freezes the page. It holds the device tables it has
-// been sent, by id, so a request carries only the sheet and an outline of the bench. Cancelling
-// a run that has been superseded is the page's side: it terminates this worker and starts a new
-// one, because a run in progress cannot be interrupted from inside.
+// been sent, by id, so a request carries only the sheet and an outline of the bench. The page
+// cancels a run that has been replaced by terminating this worker and starting a new one,
+// because a run in progress cannot be interrupted from inside.
 
 import type { CharacterizedDevice, DeviceTable, SheetRefIndex } from '@gmid/mostab-core';
 import {

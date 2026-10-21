@@ -103,17 +103,18 @@
 
   // Every evaluation — the verdict, the sweeps, the sensitivities — runs in this panel's
   // evaluation worker, never on the page's thread: a large sheet takes seconds per run. Each
-  // answer lands in a $state.raw below (results are plain data, never worth deep-proxying), and
-  // the last answer stays on screen beside the busy indicator until the next one arrives.
+  // answer is stored in a $state.raw below (results are plain data, so they are not wrapped in
+  // reactive proxies), and the last answer stays on screen beside the busy indicator until the
+  // next one arrives.
   const evaluator = new SheetEvaluator();
   $effect(() => () => evaluator.dispose());
-  /** A job that could not run at all, in its own words — shown with the warnings. */
+  /** The error from a job that could not run at all, shown with the warnings. */
   let evalError = $state<string | null>(null);
   const failed = (e: string): void => {
     evalError = `evaluation failed: ${e}`;
   };
-  /** The one shape every evaluation below takes: ask for `job` and hand its answer to `answer`,
-   *  or, with no job to ask (nothing to evaluate there), withdraw the request and clear it. */
+  /** Used by every evaluation below: request `job` and pass its answer to `answer`. When there is
+   *  no job (nothing to evaluate), withdraw the request and clear the answer. */
   function ask<K extends JobKind>(
     kind: K,
     job: JobOf<K> | undefined,
@@ -292,7 +293,7 @@
   const busyText = $derived.by(() => {
     if (evaluator.busy('run')) return runs.length ? 'updating…' : '';
     if (sweeping) return 'sweeping…';
-    return evaluator.busy('sens') ? 'probing…' : '';
+    return evaluator.busy('sens') ? 'computing sensitivities…' : '';
   });
   const multi = $derived(runs.length > 1);
   // Two questions, answered apart: is the design feasible where it is sized, and at how many of
@@ -495,15 +496,15 @@
   // One condition at a time: a ranking is a statement about the point it was taken at, and
   // there is no such point while several conditions are on screen.
   const sensReady = $derived(!multi && evaluated && result !== undefined && refTable !== undefined);
-  /** The design a snapshot is being taken of, while the worker takes it: set exactly while the
-   *  request is out, so it is also the busy state. */
+  /** The design being probed. It is set only while the request is pending, so it is also the
+   *  busy state. */
   let sensFor = $state.raw<{ doc: SheetDoc; dev: DeviceTable } | null>(null);
   const sensBusy = $derived(sensFor !== null);
   function stopSens(): void {
     evaluator.cancel('sens');
     sensFor = null;
   }
-  // A snapshot of a design that has since moved would not render, so stop paying for it: the
+  // A snapshot of a design that has since changed would not be shown, so stop computing it: the
   // worker runs one job at a time, and the verdict for the new design is waiting behind it.
   $effect(() => {
     if (sensFor && (sensFor.doc !== cfg || sensFor.dev !== refTable)) stopSens();
@@ -827,8 +828,8 @@
   const hasRefs = $derived(docHasRefs(cfg));
 
   // `doc` with the block at `path` (a non-empty index path from the top sheet) replaced by
-  // `fn(block)`, as a fresh doc down to it — the immutable edit every block control makes. A path
-  // through a block with no local doc (a live reference) changes nothing past it.
+  // `fn(block)`, copying each doc on the way down; every block control edits the sheet this way. A
+  // path through a block with no local doc (a live reference) changes nothing past that block.
   function updateBlockAt(
     doc: SheetDoc,
     path: number[],
@@ -1711,7 +1712,7 @@
       </p>
     {/if}
   {:else if active && sweeping}
-    <!-- The sweep is being taken in the background; the chart lands here when it is done. -->
+    <!-- The sweep is running in the background; the chart appears here when it is done. -->
     <p class="feas sbusy" data-sweeping>sweeping {active}…</p>
   {:else if active && refRun}
     <!-- The sweep is a statement about a design, and there is no design here yet. -->

@@ -520,12 +520,11 @@ function applyGivensBias(
  * pass-through column the table carries (`passthrough`, as the sizing reports them), which is how
  * a sheet reads a quantity the format has no name for.
  *
- * A pass-through name is the table's, not the sheet's, so it never displaces one the sheet already
- * means something by: a param, a child's provide, or an expression constant — a column called `k`
- * would otherwise replace Boltzmann's constant in every equation after the sizing, on this table
- * and no other. Such a column is left out of scope and the sheet is told, rather than either side
- * silently winning. Namespace quantities keep their place: the sheet reads its device through
- * them by design.
+ * A pass-through column never replaces a name the sheet already uses: a param, a child's provide,
+ * or an expression constant. Otherwise a column called `k` would replace Boltzmann's constant in
+ * every equation after the sizing, on this table and no other. Such a column is left out of scope
+ * and a warning says so, so neither side silently wins. Namespace quantities are always put in
+ * scope: they are how the sheet reads its device.
  */
 function mergeSized(
   values: Record<string, number>,

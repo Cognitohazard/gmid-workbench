@@ -78,10 +78,10 @@ const GM_BAD_FRACTION = 0.34;
  *  span — so sub-pA leakage/noise wiggles in the off region are not "glitches". */
 const MONO_EPS = 1e-3;
 
-/** The capacitances that are magnitudes — self-capacitances and junction capacitances — which
- *  a signed source may still have to be told about (see signCheck below). The transcapacitances
- *  are not among them: their sign is information, and abs-ing one would corrupt it. Read off the
- *  namespace flag (BaseQuantity.magnitude), which is also what canonicalizeTable folds. */
+/** The capacitances that are magnitudes (self-capacitances and junction capacitances), which the
+ *  sign check below covers. The transcapacitances are not among them: their sign carries
+ *  information, and taking the absolute value would lose it. Read from the namespace flag
+ *  (BaseQuantity.magnitude), which is also what canonicalizeTable folds. */
 const MAGNITUDE_CAP_KEYS: readonly string[] = BASE_QUANTITIES.filter(
   (q) => q.magnitude && q.unit === 'F',
 ).map((q) => q.key);
@@ -536,12 +536,12 @@ export function validate(table: DeviceTable): QAWarning[] {
     });
   }
 
-  // --- columns carried without a meaning ---
-  // The namespace names every quantity it knows how to treat; anything else is carried under its
-  // own name so nothing in the file is lost, but nothing here knows how it scales or what sign it
-  // takes. Said once, as information, so a column that ought to be a named quantity (spelled
-  // another way by this exporter) shows up rather than quietly going unscaled. A column named
-  // like a derived quantity is reported above instead.
+  // --- columns with no name in the namespace ---
+  // The namespace names every quantity it knows how to treat. Any other column is kept under its
+  // own name, so nothing in the file is lost, but nothing here knows how it scales or what sign
+  // it takes. It is reported once, as information, so that a standard quantity this exporter
+  // names differently is noticed instead of going unscaled. A column named like a derived
+  // quantity is reported above instead.
   const unnamed = passthroughKeys(table.grid);
   if (unnamed.length) {
     out.push({
