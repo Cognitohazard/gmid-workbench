@@ -7,6 +7,7 @@
 
 import { type DeviceTable, LookupRangeError } from '../types';
 import {
+  gmIdCeiling,
   lookup,
   lookupByGmId,
   lookupByQuantity,
@@ -14,7 +15,7 @@ import {
   reportsDerived,
   storedKeys,
 } from '../lookup';
-import { offHull, sliceGrid } from '../grid';
+import { offHull } from '../grid';
 import { registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
 import {
@@ -44,6 +45,10 @@ import { AXIS_KEYS, BASE_KEYS, PER_WIDTH_KEYS, isPassthroughKey } from '../names
 export interface SizeQuery {
   table: DeviceTable;
   L: number;
+  /** Every length the table was characterized at, where `table` has been cut down to the ones
+   *  sizing at `L` reads (see bracketGrid): the range a length off the table's hull is judged
+   *  and reported against. Absent, that range is the table's own `l` axis. */
+  lengths?: Float64Array;
   gm?: number;
   gm_id?: number;
   id?: number;
@@ -261,27 +266,6 @@ function atGateVoltage(
 }
 
 /**
- * Maximum gm/ID over the fixed-L slice — the weak-inversion ceiling the device
- * cannot physically exceed. Computed elementwise from the slice's gm and id
- * columns so it reflects exactly the data, not a model assumption.
- */
-function gmIdCeiling(table: DeviceTable, L: number): number {
-  const slice = sliceGrid(table.grid, { l: L });
-  const gm = slice.quantities.get('gm');
-  const id = slice.quantities.get('id');
-  if (!gm || !id) {
-    throw new Error('sizeDevice: slice is missing gm and/or id columns for the ceiling');
-  }
-  let max = -Infinity;
-  for (let i = 0; i < gm.length; i++) {
-    if (id[i] === 0) continue; // undefined ratio; skip (mirrors qa/validate's ceiling scan)
-    const r = gm[i] / id[i];
-    if (Number.isFinite(r) && r > max) max = r; // skip ±∞/NaN so they can't pin the ceiling
-  }
-  return max;
-}
-
-/**
  * Size a device by binding any two of {gm, gm/ID, ID, W, fT, gm/gds, A_v0, V*} at a
  * chosen length L (see SizeQuery for which pairs are legal).
  *
@@ -310,11 +294,11 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // infeasibility (unlike a gm/ID past the ceiling, which the inverse lookup throws on).
   const warnings: string[] = [];
   const clamped: string[] = [];
-  const lAxis = q.table.grid.axes.find((a) => a.name === 'l');
-  if (lAxis && lAxis.values.length > 0) {
-    const lLo = lAxis.values[0];
-    const lHi = lAxis.values[lAxis.values.length - 1];
-    if (offHull(lAxis.values, L)) {
+  const lengths = q.lengths ?? q.table.grid.axes.find((a) => a.name === 'l')?.values;
+  if (lengths && lengths.length > 0) {
+    const lLo = lengths[0];
+    const lHi = lengths[lengths.length - 1];
+    if (offHull(lengths, L)) {
       clamped.push('l');
       warnings.push(
         `requested L ${L} m is outside the table's L range [${lLo}, ${lHi}] m; clamped to the nearest characterized length`,

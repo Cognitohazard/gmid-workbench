@@ -17,9 +17,12 @@ import {
 const tables = new Map<string, DeviceTable>();
 let refs: SheetRefIndex = new Map();
 
-function hydrate(o: DeviceOutline): CharacterizedDevice {
+function hydrate(
+  o: DeviceOutline,
+  outlines: ReadonlyMap<string, DeviceTable>,
+): CharacterizedDevice {
   const table = (uid: string): DeviceTable => {
-    const t = tables.get(uid);
+    const t = tables.get(uid) ?? outlines.get(uid);
     if (!t) throw new Error(`sheet worker: table ${uid} was never sent`);
     return t;
   };
@@ -38,7 +41,8 @@ self.onmessage = (e: MessageEvent<JobRequest>): void => {
     const keep = new Set(m.devices.flatMap((o) => o.conditions));
     for (const uid of [...tables.keys()]) if (!keep.has(uid)) tables.delete(uid);
     if (m.refs) refs = new Map(m.refs);
-    const devices = new Map(m.devices.map((o) => [o.deviceUid, hydrate(o)]));
+    const outlines = new Map(m.outlines);
+    const devices = new Map(m.devices.map((o) => [o.deviceUid, hydrate(o, outlines)]));
     const primary = devices.get(m.primary);
     if (!primary) throw new Error('sheet worker: the primary device was not sent');
     const bound = new Map(m.bindings);

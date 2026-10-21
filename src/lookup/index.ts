@@ -6,7 +6,7 @@
 
 import { type Axis, type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
 import { BASE_KEYS, passthroughKeys } from '../namespace';
-import { interpolate, sliceGrid, orient, interp1 } from '../grid';
+import { interpolate, sliceGrid, orient, interp1, type Oriented } from '../grid';
 import { DERIVED_FORMS, derivedForm, metaScalars, evalColumn, pointScope } from '../derive';
 
 // The Map is authoritative (shared with derive); a module-level key array keeps the per-lookup
@@ -270,6 +270,65 @@ export function operatingPointAxis(grid: Grid, prefix: string, context: string):
 }
 
 /**
+ * A table's slice at one length, and what sizing reads off it: the curve of each quantity it has
+ * inverted there, oriented for inversion, and the gm/ID ceiling. All three are pure functions of
+ * the table and the length, so each is built once and read again by every later sizing on the
+ * same table at the same length — the sheet engine sizes many devices on one cached table (see
+ * sheet/eval.ts), and the solver sizes the same ones again on every probe.
+ */
+interface LengthSlice {
+  readonly grid: Grid;
+  readonly curves: Map<string, Oriented>;
+  ceiling?: number;
+}
+
+/** Per table, its slices by length. Weak in the table, so a slice lives exactly as long as the
+ *  table it was cut from; bounded per table, the least recently used dropped first, because a
+ *  sweep of L asks for a new length every sample. */
+const LENGTH_SLICES = new WeakMap<DeviceTable, Map<number, LengthSlice>>();
+const LENGTH_SLICES_PER_TABLE = 8;
+
+/** The table's slice at length `L` (see LengthSlice). */
+function lengthSlice(table: DeviceTable, L: number): LengthSlice {
+  let byL = LENGTH_SLICES.get(table);
+  if (!byL) LENGTH_SLICES.set(table, (byL = new Map()));
+  const hit = byL.get(L);
+  if (hit) {
+    // Re-inserted, so insertion order tracks recency and the cap drops the coldest.
+    byL.delete(L);
+    byL.set(L, hit);
+    return hit;
+  }
+  if (byL.size >= LENGTH_SLICES_PER_TABLE) byL.delete(byL.keys().next().value as number);
+  const made: LengthSlice = { grid: sliceGrid(table.grid, { l: L }), curves: new Map() };
+  byL.set(L, made);
+  return made;
+}
+
+/**
+ * Maximum gm/ID over the fixed-L slice — the weak-inversion ceiling the device
+ * cannot physically exceed. Computed elementwise from the slice's gm and id
+ * columns so it reflects exactly the data, not a model assumption.
+ */
+export function gmIdCeiling(table: DeviceTable, L: number): number {
+  const slice = lengthSlice(table, L);
+  if (slice.ceiling !== undefined) return slice.ceiling;
+  const gm = slice.grid.quantities.get('gm');
+  const id = slice.grid.quantities.get('id');
+  if (!gm || !id) {
+    throw new Error('sizeDevice: slice is missing gm and/or id columns for the ceiling');
+  }
+  let max = -Infinity;
+  for (let i = 0; i < gm.length; i++) {
+    if (id[i] === 0) continue; // undefined ratio; skip (mirrors qa/validate's ceiling scan)
+    const r = gm[i] / id[i];
+    if (Number.isFinite(r) && r > max) max = r; // skip ±∞/NaN so they can't pin the ceiling
+  }
+  slice.ceiling = max;
+  return max;
+}
+
+/**
  * Shared inversion kernel: build the `key` curve over vgs on the L-slice and invert it
  * to a vgs coordinate. Fails closed on any uninvertible slice (uncomputable quantity,
  * missing columns, extra live axes, non-monotonic data, out-of-range target) rather
@@ -280,17 +339,22 @@ function invertOnSlice(table: DeviceTable, L: number, key: string, target: numbe
   const vgs = operatingPointAxis(grid, 'inverse lookup', `bracket ${key}`).values;
 
   // Collapse the l axis at L, leaving a slice grid whose remaining axes include vgs.
-  const slice = sliceGrid(grid, { l: L });
+  const slice = lengthSlice(table, L);
 
   // Every other axis is degenerate (the guard above), so the column IS the curve over the
   // vgs lattice — one value per node, in order.
-  const curve = sliceColumn(table, slice, key);
-
+  //
   // Invert curve → vgs with the SAME monotone bracket-and-interpolate kernel the
   // cursor (series.invertX) uses, so endpoint/ULP handling is identical. orient
   // drops any non-finite node (an id==0 sample yields ±∞) so it cannot widen the
-  // range or match a bracket; interp1 carries the shared ULP-overshoot clamp.
-  const o = orient(curve, vgs);
+  // range or match a bracket; interp1 carries the shared ULP-overshoot clamp. The oriented
+  // curve depends on the table, the length and the key alone, so it is built once for each; a
+  // key the table cannot compute throws here every time, and is never stored.
+  let o = slice.curves.get(key);
+  if (!o) {
+    o = orient(sliceColumn(table, slice.grid, key), vgs);
+    slice.curves.set(key, o);
+  }
   // The sizer is a guardrail: fail closed on any uninvertible slice rather than let
   // orient's fail-soft NaN bounds / arbitrary-branch sort fabricate an operating point.
   if (o.nx.length === 0) {

@@ -29,6 +29,7 @@ import {
   evaluateSheet,
   levelEligibility,
   proposeWiring,
+  resolvedSheet,
   runSheet,
   structuralDiodes,
   validateSheet,
@@ -1363,6 +1364,135 @@ describe('one wiring pass, on the tree once it has settled', () => {
     expect(r.warnings.some((w) => /found no solution/.test(w.message))).toBe(true);
     expect(r.blocks![0].nodes?.state).toBe('not-evaluated');
     expect(wiring(r)).toEqual([]);
+  });
+});
+
+describe('a child result read back from its tree is walked as the settled tree has it', () => {
+  // Every probe of a parent search evaluates every block again, and a block whose inputs the probe
+  // did not move is read back from what the tree evaluated earlier instead. The result read back
+  // is shared by the reports of every probe that read it; each report keeps its own wiring entry,
+  // so the walk of the settled tree must come out exactly as if each child had been evaluated
+  // there afresh. A document with the solved params fixed where they landed evaluates every child
+  // once, with nothing read back, and is the reference.
+
+  /** `table` behind a getter that counts how often its metadata is read: once per evaluation of a
+   *  document sized on it, which is how a test sees a child evaluated or read back. */
+  const counted = (table: DeviceTable): { table: DeviceTable; reads: () => number } => {
+    let n = 0;
+    const wrapped: DeviceTable = {
+      id: table.id,
+      grid: table.grid,
+      get meta() {
+        n++;
+        return table.meta;
+      },
+    };
+    return { table: wrapped, reads: () => n };
+  };
+
+  /** The same document with every solved param fixed at the value `res` landed it on. */
+  const fixedAt = (doc: SheetDoc, res: SheetResult): SheetDoc => ({
+    ...doc,
+    params: doc.params.map((p) => {
+      if (!p.designConstraint && !p.solveFor) return p;
+      const { designConstraint: _c, solveFor: _s, ...rest } = p;
+      return { ...rest, value: res.values[p.name] };
+    }),
+  });
+
+  /** Everything a block report says, the walk's findings included. */
+  const reportOf = (r: SheetResult, name: string): string =>
+    JSON.stringify(r.blocks!.find((b) => b.name === name));
+  /** The findings attributed to one block, in order. */
+  const saidOf = (r: SheetResult, name: string): string[] =>
+    r.warnings.filter((w) => w.message.startsWith(`block "${name}"`)).map((w) => w.message);
+
+  it('a composed sheet: a child the search never moves is evaluated once and walked as fresh', () => {
+    const cs = (gm_id: string): SheetDoc => ({
+      title: 'cs',
+      polarity: 'n',
+      formatVersion: 2,
+      params: [param('I', 1e-5), param('g', 10), vparam('V_d', 0.9), vparam('V_g', 0.6)],
+      givens: { L: '1e-6', id: 'I', gm_id, vds: 'V_d' },
+      nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+      levels: { out: 'V_d', in: 'V_g' },
+      equations: [],
+      checks: [],
+      provides: ['vgs', 'id', 'gm', 'W'],
+    });
+    const parent: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      formatVersion: 2,
+      params: [
+        {
+          name: 'gx',
+          value: 10,
+          min: 5,
+          max: 20,
+          designConstraint: { lhs: 'a__vgs', rhs: 'Spec' },
+        },
+        param('Spec', 0.6),
+      ],
+      blocks: [
+        { name: 'a', doc: cs('g'), params: { g: 'gx' } },
+        { name: 'b', doc: cs('12'), device: 'still' },
+      ],
+      equations: [],
+      checks: [],
+    };
+    expect(validateSheet(parent).filter((w) => w.severity === 'error')).toEqual([]);
+    const top = counted(t);
+    const still = counted(t);
+    const r = evaluateSheet(parent, top.table, (id) => (id === 'still' ? still.table : undefined));
+    expect(r.solve).toEqual({ kind: 'settled' });
+    // The parent probed many times; `b`, whose inputs no probe moves, was evaluated once (one read
+    // more is the cut of its table to its length, taken once).
+    expect(top.reads()).toBeGreaterThan(5);
+    expect(still.reads()).toBeLessThanOrEqual(2);
+    // `b` is biased off its own gate level, so its walk has a finding: said once, on the settled
+    // tree, however many probes read the result back.
+    expect(r.blocks![1].nodes?.state).toBe('checked-with-findings');
+    expect(saidOf(r, 'b')).toHaveLength(1);
+    expect(saidOf(r, 'b')[0]).toMatch(/the wiring does not close/);
+    const ref = evaluateSheet(fixedAt(parent, r), t, (id) => (id === 'still' ? t : undefined));
+    for (const name of ['a', 'b']) {
+      expect(reportOf(r, name)).toBe(reportOf(ref, name));
+      expect(saidOf(r, name)).toEqual(saidOf(ref, name));
+    }
+  });
+
+  it('the flattened two-stage sheets: every block, the referenced load included, as fresh', () => {
+    for (const path of [
+      'multistage/two-stage-miller-ota.json',
+      'multistage/two-stage-cascode-comp-ota.json',
+    ]) {
+      const doc = resolvedSheet(librarySheet(path), REFS).doc;
+      // The output load is composed by reference with no port map of its own: its wiring joins
+      // the parent's walk (it is flattened), and its inputs do not move with the solved tail.
+      const ld2 = doc.blocks!.find((b) => b.name === 'ld2')!;
+      expect(ld2.nodes).toBeUndefined();
+      // The bias leg reads nothing the search moves; it is bound to a counted copy of the table.
+      const bound: SheetDoc = {
+        ...doc,
+        blocks: doc.blocks!.map((b) => (b.name === 'bias' ? { ...b, device: 'bias' } : b)),
+      };
+      const top = counted(libraryTable);
+      const bias = counted(libraryTable);
+      const r = evaluateSheet(bound, top.table, (id) => (id === 'bias' ? bias.table : undefined));
+      expect(r.solve).toEqual({ kind: 'settled' });
+      expect(top.reads()).toBeGreaterThan(20);
+      expect(bias.reads()).toBeLessThanOrEqual(2);
+      expect(r.blocks!.find((b) => b.name === 'ld2')!.wiringValues).toBeDefined();
+      const ref = evaluateSheet(fixedAt(bound, r), libraryTable, (id) =>
+        id === 'bias' ? libraryTable : undefined,
+      );
+      for (const b of bound.blocks!) {
+        expect([path, b.name, reportOf(r, b.name)]).toEqual([path, b.name, reportOf(ref, b.name)]);
+        expect(saidOf(r, b.name)).toEqual(saidOf(ref, b.name));
+      }
+      expect(JSON.stringify(r.nodes)).toBe(JSON.stringify(ref.nodes));
+    }
   });
 });
 

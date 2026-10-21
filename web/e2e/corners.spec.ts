@@ -309,6 +309,74 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   expect(errors).toEqual([]);
 });
 
+test('sheet panel: the worker is sent the tables a job evaluates, and the outline of the rest', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+  // Every job request the page posts to a sheet worker, as the ids of the full tables and of the
+  // outlines it carries.
+  await page.addInitScript(() => {
+    const seen: { kind: string; keys: number; tables: string[]; outlines: string[] }[] = [];
+    (window as unknown as { __jobs: typeof seen }).__jobs = seen;
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (this: Worker, msg: unknown, ...rest: never[]) {
+      const m = msg as {
+        job?: { kind: string; keys?: unknown[] };
+        tables?: [string][];
+        outlines?: [string][];
+      };
+      if (m && m.job && m.tables && m.outlines)
+        seen.push({
+          kind: m.job.kind,
+          keys: m.job.keys?.length ?? 1,
+          tables: m.tables.map(([uid]) => uid),
+          outlines: m.outlines.map(([uid]) => uid),
+        });
+      return post.call(this, msg, ...rest);
+    } as typeof Worker.prototype.postMessage;
+  });
+  const runs = () =>
+    page.evaluate(() =>
+      (
+        window as unknown as {
+          __jobs: { kind: string; keys: number; tables: string[]; outlines: string[] }[];
+        }
+      ).__jobs.filter((j) => j.kind === 'run'),
+    );
+
+  await page.goto('/');
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+  await condition(page, 'tt').locator('.dname').click();
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
+  await expect(sp.locator('.scond')).toHaveText('at tt');
+  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+
+  // One condition asked: the job carries that condition's table, and the other condition only as
+  // an outline — what projection reads of it, with no columns.
+  const [first] = await runs();
+  expect(first.keys).toBe(1);
+  expect(first.tables).toHaveLength(1);
+  expect(first.outlines).toHaveLength(1);
+  expect(first.outlines[0]).not.toBe(first.tables[0]);
+
+  // Every condition asked: the job carries the one table the worker does not hold yet, and no
+  // outline — and the verdicts at both conditions are the ones the corner-mode test reads.
+  await sp.locator('[data-corner-mode]').selectOption('all');
+  await expect(sp.locator('.scorntab tr')).toHaveCount(2);
+  await expect(sp.locator('[data-corner-row="tt"] .ccl')).toHaveText('✓ feasible');
+  await expect(sp.locator('[data-corner-row="ss@-40"] .ccl')).toHaveText('✗ does not comply');
+  const all = (await runs()).find((j) => j.keys === 2);
+  expect(all?.tables).toEqual(first.outlines);
+  expect(all?.outlines).toEqual([]);
+
+  expect(errors).toEqual([]);
+});
+
 test('sheet panel: a chosen condition that leaves is answered, not forgotten', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));

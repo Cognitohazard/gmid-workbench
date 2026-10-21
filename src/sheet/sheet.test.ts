@@ -2354,6 +2354,44 @@ describe('a device is sized only on a table that carries what its givens use', (
       expect(res.warnings.some((w) => /outside the table's L range/.test(w.message))).toBe(true);
     });
 
+    it('sizes on the length nodes it reads, and judges and quotes the length against them all', () => {
+      // The engine cuts a table to the one or two length nodes a length reads before it slices
+      // the bias axes. The warning about a length off the table still names the table's whole
+      // range — not the single node the cut kept — and the numbers are the uncut table's.
+      const lengths = dev.grid.axes.find((a) => a.name === 'l')!.values;
+      expect(lengths.length).toBeGreaterThan(2);
+      const lo = lengths[0];
+      const hi = lengths[lengths.length - 1];
+      const at = (L: number): SheetResult =>
+        evaluateSheet(
+          boundDoc({
+            params: boundDoc().params.map((p) => (p.name === 'L' ? { ...p, value: L } : p)),
+          }),
+          dev,
+        );
+      const direct = (L: number) =>
+        sizeDevice({ table: devAt, L, gm: 2 * Math.PI * 10e6 * 2e-12, gm_id: 12 });
+      for (const L of [hi * 2.5, lo / 2]) {
+        const res = at(L);
+        expect(res.sizing?.clamped).toEqual(['l']);
+        const said = res.warnings.filter((w) => /outside the table's L range/.test(w.message));
+        expect(said.map((w) => w.message)).toEqual([
+          `requested L ${L} m is outside the table's L range [${lo}, ${hi}] m; clamped to the nearest characterized length`,
+        ]);
+        expect(direct(L).warnings).toContain(said[0].message);
+        expect(res.sizing?.W).toBe(direct(L).W);
+      }
+      // Between two nodes, and on one: no warning, and the uncut table's numbers to the bit.
+      for (const L of [0.77e-6, 0.5e-6]) {
+        const res = at(L);
+        expect(res.sizing?.clamped).toBeUndefined();
+        expect(res.warnings.some((w) => /L range/.test(w.message))).toBe(false);
+        expect(res.sizing?.W).toBe(direct(L).W);
+        expect(res.sizing?.vgs).toBe(direct(L).vgs);
+        expect(res.values.gm_gds).toBe(direct(L).quantities.gm_gds);
+      }
+    });
+
     it('on a table with no length axis: the sizing fails in the lookup, as it always has', () => {
       // Nothing on such a table records a length — no axis, and no metadata the importer reads
       // — so there is no value to hold the given against. The lookup has always refused it.
@@ -2785,6 +2823,81 @@ describe('a solve starved by a SIBLING is not accused of failing', () => {
 
   it('solves alone', () => {
     expect(evaluateSheet(solved('victim'), dev).feasible).toBe(true);
+  });
+
+  it('is evaluated again, and told the budget ran out, when it was read back earlier at plenty', () => {
+    // The same child, with the same inputs, before and after the eater. The first is evaluated;
+    // the second could be read back, but the budget can no longer pay for what evaluating it
+    // costs, so it is evaluated again and stops where a fresh evaluation stops — reading the
+    // first result back would report a solve this tree has no budget left to make.
+    const victim = solved('victim');
+    const twice = evaluateSheet(
+      {
+        title: 'root',
+        polarity: 'n',
+        params: [],
+        equations: [],
+        checks: [],
+        blocks: [
+          { name: 'first', doc: victim },
+          { name: 'eater', doc: eater },
+          { name: 'again', doc: victim },
+        ],
+      },
+      dev,
+    );
+    const said = (name: string) =>
+      twice.warnings.filter(
+        (w) => w.rule === 'sheet-solve' && w.message.startsWith(`block "${name}"`),
+      );
+    expect(said('first')).toEqual([]);
+    expect(twice.blocks![0].solve).toEqual({ kind: 'settled' });
+    expect(said('again')).toHaveLength(1);
+    expect(said('again')[0].message).toMatch(/evaluation budget \(\d+ evaluations\) ran out/);
+  });
+});
+
+describe('a composed child read back from its tree', () => {
+  // A parent search evaluates its blocks again on every probe; a block whose inputs did not move
+  // is read back from what the tree evaluated before, and reading it back costs no evaluation.
+  // A child whose input is the parent's own solved param is asked for again at the points a
+  // search probes first, whichever parent search asks — so a nest of four of them, which used to
+  // spend the whole budget, now settles on the evaluations it actually makes.
+  const level = (k: number): SheetDoc => {
+    const reads = k < 3 ? `(c${k}__X*0.5 + IN*0.3)` : '(0.2 + IN/3)';
+    return {
+      title: `L${k}`,
+      polarity: 'n',
+      params: [
+        { name: 'IN', value: 0.5 },
+        {
+          name: 'X',
+          value: 0,
+          min: 0,
+          max: 1,
+          designConstraint: {
+            lhs: 'exp(4*X) + X^3',
+            rhs: `exp(4*${reads}*0.9) + (${reads}*0.9)^3`,
+          },
+        },
+      ],
+      blocks: k < 3 ? [{ name: `c${k}`, doc: level(k + 1), params: { IN: 'X' } }] : [],
+      equations: [],
+      checks: [],
+      provides: ['X'],
+    };
+  };
+
+  it('settles a nest that re-asks its children the same questions, every level verified', () => {
+    const res = evaluateSheet(level(0), dev);
+    expect(res.solve).toEqual({ kind: 'settled' });
+    expect(res.feasible).toBe(true);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
+    let blocks = res.blocks;
+    for (let k = 0; k < 3; k++) {
+      expect(blocks![0].solve).toEqual({ kind: 'settled' });
+      blocks = blocks![0].blocks;
+    }
   });
 });
 
@@ -3962,7 +4075,9 @@ describe('a solve reads only a child whose own solve landed', () => {
     // root sits exactly at its low end) except within 0.1 of P = 1, where it nests a real solve
     // four levels deep — so that one probe runs the budget out inside the child, which then
     // publishes nothing. That probe says nothing about the far end, and the search says the budget
-    // ran out; it does not report the no-root it had nearly shown.
+    // ran out; it does not report the no-root it had nearly shown. Each level hands its child a
+    // HOT that moves with its own probe, so no child is ever asked the same thing twice and the
+    // nest costs what it would cost without remembered child results.
     const level = (k: number): SheetDoc => {
       const reads = k < 3 ? `(c${k}__X*0.5 + 0.3)` : '0.4';
       return {
@@ -3981,7 +4096,10 @@ describe('a solve reads only a child whose own solve landed', () => {
             },
           },
         ],
-        blocks: k < 3 ? [{ name: `c${k}`, doc: level(k + 1), params: { HOT: 'HOT' } }] : [],
+        blocks:
+          k < 3
+            ? [{ name: `c${k}`, doc: level(k + 1), params: { HOT: 'HOT > 0 ? HOT + X : 0' } }]
+            : [],
         equations: [],
         checks: [],
         provides: ['X'],
@@ -3999,7 +4117,7 @@ describe('a solve reads only a child whose own solve landed', () => {
           designConstraint: { lhs: 'P + 1 + 0*c__X', rhs: '0' },
         },
       ],
-      blocks: [{ name: 'c', doc: level(0), params: { HOT: 'P > 0.9 && P < 1 ? 1 : 0' } }],
+      blocks: [{ name: 'c', doc: level(0), params: { HOT: 'P > 0.9 && P < 1 ? P : 0' } }],
       equations: [],
       checks: [],
     };
@@ -4017,7 +4135,9 @@ describe('a solve reads only a child whose own solve landed', () => {
     // Four levels, each solving X with a relation that reads its child's X; the child's input is
     // the parent's X. The nesting multiplies past the shared budget. Every level says the budget
     // ran out and that it was not shown to be unsolvable — none says it found no solution, though
-    // the children it read stopped publishing when they ran out.
+    // the children it read stopped publishing when they ran out. The child's input carries a trace
+    // of the parent's own input, so no child input recurs from one search to the next: a child
+    // result read back would charge nothing, and the nest has to cost what it costs evaluated.
     const level = (k: number): SheetDoc => {
       const reads = k < 3 ? `(c${k}__X*0.5 + IN*0.3)` : '(0.2 + IN/3)';
       return {
@@ -4036,7 +4156,7 @@ describe('a solve reads only a child whose own solve landed', () => {
             },
           },
         ],
-        blocks: k < 3 ? [{ name: `c${k}`, doc: level(k + 1), params: { IN: 'X' } }] : [],
+        blocks: k < 3 ? [{ name: `c${k}`, doc: level(k + 1), params: { IN: 'X + IN/1000' } }] : [],
         equations: [],
         checks: [],
         provides: ['X'],

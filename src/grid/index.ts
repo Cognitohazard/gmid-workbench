@@ -37,13 +37,20 @@ function gridSize(shape: readonly number[]): number {
 function materializeAxis(axis: Axis, shape: readonly number[], dim: number): Float64Array {
   const total = gridSize(shape);
   const col = new Float64Array(total);
+  if (total === 0) return col;
   // stride = product of lengths of axes after `dim` (how often this axis index advances)
   let stride = 1;
   for (let d = dim + 1; d < shape.length; d++) stride *= shape[d];
   const len = shape[dim];
-  for (let i = 0; i < total; i++) {
-    const ai = Math.floor(i / stride) % len;
-    col[i] = axis.values[ai];
+  // Row-major: the column is `total / (len·stride)` repeats of each axis value written `stride`
+  // times in turn, so it is filled run by run rather than decoded sample by sample.
+  const repeats = total / (len * stride);
+  let i = 0;
+  for (let o = 0; o < repeats; o++) {
+    for (let a = 0; a < len; a++) {
+      const v = axis.values[a];
+      for (let s = 0; s < stride; s++) col[i++] = v;
+    }
   }
   return col;
 }
@@ -263,61 +270,158 @@ function dropFrame(
 /**
  * Interpolate away the `fixed` axes, returning a lower-D Grid over the remaining
  * axes. Remaining axis columns are re-materialized by makeGrid.
+ *
+ * Each output cell is the weighted sum over the corners of the fixed axes' bracketing cell, taken
+ * corner by corner in ascending corner order and skipping corners whose weight is zero. Those
+ * weights, and each corner's offset into a column, are the same for every output cell, so they are
+ * worked out once here; only the offset of the cell itself changes from cell to cell.
  */
 export function sliceGrid(grid: Grid, fixed: Record<string, number>): Grid {
   const fixedNames = new Set(Object.keys(fixed));
 
-  // Precompute the locate (lower index + weight) for each fixed axis once.
-  const fixedLowers = new Map<number, number>();
-  const fixedWeights = new Map<number, number>();
+  // Locate each fixed axis once (lower index + weight), in ascending dimension order: corner bit f
+  // stands for fixedDims[f].
+  const fixedDims: number[] = [];
+  const fixedLowers: number[] = [];
+  const fixedWeights: number[] = [];
   for (let d = 0; d < grid.axes.length; d++) {
     const axis = grid.axes[d];
     if (fixedNames.has(axis.name)) {
       const { i, w } = locate(axis.values, fixed[axis.name]);
-      fixedLowers.set(d, i);
-      fixedWeights.set(d, w);
+      fixedDims.push(d);
+      fixedLowers.push(i);
+      fixedWeights.push(w);
     }
   }
 
-  const frame = dropFrame(grid, new Set(fixedLowers.keys()), fixedNames);
-  const { remTotal, srcCols, dstCols, fullIdx } = frame;
+  const frame = dropFrame(grid, new Set(fixedDims), fixedNames);
+  const { keepDims, remTotal, srcCols, dstCols } = frame;
+  const step = strides(grid.shape);
 
-  const fixedDims = [...fixedLowers.keys()]; // loop-invariant
-  const corners = 1 << fixedDims.length;
-  const acc = new Float64Array(srcCols.length); // reused per output cell
-
-  for (let r = 0; r < remTotal; r++) {
-    frame.decode(r);
-
-    // multilinear over the fixed axes only
-    acc.fill(0);
-    for (let corner = 0; corner < corners; corner++) {
-      let cw = 1;
-      for (let f = 0; f < fixedDims.length; f++) {
-        const d = fixedDims[f];
-        const high = (corner >> f) & 1;
-        const w = fixedWeights.get(d)!;
-        const len = grid.shape[d];
-        if (high) {
-          cw *= len > 1 ? w : 0;
-          fullIdx[d] = len > 1 ? fixedLowers.get(d)! + 1 : fixedLowers.get(d)!;
-        } else {
-          cw *= len > 1 ? 1 - w : 1;
-          fullIdx[d] = fixedLowers.get(d)!;
-        }
+  // Every corner's weight (the product of its per-axis weights, multiplied in corner-bit order)
+  // and its offset along the fixed axes. A degenerate fixed axis (one node) has no upper node, so
+  // its upper corners weigh zero. Zero-weight corners are dropped here, once, rather than skipped
+  // in every cell.
+  const cornerWeights: number[] = [];
+  const cornerOffsets: number[] = [];
+  for (let corner = 0; corner < 1 << fixedDims.length; corner++) {
+    let cw = 1;
+    let off = 0;
+    for (let f = 0; f < fixedDims.length; f++) {
+      const d = fixedDims[f];
+      const w = fixedWeights[f];
+      const len = grid.shape[d];
+      let idx = fixedLowers[f];
+      if ((corner >> f) & 1) {
+        cw *= len > 1 ? w : 0;
+        if (len > 1) idx += 1;
+      } else {
+        cw *= len > 1 ? 1 - w : 1;
       }
-      if (cw === 0) continue;
-      const flat = flatIndex(grid.shape, fullIdx);
-      for (let c = 0; c < srcCols.length; c++) {
-        acc[c] += cw * srcCols[c][flat];
-      }
+      off += idx * step[d];
     }
-    for (let c = 0; c < dstCols.length; c++) {
-      dstCols[c][r] = acc[c];
+    if (cw === 0) continue;
+    cornerWeights.push(cw);
+    cornerOffsets.push(off);
+  }
+
+  // Each output cell's offset along the kept axes, walked in row-major order.
+  const cellOffsets = new Float64Array(remTotal);
+  const remShape = keepDims.map((d) => grid.shape[d]);
+  const counter = new Array<number>(keepDims.length).fill(0);
+  let base = 0;
+  for (let r = 0; r < remTotal; r++) {
+    cellOffsets[r] = base;
+    for (let k = keepDims.length - 1; k >= 0; k--) {
+      const d = keepDims[k];
+      base += step[d];
+      if (++counter[k] < remShape[k]) break;
+      base -= step[d] * remShape[k];
+      counter[k] = 0;
+    }
+  }
+
+  // Each sum starts from zero and adds the corners in order, as one accumulator per cell would; the
+  // leading `0 +` is part of that, since it turns a -0 product into +0 just as the accumulator did.
+  const nc = cornerWeights.length;
+  const [w0, w1] = cornerWeights;
+  const [o0, o1] = cornerOffsets;
+  for (let c = 0; c < srcCols.length; c++) {
+    const src = srcCols[c];
+    const dst = dstCols[c];
+    if (nc === 1) {
+      for (let r = 0; r < remTotal; r++) dst[r] = 0 + w0 * src[cellOffsets[r] + o0];
+    } else if (nc === 2) {
+      for (let r = 0; r < remTotal; r++) {
+        const at = cellOffsets[r];
+        dst[r] = 0 + w0 * src[at + o0] + w1 * src[at + o1];
+      }
+    } else {
+      for (let r = 0; r < remTotal; r++) {
+        const at = cellOffsets[r];
+        let acc = 0;
+        for (let k = 0; k < nc; k++) acc += cornerWeights[k] * src[at + cornerOffsets[k]];
+        dst[r] = acc;
+      }
     }
   }
 
   return makeGrid(frame.remainingAxes, frame.outCols);
+}
+
+/**
+ * The grid cut down to the nodes of axis `name` that interpolating it at `x` reads: the node `x`
+ * sits on, or is clamped to past either end, or else the two nodes either side of it. Every other
+ * axis and every column is kept, in the same order.
+ *
+ * Slicing or interpolating the result at `x` gives the same numbers, bit for bit, as doing it on
+ * the whole grid: the nodes left out are exactly the ones whose weight there is zero, and the
+ * weights of the nodes kept are computed from the same two node values. What changes is the work,
+ * which shrinks with the axis: a slice along the other axes that used to visit every node of this
+ * one now visits one or two.
+ *
+ * Where `name` is the first (slowest) axis, the kept nodes are one contiguous run of every column,
+ * and the result's columns are views into the source's rather than copies. Returns `grid` itself
+ * when it has no such axis or the axis has nothing to cut.
+ */
+export function bracketGrid(grid: Grid, name: string, x: number): Grid {
+  const dim = grid.axes.findIndex((a) => a.name === name);
+  if (dim < 0) return grid;
+  const values = grid.axes[dim].values;
+  const n = values.length;
+  if (n <= 1) return grid;
+  const { i, w } = locate(values, x);
+  // The nodes with a nonzero weight: the upper one alone where the weight is all on it.
+  const from = w === 1 ? i + 1 : i;
+  const count = w === 0 || w === 1 ? 1 : 2;
+  if (count === n) return grid;
+
+  // A column is `outer` runs of n·inner samples; the kept nodes are count·inner of each run.
+  let inner = 1;
+  for (let d = dim + 1; d < grid.shape.length; d++) inner *= grid.shape[d];
+  const outer = gridSize(grid.shape) / (n * inner);
+  const run = n * inner;
+  const keep = count * inner;
+  const quantities = new Map<string, Float64Array>();
+  for (const [key, col] of grid.quantities) {
+    if (outer === 1) {
+      quantities.set(key, col.subarray(from * inner, from * inner + keep));
+      continue;
+    }
+    const out = new Float64Array(outer * keep);
+    for (let o = 0; o < outer; o++) {
+      const start = o * run + from * inner;
+      out.set(col.subarray(start, start + keep), o * keep);
+    }
+    quantities.set(key, out);
+  }
+  const axes: readonly Axis[] = Object.freeze(
+    grid.axes.map((a, d) =>
+      d === dim ? Object.freeze({ name: a.name, values: values.subarray(from, from + count) }) : a,
+    ),
+  );
+  const shape: readonly number[] = Object.freeze(grid.shape.map((s, d) => (d === dim ? count : s)));
+  return Object.freeze({ axes, shape, quantities });
 }
 
 /**

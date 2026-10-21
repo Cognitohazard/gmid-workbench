@@ -17,6 +17,7 @@
 
 import {
   namedBindings,
+  tableAt,
   type CharacterizedDevice,
   type DeviceTable,
   type SheetRefHit,
@@ -26,6 +27,7 @@ import SheetWorker from './sheet.worker.ts?worker&inline';
 import { tableUid } from './dashboard';
 import type { Bench } from './families';
 import {
+  jobConditions,
   jobReply,
   runJob,
   type DeviceOutline,
@@ -81,15 +83,16 @@ interface Running extends Pending {
 /** A table as the worker can receive it. The bench keeps its tables in Svelte state, whose
  *  proxies cannot cross to a worker; the bulk columns inside are never proxied, so this copies
  *  only the small parts and hands the typed arrays over as they are. Every field but the grid is
- *  copied as it is, so a field a table gains reaches the worker as it reaches the page. */
-function plainTable(t: DeviceTable): DeviceTable {
+ *  copied as it is, so a field a table gains reaches the worker as it reaches the page. Without
+ *  `columns`, the table's outline: the same with no quantity columns (see JobRequest.outlines). */
+function plainTable(t: DeviceTable, columns = true): DeviceTable {
   const { grid, ...rest } = t;
   return {
     ...($state.snapshot(rest) as Omit<DeviceTable, 'grid'>),
     grid: {
       axes: grid.axes.map((a) => ({ name: a.name, values: a.values })),
       shape: [...grid.shape],
-      quantities: new Map(grid.quantities),
+      quantities: columns ? new Map(grid.quantities) : new Map(),
     },
   };
 }
@@ -362,18 +365,30 @@ export class SheetEvaluator {
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- scratch for one message
     const kept = new Set(outlines.flatMap((o) => o.conditions));
     for (const uid of [...this.#sent]) if (!kept.has(uid)) this.#sent.delete(uid);
+    // Of those, it is sent in full only the ones this job evaluates — each device's table at each
+    // condition the job asks about — and an outline of each other one it does not hold: a job at
+    // one condition of a nine-condition device copies one table, not nine.
     const tables: [string, DeviceTable][] = [];
     for (const d of devices.values())
-      for (const t of d.conditions) {
+      for (const key of jobConditions(p.job)) {
+        const t = tableAt(d, key);
+        if (!t) continue;
         const uid = tableUid(t);
         if (this.#sent.has(uid)) continue;
         tables.push([uid, plainTable(t)]);
         this.#sent.add(uid);
       }
+    const outlined: [string, DeviceTable][] = [];
+    for (const d of devices.values())
+      for (const t of d.conditions) {
+        const uid = tableUid(t);
+        if (!this.#sent.has(uid)) outlined.push([uid, plainTable(t, false)]);
+      }
     const req: JobRequest = {
       id,
       job: p.job,
       tables,
+      outlines: outlined,
       devices: outlines,
       primary: p.primary.deviceUid,
       bindings,

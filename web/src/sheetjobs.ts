@@ -49,6 +49,20 @@ export type SheetJob =
 
 export type JobKind = SheetJob['kind'];
 
+/** The conditions a job evaluates at: every condition it asks about, and the one a run sizes its
+ *  design at. A table at any other condition is never evaluated by it. */
+export function jobConditions(job: SheetJob): ConditionKey[] {
+  switch (job.kind) {
+    case 'run':
+      return job.base ? [...job.keys, job.base] : [...job.keys];
+    case 'sweeps':
+      return [...job.at];
+    case 'sweep2':
+    case 'sens':
+      return [job.at];
+  }
+}
+
 /** What each kind of job answers with. */
 export interface JobResults {
   run: ConditionRun[];
@@ -120,9 +134,14 @@ export interface DeviceOutline extends Omit<CharacterizedDevice, 'conditions' | 
 export interface JobRequest {
   id: number;
   job: SheetJob;
-  /** Tables the worker does not hold yet, by id. The worker keeps only the tables the request's
-   *  devices hold, and drops any other. */
+  /** Tables the job evaluates (jobConditions) that the worker does not hold yet, by id. The worker
+   *  keeps only the tables the request's devices hold, and drops any other. */
   tables: [string, DeviceTable][];
+  /** Every other table of the request's devices that the worker does not hold, as an outline: its
+   *  identity and axes, with no columns. Projection reads that much of every condition of a
+   *  device (`tableAt` matches identities, `canProjectAt` compares axes); the job evaluates only
+   *  conditions whose tables it was sent in full, so nothing is ever evaluated on an outline. */
+  outlines: [string, DeviceTable][];
   /** The sheet library, when it changed since the worker last received it. */
   refs?: [string, SheetRefHit][];
   /** The primary device and every device a binding in the sheet names. */

@@ -15,7 +15,7 @@ import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
-import { diodeGrid, offHull } from '../grid';
+import { bracketGrid, diodeGrid, offHull } from '../grid';
 import {
   BIAS_AXES,
   MAX_BLOCK_DEPTH,
@@ -217,51 +217,85 @@ function evalFinite(
 }
 
 /**
- * Memoized single-axis slice. fixTable re-interpolates every quantity column, and a
- * sweep re-slices the SAME table at the SAME constant bias for every sample — up to n²
- * evaluations per render doing identical full-grid work. Keyed weakly by the source
- * table (chained vds→vsb slices hit because a cached first slice returns the identical
- * object). fixTable is pure, so a hit is referentially transparent. Bounded: sweeping a
- * BIAS param mints one full-grid slice per sample, and an unbounded cache would hold
- * tens of MB — at the cap the least-recently-used entry is evicted, never the whole map:
- * solver probes mint a unique key per pass, and flushing wholesale threw out the
- * constant-bias slices (e.g. vsb=0) that hit on every probe — measured at 11% of a
- * sweep's fixTable work redone.
+ * The table a device is sized on, cut down in three cached steps. Sizing reads a table at one
+ * length and one bias point, and a solver probe sizes every device again at a drain voltage that is
+ * new almost every time, so what each step costs, and what it can reuse, decides how long an
+ * evaluation takes:
+ *
+ *  1. at the device's length (atLength): the table cut to the one or two length nodes that length
+ *     reads (bracketGrid). A document states its lengths, so a whole evaluation reads a table at
+ *     a handful of them, and on a table whose first axis is the length the cut is a view into it
+ *     rather than a copy;
+ *  2. along the diode diagonal (diodeFolded), for a device that is diode-connected: once per cut;
+ *  3. at the bias point (atBias): every bias axis the givens fix, sliced in turn, on the table
+ *     from step 1 or 2. Only the finished slice is kept — the intermediate one after the first
+ *     axis would only be read again at the same drain voltage, which is exactly what does not
+ *     recur.
+ *
+ * Every step is pure, so a hit is the same table the step would build. Cutting to the length
+ * first changes no number: the nodes it leaves out are exactly those the length interpolation
+ * weights by zero, so each later slice computes every cell from the same values in the same order
+ * (see bracketGrid). Each cache is held weakly by the table it was cut from, so it goes with that
+ * table. The length and bias caches are also bounded, least recently used first out, because a
+ * sweep asks for a new length or bias point with every sample, as a solver probe asks for a new
+ * drain voltage. The bias cache's hits are mostly devices sized one after another at the same
+ * point (the two sides of a pair), so a short memory keeps nearly all of them.
  */
-const SLICE_CACHE = new WeakMap<DeviceTable, Map<string, unknown>>();
-const SLICE_CACHE_CAP = 64;
+const AT_LENGTH = new WeakMap<DeviceTable, Map<number, DeviceTable>>();
+const AT_LENGTH_CAP = 8;
+const AT_BIAS = new WeakMap<DeviceTable, Map<string, DeviceTable>>();
+const AT_BIAS_CAP = 16;
 
-/** Memoize any pure table→table collapse under `key`, per source table. */
-function collapsed<T>(t: DeviceTable, key: string, make: () => T): T {
-  let m = SLICE_CACHE.get(t);
-  if (!m) {
-    m = new Map();
-    SLICE_CACHE.set(t, m);
-  }
+/** `make()`, remembered under `key` among the at most `cap` entries `caches` keeps for `owner`;
+ *  the least recently used is dropped first. */
+function remembered<K, T>(
+  caches: WeakMap<DeviceTable, Map<K, T>>,
+  owner: DeviceTable,
+  key: K,
+  cap: number,
+  make: () => T,
+): T {
+  let m = caches.get(owner);
+  if (!m) caches.set(owner, (m = new Map()));
   const hit = m.get(key);
   if (hit !== undefined) {
     // Re-insert so insertion order tracks recency and the cap evicts the coldest entry.
     m.delete(key);
     m.set(key, hit);
-    return hit as T;
+    return hit;
   }
-  if (m.size >= SLICE_CACHE_CAP) m.delete(m.keys().next().value as string);
+  if (m.size >= cap) m.delete(m.keys().next().value as K);
   const out = make();
   m.set(key, out);
   return out;
 }
 
-const fixAxisCached = (t: DeviceTable, axis: string, v: number): DeviceTable =>
-  collapsed(t, `${axis}=${v}`, () => fixTable(t, { [axis]: v }));
-
-/** The diode diagonal — same memo, same reason: a sweep re-folds the SAME table for every
- *  sample, and the fold re-interpolates every quantity column. Carries the fold's own clamp
- *  report along with the table, so a caller cannot hold one without the other. */
-const diodeTableCached = (t: DeviceTable): { table: DeviceTable; clamped: boolean } =>
-  collapsed(t, 'diode', () => {
-    const f = diodeGrid(t.grid);
-    return { table: { ...t, grid: f.grid }, clamped: f.clamped };
+/** The table cut to the length nodes sizing at `L` reads (step 1 above). */
+const atLength = (t: DeviceTable, L: number): DeviceTable =>
+  remembered(AT_LENGTH, t, L, AT_LENGTH_CAP, () => {
+    const grid = bracketGrid(t.grid, 'l', L);
+    return grid === t.grid ? t : { ...t, grid };
   });
+
+/** The table sliced at each `[axis, value]` in turn (step 3 above). */
+const atBias = (t: DeviceTable, steps: readonly (readonly [string, number])[]): DeviceTable =>
+  steps.length === 0
+    ? t
+    : remembered(AT_BIAS, t, steps.map(([a, v]) => `${a}=${v}`).join('|'), AT_BIAS_CAP, () =>
+        steps.reduce((out, [axis, v]) => fixTable(out, { [axis]: v }), t),
+      );
+
+/** The diode diagonal (step 2 above). Carries the fold's own clamp report along with the table,
+ *  so a caller cannot hold one without the other. */
+const DIODE_FOLD = new WeakMap<DeviceTable, { table: DeviceTable; clamped: boolean }>();
+function diodeFolded(t: DeviceTable): { table: DeviceTable; clamped: boolean } {
+  let fold = DIODE_FOLD.get(t);
+  if (!fold) {
+    const f = diodeGrid(t.grid);
+    DIODE_FOLD.set(t, (fold = { table: { ...t, grid: f.grid }, clamped: f.clamped }));
+  }
+  return fold;
+}
 
 /**
  * One thing a device's givens use that its table does not sweep: the reason in words, and the
@@ -407,11 +441,14 @@ function applyGivensBias(
   const assumed: string[] = [];
   const clamped: string[] = [];
   let diode: { clamped: boolean } | undefined;
+  // The slices are taken once every axis has been read (atBias), in the order they are found
+  // here; slicing one bias axis leaves the others as they were, so each is read off `t` the same.
+  const steps: [string, number][] = [];
   const slice = (axis: string, live: { values: ArrayLike<number> }, v: number): number => {
     const lo = live.values[0];
     const hi = live.values[live.values.length - 1];
     const applied = v < lo ? lo : v > hi ? hi : v;
-    t = fixAxisCached(t, axis, applied);
+    steps.push([axis, applied]);
     bias[axis] = applied;
     return applied;
   };
@@ -422,7 +459,7 @@ function applyGivensBias(
   if (b.diode === true) {
     const live = t.grid.axes.find((a) => a.name === 'vds' && a.values.length > 1);
     if (live) {
-      const fold = diodeTableCached(t);
+      const fold = diodeFolded(t);
       diode = { clamped: fold.clamped };
       // Say it out loud when the diagonal cannot be followed everywhere: past the characterized
       // vds range the fold reads the table's edge, so a diode biased up there is reported at a
@@ -511,7 +548,7 @@ function applyGivensBias(
   }
   return (
     biasRefusal(lacking, drain, needs, taken) ?? {
-      table: t,
+      table: atBias(t, steps),
       bias,
       stated,
       assumed,
@@ -675,10 +712,12 @@ function runSizing(
     if (refused) lacking.push(refused);
   }
 
-  const sliced = applyGivensBias(b, table, values, scope, warn, lacking);
+  const sliced = applyGivensBias(b, atLength(table, L), values, scope, warn, lacking);
   if ('error' in sliced) return fail(sliced.error, sliced);
 
-  const q: SizeQuery = { table: sliced.table, L };
+  // The sized table holds only the lengths L reads; the table's own range is the one an off-hull
+  // length is judged and reported against.
+  const q: SizeQuery = { table: sliced.table, L, ...(lAxis ? { lengths: lAxis.values } : {}) };
   for (const k of supplied) {
     const v = evalFinite(b[k] as string, values, scope, warn, `given ${k}`);
     if (v === undefined) return fail(`given ${k} did not resolve to a finite number`);
@@ -1058,7 +1097,7 @@ function evalBlocks(
       wired: blockWires(parent, block) !== undefined || readsParentSelector(parent, block),
       flattened: flattened(parent, srcDoc, block),
     };
-    const res = evaluateNode(childDoc, childTable, resolveDevice, depth + 1, { budget });
+    const res = evaluateChild(srcDoc, childDoc, childTable, resolveDevice, depth + 1, budget);
 
     // Roll up child warnings, attributed to the block (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
@@ -1097,8 +1136,65 @@ function evalBlocks(
   return reports;
 }
 
+/** A number for each object that keys a child's evaluation (a document, a table), so the key can
+ *  be a string. Weak, so it holds nothing alive. */
+const OBJECT_IDS = new WeakMap<object, number>();
+let lastObjectId = 0;
+function objectId(o: object): number {
+  let id = OBJECT_IDS.get(o);
+  if (id === undefined) OBJECT_IDS.set(o, (id = ++lastObjectId));
+  return id;
+}
+
+/**
+ * A composed child evaluated as its tree's evaluation goes: once for each distinct input, and read
+ * back from the tree's budget after that (SolveBudget.children). A parent search re-evaluates
+ * every block on every probe, and most blocks read nothing the probe moved — a bias leg, a mirror
+ * reference — so they would be evaluated again exactly as before.
+ *
+ * What a child evaluates to is decided by its document as authored (`src`), the values its block
+ * overrides (`doc`, which differs from `src` only in its params' values), its table, how deep it
+ * sits, and how its children find their devices, which is the same for the whole tree. Evaluation
+ * is deterministic, so a remembered result is the result — with one exception, the budget: a
+ * search that finds the budget spent stops. So a result is remembered only from an evaluation
+ * that left budget over, and read back only while the budget could still pay for that evaluation
+ * in full (`cost`, counting what its own children read back as if evaluated). Otherwise the child
+ * is evaluated again, and stops where it would have stopped. A result read back charges nothing:
+ * the budget bounds the work a tree does, and reading a result back is none.
+ *
+ * Params whose value is not a number are not keyed; such a child is evaluated every time.
+ */
+function evaluateChild(
+  src: SheetDoc,
+  doc: SheetDoc,
+  table: DeviceTable | undefined,
+  resolveDevice: DeviceResolver | undefined,
+  depth: number,
+  budget: SolveBudget,
+): SheetResult {
+  const values = doc.params.map((p) => p.value);
+  if (!values.every((v) => typeof v === 'number'))
+    return evaluateNode(doc, table, resolveDevice, depth, { budget });
+  // String(v) tells every two numbers apart but the two zeros, which are kept apart here.
+  const key =
+    `${objectId(src)}|${table ? objectId(table) : 0}|${depth}|` +
+    values.map((v) => (Object.is(v, -0) ? '-0' : String(v))).join(',');
+  const known = budget.children.get(key);
+  if (known && budget.left > known.cost) {
+    budget.counted += known.cost;
+    return known.res;
+  }
+  const counted = budget.counted;
+  const res = evaluateNode(doc, table, resolveDevice, depth, { budget });
+  if (budget.left > 0) budget.children.set(key, { res, cost: budget.counted - counted });
+  return res;
+}
+
 /** A child's wiring, to be read once its tree has settled: what withNodes needs of it. Keyed by
- *  the child's report, so only the reports of the evaluation a tree keeps are ever read. */
+ *  the child's report, so only the reports of the evaluation a tree keeps are ever read. A child
+ *  result read back from the tree's memory (see evaluateChild) is shared by the reports of every
+ *  probe that read it; each report still names its own entry, so the walk reads the one the
+ *  settled tree kept. */
 interface PendingWiring {
   doc: SheetDoc;
   res: SheetResult;
@@ -1184,6 +1280,7 @@ interface NodeRef {
 function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResult {
   const { doc, table, budget } = node;
   budget.left--;
+  budget.counted++;
   const warnings: QAWarning[] = [];
   const warn = (w: QAWarning): void => void warnings.push(w);
   const values: Record<string, number> = {};
@@ -1320,17 +1417,24 @@ const SEARCH_MAX_PROBES = 200;
 
 /**
  * The evaluations one composed tree may spend, counted per evaluation of any document in it — a
- * probe of a three-child sheet costs four. A search costs a few tens of evaluations, a set that
- * depends on each other a few searches per sweep, and a child solves inside every evaluation of
- * its parent, so nesting multiplies: the ceiling is there so a deep tree of solved params stops
- * with a reason instead of running for minutes. The library's costliest tree (the two-stage
- * Miller OTA, held at a sky130 process condition) spends about 430 of them.
+ * probe of a three-child sheet costs four, less any child whose inputs the probe did not move,
+ * which is read back from earlier in the tree and costs none (see evaluateChild). A search costs a
+ * few tens of evaluations, a set that depends on each other a few searches per sweep, and a child
+ * solves inside every evaluation of its parent, so nesting multiplies: the ceiling is there so a
+ * deep tree of solved params stops with a reason instead of running for minutes. The library's
+ * costliest tree (the folded-cascode OTA, at the sky130 process conditions) spends about 1,500.
  */
 export const SOLVE_EVALUATIONS = 10000;
 
-/** The evaluations left to one composed evaluation, shared by every node of the tree. */
+/** The evaluations left to one composed evaluation, shared by every node of the tree, and the
+ *  children it has evaluated so far (see evaluateChild). */
 interface SolveBudget {
   left: number;
+  /** Evaluations made so far, counting a child result read back as the evaluations it took. */
+  counted: number;
+  /** Each child evaluated so far, by its inputs: the result, and the most a fresh evaluation of it
+   *  could spend. */
+  readonly children: Map<string, { res: SheetResult; cost: number }>;
 }
 
 /** The evaluation, marked infeasible, with the failure as its solve outcome and its message as one
@@ -1419,7 +1523,7 @@ function evaluateNode(
       table,
       resolveDevice,
       depth,
-      budget: opts.budget ?? { left: SOLVE_EVALUATIONS },
+      budget: opts.budget ?? { left: SOLVE_EVALUATIONS, counted: 0, children: new Map() },
     }),
   );
   if (depth > 0) return res;
