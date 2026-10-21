@@ -1,5 +1,5 @@
-// Forward + inverse operating-point lookup. Interpolates a device table's base
-// grid at a point in axis-space, then evaluates derived quantities from the
+// Forward + inverse operating-point lookup. Interpolates a device table's stored
+// columns at a point in axis-space, then evaluates derived quantities from the
 // interpolated base scalars (dogfooding the expression engine). The inverse path
 // recovers vgs from a target value of any stored or derived quantity (gm/ID, fT,
 // intrinsic gain, …) along a fixed-L slice. Pure, deterministic, zero DOM imports.
@@ -25,6 +25,24 @@ function baseKeysPresent(grid: Grid): string[] {
 }
 
 /**
+ * Stored columns the namespace does not name: an import's unknown headers, carried through under
+ * their lower-cased names (the strict-superset rule). Each is a quantity like any other, read at
+ * the point by the same interpolation as the base columns.
+ *
+ * A column named like a standard derived quantity is left out. Lookup and sizing evaluate that
+ * name from its one definition — the inverse path does too (see sliceColumn) — so reporting the
+ * stored copy would put two different numbers under one name; qa/validate flags such a column as
+ * `derived-shadow` instead.
+ */
+export function passthroughKeys(grid: Grid): string[] {
+  const out: string[] = [];
+  for (const key of grid.quantities.keys()) {
+    if (!BASE_KEYS.has(key) && !DERIVED_COMPILED.has(key)) out.push(key);
+  }
+  return out;
+}
+
+/**
  * The first free name of a derived definition that `has` cannot resolve, or undefined when
  * the whole definition is computable. One home for "can this table compute that quantity",
  * shared by the forward path (which uses it to filter the default key set) and the inverse
@@ -43,13 +61,13 @@ function missingInput(
 }
 
 /**
- * Forward lookup: multilinearly interpolate the base grid at `point` (axis-space),
+ * Forward lookup: multilinearly interpolate the stored columns at `point` (axis-space),
  * then evaluate any requested derived quantity from the interpolated base scalars.
  *
- * When `keys` is omitted the result holds every present base column plus every
- * standard derived quantity whose definition is computable from those bases.
- * Requested derived keys are evaluated from the interpolated scalars (NOT
- * re-interpolated), so vstar = 2/(gm/id) etc. stay self-consistent at the point.
+ * When `keys` is omitted the result holds every present base column, every pass-through
+ * column (see passthroughKeys), and every standard derived quantity whose definition is
+ * computable from those bases. Requested derived keys are evaluated from the interpolated
+ * scalars (NOT re-interpolated), so vstar = 2/(gm/id) etc. stay self-consistent at the point.
  */
 export function lookup(
   table: DeviceTable,
@@ -58,9 +76,19 @@ export function lookup(
 ): Record<string, number> {
   const grid = table.grid;
 
-  // Interpolate the full set of present base quantity columns once (one corner walk).
+  // Interpolate every present stored column once (one corner walk), then split the pass-through
+  // columns back out: they are reported, but they stay out of the scope the derived layer reads.
+  // A derived definition names only base quantities and constants, so the one thing a
+  // pass-through could do there is shadow a constant — a column called `k` would silently
+  // replace Boltzmann's constant in the γ-model noise.
   const basePresent = baseKeysPresent(grid);
-  const baseScalars = interpolate(grid, point, basePresent);
+  const extraPresent = passthroughKeys(grid);
+  const baseScalars = interpolate(grid, point, [...basePresent, ...extraPresent]);
+  const extraScalars: Record<string, number> = {};
+  for (const key of extraPresent) {
+    extraScalars[key] = baseScalars[key];
+    delete baseScalars[key];
+  }
 
   // Device-metadata scalars — the same scope derive/tableScope uses: T/UT overrides
   // (so the γ-model noise evaluates at this table's characterization temperature; the
@@ -91,6 +119,7 @@ export function lookup(
   const requested = keys ?? [
     ...basePresent,
     ...axisKeys,
+    ...extraPresent,
     ...DERIVED_ENTRIES.filter(
       ([, compiled]) =>
         missingInput(compiled.names, (n) =>
@@ -107,10 +136,14 @@ export function lookup(
       out[key] = baseScalars[key];
       continue;
     }
+    if (Object.prototype.hasOwnProperty.call(extraScalars, key)) {
+      out[key] = extraScalars[key];
+      continue;
+    }
     const def = DERIVED_COMPILED.get(key);
     if (!def) {
       throw new Error(
-        `lookup: "${key}" is neither a present base column nor a known derived quantity`,
+        `lookup: "${key}" is neither a present column of this table nor a known derived quantity`,
       );
     }
     const v = def.eval(scope);
@@ -164,8 +197,8 @@ export function lookupByGmId(
  *
  * A key with a namespace definition is EVALUATED from that definition — it is never read
  * from a same-named stored column, even though unknown import columns do pass through under
- * such names. The forward half of sizing surfaces only base columns and re-derives the rest
- * (see `lookup` and sizeDevice's re-evaluation at the sized width), so inverting a stored
+ * such names. The forward half of sizing re-derives every name that has a definition (see
+ * `lookup`, passthroughKeys and sizeDevice's re-evaluation at the sized width), so inverting a stored
  * `ft` or `gm_id` column would place the operating point on a curve nothing downstream
  * agrees with: the sizer would silently return a device whose reported fT is not the fT it
  * was asked for. Stored columns serve the base keys (gm, id) that have no definition.

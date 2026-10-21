@@ -11,6 +11,7 @@ import { compileExpr, metaScalars } from '../derive';
 import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
+import { passthroughKeys } from '../lookup';
 import { fixTable } from '../series';
 import { diodeGrid, offHull } from '../grid';
 import {
@@ -515,6 +516,47 @@ function applyGivensBias(
   return { table: t, bias, assumed, clamped, ...(diode ? { diode } : {}) };
 }
 
+/**
+ * Put a sizing's operating point in scope: gm/gm_id/id/W/vgs/vstar/cgg/vnth_m/… and every
+ * pass-through column the table carries (`passthrough`), which is how a sheet reads a quantity the
+ * format has no name for.
+ *
+ * A pass-through name is the table's, not the sheet's, so it never displaces one the sheet already
+ * means something by: a param, a child's provide, or an expression constant — a column called `k`
+ * would otherwise replace Boltzmann's constant in every equation after the sizing, on this table
+ * and no other. Such a column is left out of scope and the sheet is told, rather than either side
+ * silently winning. Namespace quantities keep their place: the sheet reads its device through
+ * them by design.
+ */
+function mergeSized(
+  values: Record<string, number>,
+  quantities: Record<string, number>,
+  passthrough: readonly string[],
+  warn: (w: QAWarning) => void,
+): void {
+  const extra = new Set(passthrough);
+  for (const [key, v] of Object.entries(quantities)) {
+    if (extra.has(key)) {
+      const taken = Object.prototype.hasOwnProperty.call(values, key)
+        ? 'the sheet already defines that name'
+        : Object.prototype.hasOwnProperty.call(CONSTANTS, key)
+          ? 'that name is an expression constant'
+          : undefined;
+      if (taken) {
+        warn({
+          rule: 'sheet-passthrough',
+          severity: 'warning',
+          message: `the table's "${key}" column is not read: ${taken}, which keeps its meaning — rename the column in the export to read it`,
+          location: 'givens',
+          symbol: key,
+        });
+        continue;
+      }
+    }
+    values[key] = v;
+  }
+}
+
 /** Resolve the givens, call sizeDevice, and merge its operating point into `values`. */
 function runSizing(
   b: SheetGivens,
@@ -577,7 +619,7 @@ function runSizing(
 
   try {
     const res = sizeDevice(q);
-    Object.assign(values, res.quantities); // gm/gm_id/id/W/vgs/vstar/cgg/vnth_m/… at the point
+    mergeSized(values, res.quantities, passthroughKeys(sliced.table.grid), warn);
     values.ceiling = res.ceiling; // not in the quantities bag
     values.feasible = res.feasible ? 1 : 0;
     // Surface the sizer's own engineering notes (e.g. an L clamped onto the table's

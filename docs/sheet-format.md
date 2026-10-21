@@ -570,6 +570,12 @@ did not recognize) is *not* rescaled, because its width law is unknowable — it
 The characterization width is exposed as `w0`, so if you need to refer such a column to the
 sized width you can scale it yourself with `w0/W` (or `W/w0`).
 
+A pass-through column is read under its lower-cased header, in the sheet's own equations and
+checks and in its `provides`, like any quantity of the sized device. It never takes a name the
+sheet already uses: a column named like a param, a child's provide, or an expression constant
+(`k`, `q`, `pi`, …) is left out of scope with a `sheet-passthrough` warning, and the sheet's
+meaning of the name stands. Rename the column in the export to read it.
+
 ## Composition
 
 A sheet composes children through `blocks`. Each child is either a full sheet embedded inline

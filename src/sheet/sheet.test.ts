@@ -26,6 +26,8 @@ import {
   WIRING_TOL,
 } from './index';
 import { EXAMPLES } from './examples';
+import { cjdAt, demoCsvWith, importOne, withCjd } from '../import/passthrough.fixtures';
+import { PHYS } from '../constants';
 import type { DeviceTable } from '../types';
 import type { SheetDoc, SheetResult, SheetVar } from './types';
 
@@ -1109,6 +1111,118 @@ describe('composition — blocks and the scalars they provide', () => {
     // the child's provides are withheld, so dependent parent math is `na`, not a stale number
     expect('c__id' in res.values).toBe(false);
     expect('echo' in res.values).toBe(false);
+  });
+});
+
+describe('pass-through columns reach the sheet scope', () => {
+  // A column the importer does not recognize (`cjd`) is carried through as a quantity, and the
+  // sheet format promises it is readable like any other — not rescaled, so at w0.
+  const extra = withCjd();
+  const sizedDoc = (overrides: Partial<SheetDoc> = {}): SheetDoc => ({
+    title: 'dev',
+    polarity: 'n',
+    params: [
+      { name: 'L', value: 0.5e-6 },
+      { name: 'Ib', value: 20e-6 },
+    ],
+    givens: { L: 'L', gm_id: '12', id: 'Ib', vds: '0.6' },
+    equations: [],
+    checks: [],
+    ...overrides,
+  });
+  const atSizing = (res: SheetResult): number =>
+    cjdAt({ l: 0.5e-6, vds: 0.6, vgs: res.sizing!.vgs });
+  const noted = (res: SheetResult, rule: string): string[] =>
+    res.warnings.filter((w) => w.rule === rule).map((w) => w.message);
+
+  it('a sized sheet reads the column in its own equations, at w0', () => {
+    const res = runSheet(
+      sizedDoc({
+        equations: [
+          { name: 'Cj', expr: 'cjd' },
+          { name: 'Cj_sized', expr: 'cjd*W/w0' },
+        ],
+        provides: ['cjd'],
+      }),
+      extra,
+    );
+    expect(res.sizing?.ok).toBe(true);
+    expect(noted(res, 'sheet-undeclared')).toEqual([]);
+    expect(res.values.cjd).toBeCloseTo(atSizing(res), 27);
+    expect(res.values.Cj).toBe(res.values.cjd);
+    expect(res.values.Cj_sized / res.values.Cj).toBeCloseTo(res.sizing!.W / extra.meta.W!, 12);
+    expect(res.feasible).toBe(true);
+  });
+
+  it('a child provides the column to its parent, which reads child__cjd', () => {
+    const parent: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [],
+      equations: [{ name: 'C_node', expr: '2*cs__cjd' }],
+      checks: [{ id: 'cap', kind: 'spec', lhs: 'C_node', op: '<=', rhs: '1e-12' }],
+      blocks: [{ name: 'cs', doc: sizedDoc({ provides: ['cjd'] }) }],
+    };
+    const res = runSheet(parent, extra);
+    expect(res.warnings.filter((w) => /cjd/.test(w.message))).toEqual([]);
+    const child = res.blocks![0];
+    expect(child.sizing?.ok).toBe(true);
+    expect(child.provides.cjd).toBeCloseTo(
+      cjdAt({ l: 0.5e-6, vds: 0.6, vgs: child.sizing!.vgs }),
+      27,
+    );
+    expect(res.values.cs__cjd).toBe(child.provides.cjd);
+    expect(res.values.C_node).toBe(2 * child.provides.cjd);
+    expect(res.checks[0].status).toBe('pass');
+    expect(res.feasible).toBe(true);
+  });
+
+  it('a child bound to a named device provides that device’s column', () => {
+    // The parent has no table of its own: the column can only have come from the bound one.
+    const parent: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'cs', device: 'extra', doc: sizedDoc({ provides: ['cjd'] }) }],
+    };
+    const res = runSheet(parent, undefined, (id) => (id === 'extra' ? extra : undefined));
+    expect(res.blocks![0].sizing?.ok).toBe(true);
+    expect(res.values.cs__cjd).toBeCloseTo(
+      cjdAt({ l: 0.5e-6, vds: 0.6, vgs: res.blocks![0].sizing!.vgs }),
+      27,
+    );
+  });
+
+  it('a column never displaces a name the sheet already means something by', () => {
+    // A column called `k` would otherwise replace Boltzmann's constant for every equation after
+    // the sizing, and one called like a param would silently replace the param — on this table
+    // and no other. Both are left out of scope, and the sheet is told.
+    const table = importOne(demoCsvWith({ k: () => 1, cjd: cjdAt }));
+    const res = runSheet(
+      sizedDoc({
+        params: [
+          { name: 'L', value: 0.5e-6 },
+          { name: 'Ib', value: 20e-6 },
+          { name: 'cjd', value: 3e-15 },
+        ],
+        equations: [
+          { name: 'kT', expr: 'k*T' },
+          { name: 'Cj', expr: 'cjd' },
+        ],
+      }),
+      table,
+    );
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.values.kT).toBeCloseTo(PHYS.k * PHYS.T, 30);
+    expect(res.values.Cj).toBe(3e-15);
+    const notes = noted(res, 'sheet-passthrough');
+    expect(notes).toHaveLength(2);
+    expect(notes.find((m) => m.includes('"k"'))).toMatch(/expression constant/);
+    expect(notes.find((m) => m.includes('"cjd"'))).toMatch(/already defines/);
+    // An advisory note, not a failure: the sheet still means what it says.
+    expect(res.feasible).toBe(true);
   });
 });
 

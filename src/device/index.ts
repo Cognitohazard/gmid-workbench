@@ -11,7 +11,7 @@ import { offHull, sliceGrid } from '../grid';
 import { scalarScope, registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
 import { compileExpr, metaScalars, DERIVED_COMPILED } from '../derive';
-import { AXIS_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
+import { AXIS_KEYS, BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two bound quantities.
@@ -364,11 +364,17 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // quantity from its single namespace definition, so ratios (av0, ft, vstar) stay
   // invariant and width-law quantities (ro ∝ 1/W, input-referred noise ∝ 1/W) come out
   // right without any per-key case analysis here.
+  //
+  // A pass-through column is the exception: its width law is unknowable, so it is reported as
+  // read, at w0, and kept out of the scope the derived layer is re-evaluated in — for the same
+  // reason lookup keeps it out of its own (a column named like a constant would shadow it).
   const k = W / Wchar;
   const bases: Record<string, number> = {};
+  const passthrough: Record<string, number> = {};
   for (const [key, val] of Object.entries(point)) {
     if (DERIVED_COMPILED.has(key)) continue; // re-derived below at the sized width
-    bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
+    if (!BASE_KEYS.has(key)) passthrough[key] = val;
+    else bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
   }
   // The meta layer lookup used but did not report: T/UT (temperature) and — when the
   // table has no w column — the width itself, which must reflect the SIZED device.
@@ -378,7 +384,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     }
   }
   const scaledScope = scalarScope(bases);
-  const quantities: Record<string, number> = { ...bases };
+  const quantities: Record<string, number> = { ...bases, ...passthrough };
   for (const [key, compiled] of DERIVED_COMPILED) {
     if (!Object.prototype.hasOwnProperty.call(point, key)) continue; // not computable on this table
     quantities[key] = compiled.eval(scaledScope) as number;

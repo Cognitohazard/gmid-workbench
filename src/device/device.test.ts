@@ -15,6 +15,8 @@ import { generateDemoDevice, signedMirrorDemo, withoutColumns } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 import { compileExpr } from '../derive';
 import { ExprError } from '../types';
+import { fixTable } from '../series';
+import { cjdAt, withCjd } from '../import/passthrough.fixtures';
 
 /** A known operating point: forward-lookup the demo at (L, vgs) to get a self-consistent (gm, id, gm/id). */
 function knownPoint(table: DeviceTable, L: number, vgs: number) {
@@ -342,6 +344,50 @@ describe('sizeDevice — quantities describe the SIZED device (width rescale)', 
     expect(Math.abs(q.gm / (2 * Math.PI * q.cgg) / q.ft - 1)).toBeLessThan(0.01);
     // ro is derived from the same scaled gds — exact.
     expect(1 / q.gds / q.ro).toBeCloseTo(1, 12);
+  });
+});
+
+describe('sizeDevice — pass-through columns', () => {
+  // An imported column the namespace does not name (`cjd`) is a quantity like any other, so the
+  // sizing reports it at the operating point — read at the characterization width w0, because
+  // its width law is unknowable.
+  const table = fixTable(withCjd(), { vds: 0.6 });
+  const L = 0.5e-6;
+  const w0 = table.meta.W as number;
+
+  it('reports the column at the operating point, at w0', () => {
+    const res = sizeDevice({ table, L, gm_id: 12, id: 20e-6 });
+    expect(res.feasible).toBe(true);
+    expect(res.W / w0).not.toBeCloseTo(1, 1); // sized well away from w0, so a rescale would show
+    expect(res.quantities.cjd).toBeCloseTo(cjdAt({ l: L, vds: 0.6, vgs: res.vgs }), 27);
+    expect(res.quantities.cjd).toBe(lookup(table, { l: L, vgs: res.vgs }).cjd);
+    expect(res.quantities.w0).toBe(w0);
+  });
+
+  it('is the same at any sized width — the column is not rescaled', () => {
+    const small = sizeDevice({ table, L, gm_id: 12, id: 5e-6 });
+    const big = sizeDevice({ table, L, gm_id: 12, id: 50e-6 });
+    expect(big.W / small.W).toBeCloseTo(10, 6);
+    expect(big.quantities.cjd).toBe(small.quantities.cjd);
+    // …while a per-width base column on the same table is.
+    expect(big.quantities.cgg / small.quantities.cgg).toBeCloseTo(10, 6);
+  });
+
+  it('leaves the re-derived layer untouched, even under a constant’s name', () => {
+    // The re-evaluation at the sized width reads base columns and constants; a column called
+    // `k` must not stand in for Boltzmann's constant there.
+    const plain = generateDemoDevice();
+    const kCol = new Float64Array(plain.grid.quantities.get('gm')!.length).fill(1);
+    const withK: DeviceTable = {
+      ...plain,
+      grid: makeGrid([...plain.grid.axes], new Map([...plain.grid.quantities, ['k', kCol]])),
+    };
+    const Lp = plain.grid.axes[0].values[1];
+    const a = sizeDevice({ table: plain, L: Lp, gm_id: 12, id: 20e-6 });
+    const b = sizeDevice({ table: withK, L: Lp, gm_id: 12, id: 20e-6 });
+    expect(b.quantities.k).toBe(1);
+    expect(b.quantities.svth_m).toBe(a.quantities.svth_m);
+    expect(b.quantities.vnth_m).toBe(a.quantities.vnth_m);
   });
 });
 
