@@ -19,6 +19,7 @@ import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { fixTable } from '../series';
 import { diodeGrid, makeGrid } from '../grid';
 import { lookup } from '../lookup';
+import { derivedFallbacks, fallbackMessage } from '../derive';
 import {
   evaluateSheet,
   heldOutcome,
@@ -958,7 +959,7 @@ describe('thermal noise from the table when it carries it, and the result says w
   const doc = boundDoc({
     equations: [
       { name: 'vn', expr: 'vnth_m' },
-      { name: 'sv_own', expr: '4*k*T*gamma/gm' },
+      { name: 'sv_own', expr: '4*k*T*gamma*(gm+gmb)/gm^2' },
     ],
   });
 
@@ -977,9 +978,33 @@ describe('thermal noise from the table when it carries it, and the result says w
     const res = runSheet(doc, bare);
     expect(res.sizing?.noise).toBe('estimated');
     expect(res.values).not.toHaveProperty('gamma');
-    const estimate = Math.sqrt((4 * PHYS.k * PHYS.T) / res.values.gm);
+    const { gm, gmb } = res.values;
+    const estimate = Math.sqrt(4 * PHYS.k * PHYS.T * (gm + gmb)) / gm;
     expect(res.values.vn / estimate).toBeCloseTo(1, 2);
+    // The estimate is γ's own fallback, carried beside the noise source.
+    expect(res.sizing?.fallbacks?.map((f) => [f.quantity, f.missing])).toEqual([
+      ['gamma', ['sth']],
+    ]);
     expect(runSheet(doc, dev).sizing?.noise).toBe('column');
+    expect(runSheet(doc, dev).sizing).not.toHaveProperty('fallbacks');
+  });
+
+  it('carries the fallback forms a table without gmb forces beside the noise source, once per device', () => {
+    const noGmb = withoutColumns(bare, ['gmb']);
+    const res = runSheet(doc, noGmb);
+    expect(res.sizing?.noise).toBe('estimated');
+    expect(res.sizing?.fallbacks?.map((f) => [f.quantity, f.missing, f.form])).toEqual([
+      ['gamma', ['sth'], '1.0'],
+      ['svth_m', ['gmb'], '4*k*T*gamma/gm'],
+      ['vnth_m', ['gmb'], 'sqrt(4*k*T*gamma/gm)'],
+    ]);
+    // The figure is that form: no body-effect term.
+    expect(res.values.vn / Math.sqrt((4 * PHYS.k * PHYS.T) / res.values.gm)).toBeCloseTo(1, 2);
+    // Said on the report, not repeated as a warning of the run.
+    const said = res.sizing!.fallbacks!.map(fallbackMessage);
+    expect(res.warnings.filter((w) => said.some((m) => w.message.includes(m)))).toEqual([]);
+    // And where the table has the column, nothing is owed.
+    expect(runSheet(doc, measured).sizing).not.toHaveProperty('fallbacks');
   });
 
   it('lists each sized device of a composed tree with its own table’s answer', () => {
@@ -997,8 +1022,8 @@ describe('thermal noise from the table when it carries it, and the result says w
     };
     const res = runSheet(tree, measured, (id) => (id === 'bare' ? bare : undefined));
     expect(noiseSourcesIn(res)).toEqual([
-      { device: 'a', source: 'measured' },
-      { device: 'b', source: 'estimated' },
+      { device: 'a', source: 'measured', fallbacks: [] },
+      { device: 'b', source: 'estimated', fallbacks: derivedFallbacks(bare.grid) },
     ]);
   });
 });
@@ -1006,8 +1031,9 @@ describe('thermal noise from the table when it carries it, and the result says w
 // The five-transistor OTA on the sky130 tables the generator writes (data/pdk is not committed,
 // so this runs only where the tables have been generated). Simulated, the OTA's input-referred
 // thermal floor is 28.24 nV/√Hz, and the nfet's own effective γ at the pair's bias point is 1.95
-// where the pfet's at the load's is 1.00 (tools/verify/README.md). The γ = 1 estimate reads
-// 22.7 nV/√Hz; reading the tables' own thermal noise has to land near the simulation.
+// where the pfet's at the load's is 1.00 (tools/verify/README.md), both against gm alone. The
+// γ = 1 estimate, body effect counted, reads 25.1 nV/√Hz; reading the tables' own thermal noise
+// has to land near the simulation.
 const SKY130 = fileURLToPath(new URL('../../data/pdk/sky130', import.meta.url));
 const skyTable = (name: string): string =>
   join(SKY130, `sky130_fd_pr__${name}__tt__27C.mostab.csv`);

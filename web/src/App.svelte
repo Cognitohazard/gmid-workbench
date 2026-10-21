@@ -4,8 +4,9 @@
     plottableQuantities,
     importMostab,
     metaScalars,
+    derivedFallbacks,
+    noiseLabel,
     noiseSource,
-    noiseSourceLabel,
     formatEng,
     formatSI,
     validate,
@@ -342,6 +343,13 @@
     activeTab ? biasAxes.filter((a) => activeTab.panels.some((p) => p.family !== a.name)) : [],
   );
 
+  // The derived quantities this device computes by a fallback form rather than their definition
+  // (a noise figure without a gmb column): the picker shows the form it plots, and the device
+  // panel's noise line names them.
+  const deviceFallbacks = $derived(
+    device ? derivedFallbacks(device.grid, metaScalars(device.meta)) : [],
+  );
+
   // Picker for panel X/Y: every quantity THIS device resolves along the sweep,
   // including derived ones the width scalar unlocks (id/w).
   const exprOptions = $derived.by(() => {
@@ -357,11 +365,13 @@
       // `gamma` column beside `sth`), so it is offered once, as the column.
       ...pq.derived
         .filter((k) => !pq.base.includes(k))
-        .map((k) => ({
-          value: k,
-          label: `${k} = ${derivedExpr.get(k)}`,
-          formula: derivedExpr.get(k),
-        })),
+        .map((k) => {
+          // The form plotted on this device: a fallback says so, with the column it lacks.
+          const f = deviceFallbacks.find((n) => n.quantity === k);
+          const formula = f?.form ?? derivedExpr.get(k);
+          const lacks = f ? ` (no ${f.missing.join(' or ')} column)` : '';
+          return { value: k, label: `${k} = ${formula}${lacks}`, formula };
+        }),
     ];
   });
   const defaultFamily = $derived(multiAxes.includes(LENGTH_AXIS) ? LENGTH_AXIS : '');
@@ -737,7 +747,7 @@
           <dd>{device.meta.polarity}</dd>{/if}
         <dt>noise</dt>
         <dd data-noise title={CONTROL_HELP.noiseSource}>
-          {noiseSourceLabel(noiseSource(device.grid))}
+          {noiseLabel(noiseSource(device.grid), deviceFallbacks)}
         </dd>
         {#each Object.entries(device.meta.extra ?? {}) as [k, v]}
           <dt>{k}</dt>

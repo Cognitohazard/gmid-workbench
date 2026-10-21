@@ -249,7 +249,7 @@ describe('the search', () => {
     expect(c.verdict).toBe('closed');
     expect(c.specCoverage).toEqual({ consumed: 9, supplied: 9 });
     expect(Object.keys(c.knobs)).toEqual(['I_tail', 'gm_id_in']);
-    expect(c.knobs.I_tail).toBeCloseTo(1.915625e-5, 12);
+    expect(c.knobs.I_tail).toBeCloseTo(1.83125e-5, 12);
     expect(c.knobs.gm_id_in).toBe(18);
     expect(c.atRangeFloor).toEqual([]);
     // The knob values above are a SEARCH OUTCOME: where this search lands on this sheet, pinned

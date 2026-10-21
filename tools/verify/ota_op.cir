@@ -14,7 +14,7 @@
 *   ld    (XM4)         2.5797   8.9782  -1132.19   71.90    8.01   output side, ldr's gate
 *
 *   V_tail 272.57 mV   tail__id = I_q 18.103 uA   out_share 0.4960   vos_sys 4.7845 mV
-*   in__gds 1.3346 uS   ld__gds 0.6774 uS   Rout 497.02 kohm   gm_pair 107.52 uS   Av 53.44
+*   in__gds 1.3346 uS   ld__gds 0.6774 uS   Rout 497.02 kohm   gm_pair 106.71 uS   Av 53.04
 *
 * The sheet draws the OTA at rest, the state this deck puts it in: the output held at V_out_dc,
 * the two inputs apart by the offset that takes. The split of the tail current is solved so the

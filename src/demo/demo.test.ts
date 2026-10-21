@@ -136,9 +136,12 @@ describe('generateDemoDevice', () => {
       expect(sth[i]).toBeGreaterThan(0);
       expect(sfl[i]).toBeGreaterThan(0);
     }
-    // sth = 4kTγ·gm by construction, so the data thermal PSD svth = sth/gm² == the γ-model.
+    // sth = 4kTγ·(gm + gmb) by construction, so the data thermal PSD svth = sth/gm² is the
+    // γ-model, and the stored γ is the one the stored noise implies.
+    const gmb = col(dev.grid, 'gmb');
     const i = Math.floor(gm.length / 2);
-    expect(sth[i]).toBeCloseTo(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * gm[i], 30);
+    expect(sth[i]).toBeCloseTo(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * (gm[i] + gmb[i]), 30);
+    expect(gmb[i]).toBeGreaterThan(0);
     // the flicker corner fco = sfl/sth is a positive, finite LUT quantity.
     expect(sfl[i] / sth[i]).toBeGreaterThan(0);
   });

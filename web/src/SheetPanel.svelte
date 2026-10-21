@@ -29,7 +29,9 @@
     unreadFormat,
     formatEng,
     formatSI,
-    noiseSourceLabel,
+    fallbackMessage,
+    noiseFallbacks,
+    noiseLabel,
     noiseSourcesIn,
     joinProvide,
     PROVIDE_SEP,
@@ -307,13 +309,15 @@
   /** The primary table the detail was computed on: the device's table at the reference
    *  condition, which is the active table only when the panel is asking about that condition. */
   const refTable = $derived(refKey && primary ? tableAt(primary, refKey) : undefined);
-  /** Where the sized devices' thermal-noise figures come from, in one line: the label alone when
-   *  every device agrees, else each label with the devices that carry it. Empty with nothing
-   *  sized. */
+  /** The sized devices of the reference run, with where each one's noise figures come from. */
+  const noiseDevices = $derived(result ? noiseSourcesIn(result) : []);
+  /** Where the sized devices' thermal-noise figures come from, in one line — each device's source
+   *  and the figures its table made fall back (noiseLabel): the label alone when every device
+   *  agrees, else each label with the devices that carry it. Empty with nothing sized. */
   const noiseText = $derived.by((): string => {
-    const devices = (result ? noiseSourcesIn(result) : []).map((d) => ({
+    const devices = noiseDevices.map((d) => ({
       device: d.device,
-      label: noiseSourceLabel(d.source),
+      label: noiseLabel(d.source, d.fallbacks),
     }));
     const labels = devices.map((d) => d.label).filter((l, i, all) => all.indexOf(l) === i);
     if (labels.length <= 1) return labels.join('');
@@ -323,6 +327,14 @@
         .map((d) => d.device)
         .join(', ');
     return labels.map((label) => `${label} (${carrying(label)})`).join(' · ');
+  });
+  /** The noise line's tooltip: what the sources mean, then every fallback the line names, each in
+   *  full — the quantity, the missing column, the form used and what it costs — said once. */
+  const noiseTitle = $derived.by((): string => {
+    const said = noiseDevices
+      .flatMap((d) => noiseFallbacks(d.fallbacks).map(fallbackMessage))
+      .filter((m, i, all) => all.indexOf(m) === i);
+    return [CONTROL_HELP.noiseSource, ...said].join('\n\n');
   });
   /** The projection at the reference condition, for what the panel itself reads off a child's
    *  bound table (the sign hints). The evaluations project in the worker through the same core
@@ -1365,9 +1377,10 @@
           )}</span
         >
       {/if}
-      <!-- Which noise the noise rows are: the table's own, or the γ = 1.0 estimate. -->
+      <!-- Which noise the noise rows are: the table's own, or the γ = 1.0 estimate, and any figure a
+         missing column made fall back to a lesser form (the tooltip spells each one out). -->
       {#if evaluated && noiseText}
-        <span class="snoise" title={CONTROL_HELP.noiseSource}>noise: {noiseText}</span>
+        <span class="snoise" title={noiseTitle}>noise: {noiseText}</span>
       {/if}
       <!-- What each held expression came to at this run: the gate bias a node under a gate needs,
          or the zero a current balance reads. -->

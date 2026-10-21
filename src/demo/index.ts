@@ -146,10 +146,11 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
   const vth = new Float64Array(size);
   const vdsat = new Float64Array(size);
   // Noise columns: a constant thermal factor γ, the channel thermal PSD
-  // sth = 4kTγ·gm [A²/Hz], and the 1/f flicker PSD at 1 Hz sfl [A²/Hz]. These
-  // make the data-thermal / flicker / corner (fco) derived quantities live on the
-  // demo device. Clearly synthetic-model-derived (so data == the γ-model thermal
-  // here) — never how a real measured import is treated.
+  // sth = 4kTγ·(gm + gmb) [A²/Hz] (in saturation the channel's noise conductance is gm + gmb),
+  // and the 1/f flicker PSD at 1 Hz sfl [A²/Hz]. These make the data-thermal / flicker /
+  // corner (fco) derived quantities live on the demo device. Clearly synthetic-model-derived
+  // (so data == the γ-model thermal here, and the stored γ is the one sth implies) — never how
+  // a real measured import is treated.
   const gamma = new Float64Array(size);
   const sth = new Float64Array(size);
   const sfl = new Float64Array(size);
@@ -191,7 +192,7 @@ export function generateDemoDevice(opts: DemoOptions = {}): DeviceTable {
           vth[flat] = vthEff;
           vdsat[flat] = vdsatVal;
           gamma[flat] = GAMMA_DEFAULT;
-          sth[flat] = kT4 * GAMMA_DEFAULT * gmv; // 4kTγ·gm
+          sth[flat] = kT4 * GAMMA_DEFAULT * (gmv + gmb[flat]); // 4kTγ·(gm + gmb)
           sfl[flat] = (KFLICKER * gmv * gmv) / cggL; // area-domain: svfl = sfl/gm² = KFLICKER/(W·L·Cox)
         }
       }

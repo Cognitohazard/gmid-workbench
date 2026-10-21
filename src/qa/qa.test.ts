@@ -530,7 +530,7 @@ describe('validate: deepened sign / noise / gamma checks', () => {
   });
 
   it('flags a thermal-noise column whose γ at full drive no transistor reaches', () => {
-    // The demo's sth is 4kT·gm with γ = 1. Scaled by 1e6 — a µ-prefixed export — it reads γ = 1e6
+    // The demo's sth is 4kT·(gm + gmb) with γ = 1. Scaled by 1e6 — a µ-prefixed export — it reads γ = 1e6
     // at the full-drive point (shortest L, largest vgs and vds, body at the source), which is a
     // unit error and nothing a device does.
     const dev = generateDemoDevice({
@@ -554,7 +554,7 @@ describe('validate: deepened sign / noise / gamma checks', () => {
     );
     expect(slipped.map((x) => x.severity)).toEqual(['warning']);
     expect(slipped[0].message).toMatch(
-      /γ = sth\/\(4kT·gm\) = 1\.00e\+6 at the table's full-drive point \(l = 1\.8e-7, vds = 1\.2, vsb = 0, vgs = 1\.2\)/,
+      /γ = sth\/\(4\*k\*T\*\(gm\+gmb\)\) = 1\.00e\+6 at the table's full-drive point \(l = 1\.8e-7, vds = 1\.2, vsb = 0, vgs = 1\.2\)/,
     );
     // Low by the same factor is the same slip.
     expect(validate(scaleQuantities(dev, { sth: 1e-6 })).map((x) => x.rule)).toContain(

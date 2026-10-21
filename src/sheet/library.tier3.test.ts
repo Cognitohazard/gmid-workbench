@@ -7,7 +7,8 @@
 //  - After sizing at a declared vds, gds/id = 1/(VA + vds) EXACTLY (VA = 5e6·L),
 //    so gds = id/(VA + vds) and the intrinsic gain av0 = (gm/ID)·(VA + vds). Analytic
 //    single-stage gains therefore land within interpolation error (< 1e-2).
-//  - Thermal density vnth_m = sqrt(4kTγ/gm) with γ = GAMMA_DEFAULT.
+//  - Thermal density vnth_m = sqrt(4kTγ·(gm + gmb))/gm with γ = GAMMA_DEFAULT and the demo's
+//    gmb = BODY_FACTOR·gm, i.e. sqrt(4kTγ·(1 + BODY_FACTOR)/gm) (vnthM).
 //  - A device given another device's gate voltage and a multiple K of its width carries K times
 //    that device's current times (VA + vds)/(VA + vds_ref): id and gm both scale with
 //    (1 + vds/VA) at fixed vgs and W. A diode-connected reference has vds_ref equal to its own
@@ -456,13 +457,14 @@ describe('tier-3 goldens: degenerated differential pair', () => {
   });
 
   it('input noise takes the device at its gate and the resistor through the source', () => {
-    // Per side, the device's own gate-referred density, 4kTγ/gm, and the resistor's 4kT·R_s. The
-    // resistor's noise is a voltage in series with the source, and a source voltage moves the
-    // drain current through gm + gmb where a gate voltage moves it through gm, so it refers to
-    // the gate through (gm + gmb)/gm — 1.2 in the demo model, 1.44 in power:
-    //   device    4kTγ/gm      = 1.6576e-20/145.79 µS    = 1.1369e-16 V²/Hz
+    // Per side, the device's own gate-referred density, 4kTγ·(gm + gmb)/gm², and the resistor's
+    // 4kT·R_s. The resistor's noise is a voltage in series with the source, and a source voltage
+    // moves the drain current through gm + gmb where a gate voltage moves it through gm, so it
+    // refers to the gate through (gm + gmb)/gm — 1.2 in the demo model, 1.44 in power. The
+    // device's own channel noise carries the same 1.2 (its noise conductance is gm + gmb):
+    //   device    4kTγ·1.2/gm  = 1.9891e-20/145.79 µS    = 1.3643e-16 V²/Hz
     //   resistor  4kT·R_s·1.44 = 1.9891e-16 × 1.44       = 2.8643e-16 V²/Hz
-    // Both sides of the pair: sqrt(2 × 4.0013e-16) = 28.29 nV/√Hz.
+    // Both sides of the pair: sqrt(2 × 4.2286e-16) = 29.08 nV/√Hz.
     const viaSource = (gmIn + gmbOf(gmIn)) / gmIn;
     const device = vnthM(gmIn) ** 2;
     const resistor = 4 * PHYS.k * PHYS.T * R_S;
@@ -475,7 +477,7 @@ describe('tier-3 goldens: degenerated differential pair', () => {
     expect(
       relErr(res.values.vn_in, Math.sqrt(2 * (res.values.in__vnth_m ** 2 + resistor * path ** 2))),
     ).toBeLessThan(1e-12);
-    // Referred as if it sat at the gate, the resistor would leave the row at 25.0 nV/√Hz, 12 % low.
+    // Referred as if it sat at the gate, the resistor would leave the row at 25.9 nV/√Hz, 11 % low.
     const atTheGate = Math.sqrt(2 * (device + resistor));
     expect(atTheGate / res.values.vn_in).toBeLessThan(0.9);
     expect(
@@ -561,6 +563,9 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     const iDiode = iTail - iOut;
     const gmOut = 14 * iOut;
     const gmDiode = gmIdDemo(vgsInr) * iDiode;
+    // The load mirror's current gain, its output device's gm over its diode device's: one gate,
+    // one width, so the ratio its currents are in, rM = share/(1 − share).
+    const rM = share / (1 - share);
     return {
       share,
       vBr,
@@ -570,7 +575,10 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
       iTail,
       iOut,
       iDiode,
-      gmPair: (2 * gmOut * gmDiode) / (gmOut + gmDiode),
+      rM,
+      gmDiode,
+      // The diode side's half through the mirror, the output side's half direct.
+      gmPair: (gmDiode * rM + gmOut) / 2,
     };
   })();
   const { vTail, iOut, iDiode, gmPair } = rest;
@@ -626,13 +634,19 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
   it('slew and GBW follow from the current the tail delivers and the pair transconductance', () => {
     // 20 µA × 0.921 = 18.43 µA — not the 20 µA the reference is programmed to.
     expect(relErr(res.values.SR, rest.iTail / CL)).toBeLessThan(1e-3);
-    expect(relErr(res.values.GBW, gmPair / (TWO_PI * CL))).toBeLessThan(1e-3);
-    // Which current each equation reads, exactly: the tail's own, and the pair's two in series.
+    // The diode-side transistor's gm is read off the table between drain-voltage and body-bias
+    // nodes, 0.15 % under the model's, and the mirror's gain rides the interpolated gm curve; the
+    // diode side's half carries both, so the closed form holds to 1.5e-3 rather than 1e-3.
+    expect(relErr(res.values.inr__gm, rest.gmDiode)).toBeLessThan(2e-3);
+    expect(relErr(res.values.GBW, gmPair / (TWO_PI * CL))).toBeLessThan(1.5e-3);
+    // Which current each equation reads, exactly: the tail's own, and the pair's two halves,
+    // the diode side's through the load mirror's gain.
     expect(relErr(res.values.SR, res.values.tail__id / CL)).toBeLessThan(1e-12);
-    const { in__gm, inr__gm } = res.values;
-    expect(relErr(res.values.gm_pair, (2 * in__gm * inr__gm) / (in__gm + inr__gm))).toBeLessThan(
+    const { in__gm, inr__gm, mir__gm, mirr__gm } = res.values;
+    expect(relErr(res.values.gm_pair, (inr__gm * (mir__gm / mirr__gm) + in__gm) / 2)).toBeLessThan(
       1e-12,
     );
+    expect(relErr(mir__gm / mirr__gm, rest.rM)).toBeLessThan(1e-3);
     expect(relErr(res.values.GBW, res.values.gm_pair / (TWO_PI * CL))).toBeLessThan(1e-12);
     expect(res.values.I_q).toBe(res.values.tail__id);
   });
@@ -791,6 +805,9 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     const iOut = share * iTail;
     const gmOut = 14 * iOut;
     const gmDiode = gmIdDemo(vgsInr, L_IN) * (iTail - iOut);
+    // The bottom mirror's current gain, its output device's gm over its diode device's: one gate,
+    // one width, drains at V_C and V_c_r, so the ratio its currents are in.
+    const copy = (VA1 + V_C) / (VA1 + vCr);
     return {
       share,
       vFr,
@@ -801,7 +818,9 @@ describe('tier-3 goldens: folded cascode OTA', () => {
       iOut,
       iPr,
       iNmir,
-      gmPair: (2 * gmOut * gmDiode) / (gmOut + gmDiode),
+      copy,
+      // The diode side's half through the bottom mirror, the output side's half direct.
+      gmPair: (gmDiode * copy + gmOut) / 2,
     };
   })();
   const { vTail, gmPair } = rest;
@@ -829,6 +848,12 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     expect(relErr(res.values.I_fold, 30e-6 - res.values.in__id)).toBeLessThan(1e-12);
     expect(relErr(res.values.GBW, gmPair / (TWO_PI * CL))).toBeLessThan(1e-3);
     expect(relErr(res.values.GBW, res.values.gm_pair / (TWO_PI * CL))).toBeLessThan(1e-12);
+    // The pair's two halves, the diode side's through the bottom mirror's gain.
+    const { in__gm, inr__gm, nmir__gm, nmir_r__gm } = res.values;
+    expect(
+      relErr(res.values.gm_pair, (inr__gm * (nmir__gm / nmir_r__gm) + in__gm) / 2),
+    ).toBeLessThan(1e-12);
+    expect(relErr(nmir__gm / nmir_r__gm, rest.copy)).toBeLessThan(1e-3);
     expect(relErr(res.values.SR, res.values.tail__id / CL)).toBeLessThan(1e-12);
     // The branch must take at least the input device's current, so that slewing the whole tail
     // into one folding node does not starve it: the check compares the two currents the run reads.
@@ -1077,7 +1102,9 @@ const mirrorOtaAtRest = () => {
   const iFolded = iTail - iOut;
   const gmIn = 12 * iOut;
   const gmInF = gmIdDemo(vgsInf) * iFolded;
-  const gmPair = (2 * gmIn * gmInF) / (gmIn + gmInF);
+  // Each pair transistor's half of the signal through its own mirror path: the output-driving
+  // side's through the PMOS mirror, K_m·rOut, the folded side's through both, K_m·rFold·rOut.
+  const gmOut = (gmIn * K_M * rOut + gmInF * K_M * rFold * rOut) / 2;
   const iP = K_M * iOut * rOut; // the PMOS output device at the output
   const iFold = K_M * iFolded * rFold; // the PMOS output device on the NMOS diode
   return {
@@ -1090,7 +1117,7 @@ const mirrorOtaAtRest = () => {
     iFolded,
     gmIn,
     gmInF,
-    gmPair,
+    gmOut,
     rFold,
     iP,
     iFold,
@@ -1110,7 +1137,7 @@ const itIsAMirrorOta = (
   const vgs10 = VGS_GMID10_L05;
   const rOut = (VA + 0.9) / (VA + vgs10);
   const rest = mirrorOtaAtRest();
-  const { vTail, iOut, iFolded, gmPair, rFold, iP, iFold } = rest;
+  const { vTail, iOut, iFolded, gmOut, rFold, iP, iFold } = rest;
   const v = res.values;
 
   // A common mode that leaves the tail device 30 mV short of its saturation voltage, for the pair
@@ -1203,18 +1230,14 @@ const itIsAMirrorOta = (
     // gm scales with (VA + vds) exactly as id does, so each mirror's small-signal current gain is
     // its current ratio: K_m·rOut straight to the output, K_m·rFold·rOut through the NMOS mirror.
     // The gm of a device on another's gate rides the interpolated gm curve, so these two hold to
-    // interpolation order. The pair's two sides carry one signal current, equal and opposite, at
-    // the series combination of their two transconductances.
+    // interpolation order. Each pair transistor turns half the differential input into current at
+    // its own transconductance, and each half takes its own side's path.
     expect(relErr(v.Ai_p / K_M - 1, rOut - 1)).toBeLessThan(1e-2);
     expect(relErr(v.Ai_n / K_M - 1, rFold * rOut - 1)).toBeLessThan(1e-2);
-    const gmOut = (gmPair * K_M * rOut * (1 + rFold)) / 2;
     expect(relErr(v.Gm_out, gmOut)).toBeLessThan(1e-3);
     expect(relErr(v.GBW, gmOut / (TWO_PI * CL))).toBeLessThan(1e-3);
     // Which quantities each equation reads, exactly.
-    expect(relErr(v.gm_pair, (2 * v.in__gm * v.in_f__gm) / (v.in__gm + v.in_f__gm))).toBeLessThan(
-      1e-12,
-    );
-    expect(relErr(v.Gm_out, (v.gm_pair * (v.Ai_p + v.Ai_n)) / 2)).toBeLessThan(1e-12);
+    expect(relErr(v.Gm_out, (v.in__gm * v.Ai_p + v.in_f__gm * v.Ai_n) / 2)).toBeLessThan(1e-12);
     expect(relErr(v.GBW, v.Gm_out / (TWO_PI * CL))).toBeLessThan(1e-12);
   });
 
@@ -1233,16 +1256,19 @@ const itIsAMirrorOta = (
     expect(relErr(v.I_q, v.tail__id + v.moutp__id + v.mfold__id)).toBeLessThan(1e-12);
   });
 
-  it('DC gain is K_m-independent: gain = (gm_pair/I)·(VA + V_out)/2 at rest', () => {
+  it('DC gain is K_m-independent: gain = (gm_in + rFold·gm_in_f)·(VA + V_out)/(4·I_out) at rest', () => {
     // gds = idSat/VA in the demo model and an output device copies its diode's saturation current
     // per width, so the drain voltage an output device sits at cancels out of its gds: it is its
     // diode's current, times the width ratio, over (VA + that diode's drop). The two output
     // devices carry one current at rest, so each has the same gds.
     const rout = 1 / (2 * gdsOf(iP, L, 0.9));
     expect(relErr(v.Rout, rout)).toBeLessThan(1e-3);
-    // Against the transconductance above, K_m and the currents cancel to the pair's two gm over
-    // the output current: Av = gm_pair·(1 + rFold)·(VA + 0.9)/(4·s·I).
-    expect(relErr(v.Av, (gmPair * K_M * rOut * (1 + rFold) * rout) / 2)).toBeLessThan(1e-3);
+    // Against the transconductance above, K_m and the mirror gain rOut cancel, leaving the pair's
+    // two gm over the output side's current: Av = (gm_in + rFold·gm_in_f)·(VA + 0.9)/(4·I_out).
+    expect(relErr(v.Av, gmOut * rout)).toBeLessThan(1e-3);
+    expect(
+      relErr(v.Av, ((rest.gmIn + rFold * rest.gmInF) * (va(L) + 0.9)) / (4 * iOut)),
+    ).toBeLessThan(1e-3);
     expect(relErr(v.Av, v.Gm_out * v.Rout)).toBeLessThan(1e-12);
     // K_m scales every output-side width and current together, so it cancels on the table too.
     const wider = runSheet(withParams(doc, { K_m: 4 }), table);
@@ -1267,7 +1293,8 @@ const itIsAMirrorOta = (
   });
 
   it('input noise counts all eight signal-path devices, each through its own path', () => {
-    // Every device's drain noise current is 4kTγ·gm. Referred to the input, a pair transistor's
+    // Every device's drain noise current is 4kTγ·(gm + gmb), which on the demo is 4kTγ·1.2·gm (kT4
+    // below is that coefficient). Referred to the input, a pair transistor's
     // noise is its own density; a mirror device's drain noise current reaches the output through
     // the gain of its path and is divided by Gm_out:
     //   PMOS diodes     the output-driving one through the PMOS mirror, Ai_p, the folded one
@@ -1281,7 +1308,6 @@ const itIsAMirrorOta = (
     const gmNmir = 10 * iFold;
     const aiP = K_M * rOut;
     const aiN = K_M * rFold * rOut;
-    const gmOut = (gmPair * (aiP + aiN)) / 2;
     const outputSide =
       10 * iOut * aiP ** 2 + // output-driving PMOS diode
       rest.gmF * iFolded * aiN ** 2 + // folded PMOS diode
@@ -1625,8 +1651,9 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     // Both devices at L 0.5 µm and |vds| 0.9 carry one current, so gds_n = gds_p and
     // Av = (gid_n + gid_p)·(VA + vds)/2 = 12.620015 × 3.4/2 = 21.454.
     expect(relErr(res.values.Av, ((10 + gmIdP) * (va(L) + 0.9)) / 2)).toBeLessThan(1e-3);
-    // Both devices are counted: each puts 4kTγ·gm of noise current into the output, and the sum
-    // over gm_tot² is the density of one device with the composite transconductance.
+    // Both devices are counted: each puts 4kTγ·(gm + gmb) of noise current into the output —
+    // 4kTγ·1.2·gm on the demo — and the sum over gm_tot² is the density of one device with the
+    // composite transconductance.
     expect(relErr(res.values.vn_in, vnthM(gmTot))).toBeLessThan(1e-3);
     const i2 = (name: string): number =>
       (res.values[`${name}__vnth_m`] * res.values[`${name}__gm`]) ** 2;

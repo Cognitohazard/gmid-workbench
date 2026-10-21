@@ -8,16 +8,17 @@
 import { type DeviceTable, LookupRangeError } from '../types';
 import { lookup, lookupByGmId, lookupByQuantity, operatingPointAxis } from '../lookup';
 import { offHull, sliceGrid } from '../grid';
-import { scalarScope, registerExprFunction } from '../expr';
+import { registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
-import { compileExpr, metaScalars, pointScope, DERIVED_COMPILED } from '../derive';
 import {
-  AXIS_KEYS,
-  BASE_KEYS,
-  DERIVED_QUANTITIES,
-  PER_WIDTH_KEYS,
-  isPassthroughKey,
-} from '../namespace';
+  DERIVED_FORMS,
+  derivedFallbacks,
+  fallbackMessage,
+  metaScalars,
+  pointScope,
+  type FallbackNote,
+} from '../derive';
+import { AXIS_KEYS, BASE_KEYS, PER_WIDTH_KEYS, isPassthroughKey } from '../namespace';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two bound quantities.
@@ -73,9 +74,18 @@ export interface SizeResult {
   passthrough: string[];
   /**
    * Human-readable engineering notes for this sizing (e.g. a requested L that fell
-   * off the table's L hull and was clamped). Empty when nothing needs flagging.
+   * off the table's L hull and was clamped, or a quantity read by a fallback form — the
+   * sentence for each entry of `fallbacks`). Empty when nothing needs flagging.
    */
   warnings: string[];
+  /**
+   * The derived quantities this table computes by a fallback rather than their definition (a
+   * γ-model noise figure without a `gmb` column, γ without `sth`): the quantity, the missing
+   * column, the form used and what it costs. A fact about the table, decided once for it, so it
+   * applies to every sized point; its sentences are also in `warnings`. Empty when every
+   * quantity is read by its definition.
+   */
+  fallbacks: FallbackNote[];
   /**
    * The coordinates this sizing was asked for and could not be read at, because they fall off
    * the table's hull: `l` (the length), `vgs` (a gate voltage supplied rather than solved). Each
@@ -386,7 +396,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   const bases: Record<string, number> = {};
   const passthrough: Record<string, number> = {};
   for (const [key, val] of Object.entries(point)) {
-    if (DERIVED_COMPILED.has(key) && !stored(key)) continue; // re-derived below at the sized width
+    if (DERIVED_FORMS.has(key) && !stored(key)) continue; // re-derived below at the sized width
     if (isPassthroughKey(key)) passthrough[key] = val;
     else bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
   }
@@ -398,14 +408,18 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     }
   }
   // A point scope, so a definition reading another derived name (the γ-model keys read `gamma`)
-  // reads it re-derived from the same scaled bases. Pass-through columns stay out of that scope.
+  // reads it re-derived from the same scaled bases, each by the form this table reads it by.
+  // Pass-through columns stay out of that scope.
   const scaledScope = pointScope(bases);
   const quantities: Record<string, number> = { ...bases, ...passthrough };
-  for (const [key, compiled] of DERIVED_COMPILED) {
+  for (const key of DERIVED_FORMS.keys()) {
     if (!Object.prototype.hasOwnProperty.call(point, key)) continue; // not computable on this table
     if (stored(key)) continue; // kept as read, above
-    quantities[key] = compiled.eval(scaledScope) as number;
+    quantities[key] = scaledScope.resolve(key) as number;
   }
+  // Which of those forms are not the definition is one fact about the table, said on every sizing.
+  const fallbacks = derivedFallbacks(q.table.grid, metaScalars(q.table.meta));
+  warnings.push(...fallbacks.map(fallbackMessage));
   // Bound targets and sizing outputs win over anything reconstructed above; id_w is the
   // (width-invariant) current density; `w0` records the characterization width so a consumer
   // can refer an unknown pass-through column (not rescaled) by hand.
@@ -443,6 +457,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     quantities,
     passthrough: Object.keys(passthrough),
     warnings,
+    fallbacks,
     clamped,
   };
 }
@@ -472,36 +487,33 @@ export function sizeableLengths(q: SizeQuery): number[] {
   return out;
 }
 
-// The input-referred thermal-noise density √(4kTγ/gm), compiled ONCE from its single
-// home in namespace.ts (the `vnth_m` derived quantity). thermalNoise evaluates this
-// compiled definition rather than re-coding the formula, so the two can never drift.
-const VNTH_M = compileExpr(
-  (() => {
-    const def = DERIVED_QUANTITIES.find((d) => d.key === 'vnth_m');
-    if (!def) throw new Error('thermalNoise: namespace is missing the vnth_m definition');
-    return def.expr;
-  })(),
-);
-
 /**
- * Input-referred channel thermal-noise density √(4kTγ/gm) [V/√Hz] at the device's
- * actual transconductance gm. Noise is width-dependent (gm ∝ W), so a sized device
- * must pass its SIZED gm — the characterization-width value would be wrong. Pass the
+ * Input-referred channel thermal-noise density √(4kTγ·(gm + gmb))/gm [V/√Hz] at the device's
+ * actual transconductance. Noise is width-dependent (gm and gmb ∝ W), so a sized device must
+ * pass its SIZED gm and gmb — the characterization-width values would be wrong. Pass the
  * operating point's own γ (`quantities.gamma` of a sizing): it is the table's thermal noise
  * read back where the table carries `sth` (or its own `gamma` column), and absent where it
  * carries neither, so omitted it falls to GAMMA_DEFAULT (see noiseSource). Pass the
  * table's characterization temperature `tempC` (meta.temp, °C) so kT tracks the
- * data; omitted, T falls through to the engine's 27 °C default.
+ * data; omitted, T falls through to the engine's 27 °C default. Omit `gmb` only where the
+ * table has none: the density is then vnth_m's declared fallback without the body-effect term,
+ * and the sizing's `fallbacks` (or derivedFallbacks of the table) is what says so.
  *
- * The formula itself lives only in namespace.ts (vnth_m); here we just bind gm, γ,
- * and the temperature and evaluate that definition. k falls through resolve() to
- * the engine's constant scope; bound names shadow constants so explicit values win.
+ * The formula itself lives only in namespace.ts (vnth_m, and its fallback); here we just bind
+ * gm, gmb, γ and the temperature and evaluate it by name, so the form follows what was bound.
+ * k falls through resolve() to the engine's constant scope; bound names shadow constants so
+ * explicit values win.
  */
-export function thermalNoise(gm: number, gamma?: number, tempC?: number): number {
-  const scope = scalarScope({ ...thermalScalars(tempC), gm, gamma: gamma ?? CONSTANTS.gamma });
-  // vnth_m over scalar gm,γ reduces to a scalar; the engine's Value admits an array,
+export function thermalNoise(gm: number, gamma?: number, tempC?: number, gmb?: number): number {
+  const scope = pointScope({
+    ...thermalScalars(tempC),
+    gm,
+    gamma: gamma ?? CONSTANTS.gamma,
+    ...(gmb !== undefined ? { gmb } : {}),
+  });
+  // vnth_m over scalar gm, gmb, γ reduces to a scalar; the engine's Value admits an array,
   // which this scalar-only scope never produces, so read it back as a number.
-  return VNTH_M.eval(scope) as number;
+  return scope.resolve('vnth_m') as number;
 }
 
 /**

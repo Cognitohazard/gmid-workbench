@@ -17,6 +17,7 @@ import {
 } from '../corners';
 import { PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
+import { derivedForm, metaScalars, pointScope } from '../derive';
 import {
   AXIS_DEFAULT_BIAS,
   BASE_KEYS,
@@ -55,13 +56,16 @@ const VGS_STEP_TOL = 1e-6;
 const GAMMA_LO = 0.4;
 const GAMMA_HI = 4.0;
 
-/** The band the thermal-noise factor γ = sth/(4kT·gm) has to fall in at a table's full-drive
- *  point (see fullDrive). Real devices spread wider there than the textbook suggests: across the
- *  generated sky130 and gf180 tables, every corner and temperature, it runs from 0.22 (the 5 V
- *  pfet, cold) to 11.4 (the low-threshold nfet at the shortest length) — so a narrow band would
+/** The band the thermal-noise factor γ the stored noise implies (the `gamma` definition,
+ *  sth/(4kT·(gm + gmb)), or sth/(4kT·gm) on a table without gmb) has to fall in at a table's
+ *  full-drive point (see fullDrive). Real devices spread wider there than the textbook suggests:
+ *  across the generated sky130 and gf180 tables, every corner and temperature, it runs from 0.18
+ *  (the 5 V pfet, cold) to 10.3 (the low-threshold nfet at the shortest length) — 0.22 to 11.4
+ *  against gm alone, the body factor 1 + gmb/gm there being 1.10 to 1.42 — so a narrow band would
  *  flag good data. The unit slips this exists for are orders of magnitude (a µ-prefixed export is
  *  off by 1e6, a density left unsquared by about 1e12, a lost 4kT by about 1e20), and this is the
- *  window the table generator applies to its own output, so the two agree. */
+ *  window the table generator applies to its own output (read against gm alone there, which moves
+ *  γ by far less than the window is wide), so the two agree on what a slip is. */
 const NOISE_FACTOR_LO = 0.01;
 const NOISE_FACTOR_HI = 100;
 
@@ -450,16 +454,27 @@ export function validate(table: DeviceTable): QAWarning[] {
   // there, and it is infinite where gm is 0 — so it is read at ONE point where the device is
   // unambiguously saturated and strongly inverted — the point the table generator checks its own
   // output at — and nowhere else.
+  // γ is read by its own definition (and its fallback where the table has no gmb), from the stored
+  // sth even where a `gamma` column stands beside it — the column is not what is being checked.
   const sth = q.get('sth');
   const drive = sth && gm ? fullDrive(grid) : undefined;
   if (sth && gm && drive) {
-    const g = sth[drive.at] / (4 * PHYS.k * kelvin(table.meta.temp ?? 27) * gm[drive.at]);
+    const gmb = q.get('gmb');
+    const at: Record<string, number> = {
+      ...metaScalars(table.meta),
+      sth: sth[drive.at],
+      gm: gm[drive.at],
+      ...(gmb ? { gmb: gmb[drive.at] } : {}),
+    };
+    const has = (n: string): boolean => Object.prototype.hasOwnProperty.call(at, n);
+    const form = derivedForm('gamma', has)?.compiled.src;
+    const g = pointScope(at).resolve('gamma') as number;
     if (Number.isFinite(g) && (g < NOISE_FACTOR_LO || g > NOISE_FACTOR_HI)) {
       out.push({
         rule: 'noise-factor',
         severity: 'warning',
         message:
-          `the stored thermal noise (sth) gives γ = sth/(4kT·gm) = ${g.toPrecision(3)} at the ` +
+          `the stored thermal noise (sth) gives γ = ${form} = ${g.toPrecision(3)} at the ` +
           `table's full-drive point (${drive.where}), outside [${NOISE_FACTOR_LO}, ` +
           `${NOISE_FACTOR_HI}], far past any transistor in saturation, so sth is probably in ` +
           `the wrong unit — and every thermal-noise figure on this table is read from it`,

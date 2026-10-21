@@ -390,40 +390,57 @@ Two quantities a sheet reaches for constantly are handled in deliberately differ
 the difference is worth stating once.
 
 `gmb` is **data**. It is an optional base quantity like `gds` or `cgg`: present when the table
-carries it, absent otherwise. There is no fallback. A sheet that writes `gm + gmb` on a table
-without a `gmb` column gets a skipped equation and a named warning, and any hard check reading that
-equation goes `na`, which fails feasibility closed. That is on purpose — a `gmb = 0` assumption
-would make the same sheet compute different physics on different tables while both looked green,
-and would show a model zero where the tool promises data. Wherever the body terminal is not
-tied to the source, `gmb` belongs in the expression; write it, and let a table that cannot
-support the sheet say so.
+carries it, absent otherwise. A sheet's own expression that reads it has no fallback: a sheet
+that writes `gm + gmb` on a table without a `gmb` column gets a skipped equation and a named
+warning, and any hard check reading that equation goes `na`, which fails feasibility closed. That
+is on purpose — a `gmb = 0` assumption would make the same sheet compute different physics on
+different tables while both looked green, and would show a model zero where the tool promises
+data. Wherever the body terminal is not tied to the source, `gmb` belongs in the expression;
+write it, and let a table that cannot support the sheet say so. The namespace's thermal-noise
+figures read `gmb` too, and they are the one place a fallback is declared, because they have to
+resolve on every table: without the column they leave the body-effect term out, and every result
+says so (below).
 
 `gamma` is **data where the table has it, and a default where it does not**. It is a named
-constant, so it is always in scope. A table that stores its drain thermal-noise PSD `sth` gives
-it at every point, read back through `sth = 4*k*T*gamma*gm` at the table's own temperature:
-γ = `sth/(4*k*T*gm)`. Every quantity a sized device publishes built on it then follows the
-data — `svth_m`, `vnth_m`, and an author's own `4*k*T*gamma/gm` written at the level that sizes
-the device — so on such a table `vnth_m` equals the measured `vnth = sqrt(sth)/gm` point for point,
-and the library's noise rows, which read each device's `vnth_m`, read measured noise without a
-change to any sheet. The measured γ is a property of a sized device, so it is in scope only where
-one is: an unqualified `gamma` in a parent's row — a level with no device of its own — is the
-constant 1.0, and the device's value there is `<block>__gamma`, published by the block. The
-current-mirror OTA's `vn_gbw` row is one such parent row: it reads the constant. A table that stores a `gamma` column
-of its own is read from that column instead, as every stored column wins. A table with neither
-gets the default, 1.0. A simulation of sky130 bears the default out for the PMOS in strong
-inversion (1.00) and not for the NMOS (about 1.95 at gm/ID 12; see
-[tools/verify](../tools/verify/README.md)); the textbook long-channel value 2/3 describes no
-table anyone ships here, and for a noise *floor* an optimistic assumption is the dangerous
-direction. On the sky130 tables the generator writes, which carry `sth`, the five-transistor
-OTA's input-referred thermal density reads about 28 nV/√Hz against 28.24 nV/√Hz simulated,
-where the 1.0 default read 22.7.
+constant, so it is always in scope. The channel's thermal noise is `Sid = 4*k*T*gamma*(gm+gmb)`:
+in saturation its noise conductance is `gm + gmb`, not `gm`. A table that stores its drain
+thermal-noise PSD `sth` gives γ at every point, read back through that relation at the table's
+own temperature: γ = `sth/(4*k*T*(gm+gmb))`. Every quantity a sized device publishes built on it
+then follows the data — `svth_m = 4*k*T*gamma*(gm+gmb)/gm^2`, `vnth_m = sqrt(4*k*T*gamma*(gm+gmb))/gm`,
+and an author's own formula written the same way at the level that sizes the device — so on such
+a table `vnth_m` equals the measured `vnth = sqrt(sth)/gm` point for point, and the library's
+noise rows, which read each device's `vnth_m`, read measured noise without a change to any sheet.
+An author's `4*k*T*gamma/gm` leaves the body-effect term out, and reads low by the factor
+`1 + gmb/gm` on every table. The measured γ is a property of a sized device, so it is in scope
+only where one is: an unqualified `gamma` in a parent's row — a level with no device of its own —
+is the constant 1.0, and the device's value there is `<block>__gamma`, published by the block. The
+current-mirror OTA's `vn_gbw` row is one such parent row: it reads the constant. A table that
+stores a `gamma` column of its own is read from that column instead, as every stored column wins.
+A table with neither gets the default, 1.0. A simulation of sky130 bears the default out for
+neither device once the body effect is separated out: at the five-transistor OTA's bias points
+the PMOS load reads 0.81 and the NMOS pair 1.63 (1.00 and 1.95 against `gm` alone; see
+[tools/verify](../tools/verify/README.md)). The textbook long-channel value 2/3 describes no table
+anyone ships here, and for a noise *floor* an optimistic assumption is the dangerous direction. On
+the sky130 tables the generator writes, which carry `sth`, the five-transistor OTA's
+input-referred thermal density reads about 28 nV/√Hz against 28.24 nV/√Hz simulated, where the
+1.0 default reads 25.1 (22.7 with the body effect left out as well).
+
+On a table without `gmb`, γ is read back as `sth/(4*k*T*gm)`, which carries the body factor
+`1 + gmb/gm`, and `svth_m` and `vnth_m` are read as `4*k*T*gamma/gm` and `sqrt(4*k*T*gamma/gm)`.
+Where the table stores `sth` the two cancel and the figures are still its own noise; where γ is
+the default or a stored column, the floor reads low by `1 + gmb/gm` in power.
 
 Every result says which reading it used. Each sized device's report carries `noise`:
 `measured` (γ from `sth`), `column` (the table's own `gamma` column) or `estimated` (the
-default), and the sheet panel shows it beside the sizing as "noise: measured" or "noise:
-estimated, γ = 1.0", device by device where they differ. A density computed from the default
-is an estimate: against measured silicon noise on comparable topologies, γ = 1.0 closes only
-about half the gap, so treat it as a lower bound and set a real target above it.
+default), and beside it `fallbacks`: every figure the table made the engine read by a lesser
+form, each with the quantity, the missing column, the form used and what that costs — the γ
+default among them. The sizing itself (`sizeDevice`) carries the same list, and its sentences in
+its warnings. The sheet panel shows the source beside the sizing as "noise: measured" or "noise:
+estimated, γ = 1.0", followed by any column a figure fell back for ("noise: measured · no gmb
+column: gamma, svth_m, vnth_m"), device by device where they differ, and its tooltip spells each
+fallback out. A density computed from the default is an estimate: against measured silicon noise
+on comparable topologies, γ = 1.0 closes only about half the gap, so treat it as a lower bound and
+set a real target above it.
 
 ### Author-callable functions
 

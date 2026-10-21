@@ -12,13 +12,18 @@ export const PHYS = {
 export const UT: number = (PHYS.k * PHYS.T) / PHYS.q;
 
 /**
- * Default channel thermal-noise factor γ (Sid = 4kTγ·gm). In simulation 1.0 matches
+ * Default channel thermal-noise factor γ (Sid = 4kTγ·(gm + gmb)). In simulation 1.0 matches
  * sky130's PMOS in strong inversion and understates its NMOS (about 1.95 at gm/ID 12);
  * the long-channel 2/3 understates both — the full argument lives in
  * docs/sheet-format.md ("Body effect and noise-model defaults"). Only a default: a
  * table's own per-point `gamma` column shadows it.
  */
 export const GAMMA_DEFAULT = 1.0;
+
+/** GAMMA_DEFAULT as a result or the panel states it, with one decimal at least ("1.0"). */
+export const GAMMA_DEFAULT_LABEL: string = Number.isInteger(GAMMA_DEFAULT)
+  ? GAMMA_DEFAULT.toFixed(1)
+  : String(GAMMA_DEFAULT);
 
 /** Named constants available to every expression (pi, k, q, T, eps, UT, gamma). */
 export const CONSTANTS: Readonly<Record<string, number>> = {

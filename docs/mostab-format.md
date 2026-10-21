@@ -142,7 +142,7 @@ the drain current bends into saturation, and by their coarser step above that.
 | `cjd`, `cjs` | F | optional: drain and source junction capacitances |
 | `qg`, `qd`, `qs`, `qb` | C | optional: terminal charges |
 | `vth`, `vdsat` | V | optional |
-| `gmb` | S | optional (body effect) |
+| `gmb` | S | optional: body transconductance; the body effect, and the second half of the channel's noise conductance `gm + gmb` |
 | `sth` | A²/Hz | optional: drain thermal-noise current PSD; where present, the thermal-noise figures are read from it |
 | `sfl` | A²/Hz | optional: drain flicker-noise current PSD at 1 Hz |
 | `gamma` | 1 | optional: thermal-noise factor γ; read as stored, ahead of the γ that `sth` gives |
@@ -154,12 +154,28 @@ nfet's carry `sfl` alone; see `data/pdk/PROVENANCE.md`): `tools/gen_gmid.py` run
 noise analysis at 1 Hz at each point, so `sfl` is taken at exactly 1 Hz, and it is 0
 where no drain current flows (`vds = 0`).
 
-The thermal-noise figures a design sheet reads (`vnth_m`, `svth_m`, and `gamma` itself) follow
-`sth` where a table carries it: γ is read back from it as `sth/(4*k*T*gm)`, at the table's own
-temperature, so `vnth_m` equals the measured `sqrt(sth)/gm`. A stored `gamma` column is read as
-it stands instead. A table with neither falls back to γ = 1.0, an estimate that understates a
-device that runs hotter (sky130's NMOS sits near 1.95 at gm/ID 12 in simulation). The app shows
-which a table gives in the device's details, and each sized device reports it.
+The channel's thermal noise is `Sid = 4kTγ·(gm + gmb)`: in saturation its noise conductance is
+`gm + gmb`, not `gm` alone. The thermal-noise figures a design sheet reads are defined from it:
+
+| Quantity | Definition | Without `gmb` |
+| --- | --- | --- |
+| `gamma` | `sth/(4*k*T*(gm+gmb))`; `1.0` without `sth` | `sth/(4*k*T*gm)` |
+| `svth_m` | `4*k*T*gamma*(gm+gmb)/gm^2` | `4*k*T*gamma/gm` |
+| `vnth_m` | `sqrt(4*k*T*gamma*(gm+gmb))/gm` | `sqrt(4*k*T*gamma/gm)` |
+
+They follow `sth` where a table carries it: γ is read back from it at the table's own
+temperature, so `vnth_m` equals the measured `sqrt(sth)/gm` (and `svth_m` the measured
+`sth/gm^2`). A stored `gamma` column is read as it stands instead. A table with neither falls
+back to γ = 1.0, an estimate that understates a device that runs hotter (sky130's NMOS sits near
+1.6 at gm/ID 12 in simulation, 1.95 against `gm` alone). The app shows which a table gives in the
+device's details, and each sized device reports it.
+
+`gmb` is what separates the body effect out of the noise. A table without it is read by the
+forms in the last column, and every result says so: the sizing's notes, the sheet's sizing report
+and the panel's noise line name the quantity, the missing column and the form used. On a table
+that stores `sth` the two lesser forms cancel and the figures are still its own noise, though γ
+then carries the body factor `1 + gmb/gm`; on one that does not, or that stores a `gamma` column,
+the thermal floor reads low by that factor in power. A ratio `gmb/gm` of 0.2 to 0.4 is typical.
 
 ### Data cells
 
@@ -256,11 +272,12 @@ importer's QA pass warns (it never edits data) when:
 - |vgs| exceeds 100 V — the axis is probably in mV, not V;
 - the stored `gm` disagrees grossly with a finite difference of `id` along `vgs`;
 - `id` is non-monotonic in `vgs`, or `gamma` is outside a plausible range;
-- the stored `sth` gives a noise factor `sth/(4kT·gm)` outside [0.01, 100] at the table's
-  full-drive point (the shortest length, the largest |`vgs`| and |`vds`|, `vsb` = 0) — a unit
-  error, since real devices span about 0.2 to 12 there (rule `noise-factor`). It is read at that
-  one point only: in triode, where gm collapses and the channel noise does not, the factor runs
-  far outside any band on good data.
+- the stored `sth` gives a noise factor γ outside [0.01, 100] at the table's full-drive point
+  (the shortest length, the largest |`vgs`| and |`vds`|, `vsb` = 0) — a unit error, since real
+  devices span about 0.2 to 10 there (rule `noise-factor`). γ is the `gamma` definition above,
+  `sth/(4kT·(gm + gmb))`, or `sth/(4kT·gm)` on a table without `gmb`, and the warning names which.
+  It is read at that one point only: in triode, where gm collapses and the channel noise does not,
+  the factor runs far outside any band on good data.
 
 ## Example
 

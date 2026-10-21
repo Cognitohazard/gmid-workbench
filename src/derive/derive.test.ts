@@ -8,10 +8,14 @@ import {
   metaScalars,
   noiseSource,
   noiseSourceLabel,
-  DEFAULTED_DERIVED,
+  noiseLabel,
+  derivedFallbacks,
+  derivedForm,
+  fallbackMessage,
 } from './index';
 import type { Axis, Grid } from '../types';
-import { generateDemoDevice, scaleQuantities, withoutColumns } from '../demo';
+import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
+import { BODY_FACTOR, generateDemoDevice, scaleQuantities, withoutColumns } from '../demo';
 import { makeGrid } from '../grid';
 import { GAMMA_DEFAULT, PHYS, UT } from '../constants';
 
@@ -195,7 +199,7 @@ describe('metaScalars temperature', () => {
     const hot = { ...dev, meta: { ...dev.meta, temp: 125 } };
     const base = derive(dev, 'svth_m');
     const hotCol = derive(hot, 'svth_m');
-    // svth_m = 4kTγ/gm is linear in T at a fixed point.
+    // svth_m = 4kTγ·(gm + gmb)/gm² is linear in T at a fixed point.
     expect(hotCol[10] / base[10]).toBeCloseTo((125 + 273.15) / PHYS.T, 12);
   });
 
@@ -209,18 +213,20 @@ describe('metaScalars temperature', () => {
 
 describe('γ from the table where it carries thermal noise, the default where it does not', () => {
   // The demo stores a `gamma` column and an `sth` made from it; the cases below take one or both
-  // away, and double `sth`, so a γ read from the data cannot pass for the default.
+  // away, and double `sth`, so a γ read from the data cannot pass for the default. The demo's gmb
+  // is exactly BODY_FACTOR·gm, and its sth = 4kTγ·(gm + gmb).
   const dev = generateDemoDevice();
   const measured = scaleQuantities(withoutColumns(dev, ['gamma']), { sth: 2 });
   const bare = withoutColumns(dev, ['gamma', 'sth']);
   const k4T = 4 * PHYS.k * PHYS.T; // the demo is characterized at 27 °C
 
-  it('reads γ = sth/(4kT·gm) off a table that carries sth, and every γ-model key follows', () => {
+  it('reads γ = sth/(4kT·(gm + gmb)) off a table that carries sth, and every γ-model key follows', () => {
     const gamma = derive(measured, 'gamma');
     const sth = col(measured.grid, 'sth');
     const gm = col(measured.grid, 'gm');
+    const gmb = col(measured.grid, 'gmb');
     for (const i of [10, 60, 110]) {
-      expect(gamma[i]).toBeCloseTo(sth[i] / (k4T * gm[i]), 12);
+      expect(gamma[i]).toBeCloseTo(sth[i] / (k4T * (gm[i] + gmb[i])), 12);
       expect(gamma[i]).toBeCloseTo(2 * GAMMA_DEFAULT, 12);
     }
     // The estimate keys are then the measured ones, point for point.
@@ -236,21 +242,95 @@ describe('γ from the table where it carries thermal noise, the default where it
     const hot = { ...measured, meta: { ...measured.meta, temp: 125 } };
     expect(derive(hot, 'vnth_m')[60] / vnthM[60]).toBeCloseTo(1, 12);
     expect(derive(hot, 'gamma')[60] / gamma[60]).toBeCloseTo(PHYS.T / (125 + 273.15), 12);
+    // Every quantity is read by its definition here, so the table owes no note.
+    expect(derivedFallbacks(measured.grid, metaScalars(measured.meta))).toEqual([]);
   });
 
-  it('falls back to GAMMA_DEFAULT on a table without sth', () => {
+  it('counts the body effect in the γ-model: Sid = 4kTγ·(gm + gmb)', () => {
+    const vnthM = derive(bare, 'vnth_m');
+    const svthM = derive(bare, 'svth_m');
+    const gm = col(bare.grid, 'gm');
+    const gmb = col(bare.grid, 'gmb');
+    for (const i of [10, 60, 110]) {
+      expect(vnthM[i]).toBeCloseTo(Math.sqrt(k4T * GAMMA_DEFAULT * (gm[i] + gmb[i])) / gm[i], 18);
+      expect(svthM[i] / vnthM[i] ** 2).toBeCloseTo(1, 12);
+      // (1 + BODY_FACTOR) above the γ·gm form, in power.
+      expect(svthM[i] / ((k4T * GAMMA_DEFAULT) / gm[i])).toBeCloseTo(1 + BODY_FACTOR, 12);
+    }
+  });
+
+  it('falls back to GAMMA_DEFAULT on a table without sth, and says so', () => {
     const gamma = derive(bare, 'gamma');
     expect(new Set(gamma)).toEqual(new Set([GAMMA_DEFAULT]));
-    const vnthM = derive(bare, 'vnth_m');
-    const gm = col(bare.grid, 'gm');
-    expect(vnthM[60]).toBeCloseTo(Math.sqrt((k4T * GAMMA_DEFAULT) / gm[60]), 18);
-    // Any expression reading the name gets the same default, through the constant map.
+    // Any expression reading the name gets the same value.
     expect(deriveColumn(bare.grid, 'gamma*2')[60]).toBe(2 * GAMMA_DEFAULT);
-    // A quantity with no default still needs its column.
+    // A quantity with no fallback still needs its column.
     expect(() => derive(bare, 'vnth')).toThrow();
+    expect(derivedFallbacks(bare.grid)).toEqual([
+      {
+        quantity: 'gamma',
+        missing: ['sth'],
+        form: '1.0',
+        says: 'γ is the stand-in 1.0, not the table’s own noise',
+      },
+    ]);
   });
 
-  it('keeps a stored gamma column ahead of both', () => {
+  it('drops the body-effect term without a gmb column, and every result says which forms it used', () => {
+    // Without gmb, γ read back from sth carries the body factor, and the γ-model keys leave the
+    // term out: the two cancel, so on a table that stores sth the figures are still its own noise.
+    const noGmb = withoutColumns(measured, ['gmb']);
+    const gm = col(noGmb.grid, 'gm');
+    const gmb = col(measured.grid, 'gmb');
+    const gamma = derive(noGmb, 'gamma');
+    const vnthM = derive(noGmb, 'vnth_m');
+    const vnth = derive(noGmb, 'vnth');
+    for (const i of [10, 60, 110]) {
+      expect(gamma[i]).toBeCloseTo(2 * GAMMA_DEFAULT * (1 + gmb[i] / gm[i]), 12);
+      expect(vnthM[i] / vnth[i]).toBeCloseTo(1, 12);
+    }
+    const notes = derivedFallbacks(noGmb.grid);
+    expect(notes.map((n) => [n.quantity, n.missing, n.form])).toEqual([
+      ['gamma', ['gmb'], 'sth/(4*k*T*gm)'],
+      ['svth_m', ['gmb'], '4*k*T*gamma/gm'],
+      ['vnth_m', ['gmb'], 'sqrt(4*k*T*gamma/gm)'],
+    ]);
+    expect(fallbackMessage(notes[2])).toBe(
+      'vnth_m is read as sqrt(4*k*T*gamma/gm) because the table has no gmb column — the floor ' +
+        'has no body-effect term: exact where γ is read back from the stored noise, which then ' +
+        'carries it, and low by the factor 1 + gmb/gm in power where γ is a stand-in or a stored column',
+    );
+    // On a table with neither, the estimate is low by the body factor and both notes are owed.
+    const neither = withoutColumns(bare, ['gmb']);
+    expect(derive(neither, 'vnth_m')[60]).toBeCloseTo(
+      Math.sqrt((k4T * GAMMA_DEFAULT) / gm[60]),
+      18,
+    );
+    expect(derivedFallbacks(neither.grid).map((n) => [n.quantity, n.missing])).toEqual([
+      ['gamma', ['sth']],
+      ['svth_m', ['gmb']],
+      ['vnth_m', ['gmb']],
+    ]);
+    // A stored gamma column is read as stored and owes no note of its own.
+    const ownNoGmb = withoutColumns(dev, ['gmb']);
+    expect(derivedFallbacks(ownNoGmb.grid).map((n) => n.quantity)).toEqual(['svth_m', 'vnth_m']);
+  });
+
+  it('declares every fallback so that it is the form a table lacking exactly its columns uses', () => {
+    // A table holding every base quantity except a fallback's `without` columns, and every metadata
+    // scalar, picks that fallback: the declaration and the selection agree for every quantity.
+    const all = new Set([...BASE_QUANTITIES.map((q) => q.key), 'T', 'UT']);
+    for (const q of DERIVED_QUANTITIES) {
+      for (const f of q.fallbacks ?? []) {
+        const has = (n: string): boolean => all.has(n) && !f.without.includes(n) && n !== q.key;
+        expect(derivedForm(q.key, has)?.fallback, `${q.key} without ${f.without}`).toBe(f);
+      }
+      // With everything present, the definition itself.
+      expect(derivedForm(q.key, (n) => all.has(n) && n !== q.key)?.fallback).toBeUndefined();
+    }
+  });
+
+  it('keeps a stored gamma column ahead of every form', () => {
     const own = scaleQuantities(dev, { gamma: 1.5 });
     expect(derive(own, 'gamma')[60]).toBe(1.5 * GAMMA_DEFAULT);
     expect(tableScope(own.grid).resolve('gamma')).toBe(own.grid.quantities.get('gamma'));
@@ -263,6 +343,15 @@ describe('γ from the table where it carries thermal noise, the default where it
     expect(noiseSourceLabel('measured')).toBe('measured');
     expect(noiseSourceLabel('estimated')).toBe('estimated, γ = 1.0');
     expect(noiseSourceLabel('column')).toBe('γ from the table');
-    expect(DEFAULTED_DERIVED).toEqual(new Set(['gamma']));
+    // The line a panel shows: the source, then the figures each missing column made fall back.
+    // The γ stand-in is the `estimated` label itself, so it is not said twice.
+    const noGmb = (t: typeof dev) => withoutColumns(t, ['gmb']);
+    const line = (t: typeof dev): string =>
+      noiseLabel(noiseSource(t.grid), derivedFallbacks(t.grid));
+    expect(line(measured)).toBe('measured');
+    expect(line(bare)).toBe('estimated, γ = 1.0');
+    expect(line(noGmb(measured))).toBe('measured · no gmb column: gamma, svth_m, vnth_m');
+    expect(line(noGmb(bare))).toBe('estimated, γ = 1.0 · no gmb column: svth_m, vnth_m');
+    expect(line(noGmb(dev))).toBe('γ from the table · no gmb column: svth_m, vnth_m');
   });
 });

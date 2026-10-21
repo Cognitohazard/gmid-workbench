@@ -8,8 +8,8 @@
 //     recipe does not carry).
 //
 //  2. Golden tests pinning hand-derived numbers per sheet, computed from the demo
-//     model's closed forms (EKV current, VA = VA_PER_L·L Early voltage, 4kTγ/gm
-//     thermal density) — never by re-running the engine. Per-tier goldens live in the
+//     model's closed forms (EKV current, VA = VA_PER_L·L Early voltage, 4kTγ·(gm + gmb)
+//     thermal noise with gmb = BODY_FACTOR·gm) — never by re-running the engine. Per-tier goldens live in the
 //     library.tier*.test.ts files; the exemplar goldens live here. The shared table,
 //     loaders, and closed-form helpers live in library.fixtures.ts.
 //
@@ -743,7 +743,10 @@ describe('exemplar goldens: 5T OTA', () => {
       iDiode,
       gmOut,
       gmDiode,
-      gmPair: (2 * gmOut * gmDiode) / (gmOut + gmDiode),
+      // The diode side's half through the load mirror, whose current gain is its output
+      // device's gm over its diode device's: on one gate at one width, gm scales with
+      // (VA + vds) exactly as id does, so that gain is rLoad. The output side's half direct.
+      gmPair: (gmDiode * rLoad + gmOut) / 2,
       vdsOut: vOut - vTail,
       vdsDiode: 1.8 - VGS_GMID8_L05 - vTail,
     };
@@ -865,13 +868,31 @@ describe('exemplar goldens: 5T OTA', () => {
     expect(relErr(above.values.vos_sys, restAbove.delta)).toBeLessThan(3e-3);
   });
 
-  it('the pair transconductance is its two transistors in series', () => {
-    // 2·gm_a·gm_b/(gm_a + gm_b): what a differential input sees through the common source. The
-    // output-side transistor carries 9.817 µA at gm/ID 12; its partner 9.148 µA at the slightly
-    // weaker inversion its lower gate drive gives, gm/ID 12.64 in the model.
-    const { gm_pair, in__gm, inr__gm } = res.values;
-    expect(relErr(gm_pair, (2 * in__gm * inr__gm) / (in__gm + inr__gm))).toBeLessThan(1e-12);
+  it('the pair transconductance takes the diode side’s half through the mirror, as the Miller OTA does', () => {
+    // Each pair transistor turns half the differential input into current: the diode side's half
+    // reaches the output through the load mirror at its current gain gm_ld/gm_ldr, the output
+    // side's half directly. The output-side transistor carries 9.817 µA at gm/ID 12; its partner
+    // 9.148 µA at the slightly weaker inversion its lower gate drive gives, gm/ID 12.64 in the
+    // model; and the mirror's output side, 0.232 V further from the supply, has rL = 1.073 times
+    // its diode side's gm. So gm_pair = (12.64 × 9.148 µA × 1.073 + 12 × 9.817 µA)/2 = 120.9 µS.
+    const { gm_pair, in__gm, inr__gm, ld__gm, ldr__gm } = res.values;
+    expect(relErr(gm_pair, (inr__gm * (ld__gm / ldr__gm) + in__gm) / 2)).toBeLessThan(1e-12);
     expect(relErr(gm_pair, gmPair)).toBeLessThan(1e-3);
+    expect(relErr(ld__gm / ldr__gm, rL)).toBeLessThan(1e-3);
+    // It is the two-stage Miller OTA's first-stage form, read with this sheet's names: the input
+    // device on the diode side, the mirror's output and diode devices, the output-side input.
+    const miller = sheet('multistage/two-stage-miller-ota.json').equations.find(
+      (e) => e.name === 'gm1',
+    )!.expr;
+    const renamed = miller
+      .replace(/\bld1o__/g, 'LD__')
+      .replace(/\bld1__/g, 'LDR__')
+      .replace(/\bino__/g, 'IN__')
+      .replace(/\bin__/g, 'inr__')
+      .replace(/\bLD__/g, 'ld__')
+      .replace(/\bLDR__/g, 'ldr__')
+      .replace(/\bIN__/g, 'in__');
+    expect(doc.equations.find((e) => e.name === 'gm_pair')!.expr).toBe(renamed);
     expect(relErr(in__gm, 12 * iOut)).toBeLessThan(1e-3);
     // The diode-side transistor's gm is read back off the table between two drain-voltage
     // nodes, 0.13 % under the model's.
@@ -895,7 +916,7 @@ describe('exemplar goldens: 5T OTA', () => {
     // 9.817 µA at vds = V_out_dc − V_tail, so its gds is I/(VA + vds) there. The load's output
     // side copies the diode side's saturation current I/(1 + vgs(8)/VA) and gds = idSat/VA in the
     // demo model, so its gds is the diode side's 9.148 µA over (VA + vgs(8)) — the drain voltage
-    // it sits at cancels. Rout = 160.9 kΩ, and the gain is the pair's 116.7 µS into it, 18.78.
+    // it sits at cancels. Rout = 160.9 kΩ, and the gain is the pair's 120.9 µS into it, 19.45.
     const rout = 1 / (gdsOf(iOut, L, rest.vdsOut) + gdsOf(iDiode, L, VGS_GMID8_L05));
     expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-3);
     expect(relErr(res.values.Av, gmPair * rout)).toBeLessThan(1e-3);
@@ -916,8 +937,9 @@ describe('exemplar goldens: 5T OTA', () => {
 
   it('input noise counts both pair and both mirror devices, each where it sits', () => {
     // A pair transistor's noise is in series with its own input, so it enters at its own
-    // density 4kTγ/gm, each at its own gm. A mirror device's 4kTγ·gm of current noise is a
-    // current at the output, referred through the pair's transconductance. The load's diode side
+    // density 4kTγ·(gm + gmb)/gm², each at its own gm (gmb = BODY_FACTOR·gm in the model). A
+    // mirror device's 4kTγ·(gm + gmb) of current noise is a current at the output, referred
+    // through the pair's transconductance. The load's diode side
     // carries 9.148 µA at gm/ID 8; its output side is on the same gate at a higher drain voltage,
     // and gm scales with (VA + vds) exactly as id does, so it has rL times that — 8 × 9.817 µA.
     const referred = (gm: number): number => (vnthM(gm) * gm) / gmPair;

@@ -18,9 +18,10 @@ import {
   signedMirrorDemo,
   withColumns,
   withoutColumns,
+  BODY_FACTOR,
 } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
-import { compileExpr } from '../derive';
+import { compileExpr, fallbackMessage } from '../derive';
 import { ExprError } from '../types';
 import { demoCsvWith, importOne, ueffAt, withUeff } from '../import/passthrough.fixtures';
 
@@ -226,11 +227,18 @@ describe('mismatch (Pelgrom budget)', () => {
 });
 
 describe('thermalNoise', () => {
-  it('is √(4kTγ/gm) and falls as 1/√gm (width-dependent)', () => {
-    const v1 = thermalNoise(1e-3);
-    const v4 = thermalNoise(4e-3); // 4× gm (≈4× width) → half the noise density
+  it('is √(4kTγ·(gm + gmb))/gm and falls as 1/√gm (width-dependent)', () => {
+    const v1 = thermalNoise(1e-3, undefined, undefined, 2e-4);
+    const v4 = thermalNoise(4e-3, undefined, undefined, 8e-4); // 4× gm and gmb (≈4× width)
     expect(v4).toBeCloseTo(v1 / 2, 18);
-    expect(v1).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / 1e-3), 30);
+    expect(v1).toBeCloseTo(Math.sqrt(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * 1.2e-3) / 1e-3, 30);
+  });
+
+  it('without a gmb is the declared fallback, √(4kTγ/gm)', () => {
+    expect(thermalNoise(1e-3)).toBeCloseTo(
+      Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / 1e-3),
+      30,
+    );
   });
 
   it('honors an explicit operating-point γ over the default', () => {
@@ -241,10 +249,14 @@ describe('thermalNoise', () => {
     const table = generateDemoDevice();
     const L = table.grid.axes[0].values[1];
     const res = sizeDevice({ table, L, gm_id: 12, id: 50e-6 });
-    const sized = thermalNoise(res.gm, res.quantities.gamma); // correct: sized gm
+    const { gamma, gmb } = res.quantities;
+    const sized = thermalNoise(res.gm, gamma, undefined, gmb); // correct: sized gm and gmb
     // The model vnth_m inside res.quantities is at W_char, so gm differs ⇒ noise differs.
     expect(sized).not.toBeCloseTo(res.quantities.vnth_m, 12);
-    expect(sized).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / res.gm), 30);
+    expect(sized).toBeCloseTo(
+      Math.sqrt(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * (res.gm + gmb)) / res.gm,
+      30,
+    );
   });
 });
 
@@ -260,10 +272,13 @@ describe('the sized device reads γ from the table where it carries thermal nois
     expect(b.quantities.gamma).toBeCloseTo(a.quantities.gamma, 12); // intensive
     expect(a.quantities.vnth_m / a.quantities.vnth).toBeCloseTo(1, 12);
     // What the sizer's own readout computes from it: √2 above the γ = 1 estimate.
-    expect(thermalNoise(a.gm, a.quantities.gamma, measured.meta.temp)).toBeCloseTo(
-      Math.sqrt((4 * PHYS.k * PHYS.T * 2 * GAMMA_DEFAULT) / a.gm),
+    const gmb = a.quantities.gmb;
+    expect(thermalNoise(a.gm, a.quantities.gamma, measured.meta.temp, gmb)).toBeCloseTo(
+      Math.sqrt(4 * PHYS.k * PHYS.T * 2 * GAMMA_DEFAULT * (a.gm + gmb)) / a.gm,
       18,
     );
+    // Sized on a table that carries every column the noise definitions read, nothing fell back.
+    expect(a.fallbacks).toEqual([]);
   });
 
   it('keeps a stored gamma column as read, with no sth beside it to derive one from', () => {
@@ -271,8 +286,29 @@ describe('the sized device reads γ from the table where it carries thermal nois
     const r = sizeDevice({ table: own, L, gm_id: 12, id: 20e-6 });
     expect(r.quantities.gamma).toBeCloseTo(1.5 * GAMMA_DEFAULT, 12);
     // To the interpolation residual between the re-derived gm and the honoured one (~0.1 %).
-    const expected = Math.sqrt((4 * PHYS.k * PHYS.T * 1.5 * GAMMA_DEFAULT) / r.quantities.gm);
+    const { gm, gmb } = r.quantities;
+    const expected = Math.sqrt(4 * PHYS.k * PHYS.T * 1.5 * GAMMA_DEFAULT * (gm + gmb)) / gm;
     expect(r.quantities.vnth_m / expected).toBeCloseTo(1, 2);
+  });
+
+  it('says on the sizing which noise figures a table without gmb reads by their fallback', () => {
+    // With gmb, every noise figure is read by its definition and the sizing owes no note.
+    const full = sizeDevice({ table: dev, L, gm_id: 12, id: 20e-6 });
+    expect(full.fallbacks).toEqual([]);
+    // Without it, the γ-model keys drop the body-effect term, and the sizing names them, the
+    // missing column and the form used, in its structured notes and in its warnings alike.
+    const r = sizeDevice({ table: withoutColumns(dev, ['gmb']), L, gm_id: 12, id: 20e-6 });
+    expect(r.fallbacks.map((f) => [f.quantity, f.missing, f.form])).toEqual([
+      ['svth_m', ['gmb'], '4*k*T*gamma/gm'],
+      ['vnth_m', ['gmb'], 'sqrt(4*k*T*gamma/gm)'],
+    ]);
+    expect(r.warnings).toEqual(r.fallbacks.map(fallbackMessage));
+    // And the figure is that form, at the sized point: (1 + BODY_FACTOR) below the full one in
+    // power, on the demo whose stored γ column has no body effect in it.
+    const { gm, gamma } = r.quantities;
+    // To the interpolation residual between the re-derived gm and the honoured one (~0.1 %).
+    expect(r.quantities.vnth_m / Math.sqrt((4 * PHYS.k * PHYS.T * gamma) / gm)).toBeCloseTo(1, 2);
+    expect((full.quantities.vnth_m / r.quantities.vnth_m) ** 2).toBeCloseTo(1 + BODY_FACTOR, 2);
   });
 });
 
@@ -775,7 +811,10 @@ describe('sizeDevice — a bound gate-source voltage', () => {
     expect(res.gm).toBeCloseTo(30e-6, 15);
     expect(res.gm_id).toBeCloseTo(2.5, 12);
     expect(res.W).toBeCloseTo(3 * GT_W0, 15);
-    expect(res.warnings).toEqual([]);
+    // The two-column oracle carries no sth and no gmb, so the only notes are the noise
+    // figures' fallback forms, which every sizing on it says.
+    expect(res.fallbacks.map((f) => f.quantity)).toEqual(['gamma', 'svth_m', 'vnth_m']);
+    expect(res.warnings).toEqual(res.fallbacks.map(fallbackMessage));
   });
 
   it('carries no size information: the same gate voltage at 7x the current is 7x the width', () => {
@@ -853,13 +892,16 @@ describe('sizeDevice — a bound gate-source voltage', () => {
 
     expect(res.vgs).toBeCloseTo(1.0, 15); // the top characterized node
     expect(res.id).toBeCloseTo(1e-5 * 1.0, 15); // read AT the hull, not at 1.3 V
-    expect(res.warnings).toHaveLength(1);
-    expect(res.warnings[0]).toMatch(/vgs 1\.3 .*outside .*\[0\.05, 1\].*clamped/);
+    // Beside the table's fallback notes (see above), the one clamp.
+    const clampNotes = (r: typeof res): string[] =>
+      r.warnings.filter((w) => !r.fallbacks.map(fallbackMessage).includes(w));
+    expect(clampNotes(res)).toHaveLength(1);
+    expect(clampNotes(res)[0]).toMatch(/vgs 1\.3 .*outside .*\[0\.05, 1\].*clamped/);
 
     // Below the hull too, and the sizing runs — a clamp is not an infeasibility.
     const low = sizeDevice({ table, L: GT_L, vgs: -0.2, W: GT_W0 });
     expect(low.vgs).toBeCloseTo(0.05, 15);
-    expect(low.warnings).toHaveLength(1);
+    expect(clampNotes(low)).toHaveLength(1);
 
     // Contrast: an out-of-reach gm/ID on the same slice throws instead.
     expect(() => sizeDevice({ table, L: GT_L, gm_id: 500, W: GT_W0 })).toThrow(LookupRangeError);

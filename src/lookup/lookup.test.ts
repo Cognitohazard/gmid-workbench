@@ -183,14 +183,15 @@ describe('lookupByGmId (inverse)', () => {
     expect(Object.keys(back).sort()).toEqual(['id', 'vgs']);
   });
 
-  it('models input-referred thermal noise vnth_m = √(4kTγ/gm), falling as gm rises', () => {
+  it('models input-referred thermal noise vnth_m = √(4kTγ·(gm + gmb))/gm, falling as gm rises', () => {
     const table = generateDemoDevice();
     const L = table.grid.axes[0].values[0];
     const weak = lookup(table, { l: L, vgs: 0.45 }); // low gm
     const strong = lookup(table, { l: L, vgs: 0.9 }); // high gm
 
-    // The γ-model quantity is exactly the closed form with the default γ.
-    const expected = Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / weak.gm);
+    // The γ-model quantity is exactly the closed form with the default γ, body effect included.
+    const expected =
+      Math.sqrt(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * (weak.gm + weak.gmb)) / weak.gm;
     expect(weak.vnth_m).toBeCloseTo(expected, 18);
     expect(weak.svth_m).toBeCloseTo(weak.vnth_m * weak.vnth_m, 30); // PSD = density²
 
@@ -280,7 +281,7 @@ describe('lookup — γ from the table where it carries thermal noise', () => {
 
   it('reports the measured γ at the point, and the γ-model keys read it', () => {
     const out = lookup(measured, { l: L, vgs: 0.6 });
-    expect(out.gamma).toBeCloseTo(out.sth / (4 * PHYS.k * PHYS.T * out.gm), 12);
+    expect(out.gamma).toBeCloseTo(out.sth / (4 * PHYS.k * PHYS.T * (out.gm + out.gmb)), 12);
     expect(out.gamma).toBeCloseTo(2 * GAMMA_DEFAULT, 12);
     expect(out.vnth_m / out.vnth).toBeCloseTo(1, 12);
     expect(out.svth_m / out.svth).toBeCloseTo(1, 12);
@@ -292,8 +293,17 @@ describe('lookup — γ from the table where it carries thermal noise', () => {
   it('takes the default where the table carries no sth, and says so when asked by name', () => {
     const out = lookup(bare, { l: L, vgs: 0.6 });
     expect(out).not.toHaveProperty('gamma');
-    expect(out.vnth_m).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / out.gm), 18);
+    expect(out.vnth_m).toBeCloseTo(
+      Math.sqrt(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * (out.gm + out.gmb)) / out.gm,
+      18,
+    );
     expect(lookup(bare, { l: L, vgs: 0.6 }, ['gamma'])).toEqual({ gamma: GAMMA_DEFAULT });
+    // Without gmb the point reads the form the table does, without the body-effect term.
+    const noGmb = lookup(withoutColumns(bare, ['gmb']), { l: L, vgs: 0.6 });
+    expect(noGmb.vnth_m).toBeCloseTo(
+      Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / noGmb.gm),
+      18,
+    );
   });
 });
 
@@ -304,7 +314,7 @@ describe('lookup temperature', () => {
     const L = dev.grid.axes[0].values[1];
     const a = lookup(dev, { l: L, vgs: 0.6 });
     const b = lookup(hot, { l: L, vgs: 0.6 });
-    // svth_m = 4kTγ/gm: same interpolated point, T scaled 300.15 K → 398.15 K.
+    // svth_m = 4kTγ·(gm + gmb)/gm²: same interpolated point, T scaled 300.15 K → 398.15 K.
     expect(b.svth_m / a.svth_m).toBeCloseTo((125 + 273.15) / PHYS.T, 12);
     expect(a.gm).toBeCloseTo(b.gm, 15); // the data itself is untouched
   });

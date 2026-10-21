@@ -6,7 +6,7 @@
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
 import type { QAWarning } from '../types';
-import { compileExpr, metaScalars, type NoiseSource } from '../derive';
+import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { BINDABLE } from '../device';
 import { additiveCoefficient } from '../expr';
@@ -1223,6 +1223,12 @@ export interface SizingReport {
    *  sized on, carried on the sizing so a result can say which its noise rows are. Present on a
    *  sizing that succeeded. */
   noise?: NoiseSource;
+  /** The derived quantities the table this device was sized on computes by a fallback form
+   *  rather than their definition — a γ-model noise figure without a `gmb` column, γ without
+   *  `sth` — each with the missing column, the form used and what it costs (see FallbackNote).
+   *  Like `noise`, a fact about the table, carried on the sizing so a result says which of its
+   *  rows rest on a lesser form. Present on a sizing that succeeded and fell back somewhere. */
+  fallbacks?: FallbackNote[];
   error?: string;
 }
 
@@ -1359,13 +1365,22 @@ export function refusedIn(res: {
 }
 
 /** Every device sized anywhere in one evaluation's tree, with where its thermal-noise figures
- *  come from (SizingReport.noise), named as clampedIn names them (`givens` for the sheet's own
- *  device, a block path below it) and in tree order. A device that did not size is not listed. */
+ *  come from (SizingReport.noise) and the fallback forms its table forced (SizingReport.fallbacks,
+ *  empty when none), named as clampedIn names them (`givens` for the sheet's own device, a block
+ *  path below it) and in tree order. A device that did not size is not listed. */
 export function noiseSourcesIn(
   res: { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] },
   path = '',
-): { device: string; source: NoiseSource }[] {
-  const out = res.sizing?.noise ? [{ device: path || 'givens', source: res.sizing.noise }] : [];
+): { device: string; source: NoiseSource; fallbacks: FallbackNote[] }[] {
+  const out = res.sizing?.noise
+    ? [
+        {
+          device: path || 'givens',
+          source: res.sizing.noise,
+          fallbacks: res.sizing.fallbacks ?? [],
+        },
+      ]
+    : [];
   for (const c of res.blocks ?? [])
     out.push(...noiseSourcesIn(c, path ? `${path}${PATH_SEP}${c.name}` : c.name));
   return out;

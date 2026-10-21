@@ -13,7 +13,7 @@
       "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor a sky130 tt realization of this OTA shows in simulation. The row reads each device's noise from the tables where they carry it and lands at 28.4 nV/rtHz on that realization; the gamma = 1 estimate a table without stored noise gets would read 22.7 nV/rtHz at the same operating points. Clearing only the estimate is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
+      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor a sky130 tt realization of this OTA shows in simulation. The row reads each device's noise from the tables where they carry it and lands at 28.4 nV/rtHz on that realization; the gamma = 1 estimate a table without stored noise gets, body effect included, would read 25.1 nV/rtHz at the same operating points. Clearing only the estimate is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
     },
     {
       "name": "vos_target",
@@ -405,9 +405,9 @@
     },
     {
       "name": "gm_pair",
-      "expr": "2*inr__gm*in__gm/(inr__gm + in__gm)",
+      "expr": "(inr__gm*ld__gm/ldr__gm + in__gm)/2",
       "unit": "S",
-      "note": "the pair's differential transconductance: a differential input sees the two transistors in series through their common source, so this is the series combination of their two $g_m$, doubled — either transistor's own $g_m$ when the two are equal"
+      "note": "the pair's transconductance into the output node. Each pair transistor turns half the differential input into current: the diode-side half reaches the output through the mirror load, whose current gain is its output device's $g_m$ over its diode device's, and the output-side half arrives directly. It is either transistor's own $g_m$ where the two sides sit at the same levels"
     },
     {
       "name": "Rout",

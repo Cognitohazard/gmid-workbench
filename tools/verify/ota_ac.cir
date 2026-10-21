@@ -4,7 +4,7 @@
 * inputs differentially, so v(out) is the differential gain directly. What the sheet reports,
 * to compare with what this deck prints:
 *
-*   Av 53.44 (gm_pair * Rout)   GBW 8.556 MHz (gm_pair / (2 pi CL))   PM 89.70 deg
+*   Av 53.04 (gm_pair * Rout)   GBW 8.492 MHz (gm_pair / (2 pi CL))   PM 89.70 deg
 *
 * The circuit section below is identical in ota_op.cir, ota_ac.cir and ota_noise.cir.
 .param mc_mm_switch=0

@@ -930,10 +930,11 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
   });
 
   it('input noise counts both input devices and both load current sources', () => {
-    // Each device's thermal density is sqrt(4kTγ/gm). A load's noise current reaches the output
-    // in full, so it is referred to the input by gm_load/gm_in: the two sides together give
-    // 2·4kTγ/gm_in·(1 + gm_load/gm_in). The load runs at gm/ID 8 on the side's current against
-    // the pair's 12, so the loads raise the pair's own density by sqrt(1 + 2/3) = 1.29.
+    // Each device's thermal density is sqrt(4kTγ·(gm + gmb))/gm, which with the demo's
+    // gmb = 0.2·gm is sqrt(4kTγ·1.2/gm). A load's noise current reaches the output in full, so it
+    // is referred to the input by gm_load/gm_in: the two sides together give
+    // 2·4kTγ·1.2/gm_in·(1 + gm_load/gm_in). The load runs at gm/ID 8 on the side's current
+    // against the pair's 12, so the loads raise the pair's own density by sqrt(1 + 2/3) = 1.29.
     const gmLoad = 8 * iSide;
     const vn = Math.sqrt(2 * (vnthM(gmIn) ** 2 + (vnthM(gmLoad) * (gmLoad / gmIn)) ** 2));
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);

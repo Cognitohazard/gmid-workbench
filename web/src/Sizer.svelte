@@ -7,8 +7,10 @@
     mismatch,
     thermalNoise,
     integratedNoise,
+    derivedFallbacks,
+    metaScalars,
+    noiseLabel,
     noiseSource,
-    noiseSourceLabel,
     formatEng,
     formatSI,
     parseEng,
@@ -177,17 +179,26 @@
     }
   });
 
-  // Where the thermal density's γ comes from on this table: its own noise, or the estimate.
-  const noiseFrom = $derived(noiseSourceLabel(noiseSource(sizingTable.grid)));
+  // Where the thermal density's γ comes from on this table: its own noise, or the estimate — and
+  // whether a missing column (gmb) made the noise figures fall back to a lesser form.
+  const noiseFrom = $derived(
+    noiseLabel(
+      noiseSource(sizingTable.grid),
+      derivedFallbacks(sizingTable.grid, metaScalars(sizingTable.meta)),
+    ),
+  );
   // Input-referred thermal-noise density (at the sized gm) and the total integrated
   // RMS over the band share the thermal floor, so compute it once. rms is null on an
   // invalid band; the whole object is null until a geometry is sized.
   const noise = $derived.by(() => {
     if (!sizing.result) return null;
+    // The sized gmb where the table has one; without it the density is vnth_m's fallback form,
+    // which the label above and the sizing's own notes say.
     const density = thermalNoise(
       sizing.result.gm,
       sizing.result.quantities.gamma,
       sizingTable.meta.temp,
+      sizing.result.quantities.gmb,
     );
     // The core owns the band/PSD preconditions (0 < fLo < fHi, fc ≥ 0, sth ≥ 0 — the
     // last is violable via a bad table gamma column, which QA warns about but never
@@ -396,8 +407,9 @@
     ></label
   >
   {#if noise}
-    <!-- Thermal noise uses the SIZED gm (noise ∝ 1/√gm), with the table's own γ where it
-         carries thermal noise and the default otherwise; the label says which. -->
+    <!-- Thermal noise uses the SIZED gm and gmb (noise ∝ 1/√gm), with the table's own γ where it
+         carries thermal noise and the default otherwise; the label says which, and whether the
+         body-effect term was left out for want of a gmb column. -->
     <dl class="noise">
       <dt>v<sub>n,th</sub> <small title={CONTROL_HELP.noiseSource}>{noiseFrom}</small></dt>
       <dd>{formatSI(noise.density)}V/√Hz</dd>

@@ -7,14 +7,8 @@
 import type { DeviceTable, Grid } from '../types';
 import { sliceGrid, orient, interp1 } from '../grid';
 import type { Oriented } from '../grid';
-import { compileExpr, evalColumn, metaScalars } from '../derive';
-import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
-
-// Free identifiers of each standard derived definition, compiled once.
-const DERIVED_NAMES = DERIVED_QUANTITIES.map((q) => ({
-  key: q.key,
-  names: compileExpr(q.expr).names,
-}));
+import { DERIVED_FORMS, compileExpr, derivedForm, evalColumn, metaScalars } from '../derive';
+import { BASE_QUANTITIES } from '../namespace';
 
 /**
  * Collapse the named axes of a table — fixing each at a coordinate (interpolated
@@ -526,9 +520,11 @@ export function subsample(
  * non-axis columns — axis quantities other than X (l, vds, …) are NOT plottable
  * here. Constants (pi, k, gamma, …) are deliberately NOT counted as plottable: a
  * derived's free names already exclude constants, so a constant only ever leaks in
- * as a flat base "quantity" (e.g. a `gamma` constant masquerading as device data).
- * Returns the present base keys and the standard derived keys expressible from
- * them, for building a Y (or X) picker honestly per table. `scalarNames` are
+ * as a flat base "quantity" (e.g. a `gamma` constant masquerading as device data) — and a
+ * derived quantity whose only computable form is a stand-in reading no column (γ on a table
+ * without `sth`) is left out for the same reason. Returns the present base keys and the
+ * standard derived keys computable from them by some form (see derivedForm; a fallback form
+ * is reported by derivedFallbacks), for building a Y (or X) picker honestly per table. `scalarNames` are
  * metadata scalars (e.g. width `w`, see metaScalars) that enable derived quantities
  * referencing them (id/w) WITHOUT being offered as flat base lines — a scalar is
  * not device data.
@@ -545,8 +541,8 @@ export function plottableQuantities(
   ]);
   const resolvable = new Set<string>([...columns, ...scalarNames]);
   const base = BASE_QUANTITIES.filter((q) => columns.has(q.key)).map((q) => q.key);
-  const derived = DERIVED_NAMES.filter((d) => d.names.every((n) => resolvable.has(n))).map(
-    (d) => d.key,
+  const derived = [...DERIVED_FORMS.keys()].filter(
+    (key) => (derivedForm(key, (n) => resolvable.has(n))?.compiled.names.length ?? 0) > 0,
   );
   return { base, derived };
 }

@@ -1,4 +1,5 @@
 import type { BaseQuantity, DerivedQuantity, Grid } from './types';
+import { GAMMA_DEFAULT_LABEL } from './constants';
 
 /**
  * The canonical base quantities — the stored vocabulary. This is the *namespace*
@@ -52,7 +53,8 @@ export const BASE_QUANTITIES: readonly BaseQuantity[] = [
   { key: 'sth', unit: 'A^2/Hz', required: false, perWidth: true }, // thermal noise PSD
   { key: 'sfl', unit: 'A^2/Hz', required: false, perWidth: true }, // flicker noise PSD @ 1 Hz
   // thermal-noise factor γ: a stored column wins; without one it is derived from `sth` where the
-  // table carries it, and is GAMMA_DEFAULT where it does not (see the `gamma` definition below)
+  // table carries it, and is GAMMA_DEFAULT where it does not (see the `gamma` definition below).
+  // `gmb` above is what separates the body effect out of the channel noise (Sid = 4kTγ·(gm + gmb)).
   { key: 'gamma', unit: '1', required: false },
   { key: 'igd', unit: 'A', required: false, perWidth: true },
   { key: 'igs', unit: 'A', required: false, perWidth: true },
@@ -94,10 +96,19 @@ export const REQUIRED_KEYS: readonly string[] = BASE_QUANTITIES.filter((q) => q.
   (q) => q.key,
 );
 
+/** The γ-model figures without a `gmb` column: the body-effect term of the channel's noise
+ *  conductance gm + gmb is lost. Where γ itself was read back from the stored noise against gm
+ *  alone it carries that term, so the figure is still the table's own noise. */
+const WITHOUT_GMB =
+  'the floor has no body-effect term: exact where γ is read back from the stored noise, which ' +
+  'then carries it, and low by the factor 1 + gmb/gm in power where γ is a stand-in or a stored column';
+
 /**
  * Standard derived quantities, each defined as an expression over the base
  * namespace + constants. The derive module evaluates these with the expression
- * engine (dogfooding it), so there is exactly one definition per quantity.
+ * engine (dogfooding it), so there is exactly one definition per quantity. A definition that
+ * reads a column some tables lack may declare the next-best forms (see DerivedFallback); a
+ * result that used one says so.
  */
 export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   { key: 'gm_id', expr: 'gm/id', unit: '1/V' },
@@ -118,19 +129,46 @@ export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   // resolvable when the table actually carries `sth`, so a model is never shown as data.
   { key: 'svth', expr: 'sth/(gm^2)', unit: 'V^2/Hz' }, // input-referred thermal PSD (data)
   { key: 'vnth', expr: 'sqrt(sth)/gm', unit: 'V/sqrt(Hz)' }, // input-referred thermal density (data)
-  // The thermal-noise factor γ read back from the stored PSD: Sid = 4kTγ·gm solved for γ, at the
-  // table's own temperature (T comes from its metadata). It shares its name with the engine
-  // constant `gamma` (GAMMA_DEFAULT), and that constant is its default: on a table without `sth`
-  // the name resolves to the constant instead (see DEFAULTED_DERIVED in derive/). A stored `gamma`
-  // column wins over both, as every stored column does.
-  { key: 'gamma', expr: 'sth/(4*k*T*gm)', unit: '1' },
-  // The γ-model: Sid = 4kTγ·gm. Always available (needs only gm), and it reads `gamma` as above —
-  // so on a table that carries `sth` it IS the measured noise (vnth_m = sqrt(sth)/gm = vnth), and
-  // on one that does not it is the estimate at GAMMA_DEFAULT (a sub-micron stand-in, not the
-  // long-channel 2/3). These are the keys sheets read, because they resolve on every table;
-  // noiseSource (derive/) says per table which of the two they are.
-  { key: 'svth_m', expr: '4*k*T*gamma/gm', unit: 'V^2/Hz' }, // input-referred thermal PSD
-  { key: 'vnth_m', expr: 'sqrt(4*k*T*gamma/gm)', unit: 'V/sqrt(Hz)' }, // input-referred density
+  // The thermal-noise factor γ read back from the stored PSD. In saturation the channel's noise
+  // conductance is g_d0 = gm + gmb, so Sid = 4kTγ·(gm + gmb), solved here for γ at the table's own
+  // temperature (T comes from its metadata). It shares its name with the engine constant `gamma`
+  // (GAMMA_DEFAULT), which is its last fallback. A stored `gamma` column wins over every form, as
+  // every stored column does.
+  {
+    key: 'gamma',
+    expr: 'sth/(4*k*T*(gm+gmb))',
+    unit: '1',
+    fallbacks: [
+      {
+        without: ['gmb'],
+        expr: 'sth/(4*k*T*gm)',
+        says: 'γ carries the body-effect factor 1 + gmb/gm, so it reads that much above the channel’s own γ',
+      },
+      {
+        without: ['sth'],
+        expr: GAMMA_DEFAULT_LABEL,
+        says: `γ is the stand-in ${GAMMA_DEFAULT_LABEL}, not the table’s own noise`,
+      },
+    ],
+  },
+  // The γ-model: the channel's thermal noise Sid = 4kTγ·(gm + gmb) referred to the gate through
+  // gm. It resolves on every table and reads `gamma` as above — so on a table that carries `sth`
+  // it IS the measured noise (vnth_m = sqrt(sth)/gm = vnth, with or without `gmb`), and on one that
+  // does not it is the estimate at GAMMA_DEFAULT (a sub-micron stand-in, not the long-channel 2/3).
+  // These are the keys sheets read, because they resolve on every table; noiseSource (derive/)
+  // says per table which of the two they are.
+  {
+    key: 'svth_m', // input-referred thermal PSD
+    expr: '4*k*T*gamma*(gm+gmb)/gm^2',
+    unit: 'V^2/Hz',
+    fallbacks: [{ without: ['gmb'], expr: '4*k*T*gamma/gm', says: WITHOUT_GMB }],
+  },
+  {
+    key: 'vnth_m', // input-referred thermal density
+    expr: 'sqrt(4*k*T*gamma*(gm+gmb))/gm',
+    unit: 'V/sqrt(Hz)',
+    fallbacks: [{ without: ['gmb'], expr: 'sqrt(4*k*T*gamma/gm)', says: WITHOUT_GMB }],
+  },
   // Input-referred 1/f (flicker) noise from the simulator's stored flicker PSD @ 1 Hz
   // (`sfl`). Area-domain, so unlike thermal there is no universal model default — these
   // are MEASURED-only, resolvable solely when the table carries `sfl`.

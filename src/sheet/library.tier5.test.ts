@@ -12,7 +12,7 @@
 // operating point the sizer landed on, so those match only to interpolation order
 // (~1e-3), exactly like the exemplar goldens. gds/id = 1/(VA + vds) with VA = 5e6·L,
 // so the intrinsic gain gm·ro = (gm/ID)·(VA + vds); the gamma-model thermal density is
-// vnth_m = sqrt(4kTγ/gm) with γ = GAMMA_DEFAULT.
+// vnth_m = sqrt(4kTγ·(gm + gmb))/gm with γ = GAMMA_DEFAULT and gmb = BODY_FACTOR·gm.
 
 import { describe, it, expect } from 'vitest';
 import { GAMMA_DEFAULT, PHYS, UT } from '../constants';
@@ -22,6 +22,7 @@ import {
   table,
   relErr,
   VA_PER_L,
+  BODY_FACTOR,
   vnthM,
   VGS_GMID10_L05,
   sheet as libSheet,
@@ -132,10 +133,18 @@ describe('tier5 goldens: StrongARM comparator', () => {
     expect(relErr(res.values.gm_id, 12)).toBeLessThan(1e-9);
   });
 
-  it('integration-phase noise is the kT/C thermal floor', () => {
+  it('integration-phase noise is the kT/C thermal floor, body effect counted', () => {
+    // 2kT·γ·(gm + gmb)/gm over C_int, and the demo's gmb is BODY_FACTOR·gm: sqrt(2kTγ·1.2/C).
+    // The row reads γ·(gm + gmb)/gm as svth_m·gm/4kT, svth_m re-derived at the point and gm the
+    // sizing's honoured one, so the two meet to the interpolation residual (~0.1 % in gm).
     expect(
-      relErr(res.values.sigma_n, Math.sqrt((2 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / 2e-14)),
-    ).toBeLessThan(1e-9);
+      relErr(
+        res.values.sigma_n,
+        Math.sqrt((2 * PHYS.k * PHYS.T * GAMMA_DEFAULT * (1 + BODY_FACTOR)) / 2e-14),
+      ),
+    ).toBeLessThan(1e-3);
+    const { svth_m, gm } = res.values;
+    expect(relErr(res.values.sigma_n, Math.sqrt((svth_m * gm) / (2 * 2e-14)))).toBeLessThan(1e-12);
   });
 });
 

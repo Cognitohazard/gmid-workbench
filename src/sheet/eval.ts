@@ -8,7 +8,7 @@
 import { LOOKUP_RANGE_MESSAGE } from '../types';
 import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
-import { compileExpr, metaScalars, noiseSource } from '../derive';
+import { compileExpr, fallbackMessage, metaScalars, noiseSource } from '../derive';
 import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
@@ -639,8 +639,12 @@ function runSizing(
     values.feasible = res.feasible ? 1 : 0;
     // Surface the sizer's own engineering notes (e.g. an L clamped onto the table's
     // hull) as advisory sheet warnings — same pattern children use at evalBlocks.
-    // Severity 'warning', not 'error', so a clamp does not flip feasibility closed.
+    // Severity 'warning', not 'error', so a clamp does not flip feasibility closed. The notes
+    // about fallback forms are a fact about the table, like `noise`, so they are carried beside
+    // it on the report instead, once per device rather than once per warning list.
+    const fellBack = new Set(res.fallbacks.map(fallbackMessage));
     for (const m of res.warnings) {
+      if (fellBack.has(m)) continue;
       warn({ rule: 'sheet-givens', severity: 'warning', message: m, location: 'givens' });
     }
     const report: SizingReport = {
@@ -651,6 +655,7 @@ function runSizing(
       id: res.id,
       noise: noiseSource(table.grid),
     };
+    if (res.fallbacks.length) report.fallbacks = res.fallbacks;
     if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
     // The drain voltage the region check compares: the one the givens STATE, not the one a
     // table that does not reach it was read at. A clamp is reported where it happens (`clamped`

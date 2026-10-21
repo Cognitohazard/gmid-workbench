@@ -6,19 +6,12 @@
 
 import { type Axis, type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
 import { BASE_KEYS, passthroughKeys } from '../namespace';
-import { CONSTANTS } from '../constants';
 import { interpolate, sliceGrid, orient, interp1 } from '../grid';
-import {
-  DEFAULTED_DERIVED,
-  DERIVED_COMPILED,
-  metaScalars,
-  evalColumn,
-  pointScope,
-} from '../derive';
+import { DERIVED_FORMS, derivedForm, metaScalars, evalColumn, pointScope } from '../derive';
 
-// The Map is authoritative (shared with derive); a module-level entries array keeps
-// the per-lookup default-keys walk allocation-free.
-const DERIVED_ENTRIES = [...DERIVED_COMPILED];
+// The Map is authoritative (shared with derive); a module-level key array keeps the per-lookup
+// default-keys walk allocation-free.
+const DERIVED_KEYS = [...DERIVED_FORMS.keys()];
 
 /** Base quantity keys actually stored as columns in this grid (axes included). */
 function baseKeysPresent(grid: Grid): string[] {
@@ -30,21 +23,15 @@ function baseKeysPresent(grid: Grid): string[] {
 }
 
 /**
- * The first free name of a derived definition that `has` cannot resolve, or undefined when
- * the whole definition is computable. One home for "can this table compute that quantity",
- * shared by the forward path (which uses it to filter the default key set) and the inverse
- * path (which uses the name to say WHICH column is missing). Constants always resolve.
+ * The first free name of a derived definition that `has` cannot resolve, a derived name counting
+ * when some form of it does — what the inverse path names as the missing column when a table
+ * cannot compute a quantity by any form. Constants never appear among the free names.
  */
 function missingInput(
   names: readonly string[],
   has: (name: string) => boolean,
 ): string | undefined {
-  for (const n of names) {
-    if (has(n)) continue;
-    if (Object.prototype.hasOwnProperty.call(CONSTANTS, n)) continue;
-    return n;
-  }
-  return undefined;
+  return names.find((n) => !has(n) && derivedForm(n, has) === undefined);
 }
 
 /**
@@ -52,9 +39,12 @@ function missingInput(
  * then evaluate any requested derived quantity from the interpolated base scalars.
  *
  * When `keys` is omitted the result holds every present base column, every pass-through
- * column (see passthroughKeys), and every standard derived quantity whose definition is
- * computable from those bases. Requested derived keys are evaluated from the interpolated
- * scalars (NOT re-interpolated), so vstar = 2/(gm/id) etc. stay self-consistent at the point.
+ * column (see passthroughKeys), and every standard derived quantity computable from those bases
+ * by a form that reads them — a stand-in that reads nothing (γ on a table without `sth`) is not a
+ * reading of the table, and is answered only when asked for by name. Requested derived keys are
+ * evaluated from the interpolated scalars (NOT re-interpolated), so vstar = 2/(gm/id) etc. stay
+ * self-consistent at the point. Each is computed by the form the table reads it by, which is not
+ * always its definition: derivedFallbacks names the quantities that fell back, and why.
  */
 export function lookup(
   table: DeviceTable,
@@ -103,16 +93,12 @@ export function lookup(
     }
   }
 
+  const hasBase = (n: string): boolean => Object.prototype.hasOwnProperty.call(baseScalars, n);
   const requested = keys ?? [
     ...basePresent,
     ...axisKeys,
     ...extraPresent,
-    ...DERIVED_ENTRIES.filter(
-      ([, compiled]) =>
-        missingInput(compiled.names, (n) =>
-          Object.prototype.hasOwnProperty.call(baseScalars, n),
-        ) === undefined,
-    ).map(([key]) => key),
+    ...DERIVED_KEYS.filter((key) => (derivedForm(key, hasBase)?.compiled.names.length ?? 0) > 0),
   ];
 
   // A point scope rather than a plain scalar one: a definition that reads another derived name
@@ -129,20 +115,15 @@ export function lookup(
       out[key] = extraScalars[key];
       continue;
     }
-    const def = DERIVED_COMPILED.get(key);
-    if (!def) {
+    const forms = DERIVED_FORMS.get(key);
+    if (!forms) {
       throw new Error(
         `lookup: "${key}" is neither a present column of this table nor a known derived quantity`,
       );
     }
-    // Asked for by name on a table that cannot compute it, a defaulted quantity is its default —
-    // the value every expression reading the name gets on this table.
-    const v =
-      DEFAULTED_DERIVED.has(key) &&
-      missingInput(def.names, (n) => Object.prototype.hasOwnProperty.call(baseScalars, n)) !==
-        undefined
-        ? CONSTANTS[key]
-        : def.eval(scope);
+    // By name, so it is the value every expression reading the name gets at this point: the form
+    // this table reads it by (or, computable by none, the definition's error naming the column).
+    const v = scope.resolve(key) ?? forms[0].compiled.eval(scope);
     if (v instanceof Float64Array) {
       // Derived definitions over scalar bases yield scalars; guard defensively.
       throw new Error(`lookup: derived "${key}" did not reduce to a scalar`);
@@ -204,8 +185,8 @@ export function lookupByGmId(
  * say so rather than surface as an out-of-range or non-monotonic complaint.
  */
 function sliceColumn(table: DeviceTable, slice: Grid, key: string): Float64Array {
-  const def = DERIVED_COMPILED.get(key);
-  if (!def) {
+  const forms = DERIVED_FORMS.get(key);
+  if (!forms) {
     const stored = slice.quantities.get(key);
     if (stored) return stored;
     throw new Error(
@@ -213,16 +194,15 @@ function sliceColumn(table: DeviceTable, slice: Grid, key: string): Float64Array
     );
   }
   const scalars = metaScalars(table.meta);
-  const missing = missingInput(
-    def.names,
-    (n) => slice.quantities.has(n) || Object.prototype.hasOwnProperty.call(scalars, n),
-  );
-  if (missing !== undefined) {
+  const has = (n: string): boolean =>
+    slice.quantities.has(n) || Object.prototype.hasOwnProperty.call(scalars, n);
+  const form = derivedForm(key, has);
+  if (!form) {
     throw new Error(
-      `inverse lookup: cannot invert "${key}" on this table — it carries no "${missing}" column`,
+      `inverse lookup: cannot invert "${key}" on this table — it carries no "${missingInput(forms[0].compiled.names, has)}" column`,
     );
   }
-  return evalColumn(slice, def, scalars);
+  return evalColumn(slice, form.compiled, scalars);
 }
 
 /**

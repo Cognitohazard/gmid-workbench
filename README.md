@@ -36,8 +36,9 @@ turns them into gm/ID design charts, operating-point lookups, and sized devices.
   disclosures — how much of your spec each sheet could use, whether the search ran out of
   budget rather than the design failing, and whether a reported current is really the author's
   slider floor. Picking a result opens it as a new design sheet with the values found.
-- **Noise and mismatch** — input-referred thermal noise (from the table's stored
-  noise when it carries it, else a γ = 1.0 estimate, and the result says which),
+- **Noise and mismatch** — input-referred thermal noise, 4kTγ·(gm + gmb) referred through gm
+  (from the table's stored noise when it carries it, else a γ = 1.0 estimate, and the result
+  says which, and says so too when a table without `gmb` leaves the body-effect term out),
   1/f noise and the flicker corner,
   integrated RMS noise over a band, and a Pelgrom mismatch budget on the sized geometry.
 - **Data-trust QA** — gm and gds are derivatives and are exquisitely sensitive to sweep
@@ -147,8 +148,8 @@ table's own drain noise (`sth`) where the table carries it — the tables the
 generator produces do, and the five-transistor OTA then reads about 28 nV/√Hz
 against its simulated 28.24 — and falls back to γ = 1.0 where it does not, which
 understates a device that runs
-hotter (in simulation sky130's NMOS sits at about γ = 1.95 at gm/ID 12); every result
-says which it used. It is thermal noise only, and flicker can dominate far past the
+hotter (in simulation sky130's NMOS sits at about γ = 1.6 at gm/ID 12 once its body effect is
+separated out); every result says which it used. It is thermal noise only, and flicker can dominate far past the
 audio band — treat table-derived noise as a floor, not a budget.
 
 ## Scripting the core

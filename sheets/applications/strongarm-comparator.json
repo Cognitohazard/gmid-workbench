@@ -1,6 +1,6 @@
 {
   "title": "StrongARM comparator",
-  "description": "A dynamic StrongARM latch budgeted through the integration phase, where all the analog action lives. One input device is bound at the integration-phase current so the sheet ends in silicon; the integration time follows from charging the output node $C_{int}$ to $\\Delta V_{int}$, the input-referred noise is the $kT/C$-style thermal floor of that integration, the offset is the Pelgrom spread of the input pair, and the decision time adds a regeneration time constant $\\tau_{reg} = C_{int}/g_{m,latch}$. Every closed form here is estimate-grade: dynamic comparators are sim-verified for offset, noise, and metastability, and this sheet only budgets. $\\gamma$ is the thermal-noise factor, read from the table's own noise where it carries it and 1.0 otherwise.",
+  "description": "A dynamic StrongARM latch budgeted through the integration phase, where all the analog action lives. One input device is bound at the integration-phase current so the sheet ends in silicon; the integration time follows from charging the output node $C_{int}$ to $\\Delta V_{int}$, the input-referred noise is the $kT/C$-style thermal floor of that integration, the offset is the Pelgrom spread of the input pair, and the decision time adds a regeneration time constant $\\tau_{reg} = C_{int}/g_{m,latch}$. Every closed form here is estimate-grade: dynamic comparators are sim-verified for offset, noise, and metastability, and this sheet only budgets. $\\gamma$ is the thermal-noise factor, read from the table's own noise where it carries it and 1.0 otherwise, and the channel's noise is $\\gamma(g_m + g_{mb})$, the body effect included where the table has a $g_{mb}$ column.",
   "polarity": "n",
   "params": [
     {
@@ -124,9 +124,9 @@
     },
     {
       "name": "sigma_n",
-      "expr": "sqrt(2*k*T*gamma/C_int)",
+      "expr": "sqrt(2*k*T*(svth_m*gm/(4*k*T))/C_int)",
       "unit": "V",
-      "note": "input-referred thermal noise of the integration phase, kT/C-style; estimate, gamma is the model factor"
+      "note": "input-referred thermal noise of the integration phase, kT/C-style: 2kT over C_int, scaled by the input device's channel noise against its gm, gamma*(gm + gmb)/gm, which is what svth_m*gm/4kT reads; estimate"
     },
     {
       "name": "vos",

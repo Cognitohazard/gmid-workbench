@@ -4,11 +4,11 @@
 * noise row is thermal only, read from the thermal noise the tables store for each device
 * (sth, the simulator's own channel noise at each table point):
 *
-*   vn_in 28.39 nV/rtHz = sqrt(17.27^2 + 17.31^2 + 10.24^2 + 10.16^2)
+*   vn_in 28.44 nV/rtHz = sqrt(17.27^2 + 17.31^2 + 10.32^2 + 10.23^2)
 *     17.27  pair, diode side (inr__vnth_m)
 *     17.31  pair, output side (in__vnth_m)
-*     10.24  load diode side, referred by its gm over the pair's (ldr__vnth_m * ldr__gm / gm_pair)
-*     10.16  load output side, referred the same way
+*     10.32  load diode side, referred by its gm over the pair's (ldr__vnth_m * ldr__gm / gm_pair)
+*     10.23  load output side, referred the same way
 *
 * The simulated total also carries flicker noise, which the sheet does not model. ngspice
 * reports each device's flicker part separately, so this deck splits the total into a flicker

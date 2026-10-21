@@ -101,21 +101,21 @@ every row below is compared directly, in one state, with nothing forced:
 | Input offset that holds `V_out_dc` (`vos_sys`)     | 4.785 mV           | 4.743 mV           | −0.9 %          |
 | Pair gm, output side / diode side                  | 107.74 / 107.29 µS | 108.76 / 108.34 µS | +0.9 % / +1.0 % |
 | Pair gm/ID, output side / diode side               | 12.00 / 11.76      | 12.12 / 11.88      | +1.0 % / +1.0 % |
-| The two in series, doubled (`gm_pair`)             | 107.52 µS          | 108.55 µS          | +1.0 %          |
+| Pair transconductance into the output (`gm_pair`) | 106.71 µS          | 107.77 µS          | +1.0 %          |
 | Load VGS, both sides (`ldr__vgs`)                  | −1132.19 mV        | −1132.15 mV        | +0.04 mV        |
 | Load gm/ID, diode side / output side               | 8.00 / 8.01        | 8.00 / 8.01        | 0.0 %           |
 | Output gds, pair / load (`in__gds`, `ld__gds`)     | 1.3346 / 0.6774 µS | 1.3240 / 0.6714 µS | −0.8 % / −0.9 % |
-| Low-frequency gain (`Av`)                          | 53.44              | 53.90              | +0.9 %          |
-| Unity-gain frequency (`GBW`)                       | 8.556 MHz          | 8.420 MHz          | −1.6 %          |
+| Low-frequency gain (`Av`)                          | 53.04              | 53.90              | +1.6 %          |
+| Unity-gain frequency (`GBW`)                       | 8.492 MHz          | 8.420 MHz          | −0.8 %          |
 | Phase margin (`PM`)                                | 89.7°              | 90.7°              | +1.0°           |
-| Input-referred thermal noise density (`vn_in`)     | 28.39 nV/√Hz       | 28.24 nV/√Hz       | −0.5 %          |
+| Input-referred thermal noise density (`vn_in`)     | 28.44 nV/√Hz       | 28.24 nV/√Hz       | −0.7 %          |
 
 Slew rate was not simulated; the sheet computes it as `tail__id/CL`, so it follows the
 tail current.
 
 Every current agrees within 0.05 %, every voltage within 1.2 mV, every gm, gm/ID and output
-conductance within 1 %, the gain within 0.9 %, the offset within 0.9 %, the bandwidth within
-1.6 % and the thermal noise within 0.5 %. The gate-source voltages sit about a millivolt low
+conductance within 1 %, the gain within 1.6 %, the offset within 0.9 %, the bandwidth within
+0.8 % and the thermal noise within 0.7 %. The gate-source voltages sit about a millivolt low
 and the pair's gm/ID 1 % low for one reason, the pair's body bias (below). The
 thermal-noise row is read from the noise the tables store for each device, which is the
 simulator's own:
@@ -125,9 +125,11 @@ simulator's own:
   the total less every device's flicker term, because the total itself is
   flicker-dominated there. The reference decks show why a γ = 1 estimate, which is what a
   table without stored noise gets, would not: at the output-side pair device's bias point
-  the nfet's own density is 17.32 nV/√Hz, an effective γ of 1.95, where the table's stored
-  noise reads 17.31; at the load's bias point the pfet's is 15.08 nV/√Hz against the
-  table's 15.08, γ 1.00. With γ = 1 for both, the row would read 22.7 nV/√Hz, 20 % low.
+  the nfet's own density is 17.32 nV/√Hz, an effective γ of 1.95 against gm alone (1.63
+  against the channel's noise conductance gm + gmb), where the table's stored noise reads
+  17.31; at the load's bias point the pfet's is 15.08 nV/√Hz against the table's 15.08, γ 1.00
+  (0.81). With γ = 1 for both, the body effect counted, the row would read 25.1 nV/√Hz, 11 %
+  low; with the body effect left out as well, 22.7 nV/√Hz, 20 % low.
   Neither γ is a constant: moving VG in the reference decks takes the nfet from 1.4 at
   gm/ID 22 to 1.9 at gm/ID 6–12, and the pfet from 0.5 at gm/ID 17 to 1.0 at gm/ID 4–8.
   This is consistent with the two models' thermal-noise parameters (`tnoimod = 1` in both;
@@ -180,13 +182,13 @@ simulator's own:
   5.20 mV.
 - **The 5T OTA meets its gain and bandwidth specs in simulation.** Gain is 53.9 against
   a target of 15, and the unity-gain frequency is 8.42 MHz against a target of 8 MHz.
-  2π × 8.420 MHz × 2 pF is 105.8 µS of effective transconductance, 2.5 % under the
-  108.6 µS the simulated pair devices have in series (108.76 and 108.34 µS). The mirror
-  passes on the diode side's half of the signal with a gain of 0.986 (71.91 µS over
-  72.96 µS), which accounts for 0.7 %; the rest was not separated out. The sheet's
-  `gm_pair` is 107.52 µS, 1.0 % under the simulated devices because of the body-bias
-  interpolation above, so its `GBW` lands 1.6 % above the simulated unity-gain
-  frequency. The devices add only about 1 fF to the 2 pF load.
+  2π × 8.420 MHz × 2 pF is 105.8 µS of effective transconductance. The simulated pair
+  devices have 108.76 and 108.34 µS, and the mirror passes on the diode side's half of the
+  signal with a gain of 0.986 (71.91 µS over 72.96 µS), so the two halves give 107.77 µS,
+  the form the sheet's `gm_pair` takes; the effective figure is 1.8 % under it, and the rest
+  was not separated out. The sheet's `gm_pair` is 106.71 µS, 1.0 % under the simulated
+  devices because of the body-bias interpolation above, so its `GBW` lands 0.8 % above the
+  simulated unity-gain frequency. The devices add only about 1 fF to the 2 pF load.
 - **Input-referred noise is two-sided.** The two pair devices contribute 17.14 and
   17.29 nV/√Hz of thermal noise at the input, and the two load devices 9.88 and
   10.31 nV/√Hz. All four together give 1.40× the density of one pair device and one

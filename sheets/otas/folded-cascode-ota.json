@@ -770,9 +770,9 @@
     },
     {
       "name": "gm_pair",
-      "expr": "2*inr__gm*in__gm/(inr__gm + in__gm)",
+      "expr": "(inr__gm*nmir__gm/nmir_r__gm + in__gm)/2",
       "unit": "S",
-      "note": "the pair's differential transconductance: a differential input sees the two transistors in series through their common source, so this is the series combination of their two $g_m$, doubled — either transistor's own $g_m$ when the two are equal"
+      "note": "the pair's transconductance into the output node. Each pair transistor turns half the differential input into current, which its folding branch carries on unchanged: the diode-side half reaches the output through the bottom mirror, whose current gain is its output device's $g_m$ over its diode device's, and the output-side half arrives directly. It is either transistor's own $g_m$ where the two sides sit at the same levels"
     },
     {
       "name": "Rout_p",

@@ -13,7 +13,7 @@ import { buildSheetRefIndex, type SheetRefEntry, type SheetRefIndex } from './re
 import { gdsOf } from './library.math';
 import type { SheetDoc } from './types';
 
-export { VA_PER_L };
+export { VA_PER_L, BODY_FACTOR };
 // The demo model's closed forms live in library.math.ts, which has no import-time work; they
 // are re-exported here so a suite already holding the fixtures needs no second import.
 export { relErr, par, va, gdsOf, pelgromIrelRatio } from './library.math';
@@ -90,8 +90,10 @@ export const roMirrored = (vdsRef: number, K: number, iIn: number): number =>
  *  Av = gm·Rout says the interface equation added a name and no arithmetic. */
 export const stage2Rout = (I: number, L: number, vds: number): number => 1 / (2 * gdsOf(I, L, vds));
 
-/** γ-model input-referred thermal density sqrt(4kTγ/gm) at the demo's γ = GAMMA_DEFAULT. */
-export const vnthM = (gm: number): number => Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / gm);
+/** γ-model input-referred thermal density sqrt(4kTγ·(gm + gmb))/gm at the demo's γ = GAMMA_DEFAULT
+ *  and its gmb = BODY_FACTOR·gm: sqrt(4kTγ·(1 + BODY_FACTOR)/gm). */
+export const vnthM = (gm: number): number =>
+  Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * (1 + BODY_FACTOR)) / gm);
 
 /** Body transconductance of the demo model — exact at every point (see src/demo/index.ts). */
 export const gmbOf = (gm: number): number => BODY_FACTOR * gm;

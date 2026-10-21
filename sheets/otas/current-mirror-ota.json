@@ -552,12 +552,6 @@
       "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two pair transistors' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
-      "name": "gm_pair",
-      "expr": "2*in_f__gm*in__gm/(in_f__gm + in__gm)",
-      "unit": "S",
-      "note": "the pair's differential transconductance: a differential input sees the two transistors in series through their common source, so this is the series combination of their two $g_m$, doubled — either transistor's own $g_m$ when the two are equal"
-    },
-    {
       "name": "Ai_p",
       "expr": "moutp__gm/mload__gm",
       "unit": "1",
@@ -571,9 +565,9 @@
     },
     {
       "name": "Gm_out",
-      "expr": "gm_pair*(Ai_p + Ai_n)/2",
+      "expr": "(in__gm*Ai_p + in_f__gm*Ai_n)/2",
       "unit": "S",
-      "note": "output transconductance: the pair turns the differential input into one signal current, carried equal and opposite by its two sides, and each side's half reaches the output through its own mirror path. It is K_m times the input gm where both paths copy exactly"
+      "note": "output transconductance. Each pair transistor turns half the differential input into current at its own $g_m$, and each half reaches the output through its own mirror path: the output-driving side's through its PMOS mirror, gain Ai_p, the folded side's through both mirrors, gain Ai_n. It is K_m times the input $g_m$ where the two sides sit at the same levels and both paths copy exactly"
     },
     {
       "name": "Rout",

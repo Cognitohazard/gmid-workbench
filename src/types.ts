@@ -140,11 +140,30 @@ export interface BaseQuantity {
   readonly defaultBias?: number;
 }
 
+/**
+ * The next-best form of a derived quantity, for a table that lacks a column its definition
+ * reads. It is used only where every form before it cannot be computed, and the result that
+ * used it says so: the quantity, the missing column and this form (see the derive module's
+ * fallback notes). A lesser form is never chosen silently.
+ */
+export interface DerivedFallback {
+  /** The column(s) whose absence this form stands in for — what the note names as missing. */
+  readonly without: readonly string[];
+  /** The form used instead, over the base namespace + constants like the definition itself. */
+  readonly expr: string;
+  /** What reading the quantity this way costs, in a clause the note ends with. */
+  readonly says: string;
+}
+
 /** Definition of a derived quantity as an expression over the base namespace. */
 export interface DerivedQuantity {
   readonly key: string; // e.g. "gm_id", "ft", "vstar"
   readonly expr: string; // closed-form over base quantities + constants, e.g. "gm/id"
   readonly unit: string;
+  /** Lesser forms in order of preference, each tried only when everything before it cannot be
+   *  computed on a table. Absent for a quantity that has none: a table that cannot compute the
+   *  definition cannot compute the quantity. */
+  readonly fallbacks?: readonly DerivedFallback[];
 }
 
 /** A name resolver for the expression engine: base columns, derived, constants. */
