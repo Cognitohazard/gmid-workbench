@@ -1,7 +1,7 @@
 // A demo table written out as mostab CSV with one column the namespace has no name for, then read
 // back through the importer — the shape of a real export carrying an extra simulator output (here
-// a drain-junction capacitance, `cjd`). Shared by the lookup, sizing and sheet suites, which each
-// check that the column reaches them. Lives outside the vitest glob (not *.test.ts) so importing
+// the effective channel mobility, `ueff`, which BSIM reports and the format does not name).
+// Shared by the lookup, sizing and sheet suites, which each check that the column reaches them. Lives outside the vitest glob (not *.test.ts) so importing
 // it never re-registers another file's tests, and is not exported from the barrel.
 
 import { generateDemoDevice } from '../demo';
@@ -13,8 +13,8 @@ import type { DeviceTable } from '../types';
  * interpolation reproduces it exactly anywhere inside the grid and a test can predict the value
  * between nodes in closed form.
  */
-export function cjdAt(p: { l: number; vds: number; vgs: number }): number {
-  return 1e-15 + 2e-15 * p.vgs + 0.5e-15 * p.vds + 1e-9 * p.l;
+export function ueffAt(p: { l: number; vds: number; vgs: number }): number {
+  return 0.04 - 0.01 * p.vgs + 0.002 * p.vds + 1e3 * p.l;
 }
 
 /** The demo device over (l, vds, vgs), as mostab CSV text, with extra columns `extra` computed
@@ -67,5 +67,5 @@ export function importOne(csv: string): DeviceTable {
   return res.dataset.tables[0];
 }
 
-/** The demo device imported with one pass-through column, `cjd` (see cjdAt). */
-export const withCjd = (): DeviceTable => importOne(demoCsvWith({ cjd: cjdAt }));
+/** The demo device imported with one pass-through column, `ueff` (see ueffAt). */
+export const withUeff = (): DeviceTable => importOne(demoCsvWith({ ueff: ueffAt }));

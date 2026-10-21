@@ -26,7 +26,7 @@ import {
   WIRING_TOL,
 } from './index';
 import { EXAMPLES } from './examples';
-import { cjdAt, demoCsvWith, importOne, withCjd } from '../import/passthrough.fixtures';
+import { ueffAt, demoCsvWith, importOne, withUeff } from '../import/passthrough.fixtures';
 import { PHYS } from '../constants';
 import type { DeviceTable } from '../types';
 import type { SheetDoc, SheetResult, SheetVar } from './types';
@@ -1115,9 +1115,9 @@ describe('composition — blocks and the scalars they provide', () => {
 });
 
 describe('pass-through columns reach the sheet scope', () => {
-  // A column the importer does not recognize (`cjd`) is carried through as a quantity, and the
+  // A column the importer does not recognize (`ueff`) is carried through as a quantity, and the
   // sheet format promises it is readable like any other — not rescaled, so at w0.
-  const extra = withCjd();
+  const extra = withUeff();
   const sizedDoc = (overrides: Partial<SheetDoc> = {}): SheetDoc => ({
     title: 'dev',
     polarity: 'n',
@@ -1131,7 +1131,7 @@ describe('pass-through columns reach the sheet scope', () => {
     ...overrides,
   });
   const atSizing = (res: SheetResult): number =>
-    cjdAt({ l: 0.5e-6, vds: 0.6, vgs: res.sizing!.vgs });
+    ueffAt({ l: 0.5e-6, vds: 0.6, vgs: res.sizing!.vgs });
   const noted = (res: SheetResult, rule: string): string[] =>
     res.warnings.filter((w) => w.rule === rule).map((w) => w.message);
 
@@ -1139,40 +1139,40 @@ describe('pass-through columns reach the sheet scope', () => {
     const res = runSheet(
       sizedDoc({
         equations: [
-          { name: 'Cj', expr: 'cjd' },
-          { name: 'Cj_sized', expr: 'cjd*W/w0' },
+          { name: 'U', expr: 'ueff' },
+          { name: 'U_scaled', expr: 'ueff*W/w0' },
         ],
-        provides: ['cjd'],
+        provides: ['ueff'],
       }),
       extra,
     );
     expect(res.sizing?.ok).toBe(true);
     expect(noted(res, 'sheet-undeclared')).toEqual([]);
-    expect(res.values.cjd).toBeCloseTo(atSizing(res), 27);
-    expect(res.values.Cj).toBe(res.values.cjd);
-    expect(res.values.Cj_sized / res.values.Cj).toBeCloseTo(res.sizing!.W / extra.meta.W!, 12);
+    expect(res.values.ueff).toBeCloseTo(atSizing(res), 12);
+    expect(res.values.U).toBe(res.values.ueff);
+    expect(res.values.U_scaled / res.values.U).toBeCloseTo(res.sizing!.W / extra.meta.W!, 12);
     expect(res.feasible).toBe(true);
   });
 
-  it('a child provides the column to its parent, which reads child__cjd', () => {
+  it('a child provides the column to its parent, which reads child__ueff', () => {
     const parent: SheetDoc = {
       title: 'parent',
       polarity: 'n',
       params: [],
-      equations: [{ name: 'C_node', expr: '2*cs__cjd' }],
-      checks: [{ id: 'cap', kind: 'spec', lhs: 'C_node', op: '<=', rhs: '1e-12' }],
-      blocks: [{ name: 'cs', doc: sizedDoc({ provides: ['cjd'] }) }],
+      equations: [{ name: 'U_twice', expr: '2*cs__ueff' }],
+      checks: [{ id: 'mobility', kind: 'spec', lhs: 'U_twice', op: '<=', rhs: '1' }],
+      blocks: [{ name: 'cs', doc: sizedDoc({ provides: ['ueff'] }) }],
     };
     const res = runSheet(parent, extra);
-    expect(res.warnings.filter((w) => /cjd/.test(w.message))).toEqual([]);
+    expect(res.warnings.filter((w) => /ueff/.test(w.message))).toEqual([]);
     const child = res.blocks![0];
     expect(child.sizing?.ok).toBe(true);
-    expect(child.provides.cjd).toBeCloseTo(
-      cjdAt({ l: 0.5e-6, vds: 0.6, vgs: child.sizing!.vgs }),
+    expect(child.provides.ueff).toBeCloseTo(
+      ueffAt({ l: 0.5e-6, vds: 0.6, vgs: child.sizing!.vgs }),
       27,
     );
-    expect(res.values.cs__cjd).toBe(child.provides.cjd);
-    expect(res.values.C_node).toBe(2 * child.provides.cjd);
+    expect(res.values.cs__ueff).toBe(child.provides.ueff);
+    expect(res.values.U_twice).toBe(2 * child.provides.ueff);
     expect(res.checks[0].status).toBe('pass');
     expect(res.feasible).toBe(true);
   });
@@ -1185,13 +1185,13 @@ describe('pass-through columns reach the sheet scope', () => {
       params: [],
       equations: [],
       checks: [],
-      blocks: [{ name: 'cs', device: 'extra', doc: sizedDoc({ provides: ['cjd'] }) }],
+      blocks: [{ name: 'cs', device: 'extra', doc: sizedDoc({ provides: ['ueff'] }) }],
     };
     const res = runSheet(parent, undefined, (id) => (id === 'extra' ? extra : undefined));
     expect(res.blocks![0].sizing?.ok).toBe(true);
-    expect(res.values.cs__cjd).toBeCloseTo(
-      cjdAt({ l: 0.5e-6, vds: 0.6, vgs: res.blocks![0].sizing!.vgs }),
-      27,
+    expect(res.values.cs__ueff).toBeCloseTo(
+      ueffAt({ l: 0.5e-6, vds: 0.6, vgs: res.blocks![0].sizing!.vgs }),
+      12,
     );
   });
 
@@ -1199,28 +1199,28 @@ describe('pass-through columns reach the sheet scope', () => {
     // A column called `k` would otherwise replace Boltzmann's constant for every equation after
     // the sizing, and one called like a param would silently replace the param — on this table
     // and no other. Both are left out of scope, and the sheet is told.
-    const table = importOne(demoCsvWith({ k: () => 1, cjd: cjdAt }));
+    const table = importOne(demoCsvWith({ k: () => 1, ueff: ueffAt }));
     const res = runSheet(
       sizedDoc({
         params: [
           { name: 'L', value: 0.5e-6 },
           { name: 'Ib', value: 20e-6 },
-          { name: 'cjd', value: 3e-15 },
+          { name: 'ueff', value: 3e-15 },
         ],
         equations: [
           { name: 'kT', expr: 'k*T' },
-          { name: 'Cj', expr: 'cjd' },
+          { name: 'U', expr: 'ueff' },
         ],
       }),
       table,
     );
     expect(res.sizing?.ok).toBe(true);
     expect(res.values.kT).toBeCloseTo(PHYS.k * PHYS.T, 30);
-    expect(res.values.Cj).toBe(3e-15);
+    expect(res.values.U).toBe(3e-15);
     const notes = noted(res, 'sheet-passthrough');
     expect(notes).toHaveLength(2);
     expect(notes.find((m) => m.includes('"k"'))).toMatch(/expression constant/);
-    expect(notes.find((m) => m.includes('"cjd"'))).toMatch(/already defines/);
+    expect(notes.find((m) => m.includes('"ueff"'))).toMatch(/already defines/);
     // An advisory note, not a failure: the sheet still means what it says.
     expect(res.feasible).toBe(true);
   });

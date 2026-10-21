@@ -6,7 +6,7 @@ import { type Axis, type DeviceTable, LookupError } from '../types';
 import { generateDemoDevice, withoutColumns } from '../demo';
 import { importMostab } from '../import';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
-import { cjdAt, withCjd } from '../import/passthrough.fixtures';
+import { ueffAt, withUeff } from '../import/passthrough.fixtures';
 
 /** Build a single-L (l, vgs) DeviceTable from explicit gm/id columns so a slice's
  *  gm/id-vs-vgs curve can be made deliberately degenerate (all id==0) or folded
@@ -286,46 +286,46 @@ describe('lookup temperature', () => {
 describe('lookup pass-through columns', () => {
   // A header the importer does not recognize becomes a quantity under its lower-cased name, and
   // the format promises it is available to lookup like any built-in one.
-  const table = withCjd();
+  const table = withUeff();
   const l = table.grid.axes.find((a) => a.name === 'l') as Axis;
   const vds = table.grid.axes.find((a) => a.name === 'vds') as Axis;
   const vgs = table.grid.axes.find((a) => a.name === 'vgs') as Axis;
 
   it('the import keeps the column as a stored quantity', () => {
-    expect(table.grid.quantities.has('cjd')).toBe(true);
-    expect(table.passthrough?.has('cjd')).toBe(true);
+    expect(table.grid.quantities.has('ueff')).toBe(true);
+    expect(table.passthrough?.has('ueff')).toBe(true);
   });
 
   it('reports the column at a grid node, in the default key set', () => {
     const p = { l: l.values[1], vds: vds.values[2], vgs: vgs.values[60] };
     const out = lookup(table, p);
-    expect(out.cjd).toBeCloseTo(cjdAt(p), 27);
+    expect(out.ueff).toBeCloseTo(ueffAt(p), 12);
   });
 
   it('interpolates the column between nodes like any quantity', () => {
-    // cjd is affine in every axis, so the multilinear read is exact off the nodes too.
+    // ueff is affine in every axis, so the multilinear read is exact off the nodes too.
     const p = { l: 0.33e-6, vds: 0.75, vgs: 0.537 };
     const out = lookup(table, p);
-    expect(out.cjd).toBeCloseTo(cjdAt(p), 27);
+    expect(out.ueff).toBeCloseTo(ueffAt(p), 12);
     // …through the same corner walk as the base columns: it is read at the same point.
     expect(out.vgs).toBe(p.vgs);
   });
 
   it('answers when asked for by name', () => {
     const p = { l: 0.5e-6, vds: 0.6, vgs: 0.6 };
-    expect(lookup(table, p, ['cjd'])).toEqual({ cjd: cjdAt(p) });
+    expect(lookup(table, p, ['ueff'])).toEqual({ ueff: ueffAt(p) });
     expect(() => lookup(table, p, ['cjx'])).toThrow(/"cjx" is neither/);
   });
 
   it('inverts on the column like any stored quantity', () => {
-    // cjd rises with vgs on every slice, so it can place an operating point (inverse lookup
+    // ueff rises with vgs on every slice, so it can place an operating point (inverse lookup
     // needs every axis but l and vgs pinned, so vds is fixed first).
     const at = fixTable(table, { vds: 0.6 });
     const L = 0.5e-6;
-    const target = cjdAt({ l: L, vds: 0.6, vgs: 0.6 });
-    const out = lookupByQuantity(at, 'cjd', target, L);
+    const target = ueffAt({ l: L, vds: 0.6, vgs: 0.6 });
+    const out = lookupByQuantity(at, 'ueff', target, L);
     expect(out.vgs).toBeCloseTo(0.6, 12);
-    expect(out.cjd).toBeCloseTo(target, 27);
+    expect(out.ueff).toBeCloseTo(target, 12);
   });
 
   it('leaves the derived layer as the base columns define it', () => {

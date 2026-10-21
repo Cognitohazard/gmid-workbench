@@ -559,9 +559,9 @@ range](#the-operating-range-operatingrange)).
 
 Every quantity the sheet reports describes the **sized** device, not the characterization-width
 artifact. When the givens size a device to width `W`, the extensive quantities — `id`, `gm`,
-`gds`, the capacitances, the noise PSDs, `w` — are rescaled from the characterization width
-`w0` to `W` (the parallel-composition model: the sized device is `W/w0` unit devices in
-parallel), and the derived layer (`av0`, `ft`, `vstar`, input-referred noise, …) is
+`gds`, the capacitances, the terminal charges, the noise PSDs, `w` — are rescaled from the
+characterization width `w0` to `W` (the parallel-composition model: the sized device is `W/w0`
+unit devices in parallel), and the derived layer (`av0`, `ft`, `vstar`, input-referred noise, …) is
 re-evaluated from those scaled bases. So author math like `gm/(2*pi*cgg)` reads the device you
 actually sized.
 

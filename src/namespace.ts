@@ -11,17 +11,41 @@ export const BASE_QUANTITIES: readonly BaseQuantity[] = [
   { key: 'vds', unit: 'V', required: false, axis: true },
   { key: 'vsb', unit: 'V', required: false, axis: true, defaultBias: 0 }, // body-grounded default
   // required operating-point quantities
-  { key: 'id', unit: 'A', required: true, perWidth: true },
-  { key: 'gm', unit: 'S', required: true, perWidth: true },
+  { key: 'id', unit: 'A', required: true, perWidth: true, magnitude: true },
+  { key: 'gm', unit: 'S', required: true, perWidth: true, magnitude: true },
   // recommended / optional
-  { key: 'gds', unit: 'S', required: false, perWidth: true },
-  { key: 'gmb', unit: 'S', required: false, perWidth: true },
-  { key: 'cgg', unit: 'F', required: false, perWidth: true },
+  { key: 'gds', unit: 'S', required: false, perWidth: true, magnitude: true },
+  { key: 'gmb', unit: 'S', required: false, perWidth: true, magnitude: true },
+  // Capacitances, named c<i><j> for terminals g, d, s, b. C_ii = ∂Q_i/∂V_i is the total
+  // self-capacitance of node i, a magnitude. C_ij for i ≠ j is a transcapacitance: not
+  // reciprocal (cgd is not cdg), and its sign depends on the exporter's convention (BSIM's
+  // −∂Q_i/∂V_j or the plain ∂Q_i/∂V_j) and on the region, so it is kept as exported. Gate row
+  // first (as the format has always listed it), then drain, source, body.
+  { key: 'cgg', unit: 'F', required: false, perWidth: true, magnitude: true },
   { key: 'cgs', unit: 'F', required: false, perWidth: true },
   { key: 'cgd', unit: 'F', required: false, perWidth: true },
   { key: 'cgb', unit: 'F', required: false, perWidth: true },
   { key: 'cdb', unit: 'F', required: false, perWidth: true },
   { key: 'csb', unit: 'F', required: false, perWidth: true },
+  { key: 'cdd', unit: 'F', required: false, perWidth: true, magnitude: true },
+  { key: 'cdg', unit: 'F', required: false, perWidth: true },
+  { key: 'cds', unit: 'F', required: false, perWidth: true },
+  { key: 'css', unit: 'F', required: false, perWidth: true, magnitude: true },
+  { key: 'csg', unit: 'F', required: false, perWidth: true },
+  { key: 'csd', unit: 'F', required: false, perWidth: true },
+  { key: 'cbb', unit: 'F', required: false, perWidth: true, magnitude: true },
+  { key: 'cbg', unit: 'F', required: false, perWidth: true },
+  { key: 'cbd', unit: 'F', required: false, perWidth: true },
+  { key: 'cbs', unit: 'F', required: false, perWidth: true },
+  // Junction capacitances: the drain- and source-to-body diodes, apart from the intrinsic
+  // matrix above. Not cbd/cbs, which are transcapacitances in BSIM's own output.
+  { key: 'cjd', unit: 'F', required: false, perWidth: true, magnitude: true },
+  { key: 'cjs', unit: 'F', required: false, perWidth: true, magnitude: true },
+  // Terminal charges, kept as exported (see BaseQuantity.magnitude).
+  { key: 'qg', unit: 'C', required: false, perWidth: true },
+  { key: 'qd', unit: 'C', required: false, perWidth: true },
+  { key: 'qs', unit: 'C', required: false, perWidth: true },
+  { key: 'qb', unit: 'C', required: false, perWidth: true },
   { key: 'vth', unit: 'V', required: false },
   { key: 'vdsat', unit: 'V', required: false },
   { key: 'w', unit: 'm', required: false, perWidth: true }, // may be metadata instead of a column
@@ -37,6 +61,12 @@ export const BASE_KEYS: ReadonlySet<string> = new Set(BASE_QUANTITIES.map((q) =>
 /** Base keys that scale with device width (see BaseQuantity.perWidth). */
 export const PER_WIDTH_KEYS: ReadonlySet<string> = new Set(
   BASE_QUANTITIES.filter((q) => q.perWidth).map((q) => q.key),
+);
+
+/** Value keys that are magnitudes whatever the polarity (see BaseQuantity.magnitude): folded
+ *  to |value| on a declared signed PMOS export, and expected non-negative by QA. */
+export const MAGNITUDE_KEYS: ReadonlySet<string> = new Set(
+  BASE_QUANTITIES.filter((q) => q.magnitude).map((q) => q.key),
 );
 
 /** Base keys swept as grid coordinates rather than measured as values (see
@@ -126,15 +156,33 @@ export const ALIASES: Readonly<Record<string, string>> = {
   gm: 'gm',
   gmbs: 'gmb',
   gmb: 'gmb',
-  // capacitances
+  // capacitances — each its own key. cdd and css are self-capacitances, not the cross terms
+  // cdb and csb; capbd and capbs are BSIM4's names (in ngspice) for the junction capacitances.
   cgg: 'cgg',
   cgs: 'cgs',
   cgd: 'cgd',
   cgb: 'cgb',
-  cdd: 'cdb',
+  cdd: 'cdd',
+  cdg: 'cdg',
+  cds: 'cds',
   cdb: 'cdb',
-  css: 'csb',
+  css: 'css',
+  csg: 'csg',
+  csd: 'csd',
   csb: 'csb',
+  cbb: 'cbb',
+  cbg: 'cbg',
+  cbd: 'cbd',
+  cbs: 'cbs',
+  cjd: 'cjd',
+  cjs: 'cjs',
+  capbd: 'cjd',
+  capbs: 'cjs',
+  // terminal charges
+  qg: 'qg',
+  qd: 'qd',
+  qs: 'qs',
+  qb: 'qb',
   // voltages
   vt: 'vth',
   vt0: 'vth',
