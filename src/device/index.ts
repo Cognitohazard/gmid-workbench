@@ -11,7 +11,13 @@ import { offHull, sliceGrid } from '../grid';
 import { scalarScope, registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
 import { compileExpr, metaScalars, pointScope, DERIVED_COMPILED } from '../derive';
-import { AXIS_KEYS, BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
+import {
+  AXIS_KEYS,
+  BASE_KEYS,
+  DERIVED_QUANTITIES,
+  PER_WIDTH_KEYS,
+  isPassthroughKey,
+} from '../namespace';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two bound quantities.
@@ -63,6 +69,8 @@ export interface SizeResult {
    * unknowable) and remain at w0.
    */
   quantities: Record<string, number>;
+  /** The keys of `quantities` read from pass-through columns (see isPassthroughKey). */
+  passthrough: string[];
   /**
    * Human-readable engineering notes for this sizing (e.g. a requested L that fell
    * off the table's L hull and was clamped). Empty when nothing needs flagging.
@@ -370,12 +378,17 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // column, rather than re-derived from inputs the table may not have. A stored column of any other
   // derived name (an export's own `ro`, `vnth`) never reached the point — the lookup interpolates
   // base columns only — so it is re-derived at the sized width like the rest.
+  // A pass-through column is the exception: its width law is unknowable, so it is reported as
+  // read, at w0, and kept out of the scope the derived layer is re-evaluated in — for the same
+  // reason lookup keeps it out of its own (a column named like a constant would shadow it).
   const k = W / Wchar;
   const stored = (key: string): boolean => BASE_KEYS.has(key) && q.table.grid.quantities.has(key);
   const bases: Record<string, number> = {};
+  const passthrough: Record<string, number> = {};
   for (const [key, val] of Object.entries(point)) {
     if (DERIVED_COMPILED.has(key) && !stored(key)) continue; // re-derived below at the sized width
-    bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
+    if (isPassthroughKey(key)) passthrough[key] = val;
+    else bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
   }
   // The meta layer lookup used but did not report: T/UT (temperature) and — when the
   // table has no w column — the width itself, which must reflect the SIZED device.
@@ -385,9 +398,9 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     }
   }
   // A point scope, so a definition reading another derived name (the γ-model keys read `gamma`)
-  // reads it re-derived from the same scaled bases.
+  // reads it re-derived from the same scaled bases. Pass-through columns stay out of that scope.
   const scaledScope = pointScope(bases);
-  const quantities: Record<string, number> = { ...bases };
+  const quantities: Record<string, number> = { ...bases, ...passthrough };
   for (const [key, compiled] of DERIVED_COMPILED) {
     if (!Object.prototype.hasOwnProperty.call(point, key)) continue; // not computable on this table
     if (stored(key)) continue; // kept as read, above
@@ -419,7 +432,19 @@ export function sizeDevice(q: SizeQuery): SizeResult {
       : {}),
   });
 
-  return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities, warnings, clamped };
+  return {
+    gm,
+    gm_id,
+    id,
+    W,
+    vgs,
+    feasible,
+    ceiling,
+    quantities,
+    passthrough: Object.keys(passthrough),
+    warnings,
+    clamped,
+  };
 }
 
 /**

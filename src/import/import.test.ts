@@ -149,4 +149,79 @@ describe('importMostab', () => {
     expect(rules.has('gds-sign')).toBe(true);
     expect(rules.has('cap-sign')).toBe(true);
   });
+
+  // ── The wider namespace: each standard operating-point output under its own name ──────────
+
+  // An NMOS export carrying the capacitance matrix's self and cross terms, both junction
+  // capacitances under BSIM4's names, a terminal charge, and one output the format does not name.
+  const WIDE = `# device: nch_wide
+# W: 1e-6
+L,VGS,ID,GM,CDD,CDB,CSS,CSB,CBB,CBD,CAPBD,CAPBS,QG,UEFF
+1e-7,0.3,1e-6,1e-5,4e-15,1e-16,5e-15,2e-16,6e-15,3e-16,7e-16,8e-16,1e-15,0.04
+1e-7,0.4,2e-6,2e-5,4e-15,1e-16,5e-15,2e-16,6e-15,3e-16,7e-16,8e-16,2e-15,0.04
+1e-7,0.5,3e-6,3e-5,4e-15,1e-16,5e-15,2e-16,6e-15,3e-16,7e-16,8e-16,3e-15,0.04
+`;
+
+  it('names each capacitance, junction capacitance and charge, and carries only the rest', () => {
+    const r = importMostab(WIDE);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const t = r.dataset.tables[0];
+    const q = t.grid.quantities;
+    // cdd and css are self-capacitances, cdb and csb cross terms: four columns, four keys. (cdd
+    // and css used to be read as cdb and csb, so a file carrying both pairs was refused.)
+    expect(q.get('cdd')?.[0]).toBe(4e-15);
+    expect(q.get('cdb')?.[0]).toBe(1e-16);
+    expect(q.get('css')?.[0]).toBe(5e-15);
+    expect(q.get('csb')?.[0]).toBe(2e-16);
+    expect(q.get('cbb')?.[0]).toBe(6e-15);
+    // cbd is the body–drain transcapacitance; the junction capacitance is cjd (capbd in BSIM4).
+    expect(q.get('cbd')?.[0]).toBe(3e-16);
+    expect(q.get('cjd')?.[0]).toBe(7e-16);
+    expect(q.get('cjs')?.[0]).toBe(8e-16);
+    expect(q.get('qg')?.[2]).toBe(3e-15);
+    // Only the unnamed column passes through, and the import says so — once, as information.
+    expect([...(t.passthrough ?? [])]).toEqual(['ueff']);
+    const notes = r.dataset.warnings.filter((w) => w.rule === 'passthrough-columns');
+    expect(notes).toHaveLength(1);
+    expect(notes[0].severity).toBe('info');
+    expect(notes[0].message).toMatch(/not recognized: ueff — kept under its own name/);
+    expect(notes[0].message).toMatch(/not rescaled when a device is sized/);
+  });
+
+  it('says nothing about pass-through on a file whose every column is named', () => {
+    const r = importMostab(SAMPLE);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.dataset.warnings.some((w) => w.rule === 'passthrough-columns')).toBe(false);
+  });
+
+  // A signed PMOS export of the same columns.
+  const WIDE_PMOS = `L,VGS,ID,GM,CDD,CBD,CJD,QG
+1e-7,-0.5,-3e-6,-3e-5,-4e-15,-3e-16,-7e-16,-3e-15
+1e-7,-0.4,-2e-6,-2e-5,-4e-15,-3e-16,-7e-16,-2e-15
+1e-7,-0.3,-1e-6,-1e-5,-4e-15,-3e-16,-7e-16,-1e-15
+`;
+
+  it('on a declared signed PMOS export, folds the magnitudes and keeps the signed terms', () => {
+    const r = importMostab(`# device: pch_wide\n# polarity: p\n${WIDE_PMOS}`);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const q = r.dataset.tables[0].grid.quantities;
+    // A self-capacitance and a junction capacitance are magnitudes: folded.
+    expect([...q.get('cdd')!].every((x) => x > 0)).toBe(true);
+    expect([...q.get('cjd')!].every((x) => x > 0)).toBe(true);
+    // A transcapacitance and a terminal charge carry their sign as information: kept.
+    expect([...q.get('cbd')!].every((x) => x < 0)).toBe(true);
+    expect([...q.get('qg')!].every((x) => x < 0)).toBe(true);
+    expect(r.dataset.warnings.some((w) => w.rule === 'cap-sign')).toBe(false);
+  });
+
+  it('flags a negative self- or junction capacitance on an undeclared signed export, not a transcapacitance', () => {
+    const r = importMostab(`# device: pch_wide\n${WIDE_PMOS}`);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const flagged = r.dataset.warnings.filter((w) => w.rule === 'cap-sign').map((w) => w.location);
+    expect(flagged.sort()).toEqual(['cdd', 'cjd']);
+  });
 });

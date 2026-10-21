@@ -83,17 +83,34 @@ Alias map (source header → canonical key):
 | `gm` | `gm` | |
 | `gmbs`, `gmb` | `gmb` | |
 | `cgg`, `cgs`, `cgd`, `cgb` | themselves | |
-| `cdd`, `cdb` | `cdb` | |
-| `css`, `csb` | `csb` | |
+| `cdd`, `cdg`, `cds`, `cdb` | themselves | |
+| `css`, `csg`, `csd`, `csb` | themselves | |
+| `cbb`, `cbg`, `cbd`, `cbs` | themselves | |
+| `cjd`, `capbd` | `cjd` | drain junction capacitance |
+| `cjs`, `capbs` | `cjs` | source junction capacitance |
+| `qg`, `qd`, `qs`, `qb` | themselves | |
 | `vt`, `vt0`, `vth` | `vth` | |
 | `vdssat`, `vdsat` | `vdsat` | |
 | `vgs`, `vds`, `vsb` | themselves | |
 | `vbs` | `vsb` | values negated: `vsb = -vbs` |
 | `sth`, `sfl`, `gamma`, `igd`, `igs` | themselves | |
 
-**Unknown columns pass through.** Any header not in the table above becomes a
-first-class numeric quantity under its lower-cased name — available to charts, the
-expression engine, and lookup like any built-in quantity. Its cells must still be
+`cdd` and `css` are the drain's and source's total self-capacitances, not the cross terms
+`cdb` and `csb`; earlier versions of the importer read them as `cdb` and `csb`, so a table
+imported then and kept by the app holds a self-capacitance under a cross term's name, and the
+file should be imported again. `cbd` and `cbs` are the body's transcapacitances, as BSIM
+reports them, not the junction capacitances: an exporter whose `cbd` means the drain junction
+should write it as `cjd`.
+
+**Unknown columns pass through.** The table above is meant to name every standard quantity a
+characterization carries; it is not a filter. Any header not in it becomes a numeric quantity
+under its lower-cased name — available to charts, the expression engine, lookup, sizing and
+design sheets — so nothing in a file is lost. Unlike a named quantity, such a column is not
+rescaled when a device is sized (it is reported at the characterization width), not folded for
+a signed PMOS export, and not checked, because nothing says how it scales or what sign it
+takes. The importer
+lists such columns as an information finding (`passthrough-columns`), so a quantity this
+exporter spells differently shows up instead of going unscaled. Its cells must still be
 numeric.
 
 ## Columns
@@ -119,7 +136,11 @@ the drain current bends into saturation, and by their coarser step above that.
 | `l`, `vds`, `vsb` | m, V, V | optional axes — each one decides what the file can be used for; see [What each use needs](#what-each-use-needs) |
 | `gds` | S | recommended (intrinsic gain, ro) |
 | `cgg` | F | recommended (fT) |
-| `cgs`, `cgd`, `cgb`, `cdb`, `csb` | F | optional capacitances |
+| `cgs`, `cgd`, `cgb` | F | optional: gate transcapacitances |
+| `cdd`, `css`, `cbb` | F | optional: drain, source and body self-capacitances |
+| `cdg`, `cds`, `cdb`, `csg`, `csd`, `csb`, `cbg`, `cbd`, `cbs` | F | optional: the remaining transcapacitances |
+| `cjd`, `cjs` | F | optional: drain and source junction capacitances |
+| `qg`, `qd`, `qs`, `qb` | C | optional: terminal charges |
 | `vth`, `vdsat` | V | optional |
 | `gmb` | S | optional (body effect) |
 | `sth` | A²/Hz | optional: drain thermal-noise current PSD; where present, the thermal-noise figures are read from it |
@@ -209,12 +230,15 @@ Temperature metadata is in °C. Do not export in mV, µA, or fF.
 - **PMOS:** exports may be **signed** (negative `vgs`/`vds` sweep values, negative
   `id`/`gm`). Declare `# polarity: p`. On import, value columns are then folded to
   magnitudes with the polarity recorded, specifically:
-  - folded to |·|: `id`, `gm`, `gds`, `gmb`, `cgg`, and non-axis voltage columns
+  - folded to |·|: `id`, `gm`, `gds`, `gmb`, the self-capacitances `cgg`, `cdd`, `css`,
+    `cbb`, the junction capacitances `cjd`, `cjs`, and non-axis voltage columns
     (`vth`, `vdsat`);
   - **not** folded: the swept axis columns (`vgs`, `vds`, `vsb`, `l`), which stay
     signed as exported;
-  - **not** folded: the cross-capacitances `cgd`, `cgb`, `cdb`, `csb` — these are
-    legitimately signed under the ∂Qi/∂Vj convention — and passthrough columns.
+  - **not** folded: the transcapacitances (`cgs`, `cgd`, `cgb` and the other `c<i><j>`
+    with i ≠ j), which are legitimately signed under the ∂Qi/∂Vj convention; the
+    terminal charges `qg`, `qd`, `qs`, `qb`, whose sign is information (a gate charge
+    crosses zero near flat band); and passthrough columns.
 
   A signed PMOS table **without** a `# polarity: p` declaration is imported as-is and
   flagged by QA warnings; it is never guessed at and silently repaired. Exporting

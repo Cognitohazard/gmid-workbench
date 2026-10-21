@@ -12,10 +12,17 @@ import { lookup } from '../lookup';
 import { fixTable } from '../series';
 import { makeGrid, sliceGrid } from '../grid';
 import type { DeviceTable } from '../types';
-import { generateDemoDevice, scaleQuantities, signedMirrorDemo, withoutColumns } from '../demo';
+import {
+  generateDemoDevice,
+  scaleQuantities,
+  signedMirrorDemo,
+  withColumns,
+  withoutColumns,
+} from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 import { compileExpr } from '../derive';
 import { ExprError } from '../types';
+import { demoCsvWith, importOne, ueffAt, withUeff } from '../import/passthrough.fixtures';
 
 /** A known operating point: forward-lookup the demo at (L, vgs) to get a self-consistent (gm, id, gm/id). */
 function knownPoint(table: DeviceTable, L: number, vgs: number) {
@@ -401,6 +408,57 @@ describe('sizeDevice — quantities describe the SIZED device (width rescale)', 
     expect(Math.abs(q.gm / (2 * Math.PI * q.cgg) / q.ft - 1)).toBeLessThan(0.01);
     // ro is derived from the same scaled gds — exact.
     expect(1 / q.gds / q.ro).toBeCloseTo(1, 12);
+  });
+});
+
+describe('sizeDevice — pass-through columns', () => {
+  // An imported column the namespace does not name (`ueff`) is a quantity like any other, so the
+  // sizing reports it at the operating point — read at the characterization width w0, because
+  // its width law is unknowable.
+  const table = fixTable(withUeff(), { vds: 0.6 });
+  const L = 0.5e-6;
+  const w0 = table.meta.W as number;
+
+  it('reports the column at the operating point, at w0', () => {
+    const res = sizeDevice({ table, L, gm_id: 12, id: 20e-6 });
+    expect(res.feasible).toBe(true);
+    expect(res.W / w0).not.toBeCloseTo(1, 1); // sized well away from w0, so a rescale would show
+    expect(res.quantities.ueff).toBeCloseTo(ueffAt({ l: L, vds: 0.6, vgs: res.vgs }), 12);
+    expect(res.quantities.ueff).toBe(lookup(table, { l: L, vgs: res.vgs }).ueff);
+    expect(res.quantities.w0).toBe(w0);
+  });
+
+  it('is the same at any sized width — the column is not rescaled', () => {
+    const small = sizeDevice({ table, L, gm_id: 12, id: 5e-6 });
+    const big = sizeDevice({ table, L, gm_id: 12, id: 50e-6 });
+    expect(big.W / small.W).toBeCloseTo(10, 6);
+    expect(big.quantities.ueff).toBe(small.quantities.ueff);
+    // …while a per-width base column on the same table is.
+    expect(big.quantities.cgg / small.quantities.cgg).toBeCloseTo(10, 6);
+  });
+
+  it('a named quantity under the same treatment is rescaled: the junction capacitance', () => {
+    // cjd was once a column the format had no name for; now that it is named, sizing knows it
+    // scales with width and refers it to the sized device.
+    const named = fixTable(importOne(demoCsvWith({ cjd: () => 2e-15 })), { vds: 0.6 });
+    expect(named.passthrough?.has('cjd') ?? false).toBe(false);
+    const small = sizeDevice({ table: named, L, gm_id: 12, id: 5e-6 });
+    const big = sizeDevice({ table: named, L, gm_id: 12, id: 50e-6 });
+    expect(small.quantities.cjd).toBeCloseTo(2e-15 * (small.W / w0), 27);
+    expect(big.quantities.cjd / small.quantities.cjd).toBeCloseTo(10, 6);
+  });
+
+  it('leaves the re-derived layer untouched, even under a constant’s name', () => {
+    // The re-evaluation at the sized width reads base columns and constants; a column called
+    // `k` must not stand in for Boltzmann's constant there.
+    const plain = generateDemoDevice();
+    const withK = withColumns(plain, { k: 1 });
+    const Lp = plain.grid.axes[0].values[1];
+    const a = sizeDevice({ table: plain, L: Lp, gm_id: 12, id: 20e-6 });
+    const b = sizeDevice({ table: withK, L: Lp, gm_id: 12, id: 20e-6 });
+    expect(b.quantities.k).toBe(1);
+    expect(b.quantities.svth_m).toBe(a.quantities.svth_m);
+    expect(b.quantities.vnth_m).toBe(a.quantities.vnth_m);
   });
 });
 

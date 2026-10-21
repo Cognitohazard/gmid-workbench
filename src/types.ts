@@ -114,6 +114,16 @@ export interface BaseQuantity {
    */
   readonly perWidth?: boolean;
   /**
+   * True for value columns that are magnitudes whatever the device's polarity: currents,
+   * conductances, and a node's total self-capacitance or a junction capacitance. A signed PMOS
+   * export declared `# polarity: p` has these folded to |value| on import; on an undeclared one,
+   * QA flags a negative gm, gds or magnitude capacitance. Transcapacitances and terminal charges
+   * carry no flag: their sign is
+   * information (a transcapacitance is legitimately negative in places, and a gate charge
+   * crosses zero near flat band), so they are kept as exported.
+   */
+  readonly magnitude?: boolean;
+  /**
    * For a bias sweep axis only: the operating point a sizer may assume when a design sheet's
    * givens leave this axis undeclared — e.g. vsb = 0 (source at body, the body-grounded case
    * almost every device sits in). An axis without one (vds, set by the circuit node) has no

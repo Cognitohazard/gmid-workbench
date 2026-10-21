@@ -85,12 +85,14 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Which knob to turn. For the check the badge names (or, on a feasible design, the check failing at a range end if one is, else the one with the least room left), this ranks the design choices by how far each moves that check’s margin over one small step of its own value — up and down shown separately, since a knob is rarely symmetric and an equality check genuinely differs on the two sides. It is a snapshot: each knob costs two full re-evaluations of the whole sheet, so it is taken when you ask and retired as soon as you change the design.',
   wiringWarning:
     'A block declares which node its gate and source are tied to, and the sizing says what its V_GS came out at. Those describe the same wire, so they must agree — this says by how much they do not. Nothing is repaired and no verdict moves: which of the two is wrong (the declared node, or the givens that implied a different one) is a design decision. It is the failure that lets two blocks be sized at gate voltages hundreds of millivolts apart with every check still green. To make it gate the design, write a hard check on the same two numbers.',
+  evaluating:
+    'This sheet is evaluated in the background, so the page stays responsive while it runs. The numbers on screen are the last finished answer and update when the next one arrives; an edit made in the meantime cancels the run it makes out of date.',
   sheetSweep:
     'Sweep one variable across its range and chart every check’s margin — the region where the design is feasible.',
   sheetSweep2:
     'Add a second variable to sweep the design plane: a feasibility heatmap (green = feasible, red = a hard check fails) instead of the 1-D margin chart.',
   blockDevice:
-    'Size this block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load); “active device” inherits the parent’s.',
+    'Size this block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load). Left unset, a block inherits its parent’s device: the active device for a block on the sheet itself, the enclosing block’s for one nested inside another. A block inside a referenced sheet belongs to that sheet and cannot be rebound here — detach the reference to make it local.',
   // design-sheet vocabulary (check kinds, statuses, composition, bias, param roles)
   checkKind:
     'physical = a hard physical floor; spec = a hard application spec — both must hold for a feasible design. advisory = shown, never blocks.',

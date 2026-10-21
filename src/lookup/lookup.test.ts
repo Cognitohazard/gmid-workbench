@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { lookup, lookupByGmId, lookupByQuantity } from './index';
-import { invertX } from '../series';
+import { fixTable, invertX } from '../series';
 import { makeGrid } from '../grid';
 import { type Axis, type DeviceTable, LookupError } from '../types';
-import { generateDemoDevice, scaleQuantities, withoutColumns } from '../demo';
+import { generateDemoDevice, scaleQuantities, withColumns, withoutColumns } from '../demo';
 import { importMostab } from '../import';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
+import { ueffAt, withUeff } from '../import/passthrough.fixtures';
 
 /** Build a single-L (l, vgs) DeviceTable from explicit gm/id columns so a slice's
  *  gm/id-vs-vgs curve can be made deliberately degenerate (all id==0) or folded
@@ -113,7 +114,9 @@ describe('lookup (forward)', () => {
 
   it('throws for an unknown requested key', () => {
     const table = generateDemoDevice();
-    expect(() => lookup(table, { l: 1e-6, vgs: 0.7 }, ['nope'])).toThrow(/neither a present base/);
+    expect(() => lookup(table, { l: 1e-6, vgs: 0.7 }, ['nope'])).toThrow(
+      /neither a present column/,
+    );
   });
 });
 
@@ -304,5 +307,75 @@ describe('lookup temperature', () => {
     // svth_m = 4kTγ/gm: same interpolated point, T scaled 300.15 K → 398.15 K.
     expect(b.svth_m / a.svth_m).toBeCloseTo((125 + 273.15) / PHYS.T, 12);
     expect(a.gm).toBeCloseTo(b.gm, 15); // the data itself is untouched
+  });
+});
+
+describe('lookup pass-through columns', () => {
+  // A header the importer does not recognize becomes a quantity under its lower-cased name, and
+  // the format promises it is available to lookup like any built-in one.
+  const table = withUeff();
+  const l = table.grid.axes.find((a) => a.name === 'l') as Axis;
+  const vds = table.grid.axes.find((a) => a.name === 'vds') as Axis;
+  const vgs = table.grid.axes.find((a) => a.name === 'vgs') as Axis;
+
+  it('the import keeps the column as a stored quantity', () => {
+    expect(table.grid.quantities.has('ueff')).toBe(true);
+    expect(table.passthrough?.has('ueff')).toBe(true);
+  });
+
+  it('reports the column at a grid node, in the default key set', () => {
+    const p = { l: l.values[1], vds: vds.values[2], vgs: vgs.values[60] };
+    const out = lookup(table, p);
+    expect(out.ueff).toBeCloseTo(ueffAt(p), 12);
+  });
+
+  it('interpolates the column between nodes like any quantity', () => {
+    // ueff is affine in every axis, so the multilinear read is exact off the nodes too.
+    const p = { l: 0.33e-6, vds: 0.75, vgs: 0.537 };
+    const out = lookup(table, p);
+    expect(out.ueff).toBeCloseTo(ueffAt(p), 12);
+    // …through the same corner walk as the base columns: it is read at the same point.
+    expect(out.vgs).toBe(p.vgs);
+  });
+
+  it('answers when asked for by name', () => {
+    const p = { l: 0.5e-6, vds: 0.6, vgs: 0.6 };
+    expect(lookup(table, p, ['ueff'])).toEqual({ ueff: ueffAt(p) });
+    expect(() => lookup(table, p, ['cjx'])).toThrow(/"cjx" is neither/);
+  });
+
+  it('inverts on the column like any stored quantity', () => {
+    // ueff rises with vgs on every slice, so it can place an operating point (inverse lookup
+    // needs every axis but l and vgs pinned, so vds is fixed first).
+    const at = fixTable(table, { vds: 0.6 });
+    const L = 0.5e-6;
+    const target = ueffAt({ l: L, vds: 0.6, vgs: 0.6 });
+    const out = lookupByQuantity(at, 'ueff', target, L);
+    expect(out.vgs).toBeCloseTo(0.6, 12);
+    expect(out.ueff).toBeCloseTo(target, 12);
+  });
+
+  it('leaves the derived layer as the base columns define it', () => {
+    // Every derived quantity reads base columns and constants only, so a pass-through column —
+    // even one named like a constant — cannot change one. A column called `k` must not replace
+    // Boltzmann's constant in the γ-model noise.
+    const plain = generateDemoDevice();
+    const withK = withColumns(plain, { k: 1 });
+    const p = { l: plain.grid.axes[0].values[1], vgs: 0.55 };
+    const a = lookup(plain, p);
+    const b = lookup(withK, p);
+    expect(b.k).toBe(1);
+    const { k: _k, ...rest } = b;
+    expect(rest).toEqual(a);
+  });
+
+  it('does not report a stored column under a derived name in place of the definition', () => {
+    // qa/validate flags such a column (derived-shadow); lookup keeps reading the definition, as
+    // the inverse path and sizing do, so one name never carries two numbers.
+    const plain = generateDemoDevice();
+    const shadowed = withColumns(plain, { ft: 42 });
+    const p = { l: plain.grid.axes[0].values[1], vgs: 0.55 };
+    expect(lookup(shadowed, p).ft).toBe(lookup(plain, p).ft);
+    expect(lookup(shadowed, p, ['ft']).ft).toBe(lookup(plain, p).ft);
   });
 });

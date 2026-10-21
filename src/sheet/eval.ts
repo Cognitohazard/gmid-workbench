@@ -525,9 +525,50 @@ interface RegionPoint {
   axis?: 1 | -1;
 }
 
-/** Resolve the givens, call sizeDevice, and merge its operating point into `values`. `point`
- *  receives the two numbers the region check reads, taken from the givens and the sizing rather
- *  than from `values`, where a param or equation of the same name could stand in for them. */
+/**
+ * Put a sizing's operating point in scope: gm/gm_id/id/W/vgs/vstar/cgg/vnth_m/… and every
+ * pass-through column the table carries (`passthrough`, as the sizing reports them), which is how
+ * a sheet reads a quantity the format has no name for.
+ *
+ * A pass-through column never replaces a name the sheet already uses: a param, a child's provide,
+ * or an expression constant. Otherwise a column called `k` would replace Boltzmann's constant in
+ * every equation after the sizing, on this table and no other. Such a column is left out of scope
+ * and a warning says so, so neither side silently wins. Namespace quantities are always put in
+ * scope: they are how the sheet reads its device.
+ */
+function mergeSized(
+  values: Record<string, number>,
+  quantities: Record<string, number>,
+  passthrough: readonly string[],
+  warn: (w: QAWarning) => void,
+): void {
+  const extra = new Set(passthrough);
+  for (const [key, v] of Object.entries(quantities)) {
+    if (extra.has(key)) {
+      const taken = Object.prototype.hasOwnProperty.call(values, key)
+        ? 'the sheet already defines that name'
+        : Object.prototype.hasOwnProperty.call(CONSTANTS, key)
+          ? 'that name is an expression constant'
+          : undefined;
+      if (taken) {
+        warn({
+          rule: 'sheet-passthrough',
+          severity: 'warning',
+          message: `the table's "${key}" column is not read: ${taken}, which keeps its meaning — rename the column in the export to read it`,
+          location: 'givens',
+          symbol: key,
+        });
+        continue;
+      }
+    }
+    values[key] = v;
+  }
+}
+
+/** Resolve the givens, call sizeDevice, and merge its operating point into `values` (through
+ *  mergeSized, so a pass-through column never shadows a name the sheet uses). `point` receives
+ *  the two numbers the region check reads, taken from the givens and the sizing rather than from
+ *  `values`, where a param or equation of the same name could stand in for them. */
 function runSizing(
   b: SheetGivens,
   table: DeviceTable | undefined,
@@ -590,7 +631,7 @@ function runSizing(
 
   try {
     const res = sizeDevice(q);
-    Object.assign(values, res.quantities); // gm/gm_id/id/W/vgs/vstar/cgg/vnth_m/… at the point
+    mergeSized(values, res.quantities, res.passthrough, warn);
     values.ceiling = res.ceiling; // not in the quantities bag
     values.feasible = res.feasible ? 1 : 0;
     // Surface the sizer's own engineering notes (e.g. an L clamped onto the table's

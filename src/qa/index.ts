@@ -17,7 +17,14 @@ import {
 } from '../corners';
 import { PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
-import { AXIS_DEFAULT_BIAS, BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
+import {
+  AXIS_DEFAULT_BIAS,
+  BASE_KEYS,
+  BASE_QUANTITIES,
+  DERIVED_QUANTITIES,
+  MAGNITUDE_KEYS,
+  passthroughKeys,
+} from '../namespace';
 
 // --- physical thresholds -----------------------------------------------------
 
@@ -34,6 +41,12 @@ const GM_ID_UNIT_ERROR = 45;
 
 /** Per-step vgs spacing above this (in volts) is coarse enough to warn. */
 const VGS_STEP_WARN = 0.01; // 10 mV
+
+/** Relative slack on that limit. A step is the difference of two decimal values held as binary
+ *  floats, so an axis at exactly 10 mV measures a few ULP either side of 0.01 (0.07 − 0.06 is
+ *  0.010000000000000009). One part in a million absorbs that at any vgs a table can hold while
+ *  remaining far below any step an exporter actually chose. */
+const VGS_STEP_TOL = 1e-6;
 
 /** Plausible range for the thermal-noise factor γ; outside it is likely a unit/model error.
  *  The long-channel value is 2/3; short-channel devices run higher (hot-carrier / velocity
@@ -76,14 +89,19 @@ const GM_BAD_FRACTION = 0.34;
  *  span — so sub-pA leakage/noise wiggles in the off region are not "glitches". */
 const MONO_EPS = 1e-3;
 
-/** Quantities whose sign is convention-dependent and folded to magnitude. */
-const SIGNED_MAGNITUDE_KEYS: readonly string[] = ['id', 'gm', 'gds', 'gmb'];
-
-/** Only the self-term gate capacitance cgg is a magnitude folded on signed input.
- *  The cross/trans-capacitances (cgd, cgb, cdb, csb) are legitimately signed under the
- *  common ∂Qi/∂Vj convention (see signCheck below), so they are deliberately NOT folded —
- *  abs-ing them would corrupt their sign information. */
-const SELF_CAP_KEYS: readonly string[] = ['cgg'];
+/** The capacitances that are magnitudes (self-capacitances and junction capacitances), which the
+ *  sign check below covers. The transcapacitances are not among them: their sign carries
+ *  information, and taking the absolute value would lose it. Read from the namespace flag
+ *  (BaseQuantity.magnitude), which is also what canonicalizeTable folds. */
+const MAGNITUDE_CAP_KEYS: readonly string[] = BASE_QUANTITIES.filter(
+  (q) => q.magnitude && q.unit === 'F',
+).map((q) => q.key);
+/** How the cap-sign finding names a capacitance that is not a node's self-capacitance. */
+const CAP_NOUN: Readonly<Record<string, string>> = {
+  cgg: 'the total gate capacitance',
+  cjd: 'a junction capacitance',
+  cjs: 'a junction capacitance',
+};
 
 /** Voltage axis/column keys (folded to |v| on signed input). */
 const VOLTAGE_KEYS: readonly string[] = BASE_QUANTITIES.filter((q) => q.unit === 'V').map(
@@ -249,11 +267,16 @@ export function validate(table: DeviceTable): QAWarning[] {
         location: 'vgs',
       });
     }
-    if (maxStep > VGS_STEP_WARN) {
+    if (maxStep > VGS_STEP_WARN * (1 + VGS_STEP_TOL)) {
+      // Enough decimals that the step shown is visibly past the limit: a 10.04 mV step at one
+      // decimal would read "10.0 mV exceeds 10 mV".
+      const mV = maxStep * 1e3;
+      let digits = 1;
+      while (digits < 6 && Number(mV.toFixed(digits)) <= VGS_STEP_WARN * 1e3) digits++;
       out.push({
         rule: 'vgs-step',
         severity: 'warning',
-        message: `vgs step up to ${(maxStep * 1e3).toFixed(1)} mV exceeds 10 mV`,
+        message: `vgs step up to ${mV.toFixed(digits)} mV exceeds 10 mV`,
         location: 'vgs',
       });
     }
@@ -339,10 +362,10 @@ export function validate(table: DeviceTable): QAWarning[] {
   }
 
   // --- magnitude / positivity checks ---
-  // gm and gds are reported as magnitudes; the total gate capacitance cgg is a self-term and
-  // must be non-negative. A signed PMOS dump trips these until canonicalization folds it to
-  // magnitude. The cross/trans-capacitances (cgd, cgb, cdb, csb) are deliberately NOT checked
-  // — they are legitimately negative under the common ∂Qi/∂Vj convention.
+  // gm and gds are reported as magnitudes; a self-capacitance (cgg, cdd, css, cbb) and a
+  // junction capacitance must be non-negative. A signed PMOS dump trips these until
+  // canonicalization folds it to magnitude. The transcapacitances are deliberately NOT checked
+  // — they are legitimately negative under some exporters' conventions and in some regions.
   const signCheck = (
     col: Float64Array | undefined,
     rule: string,
@@ -371,7 +394,13 @@ export function validate(table: DeviceTable): QAWarning[] {
     'gds',
     'expected a magnitude (a signed PMOS dump needs canonicalization first)',
   );
-  signCheck(q.get('cgg'), 'cap-sign', 'cgg', 'the total gate capacitance should be a magnitude');
+  for (const key of MAGNITUDE_CAP_KEYS)
+    signCheck(
+      q.get(key),
+      'cap-sign',
+      key,
+      `${CAP_NOUN[key] ?? 'a self-capacitance'} should be a magnitude`,
+    );
 
   // A non-positive sth/sfl poisons every input-referred noise quantity (sqrt of ≤0, or a 0 in fco).
   // Flicker noise is the exception where no current flows: a simulator gives exactly 0 at
@@ -588,6 +617,26 @@ export function validate(table: DeviceTable): QAWarning[] {
     });
   }
 
+  // --- columns with no name in the namespace ---
+  // The namespace names every quantity it knows how to treat. Any other column is kept under its
+  // own name, so nothing in the file is lost, but nothing here knows how it scales or what sign
+  // it takes. It is reported once, as information, so that a standard quantity this exporter
+  // names differently is noticed instead of going unscaled. A column named like a derived
+  // quantity is reported above instead.
+  const unnamed = passthroughKeys(table.grid);
+  if (unnamed.length) {
+    out.push({
+      rule: 'passthrough-columns',
+      severity: 'info',
+      message:
+        `carried as-is, not recognized: ${unnamed.join(', ')} — kept under ` +
+        `${unnamed.length > 1 ? 'their own names' : 'its own name'}, and can be charted, looked ` +
+        `up and read by a design sheet, but ${unnamed.length > 1 ? 'they are' : 'it is'} not ` +
+        `rescaled when a device is sized, not folded for a signed PMOS export, and not checked`,
+      location: unnamed.join(', '),
+    });
+  }
+
   return out;
 }
 
@@ -784,9 +833,10 @@ export function validateDevices(devices: readonly CharacterizedDevice[]): QAWarn
 
 /**
  * Fold signed (e.g. PMOS) source conventions into magnitudes. When
- * meta.polarity.signedInput is set, replace id/gm/gds/gmb, the self-term gate
- * capacitance cgg and NON-AXIS voltages (vth, vdsat) with |value|, and record the
- * polarity. The cross/trans-capacitances (cgd/cgb/cdb/csb) are left signed. Sweep
+ * meta.polarity.signedInput is set, replace every magnitude quantity (BaseQuantity.magnitude:
+ * id/gm/gds/gmb, the self-capacitances cgg/cdd/css/cbb and the junction capacitances cjd/cjs)
+ * and the NON-AXIS voltages (vth, vdsat) with |value|, and record the polarity. The
+ * transcapacitances and the terminal charges are left signed. Sweep
  * AXES are left untouched: a signed sweep is still ascending and valid, and the
  * data row order already matches it — abs-ing + re-sorting an axis without
  * reindexing the data would corrupt the mapping. |V| axis presentation, if ever
@@ -798,10 +848,10 @@ export function canonicalizeTable(table: DeviceTable): DeviceTable {
 
   const grid = table.grid;
 
-  // Magnitude for currents/conductances, the self-term capacitance cgg, and
+  // Magnitude for currents/conductances, the self- and junction capacitances, and
   // non-axis voltages. Axis-name columns are skipped so the materialized axis
   // column keeps matching its (untouched) axis.
-  const magKeys = new Set<string>([...SIGNED_MAGNITUDE_KEYS, ...SELF_CAP_KEYS, ...VOLTAGE_KEYS]);
+  const magKeys = new Set<string>([...MAGNITUDE_KEYS, ...VOLTAGE_KEYS]);
   const axisNames = new Set(grid.axes.map((ax) => ax.name));
 
   const nextQ = new Map<string, Float64Array>();

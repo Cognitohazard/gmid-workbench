@@ -1,21 +1,19 @@
 <script lang="ts">
   // A leaf design-sheet panel: pick a vetted example, tune the design variables, and
   // watch the author equations and pass/fail checks recompute with signed margins.
-  // It holds no numerics — runSheet (core) does all evaluation and never throws.
+  // It holds no numerics — the core does all evaluation and never throws, in this panel's
+  // evaluation worker (sheetEvaluator.svelte.ts), off the page's thread.
   import {
     cloneDoc,
     aggregateConditionRuns,
     clampMargin,
     measurable,
     projectingResolver,
-    runConditions,
     sameCondition,
     tableAt,
     conditionKeyId,
     conditionKeyOf,
     conditionLabel,
-    sweepSheet,
-    sweepSheet2,
     sweepable as isSweepable,
     torn,
     constrained as isConstrained,
@@ -24,7 +22,6 @@
     limitingCheck,
     rangeEndCheck,
     withoutRange,
-    sheetSensitivities,
     SENSITIVITY_REL_STEP,
     resolveSheetRefs,
     flattenSheetDoc,
@@ -67,6 +64,8 @@
   import { commitEng, pct } from './eng';
   import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
   import { copyText, download } from './export';
+  import { SheetEvaluator, type JobOf } from './sheetEvaluator.svelte';
+  import type { JobKind, JobResults } from './sheetjobs';
 
   let {
     device,
@@ -103,6 +102,33 @@
   // The live sheet library (curated ∪ user-imported) and its by-reference index.
   const menu = $derived(sheetMenu());
   const refs = $derived(sheetRefIndex());
+
+  // Every evaluation — the verdict, the sweeps, the sensitivities — runs in this panel's
+  // evaluation worker, never on the page's thread: a large sheet takes seconds per run. Each
+  // answer is stored in a $state.raw below (results are plain data, so they are not wrapped in
+  // reactive proxies), and the last answer stays on screen beside the busy indicator until the
+  // next one arrives.
+  const evaluator = new SheetEvaluator();
+  $effect(() => () => evaluator.dispose());
+  /** The error from a job that could not run at all, shown with the warnings. */
+  let evalError = $state<string | null>(null);
+  const failed = (e: string): void => {
+    evalError = `evaluation failed: ${e}`;
+  };
+  /** Used by every evaluation below: request `job` and pass its answer to `answer`. When there is
+   *  no job (nothing to evaluate), withdraw the request and clear the answer. */
+  function ask<K extends JobKind>(
+    kind: K,
+    job: JobOf<K> | undefined,
+    answer: (r: JobResults[K] | null) => void,
+  ): void {
+    if (!job || !primary) {
+      evaluator.cancel(kind);
+      answer(null);
+      return;
+    }
+    evaluator.request(job, { bench, primary, refs }, answer, failed);
+  }
 
   // One unresolved or mis-parameterized child makes every parent expression that
   // reads its provides "not defined" — a ~20-line wall for one root cause. Collapse
@@ -156,6 +182,7 @@
   // Onboarding hints lead the same list the diagnostics land in — they are the likeliest cause of
   // the diagnostics below them — and carry no help of their own (they already name the remedy).
   const warnLines = $derived.by(() => [
+    ...(evalError ? [{ text: evalError }] : []),
     ...signHints.map((text): WarnLine => ({ text })),
     ...shownWarnings,
   ]);
@@ -229,18 +256,38 @@
   // other, same widths, lengths, currents and gate biases, operating point re-settled — and the
   // nominal condition's run comes back first even when it was not asked for: the design is
   // sized there, so its home is always on the page, and feasibility is its verdict.
+  //
+  // The answer is kept with the title of the sheet it answers, so picking another sheet does not
+  // show the previous sheet's verdict while the new one is evaluated.
+  let runsAnswer = $state.raw<{ title: string; runs: ConditionRun[] } | null>(null);
+  $effect(() => {
+    const title = cfg.title;
+    const base = keys.length > 1 ? nominalKey : undefined;
+    ask(
+      'run',
+      keys.length
+        ? { kind: 'run', doc: cfg, keys: [...keys], ...(base ? { base } : {}) }
+        : undefined,
+      (r) => {
+        runsAnswer = r && { title, runs: r };
+        if (r) evalError = null;
+      },
+    );
+  });
   const runs = $derived(
-    primary
-      ? runConditions(
-          cfg,
-          primary,
-          keys,
-          bench.deviceOf,
-          refs,
-          keys.length > 1 ? nominalKey : undefined,
-        )
-      : [],
+    primary && runsAnswer && runsAnswer.title === cfg.title ? runsAnswer.runs : [],
   );
+  /** Nothing to show yet: the first verdict for this sheet is still being evaluated. */
+  const firstRun = $derived(runs.length === 0 && evaluator.busy('run'));
+  /** A sweep or a design-plane map is being taken. */
+  const sweeping = $derived(evaluator.busy('sweeps') || evaluator.busy('sweep2'));
+  /** What the worker is doing while the page shows its last answer. The first verdict needs no
+   *  line of its own: the badge says it is being evaluated. */
+  const busyText = $derived.by(() => {
+    if (evaluator.busy('run')) return runs.length ? 'updating…' : '';
+    if (sweeping) return 'sweeping…';
+    return evaluator.busy('sens') ? 'computing sensitivities…' : '';
+  });
   const multi = $derived(runs.length > 1);
   // Two questions, answered apart: is the design feasible where it is sized, and at how many of
   // the points it is promised to work at does that one design comply.
@@ -279,10 +326,9 @@
         .join(', ');
     return labels.map((label) => `${label} (${carrying(label)})`).join(' · ');
   });
-  /** The projection at the reference condition — the resolver the detail body, the sweeps and
-   *  the sensitivity probes all read. It is the core's own projection (the same one the runs
-   *  above evaluated through), so a chart or a probe can never mix conditions the verdict above
-   *  it did not. */
+  /** The projection at the reference condition, for what the panel itself reads off a child's
+   *  bound table (the sign hints). The evaluations project in the worker through the same core
+   *  function, so nothing on the panel can mix conditions the verdict above it did not. */
   const resolveDevice = $derived(refKey ? projectingResolver(bench.deviceOf, refKey) : undefined);
 
   // ── What the header may say. FEASIBILITY is one answer about the design where it was sized;
@@ -304,7 +350,9 @@
   /** The feasibility badge's words — stamped with the condition it was asked at whenever more
    *  than one condition is on the page, so no verdict there is unattributed. */
   const feasText = $derived(
-    FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
+    firstRun
+      ? 'evaluating…'
+      : FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
   );
   /** Whether the sheet claims an operating range at all — read from the doc, so the range
    *  column is there even when no condition could be evaluated. */
@@ -458,24 +506,47 @@
   // One condition at a time: a ranking is a statement about the point it was taken at, and
   // there is no such point while several conditions are on screen.
   const sensReady = $derived(!multi && evaluated && result !== undefined && refTable !== undefined);
+  /** The design being probed. It is set only while the request is pending, so it is also the
+   *  busy state. */
+  let sensFor = $state.raw<{ doc: SheetDoc; dev: DeviceTable } | null>(null);
+  const sensBusy = $derived(sensFor !== null);
+  function stopSens(): void {
+    evaluator.cancel('sens');
+    sensFor = null;
+  }
+  // A snapshot of a design that has since changed would not be shown, so stop computing it: the
+  // worker runs one job at a time, and the verdict for the new design is waiting behind it.
+  $effect(() => {
+    if (sensFor && (sensFor.doc !== cfg || sensFor.dev !== refTable)) stopSens();
+  });
   function toggleSens(): void {
     if (shot) {
       snap = null;
       return;
     }
-    if (!sensReady || !result || !refTable) return;
+    if (sensBusy) {
+      stopSens();
+      return;
+    }
+    if (!sensReady || !result || !refTable || !refKey || !primary) return;
     const focus = binding ?? rangeEndCheck(result) ?? limitingCheck(result);
-    snap = {
-      doc: cfg,
-      dev: refTable,
-      focus,
+    const doc = cfg;
+    const dev = refTable;
+    sensFor = { doc, dev };
+    evaluator.request(
       // Naming the check keeps the probes off the range-end runs unless the check in question
       // lives on one — the difference between 2 and 2*(1 + range ends) evaluations per knob.
-      rows: sheetSensitivities(cfg, refTable, resolveDevice, {
-        refs,
-        ...(focus ? { check: focus.id } : {}),
-      }),
-    };
+      { kind: 'sens', doc, at: refKey, ...(focus ? { check: focus.id } : {}) },
+      { bench, primary, refs },
+      (rows) => {
+        sensFor = null;
+        snap = { doc, dev, focus, rows: rows ?? [] };
+      },
+      (e) => {
+        sensFor = null;
+        failed(e);
+      },
+    );
   }
 
   // Knobs ranked for that check. The ranking quantity is the margin change over ONE STEP of each
@@ -518,38 +589,31 @@
   const sweepable = $derived(cfg.params.filter((p) => isSweepable(p)));
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
   const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
-  // `evaluated`, not merely "there is a table": a condition refused for want of a child device
-  // has no design to sweep, and sweeping it anyway would print a feasibility window — a verdict —
-  // under a header that just said the condition was not evaluated.
-  const swept = $derived(
-    active && !multi && evaluated && refTable
-      ? sweepSheet(rr.doc, active, refTable, SWEEP_POINTS, resolveDevice)
-      : null,
-  );
-  /** The same sweep at every EVALUATED condition — the multi-condition chart. Each curve is that
-   *  condition's own FEASIBILITY across the knob (the design re-sized there at every sample), so
-   *  the operating range is left out. A condition that was refused has no design to sweep, so it
-   *  contributes no curve and stays visible as its breakdown row instead. */
-  const sweptByKey = $derived.by(() => {
-    if (!active || !multi || !primary) return [];
-    const out: { key: ConditionKey; sweep: ReturnType<typeof sweepSheet> }[] = [];
-    for (const r of runs) {
-      if (r.state !== 'evaluated') continue;
-      const table = tableAt(primary, r.key);
-      if (!table) continue;
-      out.push({
-        key: r.key,
-        sweep: sweepSheet(
-          withoutRange(rr.doc),
-          active,
-          table,
-          SWEEP_POINTS,
-          projectingResolver(bench.deviceOf, r.key),
-        ),
-      });
-    }
-    return out;
+  // One sweep per EVALUATED condition, not merely per table: a condition refused for want of a
+  // child device has no design to sweep, and sweeping it anyway would print a feasibility window —
+  // a verdict — under a header that just said the condition was not evaluated. At one condition
+  // the sweep reads the sheet as it stands, range ends included; at several, each curve is that
+  // condition's own FEASIBILITY across the knob (the design re-sized there at every sample), so the
+  // operating range is left out. A refused condition contributes no curve and stays visible as its
+  // breakdown row instead. An answer is shown only while it is about the param now selected: a
+  // sweep of the previous one stays off the chart rather than being drawn under the new name.
+  const sweepDoc = $derived(multi ? withoutRange(rr.doc) : rr.doc);
+  let sweepsAnswer = $state.raw<JobResults['sweeps']>([]);
+  $effect(() => {
+    const at = runs.filter((r) => r.state === 'evaluated').map((r) => r.key);
+    ask(
+      'sweeps',
+      active && at.length
+        ? { kind: 'sweeps', doc: sweepDoc, param: active, at, points: SWEEP_POINTS }
+        : undefined,
+      (r) => (sweepsAnswer = r ?? []),
+    );
   });
+  const sweptHere = $derived(sweepsAnswer.filter((e) => e.sweep.param === active));
+  const swept = $derived(
+    !multi && refKey ? (sweptHere.find((e) => sameCondition(e.key, refKey))?.sweep ?? null) : null,
+  );
+  const sweptByKey = $derived(multi ? sweptHere : []);
 
   /** The swept parameter's unit, from whichever sweep ran — the caption's only use of it. */
   const sweptUnit = $derived(swept?.unit ?? sweptByKey[0]?.sweep.unit ?? '');
@@ -563,10 +627,25 @@
     !multi && active && sweep2 && sweepable2.some((p) => p.name === sweep2) ? sweep2 : '',
   );
   const twoD = $derived(active2 !== ''); // active2 is only ever set while `active` is
+  let swept2Answer = $state.raw<SheetSweep2 | null>(null);
+  $effect(() => {
+    ask(
+      'sweep2',
+      twoD && evaluated && refKey
+        ? {
+            kind: 'sweep2',
+            doc: rr.doc,
+            param: active,
+            param2: active2,
+            at: refKey,
+            points: SWEEP2_POINTS,
+          }
+        : undefined,
+      (r) => (swept2Answer = r),
+    );
+  });
   const swept2 = $derived(
-    twoD && evaluated && refTable
-      ? sweepSheet2(rr.doc, active, active2, refTable, SWEEP2_POINTS, resolveDevice)
-      : null,
+    swept2Answer?.paramX === active && swept2Answer.paramY === active2 ? swept2Answer : null,
   );
   // The distinct hard-check ids (tree-path) that bound the infeasible region — the caption's "what
   // limits it", so the plane is never a wall of red with no named cause.
@@ -680,15 +759,18 @@
     return f ? `${deviceLabel(f)} · stored by table` : `${describeBinding(binding)} (not loaded)`;
   };
 
-  // Point a composed child at a specific loaded device (a device binding), or '' to inherit the
-  // parent.
-  function setBlockDevice(i: number, uid: string): void {
-    const blocks = (cfg.blocks ?? []).map((u, j) => {
-      if (j !== i) return u;
-      const { device: _drop, ...rest } = u;
-      return uid ? { ...rest, device: uid } : rest;
-    });
-    onChange({ ...cfg, blocks });
+  // Point the composed block at `path` — []=top sheet is never one, [i]=child i, [i,j]=grandchild
+  // — at a specific loaded device (a device binding), or '' to inherit its parent's. The binding
+  // lives in the block entry of the doc that holds the block, so any block whose entry is local
+  // can be rebound; one inside a by-reference sheet belongs to that library sheet and has no
+  // control (detach the reference to make it local).
+  function setBlockDevice(path: number[], uid: string): void {
+    onChange(
+      updateBlockAt(cfg, path, (u) => {
+        const { device: _drop, ...rest } = u;
+        return uid ? { ...rest, device: uid } : rest;
+      }),
+    );
   }
 
   // ── Per-block operating point. A sheet sizes each device at its OWN vds/vsb; a
@@ -716,23 +798,20 @@
   // Write (or clear, on empty) a bias literal into the givens at `path` — []=top sheet, [i]=child
   // i, [i,j]=grandchild — and emit a fresh doc down the same immutable onChange path as setParam.
   function setBias(path: number[], axis: string, value: number | null): void {
-    const edit = (doc: SheetDoc, depth: number): SheetDoc => {
-      if (depth === path.length) {
-        if (!doc.givens) return doc;
-        const givens = { ...doc.givens } as SheetGivens & Record<string, string | undefined>;
-        if (value == null || !Number.isFinite(value)) delete givens[axis];
-        else givens[axis] = String(value);
-        return { ...doc, givens };
-      }
-      const i = path[depth];
-      // A docless (by-reference) block has nothing local to write into — the control is
-      // not rendered for those, so this is just the fail-safe.
-      const blocks = (doc.blocks ?? []).map((u, j) =>
-        j === i && u.doc ? { ...u, doc: edit(u.doc, depth + 1) } : u,
-      );
-      return { ...doc, blocks };
+    const edit = (doc: SheetDoc): SheetDoc => {
+      if (!doc.givens) return doc;
+      const givens = { ...doc.givens } as SheetGivens & Record<string, string | undefined>;
+      if (value == null || !Number.isFinite(value)) delete givens[axis];
+      else givens[axis] = String(value);
+      return { ...doc, givens };
     };
-    onChange(edit(cfg, 0));
+    // A docless (by-reference) block has nothing local to write into — the control is not
+    // rendered for those, so this is just the fail-safe.
+    onChange(
+      path.length
+        ? updateBlockAt(cfg, path, (u) => (u.doc ? { ...u, doc: edit(u.doc) } : u))
+        : edit(cfg),
+    );
   }
 
   // Copy-on-write escape hatch: swap the by-reference block at `path` for an embedded
@@ -745,24 +824,37 @@
     const hit = ref !== undefined ? refs.get(ref) : undefined;
     if (!hit || !('doc' in hit)) return; // unresolved — the button is not rendered here
     const inline = cloneDoc(hit.doc);
-    const edit = (doc: SheetDoc, depth: number): SheetDoc => ({
-      ...doc,
-      blocks: (doc.blocks ?? []).map((c, j) => {
-        if (j !== path[depth]) return c;
-        if (depth === path.length - 1) {
-          const { ref: _drop, ...rest } = c;
-          return { ...rest, doc: inline };
-        }
-        return c.doc ? { ...c, doc: edit(c.doc, depth + 1) } : c;
+    onChange(
+      updateBlockAt(cfg, path, (c) => {
+        const { ref: _drop, ...rest } = c;
+        return { ...rest, doc: inline };
       }),
-    });
-    onChange(edit(cfg, 0));
+    );
   }
 
   // Any by-reference block anywhere in the authored tree? Gates the flatten button.
   const docHasRefs = (d: SheetDoc): boolean =>
     (d.blocks ?? []).some((u) => u.ref !== undefined || (u.doc ? docHasRefs(u.doc) : false));
   const hasRefs = $derived(docHasRefs(cfg));
+
+  // `doc` with the block at `path` (a non-empty index path from the top sheet) replaced by
+  // `fn(block)`, copying each doc on the way down; every block control edits the sheet this way. A
+  // path through a block with no local doc (a live reference) changes nothing past that block.
+  function updateBlockAt(
+    doc: SheetDoc,
+    path: number[],
+    fn: (block: SheetBlock) => SheetBlock,
+    depth = 0,
+  ): SheetDoc {
+    return {
+      ...doc,
+      blocks: (doc.blocks ?? []).map((u, j) => {
+        if (j !== path[depth]) return u;
+        if (depth === path.length - 1) return fn(u);
+        return u.doc ? { ...u, doc: updateBlockAt(u.doc, path, fn, depth + 1) } : u;
+      }),
+    };
+  }
 
   // The AUTHORED block at `path` (childCard renders the resolved tree, which cannot tell
   // a live materialized ref from a hand-authored pinned ref+doc snapshot — only the raw
@@ -1129,17 +1221,22 @@
           {/if}
         {/if}
       {/if}
-      {#if path.length === 1 && block && (bench.options.length > 0 || block.device)}
+      <!-- Any block whose entry is local gets the control, at any depth: the binding is written
+           into the doc that holds it. A block inside a live reference has none (authored is
+           undefined there) — its entry belongs to the library sheet. -->
+      {#if authored && (bench.options.length > 0 || authored.device)}
         <span class="dsl" title={CONTROL_HELP.blockDevice}>device</span>
         <select
           class="dsel"
           title={CONTROL_HELP.blockDevice}
-          value={block.device ?? ''}
-          onchange={(e) => setBlockDevice(path[0], (e.currentTarget as HTMLSelectElement).value)}
+          value={authored.device ?? ''}
+          onchange={(e) => setBlockDevice(path, (e.currentTarget as HTMLSelectElement).value)}
         >
-          <option value="">↳ active device</option>
-          {#if block.device && !bench.options.some((o) => o.binding === block.device)}
-            <option value={block.device}>{bindingOption(block.device)}</option>
+          <option value=""
+            >{path.length === 1 ? '↳ active device' : '↳ parent block’s device'}</option
+          >
+          {#if authored.device && !bench.options.some((o) => o.binding === authored.device)}
+            <option value={authored.device}>{bindingOption(authored.device)}</option>
           {/if}
           {#each bench.options as o}<option value={o.binding}>{o.label}</option>{/each}
         </select>
@@ -1217,6 +1314,9 @@
         >{complianceText}</span
       >
     {/if}
+    {#if busyText}
+      <span class="sbusy" role="status" data-busy title={CONTROL_HELP.evaluating}>{busyText}</span>
+    {/if}
     {#if refKey && !multi}
       <span class="scond" data-condition={conditionLabel(refKey)} title={CONTROL_HELP.cornerMode}
         >at {conditionLabel(refKey)}</span
@@ -1250,10 +1350,10 @@
     <!-- On demand only: each knob costs two full evaluations, so this never runs with the badge. -->
     <button
       class="sensb"
-      class:on={sens !== null}
-      disabled={!sensReady && !shot}
+      class:on={sens !== null || sensBusy}
+      disabled={!sensReady && !shot && !sensBusy}
       title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sensitivity}
-      onclick={toggleSens}>sensitivities</button
+      onclick={toggleSens}>{sensBusy ? 'sensitivities…' : 'sensitivities'}</button
     >
     {#if result?.sizing && !multi}
       {#if result.sizing.ok}
@@ -1626,6 +1726,9 @@
         {/if}
       </p>
     {/if}
+  {:else if active && sweeping}
+    <!-- The sweep is running in the background; the chart appears here when it is done. -->
+    <p class="feas sbusy" data-sweeping>sweeping {active}…</p>
   {:else if active && refRun}
     <!-- The sweep is a statement about a design, and there is no design here yet. -->
     <p class="feas">
@@ -1725,6 +1828,26 @@
     color: var(--fg);
     opacity: 0.55;
     border-style: dashed;
+  }
+  /* Work in progress behind the numbers on screen: quiet, and pulsing so it reads as live. */
+  .sbusy {
+    font-size: calc(0.72rem * var(--text-scale));
+    font-style: italic;
+    opacity: 0.75;
+    animation: sbusy 1.2s ease-in-out infinite alternate;
+  }
+  @keyframes sbusy {
+    from {
+      opacity: 0.35;
+    }
+    to {
+      opacity: 0.85;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sbusy {
+      animation: none;
+    }
   }
   /* The condition a verdict was measured at. Quiet, and never optional. */
   .scond {

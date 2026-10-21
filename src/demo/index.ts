@@ -293,6 +293,51 @@ export function withoutColumns(table: DeviceTable, keys: readonly string[]): Dev
 }
 
 /**
+ * A copy of `table` with columns added (or replaced), each a full column or one value for every
+ * grid point. For tests that need a table with a column it does not carry, such as one the
+ * namespace has no name for. The grid is rebuilt through makeGrid, so a column of the wrong
+ * length throws.
+ */
+export function withColumns(
+  table: DeviceTable,
+  columns: Readonly<Record<string, Float64Array | number>>,
+): DeviceTable {
+  const size = table.grid.shape.reduce((a, b) => a * b, 1);
+  const quantities = new Map(table.grid.quantities);
+  for (const [name, col] of Object.entries(columns))
+    quantities.set(name, typeof col === 'number' ? new Float64Array(size).fill(col) : col);
+  return { ...table, grid: makeGrid([...table.grid.axes], quantities) };
+}
+
+/**
+ * `table` as mostab CSV text: the identity and metadata headers the importer reads, then one row
+ * per grid point. makeGrid stores every axis as a full-length column too, so each row is just
+ * the i-th value of every column, and String(double) is the shortest form that reads back
+ * exactly.
+ */
+export function toMostabCsv(table: DeviceTable): string {
+  const { grid, id, meta } = table;
+  const axisNames = grid.axes.map((a) => a.name);
+  const dataNames = [...grid.quantities.keys()].filter((n) => !axisNames.includes(n));
+  const names = [...axisNames, ...dataNames];
+  const cols = names.map((n) => grid.quantities.get(n) as Float64Array);
+  const size = grid.shape.reduce((a, b) => a * b, 1);
+  const lines = [
+    '# mostab: 0.1',
+    `# device: ${id.device}`,
+    `# corner: ${id.corner}`,
+    `# temp: ${id.temp}`,
+  ];
+  if (meta.W != null) lines.push(`# W: ${meta.W}`);
+  if (meta.simulator) lines.push(`# simulator: ${meta.simulator}`);
+  // The importer records polarity only from this declaration, never from data signs.
+  if (meta.polarity) lines.push(`# polarity: ${meta.polarity.device}`);
+  lines.push(names.map((n) => n.toUpperCase()).join(','));
+  for (let i = 0; i < size; i++) lines.push(cols.map((c) => String(c[i])).join(','));
+  return lines.join('\n') + '\n';
+}
+
+/**
  * A copy of `table` with named quantity columns multiplied — how a second characterization of
  * one device is made for a test: not physics, but a difference from nominal that is exactly
  * known, so a per-condition verdict can be predicted in closed form rather than read back off
