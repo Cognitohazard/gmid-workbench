@@ -5,7 +5,7 @@
 // intrinsic gain, …) along a fixed-L slice. Pure, deterministic, zero DOM imports.
 
 import { type Axis, type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
-import { BASE_KEYS } from '../namespace';
+import { BASE_KEYS, passthroughKeys } from '../namespace';
 import { CONSTANTS } from '../constants';
 import { interpolate, sliceGrid, orient, interp1 } from '../grid';
 import { scalarScope } from '../expr';
@@ -20,24 +20,6 @@ function baseKeysPresent(grid: Grid): string[] {
   const out: string[] = [];
   for (const key of grid.quantities.keys()) {
     if (BASE_KEYS.has(key)) out.push(key);
-  }
-  return out;
-}
-
-/**
- * Stored columns the namespace does not name: an import's unknown headers, carried through under
- * their lower-cased names (the strict-superset rule). Each is a quantity like any other, read at
- * the point by the same interpolation as the base columns.
- *
- * A column named like a standard derived quantity is left out. Lookup and sizing evaluate that
- * name from its one definition — the inverse path does too (see sliceColumn) — so reporting the
- * stored copy would put two different numbers under one name; qa/validate flags such a column as
- * `derived-shadow` instead.
- */
-export function passthroughKeys(grid: Grid): string[] {
-  const out: string[] = [];
-  for (const key of grid.quantities.keys()) {
-    if (!BASE_KEYS.has(key) && !DERIVED_COMPILED.has(key)) out.push(key);
   }
   return out;
 }

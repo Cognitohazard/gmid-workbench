@@ -11,7 +11,7 @@ import {
 import { lookup } from '../lookup';
 import { makeGrid, sliceGrid } from '../grid';
 import type { DeviceTable } from '../types';
-import { generateDemoDevice, signedMirrorDemo, withoutColumns } from '../demo';
+import { generateDemoDevice, signedMirrorDemo, withColumns, withoutColumns } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 import { compileExpr } from '../derive';
 import { ExprError } from '../types';
@@ -388,11 +388,7 @@ describe('sizeDevice — pass-through columns', () => {
     // The re-evaluation at the sized width reads base columns and constants; a column called
     // `k` must not stand in for Boltzmann's constant there.
     const plain = generateDemoDevice();
-    const kCol = new Float64Array(plain.grid.quantities.get('gm')!.length).fill(1);
-    const withK: DeviceTable = {
-      ...plain,
-      grid: makeGrid([...plain.grid.axes], new Map([...plain.grid.quantities, ['k', kCol]])),
-    };
+    const withK = withColumns(plain, { k: 1 });
     const Lp = plain.grid.axes[0].values[1];
     const a = sizeDevice({ table: plain, L: Lp, gm_id: 12, id: 20e-6 });
     const b = sizeDevice({ table: withK, L: Lp, gm_id: 12, id: 20e-6 });

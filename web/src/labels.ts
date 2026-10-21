@@ -5,6 +5,13 @@ import { BASE_QUANTITIES, PROVIDE_SEP } from '@gmid/mostab-core';
 // subscript). Any expression not in the map falls back to ESCAPED plain text, so {@html}
 // is always safe even for arbitrary user-typed expressions.
 const SUBSCRIPTED: Readonly<Record<string, string>> = {
+  // capacitances c<i><j> and terminal charges q<i>, read off the namespace: C_gd, C_jd, Q_g, …
+  ...Object.fromEntries(
+    BASE_QUANTITIES.filter((q) => q.unit === 'F' || q.unit === 'C').map((q) => [
+      q.key,
+      `${q.key[0].toUpperCase()}<sub>${q.key.slice(1)}</sub>`,
+    ]),
+  ),
   // derived design quantities
   gm_id: 'g<sub>m</sub>/I<sub>D</sub>',
   id_w: 'I<sub>D</sub>/W',
@@ -35,28 +42,6 @@ const SUBSCRIPTED: Readonly<Record<string, string>> = {
   gm: 'g<sub>m</sub>',
   gds: 'g<sub>ds</sub>',
   gmb: 'g<sub>mb</sub>',
-  cgg: 'C<sub>gg</sub>',
-  cgs: 'C<sub>gs</sub>',
-  cgd: 'C<sub>gd</sub>',
-  cgb: 'C<sub>gb</sub>',
-  cdb: 'C<sub>db</sub>',
-  csb: 'C<sub>sb</sub>',
-  cdd: 'C<sub>dd</sub>',
-  cdg: 'C<sub>dg</sub>',
-  cds: 'C<sub>ds</sub>',
-  css: 'C<sub>ss</sub>',
-  csg: 'C<sub>sg</sub>',
-  csd: 'C<sub>sd</sub>',
-  cbb: 'C<sub>bb</sub>',
-  cbg: 'C<sub>bg</sub>',
-  cbd: 'C<sub>bd</sub>',
-  cbs: 'C<sub>bs</sub>',
-  cjd: 'C<sub>jd</sub>',
-  cjs: 'C<sub>js</sub>',
-  qg: 'Q<sub>g</sub>',
-  qd: 'Q<sub>d</sub>',
-  qs: 'Q<sub>s</sub>',
-  qb: 'Q<sub>b</sub>',
   sth: 'S<sub>th</sub>',
   sfl: 'S<sub>fl</sub>',
   l: 'L',

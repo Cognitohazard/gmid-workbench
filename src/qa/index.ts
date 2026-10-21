@@ -22,8 +22,8 @@ import {
   BASE_QUANTITIES,
   DERIVED_QUANTITIES,
   MAGNITUDE_KEYS,
+  passthroughKeys,
 } from '../namespace';
-import { passthroughKeys } from '../lookup';
 
 // --- physical thresholds -----------------------------------------------------
 
@@ -85,6 +85,12 @@ const MONO_EPS = 1e-3;
 const MAGNITUDE_CAP_KEYS: readonly string[] = BASE_QUANTITIES.filter(
   (q) => q.magnitude && q.unit === 'F',
 ).map((q) => q.key);
+/** How the cap-sign finding names a capacitance that is not a node's self-capacitance. */
+const CAP_NOUN: Readonly<Record<string, string>> = {
+  cgg: 'the total gate capacitance',
+  cjd: 'a junction capacitance',
+  cjs: 'a junction capacitance',
+};
 
 /** Voltage axis/column keys (folded to |v| on signed input). */
 const VOLTAGE_KEYS: readonly string[] = BASE_QUANTITIES.filter((q) => q.unit === 'V').map(
@@ -353,11 +359,7 @@ export function validate(table: DeviceTable): QAWarning[] {
       q.get(key),
       'cap-sign',
       key,
-      key === 'cgg'
-        ? 'the total gate capacitance should be a magnitude'
-        : key === 'cjd' || key === 'cjs'
-          ? 'a junction capacitance should be a magnitude'
-          : 'a self-capacitance should be a magnitude',
+      `${CAP_NOUN[key] ?? 'a self-capacitance'} should be a magnitude`,
     );
 
   // A non-positive sth/sfl poisons every input-referred noise quantity (sqrt of ≤0, or a 0 in fco).

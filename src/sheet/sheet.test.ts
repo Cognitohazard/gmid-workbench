@@ -1118,18 +1118,16 @@ describe('pass-through columns reach the sheet scope', () => {
   // A column the importer does not recognize (`ueff`) is carried through as a quantity, and the
   // sheet format promises it is readable like any other — not rescaled, so at w0.
   const extra = withUeff();
-  const sizedDoc = (overrides: Partial<SheetDoc> = {}): SheetDoc => ({
-    title: 'dev',
-    polarity: 'n',
-    params: [
-      { name: 'L', value: 0.5e-6 },
-      { name: 'Ib', value: 20e-6 },
-    ],
-    givens: { L: 'L', gm_id: '12', id: 'Ib', vds: '0.6' },
-    equations: [],
-    checks: [],
-    ...overrides,
-  });
+  // boundDoc's operating point, sized by current so the bias is a round number.
+  const sizedDoc = (overrides: Partial<SheetDoc> = {}): SheetDoc =>
+    boundDoc({
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'Ib', value: 20e-6 },
+      ],
+      givens: { L: 'L', gm_id: '12', id: 'Ib', vds: '0.6' },
+      ...overrides,
+    });
   const atSizing = (res: SheetResult): number =>
     ueffAt({ l: 0.5e-6, vds: 0.6, vgs: res.sizing!.vgs });
   const noted = (res: SheetResult, rule: string): string[] =>

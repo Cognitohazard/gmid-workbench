@@ -1,10 +1,11 @@
 // A demo table written out as mostab CSV with one column the namespace has no name for, then read
 // back through the importer — the shape of a real export carrying an extra simulator output (here
 // the effective channel mobility, `ueff`, which BSIM reports and the format does not name).
-// Shared by the lookup, sizing and sheet suites, which each check that the column reaches them. Lives outside the vitest glob (not *.test.ts) so importing
-// it never re-registers another file's tests, and is not exported from the barrel.
+// Shared by the lookup, sizing and sheet suites, which each check that the column reaches them.
+// Lives outside the vitest glob (not *.test.ts) so importing it never re-registers another file's
+// tests, and is not exported from the barrel.
 
-import { generateDemoDevice } from '../demo';
+import { generateDemoDevice, toMostabCsv, withColumns } from '../demo';
 import { importMostab } from './index';
 import type { DeviceTable } from '../types';
 
@@ -18,7 +19,7 @@ export function ueffAt(p: { l: number; vds: number; vgs: number }): number {
 }
 
 /** The demo device over (l, vds, vgs), as mostab CSV text, with extra columns `extra` computed
- *  per row from the row's axis coordinates. */
+ *  per grid point from that point's axis coordinates. */
 export function demoCsvWith(
   extra: Readonly<Record<string, (p: { l: number; vds: number; vgs: number }) => number>>,
 ): string {
@@ -26,38 +27,16 @@ export function demoCsvWith(
     lengths: [0.18e-6, 0.5e-6, 1e-6],
     vds: { min: 0.3, max: 1.2, step: 0.3 },
   });
-  const axes = t.grid.axes;
-  // makeGrid materializes each axis as a column too; those go out once, as axes.
-  const cols = [...t.grid.quantities].filter(([k]) => !axes.some((a) => a.name === k));
-  const extras = Object.entries(extra);
-  const lines = [
-    '# device: nmos_extra',
-    '# corner: tt',
-    '# temp: 27',
-    `# W: ${t.meta.W}`,
-    '# polarity: n',
-    [...axes.map((a) => a.name), ...cols.map(([k]) => k), ...extras.map(([k]) => k)].join(','),
-  ];
-  const size = t.grid.shape.reduce((a, b) => a * b, 1);
-  for (let flat = 0; flat < size; flat++) {
-    // Row-major, last axis fastest: peel each axis index off the flat index from the back.
-    const coord: Record<string, number> = {};
-    let rest = flat;
-    for (let d = axes.length - 1; d >= 0; d--) {
-      const n = axes[d].values.length;
-      coord[axes[d].name] = axes[d].values[rest % n];
-      rest = Math.floor(rest / n);
-    }
-    const p = { l: coord.l, vds: coord.vds, vgs: coord.vgs };
-    lines.push(
-      [
-        ...axes.map((a) => coord[a.name]),
-        ...cols.map(([, col]) => col[flat]),
-        ...extras.map(([, f]) => f(p)),
-      ].join(','),
-    );
-  }
-  return lines.join('\n');
+  // Every axis is also a full-length column, so a point's coordinates are one index across them.
+  const q = t.grid.quantities;
+  const [l, vds, vgs] = (['l', 'vds', 'vgs'] as const).map((a) => q.get(a) as Float64Array);
+  const columns = Object.fromEntries(
+    Object.entries(extra).map(([name, f]) => [
+      name,
+      Float64Array.from(vgs, (_, i) => f({ l: l[i], vds: vds[i], vgs: vgs[i] })),
+    ]),
+  );
+  return toMostabCsv(withColumns({ ...t, id: { ...t.id, device: 'nmos_extra' } }, columns));
 }
 
 /** Import mostab CSV text that must import cleanly, returning its one table. */

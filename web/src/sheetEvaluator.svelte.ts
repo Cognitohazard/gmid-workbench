@@ -37,13 +37,14 @@ import {
 } from './sheetjobs';
 
 /** The order queued jobs run in: the verdict first, because everything on the panel reads it. */
-const PRIORITY: readonly JobKind[] = ['run', 'sens', 'sweep', 'sweeps', 'sweep2'];
+const PRIORITY: readonly JobKind[] = ['run', 'sens', 'sweeps', 'sweep2'];
 
-/** How long a superseded job may keep running before it is cancelled, in ms. About what an
- *  ordinary sheet takes, and well under the seconds a large one does. */
+/** How long a superseded job may keep running before it is cancelled, in ms, counted from when
+ *  its worker had loaded. About what an ordinary sheet takes, and well under the seconds a large
+ *  one does. */
 const GRACE_MS = 150;
 
-type JobOf<K extends JobKind> = Extract<SheetJob, { kind: K }>;
+export type JobOf<K extends JobKind> = Extract<SheetJob, { kind: K }>;
 
 interface Pending {
   kind: JobKind;
@@ -60,11 +61,10 @@ interface Pending {
 
 interface Running extends Pending {
   id: number;
+  /** When its grace began: the post, or the worker's load if it came later. */
   started: number;
   /** A newer request of the same kind is queued behind it. */
   superseded: boolean;
-  /** Its answer is no longer wanted at all. */
-  cancelled: boolean;
 }
 
 /** A table as the worker can receive it. The bench keeps its tables in Svelte state, whose
@@ -117,12 +117,13 @@ export class SheetEvaluator {
   #done = new Map<JobKind, { key: string; result: unknown }>();
   #seq = 0;
   #disposed = false;
-  /** Which kinds of job are waiting or running — the panel's busy indicator. */
-  #busy = $state<Partial<Record<JobKind, true>>>({});
+  /** Which kinds of job are waiting or running, in PRIORITY order — the panel's busy indicator.
+   *  Replaced only when it changes, so a request that changes nothing invalidates nothing. */
+  #busy = $state.raw<readonly JobKind[]>([]);
 
   /** Whether a job of `kind` (or, with no kind, any job) is waiting or running. */
   busy(kind?: JobKind): boolean {
-    return kind === undefined ? Object.keys(this.#busy).length > 0 : this.#busy[kind] === true;
+    return kind === undefined ? this.#busy.length > 0 : this.#busy.includes(kind);
   }
 
   /**
@@ -144,6 +145,14 @@ export class SheetEvaluator {
     if (this.#disposed) return;
     const snap = $state.snapshot(job) as SheetJob;
     const key = `${JSON.stringify(snap)}|${ctx.bench.revision}|${refsId(ctx.refs)}`;
+    const done = this.#done.get(job.kind);
+    if (done?.key === key) {
+      // Already answered. Whatever was asked for since is no longer the question, and must not
+      // land after this answer, so it is withdrawn.
+      this.cancel(job.kind);
+      deliver(done.result as JobResults[K]);
+      return;
+    }
     const p: Pending = {
       kind: job.kind,
       job: snap,
@@ -153,20 +162,6 @@ export class SheetEvaluator {
       fail,
     };
     const running = this.#running;
-    const done = this.#done.get(job.kind);
-    if (done?.key === key) {
-      // Already answered. Whatever was asked for since is no longer the question, and must not
-      // land after this answer: it is withdrawn, and a running one is never delivered.
-      this.#queue.delete(job.kind);
-      if (running?.kind === job.kind) {
-        running.cancelled = true;
-        if (this.#worker) this.#restart();
-      }
-      this.#mark();
-      this.#pump();
-      deliver(done.result as JobResults[K]);
-      return;
-    }
     if (running?.kind === job.kind && running.key === key) {
       // The same question is already being answered: answer this caller instead, and drop
       // anything queued since — asking again means the question went back to this one.
@@ -180,46 +175,42 @@ export class SheetEvaluator {
     if (this.#queue.get(job.kind)?.key === key) return;
     this.#queue.set(job.kind, p);
     if (running?.kind === job.kind) this.#supersede(running);
-    this.#mark();
-    this.#pump();
+    this.#settle();
   }
 
-  /** Withdraw the request of `kind`: its answer is no longer wanted. */
+  /** Withdraw the request of `kind`: its answer is no longer wanted. A running one is abandoned
+   *  with its worker (on the page, where nothing runs between tasks, it simply never starts). */
   cancel(kind: JobKind): void {
     this.#queue.delete(kind);
-    const running = this.#running;
-    if (running?.kind === kind) {
-      running.cancelled = true;
-      if (this.#worker) {
-        this.#restart();
-        this.#pump();
-      }
-    }
-    this.#mark();
+    if (this.#running?.kind === kind) this.#restart();
+    this.#settle();
   }
 
   /** A newer request of the running job's kind is queued: cancel the running one once its grace
    *  is spent, unless it has finished (or been asked for again) by then. */
   #supersede(job: Running): void {
+    if (job.superseded) return; // its cancellation is already timed
     job.superseded = true;
     if (!this.#worker) return; // on the page it cannot be stopped; #runInline skips it if unstarted
     const kill = (): void => {
       if (this.#running !== job || !job.superseded) return;
+      // The grace restarts when a fresh worker finishes loading, so check it again.
+      const left = GRACE_MS - (performance.now() - job.started);
+      if (left > 0) {
+        setTimeout(kill, left);
+        return;
+      }
       this.#restart();
-      this.#pump();
+      this.#settle();
     };
-    const left = GRACE_MS - (performance.now() - job.started);
-    if (left <= 0) kill();
-    else setTimeout(kill, left);
+    kill();
   }
 
   /** Stop everything: the panel is gone. */
   dispose(): void {
     this.#disposed = true;
     this.#queue.clear();
-    this.#running = null;
-    this.#worker?.terminate();
-    this.#worker = null;
+    this.#restart();
     this.#mark();
   }
 
@@ -233,11 +224,15 @@ export class SheetEvaluator {
     this.#refsSent = null;
   }
 
+  /** Start the next job if nothing is running, then bring the busy indicator up to date. */
+  #settle(): void {
+    this.#pump();
+    this.#mark();
+  }
+
   #mark(): void {
-    const busy: Partial<Record<JobKind, true>> = {};
-    for (const k of this.#queue.keys()) busy[k] = true;
-    if (this.#running) busy[this.#running.kind] = true;
-    this.#busy = busy;
+    const busy = PRIORITY.filter((k) => this.#queue.has(k) || this.#running?.kind === k);
+    if (busy.join() !== this.#busy.join()) this.#busy = busy;
   }
 
   #spawn(): Worker | null {
@@ -255,8 +250,10 @@ export class SheetEvaluator {
     // from then on; one that died later (out of memory, say) fails its job and the rest go on.
     let loaded = false;
     w.onmessage = (e: MessageEvent<JobReply | WorkerReady>) => {
-      if ('ready' in e.data) loaded = true;
-      else this.#reply(w, e.data);
+      if (!('ready' in e.data)) return this.#reply(w, e.data);
+      loaded = true;
+      // Loading is the restart's cost, not the job's: its grace starts now.
+      if (w === this.#worker && this.#running) this.#running.started = performance.now();
     };
     w.onerror = (e) => {
       e.preventDefault();
@@ -264,14 +261,13 @@ export class SheetEvaluator {
       const job = this.#running;
       this.#restart();
       if (!loaded) this.#inline = true;
-      if (job && !job.cancelled) {
+      if (job) {
         // Unable to run here: ask the page instead, unless a newer request already replaced it.
         if (this.#inline) {
           if (!this.#queue.has(job.kind)) this.#queue.set(job.kind, job);
         } else job.fail(e.message || 'the evaluation worker stopped');
       }
-      this.#mark();
-      this.#pump();
+      this.#settle();
     };
     this.#worker = w;
     return w;
@@ -285,14 +281,11 @@ export class SheetEvaluator {
 
   #finish(job: Running, r: JobReply): void {
     this.#running = null;
-    if (!job.cancelled) {
-      if (r.ok) {
-        this.#done.set(job.kind, { key: job.key, result: r.result });
-        job.deliver(r.result);
-      } else job.fail(r.error);
-    }
-    this.#mark();
-    this.#pump();
+    if (r.ok) {
+      this.#done.set(job.kind, { key: job.key, result: r.result });
+      job.deliver(r.result);
+    } else job.fail(r.error);
+    this.#settle();
   }
 
   #pump(): void {
@@ -302,7 +295,7 @@ export class SheetEvaluator {
     const p = this.#queue.get(kind) as Pending;
     this.#queue.delete(kind);
     const id = ++this.#seq;
-    this.#running = { ...p, id, started: performance.now(), superseded: false, cancelled: false };
+    this.#running = { ...p, id, started: performance.now(), superseded: false };
     const w = this.#spawn();
     if (!w) {
       // On the page, one job per task, so the panel paints between jobs.
@@ -314,12 +307,11 @@ export class SheetEvaluator {
 
   #runInline(id: number): void {
     const job = this.#running;
-    if (!job || job.id !== id) return;
-    if (job.superseded || job.cancelled) {
+    if (!job || job.id !== id) return; // cancelled before it started
+    if (job.superseded) {
       // Not started, and no longer the question: the newer request queued behind it runs instead.
       this.#running = null;
-      this.#mark();
-      this.#pump();
+      this.#settle();
       return;
     }
     let reply: JobReply;
@@ -344,33 +336,31 @@ export class SheetEvaluator {
       bindings.push([binding, d.deviceUid]);
       devices.set(d.deviceUid, d);
     }
-    const tables: [string, DeviceTable][] = [];
-    const outline = (d: CharacterizedDevice): DeviceOutline => {
-      const conditions = d.conditions.map((t) => {
-        const uid = tableUid(t);
-        if (!this.#sent.has(uid)) {
-          tables.push([uid, plainTable(t)]);
-          this.#sent.add(uid);
-        }
-        return uid;
-      });
-      return {
-        ...$state.snapshot({ ...d, conditions: [], nominal: undefined }),
-        conditions,
-        nominal: d.nominal === undefined ? undefined : tableUid(d.nominal),
-      };
-    };
-    const retain = p.bench.devices.flatMap((d) => d.conditions.map(tableUid));
-    // The worker drops every table not retained, so it no longer holds those.
+    // The worker keeps only the tables of the devices this sheet reads, so a panel holds a copy
+    // of what it evaluates rather than of the whole bench.
+    const outlines = [...devices.values()].map((d): DeviceOutline => ({
+      ...$state.snapshot({ ...d, conditions: [], nominal: undefined }),
+      conditions: d.conditions.map(tableUid),
+      nominal: d.nominal === undefined ? undefined : tableUid(d.nominal),
+    }));
+    const retain = outlines.flatMap((o) => o.conditions);
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- scratch for one message
     const kept = new Set(retain);
     for (const uid of [...this.#sent]) if (!kept.has(uid)) this.#sent.delete(uid);
+    const tables: [string, DeviceTable][] = [];
+    for (const d of devices.values())
+      for (const t of d.conditions) {
+        const uid = tableUid(t);
+        if (this.#sent.has(uid)) continue;
+        tables.push([uid, plainTable(t)]);
+        this.#sent.add(uid);
+      }
     const req: JobRequest = {
       id,
       job: p.job,
       tables,
       retain,
-      devices: [...devices.values()].map(outline),
+      devices: outlines,
       primary: p.primary.deviceUid,
       bindings,
     };

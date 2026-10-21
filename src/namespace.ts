@@ -1,4 +1,4 @@
-import type { BaseQuantity, DerivedQuantity } from './types';
+import type { BaseQuantity, DerivedQuantity, Grid } from './types';
 
 /**
  * The canonical base quantities — the stored vocabulary. This is the *namespace*
@@ -132,6 +132,22 @@ export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   // input-referred (both PSDs divide by gm²), data-only (needs sth and sfl).
   { key: 'fco', expr: 'sfl/sth', unit: 'Hz' },
 ];
+
+const DERIVED_KEYS: ReadonlySet<string> = new Set(DERIVED_QUANTITIES.map((q) => q.key));
+
+/**
+ * Whether a stored column is a pass-through: an import's unknown header, carried under its
+ * lower-cased name (the strict-superset rule) and read like any quantity, but with no unit,
+ * width law or sign rule. A column named like a standard derived quantity is not one: lookup and
+ * sizing evaluate that name from its one definition, so reporting the stored copy would put two
+ * numbers under one name, and QA flags such a column as `derived-shadow` instead.
+ */
+export const isPassthroughKey = (key: string): boolean =>
+  !BASE_KEYS.has(key) && !DERIVED_KEYS.has(key);
+
+/** The pass-through columns a grid stores, in column order (see isPassthroughKey). */
+export const passthroughKeys = (grid: Grid): string[] =>
+  [...grid.quantities.keys()].filter(isPassthroughKey);
 
 /**
  * Header alias map: lower-cased source header -> canonical key. Used by importers

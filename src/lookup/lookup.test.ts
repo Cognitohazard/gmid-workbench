@@ -3,7 +3,7 @@ import { lookup, lookupByGmId, lookupByQuantity } from './index';
 import { fixTable, invertX } from '../series';
 import { makeGrid } from '../grid';
 import { type Axis, type DeviceTable, LookupError } from '../types';
-import { generateDemoDevice, withoutColumns } from '../demo';
+import { generateDemoDevice, withColumns, withoutColumns } from '../demo';
 import { importMostab } from '../import';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 import { ueffAt, withUeff } from '../import/passthrough.fixtures';
@@ -333,11 +333,7 @@ describe('lookup pass-through columns', () => {
     // even one named like a constant — cannot change one. A column called `k` must not replace
     // Boltzmann's constant in the γ-model noise.
     const plain = generateDemoDevice();
-    const kCol = new Float64Array(plain.grid.quantities.get('gm')!.length).fill(1);
-    const withK: DeviceTable = {
-      ...plain,
-      grid: makeGrid([...plain.grid.axes], new Map([...plain.grid.quantities, ['k', kCol]])),
-    };
+    const withK = withColumns(plain, { k: 1 });
     const p = { l: plain.grid.axes[0].values[1], vgs: 0.55 };
     const a = lookup(plain, p);
     const b = lookup(withK, p);
@@ -350,11 +346,7 @@ describe('lookup pass-through columns', () => {
     // qa/validate flags such a column (derived-shadow); lookup keeps reading the definition, as
     // the inverse path and sizing do, so one name never carries two numbers.
     const plain = generateDemoDevice();
-    const bogus = new Float64Array(plain.grid.quantities.get('gm')!.length).fill(42);
-    const shadowed: DeviceTable = {
-      ...plain,
-      grid: makeGrid([...plain.grid.axes], new Map([...plain.grid.quantities, ['ft', bogus]])),
-    };
+    const shadowed = withColumns(plain, { ft: 42 });
     const p = { l: plain.grid.axes[0].values[1], vgs: 0.55 };
     expect(lookup(shadowed, p).ft).toBe(lookup(plain, p).ft);
     expect(lookup(shadowed, p, ['ft']).ft).toBe(lookup(plain, p).ft);

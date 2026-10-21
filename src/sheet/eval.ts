@@ -11,7 +11,6 @@ import { compileExpr, metaScalars } from '../derive';
 import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
-import { passthroughKeys } from '../lookup';
 import { fixTable } from '../series';
 import { diodeGrid, offHull } from '../grid';
 import {
@@ -518,8 +517,8 @@ function applyGivensBias(
 
 /**
  * Put a sizing's operating point in scope: gm/gm_id/id/W/vgs/vstar/cgg/vnth_m/… and every
- * pass-through column the table carries (`passthrough`), which is how a sheet reads a quantity the
- * format has no name for.
+ * pass-through column the table carries (`passthrough`, as the sizing reports them), which is how
+ * a sheet reads a quantity the format has no name for.
  *
  * A pass-through name is the table's, not the sheet's, so it never displaces one the sheet already
  * means something by: a param, a child's provide, or an expression constant — a column called `k`
@@ -619,7 +618,7 @@ function runSizing(
 
   try {
     const res = sizeDevice(q);
-    mergeSized(values, res.quantities, passthroughKeys(sliced.table.grid), warn);
+    mergeSized(values, res.quantities, res.passthrough, warn);
     values.ceiling = res.ceiling; // not in the quantities bag
     values.feasible = res.feasible ? 1 : 0;
     // Surface the sizer's own engineering notes (e.g. an L clamped onto the table's

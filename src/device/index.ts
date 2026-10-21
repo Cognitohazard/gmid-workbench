@@ -11,7 +11,7 @@ import { offHull, sliceGrid } from '../grid';
 import { scalarScope, registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
 import { compileExpr, metaScalars, DERIVED_COMPILED } from '../derive';
-import { AXIS_KEYS, BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
+import { AXIS_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS, isPassthroughKey } from '../namespace';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two bound quantities.
@@ -63,6 +63,8 @@ export interface SizeResult {
    * unknowable) and remain at w0.
    */
   quantities: Record<string, number>;
+  /** The keys of `quantities` read from pass-through columns (see isPassthroughKey). */
+  passthrough: string[];
   /**
    * Human-readable engineering notes for this sizing (e.g. a requested L that fell
    * off the table's L hull and was clamped). Empty when nothing needs flagging.
@@ -373,7 +375,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   const passthrough: Record<string, number> = {};
   for (const [key, val] of Object.entries(point)) {
     if (DERIVED_COMPILED.has(key)) continue; // re-derived below at the sized width
-    if (!BASE_KEYS.has(key)) passthrough[key] = val;
+    if (isPassthroughKey(key)) passthrough[key] = val;
     else bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
   }
   // The meta layer lookup used but did not report: T/UT (temperature) and — when the
@@ -415,7 +417,19 @@ export function sizeDevice(q: SizeQuery): SizeResult {
       : {}),
   });
 
-  return { gm, gm_id, id, W, vgs, feasible, ceiling, quantities, warnings, clamped };
+  return {
+    gm,
+    gm_id,
+    id,
+    W,
+    vgs,
+    feasible,
+    ceiling,
+    quantities,
+    passthrough: Object.keys(passthrough),
+    warnings,
+    clamped,
+  };
 }
 
 /**

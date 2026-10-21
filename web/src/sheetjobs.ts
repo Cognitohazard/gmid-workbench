@@ -28,14 +28,14 @@ import {
 /**
  * One evaluation the panel asks for. Each is exactly one core call:
  *  - `run`: the verdict — every asked condition, through `runConditions`;
- *  - `sweep` / `sweep2`: the 1-D margin chart and the 2-D feasibility map at one condition;
- *  - `sweeps`: the same 1-D sweep at each of several conditions (the multi-condition chart);
+ *  - `sweeps`: the 1-D margin chart, one sweep per condition asked (one, or the several of the
+ *    multi-condition chart);
+ *  - `sweep2`: the 2-D feasibility map at one condition;
  *  - `sens`: the sensitivity readout at one condition.
  * A condition is always read off the primary device, and every other binding is projected to it.
  */
 export type SheetJob =
   | { kind: 'run'; doc: SheetDoc; keys: ConditionKey[]; base?: ConditionKey }
-  | { kind: 'sweep'; doc: SheetDoc; param: string; at: ConditionKey; points: number }
   | { kind: 'sweeps'; doc: SheetDoc; param: string; at: ConditionKey[]; points: number }
   | {
       kind: 'sweep2';
@@ -52,7 +52,6 @@ export type JobKind = SheetJob['kind'];
 /** What each kind of job answers with. */
 export interface JobResults {
   run: ConditionRun[];
-  sweep: SheetSweep | null;
   sweeps: { key: ConditionKey; sweep: SheetSweep }[];
   sweep2: SheetSweep2 | null;
   sens: SheetSensitivity[] | null;
@@ -67,21 +66,11 @@ export interface JobBench {
 }
 
 /** Run one job. Never throws on a well-formed job: the core calls it makes do not. */
-export function runJob<J extends SheetJob>(job: J, bench: JobBench): JobResults[J['kind']] {
-  return run(job, bench) as JobResults[J['kind']];
-}
-
-function run(job: SheetJob, { primary, deviceOf, refs }: JobBench): JobResults[JobKind] {
+export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): JobResults[JobKind] {
   const at = (key: ConditionKey): DeviceTable | undefined => tableAt(primary, key);
   switch (job.kind) {
     case 'run':
       return runConditions(job.doc, primary, job.keys, deviceOf, refs, job.base);
-    case 'sweep': {
-      const t = at(job.at);
-      return t
-        ? sweepSheet(job.doc, job.param, t, job.points, projectingResolver(deviceOf, job.at))
-        : null;
-    }
     case 'sweeps': {
       const out: JobResults['sweeps'] = [];
       for (const key of job.at) {
@@ -133,7 +122,7 @@ export interface JobRequest {
   job: SheetJob;
   /** Tables the worker does not hold yet, by id. */
   tables: [string, DeviceTable][];
-  /** Every table id still on the bench: the worker drops any other it holds. */
+  /** Every table id the request's devices hold: the worker drops any other it holds. */
   retain: string[];
   /** The sheet library, when it changed since the worker last received it. */
   refs?: [string, SheetRefHit][];
