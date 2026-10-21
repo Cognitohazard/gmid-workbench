@@ -1350,7 +1350,8 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await expect(chips.nth(0)).toHaveClass(/\bno\b/);
   await expect(chips.nth(1)).toHaveClass(/skip/);
   await sp.locator('.swsel select').selectOption('CM_dc');
-  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  // The sweep runs in the background and the chart lands when it is done.
+  await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 60_000 });
   await expect(sp.locator('.skey')).toContainText('complies at cm-lo', { timeout: 60_000 });
   await expect(sp.locator('.scap')).toContainText('each sample holds its OWN design');
 
@@ -1367,6 +1368,69 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 3 points · 1 fail · 2 no answer',
   );
+});
+
+test('design sheet: evaluation runs off the page — it stays responsive, says so, and cancels a superseded sweep', async ({
+  page,
+}) => {
+  // The 5T claims an operating range, so each sweep sample is three evaluations of the whole
+  // sheet: seconds of work, which used to freeze the page until it was done.
+  test.slow();
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+  let workers = 0;
+  page.on('worker', () => (workers += 1));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, '5T OTA');
+  await expect(sp.locator('.feasb')).toContainText('infeasible');
+  await expect(sp.locator('[data-busy]')).toHaveCount(0);
+
+  await sp.locator('.swsel select').selectOption('CM_dc');
+  await expect(sp.locator('[data-busy]')).toHaveText('sweeping…');
+  await expect(sp.locator('[data-sweeping]')).toHaveText('sweeping CM_dc…');
+  // The page answers while the sweep runs: nothing is evaluating on its thread.
+  const t0 = Date.now();
+  await page.evaluate(() => 0);
+  expect(Date.now() - t0).toBeLessThan(1000);
+
+  // Asking for another sweep before the first is done cancels it: the worker running it is
+  // stopped, and a fresh one takes the sweep now asked for.
+  const before = workers;
+  await sp.locator('.swsel select').selectOption('gm_id_in');
+  await expect(sp.locator('[data-sweeping]')).toHaveText('sweeping gm_id_in…');
+  await expect.poll(() => workers).toBeGreaterThan(before);
+  await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 60_000 });
+  await expect(sp.locator('.scap', { hasText: 'margin (%) vs' })).toContainText('gm_id_in');
+  await expect(sp.locator('[data-busy]')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: where no worker can be started, the sheet is evaluated on the page instead', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.addInitScript(() => {
+    // A browser that offers no workers to this page.
+    (window as unknown as { Worker: unknown }).Worker = undefined;
+  });
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.feasb')).toHaveText(/^(in)?feasible/);
+  await expect(sp.locator('.bind')).toContainText('W=');
+  await expect(sp.locator('[data-busy]')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
 });
 
 test('operating range: a range end that was not run reads as a question nobody asked, not a failure', async ({

@@ -1,21 +1,19 @@
 <script lang="ts">
   // A leaf design-sheet panel: pick a vetted example, tune the design variables, and
   // watch the author equations and pass/fail checks recompute with signed margins.
-  // It holds no numerics — runSheet (core) does all evaluation and never throws.
+  // It holds no numerics — the core does all evaluation and never throws, in this panel's
+  // evaluation worker (sheetEvaluator.svelte.ts), off the page's thread.
   import {
     cloneDoc,
     aggregateConditionRuns,
     clampMargin,
     measurable,
     projectingResolver,
-    runConditions,
     sameCondition,
     tableAt,
     conditionKeyId,
     conditionKeyOf,
     conditionLabel,
-    sweepSheet,
-    sweepSheet2,
     sweepable as isSweepable,
     torn,
     constrained as isConstrained,
@@ -24,7 +22,6 @@
     limitingCheck,
     rangeEndCheck,
     withoutRange,
-    sheetSensitivities,
     SENSITIVITY_REL_STEP,
     resolveSheetRefs,
     flattenSheetDoc,
@@ -65,6 +62,8 @@
   import { commitEng, pct } from './eng';
   import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
   import { copyText, download } from './export';
+  import { SheetEvaluator } from './sheetEvaluator.svelte';
+  import type { JobResults } from './sheetjobs';
 
   let {
     device,
@@ -101,6 +100,18 @@
   // The live sheet library (curated ∪ user-imported) and its by-reference index.
   const menu = $derived(sheetMenu());
   const refs = $derived(sheetRefIndex());
+
+  // Every evaluation — the verdict, the sweeps, the sensitivities — runs in this panel's
+  // evaluation worker, never on the page's thread: a large sheet takes seconds per run. Each
+  // answer lands in a $state.raw below (results are plain data, never worth deep-proxying), and
+  // the last answer stays on screen beside the busy indicator until the next one arrives.
+  const evaluator = new SheetEvaluator();
+  $effect(() => () => evaluator.dispose());
+  /** A job that could not run at all, in its own words — shown with the warnings. */
+  let evalError = $state<string | null>(null);
+  const failed = (e: string): void => {
+    evalError = `evaluation failed: ${e}`;
+  };
 
   // One unresolved or mis-parameterized child makes every parent expression that
   // reads its provides "not defined" — a ~20-line wall for one root cause. Collapse
@@ -163,6 +174,7 @@
   // Onboarding hints lead the same list the diagnostics land in — they are the likeliest cause of
   // the diagnostics below them — and carry no help of their own (they already name the remedy).
   const warnLines = $derived.by(() => [
+    ...(evalError ? [{ text: evalError }] : []),
     ...signHints.map((text): WarnLine => ({ text })),
     ...shownWarnings,
   ]);
@@ -236,17 +248,49 @@
   // other, same widths, lengths, currents and gate biases, operating point re-settled — and the
   // nominal condition's run comes back first even when it was not asked for: the design is
   // sized there, so its home is always on the page, and feasibility is its verdict.
+  //
+  // The answer is kept with the title of the sheet it answers, so picking another sheet does not
+  // show the previous sheet's verdict while the new one is evaluated.
+  let runsAnswer = $state.raw<{ title: string; runs: ConditionRun[] } | null>(null);
+  $effect(() => {
+    if (!primary || keys.length === 0) {
+      evaluator.cancel('run');
+      runsAnswer = null;
+      return;
+    }
+    const title = cfg.title;
+    const base = keys.length > 1 ? nominalKey : undefined;
+    evaluator.request(
+      { kind: 'run', doc: cfg, keys: [...keys], ...(base ? { base } : {}) },
+      { bench, primary, refs },
+      (r) => {
+        runsAnswer = { title, runs: r };
+        evalError = null;
+      },
+      failed,
+    );
+  });
   const runs = $derived(
-    primary
-      ? runConditions(
-          cfg,
-          primary,
-          keys,
-          bench.deviceOf,
-          refs,
-          keys.length > 1 ? nominalKey : undefined,
-        )
-      : [],
+    primary && runsAnswer && runsAnswer.title === cfg.title ? runsAnswer.runs : [],
+  );
+  /** Nothing to show yet: the first verdict for this sheet is still being evaluated. */
+  const firstRun = $derived(runs.length === 0 && evaluator.busy('run'));
+  /** A sweep, a per-condition sweep or a design-plane map is being taken. */
+  const sweeping = $derived(
+    evaluator.busy('sweep') || evaluator.busy('sweeps') || evaluator.busy('sweep2'),
+  );
+  /** What the worker is doing while the page shows its last answer. The first verdict needs no
+   *  line of its own: the badge says it is being evaluated. */
+  const busyText = $derived(
+    firstRun
+      ? ''
+      : evaluator.busy('run')
+        ? 'updating…'
+        : sweeping
+          ? 'sweeping…'
+          : evaluator.busy('sens')
+            ? 'probing…'
+            : '',
   );
   const multi = $derived(runs.length > 1);
   // Two questions, answered apart: is the design feasible where it is sized, and at how many of
@@ -294,7 +338,9 @@
   /** The feasibility badge's words — stamped with the condition it was asked at whenever more
    *  than one condition is on the page, so no verdict there is unattributed. */
   const feasText = $derived(
-    FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
+    firstRun
+      ? 'evaluating…'
+      : FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
   );
   /** Whether the sheet claims an operating range at all — read from the doc, so the range
    *  column is there even when no condition could be evaluated. */
@@ -448,24 +494,46 @@
   // One condition at a time: a ranking is a statement about the point it was taken at, and
   // there is no such point while several conditions are on screen.
   const sensReady = $derived(!multi && evaluated && result !== undefined && refTable !== undefined);
+  /** The design a snapshot is being taken of, while the worker takes it. */
+  let sensFor = $state.raw<{ doc: SheetDoc; dev: DeviceTable } | null>(null);
+  const sensBusy = $derived(sensFor !== null && evaluator.busy('sens'));
+  // A snapshot of a design that has since moved would not render, so stop paying for it: the
+  // worker runs one job at a time, and the verdict for the new design is waiting behind it.
+  $effect(() => {
+    if (sensFor && (sensFor.doc !== cfg || sensFor.dev !== refTable)) {
+      evaluator.cancel('sens');
+      sensFor = null;
+    }
+  });
   function toggleSens(): void {
     if (shot) {
       snap = null;
       return;
     }
-    if (!sensReady || !result || !refTable) return;
+    if (sensBusy) {
+      evaluator.cancel('sens');
+      sensFor = null;
+      return;
+    }
+    if (!sensReady || !result || !refTable || !refKey || !primary) return;
     const focus = binding ?? rangeEndCheck(result) ?? limitingCheck(result);
-    snap = {
-      doc: cfg,
-      dev: refTable,
-      focus,
+    const doc = cfg;
+    const dev = refTable;
+    sensFor = { doc, dev };
+    evaluator.request(
       // Naming the check keeps the probes off the range-end runs unless the check in question
       // lives on one — the difference between 2 and 2*(1 + range ends) evaluations per knob.
-      rows: sheetSensitivities(cfg, refTable, resolveDevice, {
-        refs,
-        ...(focus ? { check: focus.id } : {}),
-      }),
-    };
+      { kind: 'sens', doc, at: refKey, ...(focus ? { check: focus.id } : {}) },
+      { bench, primary, refs },
+      (rows) => {
+        sensFor = null;
+        snap = { doc, dev, focus, rows: rows ?? [] };
+      },
+      (e) => {
+        sensFor = null;
+        failed(e);
+      },
+    );
   }
 
   // Knobs ranked for that check. The ranking quantity is the margin change over ONE STEP of each
@@ -511,35 +579,45 @@
   // `evaluated`, not merely "there is a table": a condition refused for want of a child device
   // has no design to sweep, and sweeping it anyway would print a feasibility window — a verdict —
   // under a header that just said the condition was not evaluated.
-  const swept = $derived(
-    active && !multi && evaluated && refTable
-      ? sweepSheet(rr.doc, active, refTable, SWEEP_POINTS, resolveDevice)
-      : null,
-  );
+  // An answer is shown only while it is about the param now selected: a sweep of the previous
+  // one stays off the chart rather than being drawn under the new name.
+  let sweptAnswer = $state.raw<SheetSweep | null>(null);
+  $effect(() => {
+    if (!(active && !multi && evaluated && refTable && refKey && primary)) {
+      evaluator.cancel('sweep');
+      sweptAnswer = null;
+      return;
+    }
+    evaluator.request(
+      { kind: 'sweep', doc: rr.doc, param: active, at: refKey, points: SWEEP_POINTS },
+      { bench, primary, refs },
+      (r) => (sweptAnswer = r),
+      failed,
+    );
+  });
+  const swept = $derived(active && !multi && sweptAnswer?.param === active ? sweptAnswer : null);
   /** The same sweep at every EVALUATED condition — the multi-condition chart. Each curve is that
    *  condition's own FEASIBILITY across the knob (the design re-sized there at every sample), so
    *  the operating range is left out. A condition that was refused has no design to sweep, so it
    *  contributes no curve and stays visible as its breakdown row instead. */
-  const sweptByKey = $derived.by(() => {
-    if (!active || !multi || !primary) return [];
-    const out: { key: ConditionKey; sweep: ReturnType<typeof sweepSheet> }[] = [];
-    for (const r of runs) {
-      if (r.state !== 'evaluated') continue;
-      const table = tableAt(primary, r.key);
-      if (!table) continue;
-      out.push({
-        key: r.key,
-        sweep: sweepSheet(
-          withoutRange(rr.doc),
-          active,
-          table,
-          SWEEP_POINTS,
-          projectingResolver(bench.deviceOf, r.key),
-        ),
-      });
+  let sweptByKeyAnswer = $state.raw<JobResults['sweeps']>([]);
+  $effect(() => {
+    if (!active || !multi || !primary) {
+      evaluator.cancel('sweeps');
+      sweptByKeyAnswer = [];
+      return;
     }
-    return out;
+    const at = runs.filter((r) => r.state === 'evaluated').map((r) => r.key);
+    evaluator.request(
+      { kind: 'sweeps', doc: withoutRange(rr.doc), param: active, at, points: SWEEP_POINTS },
+      { bench, primary, refs },
+      (r) => (sweptByKeyAnswer = r),
+      failed,
+    );
   });
+  const sweptByKey = $derived(
+    active && multi ? sweptByKeyAnswer.filter((e) => e.sweep.param === active) : [],
+  );
 
   /** The swept parameter's unit, from whichever sweep ran — the caption's only use of it. */
   const sweptUnit = $derived(swept?.unit ?? sweptByKey[0]?.sweep.unit ?? '');
@@ -553,9 +631,30 @@
     !multi && active && sweep2 && sweepable2.some((p) => p.name === sweep2) ? sweep2 : '',
   );
   const twoD = $derived(active2 !== ''); // active2 is only ever set while `active` is
+  let swept2Answer = $state.raw<SheetSweep2 | null>(null);
+  $effect(() => {
+    if (!(twoD && evaluated && refTable && refKey && primary)) {
+      evaluator.cancel('sweep2');
+      swept2Answer = null;
+      return;
+    }
+    evaluator.request(
+      {
+        kind: 'sweep2',
+        doc: rr.doc,
+        param: active,
+        param2: active2,
+        at: refKey,
+        points: SWEEP2_POINTS,
+      },
+      { bench, primary, refs },
+      (r) => (swept2Answer = r),
+      failed,
+    );
+  });
   const swept2 = $derived(
-    twoD && evaluated && refTable
-      ? sweepSheet2(rr.doc, active, active2, refTable, SWEEP2_POINTS, resolveDevice)
+    twoD && swept2Answer?.paramX === active && swept2Answer.paramY === active2
+      ? swept2Answer
       : null,
   );
   // The distinct hard-check ids (tree-path) that bound the infeasible region — the caption's "what
@@ -1219,6 +1318,9 @@
         >{complianceText}</span
       >
     {/if}
+    {#if busyText}
+      <span class="sbusy" role="status" data-busy title={CONTROL_HELP.evaluating}>{busyText}</span>
+    {/if}
     {#if refKey && !multi}
       <span class="scond" data-condition={conditionLabel(refKey)} title={CONTROL_HELP.cornerMode}
         >at {conditionLabel(refKey)}</span
@@ -1247,10 +1349,10 @@
     <!-- On demand only: each knob costs two full evaluations, so this never runs with the badge. -->
     <button
       class="sensb"
-      class:on={sens !== null}
-      disabled={!sensReady && !shot}
+      class:on={sens !== null || sensBusy}
+      disabled={!sensReady && !shot && !sensBusy}
       title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sensitivity}
-      onclick={toggleSens}>sensitivities</button
+      onclick={toggleSens}>{sensBusy ? 'sensitivities…' : 'sensitivities'}</button
     >
     {#if result?.sizing && !multi}
       {#if result.sizing.ok}
@@ -1623,6 +1725,9 @@
         {/if}
       </p>
     {/if}
+  {:else if active && sweeping}
+    <!-- The sweep is being taken in the background; the chart lands here when it is done. -->
+    <p class="feas sbusy" data-sweeping>sweeping {active}…</p>
   {:else if active && refRun}
     <!-- The sweep is a statement about a design, and there is no design here yet. -->
     <p class="feas">
@@ -1722,6 +1827,26 @@
     color: var(--fg);
     opacity: 0.55;
     border-style: dashed;
+  }
+  /* Work in progress behind the numbers on screen: quiet, and pulsing so it reads as live. */
+  .sbusy {
+    font-size: calc(0.72rem * var(--text-scale));
+    font-style: italic;
+    opacity: 0.75;
+    animation: sbusy 1.2s ease-in-out infinite alternate;
+  }
+  @keyframes sbusy {
+    from {
+      opacity: 0.35;
+    }
+    to {
+      opacity: 0.85;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sbusy {
+      animation: none;
+    }
   }
   /* The condition a verdict was measured at. Quiet, and never optional. */
   .scond {
