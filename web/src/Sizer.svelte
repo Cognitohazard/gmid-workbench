@@ -7,6 +7,8 @@
     mismatch,
     thermalNoise,
     integratedNoise,
+    noiseSource,
+    noiseSourceLabel,
     formatEng,
     formatSI,
     parseEng,
@@ -175,6 +177,8 @@
     }
   });
 
+  // Where the thermal density's γ comes from on this table: its own noise, or the estimate.
+  const noiseFrom = $derived(noiseSourceLabel(noiseSource(sizingTable.grid)));
   // Input-referred thermal-noise density (at the sized gm) and the total integrated
   // RMS over the band share the thermal floor, so compute it once. rms is null on an
   // invalid band; the whole object is null until a geometry is sized.
@@ -272,7 +276,9 @@
       line('gm', `${formatEng(r.gm)}S`),
       line('fT', `${formatEng(r.quantities.ft)}Hz`),
       line('gm/gds', formatEng(r.quantities.gm_gds)),
-      ...(noise?.density != null ? [line('vn_th', `${formatEng(noise.density)}V/rtHz`)] : []),
+      ...(noise?.density != null
+        ? [line('vn_th', `${formatEng(noise.density)}V/rtHz (noise: ${noiseFrom})`)]
+        : []),
       ...(noise?.rms != null ? [line('vn_rms', `${formatEng(noise.rms)}V`)] : []),
       ...(mism ? [line('sigma_Vth', `${formatEng(mism.sigmaVth)}V`)] : []),
       ...(mism ? [line('sigma_Vos', `${formatEng(mism.sigmaVos)}V`)] : []),
@@ -390,10 +396,10 @@
     ></label
   >
   {#if noise}
-    <!-- γ-model thermal noise uses the SIZED gm (noise ∝ 1/√gm). The table's stored
-         `sth`/`sfl` PSDs are at the characterization width and are shown in Explore. -->
+    <!-- Thermal noise uses the SIZED gm (noise ∝ 1/√gm), with the table's own γ where it
+         carries thermal noise and the default otherwise; the label says which. -->
     <dl class="noise">
-      <dt>v<sub>n,th</sub> <small>γ-model</small></dt>
+      <dt>v<sub>n,th</sub> <small title={CONTROL_HELP.noiseSource}>{noiseFrom}</small></dt>
       <dd>{formatSI(noise.density)}V/√Hz</dd>
       {#if noise.rms !== null}
         <dt>v<sub>n,rms</sub> <small>band</small></dt>

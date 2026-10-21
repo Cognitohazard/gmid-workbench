@@ -1,6 +1,6 @@
 {
   "title": "Fully differential telescopic OTA",
-  "description": "A fully differential telescopic-cascode OTA. Each side stacks a tail source, an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails; the cascodes boost the output resistance so a single stage reaches high gain. $A_v = g_{m,in} * R_{out}$, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's $r_o$ by its intrinsic gain ($A_{v0,cascn}/g_{ds,in}$); looking up, the PMOS cascode multiplies the load's $r_o$ ($A_{v0,cascp}/g_{ds,load}$). Those branch expressions are the standard cascode approximation (they drop second-order $g_{mb}$ and finite-cascode-gain terms). Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item $I_{cmfb}$ added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Internal node levels are authored choice params with per-device saturation invariants. On the demo NMOS table every device sizes against the same data.",
+  "description": "A fully differential telescopic-cascode OTA. Each side stacks an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails, above a tail device shared by the two sides; the cascodes boost the output resistance so a single stage reaches high gain. $A_v = g_{m,in} * R_{out}$, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's $r_o$ by its intrinsic gain ($A_{v0,cascn}/g_{ds,in}$); looking up, the PMOS cascode multiplies the load's $r_o$ ($A_{v0,cascp}/g_{ds,load}$). Those branch expressions are the standard cascode approximation (they drop second-order $g_{mb}$ and finite-cascode-gain terms). Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item $I_{cmfb}$ added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Only the tail's bias reference is programmed, with $I_{tail}$: the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and each side carries half of what it delivers, so a design held fixed at another process condition follows its reference instead of carrying a typed current. Internal node levels are authored choice params, and every device in the stack declares that it must stay saturated. On the demo NMOS table every device sizes against the same data.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -33,7 +33,7 @@
       "max": 400e-6,
       "unit": "A",
       "role": "choice",
-      "note": "total tail current (each side carries half)"
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node sits below the reference's diode drop); each side carries half of what is delivered, and the supply current is computed from that, not from this number"
     },
     {
       "name": "gm_id_in",
@@ -78,7 +78,7 @@
       "max": 14,
       "unit": "1/V",
       "role": "choice",
-      "note": "tail source inversion"
+      "note": "inversion level of the bias reference, which the tail device inherits through the shared gate: a higher V* costs headroom at the tail node"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     {
@@ -163,10 +163,113 @@
   ],
   "blocks": [
     {
+      "name": "bias",
+      "doc": {
+        "title": "Tail bias reference",
+        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "I_b",
+            "value": 40e-6,
+            "unit": "A",
+            "role": "spec"
+          },
+          {
+            "name": "L_b",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
+          {
+            "name": "gm_id_b",
+            "value": 8,
+            "unit": "1/V",
+            "role": "choice"
+          }
+        ],
+        "givens": {
+          "L": "L_b",
+          "id": "I_b",
+          "gm_id": "gm_id_b",
+          "diode": true
+        },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_b",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["W", "vgs"]
+      },
+      "params": {
+        "I_b": "I_tail",
+        "L_b": "L_tail",
+        "gm_id_b": "gm_id_tail"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node $V_s$ as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at the tail node $V_s$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It has to stay saturated, and it leaves saturation when the tail node $V_s$ falls below its own $V_{dsat}$, which sets the floor under the tail node.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_t",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width — a 1:1 copy"
+          },
+          {
+            "name": "vgs_t",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          {
+            "name": "L_t",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
+          {
+            "name": "vds_t",
+            "value": 0.4,
+            "unit": "V",
+            "role": "spec",
+            "note": "the tail node"
+          }
+        ],
+        "givens": {
+          "L": "L_t",
+          "W": "W_t",
+          "vgs": "vgs_t",
+          "vds": "vds_t",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "W_t": "bias__W",
+        "vgs_t": "bias__vgs",
+        "L_t": "L_tail",
+        "vds_t": "V_s"
+      }
+    },
+    {
       "name": "in",
       "doc": {
         "title": "Input pair device",
-        "description": "Half-circuit input device at half the tail current; its gm sets the stage transconductance and its output conductance is the bottom of the down-looking cascode branch.",
+        "description": "Half-circuit input device, carrying half of what the tail delivers; its gm sets the stage transconductance and its output conductance is the bottom of the down-looking cascode branch.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -175,7 +278,14 @@
           { "name": "vx", "value": 0.23, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "id": "Ix",
+          "gm_id": "gx",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -186,10 +296,10 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg", "id"]
       },
       "params": {
-        "Ix": "I_tail/2",
+        "Ix": "tail__id/2",
         "Lx": "L_in",
         "gx": "gm_id_in",
         "vx": "V_a - V_s",
@@ -209,7 +319,14 @@
           { "name": "vx", "value": 0.4, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "id": "Ix",
+          "gm_id": "gx",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -223,7 +340,7 @@
         "provides": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
-        "Ix": "I_tail/2",
+        "Ix": "in__id",
         "Lx": "L_cascn",
         "gx": "gm_id_cascn",
         "vx": "V_out - V_a",
@@ -249,7 +366,14 @@
           },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "id": "Ix",
+          "gm_id": "gx",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -263,7 +387,7 @@
         "provides": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
-        "Ix": "I_tail/2",
+        "Ix": "in__id",
         "Lx": "L_cascp",
         "gx": "gm_id_cascp",
         "vx": "p_sign*(V_b - V_out)",
@@ -274,7 +398,7 @@
       "name": "load",
       "doc": {
         "title": "PMOS load device",
-        "description": "The PMOS load carrying the branch current; its output conductance is the top of the up-looking cascode branch.",
+        "description": "The PMOS load, in the input device's branch and carrying that device's current; its output conductance is the top of the up-looking cascode branch.",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -288,7 +412,7 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -301,34 +425,7 @@
         ],
         "provides": ["gds", "vdsat", "gm", "vnth_m"]
       },
-      "params": { "Ix": "I_tail/2", "Lx": "L_load", "gx": "gm_id_load", "vx": "p_sign*(VDD - V_b)" }
-    },
-    {
-      "name": "tail",
-      "doc": {
-        "title": "Tail current source",
-        "description": "The tail device carrying the full bias current; its saturation headroom sets the tail-node floor.",
-        "polarity": "n",
-        "params": [
-          { "name": "Ix", "value": 40e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.32, "unit": "V", "role": "spec" }
-        ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["gds", "vdsat"]
-      },
-      "params": { "Ix": "I_tail", "Lx": "L_tail", "gx": "gm_id_tail", "vx": "V_s" }
+      "params": { "Ix": "in__id", "Lx": "L_load", "gx": "gm_id_load", "vx": "p_sign*(VDD - V_b)" }
     }
   ],
   "equations": [
@@ -365,9 +462,9 @@
     },
     {
       "name": "I_q",
-      "expr": "I_tail + I_cmfb",
+      "expr": "tail__id + I_cmfb",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the tail plus the CMFB network's budget (the CMFB loop itself is out of scope). The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — what the tail device delivers, plus the CMFB network's budget (the CMFB loop itself is out of scope). The reference branch that programs the tail is shared bias infrastructure and is not counted here. The datasheet line for comparing designs; no rule reads it"
     },
     {
       "name": "vn_in",
@@ -398,46 +495,6 @@
       "op": ">=",
       "rhs": "swing_target",
       "note": "the differential output swing meets the target"
-    },
-    {
-      "id": "tail-sat",
-      "kind": "physical",
-      "lhs": "V_s",
-      "op": ">=",
-      "rhs": "tail__vdsat",
-      "note": "tail source saturated at the tail-node level"
-    },
-    {
-      "id": "in-sat",
-      "kind": "physical",
-      "lhs": "V_a - V_s",
-      "op": ">=",
-      "rhs": "in__vdsat",
-      "note": "input device saturated across its node drop"
-    },
-    {
-      "id": "cascn-sat",
-      "kind": "physical",
-      "lhs": "V_out - V_a",
-      "op": ">=",
-      "rhs": "cascn__vdsat",
-      "note": "NMOS cascode saturated across its node drop"
-    },
-    {
-      "id": "cascp-sat",
-      "kind": "physical",
-      "lhs": "V_b - V_out",
-      "op": ">=",
-      "rhs": "cascp__vdsat",
-      "note": "PMOS cascode saturated across its node drop"
-    },
-    {
-      "id": "load-sat",
-      "kind": "physical",
-      "lhs": "VDD - V_b",
-      "op": ">=",
-      "rhs": "load__vdsat",
-      "note": "PMOS load saturated across its node drop"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"]

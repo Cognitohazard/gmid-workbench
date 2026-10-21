@@ -1,6 +1,6 @@
 {
   "title": "Inverter-based OTA",
-  "description": "A complementary common-source (inverter) transconductor: an NMOS and a PMOS input device stacked between the rails share the same bias current, and their gates tie together as the input. Because both devices transconduct the input, the composite transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$ — current reuse buys roughly double the $g_m$ for the same current, so the effective $g_m/I_D$ is $(g_m/I_D)_n + (g_m/I_D)_p$. Gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$ and, for the same current, the input-referred thermal density is below a single device's, by $\\sqrt{2}$ where the two transconductances are equal. The two gates are one node and the two sources are the two rails, so the gate-source voltages add up to the supply, $V_{GS,n} + |V_{GS,p}| = V_{DD}$: one inversion level is a choice and the other follows from it. The sheet is drawn that way. The NMOS is sized from the bias current and its $g_m/I_D$, and its gate-source voltage is the input level $V_{in}$; the PMOS carries the same current at the gate-source voltage the supply leaves above $V_{in}$, and its width is whatever that takes. On a process whose two thresholds add up to well under the supply the PMOS is left a large overdrive and sits deep in strong inversion, narrow and with little of the transconductance; on one whose thresholds nearly fill the supply both devices sit in moderate inversion. The cost is supply sensitivity: the bias current and hence $g_m$ depend directly on VDD, so the inverter needs a replica or common-mode bias loop and has poor native PSRR — sim owns the supply rejection. The PMOS device takes a sign param like the mirror-load convention so it binds against either an N-style or a signed-PMOS table. Held fixed and asked about at another process condition, each device keeps its width and is handed the bias current, so the two gate voltages are read separately there and need not meet at one node; the gate-wiring check on the PMOS reports by how much they miss.",
+  "description": "A complementary common-source (inverter) transconductor: an NMOS and a PMOS input device stacked between the rails share the same bias current, and their gates tie together as the input. Because both devices transconduct the input, the composite transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$ — current reuse buys roughly double the $g_m$ for the same current, so the effective $g_m/I_D$ is $(g_m/I_D)_n + (g_m/I_D)_p$. Gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$ and, for the same current, the input-referred thermal density is below a single device's, by $\\sqrt{2}$ where the two transconductances are equal. The two gates are one node and the two sources are the two rails, so the gate-source voltages add up to the supply, $V_{GS,n} + |V_{GS,p}| = V_{DD}$: one inversion level is a choice and the other follows from it. The sheet is drawn that way. The NMOS is sized from the bias current and its $g_m/I_D$, and its gate-source voltage is the input level $V_{in}$; the PMOS carries the same current at the gate-source voltage the supply leaves above $V_{in}$, and its width is whatever that takes. On a process whose two thresholds add up to well under the supply the PMOS is left a large overdrive and sits deep in strong inversion, narrow and with little of the transconductance; on one whose thresholds nearly fill the supply both devices sit in moderate inversion. The cost is supply sensitivity: the bias current and hence $g_m$ depend directly on VDD, so the inverter needs a replica or common-mode bias loop and has poor native PSRR — sim owns the supply rejection. The PMOS device takes a sign param like the mirror-load convention so it binds against either an N-style or a signed-PMOS table. Held fixed and asked about at another process condition, the inverter keeps its supply: each device keeps its width, the PMOS keeps the gate voltage the supply leaves above the input, and the bias current is solved again so the two devices carry one current.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -46,7 +46,8 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the single current shared by the N and P devices (current reuse), typed into the NMOS; the PMOS reads the NMOS's current"
+      "hold": "I_bias - p__id",
+      "note": "the single current shared by the N and P devices (current reuse), typed into the NMOS where the design is sized; the PMOS reads the NMOS's current there. Where the design is held fixed — another process condition — the supply is what stays put: the PMOS keeps the gate voltage the supply leaves above the input, and this current is solved again, between min and max, so that the two devices carry one current"
     },
     {
       "name": "gm_id_n",
@@ -73,18 +74,24 @@
           { "name": "gm_id_d", "value": 10, "unit": "1/V", "role": "choice" },
           { "name": "vds_d", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_d", "id": "I_d", "gm_id": "gm_id_d", "vds": "vds_d" },
+        "givens": {
+          "L": "L_d",
+          "id": "I_d",
+          "gm_id": "gm_id_d",
+          "vds": "vds_d",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
             "id": "feasible-inversion",
             "kind": "physical",
-            "lhs": "gm_id_d",
+            "lhs": "gm_id",
             "op": "<=",
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m", "cgg", "id"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "W", "vnth_m", "cgg", "id", "gm_id"]
       },
       "params": {
         "I_d": "I_bias",
@@ -111,10 +118,16 @@
           },
           { "name": "vds_d", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_d", "id": "I_d", "vgs": "vgs_d", "vds": "vds_d" },
+        "givens": {
+          "L": "L_d",
+          "id": "I_d",
+          "vgs": "vgs_d",
+          "vds": "vds_d",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "W", "vnth_m", "cgg", "gm_id"]
+        "provides": ["gm", "gds", "vdsat", "W", "vnth_m", "cgg", "gm_id", "id"]
       },
       "params": {
         "I_d": "n__id",
@@ -166,7 +179,7 @@
     },
     {
       "name": "vos",
-      "expr": "sqrt((pelgrom_vos(avt, abeta, n__W, L_n, gm_id_n)*n__gm)^2 + (pelgrom_vos(avt, abeta, p__W, L_p, p__gm_id)*p__gm)^2)/gm_tot",
+      "expr": "sqrt((pelgrom_vos(avt, abeta, n__W, L_n, n__gm_id)*n__gm)^2 + (pelgrom_vos(avt, abeta, p__W, L_p, p__gm_id)*p__gm)^2)/gm_tot",
       "unit": "V",
       "note": "estimate: the N and P mismatch offsets, input-referred, each weighted by its device's share of the composite transconductance, as the noise row weights each device's noise. An offset at one device's gate moves the output current by that device's gm, and the input sees gm_tot, so a device with little of the transconductance contributes little of the offset. Adding the two unweighted would overstate it"
     },
@@ -193,7 +206,7 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "reads each device's thermal noise from the table where the table carries it, and the gamma = 1 estimate where it does not; it stays advisory because a sheet cannot know which table it will be evaluated on, and the simulator owns noise sign-off"
     },
     { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
@@ -203,14 +216,6 @@
       "op": ">=",
       "rhs": "n__vdsat + p__vdsat + 2*0.05",
       "note": "the stacked N and P must both stay saturated between the rails with a little margin"
-    },
-    {
-      "id": "p-saturated",
-      "kind": "physical",
-      "lhs": "VDD - V_out_dc",
-      "op": ">=",
-      "rhs": "p__vdsat",
-      "note": "the PMOS has the supply down to the output across it and takes its gate voltage from the shared input node, so its overdrive is whatever the supply leaves: where that is large its saturation voltage is too, and it has to fit between the supply and the output level"
     },
     {
       "id": "supply-sensitivity",

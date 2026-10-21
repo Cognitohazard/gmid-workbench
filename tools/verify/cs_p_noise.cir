@@ -1,10 +1,10 @@
 * single-device noise reference: pfet_01v8 at the 5T OTA's mirror-load bias point
 *
 * One device held at exactly the coordinates the sheet's ldr block (the diode side of the
-* mirror load) was read at (see ota_op.cir): W 2.4740 um as m copies of the 1 um device,
+* mirror load) was read at (see ota_op.cir): W 2.5797 um as m copies of the 1 um device,
 * L 0.5 um, vgs = vds = -1132.19 mV, vsb 0. There the sheet reports
 *
-*   id 8.7507 uA   gm 70.01 uS   ldr__vnth_m 15.39 nV/rtHz (4kT*gamma/gm with gamma = 1)
+*   id 9.1243 uA   gm 72.99 uS   ldr__vnth_m 15.08 nV/rtHz (the table's stored thermal noise)
 *
 * No load and no topology: the drain sits on a voltage source and HO turns its current into
 * v(o) at 1 V/A, so the output noise is the drain noise current in A/rtHz and the gain from
@@ -17,7 +17,7 @@
 
 VG   g    0    dc -1.13219 ac 1
 VD   d    0    -1.13219
-XM1  d    g    0    0    sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.4740
+XM1  d    g    0    0    sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5797
 HO   o    0    VD   1
 
 .control

@@ -260,10 +260,12 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   await sizer.locator('.bax input').first().dispatchEvent('change');
   await expect(sizer.locator('.bnote')).toHaveCount(0);
   // Matching & noise budget: the sized geometry yields a Pelgrom offset, and the
-  // thermal-noise density (γ-model) sits in its own line.
+  // thermal-noise density sits in its own line, labelled with where its γ comes from — the
+  // demo table stores a gamma column of its own.
   await expect(sizer).toContainText('matching');
   await expect(sizer.locator('.budget')).toContainText('σ(Vos) pair');
-  await expect(sizer.locator('.noise')).toContainText('V/√Hz'); // thermal noise (γ-model)
+  await expect(sizer.locator('.noise')).toContainText('V/√Hz'); // thermal noise
+  await expect(sizer.locator('.noise small').first()).toHaveText('γ from the table');
   // Total integrated input-referred noise (thermal + 1/f over the band); raising the
   // 1/f corner increases it.
   const rms = sizer.locator('.noise dd').last();

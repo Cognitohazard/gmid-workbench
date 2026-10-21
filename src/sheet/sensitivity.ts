@@ -51,7 +51,7 @@ export const SENSITIVITY_REL_STEP = 1e-2;
  *
  * `check` names the outcome the caller actually wants ranked, and it is a COST declaration as
  * much as a filter: range ends are re-run per probe only when the named check lives on one
- * (a range-end-keyed id, `cm-lo@tail-saturated`). Without it every probe re-checks compliance at
+ * (a range-end-keyed id, `cm-lo@sr-spec`). Without it every probe re-checks compliance at
  * every range end — 2*(1 + range ends) full evaluations per knob, dozens per click on a sheet with
  * several claims — to produce numbers about a check at the top. The range-free runs then carry no
  * range-end-keyed checks at all, in the base as well as the probes, so nothing reads as an

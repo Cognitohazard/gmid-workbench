@@ -11,7 +11,7 @@ import type { QAWarning } from '../types';
 import { compileExpr, metaScalars } from '../derive';
 import { BINDABLE, bindProblem } from '../device';
 import { BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
-import { HELD_AT_A_RANGE_END } from './coverage';
+import { HELD_AT_A_RANGE_END, heldShape } from './coverage';
 import {
   BIAS_AXES,
   givenIsExpression,
@@ -38,8 +38,12 @@ import {
   providedNames,
   prefixBlockWarning,
   splitProvide,
+  balancedBy,
+  balancesOf,
+  heldOnGate,
   type ParamClass,
   type SheetDoc,
+  type SheetGivens,
   type SheetEquation,
   type SheetBlock,
   type SheetVar,
@@ -319,6 +323,122 @@ function untiedGates(doc: SheetDoc): QAWarning[] {
   return out;
 }
 
+/**
+ * A device given a gate voltage, a current and no width says two things about one transistor
+ * that the design point cannot tell apart and a held design has to: whether its GATE is the fixed
+ * thing (a gate on a shared wire, an inverter's PMOS) or its CURRENT is (a gate voltage typed as an
+ * operating point). Where the design is held it is held at its width and that current
+ * (holdHardware), so its gate voltage is read separately, off whatever wire it was sized on — the
+ * right reading for a current source, the wrong one for a device on a shared gate. The sheet
+ * settles it with a `hold`: one that reads the device's current (`<block>__id`) balances it and
+ * keeps the gate (heldOnGate); one that reads its gate-source voltage (`<block>__vgs`) keeps the
+ * gate on a node by re-solving the node under it. Without either it is reported, naming both
+ * remedies, because which one fits is the circuit's to say: a series partner on a shared wire
+ * wants a hold that balances the two currents, and a mirror copy of a reference wants the
+ * reference's width and gate voltage, so its current follows the data. A current given as a
+ * number is a source by statement and draws nothing. The sheet's own device is asked about only
+ * at the top of a tree: a child's own givens are checked from its parent's block, where its
+ * overrides and the holds that could settle it are.
+ */
+function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
+  const out: QAWarning[] = [];
+  const read = new Set(doc.params.filter(holds).flatMap((p) => namesOf(p.hold)));
+  const ask = (
+    givens: SheetGivens | undefined,
+    current: (id: string) => string,
+    name: (key: string) => string,
+    who: string,
+    location: string,
+  ): void => {
+    if (!givens || givens.W !== undefined || givens.vgs === undefined) return;
+    if (typeof givens.id !== 'string') return;
+    const id = current(givens.id).trim();
+    // A number reads no name: an expression of literals (and constants) is a source by statement.
+    const literal = parses(id) && namesOf(id).length === 0;
+    if (literal || read.has(name('id')) || read.has(name('vgs'))) return;
+    out.push({
+      rule: 'sheet-held-current',
+      severity: 'warning',
+      message:
+        `${who} is given a gate voltage and a current ("${id}") and no width, so where the design ` +
+        `is held it keeps its width and that current, and its gate voltage is read separately ` +
+        `from the wire it was sized on. Say which it is: a series partner on a shared gate gets a ` +
+        `hold that balances the two currents, on the typed current that sets them ("hold": ` +
+        `"<that param> - ${name('id')}", with ${name('id')} available), and is then held on its ` +
+        `gate voltage; a mirror copy of a reference gets the reference's width and gate voltage ` +
+        `(W and vgs), so its current follows the data`,
+      location,
+    });
+  };
+  if (top)
+    ask(
+      doc.givens,
+      (id) => id,
+      (k) => k,
+      "this sheet's own device",
+      'givens',
+    );
+  for (const block of doc.blocks ?? []) {
+    const over = block.params ?? {};
+    ask(
+      block.doc?.givens,
+      // A child param the parent overrides reads what the parent wires into it.
+      (id) => (Object.prototype.hasOwnProperty.call(over, id.trim()) ? over[id.trim()] : id),
+      (k) => joinProvide(block.name, k),
+      `block "${block.name}"`,
+      block.name,
+    );
+  }
+  return out;
+}
+
+/**
+ * A current balance (a `hold` that reads a device's current, see balancedBy) fixes its param where
+ * the design is held, and the param is meant to be the current that sets the other side of the
+ * balance — the bias typed into the NMOS against the PMOS's current. Checked on the held document
+ * itself (heldShape), so the narrowing of which devices keep their gate is the one the run makes:
+ * the param has to reach the current of a device the hold does not name. One that reaches none
+ * would be solved to the balance and move nothing but its own number, and the held run would
+ * report an agreement no device makes.
+ */
+function looseBalances(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
+  const balances = doc.params.filter(holds).map((p) => ({ p, named: balancedBy(doc, p) }));
+  if (!balances.some((b) => b.named.length)) return out;
+  const held = heldShape(doc);
+  for (const { p, named } of balances) {
+    if (!named.length) continue;
+    const entries: ReachedGivens[] = [];
+    reachedGivens(held, [p.name], '', entries, 0);
+    const skip = new Set(named.map((d) => blockPath(d === '' ? '' : `${d}${PATH_SEP}`)));
+    const reaches = entries.some(({ path, givens, reached }) => {
+      if (skip.has(path)) return false;
+      const reads = (k: string): boolean => {
+        const v = (givens as unknown as Record<string, unknown>)[k];
+        return (
+          givenIsExpression(k) && typeof v === 'string' && namesOf(v).some((n) => reached.has(n))
+        );
+      };
+      // A held current is the device's current; without one the current is read from the table
+      // wherever its held givens put the operating point.
+      return givens.id !== undefined ? reads('id') : Object.keys(givens).some(reads);
+    });
+    if (reaches) continue;
+    out.push({
+      rule: 'sheet-param',
+      severity: 'error',
+      message:
+        `param "${p.name}": its hold "${p.hold}" balances the current of ` +
+        `${quoted(named.map((d) => (d === '' ? "this sheet's own device" : d)))}, but where the ` +
+        `design is held "${p.name}" reaches no other device's current, so solving it to the ` +
+        `balance would move nothing but its own number. Give it to the device it programs (that ` +
+        `device's id), so the balance is between two currents`,
+      location: p.name,
+    });
+  }
+  return out;
+}
+
 /** Whether `block` is sized on a gate voltage that names one of its `peers` — the reference read
  *  from the child's own givens and, when they name a child param, from the parent's override
  *  of it, which is where the cross-block name normally lives. */
@@ -439,6 +559,11 @@ interface Level {
   kids: Map<string, Level>;
 }
 
+/** Whether the sheet a level is embedded in balances that level's device current with a hold
+ *  (see balancedBy) — what, beside the level's own holds, decides heldOnGate for a block. */
+const balancedHere = (lv: Level): boolean =>
+  !!lv.parent && balancesOf(lv.parent.level.doc).has(lv.parent.block.name);
+
 /** The level `block` embeds below `lv`, with no children enrolled yet. */
 const childLevel = (lv: Level, block: SheetBlock, doc: SheetDoc): Level => ({
   doc,
@@ -487,6 +612,10 @@ const DEVICE_QUANTITIES: ReadonlySet<string> = new Set(
     'feasible',
   ].filter((k) => !META_PUBLISHED.has(k)),
 );
+
+/** Every name a sizing writes into its level's scope (eval.ts, runSizing): the device quantities,
+ *  and the table scalars it re-reads beside them. */
+const SIZING_PUBLISHES: ReadonlySet<string> = new Set([...DEVICE_QUANTITIES, ...META_PUBLISHED]);
 
 /** The metadata scalars sizing writes over with the sized device's own — the per-width ones,
  *  which is the width `w` (eval.ts, runSizing). Read after a level's sizing, such a name is that
@@ -606,11 +735,15 @@ function provideEdges(kid: Level, key: string, policy: TraversalPolicy): Edge[] 
   const device: Edge = { kind: 'device', lv: kid, key };
   if (!kid.doc.givens) return [inside];
   if (policy.sizingProvides) {
-    // A quantity a range end holds does not move — with one exception. A device given its width
-    // and no current (one tied to another's gate) has its current READ from the table, so that
-    // current moves with whatever moves its operating point, and everything derived from it too.
+    // A quantity a range end holds does not move — with one exception. A device whose held givens
+    // carry no current has its current READ from the table, so that current moves with whatever
+    // moves its operating point, and everything derived from it too: one given its width and no
+    // current (tied to another's gate), and one held on its gate voltage because a hold balances
+    // its current (heldOnGate), whatever current it was sized at.
     const givens = kid.doc.givens;
-    const readCurrent = key === 'id' && givens.W !== undefined && givens.id === undefined;
+    const readCurrent =
+      key === 'id' &&
+      (givens.W !== undefined ? givens.id === undefined : heldOnGate(kid.doc, balancedHere(kid)));
     return policy.held?.has(key) && !readCurrent ? [inside] : [inside, device];
   }
   const own =
@@ -1183,6 +1316,13 @@ function movedBy(
  */
 function complianceReach(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
+  // The devices a range end holds on their gate voltage (heldOnGate), by the path reachedGivens
+  // reports them under.
+  const onGate = new Set(
+    levelsOf(doc)
+      .filter((lv) => heldOnGate(lv.doc, balancedHere(lv)))
+      .map((lv) => blockPath(lv.path)),
+  );
   for (const e of doc.operatingRange ?? []) {
     const name = e.name?.trim();
     if (!name) continue; // shape errors are named above; this check needs a usable name
@@ -1194,6 +1334,17 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
       const keyMoved = (k: string): boolean =>
         givenIsExpression(k) && readsMoved(givens[k as never]);
       const where = path === 'givens' ? "this sheet's own givens" : `the givens at "${path}"`;
+      /** The note for a device whose current the range end reads from the table rather than
+       *  holds, and moves the operating point of through `point`. */
+      const readCurrentMoves = (point: string[]): QAWarning => ({
+        rule: 'sheet-range',
+        severity: 'info',
+        message:
+          `range end "${name}" moves the ${quoted(point)} of ${where}, whose current is read ` +
+          `from the table rather than given — that current is different there, and so is any ` +
+          `current derived from it`,
+        location: name,
+      });
       if (givens.W !== undefined) {
         // Width-first givens are left exactly as authored at a range end, which makes two
         // different things possible, and an author sent to the wrong one of them looks in the
@@ -1228,9 +1379,12 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
         // where a gate-tied device would keep its voltage. Givens that state the gate voltage keep
         // no such spec: the table is read at that gate voltage — the partner's, re-read at the
         // range end, where the device is tied to one, or the number the author stated — and at
-        // the new bias, body bias included. The note below still says the current moved.
+        // the new bias, body bias included. Givens that state the current as an expression the
+        // range end reaches keep none either: the current follows what it reads (a share of what
+        // a tail delivers), and the table is read at it. The note below still says it moved.
         const bias = via.filter((k) => k !== 'W' && k !== 'L');
-        if (bias.length && givens.vgs === undefined)
+        const currentFollows = givens.id !== undefined && readsMoved(givens.id);
+        if (bias.length && givens.vgs === undefined && !currentFollows)
           out.push({
             rule: 'sheet-range',
             severity: 'warning',
@@ -1246,15 +1400,14 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
         // current follows the tail node.
         const point = Object.keys(givens).filter((k) => k !== 'W' && k !== 'L' && keyMoved(k));
         if (givens.id === undefined && point.length && !geometry.length)
-          out.push({
-            rule: 'sheet-range',
-            severity: 'info',
-            message:
-              `range end "${name}" moves the ${quoted(point)} of ${where}, whose current is read ` +
-              `from the table rather than given — that current is different there, and so is any ` +
-              `current derived from it`,
-            location: name,
-          });
+          out.push(readCurrentMoves(point));
+      } else if (onGate.has(path)) {
+        // Held on its gate voltage because a hold balances its current (holdHardware): its
+        // authored current is the design point's and is not kept, so the note above applies
+        // through whatever the held givens still read — the gate voltage and the bias axes. The
+        // geometry is held as numbers, so it cannot move.
+        const point = ['vgs', ...BIAS_AXES].filter(keyMoved);
+        if (point.length) out.push(readCurrentMoves(point));
       } else if (readsMoved(givens.id)) {
         // The authored current IS the hardware description at a range end (a mirror ratio, a
         // tail split, a share of another device's current), so it is re-evaluated there on
@@ -1438,6 +1591,37 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
     }
   }
 
+  // A level that sizes a device merges everything the sizing publishes into its scope after its
+  // params are seeded (eval.ts, runSizing): every namespace quantity the table supports, the
+  // selectors, the ceiling, and the table scalars (`T`, `UT`, `w`) it re-reads at the sized
+  // width. A param of the same name is therefore overwritten wherever a device is sized — on a
+  // table that carries that quantity, which is not every table, so the same sheet reads the
+  // author's number on one table and the device's on another with nothing said. An equation of the
+  // same name runs after the sizing, so it replaces the device's value for every row after it. A
+  // param that IS the given of the same name (`gm_id: "gm_id"`) is exempt: the sizing writes back
+  // the number it was handed.
+  if (doc.givens) {
+    const givens = doc.givens as unknown as Record<string, unknown>;
+    for (const p of doc.params) {
+      if (!SIZING_PUBLISHES.has(p.name) || givens[p.name] === p.name) continue;
+      out.push({
+        rule: 'sheet-collision',
+        severity: 'warning',
+        message: `param "${p.name}": the sizing publishes a quantity named ${p.name}, which overwrites this param where a device is sized; rename it`,
+        location: p.name,
+      });
+    }
+    for (const r of doc.equations) {
+      if (!SIZING_PUBLISHES.has(r.name)) continue;
+      out.push({
+        rule: 'sheet-collision',
+        severity: 'warning',
+        message: `equation "${r.name}": the sizing publishes a quantity named ${r.name}, which this equation replaces for every row after it — the device's own value included; rename it`,
+        location: r.name,
+      });
+    }
+  }
+
   // Duplicate check ids collapse silently downstream: indexTreeResults keys results by id, so
   // the sweep charts one curve where two checks exist and bindingCheck can name the WRONG
   // worst check. (A child reusing a parent's id is fine — paths disambiguate across levels.)
@@ -1600,6 +1784,8 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
   }
 
   if (_depth === 0) out.push(...dcInputProblems(doc));
+  out.push(...unsettledGates(doc, _depth === 0));
+  out.push(...looseBalances(doc));
 
   // The composition interface, both ways: names read across a block boundary, and names this
   // sheet declares it exposes. Runs for every doc — a leaf with no children still publishes.
@@ -1646,14 +1832,18 @@ export function validateSheet(doc: SheetDoc, _depth = 0): QAWarning[] {
       if (!block.params) continue;
       const later = new Set(doc.blocks.slice(i).flatMap(providedNames));
       for (const [k, expr] of Object.entries(block.params)) {
-        // The child re-solves a held node wherever the hardware is held, so the value wired in
-        // here is honoured at the design point and dropped at a range end — while this sheet
-        // goes on reading its own.
-        if (block.doc?.params.some((p) => p.name === k && holds(p))) {
+        // The child re-solves a held param wherever the hardware is held — a node under a gate,
+        // or a current its balance fixes — so the value wired in here is honoured at the design
+        // point and dropped at a range end, while this sheet goes on reading its own.
+        const heldParam = block.doc?.params.find((p) => p.name === k && holds(p));
+        if (heldParam && block.doc) {
+          const what = balancedBy(block.doc, heldParam).length
+            ? ['a current the child balances', 'balance']
+            : ['a node the child holds under a gate', 'node'];
           out.push({
             rule: 'sheet-block-param',
             severity: 'warning',
-            message: `block "${block.name}" override "${k}" sets a node the child holds under a gate — a range end re-solves it inside the child, and this sheet's own value for it will not follow. Hold the node on this sheet instead`,
+            message: `block "${block.name}" override "${k}" sets ${what[0]} — a range end re-solves it inside the child, and this sheet's own value for it will not follow. Hold the ${what[1]} on this sheet instead`,
             location: block.name,
           });
         }

@@ -8,8 +8,13 @@ import { type Axis, type DeviceTable, type Grid, LookupError, LookupRangeError }
 import { BASE_KEYS } from '../namespace';
 import { CONSTANTS } from '../constants';
 import { interpolate, sliceGrid, orient, interp1 } from '../grid';
-import { scalarScope } from '../expr';
-import { DERIVED_COMPILED, metaScalars, evalColumn } from '../derive';
+import {
+  DEFAULTED_DERIVED,
+  DERIVED_COMPILED,
+  metaScalars,
+  evalColumn,
+  pointScope,
+} from '../derive';
 
 // The Map is authoritative (shared with derive); a module-level entries array keeps
 // the per-lookup default-keys walk allocation-free.
@@ -99,7 +104,9 @@ export function lookup(
     ).map(([key]) => key),
   ];
 
-  const scope = scalarScope(baseScalars);
+  // A point scope rather than a plain scalar one: a definition that reads another derived name
+  // (the γ-model keys read `gamma`) must see the table's value of it, not the constant.
+  const scope = pointScope(baseScalars);
   const out: Record<string, number> = {};
 
   for (const key of requested) {
@@ -113,7 +120,14 @@ export function lookup(
         `lookup: "${key}" is neither a present base column nor a known derived quantity`,
       );
     }
-    const v = def.eval(scope);
+    // Asked for by name on a table that cannot compute it, a defaulted quantity is its default —
+    // the value every expression reading the name gets on this table.
+    const v =
+      DEFAULTED_DERIVED.has(key) &&
+      missingInput(def.names, (n) => Object.prototype.hasOwnProperty.call(baseScalars, n)) !==
+        undefined
+        ? CONSTANTS[key]
+        : def.eval(scope);
     if (v instanceof Float64Array) {
       // Derived definitions over scalar bases yield scalars; guard defensively.
       throw new Error(`lookup: derived "${key}" did not reduce to a scalar`);

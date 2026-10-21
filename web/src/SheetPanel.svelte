@@ -30,6 +30,8 @@
     flattenSheetDoc,
     formatEng,
     formatSI,
+    noiseSourceLabel,
+    noiseSourcesIn,
     joinProvide,
     PROVIDE_SEP,
     BIAS_AXES,
@@ -260,6 +262,23 @@
   /** The primary table the detail was computed on: the device's table at the reference
    *  condition, which is the active table only when the panel is asking about that condition. */
   const refTable = $derived(refKey && primary ? tableAt(primary, refKey) : undefined);
+  /** Where the sized devices' thermal-noise figures come from, in one line: the label alone when
+   *  every device agrees, else each label with the devices that carry it. Empty with nothing
+   *  sized. */
+  const noiseText = $derived.by((): string => {
+    const devices = (result ? noiseSourcesIn(result) : []).map((d) => ({
+      device: d.device,
+      label: noiseSourceLabel(d.source),
+    }));
+    const labels = devices.map((d) => d.label).filter((l, i, all) => all.indexOf(l) === i);
+    if (labels.length <= 1) return labels.join('');
+    const carrying = (label: string): string =>
+      devices
+        .filter((d) => d.label === label)
+        .map((d) => d.device)
+        .join(', ');
+    return labels.map((label) => `${label} (${carrying(label)})`).join(' · ');
+  });
   /** The projection at the reference condition — the resolver the detail body, the sweeps and
    *  the sensitivity probes all read. It is the core's own projection (the same one the runs
    *  above evaluated through), so a chart or a probe can never mix conditions the verdict above
@@ -1213,7 +1232,12 @@
         )}</span
       >
     {/if}
-    <!-- The gate biases the design needs: what each held expression came to at this run. -->
+    <!-- Which noise the noise rows are: the table's own, or the γ = 1.0 estimate. -->
+    {#if evaluated && noiseText}
+      <span class="snoise" title={CONTROL_HELP.noiseSource}>noise: {noiseText}</span>
+    {/if}
+    <!-- What each held expression came to at this run: the gate bias a node under a gate needs,
+         or the zero a current balance reads. -->
     {#if evaluated && result?.held && Object.keys(result.held).length}
       <span class="sassume" data-held title={CONTROL_HELP.held}
         >holds {Object.entries(result.held)
@@ -1709,7 +1733,8 @@
     opacity: 0.7;
   }
   /* The assumed levels the verdict rests on. Quiet like the condition stamp, but never hidden. */
-  .sassume {
+  .sassume,
+  .snoise {
     font-size: calc(0.72rem * var(--text-scale));
     opacity: 0.75;
     font-style: italic;

@@ -202,8 +202,8 @@ describe('spec application', () => {
 
 describe('the search', () => {
   // The five-transistor OTA is INFEASIBLE at its shipped defaults on the demo device, binding
-  // `offset-spec` at -73.9%: the Pelgrom offset of the input pair and the mirror load together
-  // comes out at 17.39 mV against a 10 mV target. `vos_target` is the only relaxing field here,
+  // `offset-spec` at -64.9%: the Pelgrom offset of the input pair and the mirror load together
+  // comes out at 16.49 mV against a 10 mV target. `vos_target` is the only relaxing field here,
   // and this spec asks 40 mV. Every other field of the spec is at or below the sheet's own
   // default, so nothing else in it can be doing the work.
   const RELAXED: PickerSpec = {
@@ -229,12 +229,11 @@ describe('the search', () => {
   });
 
   // The same sheet at the tight spec — which is its shipped default — is the repair case. The
-  // search ranks the knobs against `offset-spec` and moves two of them. The input pair goes
-  // further into weak inversion, to the top of its slider, which leaves the offset 2.6 % over
-  // its target (10.255 mV against 10 mV); a longer load mirror then brings it to 7.93 mV and
-  // closes the sheet. Stage 2 backs the programmed current off from there until the offset
-  // target binds again, at 12.7 µA. Pinned after the algorithm was frozen; the assertion below
-  // re-evaluates that point standalone rather than trusting the search's own verdict.
+  // search ranks the knobs against `offset-spec` and moves one of them: the input pair goes
+  // further into weak inversion, to the top of its slider, and that alone closes the sheet.
+  // Stage 2 backs the programmed current off from there until the offset target binds again, at
+  // 19.2 µA. Pinned after the algorithm was frozen; the assertion below re-evaluates that point
+  // standalone rather than trusting the search's own verdict.
   it('repairs the five-transistor OTA at its tight spec, and the endpoint stands alone', () => {
     const c = pick('otas/five-transistor-ota.json', {
       VDD: 1.8,
@@ -249,11 +248,9 @@ describe('the search', () => {
     });
     expect(c.verdict).toBe('closed');
     expect(c.specCoverage).toEqual({ consumed: 9, supplied: 9 });
-    expect(Object.keys(c.knobs)).toEqual(['I_tail', 'gm_id_in', 'L_ld']);
-    expect(c.knobs.I_tail).toBeCloseTo(1.26875e-5, 12);
+    expect(Object.keys(c.knobs)).toEqual(['I_tail', 'gm_id_in']);
+    expect(c.knobs.I_tail).toBeCloseTo(1.915625e-5, 12);
     expect(c.knobs.gm_id_in).toBe(18);
-    // A scan sample: a third of the way up the length slider, 0.787 µm.
-    expect(c.knobs.L_ld).toBeCloseTo(0.18e-6 + (2e-6 - 0.18e-6) / 3, 15);
     expect(c.atRangeFloor).toEqual([]);
     // The knob values above are a SEARCH OUTCOME: where this search lands on this sheet, pinned
     // so a change to either is noticed. They are not derived by hand and say nothing on their
@@ -372,24 +369,24 @@ describe('the search', () => {
   });
 
   // The margin at a cut is an artifact OF the cut. Two budgets on one sheet and one spec give
-  // two different "fails by X%" numbers, ~3.1x apart, because the search stopped in two
+  // two different "fails by X%" numbers, ~3.5x apart, because the search stopped in two
   // different places. Neither may be read as the design's property — which is why both causes
   // lead with the stop rather than the number.
   it('never lets a margin quoted at a search cut stand as the design property', () => {
-    const tight = pick('otas/folded-cascode-ota.json', {}, 30);
-    const looser = pick('otas/folded-cascode-ota.json', {}, 46);
+    const tight = pick('otas/telescopic-cascode-ota.json', {}, 46);
+    const looser = pick('otas/telescopic-cascode-ota.json', {}, 100);
     expect(tight.verdict).toBe('did-not-close');
     expect(looser.verdict).toBe('did-not-close');
     // Where each search stopped is a SEARCH OUTCOME, recorded rather than derived by hand. What
     // each number is the margin OF is checked beside it: the sheet evaluated by itself at the
     // knobs that cut left standing binds on the same check by the same amount.
-    expect(tight.worstMargin?.marginPct).toBeCloseTo(-0.0436, 3);
-    expect(looser.worstMargin?.marginPct).toBeCloseTo(-0.0139, 3);
+    expect(tight.worstMargin?.marginPct).toBeCloseTo(-0.2347, 3);
+    expect(looser.worstMargin?.marginPct).toBeCloseTo(-0.0674, 3);
     for (const c of [tight, looser]) {
       expect(c.cause?.startsWith('the search stopped when its budget ran out')).toBe(true);
       expect(c.cause).toContain('at the last point searched');
       const hand = runSheet(
-        withParams(sheet('otas/folded-cascode-ota.json'), c.knobs),
+        withParams(sheet('otas/telescopic-cascode-ota.json'), c.knobs),
         table,
         undefined,
         REFS,

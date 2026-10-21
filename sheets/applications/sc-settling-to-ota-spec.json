@@ -99,7 +99,13 @@
           { "name": "L_c", "value": 5e-7, "unit": "m", "role": "choice" },
           { "name": "vds_c", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_c", "gm": "2*pi*GBW_c*CLeff_c", "gm_id": "gm_id_c", "vds": "vds_c" },
+        "givens": {
+          "L": "L_c",
+          "gm": "2*pi*GBW_c*CLeff_c",
+          "gm_id": "gm_id_c",
+          "vds": "vds_c",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {

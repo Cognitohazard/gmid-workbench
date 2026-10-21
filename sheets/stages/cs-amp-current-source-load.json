@@ -102,7 +102,13 @@
             "note": "signed to this device table's axis convention"
           }
         ],
-        "givens": { "L": "L_ld", "id": "I_load", "gm_id": "gm_id_ld", "vds": "vds_ld" },
+        "givens": {
+          "L": "L_ld",
+          "id": "I_load",
+          "gm_id": "gm_id_ld",
+          "vds": "vds_ld",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -127,7 +133,8 @@
     "L": "L",
     "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
     "gm_id": "gm_id",
-    "vds": "V_out"
+    "vds": "V_out",
+    "region": "saturation"
   },
   "equations": [
     {
@@ -172,22 +179,6 @@
       "rhs": "ceiling",
       "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
     },
-    {
-      "id": "input-sat",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "vdsat",
-      "note": "input device saturated at the output DC level"
-    },
-    {
-      "id": "load-sat",
-      "kind": "physical",
-      "lhs": "VDD - V_out",
-      "op": ">=",
-      "rhs": "load__vdsat",
-      "note": "load device saturated: its headroom is the supply minus the output level"
-    },
     { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
@@ -195,7 +186,7 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "read from the table's own noise where it carries it, and from the γ = 1 estimate otherwise; the simulator owns noise sign-off"
     },
     {
       "id": "gbw-margin",

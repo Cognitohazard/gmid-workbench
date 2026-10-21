@@ -223,7 +223,7 @@ export function limitingCheck(res: {
 
 /**
  * The worst failing hard check among the range-end runs, named with its range end
- * (`cm-lo@tail-saturated`) — what keeps a feasible design from complying, in the id form the
+ * (`cm-lo@sr-spec`) — what keeps a feasible design from complying, in the id form the
  * sensitivity readout takes. `undefined` when no range end has a failing check, which includes
  * every end that was not run or returned no answer: those carry no check outcomes to name.
  */

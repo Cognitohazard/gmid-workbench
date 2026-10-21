@@ -6,6 +6,7 @@
 // construction. Pure data; zero DOM imports.
 
 import type { QAWarning } from '../types';
+import { compileExpr, type NoiseSource } from '../derive';
 import { BASE_QUANTITIES } from '../namespace';
 import { BINDABLE } from '../device';
 import { additiveCoefficient } from '../expr';
@@ -86,6 +87,16 @@ export interface SheetVar {
    * times a numeric literal (see additiveCoefficient) — so its dependence on the node is there
    * to read, not inferred. A relation of any other shape, or a gate bias the sheet provides, is a
    * `designConstraint`, which is solved at the nominal run as well.
+   *
+   * The same declaration states a typed CURRENT that is the design point's choice rather than the
+   * hardware. An inverter's bias is typed into its NMOS, and the PMOS on the same gate is given
+   * that current and the gate voltage the supply leaves. `"hold": "I_bias - p__id"` — a hold that
+   * reads a device's current, a current balance (see balancedBy) — says two things: that the
+   * PMOS's gate is the fixed thing, so where the design is held it keeps its gate voltage and reads
+   * its current from the table (see holdHardware, heldOnGate); and that the bias is then whatever
+   * the two devices agree on. The balance must read zero at the design point, as it does by
+   * construction, or the run fails closed; validation requires the param to reach another device's
+   * current where the design is held.
    */
   hold?: string;
   /**
@@ -128,11 +139,53 @@ export function holds(p: SheetVar): p is SheetVar & { hold: string } {
 }
 
 /** A `hold` param as the design constraint a fixed-hardware run solves: the held expression against
- *  `rhs`, the value it took at the nominal run. The one spelling of that rewrite, shared by the run
- *  that performs it and the validator that checks the solve order it will need. */
+ *  `rhs`, the value it took at the nominal run. The one spelling of that rewrite, shared by every
+ *  held run (holdHardware) and by the held document validation reads (heldShape). */
 export function holdAsConstraint(p: SheetVar & { hold: string }, rhs: string): SheetVar {
   const { hold, ...rest } = p;
   return { ...rest, designConstraint: { lhs: hold, rhs, held: true } };
+}
+
+/**
+ * The devices whose CURRENT a param's `hold` reads: a block of `doc`, by name (`<block>__id`), or
+ * the sheet's own device, as '' (`id`, where the sheet sizes one). A hold that reads one is a
+ * current balance (see SheetVar.hold) — the declaration that a device given a gate voltage and a
+ * current keeps the gate voltage where the design is held (see holdHardware). Empty for a hold
+ * that reads no current, and for an expression that does not parse.
+ */
+export function balancedBy(doc: SheetDoc, p: SheetVar): string[] {
+  if (!holds(p)) return [];
+  let names: readonly string[];
+  try {
+    names = compileExpr(p.hold).names;
+  } catch {
+    return [];
+  }
+  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
+  const out: string[] = [];
+  for (const n of names) {
+    if (n === 'id' && doc.givens) out.push('');
+    const split = splitProvide(n);
+    if (split && split[1] === 'id' && blocks.some((b) => b.name === split[0])) out.push(split[0]);
+  }
+  return out;
+}
+
+/** Every device of `doc` whose current one of its own holds balances (see balancedBy). */
+export const balancesOf = (doc: SheetDoc): ReadonlySet<string> =>
+  new Set((Array.isArray(doc.params) ? doc.params : []).flatMap((p) => balancedBy(doc, p)));
+
+/**
+ * Whether the device `doc` sizes is held at its width and its GATE VOLTAGE where the design is
+ * held, rather than at its width and its current: it is given a gate voltage and no width, and a
+ * hold balances its current — its own sheet's (`id`), or, for a block, its parent's
+ * (`parentBalances`). One statement of the rule, read by holdHardware and by validation alike.
+ */
+export function heldOnGate(doc: SheetDoc, parentBalances: boolean): boolean {
+  const g = doc.givens;
+  return (
+    !!g && g.W === undefined && g.vgs !== undefined && (parentBalances || balancesOf(doc).has(''))
+  );
 }
 
 /**
@@ -573,7 +626,7 @@ export interface SheetRangeEnd {
 }
 
 /** Separator between a range end's name and a check id in range-end-qualified ids
- *  (`cm-lo@tail-saturated`). */
+ *  (`cm-lo@sr-spec`). */
 export const RANGE_END_SEP = '@';
 
 /** Separator that joins a block path to a check id in tree-keyed results (`cs.headroom`). */
@@ -812,6 +865,11 @@ export interface SizingReport {
    *  failed sizing, and what marks it as REFUSED: the table cannot answer for this device at
    *  all, which no knob, search range or re-bias changes (see refusedIn). `error` says why. */
   unswept?: string[];
+  /** Where the device's thermal-noise figures (`vnth_m`, `svth_m`, `gamma`) come from: the table's
+   *  own noise, or the γ = GAMMA_DEFAULT estimate (see noiseSource). A fact about the table it was
+   *  sized on, carried on the sizing so a result can say which its noise rows are. Present on a
+   *  sizing that succeeded. */
+  noise?: NoiseSource;
   error?: string;
 }
 
@@ -855,9 +913,9 @@ export interface SheetResult {
   assumptions?: string[];
   /**
    * What each of THIS sheet's `hold` expressions evaluated to, by param name — for a node under a
-   * cascode's gate, the gate bias the design needs. Read from the finished run, after every
-   * override and solve. A fixed-hardware run holds each expression at this value. Absent when the
-   * sheet holds nothing; a child's own are on its report.
+   * cascode's gate, the gate bias the design needs; for a current balance, zero. Read from the
+   * finished run, after every override and solve. A fixed-hardware run holds each expression at
+   * this value. Absent when the sheet holds nothing; a child's own are on its report.
    */
   held?: Record<string, number>;
 }
@@ -921,6 +979,19 @@ export function refusedIn(res: {
   return out;
 }
 
+/** Every device sized anywhere in one evaluation's tree, with where its thermal-noise figures
+ *  come from (SizingReport.noise), named as clampedIn names them (`givens` for the sheet's own
+ *  device, a block path below it) and in tree order. A device that did not size is not listed. */
+export function noiseSourcesIn(
+  res: { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] },
+  path = '',
+): { device: string; source: NoiseSource }[] {
+  const out = res.sizing?.noise ? [{ device: path || 'givens', source: res.sizing.noise }] : [];
+  for (const c of res.blocks ?? [])
+    out.push(...noiseSourcesIn(c, path ? `${path}${PATH_SEP}${c.name}` : c.name));
+  return out;
+}
+
 /** `pre` — what resolving and validating a sheet found — without the findings the evaluation
  *  then repeats in the same words at the same place. A device that states no drain voltage is
  *  named when the sheet is validated and refused when it is sized; a reader needs it once, and
@@ -951,7 +1022,7 @@ export function indexTreeResults(
 }
 
 /** Every check outcome of one evaluation keyed by its tree key — block paths below the top sheet,
- *  range end names for the range-end runs (`cm-lo@tail-saturated`). The ONE walk every consumer
+ *  range end names for the range-end runs (`cm-lo@sr-spec`). The ONE walk every consumer
  *  that names a check across a whole evaluation shares (the binding and limiting checks,
  *  the sensitivity readout), so they can never disagree about what a check is called.
  *

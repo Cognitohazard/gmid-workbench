@@ -1,6 +1,6 @@
 {
   "title": "Degenerated current mirror",
-  "description": "A source-degenerated current mirror: each leg puts a resistor in series with the source. Degeneration does two things. It raises the output resistance by the local-feedback factor $(1 + (g_m + g_{mb})*R_s)$ — the resistor sits in the source, so the source-body generator feeds back through it exactly as $g_m$ does — so the output current holds steadier against the output node voltage. And it improves matching: a threshold mismatch now competes with the IR drop across $R_s$, so its effect on the current divides by $(1 + (g_m + g_{mb})*R_s)$; the threshold generator sits at the gate, so only $g_m$ converts it to a current — but the source lift it causes feeds back through both source-referred generators, so the same $(g_m + g_{mb})$ factor divides it. The price is headroom, the resistor drops $I*R_s$ that the output node must clear on top of the device saturation voltage. Both legs are arranged to drop the same $I_{in}*R_s$ (the K-times output leg uses $R_s/K$), so the degeneration voltage matches and the source-body bias $V_{SB} = I_{in}*R_s$ is common to both. With both source nodes declared at that same potential and the gates on one wire, the output device binds the reference's own $V_{GS}$. Note that the arrangement is what the sheet declares rather than something the engine solves: it linearizes about $I_{out} = K*I_{in}$, so the degeneration feedback that would pull the output leg's source back toward that point is described by the matching rows, not by the systematic-error row. The demo table has no $V_{SB}$ axis, so that declaration only warns. The matching-improvement formula is exact only where threshold mismatch dominates; the LUT $g_{ds}$ and Pelgrom spread are the ground truth these rows annotate.",
+  "description": "A source-degenerated current mirror: each leg puts a resistor in series with the source. Degeneration does two things. It raises the output resistance by the local-feedback factor $(1 + (g_m + g_{mb})*R_s)$ — the resistor sits in the source, so the source-body generator feeds back through it exactly as $g_m$ does — so the output current holds steadier against the output node voltage. And it improves matching: a threshold mismatch now competes with the IR drop across $R_s$, so its effect on the current divides by $(1 + (g_m + g_{mb})*R_s)$; the threshold generator sits at the gate, so only $g_m$ converts it to a current — but the source lift it causes feeds back through both source-referred generators, so the same $(g_m + g_{mb})$ factor divides it. The price is headroom, the resistor drops $I*R_s$ that the output node must clear on top of the device saturation voltage. Both legs are arranged to drop the same $I_{in}*R_s$ at the target ratio (the K-times output leg uses $R_s/K$), so the two source nodes would sit at one potential if the output leg carried exactly $K*I_{in}$. It does not: the output device sits at a different drain voltage from the diode-connected reference, so it carries a little more or less, and its resistor drops that current times $R_s/K$. So the output device's source is solved, not assumed: it is the node at which the device's own current, through $R_s/K$, drops exactly that node voltage. The output device shares the reference's gate wire, so its gate-source voltage is the reference's gate (its diode drop above its own lifted source) less that node, and its source-body bias is the node. That is the degeneration feedback acting on the systematic error itself: a current above target lifts the source, which takes gate-source voltage away and pulls the current back, so the systematic-error row reads the drain-voltage mismatch divided by roughly the local-feedback factor. The matching-improvement formula is exact only where threshold mismatch dominates; the LUT $g_{ds}$ and Pelgrom spread are the ground truth these rows annotate.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -31,6 +31,16 @@
       "role": "spec",
       "note": "DC level of the node the mirror serves",
       "class": "independent"
+    },
+    {
+      "name": "k_s",
+      "value": 1,
+      "min": 0,
+      "max": 2,
+      "unit": "1",
+      "role": "choice",
+      "solveFor": "k_src",
+      "note": "where the output device's source sits, as a multiple of the reference leg's degeneration drop I_in*R_s. Solved, not set: the output device's current through R_s/K is the source node's voltage, and that node sets the device's gate-source voltage under the shared gate and its body bias. The engine searches for the node at which the two agree; the stored value is never read. It is stated as a multiple of the reference leg's drop so that its range means the same thing whatever the resistor: 1 is that drop, which is where the node sits when the output leg carries exactly K times the input current; it settles a little above or below that where the output leg carries more or less. It is searched between 0, the source at ground, and 2, twice that drop: there the device has less gate-source voltage than the reference while the drop asks for twice its target current, so the node cannot lie beyond it. The V_s row gives the node in volts"
     },
     {
       "name": "L",
@@ -83,7 +93,7 @@
       "name": "ref",
       "doc": {
         "title": "Reference (diode) device",
-        "description": "The diode-connected reference, its source lifted I_in*R_s above ground by the degeneration resistor. Its vds is the transistor's own diode drop; its source-body bias is the resistor drop. Exposes its width so the output side sizes as a unit-device multiple.",
+        "description": "The diode-connected reference, its source lifted I_in*R_s above ground by the degeneration resistor — the one device on this sheet whose current is typed, so that drop is exact. Its vds is the transistor's own diode drop; its source-body bias is the resistor drop. Exposes its width so the output side sizes as a unit-device multiple, and its gate-source voltage, which with the resistor drop places the gate the two devices share.",
         "polarity": "n",
         "params": [
           { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -121,18 +131,24 @@
   "givens": {
     "L": "L",
     "W": "K*ref__W",
-    "vgs": "ref__vgs",
-    "vds": "V_out - I_in*R_s",
-    "vsb": "I_in*R_s"
+    "vgs": "ref__vgs + I_in*R_s - k_s*I_in*R_s",
+    "vds": "V_out - k_s*I_in*R_s",
+    "vsb": "k_s*I_in*R_s",
+    "region": "saturation"
   },
   "equations": [
-    { "name": "I_out", "expr": "id", "unit": "A" },
+    {
+      "name": "I_out",
+      "expr": "id",
+      "unit": "A",
+      "note": "the output device's current, read off the table at the gate-source voltage, body bias and drain voltage the solved source node gives it"
+    },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
     {
       "name": "sys_err",
       "expr": "(I_out - I_target)/I_target",
       "unit": "1",
-      "note": "lambda mismatch between the output transistor vds and the diode point"
+      "note": "lambda mismatch between the output transistor's drain voltage and the diode point, with the degeneration feedback acting on it: the output leg's own current places its source, so a current above target lifts the source and takes back gate-source voltage. It is the bare drain-voltage mismatch divided by roughly the local-feedback factor"
     },
     {
       "name": "R_s_out",
@@ -144,7 +160,25 @@
       "name": "V_deg",
       "expr": "I_in*R_s",
       "unit": "V",
-      "note": "the degeneration voltage dropped across each leg's resistor"
+      "note": "the degeneration voltage dropped across the reference leg's resistor, and across the output leg's where it carries exactly K times the input current"
+    },
+    {
+      "name": "V_s",
+      "expr": "k_s*V_deg",
+      "unit": "V",
+      "note": "the output device's source node, in volts: the solved multiple of the reference leg's drop. It is the output device's body bias, the shared gate less it is its gate-source voltage, and the output level less it is its drain-source voltage. With the multiple solved it is the output device's current times R_s_out"
+    },
+    {
+      "name": "k_src",
+      "expr": "I_out*R_s_out/V_deg",
+      "unit": "1",
+      "note": "the output device's own current through the output-leg resistor, as a multiple of the reference leg's drop: where that current puts the source node. k_s is solved to this"
+    },
+    {
+      "name": "V_out_min",
+      "expr": "V_s + vdsat",
+      "unit": "V",
+      "note": "the output compliance floor: the output device's saturation voltage on top of the drop across its resistor (the headroom cost of degeneration). The output device's saturation region holds the output above it"
     },
     {
       "name": "Rout",
@@ -179,14 +213,6 @@
       "lhs": "gm_id_m",
       "op": "<=",
       "rhs": "ceiling"
-    },
-    {
-      "id": "compliance",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "vdsat + V_deg",
-      "note": "the output node must clear the device saturation voltage plus the resistor drop (the headroom cost of degeneration)"
     },
     {
       "id": "systematic-error",

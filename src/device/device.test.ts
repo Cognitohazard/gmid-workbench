@@ -9,9 +9,10 @@ import {
   integratedNoise,
 } from './index';
 import { lookup } from '../lookup';
+import { fixTable } from '../series';
 import { makeGrid, sliceGrid } from '../grid';
 import type { DeviceTable } from '../types';
-import { generateDemoDevice, signedMirrorDemo, withoutColumns } from '../demo';
+import { generateDemoDevice, scaleQuantities, signedMirrorDemo, withoutColumns } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 import { compileExpr } from '../derive';
 import { ExprError } from '../types';
@@ -237,6 +238,64 @@ describe('thermalNoise', () => {
     // The model vnth_m inside res.quantities is at W_char, so gm differs ⇒ noise differs.
     expect(sized).not.toBeCloseTo(res.quantities.vnth_m, 12);
     expect(sized).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / res.gm), 30);
+  });
+});
+
+describe('the sized device reads γ from the table where it carries thermal noise', () => {
+  const dev = generateDemoDevice();
+  const L = dev.grid.axes[0].values[1];
+  const measured = scaleQuantities(withoutColumns(dev, ['gamma']), { sth: 2 });
+
+  it('carries the measured γ at every width, and its γ-model noise is the measured noise', () => {
+    const a = sizeDevice({ table: measured, L, gm_id: 12, id: 20e-6 });
+    const b = sizeDevice({ table: measured, L, gm_id: 12, id: 80e-6 });
+    expect(a.quantities.gamma).toBeCloseTo(2 * GAMMA_DEFAULT, 12);
+    expect(b.quantities.gamma).toBeCloseTo(a.quantities.gamma, 12); // intensive
+    expect(a.quantities.vnth_m / a.quantities.vnth).toBeCloseTo(1, 12);
+    // What the sizer's own readout computes from it: √2 above the γ = 1 estimate.
+    expect(thermalNoise(a.gm, a.quantities.gamma, measured.meta.temp)).toBeCloseTo(
+      Math.sqrt((4 * PHYS.k * PHYS.T * 2 * GAMMA_DEFAULT) / a.gm),
+      18,
+    );
+  });
+
+  it('keeps a stored gamma column as read, with no sth beside it to derive one from', () => {
+    const own = scaleQuantities(withoutColumns(dev, ['sth']), { gamma: 1.5 });
+    const r = sizeDevice({ table: own, L, gm_id: 12, id: 20e-6 });
+    expect(r.quantities.gamma).toBeCloseTo(1.5 * GAMMA_DEFAULT, 12);
+    // To the interpolation residual between the re-derived gm and the honoured one (~0.1 %).
+    const expected = Math.sqrt((4 * PHYS.k * PHYS.T * 1.5 * GAMMA_DEFAULT) / r.quantities.gm);
+    expect(r.quantities.vnth_m / expected).toBeCloseTo(1, 2);
+  });
+});
+
+describe('a stored column with a derived name is re-derived at the sized width', () => {
+  it('rescales an export’s own ro and vnth instead of reading them at the characterization width', () => {
+    // Exports often carry their own ro or vnth. The lookup interpolates base columns only, so such
+    // a column never reaches the point, and the sizer re-derives it at the sized width like every
+    // other derived quantity: at ten characterization widths, ro is a tenth and vnth √10 lower.
+    const dev = generateDemoDevice({ vds: { min: 0.05, max: 1.8, step: 0.05 } });
+    const q = dev.grid.quantities;
+    const gds = q.get('gds') as Float64Array;
+    const gm = q.get('gm') as Float64Array;
+    const sth = q.get('sth') as Float64Array;
+    const extra = new Map(q);
+    extra.set(
+      'ro',
+      gds.map((v) => 1 / v),
+    );
+    extra.set(
+      'vnth',
+      sth.map((x, i) => Math.sqrt(x) / gm[i]),
+    );
+    const stores: DeviceTable = { ...dev, grid: makeGrid([...dev.grid.axes], extra) };
+    const W = 10 * (dev.meta.W as number);
+    const plain = sizeDevice({ table: fixTable(dev, { vds: 0.6 }), L: 5e-7, gm_id: 12, W });
+    const own = sizeDevice({ table: fixTable(stores, { vds: 0.6 }), L: 5e-7, gm_id: 12, W });
+    expect(own.quantities.ro).toBeCloseTo(1 / own.quantities.gds, 6);
+    expect(own.quantities.ro).toBe(plain.quantities.ro);
+    expect(own.quantities.vnth).toBe(plain.quantities.vnth);
+    expect(own.quantities.vnth / own.quantities.vnth_m).toBeCloseTo(1, 12);
   });
 });
 

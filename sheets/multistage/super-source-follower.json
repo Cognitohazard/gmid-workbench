@@ -81,7 +81,7 @@
           { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -109,7 +109,14 @@
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "id": "Ix",
+          "gm_id": "gx",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -189,22 +196,6 @@
       "op": "<=",
       "rhs": "Rout_target",
       "note": "the buffer output resistance meets the target"
-    },
-    {
-      "id": "in-sat",
-      "kind": "physical",
-      "lhs": "vds_in",
-      "op": ">=",
-      "rhs": "in__vdsat",
-      "note": "input follower device stays saturated at its operating vds"
-    },
-    {
-      "id": "fb-sat",
-      "kind": "physical",
-      "lhs": "vds_fb",
-      "op": ">=",
-      "rhs": "fb__vdsat",
-      "note": "feedback device stays saturated at its operating vds"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"]

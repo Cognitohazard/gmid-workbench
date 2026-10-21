@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { generateDemoDevice, VA_PER_L, BODY_FACTOR, COX } from '../demo';
-import { GAMMA_DEFAULT, PHYS } from '../constants';
+import { GAMMA_DEFAULT, PHYS, UT } from '../constants';
 import { buildSheetRefIndex, type SheetRefEntry, type SheetRefIndex } from './resolve';
 import { gdsOf } from './library.math';
 import type { SheetDoc } from './types';
@@ -125,3 +125,30 @@ export const vgsAtBody = (vgs0: number, vsb: number): number => vgs0 + BODY_FACT
  *  body-grounded gate-source voltage of the inversion level the device is sized at. */
 export const sourceNodeUnder = (gate: number, vgs0: number): number =>
   (gate - vgs0) / (1 + BODY_FACTOR);
+
+// The demo model's current law, for the goldens where two devices of one width carry different
+// currents: id = ispec·softplus(x)²·(1 + vds/VA) with x = (vgs − vth)/(2·n·UT) (src/demo/index.ts).
+// A device's inversion level fixes x, so the gate-source voltage it needs follows from the current
+// it carries without re-running the engine. The slope factor and the threshold are the model's.
+const N_SLOPE = 1.3;
+const softplus = (x: number): number => Math.log1p(Math.exp(x));
+
+/** Threshold of the demo model at length `L`, body at the source. */
+export const vthDemo = (L: number): number => 0.4 + 0.02 * Math.log(L / 0.18e-6 + 1);
+
+/** The gate-source voltage at which a device of the demo model carries `ratio` times the
+ *  saturation current it carries at `vgs0`, at the same width, length and body bias: softplus(x)
+ *  scales by the square root of the current. Both voltages are body-grounded; a body bias moves
+ *  them by the same BODY_FACTOR·vsb (see vgsAtBody). */
+export const vgsForCurrentRatio = (vgs0: number, ratio: number, L = 0.5e-6): number => {
+  const k = 2 * N_SLOPE * UT;
+  const s = softplus((vgs0 - vthDemo(L)) / k) * Math.sqrt(ratio);
+  return vthDemo(L) + k * Math.log(Math.expm1(s));
+};
+
+/** gm/ID of the demo model at body-grounded gate-source voltage `vgs`: sigmoid(x)/(n·UT·softplus(x)).
+ *  It does not depend on the drain voltage, so a device read at another drain keeps it. */
+export const gmIdDemo = (vgs: number, L = 0.5e-6): number => {
+  const x = (vgs - vthDemo(L)) / (2 * N_SLOPE * UT);
+  return 1 / (1 + Math.exp(-x)) / (N_SLOPE * UT * softplus(x));
+};

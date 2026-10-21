@@ -705,11 +705,11 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     // sheet, so V_out_dc is stated like the supply — nothing on this sheet is assumed. The two
     // mirrors add no voltage to state: the tail device's gate is the bias reference's own diode
     // drop and the load's output side sits on its diode side's gate, both read off devices that
-    // are on the sheet. Nor does the pair's diode-side transistor: its gate-source voltage is its
-    // partner's and its drain is the load's diode node, one load gate-source voltage below the
-    // supply. The share of the tail current the output-side pair transistor carries is the
-    // second solved value: it is searched until the pair's two currents add up to what the tail
-    // delivers.
+    // are on the sheet. Nor does the pair's diode-side transistor: its width is its partner's,
+    // its current is the rest of what the tail delivers, and its drain is the load's diode node,
+    // one load gate-source voltage below the supply. The share of the tail current the
+    // output-side pair transistor carries is the second solved value: it is searched until that
+    // transistor takes what the mirror's output side returns, the current law at the output.
     expect(classes('otas/five-transistor-ota.json')).toEqual({
       independent: ['CM_dc', 'CM_hi', 'CM_lo', 'VDD', 'V_out_dc'],
       assumed: [],
@@ -717,9 +717,9 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     });
   });
 
-  it('wide-swing cascode mirror: the mirror drain is solved, the margin that places it is stated', () => {
+  it('wide-swing cascode mirror: the mirror drain and the output-branch node are solved, the margin that places them is stated', () => {
     const r = classes('mirrors-bias/wide-swing-cascode-mirror.json');
-    expect(r.solved).toEqual(['vds_lo']);
+    expect(r.solved).toEqual(['k_x', 'vds_lo']);
     expect(r.independent).toContain('node_margin');
   });
 
@@ -857,11 +857,12 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
     expect(forwardHits(ota, 'out_share')).toEqual(
       expect.arrayContaining(['in.id:I_side', 'ldr.id:I_side']),
     );
-    // The diode-side one follows its partner through the gate-source voltage that partner
-    // publishes, so the inversion level typed for the output-side one reaches both. (The width
-    // it copies is hardware, which this walk holds and so never reports as moved.)
+    // The diode-side one copies its partner's width, which is hardware this walk holds and so
+    // never reports as moved, and carries the rest of the tail current. The inversion level typed
+    // for the output-side one sets that one's gate-source voltage, which the common mode reads, so
+    // it reaches the tail node and, through it, the current the diode-side one is handed.
     expect(forwardHits(ota, 'gm_id_in')).toEqual(
-      expect.arrayContaining(['in.gm_id:gm_id_i', 'inr.vgs:vgs_i']),
+      expect.arrayContaining(['in.gm_id:gm_id_i', 'tail.vds:vds_t', 'inr.id:I_side']),
     );
     // CM_lo is read by nothing but the cm-lo range end's `set`, so only the range-end closure
     // reaches it.
@@ -872,12 +873,18 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
     expect(bothWays(mirror, 'V_out')).toEqual([true, true]);
     expect(forwardHits(mirror, 'V_out')).toEqual(['givens.vds:V_out']);
     // The wide-swing margin places vds_lo (solved for ref's vdsat plus the margin), which is the
-    // reference's drain — so it reaches the output device's gate through the sibling's ref__vgs.
+    // reference's drain — so it reaches the output device's gate through the reference's gate
+    // voltage that device copies.
     const wide = lib('mirrors-bias/wide-swing-cascode-mirror.json');
     expect(bothWays(wide, 'node_margin')).toEqual([true, true]);
-    expect(forwardHits(wide, 'node_margin')).toContain('givens.vgs:ref__vgs');
-    // The inverter's input level enters neither device's bias.
-    expect(bothWays(lib('stages/cmos-inverter-amp.json'), 'V_in')).toEqual([false, false]);
+    expect(forwardHits(wide, 'node_margin')).toContain('out.vgs:vgs_o');
+    // The inverter's input level is not a param at all: it is the NMOS's own gate-source
+    // voltage, which the PMOS reads. So the NMOS's inversion level reaches the PMOS's gate, and
+    // the output level both drains.
+    const cmos = lib('stages/cmos-inverter-amp.json');
+    expect(cmos.params.map((p) => p.name)).not.toContain('V_in');
+    expect(forwardHits(cmos, 'gm_id_n')).toContain('p.vgs:vgs_d');
+    expect(bothWays(cmos, 'V_out')).toEqual([true, true]);
   });
 
   it('on the composition shapes the library does not carry', () => {
@@ -942,8 +949,8 @@ describe('SheetResult.assumptions', () => {
   it('the CMOS inverter assumes nothing: its output level is stated, and its input level is no DC input', () => {
     // The two drains meet at a high-impedance output held by the feedback that biases the
     // inverter at its trip point, which is not on the sheet, so V_out is stated beside the
-    // supply. The input level never enters either device's bias — gate levels are outputs of
-    // gm/ID sizing — so it is not among the DC inputs at all.
+    // supply. The input level is the NMOS's own gate-source voltage — an output of its sizing,
+    // which the PMOS reads — and not a param, so it is not among the DC inputs at all.
     const doc = sheet('stages/cmos-inverter-amp.json');
     const res = runSheet(doc, table, undefined, REFS);
     expect(res.assumptions).toEqual([]);

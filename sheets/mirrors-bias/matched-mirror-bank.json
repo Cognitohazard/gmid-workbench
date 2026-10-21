@@ -108,7 +108,13 @@
       }
     }
   ],
-  "givens": { "L": "L", "W": "N_legs*unit__W", "vgs": "unit__vgs", "vds": "V_out" },
+  "givens": {
+    "L": "L",
+    "W": "N_legs*unit__W",
+    "vgs": "unit__vgs",
+    "vds": "V_out",
+    "region": "saturation"
+  },
   "equations": [
     {
       "name": "I_fs",
@@ -143,14 +149,6 @@
       "lhs": "gm_id_m",
       "op": "<=",
       "rhs": "ceiling"
-    },
-    {
-      "id": "compliance",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "vdsat",
-      "note": "every unit element saturated at the shared output rail"
     },
     {
       "id": "accumulated-matching",

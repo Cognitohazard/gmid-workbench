@@ -72,7 +72,8 @@
     "id": "I_bias",
     "gm_id": "gm_id",
     "vds": "VDD - I_bias*R_load - V_in",
-    "vsb": "V_in"
+    "vsb": "V_in",
+    "region": "saturation"
   },
   "equations": [
     {
@@ -122,14 +123,6 @@
       "op": "<=",
       "rhs": "ceiling",
       "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
-    },
-    {
-      "id": "headroom",
-      "kind": "physical",
-      "lhs": "V_out - V_in",
-      "op": ">=",
-      "rhs": "vdsat",
-      "note": "device saturated: the drain-to-source voltage is the drain level minus the source (input) level"
     },
     {
       "id": "input-match",

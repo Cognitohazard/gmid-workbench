@@ -4,16 +4,17 @@
 // design TYPE is feasible under a spec (which must be free to re-derive), and whether THIS design
 // still works at the ends of its claimed range (which must not).
 //
-// Pure and structural: no expression is introspected, and nothing here evaluates. The mechanism
+// Pure and structural: nothing here evaluates, and the only expressions read are the `hold`s,
+// for the names of the device currents they balance (see heldOnGate). The mechanism
 // is entirely "rewrite the givens, then let the existing machinery run" — the solved-param search,
-// the vds subtractions and the (W, id) inversion all already re-settle a fixed device at a new
-// bias, so no new solver appears anywhere in this file. Internal to the engine — the range-end runs
-// in eval.ts and the condition runs in corners/ are the callers — and not on the public barrel,
-// because a caller outside them has no doc to hand it that the engine has not already produced
-// a base result for.
+// the vds subtractions, the (W, id) inversion and the (W, vgs) read all already re-settle a fixed
+// device at a new bias, so no new solver appears anywhere in this file. Internal to the engine —
+// the range-end runs in eval.ts and the condition runs in corners/ are the callers — and not on
+// the public barrel, because a caller outside them has no doc to hand it that the engine has not
+// already produced a base result for.
 
 import { BINDABLE } from '../device';
-import { blockPath, holdAsConstraint, holds, PATH_SEP } from './types';
+import { balancesOf, blockPath, heldOnGate, holdAsConstraint, holds, PATH_SEP } from './types';
 import type { SizingReport, SheetGivens, SheetBlockReport, SheetDoc, SheetBlock } from './types';
 
 /** The three quantities a range end holds fixed: the geometry, and a current the author wrote. */
@@ -26,14 +27,10 @@ export const HELD_AT_A_RANGE_END: ReadonlySet<string> = new Set(['W', 'L', 'id']
  *  written out, so a quantity added to the namespace is dropped here by default: surviving
  *  silently is the dangerous direction, and it is the one a hand-copied list takes.
  *
- *  `vgs` is in this set, and that is deliberate even though a given vgs is the one thing that
- *  DOES describe fixed hardware across a condition. The givens that say so are width-first —
- *  `{ W: "K*ref__W", vgs: "ref__vgs" }` — and holdGivens returns those untouched before this set
- *  is consulted, so the gate tie survives a range end intact and re-reads the reference's newly
- *  settled gate voltage there, which is the whole point of giving it. A vgs given WITHOUT a
- *  width is a different statement: holding that device's geometry already fixes it, and keeping
- *  a gate voltage beside a held W and a held or authored current would over-determine the
- *  transistor with three constraints where the sizer takes two. */
+ *  `vgs` is in this set although a given vgs CAN describe fixed hardware across a condition — a
+ *  gate on a shared wire. Whether it does is the sheet's to declare (see heldOnGate), and where it
+ *  is declared holdGivens puts it back after this set is cleared, in place of the current; dropping
+ *  it here keeps the rule "nothing survives unless holdGivens says so" free of exceptions. */
 const OPERATING_POINT_KEYS: readonly (keyof SheetGivens)[] = BINDABLE.filter(
   (k) => !HELD_AT_A_RANGE_END.has(k),
 );
@@ -107,8 +104,9 @@ export const assumedLevelRefusal = (assumed: readonly string[]): string =>
  * Rewrite every device's givens in `doc` to the fixed-hardware form of the design `base` reports,
  * so a re-evaluation at another condition moves the operating point and nothing else.
  *
- * The rule is a decision on two booleans — no expression is read, so a sheet cannot author its
- * way into a different classification:
+ * The rule is a decision on which givens are present, and for a device given a gate voltage, on
+ * whether the sheet DECLARES that gate to be the fixed thing — no other expression is read, so a
+ * sheet cannot author its way into a different classification:
  *
  *  - **an authored `W`** ⇒ the givens are left ALONE. They are already width-first, and W's partner
  *    is how the sheet states the device's operating point. When that partner is `vgs` — the
@@ -120,13 +118,24 @@ export const assumedLevelRefusal = (assumed: readonly string[]): string =>
  *    left alone by the same rule and do not have that property: they hold a ratio rather than
  *    a wire, so under a move they re-settle to whatever gate voltage that ratio now takes.
  *    validateSheet warns where a sheet reaches that, and `vgs` is the fix.
+ *  - **no `W`, an authored `vgs`, and a hold that balances its current** ⇒ hold the geometry
+ *    numerically and KEEP the gate voltage expression; whatever else was given — a current, a
+ *    transconductance — goes, and the current is read from the table at the held width and the
+ *    gate voltage the expression gives there. The engine cannot tell a gate on a shared wire
+ *    (`VDD - n__vgs`, an inverter's PMOS) from a gate voltage typed as an operating point, so the
+ *    sheet says which: a `hold` on its sheet that reads this device's current (`I_bias - p__id`,
+ *    on the typed current that sets the branch) is that declaration, and it is also what fixes
+ *    the current there — zero at the design point by construction, and solved back to zero where
+ *    the design is held (see heldOnGate, balancedBy). Without one, a gate voltage is an
+ *    operating-point spec like any other, and the device falls under the next rule.
  *  - **no `W`, an authored `id`** ⇒ hold the geometry (W and L) numerically, drop the operating-
  *    point spec, and KEEP the authored current. The current expression is the hardware in the
  *    sheet's own algebra — a mirror ratio, a tail split, a KCL difference — so re-evaluating it
  *    is describing the same circuit at the new condition, not re-designing it.
- *  - **neither** ⇒ hold the geometry AND the current numerically. The sheet never said where this
- *    device's current comes from, so holding it is the only reading available; it amounts to an
- *    ideal source, which is reported rather than assumed silently.
+ *  - **neither a width nor a current, nor a balanced gate** ⇒ hold the geometry AND the current
+ *    numerically. The sheet never said where this device's current comes from, so holding it is
+ *    the only reading available; it amounts to an ideal source, which is reported rather than
+ *    assumed silently.
  *
  * `L` is held alongside `W` because both are the transistor: an L that referenced a param a
  * range end overrides would otherwise hand the endpoint a different device while the report
@@ -152,8 +161,9 @@ export function holdHardware(doc: SheetDoc, base: SizingTree): HeldHardware {
 /**
  * The document a fixed-hardware run of `doc` would evaluate, in SHAPE only: every device's givens
  * and every `hold` rewritten exactly as holdHardware rewrites them, against placeholder numbers.
- * For asking a structural question of that document — which params its design constraints read —
- * before any run exists. Not for evaluation.
+ * For asking a structural question of that document before any run exists — validation reads it
+ * to check that a current balance's param reaches a current where the design is held. Not for
+ * evaluation.
  */
 export function heldShape(doc: SheetDoc): SheetDoc {
   const shape = (d: SheetDoc | undefined, name = ''): SheetBlockReport => ({
@@ -169,14 +179,23 @@ export function heldShape(doc: SheetDoc): SheetDoc {
   return holdHardware(doc, shape(doc)).doc;
 }
 
-function holdNode(doc: SheetDoc, base: SizingTree, path: string, out: HeldHardware): SheetDoc {
+function holdNode(
+  doc: SheetDoc,
+  base: SizingTree,
+  path: string,
+  out: HeldHardware,
+  parentBalances = false,
+): SheetDoc {
   const givens = doc.givens
-    ? holdGivens(doc.givens, base.sizing, path, out.assumedSource)
+    ? holdGivens(doc.givens, base.sizing, path, out.assumedSource, heldOnGate(doc, parentBalances))
     : undefined;
-  const blocks = doc.blocks?.map((block, i) => holdBlock(block, base.blocks?.[i], path, out));
+  const balanced = balancesOf(doc);
+  const blocks = doc.blocks?.map((block, i) =>
+    holdBlock(block, base.blocks?.[i], path, out, balanced.has(block.name)),
+  );
   // A node under a gate: the gate voltage the base run needed is part of the hardware, so the
   // held expression becomes a design constraint against that value and the node is re-solved
-  // (SheetVar.hold).
+  // (SheetVar.hold). A current balance becomes one the same way, against the zero it read.
   const params = doc.params.map((p) => {
     if (!holds(p)) return p;
     const v = base.held?.[p.name];
@@ -199,13 +218,14 @@ function holdBlock(
   child: SheetBlockReport | undefined,
   path: string,
   out: HeldHardware,
+  balanced: boolean,
 ): SheetBlock {
   // A block with no embedded doc never sized (validation names it); there is nothing to hold and
   // no report to hold it from.
   if (!block.doc) return block;
   return {
     ...block,
-    doc: holdNode(block.doc, child ?? {}, `${path}${block.name}${PATH_SEP}`, out),
+    doc: holdNode(block.doc, child ?? {}, `${path}${block.name}${PATH_SEP}`, out, balanced),
   };
 }
 
@@ -214,6 +234,7 @@ function holdGivens(
   report: SizingReport | undefined,
   path: string,
   assumedSource: string[],
+  onGate: boolean,
 ): SheetGivens {
   if (b.W !== undefined) return b;
   // No usable report means no hardware to hold it AT. Reachable only through the public
@@ -228,7 +249,11 @@ function holdGivens(
   for (const k of OPERATING_POINT_KEYS) delete out[k];
   out.L = numExpr(report.L);
   out.W = numExpr(report.W);
-  if (b.id === undefined) {
+  if (onGate && b.vgs !== undefined) {
+    // Declared on its wire: the gate stays there and the current follows — (W, vgs), read.
+    delete out.id;
+    out.vgs = b.vgs;
+  } else if (b.id === undefined) {
     out.id = numExpr(report.id);
     assumedSource.push(blockPath(path));
   }

@@ -29,7 +29,14 @@ import { PHYS } from '../constants';
 import { scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
 import { runSheet } from './index';
-import { withParams, type SheetDoc, type SheetResult, type SizingReport } from './types';
+import { resolveSheetRefs } from './resolve';
+import {
+  isHardCheck,
+  withParams,
+  type SheetDoc,
+  type SheetResult,
+  type SizingReport,
+} from './types';
 import {
   table,
   relErr,
@@ -42,8 +49,11 @@ import {
   VGS_GMID8_L05,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
+  VGS_GMID14_L05,
   sourceNodeUnder,
   vgsAtBody,
+  vgsForCurrentRatio,
+  gmIdDemo,
   cggOf,
   par,
   stage2Rout,
@@ -62,6 +72,25 @@ const block = (r: SheetResult, name: string): SizingReport =>
 /** A check's outcome, by id. */
 const statusOf = (r: SheetResult, id: string): string | undefined =>
   r.checks.find((c) => c.id === id)?.status;
+
+/** The saturation check a device's `region` declaration adds to its own results, by block. */
+const regionOf = (r: Pick<SheetResult, 'blocks'>, name: string): SheetResult['checks'][number] =>
+  r.blocks!.find((c) => c.name === name)!.checks.find((c) => c.id === 'region')!;
+
+/** Every hard check that fails anywhere in an evaluation, the sheet's own by id and a block's
+ *  as `block.id`. */
+const hardFailsIn = (r: Pick<SheetResult, 'checks' | 'blocks'>): string[] => [
+  ...r.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
+  ...(r.blocks ?? []).flatMap((b) =>
+    b.checks
+      .filter((c) => isHardCheck(c.kind) && c.status === 'fail')
+      .map((c) => `${b.name}.${c.id}`),
+  ),
+];
+
+/** The blocks of a sheet that declare saturation, in document order. */
+const declaredSaturated = (doc: SheetDoc): string[] =>
+  (doc.blocks ?? []).filter((u) => u.doc?.givens?.region === 'saturation').map((u) => u.name);
 
 // --- Demo-model closed forms shared across the buffer/output goldens ---
 const UT = (PHYS.k * PHYS.T) / PHYS.q;
@@ -127,48 +156,120 @@ const sizedAndHeld = (doc: SheetDoc): [SheetResult, SheetResult] => {
   return [sized.result, held.result];
 };
 
+describe('tier4: which devices each multistage sheet needs saturated', () => {
+  // Written down from each schematic: every device the design needs in saturation, and none of
+  // the diode-connected ones. The second stage's current-source load is a library sheet of its
+  // own, which declares it once for every sheet that composes it. A declaration dropped, or one
+  // added to a device the design does not need saturated, fails here by name.
+  const SATURATED: Record<string, string[]> = {
+    'class-ab-output-monticelli': ['mn', 'mp'],
+    'fd-telescopic-ota': ['tail', 'in', 'cascn', 'cascp', 'load'],
+    'fd-two-stage-ota': ['s2', 'tail', 'ld1', 'in', 'ld2'],
+    'flipped-voltage-follower': ['fb', 'in'],
+    'rail-to-rail-input-stage': ['n', 'p'],
+    'super-source-follower': ['fb', 'in'],
+    'two-stage-cascode-comp-ota': ['tail', 's2', 'ld1o', 'ino', 'in', 'casc', 'casco', 'ld2'],
+    'two-stage-miller-ota': ['tail', 's2', 'ld1o', 'ino', 'in', 'ld2'],
+  };
+  it('every sheet declares exactly the devices its design needs saturated', () => {
+    for (const [file, devices] of Object.entries(SATURATED)) {
+      const doc = resolveSheetRefs(sheet(file), REFS).doc;
+      expect([file, declaredSaturated(doc)]).toEqual([file, devices]);
+    }
+    expect(sheet('stage2-current-source-load').givens?.region).toBe('saturation');
+  });
+  it('each declaration replaces an authored check, and reads as a physical check on its device', () => {
+    // The zero-margin saturation checks the declarations stand for are gone from every sheet, and
+    // at the shipped defaults on the synthetic table every declared device is saturated.
+    const replaced = [
+      'stage2-sat',
+      'load2-sat',
+      'tail-saturated',
+      'tail-sat',
+      'in-sat',
+      'fb-sat',
+      'cascn-sat',
+      'cascp-sat',
+      'load-sat',
+      'cascode-sat',
+      'cascode-out-sat',
+      'out-hi-sat',
+      'out-lo-sat',
+    ];
+    for (const [file, devices] of Object.entries(SATURATED)) {
+      const doc = sheet(file);
+      expect([file, doc.checks.map((c) => c.id).filter((id) => replaced.includes(id))]).toEqual([
+        file,
+        [],
+      ]);
+      const res = runSheet(doc, table, undefined, REFS);
+      for (const name of devices) {
+        const c = regionOf(res, name);
+        expect([file, name, c.kind, c.status]).toEqual([file, name, 'physical', 'pass']);
+      }
+    }
+  });
+});
+
 describe('tier4 goldens: Two-stage Miller OTA', () => {
   const doc = sheet('two-stage-miller-ota');
   const res = runSheet(doc, table, undefined, REFS);
   const v = res.values;
   // Defaults: the bias reference programmed to I1 at gm/ID 10; gm/ID in 12, mirror 8, s2 12,
   // ld2 8. Only the reference and the stage-2 device have a current typed into them.
-  /** What the tail delivers to the pair: 20 µA × 0.919857 = 18.397 µA. */
-  const iTail = I1 * TAIL_RATIO;
-  // The pair's output-side device over its diode-side partner. Both stand on the tail node; one
-  // drain is the stage-1 output and the other the mirror node:
-  // (2.5 + 1.232977 − 0.360814)/(2.5 + 1.131958 − 0.360814) = 1.030882.
-  const rIn = (VA05 + V_1 - V_TAIL) / (VA05 + V_MIR - V_TAIL);
-  /** The share of the tail current the output-side device carries. The two input devices are
-   *  one width at one gate-source voltage, so they carry the tail's current in the ratio
-   *  1.030882 : 1 and the output side takes 1.030882/2.030882 = 0.507603 of it, 9.339 µA; the
-   *  diode side carries the other 9.059 µA. */
-  const share = rIn / (1 + rIn);
+  //
+  // The first stage is drawn at rest: the feedback around the amplifier holds the stage-1 output
+  // at the second stage's gate, one vgs(12) below the supply, and the inputs sit apart by what
+  // that takes. The current law at that node fixes the split: the mirror's output device returns
+  // R_LD = 0.968113 times the diode side's current, which is the diode-side input device's I_r,
+  // and the output-side input device has to take exactly that, I_o = R_LD·I_r. So the output side
+  // carries R_LD/(1 + R_LD) = 0.491899 of what the tail delivers, whatever that is.
+  //
+  // The two input devices are one width on one source. The output-side one is sized for gm/ID 12;
+  // its partner carries 1/R_LD times its current at a drain 101 mV lower — the mirror node instead
+  // of the stage-1 output — and needs more gate-source voltage for both reasons. The model's
+  // current law gives how much (vgsForCurrentRatio); the common mode is the tail node plus the
+  // mean of the two, so the tail node is a short fixed point:
+  //   tail node   V_tail = (CM_dc − vgs(12) − Δ/2)/1.2 = 0.358608 V,   Δ = 5.294 mV
+  //   tail        20 µA × (2.5 + 0.358608)/(2.5 + 0.610063) = 18.383 µA
+  //   output side 18.383 µA × 0.491899 = 9.043 µA, diode side 9.340 µA
+  const share = R_LD / (1 + R_LD);
+  let vTail = V_TAIL;
+  let delta = 0;
+  for (let i = 0; i < 30; i++) {
+    const ratio = ((1 / R_LD) * (VA05 + V_1 - vTail)) / (VA05 + V_MIR - vTail);
+    delta = vgsForCurrentRatio(VGS_GMID12_L05, ratio) - VGS_GMID12_L05;
+    vTail = sourceNodeUnder(1.0 - delta / 2, VGS_GMID12_L05);
+  }
+  /** What the tail delivers to the pair. */
+  const iTail = (I1 * (VA05 + vTail)) / (VA05 + VGS_GMID10_L05);
   const iOut = iTail * share;
   const iIn = iTail - iOut;
   const gm2 = 12 * I2;
   // Half the differential input reaches the stage-1 output through the mirror and half directly,
-  // and gm scales with (VA + vds) exactly as id does. The output-side device is the sized one,
-  // gm = 12·id with both given, and its partner's gm is that over 1.030882, which is 12 times
-  // the diode side's current: gm1 = 12·9.059 µA·(0.968113 + 1.030882)/2.
-  const gm1 = (12 * iIn * (R_LD + rIn)) / 2;
+  // and gm scales with (VA + vds) exactly as id does, so the mirror passes the diode-side device's
+  // gm on at R_LD: gm1 = (gm_in·R_LD + gm_ino)/2. The diode-side device sits at the slightly
+  // weaker inversion its larger gate drive gives (gm/ID 11.73 in the model), and its current times
+  // R_LD is the output side's, so gm1 = I_o·(11.73 + 12)/2.
+  const gm1 = (iOut * (gmIdDemo(VGS_GMID12_L05 + delta) + 12)) / 2;
 
-  it('one first-stage current is typed, and every tie is one gate wire', () => {
+  it('one first-stage current is typed, the pair is one width, and each mirror is one gate wire', () => {
     // The programmed current goes into the bias reference and nowhere else: both sides of the
     // first stage are handed a share of what the tail delivers. The second stage keeps its own
     // programmed current, which its load reads.
     expect(block(res, 'bias').id).toBe(I1);
     expect(relErr(block(res, 'ino').id, v.tail__id * v.out_share)).toBeLessThan(1e-12);
-    expect(relErr(block(res, 'ld1').id, v.tail__id * (1 - v.out_share))).toBeLessThan(1e-12);
+    expect(relErr(block(res, 'in').id, v.tail__id * (1 - v.out_share))).toBeLessThan(1e-12);
+    expect(relErr(block(res, 'ld1').id, v.in__id)).toBeLessThan(1e-12);
     expect(block(res, 's2').id).toBe(I2);
     expect(block(res, 'ld2').id).toBe(I2);
-    // A tie is the partner's width on the partner's gate-source voltage. The width is passed
+    // A mirror tie is the partner's width on the partner's gate-source voltage. The width is passed
     // through untouched; the gate voltage is reported as the table's own vgs coordinate at the
-    // point it was read, so two devices on one wire agree to rounding.
+    // point it was read, so two devices on one wire agree to rounding. The pair shares the width
+    // only: each of its devices carries its own current at its own gate-source voltage.
     for (const [tied, partner] of [
       ['tail', 'bias'],
       ['ld1o', 'ld1'],
-      ['in', 'ino'],
     ]) {
       expect([tied, block(res, tied).W]).toEqual([tied, block(res, partner).W]);
       expect([tied, relErr(block(res, tied).vgs, block(res, partner).vgs) < 1e-12]).toEqual([
@@ -176,43 +277,44 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
         true,
       ]);
     }
+    expect(block(res, 'in').W).toBe(block(res, 'ino').W);
+    expect(doc.blocks!.find((u) => u.name === 'in')!.doc!.givens).toMatchObject({
+      W: 'Wx',
+      id: 'Ix',
+    });
   });
 
   it('the tail misses its reference by the drain-voltage ratio of the demo model', () => {
-    // The tail node (0.361 V) sits below the reference's diode drop (0.610 V), so the tail
-    // under-delivers by 1 − 0.919857 = 8.01 %. 1e-2 of that error is 2 mV of drain voltage.
-    expect(relErr(1 - v.tail__id / I1, 1 - TAIL_RATIO)).toBeLessThan(1e-2);
+    // The tail node (0.359 V) sits below the reference's diode drop (0.610 V), so the tail
+    // under-delivers by 8.05 %. 1e-2 of that error is 2 mV of drain voltage.
+    expect(relErr(1 - v.tail__id / I1, 1 - iTail / I1)).toBeLessThan(1e-2);
   });
 
-  it('the pair carries the tail current between its two devices, and the split is solved', () => {
-    // Kirchhoff at the tail node: what the two input devices carry adds up to what the tail
-    // delivers, to rounding. They do not carry it evenly, because the output-side device's drain
-    // sits 101 mV above its partner's: it takes 0.507603 of the tail current. Compared as the
-    // distance from an even split, of which 1e-2 is 0.3 mV of drain voltage.
-    expect(relErr(v.in__id + v.ino__id, v.tail__id)).toBeLessThan(1e-9);
+  it('the split is solved so the currents at the stage-1 output balance', () => {
+    // What the pair's output-side device takes is what the mirror's output device returns, to the
+    // solve's tolerance; the two input devices add up to what the tail delivers by construction.
+    expect(relErr(v.ino__id, v.ld1o__id)).toBeLessThan(1e-6);
+    expect(relErr(v.in__id + v.ino__id, v.tail__id)).toBeLessThan(1e-12);
+    expect(doc.params.find((p) => p.name === 'out_share')?.designConstraint).toEqual({
+      lhs: 'ino__id',
+      rhs: 'ld1o__id',
+    });
+    // The share is the mirror's ratio R_LD/(1 + R_LD), compared as its distance from an even split,
+    // of which 1e-2 is about 0.1 mV of drain voltage.
     expect(relErr(v.out_share - 0.5, share - 0.5)).toBeLessThan(1e-2);
     expect(relErr(v.ino__id, iOut)).toBeLessThan(1e-3);
     expect(relErr(v.in__id, iIn)).toBeLessThan(1e-3);
-    expect(v.ino__id).toBeGreaterThan(v.tail__id / 2);
-    // The mirror's diode device is handed what the tail delivers less the output side's share,
-    // and that is what the input device in its branch carries: one current in one branch.
-    expect(relErr(block(res, 'ld1').id, v.in__id)).toBeLessThan(1e-9);
-    // Solved, not typed: the share is the output-side device's fraction of the pair's current as
-    // the table reads the two, and the value the sheet stores is only what the panel shows — an
-    // even split, not the answer, and never read by the solve.
-    const guess = doc.params.find((p) => p.name === 'out_share');
-    expect(guess?.solveFor).toBe('pair_split');
-    expect(guess?.value).toBe(0.5);
-    expect(relErr(v.out_share, v.pair_split)).toBeLessThan(1e-9);
-    expect(relErr(v.pair_split, v.ino__id / (v.in__id + v.ino__id))).toBeLessThan(1e-12);
+    expect(v.ino__id).toBeLessThan(v.tail__id / 2);
+    // Solved, not typed: the value the sheet stores is only what the panel shows, and never read.
+    expect(doc.params.find((p) => p.name === 'out_share')?.value).toBe(0.5);
     for (const start of [0.3, 0.7]) {
       const other = runSheet(withParams(doc, { out_share: start }), table, undefined, REFS);
-      expect([start, relErr(other.values.out_share, v.out_share) < 1e-9]).toEqual([start, true]);
+      expect([start, other.values.out_share]).toEqual([start, v.out_share]);
     }
-    // With the second stage at the mirror's diode drop the two drains sit at one level and the
-    // split is even.
+    // With the second stage at the mirror's diode drop the two levels are one and the split is
+    // even, to the table's resolution.
     const matched = runSheet(withParams(doc, { gm_id_s2: 8 }), table, undefined, REFS);
-    expect(matched.values.out_share).toBeCloseTo(0.5, 8);
+    expect(matched.values.out_share).toBeCloseTo(0.5, 4);
   });
 
   it('the stage-1 output sits at the second-stage gate, not at the mirror node', () => {
@@ -224,6 +326,7 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     expect(Math.abs(block(res, 'ld1o').bias!.vds!)).toBeCloseTo(1.8 - v.V1, 9);
     expect(block(res, 'ino').bias!.vds).toBeCloseTo(v.V1 - v.V_tail, 9);
     expect(block(res, 'in').bias!.vds).toBeCloseTo(v.V_mir - v.V_tail, 9);
+    expect(relErr(v.V_tail, vTail)).toBeLessThan(1e-3);
     // The level follows the second stage and nothing else: at gm/ID 8 the second stage needs the
     // mirror's own diode drop, and the two levels become one.
     const level = runSheet(withParams(doc, { gm_id_s2: 8 }), table, undefined, REFS);
@@ -231,41 +334,36 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     expect(relErr(level.values.V_mir, V_MIR)).toBeLessThan(1e-3);
   });
 
-  it('each output-side device misses its diode-side partner by the drain-voltage ratio', () => {
-    // The stage-1 output sits 101 mV above the mirror node. The mirror's output device therefore
-    // has less drain-source voltage than its diode device and delivers 3.19 % less; the pair's
-    // output-side device has more than its partner and takes 3.09 % more. Compared as errors:
-    // 1e-2 of them is about 1 mV of drain voltage.
+  it('the mirror output device misses its diode-side partner by the drain-voltage ratio', () => {
+    // The stage-1 output sits 101 mV above the mirror node, so the mirror's output device has
+    // less drain-source voltage than its diode device and delivers 3.19 % less. Compared as an
+    // error: 1e-2 of it is about 1 mV of drain voltage.
     expect(relErr(v.ld1o__id / block(res, 'ld1').id - 1, R_LD - 1)).toBeLessThan(1e-2);
-    expect(relErr(v.ino__id / v.in__id - 1, rIn - 1)).toBeLessThan(1e-2);
-    expect(v.ld1o__id).toBeLessThan(v.in__id);
-    expect(v.ino__id).toBeGreaterThan(v.in__id);
   });
 
-  it('the systematic offset is the current missing at the stage-1 output, referred to the input', () => {
-    // The mirror delivers 0.968113 of the diode side's current into the node and the pair's
-    // output-side device takes 1.030882 of it out. Referred through gm1, which is 12 times the
-    // diode side's current times (0.968113 + 1.030882)/2, that current cancels:
-    // vos_sys = (2/12)·(1.030882 − 0.968113)/(1.030882 + 0.968113) = 5.23 mV.
-    expect(relErr(v.vos_sys, ((2 / 12) * (rIn - R_LD)) / (rIn + R_LD))).toBeLessThan(1e-2);
-    expect(relErr(v.vos_sys, Math.abs(v.ld1o__id - v.ino__id) / v.gm1)).toBeLessThan(1e-12);
+  it('the systematic offset is the difference of the two input gate-source voltages at rest', () => {
+    // The diode-side input device carries 3.3 % more current at a drain 101 mV lower, and in the
+    // model that takes 5.29 mV more gate-source voltage. The row reads the difference directly.
+    expect(v.vos_sys).toBe(Math.abs(v.in__vgs - v.ino__vgs));
+    expect(v.in__vgs).toBeGreaterThan(v.ino__vgs);
+    expect(relErr(v.vos_sys, delta)).toBeLessThan(1e-2);
     // The check reads that row against its budget of 1 mV. It advises and never gates: the sheet
     // is feasible with the offset five times over.
     expect(statusOf(res, 'systematic-offset')).toBe('fail');
     expect(res.checks.find((c) => c.id === 'systematic-offset')?.lhsValue).toBe(v.vos_sys);
     expect(res.feasible).toBe(true);
-    // With the second stage at the mirror's diode drop both output-side devices sit where their
-    // partners do, nothing is missing at the node, and the check passes.
+    // With the second stage at the mirror's diode drop the two sides sit at one set of levels and
+    // carry one current, and the check passes.
     const matched = runSheet(withParams(doc, { gm_id_s2: 8 }), table, undefined, REFS);
     expect(matched.values.vos_sys).toBeLessThan(v.vos_sys / 100);
     expect(statusOf(matched, 'systematic-offset')).toBe('pass');
   });
 
   it('bandwidth and slew follow what the first stage delivers; the RHP zero is the second stage’s', () => {
-    // 12/V × 9.059 µA × 0.999497 = 108.65 µS, not the 120 µS of an input device at a typed 10 µA.
+    // I_o·(gm/ID_in + 12)/2 = 9.043 µA × 11.86 = 107.28 µS.
     expect(relErr(v.gm1, gm1)).toBeLessThan(1e-3);
     expect(relErr(v.GBW, gm1 / (2 * Math.PI * CC))).toBeLessThan(1e-3);
-    // The stage-1 limit binds: 18.40 µA into 3 pF is slower than 60 µA into 5 pF.
+    // The stage-1 limit binds: 18.38 µA into 3 pF is slower than 60 µA into 5 pF.
     expect(relErr(v.SR, Math.min(iTail / CC, I2 / C_LOAD))).toBeLessThan(1e-3);
     expect(relErr(v.z_rhp, gm2 / CC)).toBeLessThan(1e-9);
     // Which quantities each equation reads, exactly.
@@ -277,11 +375,11 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
   });
 
   it('stage-1 gain reads the two conductances on the stage-1 output node', () => {
-    // gds = idSat/VA in the demo model, and a device and the one tied to it have one saturation
-    // current, so the drain voltage an output-side device sits at cancels out of its gds: each
-    // is the diode side's current over (VA + the DIODE-side partner's vds). That current then
-    // cancels against gm1: Av1 = 12·0.999497/(1/3.271144 + 1/3.168042) = 19.30.
-    const gdsOut = gdsOf(iIn, L05, V_MIR - V_TAIL) + gdsOf(iIn, L05, VGS_GMID8_L05);
+    // The pair's output-side device carries I_o at vds = V1 − V_tail, so its gds is I_o over
+    // (VA + that). The mirror's output device copies its diode side's saturation current and
+    // gds = idSat/VA in the demo model, so its gds is the diode side's I_r over (VA + vgs(8)) —
+    // the drain voltage it sits at cancels. Av1 = 107.28 µS/(3.008 + 2.948 µS) = 19.06.
+    const gdsOut = gdsOf(iOut, L05, V_1 - vTail) + gdsOf(iIn, L05, VGS_GMID8_L05);
     expect(relErr(v.Av1, gm1 / gdsOut)).toBeLessThan(1e-3);
     expect(relErr(v.Av1, v.gm1 / (v.ino__gds + v.ld1o__gds))).toBeLessThan(1e-12);
     expect(relErr(v.Av, v.Av1 * v.Av2)).toBeLessThan(1e-12);
@@ -300,18 +398,27 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     expect(relErr(v.PM, pmOf(v.gm1))).toBeLessThan(1e-9);
   });
 
-  it('the tail device keeps its headroom, and a common mode that takes it away is refused', () => {
+  it('every device the design needs saturated says so, and a common mode that starves the tail is refused', () => {
+    // The tail, the pair, the mirror's output device, the second stage and its load; the two
+    // diode-connected devices cannot declare one.
+    expect(declaredSaturated(resolveSheetRefs(doc, REFS).doc)).toEqual([
+      'tail',
+      's2',
+      'ld1o',
+      'ino',
+      'in',
+      'ld2',
+    ]);
     // The tail device shares its reference's gate, so its saturation voltage is the reference's:
-    // 0.360814 − vdsat(vgs(10)) = 0.126 V of headroom at the default common mode.
-    expect(relErr(v.tail_headroom, V_TAIL - vdsatDemo(VGS_GMID10_L05, L05))).toBeLessThan(1e-2);
+    // 0.358608 − vdsat(vgs(10)) = 0.123 V of headroom at the default common mode.
+    expect(relErr(v.tail_headroom, vTail - vdsatDemo(VGS_GMID10_L05, L05))).toBeLessThan(1e-2);
     expect(relErr(v.tail_headroom, v.V_tail - v.tail__vdsat)).toBeLessThan(1e-12);
-    expect(statusOf(res, 'tail-saturated')).toBe('pass');
-    // A common mode of 0.75 V leaves the tail node (0.75 − 0.567023)/1.2 = 0.152 V, under the
-    // tail device's 0.235 V. The check is physical, so the sheet is no longer feasible.
+    expect(regionOf(res, 'tail').status).toBe('pass');
+    // A common mode of 0.75 V leaves the tail node about 0.15 V, under the tail device's 0.235 V.
+    // The declaration is a physical check, so the sheet is no longer feasible.
     const low = runSheet(withParams(doc, { CM_dc: 0.75 }), table, undefined, REFS);
-    expect(relErr(low.values.V_tail, sourceNodeUnder(0.75, VGS_GMID12_L05))).toBeLessThan(1e-2);
     expect(low.values.tail_headroom).toBeLessThan(0);
-    expect(statusOf(low, 'tail-saturated')).toBe('fail');
+    expect(regionOf(low, 'tail').status).toBe('fail');
     expect(low.feasible).toBe(false);
   });
 
@@ -323,18 +430,18 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     expect(v.cgg_in).toBe(v.in__cgg);
     expect(relErr(v.cgg_in, cggOf(block(res, 'ino').W, L05))).toBeLessThan(1e-9);
     // Supply current is what the tail delivers plus the single-ended output branch:
-    // 18.40 µA + 60 µA. The reference branch is shared bias and is not counted.
+    // 18.38 µA + 60 µA. The reference branch is shared bias and is not counted.
     expect(relErr(v.I_q, iTail + I2)).toBeLessThan(1e-3);
     expect(relErr(v.I_q, v.tail__id + I2)).toBeLessThan(1e-12);
   });
 
-  it('held at another condition, the first stage follows its tail and every tie its partner', () => {
+  it('held at another condition, the first stage follows its tail and the stage-1 output still balances', () => {
     // Every width is the sized one. The reference keeps the current it is programmed to, so at
     // half the current density it needs a higher gate voltage, and the tail device follows it
     // there instead of being handed 20 µA. The second stage keeps its own programmed current, so
     // its gate — the stage-1 output — moves with its own device.
     const [s, h] = sizedAndHeld(doc);
-    for (const name of ['bias', 'tail', 'ld1', 'in', 's2', 'ld1o', 'ino', 'ld2'])
+    for (const name of ['bias', 'tail', 'ld1', 's2', 'ld1o', 'ino', 'in', 'ld2'])
       expect([name, block(h, name).W]).toEqual([name, block(s, name).W]);
     expect(block(h, 'bias').id).toBe(I1);
     expect(block(h, 's2').id).toBe(I2);
@@ -342,29 +449,26 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     for (const [tied, partner] of [
       ['tail', 'bias'],
       ['ld1o', 'ld1'],
-      ['in', 'ino'],
     ])
       expect([tied, relErr(block(h, tied).vgs, block(h, partner).vgs) < 1e-12]).toEqual([
         tied,
         true,
       ]);
     expect(h.values.tail__id).toBeLessThan(s.values.tail__id);
-    // The split is solved again here, with the input devices at their sized width. The two still
-    // carry what the tail delivers between them, and the mirror's diode device what the input
-    // device in its branch does, to the solve's tolerance.
+    // The split is solved again here, on the held widths: the stage-1 output balances to the
+    // solve's tolerance, and the two input devices carry what the tail delivers between them.
     const hv = h.values;
-    expect(relErr(hv.in__id + hv.ino__id, hv.tail__id)).toBeLessThan(1e-6);
-    expect(relErr(hv.out_share, hv.pair_split)).toBeLessThan(1e-6);
-    expect(relErr(block(h, 'ld1').id, hv.in__id)).toBeLessThan(1e-6);
+    expect(relErr(hv.ino__id, hv.ld1o__id)).toBeLessThan(1e-6);
+    expect(relErr(hv.in__id + hv.ino__id, hv.tail__id)).toBeLessThan(1e-12);
+    expect(relErr(block(h, 'ld1').id, hv.in__id)).toBeLessThan(1e-12);
     // Every tie is the same closed form, read at this condition's voltages: scaling the current
     // column by a constant leaves its (VA + vds) dependence alone.
     const tail = (VA05 + hv.V_tail) / (VA05 + block(h, 'bias').vgs);
     const mirror = (VA05 + block(h, 's2').vgs) / (VA05 + block(h, 'ld1').vgs);
-    const pair = (VA05 + hv.V1 - hv.V_tail) / (VA05 + hv.V_mir - hv.V_tail);
     expect(relErr(1 - hv.tail__id / I1, 1 - tail)).toBeLessThan(1e-2);
     expect(relErr(hv.ld1o__id / block(h, 'ld1').id - 1, mirror - 1)).toBeLessThan(1e-2);
-    expect(relErr(hv.ino__id / hv.in__id - 1, pair - 1)).toBeLessThan(1e-2);
-    expect(relErr(hv.vos_sys, Math.abs(hv.ld1o__id - hv.ino__id) / hv.gm1)).toBeLessThan(1e-12);
+    expect(relErr(hv.out_share - 0.5, mirror / (1 + mirror) - 0.5)).toBeLessThan(1e-2);
+    expect(hv.vos_sys).toBe(Math.abs(hv.in__vgs - hv.ino__vgs));
   });
 
   it('held at another condition, the split and the tail node land the same from any stored value', () => {
@@ -391,39 +495,91 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
   const res = runSheet(doc, table, undefined, REFS);
   const v = res.values;
   // Defaults: as the Miller sheet, plus a cascode at gm/ID 10 in each first-stage branch, the
-  // diode-side one stated at V_casc = 0.4 V. No tail device is on this sheet: half of I1 is
-  // typed into the mirror's diode device and the branch under it reads that.
-  const I_HALF = I1 / 2;
-  const gmIn = 12 * I_HALF;
+  // diode-side one stated at V_casc = 0.25 V; the bias reference is programmed to I1 at gm/ID 14.
+  // The first stage is drawn at rest, as on the Miller sheet: the current law at the stage-1
+  // output fixes the split (the output-side cascode passes up what the mirror's output device
+  // returns, R_LD times the diode side's current), and the input devices are one width carrying
+  // their own currents at their own gate-source voltages. Each input device's drain is its own
+  // cascode's source:
+  //   diode side   V_A = V_mir − V_casc = 1.131958 − 0.25 = 0.881958 V
+  //   output side  V_X, where the output-side cascode, carrying R_LD times its partner's current
+  //                with its drain at V1 instead of the mirror node, needs the gate voltage the two
+  //                cascodes share. The model's current law puts it at 0.887430 V, 5.5 mV above V_A.
+  // With the drains that close, the offset is almost all the current ratio: 2.87 mV.
+  //   tail node    (CM_dc − vgs(12) − Δ/2)/1.2 = 0.359619 V
+  //   tail         20 µA × (2.5 + 0.359619)/(2.5 + 0.532095) = 18.862 µA
   const gm2 = 12 * I2;
-  /** The diode-side cascode's source, V_casc below the mirror node: 0.731958 V. */
-  const V_A = V_MIR - 0.4;
-  // The output-side cascode's source has no closed form (it inverts the model's current law at a
-  // fixed width), so it is read where the solve landed and bracketed in its own golden. The
-  // pair's output-side device over its diode-side partner is then the same ratio as on the
-  // Miller sheet, with each drain on its own cascode's source. The two sources are 2.7 mV
-  // apart, so the ratio is read at the two drain-source voltages the run reports rather than
-  // at a closed-form node 0.1 mV away from either: 1.000934.
-  const vX = v.V1 - v.V_casco;
-  const rIn = (VA05 + block(res, 'ino').bias!.vds!) / (VA05 + block(res, 'in').bias!.vds!);
-  const gm1 = (gmIn * (R_LD + rIn)) / 2;
+  const V_A = V_MIR - 0.25;
+  const share = R_LD / (1 + R_LD);
+  let vX = V_A;
+  let vTail = V_TAIL;
+  let delta = 0;
+  for (let i = 0; i < 50; i++) {
+    const cascRatio = (R_LD * (VA05 + 0.25)) / (VA05 + V_1 - vX);
+    vX = V_A - (vgsForCurrentRatio(VGS_GMID10_L05, cascRatio) - VGS_GMID10_L05) / 1.2;
+    const ratio = ((1 / R_LD) * (VA05 + vX - vTail)) / (VA05 + V_A - vTail);
+    delta = vgsForCurrentRatio(VGS_GMID12_L05, ratio) - VGS_GMID12_L05;
+    vTail = sourceNodeUnder(1.0 - delta / 2, VGS_GMID12_L05);
+  }
+  const iTail = (I1 * (VA05 + vTail)) / (VA05 + VGS_GMID14_L05);
+  const iOut = iTail * share;
+  const iIn = iTail - iOut;
+  const gm1 = (iOut * (gmIdDemo(VGS_GMID12_L05 + delta) + 12)) / 2;
 
-  it('one first-stage current is typed, and every tie is one gate wire', () => {
-    expect(block(res, 'ld1').id).toBe(I_HALF);
-    expect(block(res, 'in').id).toBe(I_HALF);
-    expect(block(res, 'casc').id).toBe(I_HALF);
+  it('one first-stage current is typed, into the bias reference, and every tie is one gate wire', () => {
+    // The programmed current goes into the bias reference and nowhere else; the mirror's diode
+    // device and the cascode and input device under it carry the diode side's share of what the
+    // tail delivers, and the output-side input device the rest.
+    expect(block(res, 'bias').id).toBe(I1);
+    expect(relErr(block(res, 'ino').id, v.tail__id * v.out_share)).toBeLessThan(1e-12);
+    expect(relErr(block(res, 'in').id, v.tail__id * (1 - v.out_share))).toBeLessThan(1e-12);
+    expect(relErr(block(res, 'ld1').id, v.in__id)).toBeLessThan(1e-12);
+    expect(block(res, 'casc').id).toBe(v.in__id);
     expect(block(res, 's2').id).toBe(I2);
     // The output-side cascode is in one branch with the input device under it and is handed
     // that device's current, to the last bit.
     expect(block(res, 'casco').id).toBe(v.ino__id);
     for (const [tied, partner] of [
+      ['tail', 'bias'],
       ['ld1o', 'ld1'],
-      ['ino', 'in'],
+      ['in', 'ino'],
       ['casco', 'casc'],
     ])
       expect([tied, block(res, tied).W]).toEqual([tied, block(res, partner).W]);
-    expect(relErr(block(res, 'ld1o').vgs, block(res, 'ld1').vgs)).toBeLessThan(1e-12);
-    expect(relErr(block(res, 'ino').vgs, block(res, 'in').vgs)).toBeLessThan(1e-12);
+    for (const [tied, partner] of [
+      ['tail', 'bias'],
+      ['ld1o', 'ld1'],
+    ])
+      expect([tied, relErr(block(res, tied).vgs, block(res, partner).vgs) < 1e-12]).toEqual([
+        tied,
+        true,
+      ]);
+    expect(doc.blocks!.find((u) => u.name === 'in')!.doc!.givens).toMatchObject({
+      W: 'Wx',
+      id: 'Ix',
+    });
+  });
+
+  it('the tail misses its reference, and the split is solved so the stage-1 output balances', () => {
+    // The tail node (0.360 V) sits below the reference's diode drop (vgs(14) = 0.532 V).
+    expect(relErr(v.V_tail, vTail)).toBeLessThan(1e-3);
+    expect(relErr(1 - v.tail__id / I1, 1 - iTail / I1)).toBeLessThan(1e-2);
+    // What the output-side cascode passes up is what the mirror's output device returns, to the
+    // solve's tolerance; the two input devices add up to what the tail delivers by construction.
+    expect(relErr(v.ino__id, v.ld1o__id)).toBeLessThan(1e-6);
+    expect(relErr(v.in__id + v.ino__id, v.tail__id)).toBeLessThan(1e-12);
+    expect(doc.params.find((p) => p.name === 'out_share')?.designConstraint).toEqual({
+      lhs: 'ino__id',
+      rhs: 'ld1o__id',
+    });
+    expect(relErr(v.out_share - 0.5, share - 0.5)).toBeLessThan(1e-2);
+    expect(relErr(v.ino__id, iOut)).toBeLessThan(1e-3);
+    for (const start of [0.3, 0.7]) {
+      const other = runSheet(withParams(doc, { out_share: start }), table, undefined, REFS);
+      expect([start, relErr(other.values.out_share, v.out_share) < 1e-9]).toEqual([start, true]);
+    }
+    expect(doc.equations.map((e) => e.name)).not.toContain('pair_residual');
+    expect(doc.equations.map((e) => e.name)).not.toContain('pair_split');
   });
 
   it('the two cascodes share one gate, and the node under the output-side one is solved to it', () => {
@@ -433,45 +589,34 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     const gate = block(res, 'casc').bias!.vsb! + block(res, 'casc').vgs;
     expect(relErr(res.held!.V_casc, gate)).toBeLessThan(1e-9);
     expect(block(res, 'casco').bias!.vsb! + block(res, 'casco').vgs).toBeCloseTo(gate, 5);
-    expect(block(res, 'casco').bias!.vsb).toBeCloseTo(vX, 9);
+    const x = v.V1 - v.V_casco;
+    expect(block(res, 'casco').bias!.vsb).toBeCloseTo(x, 9);
     expect(block(res, 'casco').bias!.vds).toBeCloseTo(v.V_casco, 9);
-    expect(block(res, 'ino').bias!.vds).toBeCloseTo(vX - v.V_tail, 9);
-    // Where it lands, to first order. The output-side cascode has its drain on the stage-1
-    // output, 101 mV above the mirror node, so it carries its current with less gate drive:
-    // id ∝ (VA + vds)·exp((gm/ID)·Δvgs) near a point, which at gm/ID 10 is
-    // ln((2.5 + 0.501)/(2.5 + 0.4))/10 = 3.4 mV less. Its source rises to give that back, and
-    // rising takes body bias with it, so the node moves by 3.4 mV/1.2 = 2.85 mV. The estimate
-    // overstates it by the few percent that the node's own move takes off that drain voltage.
-    const rise = Math.log((VA05 + V_1 - V_A) / (VA05 + 0.4)) / 10 / 1.2;
-    expect(vX - V_A).toBeGreaterThan(0.9 * rise);
-    expect(vX - V_A).toBeLessThan(rise);
-    expect(statusOf(res, 'cascode-sat')).toBe('pass');
-    expect(statusOf(res, 'cascode-out-sat')).toBe('pass');
+    expect(block(res, 'ino').bias!.vds).toBeCloseTo(x - v.V_tail, 9);
+    expect(block(res, 'in').bias!.vds).toBeCloseTo(v.V_mir - 0.25 - v.V_tail, 9);
+    // Where it lands: the model's closed form, 5.5 mV above the diode-side cascode's source, to
+    // within 3 % of that rise (the node's own move reads the table between two body-bias points).
+    expect(relErr(x - V_A, vX - V_A)).toBeLessThan(3e-2);
   });
 
-  it('the cascode shields the pair, so the mirror sets the systematic offset', () => {
-    // The mirror's output device sits at the second stage's gate and delivers 3.19 % less than
-    // its diode device, as on the Miller sheet. The pair's output-side device moves only with
-    // the 2.7 mV its cascode's source moved: 0.09 % more than its partner.
-    expect(relErr(v.ld1o__id / I_HALF - 1, R_LD - 1)).toBeLessThan(1e-2);
-    expect(relErr(v.ino__id / I_HALF - 1, rIn - 1)).toBeLessThan(1e-2);
-    expect(rIn - 1).toBeLessThan((1 - R_LD) / 20);
-    // Referred through gm1 the half current cancels:
-    // vos_sys = (2/12)·(1.000934 − 0.968113)/(1.000934 + 0.968113) = 2.78 mV, within a few
-    // percent of the 2.70 mV the mirror alone would give.
-    expect(relErr(v.vos_sys, ((2 / 12) * (rIn - R_LD)) / (rIn + R_LD))).toBeLessThan(1e-2);
-    expect(relErr(v.vos_sys, ((2 / 12) * (1 - R_LD)) / (1 + R_LD))).toBeLessThan(0.05);
-    expect(relErr(v.vos_sys, Math.abs(v.ld1o__id - v.ino__id) / v.gm1)).toBeLessThan(1e-12);
+  it('the systematic offset is the difference of the two input gate-source voltages at rest', () => {
+    // The diode-side input device carries 1/R_LD of its partner's current at a drain 5.5 mV lower:
+    // 2.87 mV more gate-source voltage. The cascodes hold the two drains so close that the
+    // current ratio is nearly all of it — the mirror's 1/R_LD alone, at equal drains, is 95 % of
+    // the row.
+    expect(v.vos_sys).toBe(Math.abs(v.in__vgs - v.ino__vgs));
+    expect(v.in__vgs).toBeGreaterThan(v.ino__vgs);
+    expect(relErr(v.vos_sys, delta)).toBeLessThan(1e-2);
+    const mirrorAlone = vgsForCurrentRatio(VGS_GMID12_L05, 1 / R_LD) - VGS_GMID12_L05;
+    expect(relErr(v.vos_sys, mirrorAlone)).toBeLessThan(0.06);
+    expect(mirrorAlone).toBeLessThan(v.vos_sys);
     expect(statusOf(res, 'systematic-offset')).toBe('fail');
     expect(res.checks.find((c) => c.id === 'systematic-offset')?.lhsValue).toBe(v.vos_sys);
     expect(res.feasible).toBe(true);
-    // What the pair's two halves carry over the tail current is that 0.09 % of a half current.
-    expect(relErr(v.pair_residual, I_HALF * (rIn - 1))).toBeLessThan(1e-2);
-    expect(relErr(v.pair_residual, v.in__id + v.ino__id - I1)).toBeLessThan(1e-9);
     // With the second stage at the mirror's diode drop the two sides sit at one set of levels:
     // the output-side cascode's source lands on the diode side's and nothing is missing.
     const matched = runSheet(withParams(doc, { gm_id_s2: 8 }), table, undefined, REFS);
-    expect(matched.values.V_casco).toBeCloseTo(0.4, 4);
+    expect(matched.values.V_casco).toBeCloseTo(0.25, 4);
     expect(matched.values.vos_sys).toBeLessThan(v.vos_sys / 100);
     expect(statusOf(matched, 'systematic-offset')).toBe('pass');
   });
@@ -483,31 +628,53 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
       1e-12,
     );
     expect(relErr(v.Av2, gm2 / (2 * (I2 / (VA05 + 0.9))))).toBeLessThan(1e-9);
-    // No tail device is drawn, so the stage-1 slew limit is the programmed tail current.
-    expect(relErr(v.SR, Math.min(I1 / CC, I2 / C_LOAD))).toBeLessThan(1e-9);
+    // The stage-1 slew limit is what the tail delivers into Cc: 18.86 µA into 3 pF is slower than
+    // 60 µA into 5 pF.
+    expect(relErr(v.SR, Math.min(iTail / CC, I2 / C_LOAD))).toBeLessThan(1e-3);
+    expect(relErr(v.SR, v.tail__id / CC)).toBeLessThan(1e-12);
   });
 
   it('stage-1 gain reads the two conductances on the output side', () => {
-    // As on the Miller sheet, a tied device's gds is the half current over (VA + its partner's
-    // vds): the input device under its cascode at 0.731958 − 0.360814 V, the mirror at vgs(8).
-    const gdsOut = gdsOf(I_HALF, L05, V_A - V_TAIL) + gdsOf(I_HALF, L05, VGS_GMID8_L05);
+    // The output-side input device carries I_o at vds = V_X − V_tail; the mirror's output device
+    // copies its diode side's saturation current, so its gds is I_r over (VA + vgs(8)).
+    const gdsOut = gdsOf(iOut, L05, vX - vTail) + gdsOf(iIn, L05, VGS_GMID8_L05);
     expect(relErr(v.Av1, gm1 / gdsOut)).toBeLessThan(1e-3);
     expect(relErr(v.Av1, v.gm1 / (v.ino__gds + v.ld1o__gds))).toBeLessThan(1e-12);
   });
 
   it('the compensation returns through the output-side cascode', () => {
-    // That cascode carries the output-side input device's current at 3.2 mV less overdrive than
-    // its partner, so its gm/ID sits a little above the 10 its partner is sized at and its gm a
-    // little above the partner's 100 µS: 101.3 µS. Bracketed, since the inversion level it lands
-    // on has no closed form.
-    expect(relErr(v.casc__gm, 10 * I_HALF)).toBeLessThan(1e-9);
-    expect(v.gm_casc).toBeGreaterThan(1.005 * v.casc__gm);
-    expect(v.gm_casc).toBeLessThan(1.02 * v.casc__gm);
+    // That cascode carries the output side's current, R_LD = 0.968 times its partner's, at a little
+    // less overdrive, so its gm sits between R_LD times its partner's and its partner's.
+    expect(relErr(v.casc__gm, 10 * v.in__id)).toBeLessThan(1e-9);
+    expect(v.gm_casc).toBeGreaterThan(R_LD * v.casc__gm);
+    expect(v.gm_casc).toBeLessThan(v.casc__gm);
   });
 
   it('phase margin has no RHP-zero term (cascode compensation removes it)', () => {
     expect(relErr(v.PM, pmOf(gm1))).toBeLessThan(1e-3);
     expect(relErr(v.PM, pmOf(v.gm1))).toBeLessThan(1e-9);
+  });
+
+  it('every device the design needs saturated says so', () => {
+    // The tail, both input devices, both cascodes, the mirror's output device, the second stage
+    // and its load. The diode-side cascode is held at the 0.25 V the sheet states, 15 mV above its
+    // saturation voltage on this table; 0.2 V takes it out, and its declaration says so.
+    expect(declaredSaturated(resolveSheetRefs(doc, REFS).doc)).toEqual([
+      'tail',
+      's2',
+      'ld1o',
+      'ino',
+      'in',
+      'casc',
+      'casco',
+      'ld2',
+    ]);
+    expect(relErr(regionOf(res, 'casc').lhsValue!, 0.25)).toBeLessThan(1e-12);
+    expect(regionOf(res, 'casco').lhsValue).toBe(v.V_casco);
+    for (const name of ['casc', 'casco', 'tail'])
+      expect([name, regionOf(res, name).status]).toEqual([name, 'pass']);
+    const starved = runSheet(withParams(doc, { V_casc: 0.2 }), table, undefined, REFS);
+    expect(hardFailsIn(starved)).toContain('casc.region');
   });
 
   it('the output interface is that same node, named, plus the input gate', () => {
@@ -518,26 +685,32 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     expect(v.cgg_in).toBe(v.in__cgg);
     expect(relErr(v.cgg_in, cggOf(block(res, 'ino').W, L05))).toBeLessThan(1e-9);
     // Cascode compensation changes where the compensation current flows, not what the two
-    // branches draw: the 20 µA tail plus the 60 µA output branch.
-    expect(relErr(v.I_q, I1 + I2)).toBeLessThan(1e-9);
+    // branches draw: what the tail delivers plus the 60 µA output branch. The reference branch is
+    // shared bias and is not counted.
+    expect(relErr(v.I_q, iTail + I2)).toBeLessThan(1e-3);
+    expect(relErr(v.I_q, v.tail__id + I2)).toBeLessThan(1e-12);
   });
 
-  it('held at another condition, both cascode nodes are solved again under the one gate', () => {
+  it('held at another condition, the tail node, the split and both cascode nodes are solved again', () => {
     // Every width is the sized one and the cascode gate stays where the design put it. The
-    // diode-side cascode's node, the tail node and the output-side cascode's node are each
-    // solved again, one after another, and the two cascodes still share that gate.
+    // diode-side cascode's node, the tail node, the split and the output-side cascode's node read
+    // one another, and are settled together; the stage-1 output still balances, and the two
+    // cascodes still share that gate.
     const [s, h] = sizedAndHeld(doc);
-    for (const name of ['ld1', 'in', 'casc', 's2', 'ld1o', 'ino', 'casco', 'ld2'])
+    for (const name of ['bias', 'tail', 'ld1', 's2', 'ld1o', 'ino', 'in', 'casc', 'casco', 'ld2'])
       expect([name, block(h, name).W]).toEqual([name, block(s, name).W]);
     const gate = s.held!.V_casc;
     expect(block(h, 'casc').bias!.vsb! + block(h, 'casc').vgs).toBeCloseTo(gate, 5);
     expect(block(h, 'casco').bias!.vsb! + block(h, 'casco').vgs).toBeCloseTo(gate, 5);
     expect(h.values.V_casc).not.toBeCloseTo(s.values.V_casc, 3);
     expect(block(h, 'casco').id).toBe(h.values.ino__id);
+    expect(relErr(h.values.ino__id, h.values.ld1o__id)).toBeLessThan(1e-6);
+    expect(relErr(h.values.in__id + h.values.ino__id, h.values.tail__id)).toBeLessThan(1e-12);
+    expect(h.values.tail__id).toBeLessThan(s.values.tail__id);
     expect(relErr(block(h, 'ld1o').vgs, block(h, 'ld1').vgs)).toBeLessThan(1e-12);
-    expect(relErr(block(h, 'ino').vgs, block(h, 'in').vgs)).toBeLessThan(1e-12);
     const mirror = (VA05 + block(h, 's2').vgs) / (VA05 + block(h, 'ld1').vgs);
-    expect(relErr(h.values.ld1o__id / I_HALF - 1, mirror - 1)).toBeLessThan(1e-2);
+    expect(relErr(h.values.ld1o__id / block(h, 'ld1').id - 1, mirror - 1)).toBeLessThan(1e-2);
+    expect(h.values.vos_sys).toBe(Math.abs(h.values.in__vgs - h.values.ino__vgs));
   });
 });
 
@@ -705,16 +878,36 @@ describe('tier4 goldens: Flipped voltage follower', () => {
 });
 
 describe('tier4 goldens: Fully differential telescopic OTA', () => {
-  const res = runSheet(sheet('fd-telescopic-ota'), table);
-  // Defaults: I_tail 40 µA (20 µA/side), gm/ID in 12, casc/load 8, all L 0.5 µm.
-  // Node levels V_s 0.32, V_a 0.55, V_out 0.95, V_b 1.30, VDD 1.8.
+  const doc = sheet('fd-telescopic-ota');
+  const res = runSheet(doc, table);
+  // Defaults: the bias reference programmed to I_tail = 40 µA at gm/ID 8, the tail device on its
+  // gate with its drain on the tail node V_s; gm/ID in 12, casc/load 8, all L 0.5 µm. Node levels
+  // V_s 0.32, V_a 0.55, V_out 0.95, V_b 1.30, VDD 1.8. Each side carries half of what the tail
+  // delivers:
+  //   tail device  (2.5 + 0.32)/(2.5 + 0.668042) = 0.890140, so each side carries 17.803 µA
   const va = VA_PER_L * 0.5e-6;
-  const gmIn = 12 * 20e-6;
+  const I_TAIL = 40e-6;
+  const iSide = (I_TAIL / 2) * ((va + 0.32) / (va + VGS_GMID8_L05));
+  const gmIn = 12 * iSide;
+
+  it('one current is typed, into the bias reference, and the tail is on its gate', () => {
+    expect(block(res, 'bias').id).toBe(I_TAIL);
+    expect(res.values.tail__id).toBe(2 * block(res, 'in').id);
+    for (const name of ['cascn', 'cascp', 'load'])
+      expect([name, block(res, name).id]).toEqual([name, block(res, 'in').id]);
+    expect(block(res, 'tail').W).toBe(block(res, 'bias').W);
+    expect(relErr(block(res, 'tail').vgs, block(res, 'bias').vgs)).toBeLessThan(1e-12);
+    expect(block(res, 'tail').bias?.vds).toBe(0.32);
+    // The tail node sits below the reference's diode drop, so the tail under-delivers by
+    // 1 − 0.890140 = 10.99 %. Compared as an error; 1e-2 of it is 3.5 mV of drain voltage.
+    expect(relErr(1 - res.values.tail__id / I_TAIL, 1 - (2 * iSide) / I_TAIL)).toBeLessThan(1e-2);
+  });
 
   it('the cascoded gain matches gm_in·(Rdown ∥ Rup) from the branch closed forms', () => {
-    const gdsIn = 20e-6 / (va + (0.55 - 0.32));
+    // Every device in a side carries the same current, so it cancels out of the gain.
+    const gdsIn = gdsOf(iSide, 0.5e-6, 0.55 - 0.32);
     const av0cascn = 8 * (va + (0.95 - 0.55));
-    const gdsLoad = 20e-6 / (va + (1.8 - 1.3));
+    const gdsLoad = gdsOf(iSide, 0.5e-6, 1.8 - 1.3);
     const av0cascp = 8 * (va + (1.3 - 0.95));
     const av = gmIn * par(av0cascn / gdsIn, av0cascp / gdsLoad);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
@@ -730,24 +923,25 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
     expect(res.values.cgg_in).toBe(res.values.in__cgg);
   });
 
-  it('the supply-current line item adds the CMFB budget exactly', () => {
-    expect(relErr(res.values.I_q, 40e-6 + 10e-6)).toBeLessThan(1e-9);
+  it('the supply-current line item is what the tail delivers plus the CMFB budget', () => {
+    // 35.606 µA + 10 µA. The reference branch is shared bias and is not counted.
+    expect(relErr(res.values.I_q, 2 * iSide + 10e-6)).toBeLessThan(1e-3);
+    expect(relErr(res.values.I_q, res.values.tail__id + 10e-6)).toBeLessThan(1e-12);
   });
 
   it('input noise counts both input devices and both load current sources', () => {
     // Each device's thermal density is sqrt(4kTγ/gm). A load's noise current reaches the output
     // in full, so it is referred to the input by gm_load/gm_in: the two sides together give
-    // 2·4kTγ/gm_in·(1 + gm_load/gm_in). The load runs at gm/ID 8 on the same 20 µA, 160 µS
-    // against the pair's 240 µS, so the loads raise the pair's own sqrt(2)·8.31 nV/rtHz by
-    // sqrt(1 + 2/3) = 1.29, to 15.2 nV/rtHz.
-    const gmLoad = 8 * 20e-6;
+    // 2·4kTγ/gm_in·(1 + gm_load/gm_in). The load runs at gm/ID 8 on the side's current against
+    // the pair's 12, so the loads raise the pair's own density by sqrt(1 + 2/3) = 1.29.
+    const gmLoad = 8 * iSide;
     const vn = Math.sqrt(2 * (vnthM(gmIn) ** 2 + (vnthM(gmLoad) * (gmLoad / gmIn)) ** 2));
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
     expect(relErr(res.values.vn_in, Math.SQRT2 * vnthM(gmIn) * Math.sqrt(1 + 8 / 12))).toBeLessThan(
       1e-3,
     );
     // The load term follows the load: at a lower gm/ID its gm, and its share, both fall.
-    const quiet = runSheet(withParams(sheet('fd-telescopic-ota'), { gm_id_load: 4 }), table);
+    const quiet = runSheet(withParams(doc, { gm_id_load: 4 }), table);
     expect(
       relErr(quiet.values.vn_in, Math.SQRT2 * vnthM(gmIn) * Math.sqrt(1 + 4 / 12)),
     ).toBeLessThan(1e-3);
@@ -758,6 +952,24 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
     const v8 = vdsatDemo(VGS_GMID8_L05, 0.5e-6); // cascodes + load, gm/ID 8
     const swing = 2 * (1.8 - v12 - 3 * v8 - 0.3);
     expect(relErr(res.values.swing_diff, swing)).toBeLessThan(1e-2);
+  });
+
+  it('every device in the stack declares that it must stay saturated', () => {
+    expect(declaredSaturated(doc)).toEqual(['tail', 'in', 'cascn', 'cascp', 'load']);
+    const across = {
+      tail: 0.32,
+      in: 0.55 - 0.32,
+      cascn: 0.95 - 0.55,
+      cascp: 1.3 - 0.95,
+      load: 0.5,
+    };
+    for (const [name, vds] of Object.entries(across)) {
+      const c = regionOf(res, name);
+      expect([name, c.kind, c.status]).toEqual([name, 'physical', 'pass']);
+      expect([name, relErr(c.lhsValue!, vds) < 1e-9]).toEqual([name, true]);
+    }
+    // A tail node 0.1 V lower leaves the tail device short of its 0.293 V saturation voltage.
+    expect(hardFailsIn(runSheet(withParams(doc, { V_s: 0.22 }), table))).toContain('tail.region');
   });
 });
 
@@ -849,12 +1061,15 @@ describe('tier4 goldens: Fully differential two-stage OTA', () => {
     // 0.360814 − vdsat(vgs(10)) = 0.126 V of headroom at the default common mode.
     expect(relErr(v.tail_headroom, V_TAIL - vdsatDemo(VGS_GMID10_L05, L05))).toBeLessThan(1e-2);
     expect(relErr(v.tail_headroom, v.V_tail - v.tail__vdsat)).toBeLessThan(1e-12);
-    expect(statusOf(res, 'tail-saturated')).toBe('pass');
+    // The tail declares that it must stay saturated: a physical check on the tail device, the
+    // tail node against the same saturation voltage.
+    expect(regionOf(res, 'tail').status).toBe('pass');
+    expect(regionOf(res, 'tail').lhsValue).toBe(v.V_tail);
     // A common mode of 0.75 V leaves the tail node (0.75 − 0.567023)/1.2 = 0.152 V, under the
-    // tail device's 0.235 V. The check is physical, so the sheet is no longer feasible.
+    // tail device's 0.235 V. The declaration is physical, so the sheet is no longer feasible.
     const low = runSheet(withParams(doc, { CM_dc: 0.75 }), table, undefined, REFS);
     expect(low.values.tail_headroom).toBeLessThan(0);
-    expect(statusOf(low, 'tail-saturated')).toBe('fail');
+    expect(regionOf(low, 'tail').status).toBe('fail');
     expect(low.feasible).toBe(false);
   });
 

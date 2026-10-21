@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { validate, canonicalizeTable } from './index';
-import { generateDemoDevice, signedMirrorDemo } from '../demo';
+import { generateDemoDevice, scaleQuantities, signedMirrorDemo } from '../demo';
+import { makeGrid } from '../grid';
 import type { Axis, DeviceTable, Grid, TableMeta } from '../types';
 
 // --- builders ----------------------------------------------------------------
@@ -493,6 +494,59 @@ describe('validate: deepened sign / noise / gamma checks', () => {
       gamma: [0.7, 2.5, 3.5],
     });
     expect(validate(shortChan).some((x) => x.rule === 'gamma-range')).toBe(false);
+  });
+
+  it('flags a thermal-noise column whose γ at full drive no transistor reaches', () => {
+    // The demo's sth is 4kT·gm with γ = 1. Scaled by 1e6 — a µ-prefixed export — it reads γ = 1e6
+    // at the full-drive point (shortest L, largest vgs and vds, body at the source), which is a
+    // unit error and nothing a device does.
+    const dev = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.3 },
+      vsb: { min: 0, max: 0.6, step: 0.3 },
+    });
+    expect(validate(dev).filter((x) => x.rule === 'noise-factor')).toEqual([]);
+    // Where gm collapses and the channel noise does not — the low-vds triode corner of real data —
+    // γ runs far out of any band, and that is the device, not the unit: those points are not read.
+    const vds = dev.grid.quantities.get('vds') as Float64Array;
+    const sth = dev.grid.quantities.get('sth') as Float64Array;
+    const triode = new Map(dev.grid.quantities);
+    triode.set(
+      'sth',
+      sth.map((x, i) => (vds[i] < 0.6 ? x * 1e6 : x)),
+    );
+    const noisyTriode = { ...dev, grid: makeGrid([...dev.grid.axes], triode) };
+    expect(validate(noisyTriode).filter((x) => x.rule === 'noise-factor')).toEqual([]);
+    const slipped = validate(scaleQuantities(dev, { sth: 1e6 })).filter(
+      (x) => x.rule === 'noise-factor',
+    );
+    expect(slipped.map((x) => x.severity)).toEqual(['warning']);
+    expect(slipped[0].message).toMatch(
+      /γ = sth\/\(4kT·gm\) = 1\.00e\+6 at the table's full-drive point \(l = 1\.8e-7, vds = 1\.2, vsb = 0, vgs = 1\.2\)/,
+    );
+    // Low by the same factor is the same slip.
+    expect(validate(scaleQuantities(dev, { sth: 1e-6 })).map((x) => x.rule)).toContain(
+      'noise-factor',
+    );
+    // A signed PMOS export is read at its most negative gate and drain voltages.
+    expect(validate(signedMirrorDemo(dev)).filter((x) => x.rule === 'noise-factor')).toEqual([]);
+    const pSlip = validate(scaleQuantities(signedMirrorDemo(dev), { sth: 1e6 })).find(
+      (x) => x.rule === 'noise-factor',
+    );
+    expect(pSlip?.message).toMatch(/vds = -1\.2, vsb = 0, vgs = -1\.2/);
+  });
+
+  it('names a stored column that shadows a derived quantity, but not a stored gamma', () => {
+    // `gamma` is a base quantity the namespace also derives from sth. A stored column of it is the
+    // documented input, kept as read by the charts and the sizer alike, so there is no
+    // disagreement to name; a stored `ft` is read by charts and re-derived by the sizer.
+    const cols = { gm: [1e-3, 2e-3, 3e-3], id: [1e-4, 2e-4, 3e-4], sth: [1e-24, 2e-24, 3e-24] };
+    const ownGamma = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      ...cols,
+      gamma: [1.2, 1.2, 1.2],
+    });
+    expect(validate(ownGamma).filter((x) => x.rule === 'derived-shadow')).toEqual([]);
+    const ownFt = makeTable([axis('vgs', [0.1, 0.2, 0.3])], { ...cols, ft: [1e9, 2e9, 3e9] });
+    expect(validate(ownFt).map((x) => x.rule)).toContain('derived-shadow');
   });
 });
 

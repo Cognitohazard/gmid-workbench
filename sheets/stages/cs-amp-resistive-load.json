@@ -61,7 +61,8 @@
     "L": "L",
     "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
     "gm_id": "gm_id",
-    "vds": "VDD - 2*pi*GBW_target*CL*(1 + gbw_margin)*R_load/gm_id"
+    "vds": "VDD - 2*pi*GBW_target*CL*(1 + gbw_margin)*R_load/gm_id",
+    "region": "saturation"
   },
   "equations": [
     {
@@ -118,14 +119,6 @@
       "rhs": "ceiling",
       "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
     },
-    {
-      "id": "headroom",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "vdsat",
-      "note": "device saturated at the DC output level the load drop leaves"
-    },
     { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
@@ -133,7 +126,7 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "read from the table's own noise where it carries it, and from the γ = 1 estimate otherwise; the simulator owns noise sign-off"
     },
     {
       "id": "gbw-margin",

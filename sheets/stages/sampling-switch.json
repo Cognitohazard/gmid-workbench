@@ -79,7 +79,8 @@
     "L": "L",
     "W": "W_sw",
     "gm_id": "gm_id_on",
-    "vds": "vds_test"
+    "vds": "vds_test",
+    "region": "triode"
   },
   "equations": [
     {

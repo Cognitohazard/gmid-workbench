@@ -10,8 +10,9 @@
 // size, and raise no hard-check na on the same table; here we pin the physics.
 
 import { describe, it, expect } from 'vitest';
-import { PHYS } from '../constants';
+import { PHYS, UT } from '../constants';
 import { runSheet, withParams, SOLVE_TOL_REL } from './index';
+import { isHardCheck, type SheetDoc, type SheetResult } from './types';
 import {
   table,
   relErr,
@@ -30,6 +31,18 @@ import {
 } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`stages/${file}`);
+
+// The demo model's threshold at length `len` (src/demo): a touch higher for a longer channel.
+const vthDemo = (len: number): number => 0.4 + 0.02 * Math.log(len / 0.18e-6 + 1);
+
+/** Saturation voltage the demo model reports at gate-source voltage `vgs` and length `len`, body at
+ *  the source: 2·UT plus the overdrive above threshold. */
+const vdsatDemo = (vgs: number, len: number): number => 2 * UT + (vgs - vthDemo(len));
+
+// The gate-source voltage the demo model needs for gm/ID 7 at L = 0.5 µm, from the EKV inversion
+// gm/ID = sigmoid(x)/(n·UT·softplus(x)) with n = 1.3 — the same derivation as the fixture
+// constants for 8 to 14: overdrive 0.280327 V on a 0.426582 V threshold.
+const VGS_GMID7_L05 = 0.70691;
 
 describe('tier1 goldens: CS amp, resistive load', () => {
   const res = runSheet(sheet('cs-amp-resistive-load.json'), table);
@@ -361,36 +374,147 @@ describe('tier1 goldens: Common gate', () => {
 });
 
 describe('tier1 goldens: CMOS inverter amplifier', () => {
-  const res = runSheet(sheet('cmos-inverter-amp.json'), table);
-  // Defaults: I_bias 20 uA (both devices), gm/ID n 12 / p 10, both L 0.5 um,
-  // V_out 0.9. Both vds = 0.9, VA = 2.5.
+  const doc = sheet('cmos-inverter-amp.json');
+  const res = runSheet(doc, table);
+  // Defaults: I_bias 20 µA typed into the NMOS at gm/ID 7, both L 0.5 µm, V_out 0.9, VDD 1.8. The
+  // two gates are one node and the two sources are the rails, so the PMOS is not given an
+  // inversion level: it carries the NMOS's current at the gate-source voltage the supply leaves.
+  //   input level   V_in = vgs(7) = 0.706910 V
+  //   PMOS          vgs = 1.8 − 0.706910 = 1.093090 V, overdrive 1.093090 − 0.426582 = 0.666507 V
+  // That overdrive is 9.9 times 2·n·UT, deep in strong inversion, where the model's gm/ID is the
+  // square law's 2/overdrive to about a part in 10⁴: 3.0007 /V against the NMOS's 7.
   const I = 20e-6;
+  const vIn = VGS_GMID7_L05;
+  const vovP = 1.8 - vIn - vthDemo(0.5e-6);
+  const gmIdP = 2 / vovP;
+  const gmTot = I * (7 + gmIdP); // 140 µS + 60.01 µS
+  const blockOf = (r: SheetResult, name: string) => r.blocks!.find((b) => b.name === name)!;
+  const checkOf = (r: SheetResult, id: string) => r.checks.find((c) => c.id === id)!;
+  const hardFails = (r: SheetResult): string[] => [
+    ...r.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
+    ...(r.blocks ?? []).flatMap((b) =>
+      b.checks
+        .filter((c) => isHardCheck(c.kind) && c.status === 'fail')
+        .map((c) => `${b.name}.${c.id}`),
+    ),
+  ];
 
-  it('both devices share the same bias current', () => {
-    expect(relErr(res.values.n__id, I)).toBeLessThan(1e-9);
-    expect(relErr(res.values.p__id, res.values.n__id)).toBeLessThan(1e-12);
+  it('the two gate-source voltages add up to the supply', () => {
+    // The fact the sheet is drawn from. The NMOS is sized for its gm/ID and its gate-source
+    // voltage is the input level; the PMOS is read at what is left of the supply above it. A
+    // given gate voltage is reported as the coordinate the table was read at, so the sum is the
+    // supply to rounding, and here that coordinate lies on the table, 107 mV inside its 1.2 V.
+    const n = blockOf(res, 'n').sizing!;
+    const p = blockOf(res, 'p').sizing!;
+    expect(relErr(n.vgs + p.vgs, 1.8)).toBeLessThan(1e-12);
+    expect(p.clamped).toBeUndefined();
+    expect(res.values.V_in).toBe(n.vgs);
+    expect(relErr(res.values.V_in, vIn)).toBeLessThan(1e-4);
+    // One current: typed into the NMOS, read from the NMOS by the PMOS.
+    expect(n.id).toBe(I);
+    expect(p.id).toBe(n.id);
+    // The inversion level the PMOS lands at is an output, and nothing on the sheet sets it.
+    expect(doc.params.map((q) => q.name)).not.toContain('gm_id_p');
+    expect(relErr(res.values.p__gm_id, gmIdP)).toBeLessThan(1e-3);
+    // Nothing on the sheet describes the shared gate a second way, so the wiring check is quiet.
+    expect(res.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);
+  });
+
+  it('the input-consistency checks read the tie: the PMOS gate is the input level, and the input level is held to the output level', () => {
+    // input-consistent-p asserts the tie: the PMOS's gate, one PMOS gate-source voltage below the
+    // supply, is the input level. The PMOS is handed exactly that, so the two sides are equal and
+    // the '==' margin is the whole band, 1 % of the input level.
+    const p = checkOf(res, 'input-consistent-p');
+    expect([p.kind, p.status]).toEqual(['advisory', 'pass']);
+    expect(relErr(p.lhsValue, p.rhsValue)).toBeLessThan(1e-12);
+    expect(relErr(p.margin, 0.01 * res.values.V_in)).toBeLessThan(1e-9);
+    // input-consistent-n is the trip point: a self-biased inverter sits where its input and
+    // output levels coincide. Here the input is 0.707 V and the output 0.9 V, 193 mV apart
+    // against a band of 9 mV, so it reads fail by that much.
+    const n = checkOf(res, 'input-consistent-n');
+    expect([n.kind, n.status]).toEqual(['advisory', 'fail']);
+    expect(n.lhsValue).toBe(res.values.V_in);
+    expect(n.rhsValue).toBe(0.9);
+    expect(relErr(n.margin, 0.009 - (0.9 - res.values.V_in))).toBeLessThan(1e-9);
+    // Where the gate the tie hands the PMOS lies past the table, the assertion trips. At gm/ID
+    // 12 the input level is vgs(12) = 0.567 V, so the PMOS is asked for 1.233 V and read at the
+    // table's 1.2 V edge: its gate is then 33 mV above the input level, and the check says so
+    // together with the gate-wiring check.
+    const clamped = runSheet(withParams(doc, { gm_id_n: 12 }), table);
+    expect(blockOf(clamped, 'p').sizing!.clamped).toEqual(['vgs']);
+    const tripped = checkOf(clamped, 'input-consistent-p');
+    expect(tripped.status).toBe('fail');
+    expect(relErr(tripped.lhsValue, 1.8 - 1.2)).toBeLessThan(1e-12);
+    expect(relErr(tripped.rhsValue, VGS_GMID12_L05)).toBeLessThan(1e-4);
+    expect(
+      clamped.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location),
+    ).toEqual(['p']);
   });
 
   it('combined transconductance is I_bias*(gm/ID_n + gm/ID_p)', () => {
-    expect(relErr(res.values.gm_tot, I * (12 + 10))).toBeLessThan(1e-9);
+    expect(relErr(res.values.n__gm, 7 * I)).toBeLessThan(1e-9);
+    expect(relErr(res.values.gm_tot, gmTot)).toBeLessThan(1e-3);
+    expect(relErr(res.values.gm_tot, res.values.n__gm + res.values.p__gm)).toBeLessThan(1e-12);
   });
 
   it('gain is the summed gm into the summed output conductance', () => {
-    const gmTot = I * 22;
-    const gds = gdsOf(I, 0.5e-6, 0.9); // same for both: equal L and |vds|
+    // Both devices at L 0.5 µm and |vds| 0.9 carry one current, so gds_n = gds_p and
+    // Av = (gm/ID_n + gm/ID_p)·(VA + vds)/2 = 10.0007 × 3.4/2 = 17.001.
+    const gds = gdsOf(I, 0.5e-6, 0.9);
     expect(relErr(res.values.Av, gmTot / (2 * gds))).toBeLessThan(2e-3);
   });
 
   it('both gates load the driver, and the stronger-inversion device is the smaller one', () => {
     // Rout is one output node: equal L and |vds| put both devices at the same gds, so it is
-    // (VA + vds)/(2*I_bias) exactly. cgg_in sums both gates because they are driven together;
-    // neither child exposes its width, so what is pinned is the sum and its ordering — the
-    // PMOS runs at gm/ID 10 against the NMOS at 12, which is a HIGHER current density and
-    // therefore a narrower device, so it contributes the smaller gate.
+    // (VA + vds)/(2*I_bias) exactly. cgg_in sums both gates because they are driven together.
+    // The PMOS, in strong inversion, carries the same current at a far higher current density,
+    // so it is the narrower device and contributes the smaller gate.
     expect(relErr(res.values.Rout, stage2Rout(I, 0.5e-6, 0.9))).toBeLessThan(1e-9);
     expect(relErr(res.values.Av, res.values.gm_tot * res.values.Rout)).toBeLessThan(1e-12);
     expect(res.values.cgg_in).toBe(res.values.n__cgg + res.values.p__cgg);
     expect(res.values.p__cgg).toBeLessThan(res.values.n__cgg);
+  });
+
+  it('both devices are held in saturation by the region each declares', () => {
+    // Each device's region check compares the drain-source voltage its givens state against its
+    // own saturation voltage, 2·UT plus its overdrive in the demo model. The PMOS's overdrive is
+    // whatever the supply leaves, so its saturation voltage is large: 0.718 V of the 0.9 V
+    // between the supply and the output.
+    const nRegion = blockOf(res, 'n').checks.find((c) => c.id === 'region')!;
+    const pRegion = blockOf(res, 'p').checks.find((c) => c.id === 'region')!;
+    expect([nRegion.kind, nRegion.status, pRegion.kind, pRegion.status]).toEqual([
+      'physical',
+      'pass',
+      'physical',
+      'pass',
+    ]);
+    expect(nRegion.lhsValue).toBe(0.9);
+    expect(relErr(nRegion.rhsValue, vdsatDemo(vIn, 0.5e-6))).toBeLessThan(1e-3);
+    expect(relErr(pRegion.lhsValue, 1.8 - 0.9)).toBeLessThan(1e-12);
+    expect(relErr(pRegion.rhsValue, vdsatDemo(1.8 - vIn, 0.5e-6))).toBeLessThan(1e-3);
+    // An output 0.2 V higher leaves the PMOS 0.7 V, under that, and the design fails there.
+    const high = runSheet(withParams(doc, { V_out: 1.1 }), table);
+    expect(hardFails(high)).toContain('p.region');
+    expect(high.feasible).toBe(false);
+  });
+
+  it('does not close on this table at its defaults: the gain is short', () => {
+    // The defaults put the input level at the 0.9 V output level on a sky130 typical-corner table,
+    // where the NMOS threshold is high enough that gm/ID 7 lands there. This table's thresholds
+    // are 0.43 V for either polarity at 0.5 µm, so gm/ID 7 puts the input at 0.707 V and leaves the
+    // PMOS 0.667 V of overdrive, deep in strong inversion at gm/ID 3.0. The composite gm/ID is
+    // 10.0, and on this table's Early voltage the gain is 17.0 against a target of 20; the
+    // trip-point check reads fail as well (above). Every other check holds.
+    expect(res.feasible).toBe(false);
+    expect(hardFails(res)).toEqual(['gain-spec']);
+    const gain = checkOf(res, 'gain-spec');
+    const av = ((7 + gmIdP) * (VA_PER_L * 0.5e-6 + 0.9)) / 2;
+    expect(relErr(gain.lhsValue, av)).toBeLessThan(2e-3);
+    expect(relErr(gain.marginPct, av / 20 - 1)).toBeLessThan(2e-3); // −15.0 %
+    expect(res.checks.filter((c) => c.status === 'fail').map((c) => c.id)).toEqual([
+      'input-consistent-n',
+      'gain-spec',
+    ]);
   });
 });
 
@@ -412,5 +536,108 @@ describe('tier1 goldens: Sampling switch', () => {
 
   it('sampled noise is the kT/C RMS voltage', () => {
     expect(relErr(res.values.vn_kTC, Math.sqrt((PHYS.k * PHYS.T) / 1e-12))).toBeLessThan(1e-9);
+  });
+});
+
+// Each device states the region the design needs it in: saturation for every amplifying, load and
+// cascode device, triode for the switch, and nothing on a diode-connected device, whose drain is
+// its gate. The engine then holds each declared device to it with a physical check of its own,
+// `region`, which compares the drain-source voltage the givens state against the device's
+// saturation voltage. A sheet therefore writes no check of its own comparing the same two voltages
+// with no margin: the declaration says it once, at every point.
+describe('tier1: the regions the stage devices declare', () => {
+  /** The region each device of a sheet declares, keyed by block name ('' for the sheet's own). */
+  const declared = (doc: SheetDoc): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (doc.givens?.region) out[''] = doc.givens.region;
+    for (const b of doc.blocks ?? []) if (b.doc?.givens?.region) out[b.name] = b.doc.givens.region;
+    return out;
+  };
+  /** The engine's region check on one device of a run, and the saturation voltage it read. */
+  const regionOf = (r: SheetResult, device: string) => {
+    const b = device ? r.blocks!.find((u) => u.name === device)! : undefined;
+    const vdsat = b ? b.provides.vdsat : r.values.vdsat;
+    return { check: (b ? b.checks : r.checks).find((c) => c.id === 'region')!, vdsat };
+  };
+
+  // Per sheet: each declaring device, its region, and the drain-source voltage that region
+  // compares, written from the schematic and read back from the run; then the hand-written checks
+  // the declaration replaced.
+  const CASES: Record<
+    string,
+    [Record<string, ['saturation' | 'triode', (r: SheetResult) => number]>, string[]]
+  > = {
+    'cs-amp-resistive-load.json': [{ '': ['saturation', (r) => r.values.V_out] }, ['headroom']],
+    'cs-amp-diode-load.json': [
+      { '': ['saturation', (r) => r.values.VDD - Math.abs(r.values.load__vgs)] },
+      ['input-sat'],
+    ],
+    'cs-amp-current-source-load.json': [
+      {
+        '': ['saturation', (r) => r.values.V_out],
+        load: ['saturation', (r) => r.values.VDD - r.values.V_out],
+      },
+      ['input-sat', 'load-sat'],
+    ],
+    'cascode-cs-amp.json': [
+      {
+        in: ['saturation', (r) => r.values.V_x],
+        '': ['saturation', (r) => r.values.V_out - r.values.V_x],
+        load: ['saturation', (r) => r.values.VDD - r.values.V_out],
+      },
+      ['input-sat', 'cascode-sat', 'load-sat'],
+    ],
+    'common-gate.json': [
+      { '': ['saturation', (r) => r.values.V_out - r.values.V_in] },
+      ['headroom'],
+    ],
+    'source-degenerated-cs-amp.json': [
+      { '': ['saturation', (r) => r.values.V_out - r.values.I_bias * r.values.R_s] },
+      ['headroom'],
+    ],
+    'source-follower.json': [
+      { '': ['saturation', (r) => r.values.VDD - r.values.V_out] },
+      ['headroom'],
+    ],
+    'cmos-inverter-amp.json': [
+      {
+        n: ['saturation', (r) => r.values.V_out],
+        p: ['saturation', (r) => r.values.VDD - r.values.V_out],
+      },
+      ['n-sat', 'p-sat'],
+    ],
+    'sampling-switch.json': [{ '': ['triode', (r) => r.values.vds_test] }, []],
+  };
+
+  it.each(Object.keys(CASES))('%s', (file) => {
+    const [devices, replaced] = CASES[file];
+    const doc = sheet(file);
+    expect(declared(doc)).toEqual(
+      Object.fromEntries(Object.entries(devices).map(([d, [region]]) => [d, region])),
+    );
+    for (const id of replaced) expect(doc.checks.map((c) => c.id)).not.toContain(id);
+    const res = runSheet(doc, table);
+    for (const [device, [region, vds]] of Object.entries(devices)) {
+      const { check, vdsat } = regionOf(res, device);
+      expect([device, check.kind, check.op, check.status]).toEqual([
+        device,
+        'physical',
+        region === 'triode' ? '<=' : '>=',
+        'pass',
+      ]);
+      expect([device, relErr(check.lhsValue, Math.abs(vds(res))) < 1e-9]).toEqual([device, true]);
+      if (vdsat !== undefined) expect(check.rhsValue).toBe(vdsat);
+    }
+  });
+
+  it('the switch is held in triode: a drain-source voltage past its saturation voltage fails it', () => {
+    // The on-resistance is vds_test over the current, which is a triode figure only while the
+    // drain-source voltage stays under the saturation voltage — 0.62 V here, at gm/ID 3.5. At
+    // vds_test 0.7 V the device is no longer a switch, and the sheet says so.
+    const doc = sheet('sampling-switch.json');
+    const at = runSheet(withParams(doc, { vds_test: 0.7 }), table);
+    const check = at.checks.find((c) => c.id === 'region')!;
+    expect([check.status, check.lhsValue]).toEqual(['fail', 0.7]);
+    expect(at.feasible).toBe(false);
   });
 });

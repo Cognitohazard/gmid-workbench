@@ -1,6 +1,6 @@
 {
   "title": "Widlar current source",
-  "description": "A Widlar source generates a small, well-defined output current from a larger reference without a large resistor. The reference device is diode-connected at $I_{in}$; the output device shares the gate but has a source resistor $R_s$, so its gate-source voltage is lower than the reference's by exactly the IR drop it develops: $V_{GS,ref} - V_{GS,out} = I_{out}*R_s$. That single equation sets the output current. This sheet does not solve that loop, it CHECKS it: you pick the output current $I_{out}$ (a choice) and the resistor $R_s$, the output device is bound at that current, and a requirement rule tests whether the resulting gate-source difference actually equals $I_{out}*R_s$. Tune $I_{out}$ until it closes. That is the scope rule made visible, an explicit designer-named fixed point evaluated against the lookup tables rather than a nodal solve. Because the output runs at a lower current density than the reference, its $V_{GS}$ sits below the reference's, so the difference is positive only when $I_{out} < I_{in}$. The output device's source sits $I_{out}*R_s$ above ground (declared as $V_{SB}$; the demo table has no $V_{SB}$ axis, so it only warns).",
+  "description": "A Widlar source generates a small, well-defined output current from a larger reference without a large resistor. The reference device is diode-connected at $I_{in}$; the output device shares the gate but has a source resistor $R_s$, so its gate-source voltage is lower than the reference's by exactly the IR drop it develops: $V_{GS,ref} - V_{GS,out} = I_{out}*R_s$. That single equation sets the output current. This sheet does not solve that loop, it CHECKS it: you pick the output current $I_{out}$ (a choice) and the resistor $R_s$, the output device is bound at that current, and a requirement rule tests whether the resulting gate-source difference actually equals $I_{out}*R_s$. Tune $I_{out}$ until it closes. That is the scope rule made visible, an explicit designer-named fixed point evaluated against the lookup tables rather than a nodal solve. Because the output runs at a lower current density than the reference, its $V_{GS}$ sits below the reference's, so the difference is positive only when $I_{out} < I_{in}$. The output device's source sits $I_{out}*R_s$ above ground, declared as its $V_{SB}$.",
   "polarity": "n",
   "params": [
     {
@@ -109,7 +109,8 @@
     "W": "M_ratio*ref__W",
     "id": "I_out",
     "vds": "V_out - I_out*R_s",
-    "vsb": "I_out*R_s"
+    "vsb": "I_out*R_s",
+    "region": "saturation"
   },
   "equations": [
     {
@@ -129,6 +130,12 @@
       "expr": "ro*(1 + (gm + gmb)*R_s) + R_s",
       "unit": "ohm",
       "note": "output resistance boosted by the local series feedback of the source resistor, with the resistor's own series contribution added back. Both source-referred generators drive current through R_s, so gmb belongs inside the factor — the same form the degenerated mirror uses. This is the number a stage loading the source sees"
+    },
+    {
+      "name": "V_out_min",
+      "expr": "I_out*R_s + vdsat",
+      "unit": "V",
+      "note": "the output compliance floor: the output device's saturation voltage on top of the source-resistor drop. The output device's saturation region holds the output above it"
     }
   ],
   "checks": [
@@ -148,14 +155,6 @@
       "rhs": "vgs_drop",
       "tolPct": 2,
       "note": "the defining Widlar equation V_GS_ref - V_GS_out = I_out*R_s, checked not solved; tune I_out until it closes"
-    },
-    {
-      "id": "compliance",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "vdsat + I_out*R_s",
-      "note": "the output node must clear the device saturation voltage plus the source-resistor drop"
     },
     {
       "id": "widlar-steps-down",

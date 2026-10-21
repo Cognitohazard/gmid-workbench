@@ -15,7 +15,7 @@
       "class": "independent"
     }
   ],
-  "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+  "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
   "equations": [],
   "checks": [
     {

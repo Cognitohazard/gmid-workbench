@@ -114,7 +114,13 @@
           { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vds_i", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_i", "id": "I_in", "gm_id": "gm_id_i", "vds": "vds_i" },
+        "givens": {
+          "L": "L_i",
+          "id": "I_in",
+          "gm_id": "gm_id_i",
+          "vds": "vds_i",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -152,7 +158,13 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "L_l", "id": "I_load", "gm_id": "gm_id_l", "vds": "vds_l" },
+        "givens": {
+          "L": "L_l",
+          "id": "I_load",
+          "gm_id": "gm_id_l",
+          "vds": "vds_l",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -178,7 +190,8 @@
     "id": "in__id",
     "gm_id": "gm_id_casc",
     "vds": "V_out - V_x",
-    "vsb": "V_x"
+    "vsb": "V_x",
+    "region": "saturation"
   },
   "equations": [
     {
@@ -228,30 +241,6 @@
       "rhs": "ceiling",
       "note": "cascode gm/ID cannot exceed the weak-inversion ceiling of the data"
     },
-    {
-      "id": "input-sat",
-      "kind": "physical",
-      "lhs": "V_x",
-      "op": ">=",
-      "rhs": "in__vdsat",
-      "note": "input device saturated: its drain V_x sits above its saturation voltage"
-    },
-    {
-      "id": "cascode-sat",
-      "kind": "physical",
-      "lhs": "V_out - V_x",
-      "op": ">=",
-      "rhs": "vdsat",
-      "note": "cascode device saturated: the output minus the intermediate node clears its saturation voltage"
-    },
-    {
-      "id": "load-sat",
-      "kind": "physical",
-      "lhs": "VDD - V_out",
-      "op": ">=",
-      "rhs": "load__vdsat",
-      "note": "load device saturated: its headroom is the supply minus the output level"
-    },
     { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
@@ -259,7 +248,7 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "read from the table's own noise where it carries it, and from the γ = 1 estimate otherwise; the simulator owns noise sign-off"
     },
     {
       "id": "gbw-margin",

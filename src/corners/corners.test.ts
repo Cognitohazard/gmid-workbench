@@ -813,6 +813,90 @@ describe('runCondition', () => {
     expect(ss.result.values.eff).toBeLessThan(12);
   });
 
+  it('holds a gate on a shared node at another condition, and solves the current it balances', () => {
+    // An inverter's two halves: the NMOS sized from a typed bias and gm/ID = 12, the PMOS given
+    // that current and the gate voltage the supply leaves. At the slow condition the NMOS's
+    // threshold sits 40 mV higher and the PMOS's 20 mV lower. Held there, the design keeps its
+    // supply: both gates stay on one node, the bias carries the `hold` that balances the two
+    // currents, and the input level moves to where they agree. The supply is twice the demo's
+    // gate voltage at gm/ID = 12 and the output half of it, so both halves are the same device at
+    // the design point and the balance sits at V_in = (VDD + 0.04 + 0.02)/2 in closed form.
+    const V0 = 0.567023; // the demo at gm/ID = 12, L = 0.5 µm, body grounded
+    const VDD = 2 * V0;
+    const slower = (t: DeviceTable, dv: number): DeviceTable => {
+      const axisNames = new Set(t.grid.axes.map((a) => a.name));
+      const axes = t.grid.axes.map((a) =>
+        a.name === 'vgs' ? { name: a.name, values: a.values.map((v) => v + dv) } : a,
+      );
+      const quantities = new Map([...t.grid.quantities].filter(([k]) => !axisNames.has(k)));
+      return retag({ ...t, grid: makeGrid(axes, quantities) }, 'ss');
+    };
+    const pmos: DeviceTable = {
+      ...dev,
+      id: { ...dev.id, device: 'pmos_demo' },
+      meta: { ...dev.meta, polarity: { device: 'p', signedInput: false } },
+    };
+    const nDevice = soleDevice([retag(dev, 'tt'), slower(dev, 0.04)]);
+    const pDevice = soleDevice([retag(pmos, 'tt'), slower(pmos, -0.02)]);
+    const half = (title: string, givens: SheetDoc['givens']): SheetDoc => ({
+      title,
+      polarity: title === 'p' ? 'p' : 'n',
+      params: [
+        { name: 'I_d', value: 2e-5, unit: 'A' },
+        { name: 'vgs_d', value: 0.5, unit: 'V' },
+        { name: 'vds_d', value: 0.5, unit: 'V' },
+      ],
+      givens,
+      equations: [],
+      checks: [],
+      provides: ['vgs', 'id'],
+    });
+    const doc: SheetDoc = {
+      title: 'inverter',
+      polarity: 'n',
+      params: [
+        { name: 'VDD', value: VDD, unit: 'V', class: 'independent' },
+        { name: 'V_out', value: V0, unit: 'V', class: 'independent' },
+        { name: 'I_bias', value: 2e-5, min: 2e-6, max: 2e-4, unit: 'A', hold: 'I_bias - p__id' },
+      ],
+      blocks: [
+        {
+          name: 'n',
+          doc: half('n', { L: '5e-7', id: 'I_d', gm_id: '12', vds: 'vds_d' }),
+          params: { I_d: 'I_bias', vds_d: 'V_out' },
+        },
+        {
+          name: 'p',
+          device: 'pmos',
+          doc: half('p', { L: '5e-7', id: 'I_d', vgs: 'vgs_d', vds: 'vds_d' }),
+          params: { I_d: 'n__id', vgs_d: 'VDD - n__vgs', vds_d: 'VDD - V_out' },
+          wiring: { gate: 'V_in', source: 'VDD' },
+        },
+      ],
+      equations: [{ name: 'V_in', expr: 'n__vgs', unit: 'V' }],
+      checks: [],
+    };
+    const [tt, ss] = runConditions(
+      doc,
+      nDevice,
+      [key('tt'), key('ss')],
+      (b) => (b === 'pmos' ? pDevice : undefined),
+      undefined,
+      key('tt'),
+    );
+    expect([tt.state, ss.state]).toEqual(['evaluated', 'evaluated']);
+    if (tt.state !== 'evaluated' || ss.state !== 'evaluated') return;
+    expect(ss.design).toBe('held');
+    expect(ss.points[0].state).toBe('complies');
+    const v = ss.result.values;
+    expect(v.n__vgs + v.p__vgs).toBeCloseTo(VDD, 12);
+    expect(Math.abs(v.n__id - v.p__id) / v.n__id).toBeLessThan(1e-5);
+    expect(v.V_in).toBeCloseTo((VDD + 0.04 + 0.02) / 2, 3);
+    expect(v.I_bias).toBe(v.n__id);
+    expect(v.I_bias).toBeLessThan(tt.result.values.I_bias);
+    expect(ss.result.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);
+  });
+
   it('answers at the base first, even when the base is not one of the conditions asked about', () => {
     // Feasibility is the base condition's verdict, so its run is part of every answer: asked
     // about ss alone with tt as the base, the set is tt (sized) and then ss (held).

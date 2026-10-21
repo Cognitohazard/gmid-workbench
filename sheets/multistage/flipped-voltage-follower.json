@@ -73,7 +73,7 @@
           { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -102,7 +102,14 @@
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" },
           { "name": "vsbx", "value": 0, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "id": "Ix",
+          "gm_id": "gx",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -185,22 +192,6 @@
       "op": ">=",
       "rhs": "headroom + V_out",
       "note": "the supply must cover the output level plus the stacked saturation voltages of the FVF branch"
-    },
-    {
-      "id": "in-sat",
-      "kind": "physical",
-      "lhs": "V_x - V_out",
-      "op": ">=",
-      "rhs": "in__vdsat",
-      "note": "the input device stays saturated on what node X leaves above the output — this is the rule that caps the output level, since raising V_out eats directly into it"
-    },
-    {
-      "id": "fb-sat",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "fb__vdsat",
-      "note": "the feedback device stays saturated: its drain is the output node and its source is at ground, so the output level IS its drain-source voltage"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"]

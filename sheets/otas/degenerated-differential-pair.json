@@ -32,7 +32,7 @@
       "value": 35e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 32.5 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model estimate — a budget that only clears the model is not a budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm it is most of the modelled power, and the row lands near 28 nV/rtHz"
+      "note": "input-referred thermal density budget, set above the 32.5 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model estimate — a budget that only clears the model is not a budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm it is most of the power, and the row, reading the devices' own noise from a sky130 tt table, lands near 32.5 nV/rtHz"
     },
     {
       "name": "vos_target",
@@ -90,7 +90,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the tail node — the tail device's drain, where the two degeneration resistors meet. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. The input device's source sits one resistor drop above it. The range reaches below the tail device's saturation voltage on purpose: a common mode that leaves the tail too little drain-source voltage then lands and fails the tail-saturated check, where a higher floor would leave the question unanswered"
+      "note": "the tail node — the tail device's drain, where the two degeneration resistors meet. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. The input device's source sits one resistor drop above it. The range reaches below the tail device's saturation voltage on purpose: a common mode that leaves the tail too little drain-source voltage then lands and fails the tail device's saturation check, where a higher floor would leave the question unanswered"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -204,7 +204,13 @@
           { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "vds_t", "value": 0.25, "unit": "V", "role": "spec", "note": "the tail node" }
         ],
-        "givens": { "L": "L_t", "W": "W_t", "vgs": "vgs_t", "vds": "vds_t" },
+        "givens": {
+          "L": "L_t",
+          "W": "W_t",
+          "vgs": "vgs_t",
+          "vds": "vds_t",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "vdsat", "id"]
@@ -240,7 +246,8 @@
           "id": "I_half",
           "gm_id": "gm_id_i",
           "vds": "vds_i",
-          "vsb": "vsb_i"
+          "vsb": "vsb_i",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -368,7 +375,7 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "reads each device's thermal noise from the table where the table carries it, and the gamma = 1 estimate where it does not; it stays advisory because a sheet cannot know which table it will be evaluated on, and the simulator owns noise sign-off"
     },
     { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
@@ -378,14 +385,6 @@
       "op": ">=",
       "rhs": "0.1",
       "note": "trips when the source node is pushed so high the device runs out of drain-source voltage at the drain DC level"
-    },
-    {
-      "id": "tail-saturated",
-      "kind": "physical",
-      "lhs": "tail_headroom",
-      "op": ">=",
-      "rhs": "0",
-      "note": "below this the tail source drops out of saturation and the bias current collapses; this is the mechanism behind the low end of the common-mode range, and the resistor drop brings it closer"
     },
     {
       "id": "cm-not-below",

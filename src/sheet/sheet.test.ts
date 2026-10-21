@@ -2,8 +2,19 @@
 // promises: the sizing is sizeDevice verbatim (no re-inversion), and bad author input
 // degrades to warnings / 'na' chips instead of throwing.
 
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice, signedMirrorDemo, withoutColumns, VA_PER_L } from '../demo';
+import {
+  generateDemoDevice,
+  scaleQuantities,
+  signedMirrorDemo,
+  withoutColumns,
+  VA_PER_L,
+} from '../demo';
+import { PHYS } from '../constants';
+import { importMostab } from '../import';
 import { sizeDevice, integratedNoise, mismatch } from '../device';
 import { fixTable } from '../series';
 import { diodeGrid, makeGrid } from '../grid';
@@ -27,6 +38,7 @@ import {
   SOLVE_SWEEPS,
   SOLVE_TOL_REL,
   WIRING_TOL,
+  noiseSourcesIn,
 } from './index';
 import { EXAMPLES } from './examples';
 import type { DeviceTable } from '../types';
@@ -891,6 +903,147 @@ describe('the noise & matching example', () => {
     expect(sw.feasible.some((f) => f)).toBe(true);
   });
 });
+
+describe('a param or equation named like a quantity the sizing publishes', () => {
+  // The sizing merges what it publishes into its level's scope after the params are seeded, so a
+  // param of such a name holds the author's number on a table that lacks the quantity and the
+  // device's on one that carries it. `T` is every table's temperature; `gamma` follows `sth`.
+  const named = (params: SheetVar[], equations: SheetDoc['equations'] = []): SheetDoc =>
+    boundDoc({
+      params: [...boundDoc().params, ...params],
+      equations: [{ name: 'seen', expr: 'gamma*T' }, ...equations],
+    });
+  const said = (doc: SheetDoc): string[] =>
+    validateSheet(doc)
+      .filter((w) => w.rule === 'sheet-collision')
+      .map((w) => `${w.severity} ${w.location}`);
+
+  it('warns, because the sizing overwrites the param where a device is sized', () => {
+    const doc = named([
+      { name: 'T', value: 350 },
+      { name: 'gamma', value: 3 },
+    ]);
+    expect(said(doc)).toEqual(['warning T', 'warning gamma']);
+    expect(validateSheet(doc).find((w) => w.location === 'gamma')?.message).toBe(
+      'param "gamma": the sizing publishes a quantity named gamma, which overwrites this param ' +
+        'where a device is sized; rename it',
+    );
+    // What it guards against: on a table that stores the demo's gamma column the sizing's 1.0
+    // replaces the author's 3, and the table's 300.15 K the author's 350 K.
+    const res = evaluateSheet(doc, dev);
+    expect(res.values.gamma).toBe(1);
+    expect(res.values.T).toBeCloseTo(300.15, 9);
+  });
+
+  it('warns on an equation of such a name too, and not on a param that is the same-named given', () => {
+    expect(said(named([], [{ name: 'ro', expr: '1/gds' }]))).toEqual(['warning ro']);
+    // boundDoc gives gm_id as the param `gm_id`: the sizing writes back the number it was handed.
+    expect(boundDoc().givens?.gm_id).toBe('gm_id');
+    expect(said(boundDoc())).toEqual([]);
+    // A level that sizes no device publishes nothing over its params.
+    expect(said({ ...named([{ name: 'gamma', value: 3 }]), givens: undefined })).toEqual([]);
+  });
+});
+
+describe('thermal noise from the table when it carries it, and the result says which', () => {
+  // sth doubled and the demo's own gamma column dropped, so the measured γ is 2 and cannot pass
+  // for the default; and the same table with no thermal noise at all.
+  const measured = scaleQuantities(withoutColumns(dev, ['gamma']), { sth: 2 });
+  const bare = withoutColumns(dev, ['gamma', 'sth']);
+  const doc = boundDoc({
+    equations: [
+      { name: 'vn', expr: 'vnth_m' },
+      { name: 'sv_own', expr: '4*k*T*gamma/gm' },
+    ],
+  });
+
+  it('reads vnth_m off the stored noise, and so does an author formula reading gamma', () => {
+    const res = runSheet(doc, measured);
+    expect(res.sizing?.noise).toBe('measured');
+    const v = res.values;
+    expect(v.gamma).toBeCloseTo(2, 12);
+    expect(v.vn / v.vnth).toBeCloseTo(1, 12);
+    // The author's formula divides by the sizing's honoured gm, the namespace keys by the gm the
+    // point re-derives: the two differ by the interpolation residual (~0.1 %), not by γ.
+    expect(v.sv_own / v.svth_m).toBeCloseTo(1, 2);
+  });
+
+  it('falls back to the γ = 1 estimate on a table without it, and says so', () => {
+    const res = runSheet(doc, bare);
+    expect(res.sizing?.noise).toBe('estimated');
+    expect(res.values).not.toHaveProperty('gamma');
+    const estimate = Math.sqrt((4 * PHYS.k * PHYS.T) / res.values.gm);
+    expect(res.values.vn / estimate).toBeCloseTo(1, 2);
+    expect(runSheet(doc, dev).sizing?.noise).toBe('column');
+  });
+
+  it('lists each sized device of a composed tree with its own table’s answer', () => {
+    const child = (title: string): SheetDoc => ({ ...boundDoc(), title, provides: ['vnth_m'] });
+    const tree: SheetDoc = {
+      title: 'tree',
+      polarity: 'n',
+      params: [],
+      equations: [],
+      checks: [],
+      blocks: [
+        { name: 'a', doc: child('a') },
+        { name: 'b', device: 'bare', doc: child('b') },
+      ],
+    };
+    const res = runSheet(tree, measured, (id) => (id === 'bare' ? bare : undefined));
+    expect(noiseSourcesIn(res)).toEqual([
+      { device: 'a', source: 'measured' },
+      { device: 'b', source: 'estimated' },
+    ]);
+  });
+});
+
+// The five-transistor OTA on the sky130 tables the generator writes (data/pdk is not committed,
+// so this runs only where the tables have been generated). Simulated, the OTA's input-referred
+// thermal floor is 28.24 nV/√Hz, and the nfet's own effective γ at the pair's bias point is 1.95
+// where the pfet's at the load's is 1.00 (tools/verify/README.md). The γ = 1 estimate reads
+// 22.7 nV/√Hz; reading the tables' own thermal noise has to land near the simulation.
+const SKY130 = fileURLToPath(new URL('../../data/pdk/sky130', import.meta.url));
+const skyTable = (name: string): string =>
+  join(SKY130, `sky130_fd_pr__${name}__tt__27C.mostab.csv`);
+describe.skipIf(!existsSync(skyTable('nfet_01v8')) || !existsSync(skyTable('pfet_01v8')))(
+  'the five-transistor OTA on sky130 reads its noise from the tables',
+  () => {
+    const load = (name: string): DeviceTable => {
+      const r = importMostab(readFileSync(skyTable(name)));
+      if (!r.ok) throw new Error(`${name} did not import`);
+      return r.dataset.tables[0];
+    };
+
+    it('lands its input-referred thermal density near the simulated floor', () => {
+      const nfet = load('nfet_01v8');
+      const pfet = load('pfet_01v8');
+      const doc = JSON.parse(
+        readFileSync(
+          fileURLToPath(new URL('../../sheets/otas/five-transistor-ota.json', import.meta.url)),
+          'utf8',
+        ),
+      ) as SheetDoc;
+      // The load mirror on the pfet table, which is exported signed (tools/verify/README.md).
+      const load_ = new Set(['ldr', 'ld']);
+      doc.blocks = doc.blocks?.map((b) => (load_.has(b.name) ? { ...b, device: 'pfet' } : b));
+      doc.params = doc.params.map((q) => (q.name === 'ld_sign' ? { ...q, value: -1 } : q));
+      const res = runSheet(doc, nfet, (id) => (id === 'pfet' ? pfet : undefined));
+      expect(res.feasible).toBe(true);
+      expect(new Set(noiseSourcesIn(res).map((d) => d.source))).toEqual(new Set(['measured']));
+      const v = res.values;
+      expect(v.vn_in).toBeGreaterThan(26.5e-9);
+      expect(v.vn_in).toBeLessThan(29.5e-9);
+      // Each device type at its own bias point, as an effective γ against kT/gm.
+      const gammaOf = (block: string): number =>
+        (v[`${block}__vnth_m`] ** 2 * v[`${block}__gm`]) / (4 * PHYS.k * PHYS.T);
+      expect(gammaOf('in')).toBeGreaterThan(1.8);
+      expect(gammaOf('in')).toBeLessThan(2.1);
+      expect(gammaOf('ld')).toBeGreaterThan(0.9);
+      expect(gammaOf('ld')).toBeLessThan(1.1);
+    });
+  },
+);
 
 describe('sweepSheet — feasibility curve', () => {
   it('traces a check margin across a parameter range and bounds the feasible window', () => {
@@ -3740,6 +3893,33 @@ describe('givens region — the saturation or triode check a device declares', (
     expect(res.feasible).toBe(true);
     // Only the device's own check list carries it; the document's checks are untouched.
     expect(device('saturation', '0.6').checks).toEqual([]);
+  });
+
+  it('fails a drain-source voltage that points against the table’s vds axis, in either region', () => {
+    // A table whose vds axis starts above zero, as a coarse export's does: a drain stated below the
+    // source is read at the axis's first value with a warning, and its magnitude clearing vdsat
+    // says nothing about saturation — the device is reverse-biased.
+    const above = generateDemoDevice({ vds: { min: 0.05, max: 1.2, step: 0.05 } });
+    for (const which of ['saturation', 'triode']) {
+      const res = runSheet(device(which, '-0.5'), above);
+      const r = region(res);
+      expect([which, r?.status]).toEqual([which, 'fail']);
+      expect(r?.margin).toBe(-0.5);
+      expect(r?.lhsValue).toBe(-0.5);
+      expect(r?.detail).toMatch(/points against this table's vds axis/);
+      expect(res.feasible).toBe(false);
+    }
+    // The same magnitude the right way round is the ordinary comparison.
+    expect(region(runSheet(device('saturation', '0.5'), above))?.status).toBe('pass');
+    // On a signed PMOS export the axis runs negative, so a negative drain voltage is the right
+    // way round there and a positive one is the reversed device.
+    const signed = signedMirrorDemo(above);
+    expect(
+      region(runSheet(device('saturation', '-0.5', '12', { polarity: 'p' }), signed))?.status,
+    ).toBe('pass');
+    expect(
+      region(runSheet(device('saturation', '0.5', '12', { polarity: 'p' }), signed))?.status,
+    ).toBe('fail');
   });
 
   it('fails, and the design with it, where the given drain voltage pushes the device out of saturation', () => {

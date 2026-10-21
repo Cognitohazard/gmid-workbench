@@ -10,8 +10,8 @@ import { lookup, lookupByGmId, lookupByQuantity, operatingPointAxis } from '../l
 import { offHull, sliceGrid } from '../grid';
 import { scalarScope, registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
-import { compileExpr, metaScalars, DERIVED_COMPILED } from '../derive';
-import { AXIS_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
+import { compileExpr, metaScalars, pointScope, DERIVED_COMPILED } from '../derive';
+import { AXIS_KEYS, BASE_KEYS, DERIVED_QUANTITIES, PER_WIDTH_KEYS } from '../namespace';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two bound quantities.
@@ -364,10 +364,17 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // quantity from its single namespace definition, so ratios (av0, ft, vstar) stay
   // invariant and width-law quantities (ro ∝ 1/W, input-referred noise ∝ 1/W) come out
   // right without any per-key case analysis here.
+  //
+  // A stored BASE column is kept even where the namespace also defines it (a `gamma` column beside
+  // the γ the definition would read from `sth`): it is scaled or kept as read like every base
+  // column, rather than re-derived from inputs the table may not have. A stored column of any other
+  // derived name (an export's own `ro`, `vnth`) never reached the point — the lookup interpolates
+  // base columns only — so it is re-derived at the sized width like the rest.
   const k = W / Wchar;
+  const stored = (key: string): boolean => BASE_KEYS.has(key) && q.table.grid.quantities.has(key);
   const bases: Record<string, number> = {};
   for (const [key, val] of Object.entries(point)) {
-    if (DERIVED_COMPILED.has(key)) continue; // re-derived below at the sized width
+    if (DERIVED_COMPILED.has(key) && !stored(key)) continue; // re-derived below at the sized width
     bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
   }
   // The meta layer lookup used but did not report: T/UT (temperature) and — when the
@@ -377,10 +384,13 @@ export function sizeDevice(q: SizeQuery): SizeResult {
       bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
     }
   }
-  const scaledScope = scalarScope(bases);
+  // A point scope, so a definition reading another derived name (the γ-model keys read `gamma`)
+  // reads it re-derived from the same scaled bases.
+  const scaledScope = pointScope(bases);
   const quantities: Record<string, number> = { ...bases };
   for (const [key, compiled] of DERIVED_COMPILED) {
     if (!Object.prototype.hasOwnProperty.call(point, key)) continue; // not computable on this table
+    if (stored(key)) continue; // kept as read, above
     quantities[key] = compiled.eval(scaledScope) as number;
   }
   // Bound targets and sizing outputs win over anything reconstructed above; id_w is the
@@ -451,8 +461,10 @@ const VNTH_M = compileExpr(
 /**
  * Input-referred channel thermal-noise density √(4kTγ/gm) [V/√Hz] at the device's
  * actual transconductance gm. Noise is width-dependent (gm ∝ W), so a sized device
- * must pass its SIZED gm — the characterization-width value would be wrong. γ comes
- * from the operating point when the table carries it, else GAMMA_DEFAULT. Pass the
+ * must pass its SIZED gm — the characterization-width value would be wrong. Pass the
+ * operating point's own γ (`quantities.gamma` of a sizing): it is the table's thermal noise
+ * read back where the table carries `sth` (or its own `gamma` column), and absent where it
+ * carries neither, so omitted it falls to GAMMA_DEFAULT (see noiseSource). Pass the
  * table's characterization temperature `tempC` (meta.temp, °C) so kT tracks the
  * data; omitted, T falls through to the engine's 27 °C default.
  *

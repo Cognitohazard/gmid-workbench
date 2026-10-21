@@ -33,6 +33,7 @@ import {
   cggOf,
   sheet as libSheet,
   REFS,
+  VGS_GMID8_L05,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
   VGS_GMID14_L05,
@@ -58,6 +59,28 @@ const block = (r: SheetResult, name: string): SizingReport =>
 
 /** One check's outcome, by id. */
 const check = (r: SheetResult, id: string) => r.checks.find((c) => c.id === id)!;
+
+/** The saturation check a device's `region` declaration adds to its own results, by block. */
+const regionOf = (
+  r: { blocks?: SheetResult['blocks'] },
+  name: string,
+): SheetResult['checks'][number] =>
+  r.blocks!.find((c) => c.name === name)!.checks.find((c) => c.id === 'region')!;
+
+/** Every hard check that fails anywhere in an evaluation, the sheet's own by id and a block's
+ *  as `block.id`. */
+const hardFailsIn = (r: Pick<SheetResult, 'checks' | 'blocks'>): string[] => [
+  ...r.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
+  ...(r.blocks ?? []).flatMap((b) =>
+    b.checks
+      .filter((c) => isHardCheck(c.kind) && c.status === 'fail')
+      .map((c) => `${b.name}.${c.id}`),
+  ),
+];
+
+/** The blocks of a sheet that declare saturation, in document order. */
+const declaredSaturated = (doc: SheetDoc): string[] =>
+  (doc.blocks ?? []).filter((u) => u.doc?.givens?.region === 'saturation').map((u) => u.name);
 
 /** Threshold of the demo model at length `len`, body at the source: 0.4 V plus a term that grows
  *  with length, 0.02·ln(len/0.18 µm + 1) (src/demo/index.ts). Length moves nothing else on the
@@ -91,7 +114,7 @@ const itDrawsItsTail = (
   iTail: number,
   vTail: number,
   vgsRef: number,
-  cmTooLow: number,
+  cmTooLow?: number,
 ): void => {
   it('one current is typed, into the bias reference, and the tail is on its gate', () => {
     // Kirchhoff at the tail node, to the last bit: the pair is HANDED the tail's current, halved,
@@ -119,14 +142,22 @@ const itDrawsItsTail = (
   it("the headroom row is the tail node less the tail device's own saturation voltage", () => {
     // The tail device is on its reference's gate, and the model's saturation voltage follows the
     // gate alone, so the row has a closed form.
+    // The tail node sits between two body-bias slices of the table, which moves it by up to
+    // 0.2 mV against its closed form: 2e-3 of a 0.13 V headroom.
     const headroom = vTail - vdsatDemo(vgsRef, L);
-    expect(relErr(res.values.tail_headroom, headroom)).toBeLessThan(1e-3);
+    expect(relErr(res.values.tail_headroom, headroom)).toBeLessThan(2e-3);
     expect(res.values.tail_headroom).toBe(res.values.V_tail - res.values.tail__vdsat);
-    const saturated = check(res, 'tail-saturated');
+    // The tail declares that it must stay saturated, which is a physical check on the tail device
+    // itself: the tail node against the same saturation voltage. No authored check repeats it.
+    expect(doc.blocks!.find((u) => u.name === 'tail')!.doc!.givens!.region).toBe('saturation');
+    const saturated = regionOf(res, 'tail');
     expect([saturated.kind, saturated.status]).toEqual(['physical', 'pass']);
-    expect(saturated.lhsValue).toBe(res.values.tail_headroom);
+    expect(saturated.lhsValue).toBe(res.values.V_tail);
+    expect(saturated.rhsValue).toBe(res.values.tail__vdsat);
+    expect(doc.checks.map((c) => c.id)).not.toContain('tail-saturated');
   });
 
+  if (cmTooLow === undefined) return;
   it("a common mode too low for the tail fails at that range end, on the tail's own check", () => {
     // The low end of the common-mode range is where the tail device runs out of drain-source
     // voltage. `cmTooLow` is the common mode that puts the tail node 30 mV under the tail's
@@ -134,21 +165,22 @@ const itDrawsItsTail = (
     // tail delivers less with its drain that low, so the pair's gate backs off and the node lands
     // a few millivolts higher than that — still well under the saturation voltage. Claiming it
     // as the low end changes nothing where the design is sized, and at that range end the tail's
-    // check is the one hard check that fails.
+    // saturation check is the one hard check that fails.
     const vdsat = vdsatDemo(vgsRef, L);
     const claimed = runSheet(withParams(doc, { CM_lo: cmTooLow }), table);
     expect(claimed.feasible).toBe(res.feasible);
     const lo = claimed.rangeEnds!.find((e) => e.name === 'cm-lo')!;
     expect(lo.error).toBeUndefined();
     expect(lo.state).toBe('does-not-comply');
-    expect(
-      lo.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
-    ).toEqual(['tail-saturated']);
+    expect(hardFailsIn(lo)).toEqual(['tail.region']);
     expect(lo.solved.V_tail).toBeGreaterThan(vdsat - 0.03);
     expect(lo.solved.V_tail).toBeLessThan(vdsat - 0.015);
     const tailAt = lo.blocks!.find((c) => c.name === 'tail')!.provides;
-    const headroom = lo.checks.find((c) => c.id === 'tail-saturated')!.lhsValue;
-    expect(relErr(headroom, lo.solved.V_tail - tailAt.vdsat)).toBeLessThan(1e-9);
+    const saturated = regionOf(lo, 'tail');
+    expect(saturated.lhsValue).toBe(lo.solved.V_tail);
+    expect(
+      relErr(saturated.lhsValue! - saturated.rhsValue!, lo.solved.V_tail - tailAt.vdsat),
+    ).toBeLessThan(1e-9);
     expect(relErr(tailAt.vdsat, vdsat)).toBeLessThan(1e-3);
   });
 };
@@ -194,6 +226,43 @@ const itIsOneInputGate = (res: SheetResult): void => {
     expect(relErr(res.values.cgg_in, cggInOf(res))).toBeLessThan(1e-9);
   });
 };
+
+describe('tier-3: which devices each OTA needs saturated', () => {
+  // Written down from each schematic: every device the amplifier needs in saturation — tails,
+  // pairs, cascodes, current sources and mirror output devices — and none of the diode-connected
+  // ones, whose drain is their gate. A declaration dropped, or one added to a device the design
+  // does not need saturated, fails here by name.
+  const SATURATED: Record<string, string[]> = {
+    'current-mirror-ota.json': ['tail', 'in', 'moutp', 'mfold', 'moutn'],
+    'degenerated-differential-pair.json': ['tail', 'in'],
+    'differential-pair-tail.json': ['tail', 'in'],
+    'five-transistor-ota.json': ['tail', 'in', 'inr', 'ld'],
+    'folded-cascode-ota.json': ['tail', 'in', 'pcs', 'pcasc', 'ncasc', 'nmir'],
+    'gain-boosted-cascode-ota.json': ['tail', 'in', 'casc_n', 'casc_p', 'mir', 'boost'],
+    'inverter-based-ota.json': ['n', 'p'],
+    'telescopic-cascode-ota.json': ['tail', 'in', 'casc_n', 'casc_p', 'mir'],
+  };
+  it('every OTA declares exactly the devices its design needs saturated', () => {
+    for (const [file, devices] of Object.entries(SATURATED))
+      expect([file, declaredSaturated(sheet(file))]).toEqual([file, devices]);
+  });
+  it('each declaration is a passing physical check on its own device where the design is sized', () => {
+    // On the synthetic table at the shipped defaults. A declaration on a device that does not
+    // size reads `na` and fails closed, so this is also the guarantee that every one is read.
+    for (const [file, devices] of Object.entries(SATURATED)) {
+      const res = runSheet(sheet(file), table, undefined, REFS);
+      for (const name of devices) {
+        const c = regionOf(res, name);
+        expect([file, name, c.kind, c.status === 'fail' || c.status === 'na']).toEqual([
+          file,
+          name,
+          'physical',
+          false,
+        ]);
+      }
+    }
+  });
+});
 
 describe('tier-3 goldens: differential pair + tail', () => {
   const res = runSheet(sheet('differential-pair-tail.json'), table);
@@ -402,19 +471,39 @@ describe('tier-3 goldens: degenerated differential pair', () => {
 });
 
 describe('tier-3 goldens: telescopic cascode OTA', () => {
-  const res = runSheet(sheet('telescopic-cascode-ota.json'), table);
-  // Defaults: I_tail 20 µA, gm/ID in 14 / casc 10 / mir 8, all L 0.5 µm; the stack is
-  // parameterized by its NODES — V_a 0.55, V_b 1.35, V_out 0.9, the tail node constrained so
-  // CM_in lands on CM_dc 0.97 — and every device vds is a subtraction between them.
+  const doc = sheet('telescopic-cascode-ota.json');
+  const res = runSheet(doc, table);
+  // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 10, the tail device on its
+  // gate, gm/ID in 14 / casc 10 / mir 8, all L 0.5 µm; the stack is parameterized by its NODES —
+  // V_a 0.55, V_b 1.35, V_out 0.9, the tail node constrained so CM_in lands on CM_dc 0.97 — and
+  // every device vds is a subtraction between them. Every device in the stack carries the input
+  // device's current, half of what the tail delivers.
   // (The telescopic's ICMR is a slot: the DC point has to sit inside the claimed [0.95, 1.12]
   // and under what the tail bracket can produce. On the demo table that is the bracket's 0.45 V
   // top plus the pair's gate-source voltage there, 0.45 + vgs(14) + 0.2 × 0.45 = 1.072 V — above
   // the 0.97 V design point, and below the claimed 1.12 V end, which is therefore not reached.)
-  const gmIn = 10e-6 * 14;
+  //   tail node    (CM_dc − vgs(14))/1.2 = (0.97 − 0.532095)/1.2 = 0.364921 V
+  //   tail device  (2.5 + 0.364921)/(2.5 + 0.610063) = 0.921178   (reference at vgs(10))
+  const I_TAIL = 20e-6;
+  const vTail = sourceNodeUnder(0.97, VGS_GMID14_L05);
+  /** What each side of the stack carries: half of what the tail delivers, 9.212 µA. */
+  const iHalf = (I_TAIL / 2) * tailRatioAt(vTail, VGS_GMID10_L05);
+  const gmIn = 14 * iHalf;
 
-  it('slew and GBW follow exactly from the tail current and input gm', () => {
-    expect(relErr(res.values.SR, 20e-6 / CL)).toBeLessThan(1e-9);
-    expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
+  // The low-common-mode golden of the shared tail goldens is left out: on this table the design
+  // also misses its offset and swing targets, so a range end there fails more than the tail.
+  itDrawsItsTail(doc, res, I_TAIL, vTail, VGS_GMID10_L05);
+
+  it('slew and GBW follow from the current the tail delivers and the input gm', () => {
+    // 20 µA × 0.921178 = 18.424 µA — not the 20 µA the reference is programmed to.
+    expect(relErr(res.values.SR, (2 * iHalf) / CL)).toBeLessThan(1e-3);
+    expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-3);
+    // Which current each equation reads, exactly: the tail's own, and the pair's half of it.
+    expect(relErr(res.values.SR, res.values.tail__id / CL)).toBeLessThan(1e-12);
+    expect(relErr(res.values.GBW, (14 * res.values.in__id) / (TWO_PI * CL))).toBeLessThan(1e-9);
+    expect(res.values.I_q).toBe(res.values.tail__id);
+    for (const name of ['casc_n', 'casc_p', 'mir'])
+      expect([name, block(res, name).id]).toEqual([name, block(res, 'in').id]);
   });
 
   it('the design constraint lands the common mode on CM_dc, with the tail node as the variable', () => {
@@ -424,10 +513,32 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
   it('gain is gm_in times the parallel cascoded output resistance', () => {
     // Node subtractions, with the solved tail node read from the result: the input device
     // sits at vds = V_a − V_tail, its cascode at V_out − V_a; the PMOS side at the V_b splits.
-    const Rn = av0Of(10, L, 0.9 - 0.55) / gdsOf(10e-6, L, 0.55 - res.values.V_tail);
-    const Rp = av0Of(10, L, 1.35 - 0.9) / gdsOf(10e-6, L, 1.8 - 1.35);
+    // Every device carries the same current, so it cancels out of the gain.
+    const Rn = av0Of(10, L, 0.9 - 0.55) / gdsOf(iHalf, L, 0.55 - res.values.V_tail);
+    const Rp = av0Of(10, L, 1.35 - 0.9) / gdsOf(iHalf, L, 1.8 - 1.35);
     const Rout = 1 / (1 / Rn + 1 / Rp);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
+  });
+
+  it('every device in the stack declares that it must stay saturated', () => {
+    // The stack's saturation is what its node placement buys, so every device in it says so, and
+    // each declaration is a physical check on its own device at its own drain-source voltage.
+    expect(declaredSaturated(doc)).toEqual(['tail', 'in', 'casc_n', 'casc_p', 'mir']);
+    const across = {
+      in: 0.55 - res.values.V_tail,
+      casc_n: 0.9 - 0.55,
+      casc_p: 1.35 - 0.9,
+      mir: 1.8 - 1.35,
+    };
+    for (const [name, vds] of Object.entries(across)) {
+      const c = regionOf(res, name);
+      expect([name, c.kind, c.status]).toEqual([name, 'physical', 'pass']);
+      expect([name, relErr(c.lhsValue!, vds) < 1e-9]).toEqual([name, true]);
+    }
+    // Squeeze the input device's drain node down onto its source and its declaration is what
+    // trips: V_a 0.40 leaves it 35 mV against a saturation voltage of 0.16 V.
+    const squeezed = runSheet(withParams(doc, { V_a: 0.4 }), table);
+    expect(hardFailsIn(squeezed)).toContain('in.region');
   });
 
   it('every device whose source sits above its body pays for it at its gate', () => {
@@ -440,7 +551,6 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     //   vgs_in = vgs(14) + 0.2 × 0.364921 = 0.605079 V
     // The node sits between two body-bias slices of the table (0.35 and 0.40 V), where the
     // table is interpolated, so these two agree to interpolation order: 0.16 mV here.
-    const vTail = sourceNodeUnder(0.97, VGS_GMID14_L05);
     expect(relErr(res.values.V_tail, vTail)).toBeLessThan(1e-3);
     expect(relErr(res.values.in__vgs, vgsAtBody(VGS_GMID14_L05, vTail))).toBeLessThan(1e-3);
     // The N cascode's source is V_a = 0.55 V above ground, and the P cascode's is V_b = 1.35 V,
@@ -452,30 +562,86 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     expect(relErr(res.held!.V_b, 1.35 - vgsAtBody(VGS_GMID10_L05, 1.8 - 1.35))).toBeLessThan(1e-5);
   });
 
+  it('at a range end the tail node and the cascode node above the pair settle together', () => {
+    // Where the design is held, the tail node is solved for the common mode and the node under the
+    // N cascode for that cascode's held gate; the pair's current is half of what the tail
+    // delivers at the tail node, and the pair's drain is the cascode node, so each reads the
+    // other. The engine settles the two by repeated searches. At cm-lo both relations hold to the
+    // solve's tolerance on the design the base run sized.
+    const lo = res.rangeEnds!.find((e) => e.name === 'cm-lo')!;
+    expect(lo.error).toBeUndefined();
+    const inAt = lo.blocks!.find((c) => c.name === 'in')!.sizing!;
+    const cascAt = lo.blocks!.find((c) => c.name === 'casc_n')!.sizing!;
+    expect(lo.solved.V_tail + inAt.vgs).toBeCloseTo(0.95, 5);
+    expect(lo.solved.V_a + cascAt.vgs).toBeCloseTo(res.held!.V_a, 5);
+    const tailAt = lo.blocks!.find((c) => c.name === 'tail')!.sizing!;
+    expect(
+      relErr(1 - tailAt.id / I_TAIL, 1 - tailRatioAt(lo.solved.V_tail, VGS_GMID10_L05)),
+    ).toBeLessThan(1e-2);
+    expect(inAt.id).toBe(tailAt.id / 2);
+  });
+
   itIsOneInputGate(res);
 });
 
 describe('tier-3 goldens: folded cascode OTA', () => {
-  const res = runSheet(sheet('folded-cascode-ota.json'), table);
-  // Defaults: I_tail 20 µA, I_branch 30 µA, gm/ID in 14 / casc 10 / cs 8, all L 0.5 µm;
-  // node-parameterized — V_fold 1.4, V_c 0.3, V_out 0.9, the tail node constrained so CM_in
-  // lands on CM_dc 1.05 — and every device vds is a subtraction between adjacent nodes.
-  const gmIn = 10e-6 * 14;
-  const iFold = 30e-6 - 10e-6; // I_branch − I_tail/2, read from the input device
+  const doc = sheet('folded-cascode-ota.json');
+  const res = runSheet(doc, table);
+  // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 8 and 0.5 µm, the tail
+  // device on its gate, I_branch 30 µA, gm/ID in 14 / casc 10 / cs 8; the cascodes at 0.5 µm, the
+  // input pair, the folding current sources and the output mirror at 1 µm; node-parameterized —
+  // V_fold 1.4, V_c 0.3, V_out 0.9, the tail node constrained so CM_in lands on CM_dc 1.05 — and
+  // every device vds is a subtraction between adjacent nodes. The pair at 1 µm needs the 0.5 µm
+  // gate-source voltage of gm/ID 14 moved by the model's threshold step between the two lengths.
+  //   pair         vgs(14) at 1 µm = 0.532095 + 0.011023 = 0.543119 V
+  //   tail node    (CM_dc − 0.543119)/1.2 = 0.422401 V
+  //   tail device  (2.5 + 0.422401)/(2.5 + 0.668042) = 0.922463   (reference at vgs(8))
+  const I_TAIL = 20e-6;
+  const L_IN = 1e-6;
+  const L_CS = 1e-6;
+  const vgsIn = vgsAtLength(VGS_GMID14_L05, L_IN);
+  const vTail = sourceNodeUnder(1.05, vgsIn);
+  /** What each input device carries: half of what the tail delivers, 9.225 µA. */
+  const iHalf = (I_TAIL / 2) * tailRatioAt(vTail, VGS_GMID8_L05);
+  const gmIn = 14 * iHalf;
+  /** The fold current: the branch bias less what the input device takes, 20.775 µA. */
+  const iFold = 30e-6 - iHalf;
+  // A common mode that leaves the tail device 30 mV short of its saturation voltage, for the pair
+  // at gm/ID 14 standing on it: 1.2 × 0.263163 + 0.543119 = 0.858914 V.
+  const cmTooLow = (1 + BODY_FACTOR) * (vdsatDemo(VGS_GMID8_L05, L) - 0.03) + vgsIn;
+  /** Where the tail node lands at a range end with every device held: the pair (Early voltage
+   *  `vaPair`, its drain at `drain`) carries half of what the tail delivers, and the tail device
+   *  (Early voltage `vaTail`) delivers in proportion to (VA + node). heldTailNode's argument, with
+   *  each device's own length. */
+  const heldAt = (cm: number, vaPair: number, vaTail: number): number => {
+    const base = sourceNodeUnder(1.05, vgsIn);
+    const resized = sourceNodeUnder(cm, vgsIn);
+    const more = Math.log((vaPair + 1.4 - resized) / (vaPair + 1.4 - base));
+    const less = Math.log((vaTail + resized) / (vaTail + base));
+    return sourceNodeUnder(cm + (more - less) / 14, vgsIn);
+  };
 
-  it('the fold current is the branch bias minus the peak steered current', () => {
-    expect(relErr(res.values.I_fold, iFold)).toBeLessThan(1e-9);
-    expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-9);
+  itDrawsItsTail(doc, res, I_TAIL, vTail, VGS_GMID8_L05, cmTooLow);
+
+  it('the fold current is the branch bias less what the input device takes', () => {
+    expect(relErr(res.values.I_fold, iFold)).toBeLessThan(1e-3);
+    expect(relErr(res.values.I_fold, 30e-6 - res.values.in__id)).toBeLessThan(1e-12);
+    expect(relErr(res.values.GBW, gmIn / (TWO_PI * CL))).toBeLessThan(1e-3);
+    expect(relErr(res.values.SR, res.values.tail__id / CL)).toBeLessThan(1e-12);
+    // The branch must take at least the input device's current, so that slewing the whole tail
+    // into one folding node does not starve it: the check compares the two currents the run reads.
+    const fold = check(res, 'fold-current');
+    expect([fold.lhsValue, fold.rhsValue]).toEqual([res.values.I_fold, res.values.in__id]);
   });
 
   it('the supply carries the two folding branches, and the tail current runs through them', () => {
     // Only the two folding current sources sit on the supply rail, so what VDD delivers is
     // 2 × 30 µA. The tail is not a third branch: it is drawn down THROUGH those sources, so
     // the equation is 2·I_branch. The cross-check is the other end of the circuit — everything
-    // reaching ground is the tail plus both fold currents, I_tail + 2·I_fold = 20 + 2 × 20 µA,
-    // and KCL requires the two to be the same 60 µA.
+    // reaching ground is what the tail delivers plus both fold currents, and KCL requires the two
+    // to be the same 60 µA.
     expect(relErr(res.values.I_q, 2 * 30e-6)).toBeLessThan(1e-9);
-    expect(relErr(res.values.I_q, 20e-6 + 2 * iFold)).toBeLessThan(1e-9);
+    expect(relErr(res.values.I_q, res.values.tail__id + 2 * res.values.I_fold)).toBeLessThan(1e-12);
   });
 
   it('the design constraint lands the common mode on CM_dc, with the tail node as the variable', () => {
@@ -483,20 +649,52 @@ describe('tier-3 goldens: folded cascode OTA', () => {
   });
 
   it('gain is gm_in times the parallel folded-cascode output resistance', () => {
-    const Rp = av0Of(10, L, 1.4 - 0.9) / gdsOf(30e-6, L, 1.8 - 1.4); // pcasc av0 / pcs gds
-    const Rn = av0Of(10, L, 0.9 - 0.3) / gdsOf(iFold, L, 0.3); // ncasc av0 / nmir gds
+    // The cascodes sit at 0.5 µm, the current sources they stand on at 1 µm, where VA is 5 V.
+    const Rp = av0Of(10, L, 1.4 - 0.9) / gdsOf(30e-6, L_CS, 1.8 - 1.4); // pcasc av0 / pcs gds
+    const Rn = av0Of(10, L, 0.9 - 0.3) / gdsOf(iFold, L_CS, 0.3); // ncasc av0 / nmir gds
     const Rout = 1 / (1 / Rp + 1 / Rn);
     expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
+  });
+
+  it('every device declares that it must stay saturated', () => {
+    expect(declaredSaturated(doc)).toEqual(['tail', 'in', 'pcs', 'pcasc', 'ncasc', 'nmir']);
+    const across = {
+      in: 1.4 - res.values.V_tail,
+      pcs: 1.8 - 1.4,
+      pcasc: 1.4 - 0.9,
+      ncasc: 0.9 - 0.3,
+      nmir: 0.3,
+    };
+    for (const [name, vds] of Object.entries(across)) {
+      const c = regionOf(res, name);
+      expect([name, c.kind]).toEqual([name, 'physical']);
+      expect([name, c.status === 'pass' || c.status === 'amber']).toEqual([name, true]);
+      expect([name, relErr(c.lhsValue!, vds) < 1e-9]).toEqual([name, true]);
+    }
+    // The output mirror sits 7 mV above its saturation voltage at V_c = 0.3 V on this table, inside
+    // the near-miss band; a node 20 mV lower takes it out, and its declaration is what says so.
+    expect(regionOf(res, 'nmir').status).toBe('amber');
+    expect(hardFailsIn(runSheet(withParams(doc, { V_c: 0.28 }), table))).toContain('nmir.region');
+  });
+
+  it('meets its own checks where it is sized, and at both ends of its common-mode range', () => {
+    // The defaults are chosen so that it does. With the pair carrying half of what the tail
+    // delivers rather than half of the programmed current, the pair, the output mirror and the
+    // folding sources need their 1 µm: with all of them at 0.5 µm the gain is 222 against a target
+    // of 300 and the offset 18.5 mV against 12 mV.
+    expect(res.feasible).toBe(true);
+    expect(res.rangeEnds?.map((e) => [e.name, e.state])).toEqual([
+      ['cm-lo', 'complies'],
+      ['cm-hi', 'complies'],
+    ]);
+    const short = runSheet(withParams(doc, { L_cs: 0.5e-6, L_in: 0.5e-6 }), table);
+    expect(hardFailsIn(short)).toEqual(['gain-spec', 'offset-spec']);
   });
 
   it('checks its claimed common-mode range on THIS design, not on a re-sized one', () => {
     // A range end re-measures the amplifier the defaults produced: every device keeps the width
     // and length the base run solved, to the last bit, and the endpoint bias comes out of the
-    // operating point instead. A range end free to re-size would give the input pair ~11% more
-    // width at cm-hi (1.167 µm → 1.291 µm: the pair's drain-source voltage falls from 0.968 V to
-    // 0.635 V there, and the same current at the same inversion level then takes
-    // (VA + 0.968)/(VA + 0.635) = 1.106 times the width) and report the margins of a different
-    // amplifier.
+    // operating point instead.
     for (const e of res.rangeEnds ?? []) {
       expect(
         e.blocks?.map((c) => c.sizing?.W),
@@ -507,78 +705,42 @@ describe('tier-3 goldens: folded cascode OTA', () => {
         e.name,
       ).toEqual(res.blocks?.map((c) => c.sizing?.L));
     }
-    // cm-lo's solve LANDS, so its operating point is a design point and can be locked as intent.
-    // Pulling the input common mode 50 mV down to 1.0 V moves the tail node 41 mV
-    // (0.4318 → 0.3908 V) and the pair's gate-source voltage the other 9 mV. The pair's source
-    // is the tail node, so 8.2 mV of that is the body effect giving back BODY_FACTOR × 41 mV.
-    // The remaining 0.8 mV is the pair being held at the width the base run sized: its drain
-    // stays at the fold node, so what the tail gives up lands on its own vds, and the extra
-    // channel-length modulation lets the gate back off at the same 10 µA. The margins move with
-    // that.
-    //
-    // The four six-decimal numbers below are RECORDED from the engine on this table, not derived:
-    // each rides the table's interpolation between two body-bias slices, which no closed form
-    // reproduces past about 1e-4. A check that is derived stands beside each of them.
-    const lo = res.rangeEnds?.find((e) => e.name === 'cm-lo');
-    expect(lo?.error).toBeUndefined();
-    expect(lo?.solved.V_tail).toBeCloseTo(0.3907617, 6);
-    // Beside the node: the held-width landing in closed form, 0.39063 V. A pair re-sized at this
-    // end would land at (1.0 − vgs(14))/1.2 = 0.38992 V, 0.7 mV lower and 1.8e-3 of the node
-    // away, so the tolerance tells the two apart.
-    const heldLo = heldTailNode(1.0, 1.05, VGS_GMID14_L05, 14, 1.4);
-    expect(relErr(lo!.solved.V_tail, heldLo)).toBeLessThan(1e-3);
-    expect(relErr(sourceNodeUnder(1.0, VGS_GMID14_L05), heldLo)).toBeGreaterThan(1.5e-3);
-    const inAt = lo?.blocks?.find((c) => c.name === 'in')?.sizing;
-    expect(inAt?.vgs).toBeCloseTo(0.6092381, 6);
-    // Beside the gate-source voltage: it and the node are the common mode the end asked for.
-    expect(lo!.solved.V_tail + inAt!.vgs).toBeCloseTo(1.0, 5);
-    const margin = (id: string): number => lo!.checks.find((r) => r.id === id)!.marginPct;
-    expect(margin('gain-spec')).toBeCloseTo(-0.186085, 6);
-    expect(margin('offset-spec')).toBeCloseTo(-0.4178275, 6);
-    // Beside the margins: the output branches did not move, so both follow from the base run and
-    // the transconductances the range end reports. The pair's gm is 1.0033 times what it was at
-    // the design point (backing the gate off at a fixed current raises gm/ID), and the gain
-    // scales with it. The offset is the pair's own Pelgrom spread and the mirror's, the mirror's
-    // referred to the input by gm_mir/gm_in, at the widths the base run sized.
-    const gmAt = (name: string): number => lo!.blocks!.find((c) => c.name === name)!.provides.gm;
-    const gmRatio = gmAt('in') / res.values.in__gm;
-    expect(margin('gain-spec')).toBeCloseTo((res.values.Av * gmRatio) / 300 - 1, 6);
-    const sigma = (W: number, gmId: number): number =>
-      (Math.SQRT2 * Math.hypot(res.values.avt, res.values.abeta / gmId)) / Math.sqrt(W * L);
-    const vosLo = Math.hypot(
-      sigma(res.values.in__W, 14),
-      (sigma(res.values.nmir__W, 8) * gmAt('nmir')) / gmAt('in'),
-    );
-    expect(margin('offset-spec')).toBeCloseTo(1 - vosLo / 12e-3, 6);
-    expect(lo?.state).toBe('does-not-comply'); // measured, and two specs fail there
-
+    // Pulling the input common mode 50 mV down to 1.0 V moves the tail node about 40 mV and the
+    // pair's gate-source voltage the rest. The pair's source is the tail node, so most of that is
+    // the body effect giving back BODY_FACTOR × the node's move. The remainder is the pair being
+    // held at the width the base run sized: its drain stays near the fold node, so what the tail
+    // gives up lands on its own vds, and the tail device — on its reference's gate with the node
+    // as its drain — delivers less there, so the pair needs less gate drive for its half.
+    const lo = res.rangeEnds!.find((e) => e.name === 'cm-lo')!;
+    expect(lo.error).toBeUndefined();
+    const heldLo = heldAt(1.0, va(L_IN), va(L));
+    expect(relErr(lo.solved.V_tail, heldLo)).toBeLessThan(1e-3);
+    // A pair re-sized at this end would land 1.4 mV lower, and one held at an ideal tail current
+    // 1.0 mV lower: the tolerance tells all three apart.
+    expect(relErr(sourceNodeUnder(1.0, vgsIn), heldLo)).toBeGreaterThan(3e-3);
+    // (an ideal tail current is a tail whose Early voltage is too large for the node to move it).
+    expect(relErr(heldAt(1.0, va(L_IN), 1e30), heldLo)).toBeGreaterThan(2e-3);
+    const inAt = lo.blocks!.find((c) => c.name === 'in')!.sizing!;
+    expect(lo.solved.V_tail + inAt.vgs).toBeCloseTo(1.0, 5);
+    const tailAt = lo.blocks!.find((c) => c.name === 'tail')!.sizing!;
+    expect(inAt.id).toBe(tailAt.id / 2);
     // cm-hi lands too. The pair's gate needs BODY_FACTOR·V_tail more than it would body-grounded,
-    // so the 1.45 V end is produced with the tail node at 0.759 V, inside its [0.1, 0.8] bracket
-    // (body-grounded it would take 1.45 − vgs(14) = 0.918 V, which the bracket does not reach).
-    // It is therefore measured, and the same two specs fail there.
-    const hi = res.rangeEnds?.find((e) => e.name === 'cm-hi');
-    expect(hi?.error).toBeUndefined();
-    expect(
-      relErr(hi!.solved.V_tail, heldTailNode(1.45, 1.05, VGS_GMID14_L05, 14, 1.4)),
-    ).toBeLessThan(1e-3);
-    expect(hi?.state).toBe('does-not-comply');
-    expect(hi?.checks.filter((r) => r.status === 'fail').map((r) => r.id)).toEqual([
-      'gain-spec',
-      'offset-spec',
-    ]);
+    // so the 1.45 V end is produced with the tail node at 0.746 V, inside its [0.1, 0.8] bracket
+    // (body-grounded it would take 1.45 − 0.543 = 0.907 V, which the bracket does not reach).
+    const hi = res.rangeEnds!.find((e) => e.name === 'cm-hi')!;
+    expect(hi.error).toBeUndefined();
+    expect(relErr(hi.solved.V_tail, heldAt(1.45, va(L_IN), va(L)))).toBeLessThan(1e-3);
   });
 
   it('gives no answer at a range end its tail-node bracket cannot produce', () => {
-    // The case where the solve never LANDS (the shipped ends both land and merely fail their
-    // checks), and the only honest assertions about it are the three the engine actually vouches
-    // for. The top of the tail bracket produces 0.8 + vgs(14) + 0.2 × 0.8 = 1.492 V; an
-    // application that presents 1.6 V asks for more than that. The tail-node constraint then
-    // finds no sign change anywhere in the bracket, so nothing was measured at that end: it is
-    // no answer, not a failure. Whatever the search was holding when it gave up is the last
-    // PROBE, not a landing — locking those numbers would be asserting an operating point the run
-    // never reached, and `solved` is left empty precisely so no consumer can go looking for one.
-    expect(0.8 + vgsAtBody(VGS_GMID14_L05, 0.8)).toBeLessThan(1.6);
-    const far = runSheet(withParams(sheet('folded-cascode-ota.json'), { CM_hi: 1.6 }), table);
+    // The case where the solve never LANDS (the shipped ends both land and comply), and the only
+    // honest assertions about it are the three the engine actually vouches for. The top of the
+    // tail bracket produces about 0.8 + 0.543 + 0.2 × 0.8 = 1.503 V; an application that presents
+    // 1.6 V asks for more than that. The tail-node constraint then finds no sign change anywhere
+    // in the bracket, so nothing was measured at that end: it is no answer, not a failure, and
+    // `solved` is left empty so no consumer can go looking for a landing.
+    expect(0.8 + vgsAtBody(vgsIn, 0.8)).toBeLessThan(1.6);
+    const far = runSheet(withParams(doc, { CM_hi: 1.6 }), table);
     const hi = far.rangeEnds?.find((e) => e.name === 'cm-hi');
     expect(hi?.state).toBe('no-answer');
     expect(hi?.error).toMatch(/does not change sign/);
@@ -589,7 +751,9 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     );
   });
 
-  itIsOneInputGate(res);
+  it('input capacitance is one input gate at the width and length the sizing landed on', () => {
+    expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, L_IN))).toBeLessThan(1e-9);
+  });
 });
 
 /**
@@ -813,19 +977,21 @@ const itIsAMirrorOta = (
 
   it('each output device is held against its own saturation voltage', () => {
     // An output device takes its gate voltage from its diode device, so nothing in its givens
-    // keeps it saturated: a check per device compares the drain-source voltage it sits at with
-    // the saturation voltage it reports. On the demo model that is the diode's, 2·UT plus the
+    // keeps it saturated: each declares that it must stay saturated, and the declaration is a
+    // physical check on that device, comparing the drain-source voltage it sits at with the
+    // saturation voltage it reports. On the demo model that is the diode's, 2·UT plus the
     // overdrive of gm/ID 10: 0.235 V.
     const vdsat = vdsatDemo(VGS_GMID10_L05, L);
     const across = { moutp: 1.8 - 0.9, mfold: 1.8 - VGS_GMID10_L05, moutn: 0.9 };
     for (const [name, vds] of Object.entries(across)) {
-      const c = check(res, `${name}-saturated`);
+      const c = regionOf(res, name);
       expect([name, c.kind, c.status]).toEqual([name, 'physical', 'pass']);
-      expect([name, relErr(c.lhsValue, vds) < 1e-5]).toEqual([name, true]);
+      expect([name, relErr(c.lhsValue!, vds) < 1e-5]).toEqual([name, true]);
       expect([name, c.rhsValue]).toEqual([name, v[`${name}__vdsat`]]);
-      expect([name, relErr(c.rhsValue, vdsat) < 1e-2]).toEqual([name, true]);
+      expect([name, relErr(c.rhsValue!, vdsat) < 1e-2]).toEqual([name, true]);
     }
-    // Each one trips alone when its own device is squeezed, and takes feasibility with it. Under
+    expect(doc.checks.map((c) => c.id).filter((id) => /-saturated$/.test(id))).toEqual([]);
+    // Each one trips when its own device is squeezed, and takes feasibility with it. Under
     // a 1.4 V supply, an output 0.2 V above ground squeezes the NMOS output device and one 0.2 V
     // below the supply the PMOS output device beside it. The other PMOS output device sits on the
     // NMOS diode's drop, so it is squeezed by strong mirrors under that supply: at gm/ID 4 a
@@ -834,13 +1000,16 @@ const itIsAMirrorOta = (
     const failing = (over: Record<string, number>): string[] => {
       const r = runSheet(withParams(doc, over), table);
       expect(r.feasible).toBe(false);
-      return r.checks
-        .filter((c) => /-saturated$/.test(c.id) && c.status === 'fail')
-        .map((c) => c.id);
+      return hardFailsIn(r).filter((id) => id.endsWith('.region'));
     };
-    expect(failing({ VDD: 1.4, V_out_dc: 0.2 })).toEqual(['moutn-saturated']);
-    expect(failing({ VDD: 1.4, V_out_dc: 1.2 })).toEqual(['moutp-saturated']);
-    expect(failing({ gm_id_ml: 4, VDD: 1.4, V_out_dc: 0.7 })).toEqual(['mfold-saturated']);
+    expect(failing({ VDD: 1.4, V_out_dc: 0.2 })).toEqual(['moutn.region']);
+    expect(failing({ VDD: 1.4, V_out_dc: 1.2 })).toEqual(['moutp.region']);
+    // The same strong PMOS diode squeezes the input device under it as well — 1.4 V less 0.93 V
+    // less the tail node leaves it a few tens of millivolts — and it declares saturation too.
+    expect(failing({ gm_id_ml: 4, VDD: 1.4, V_out_dc: 0.7 })).toEqual([
+      'in.region',
+      'mfold.region',
+    ]);
   });
 };
 
@@ -1118,18 +1287,22 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     expect(Math.hypot(ofN, ofP) / res.values.vos).toBeGreaterThan(3.5);
   });
 
-  it('the PMOS is held against its own saturation voltage', () => {
-    // The PMOS's overdrive is whatever the supply leaves, so its saturation voltage is large:
-    // 2·UT + 0.763354 = 0.815084 V of the 0.9 V between the supply and the output.
-    const saturated = check(res, 'p-saturated');
+  it('both devices are held against their own saturation voltages', () => {
+    // Both declare that they must stay saturated. The PMOS's overdrive is whatever the supply
+    // leaves, so its saturation voltage is large: 2·UT + 0.763354 = 0.815084 V of the 0.9 V
+    // between the supply and the output. The NMOS's is the 0.235 V of gm/ID 10.
+    expect(declaredSaturated(doc)).toEqual(['n', 'p']);
+    const saturated = regionOf(res, 'p');
     expect([saturated.kind, saturated.status]).toEqual(['physical', 'pass']);
-    expect(relErr(saturated.lhsValue, 1.8 - 0.9)).toBeLessThan(1e-12);
+    expect(relErr(saturated.lhsValue!, 1.8 - 0.9)).toBeLessThan(1e-12);
     expect(saturated.rhsValue).toBe(res.values.p__vdsat);
-    expect(relErr(saturated.rhsValue, vdsatDemo(1.8 - vIn, L))).toBeLessThan(1e-3);
-    // An output 0.2 V higher leaves it 0.7 V, under that, and the sheet says so.
+    expect(relErr(saturated.rhsValue!, vdsatDemo(1.8 - vIn, L))).toBeLessThan(1e-3);
+    expect(relErr(regionOf(res, 'n').rhsValue!, vdsatDemo(vIn, L))).toBeLessThan(1e-3);
+    // An output 0.2 V higher leaves the PMOS 0.7 V, under that, and the sheet says so.
     const high = runSheet(withParams(doc, { V_out_dc: 1.1 }), table);
-    expect(check(high, 'p-saturated').status).toBe('fail');
-    expect(hardFails(high)).toContain('p-saturated');
+    expect(regionOf(high, 'p').status).toBe('fail');
+    expect(hardFailsIn(high)).toContain('p.region');
+    expect(doc.checks.map((c) => c.id)).not.toContain('p-saturated');
   });
 
   it('does not close on this table at its defaults: the gain and the offset are short', () => {
@@ -1161,13 +1334,13 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     ]);
   });
 
-  it('held at another condition, each device keeps the bias current and the gates part', () => {
+  it('held at another condition, the inverter keeps its supply and the current is solved again', () => {
     // A second characterization with twice the current and twice the transconductance at every
     // gate voltage, and the design sized on the first asked about on the second. Each device
-    // keeps its width and is handed the bias current, so each needs less gate-source voltage and
-    // the two no longer add up to the supply: held this way the sheet is describing two gates.
-    // That is reported, by the gate-wiring check on the PMOS, and by nothing else: no check
-    // registers it.
+    // keeps its width, the PMOS keeps the gate voltage the supply leaves above the input, and the
+    // bias current is solved again so the two devices carry one current. Scaling the current by a
+    // constant moves no gate voltage, so the input level stays where it was and the current
+    // doubles.
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
       id: { ...t.id, corner, temp },
@@ -1187,20 +1360,16 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     expect([sized.state, held.state]).toEqual(['evaluated', 'evaluated']);
     if (sized.state !== 'evaluated' || held.state !== 'evaluated') return;
     const [s, h] = [sized.result, held.result];
-    for (const name of ['n', 'p']) {
+    for (const name of ['n', 'p'])
       expect([name, block(h, name).W]).toEqual([name, block(s, name).W]);
-      expect([name, block(h, name).id]).toEqual([name, I_BIAS]);
-      expect([name, block(h, name).vgs < block(s, name).vgs]).toEqual([name, true]);
-    }
-    const short = 1.8 - (block(h, 'n').vgs + block(h, 'p').vgs);
-    expect(short).toBeGreaterThan(0.05);
-    const said = h.warnings.filter((w) => w.rule === 'sheet-wiring');
-    expect(said.map((w) => w.location)).toEqual(['p']);
-    const delta = Number(/delta (-?[\d.]+e[+-]\d+) V/.exec(said[0].message)![1]);
-    expect(relErr(Math.abs(delta), short)).toBeLessThan(1e-3);
-    // Each device sits at a weaker inversion level there, so the gain target is met and only the
-    // offset still fails — a verdict about two separately biased gates, which is why the warning
-    // has to be read beside it.
+    expect(block(h, 'n').vgs + block(h, 'p').vgs).toBeCloseTo(1.8, 12);
+    expect(relErr(h.values.V_in, s.values.V_in)).toBeLessThan(1e-6);
+    expect(relErr(h.values.I_bias, 2 * I_BIAS)).toBeLessThan(1e-5);
+    expect(relErr(block(h, 'n').id, block(h, 'p').id)).toBeLessThan(1e-5);
+    expect(h.warnings.filter((w) => w.rule === 'sheet-wiring')).toEqual([]);
+    // That characterization doubles the current and the transconductance but not the output
+    // conductance, so the gain target is met there; only the offset, which depends on the widths
+    // and the inversion levels and on no current, still fails.
     expect(hardFails(h)).toEqual(['offset-spec']);
   });
 });

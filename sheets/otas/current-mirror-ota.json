@@ -14,7 +14,7 @@
       "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget. With every mirror device counted the gamma-model row lands near 29 nV/rtHz on sky130 tt at the shipped choices, so this budget sits only a few percent above the model, and no measured floor exists for this topology. A real floor sits above the model: meeting this budget on silicon takes a lower K_m, lower gm/ID on the mirrors, or more current in the pair"
+      "note": "input-referred thermal density budget. With every mirror device counted and each device's noise read from the tables, the row lands near 35 nV/rtHz on a sky130 tt realization with the PMOS devices on the pfet table — over this budget. No simulated floor exists for this topology. Meeting this budget on silicon takes a lower K_m, lower gm/ID on the mirrors, or more current in the pair"
     },
     {
       "name": "V_out_dc",
@@ -197,7 +197,13 @@
           { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "vds_t", "value": 0.33, "unit": "V", "role": "spec", "note": "the tail node" }
         ],
-        "givens": { "L": "L_t", "W": "W_t", "vgs": "vgs_t", "vds": "vds_t" },
+        "givens": {
+          "L": "L_t",
+          "W": "W_t",
+          "vgs": "vgs_t",
+          "vds": "vds_t",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "vdsat", "id"]
@@ -257,7 +263,8 @@
           "id": "I_half",
           "gm_id": "gm_id_i",
           "vds": "vds_i",
-          "vsb": "vsb_i"
+          "vsb": "vsb_i",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -309,7 +316,13 @@
             "note": "the supply down to the output, signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "L_o", "W": "W_o", "vgs": "vgs_o", "vds": "vds_o" },
+        "givens": {
+          "L": "L_o",
+          "W": "W_o",
+          "vgs": "vgs_o",
+          "vds": "vds_o",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "vdsat", "cgg", "id", "vnth_m"]
@@ -351,7 +364,13 @@
             "note": "the supply down to the NMOS diode's node, signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "L_o", "W": "W_o", "vgs": "vgs_o", "vds": "vds_o" },
+        "givens": {
+          "L": "L_o",
+          "W": "W_o",
+          "vgs": "vgs_o",
+          "vds": "vds_o",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "vdsat", "cgg", "id", "vnth_m"]
@@ -417,7 +436,13 @@
           { "name": "L_o", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "vds_o", "value": 0.9, "unit": "V", "role": "spec", "note": "the output level" }
         ],
-        "givens": { "L": "L_o", "W": "W_o", "vgs": "vgs_o", "vds": "vds_o" },
+        "givens": {
+          "L": "L_o",
+          "W": "W_o",
+          "vgs": "vgs_o",
+          "vds": "vds_o",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "vdsat", "cgg", "id", "vnth_m"]
@@ -544,7 +569,7 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "reads each device's thermal noise from the table where the table carries it, and the gamma = 1 estimate where it does not; it stays advisory because a sheet cannot know which table it will be evaluated on, and the simulator owns noise sign-off"
     },
     {
       "id": "pm-spec",
@@ -561,38 +586,6 @@
       "op": ">=",
       "rhs": "0.1",
       "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage under the diode load — lower gm/ID on the mirror spends less diode drop"
-    },
-    {
-      "id": "tail-saturated",
-      "kind": "physical",
-      "lhs": "tail_headroom",
-      "op": ">=",
-      "rhs": "0",
-      "note": "below this the tail source drops out of saturation and the bias current collapses; this is the mechanism behind the low end of the common-mode range"
-    },
-    {
-      "id": "moutp-saturated",
-      "kind": "physical",
-      "lhs": "VDD - V_out_dc",
-      "op": ">=",
-      "rhs": "moutp__vdsat",
-      "note": "the PMOS output device at the output has the supply down to the output across it. It takes its gate voltage from its diode device, so below its saturation voltage nothing restores its current: the copy collapses, and the transconductance, slew rate and gain rows with it"
-    },
-    {
-      "id": "mfold-saturated",
-      "kind": "physical",
-      "lhs": "VDD - V_nmir",
-      "op": ">=",
-      "rhs": "mfold__vdsat",
-      "note": "the PMOS output device that feeds the bottom mirror has the supply down to the NMOS diode's node across it, and it too takes its gate voltage from its diode device. A supply too low for one PMOS saturation voltage on top of the NMOS diode's drop shows up here"
-    },
-    {
-      "id": "moutn-saturated",
-      "kind": "physical",
-      "lhs": "V_out_dc",
-      "op": ">=",
-      "rhs": "moutn__vdsat",
-      "note": "the NMOS output device has the output level across it and takes its gate voltage from the NMOS diode device, so an output level below its saturation voltage collapses the current it sinks"
     },
     {
       "id": "cm-not-below",

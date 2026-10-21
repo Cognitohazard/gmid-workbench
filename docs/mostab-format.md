@@ -122,9 +122,9 @@ the drain current bends into saturation, and by their coarser step above that.
 | `cgs`, `cgd`, `cgb`, `cdb`, `csb` | F | optional capacitances |
 | `vth`, `vdsat` | V | optional |
 | `gmb` | S | optional (body effect) |
-| `sth` | A²/Hz | optional: drain thermal-noise current PSD |
+| `sth` | A²/Hz | optional: drain thermal-noise current PSD; where present, the thermal-noise figures are read from it |
 | `sfl` | A²/Hz | optional: drain flicker-noise current PSD at 1 Hz |
-| `gamma` | 1 | optional: thermal-noise factor γ |
+| `gamma` | 1 | optional: thermal-noise factor γ; read as stored, ahead of the γ that `sth` gives |
 | `igd`, `igs` | A | optional gate leakage |
 | `w` | m | optional (usually `# W:` metadata instead) |
 
@@ -132,6 +132,13 @@ The bundled open-PDK tables carry `sth` and `sfl` at every grid point (the sky13
 nfet's carry `sfl` alone; see `data/pdk/PROVENANCE.md`): `tools/gen_gmid.py` runs a
 noise analysis at 1 Hz at each point, so `sfl` is taken at exactly 1 Hz, and it is 0
 where no drain current flows (`vds = 0`).
+
+The thermal-noise figures a design sheet reads (`vnth_m`, `svth_m`, and `gamma` itself) follow
+`sth` where a table carries it: γ is read back from it as `sth/(4*k*T*gm)`, at the table's own
+temperature, so `vnth_m` equals the measured `sqrt(sth)/gm`. A stored `gamma` column is read as
+it stands instead. A table with neither falls back to γ = 1.0, an estimate that understates a
+device that runs hotter (sky130's NMOS sits near 1.95 at gm/ID 12 in simulation). The app shows
+which a table gives in the device's details, and each sized device reports it.
 
 ### Data cells
 
@@ -224,7 +231,12 @@ importer's QA pass warns (it never edits data) when:
   ~38.7 S/A at 27 °C) — usually a unit error;
 - |vgs| exceeds 100 V — the axis is probably in mV, not V;
 - the stored `gm` disagrees grossly with a finite difference of `id` along `vgs`;
-- `id` is non-monotonic in `vgs`, or `gamma` is outside a plausible range.
+- `id` is non-monotonic in `vgs`, or `gamma` is outside a plausible range;
+- the stored `sth` gives a noise factor `sth/(4kT·gm)` outside [0.01, 100] at the table's
+  full-drive point (the shortest length, the largest |`vgs`| and |`vds`|, `vsb` = 0) — a unit
+  error, since real devices span about 0.2 to 12 there (rule `noise-factor`). It is read at that
+  one point only: in triode, where gm collapses and the channel noise does not, the factor runs
+  far outside any band on good data.
 
 ## Example
 

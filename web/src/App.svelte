@@ -4,6 +4,8 @@
     plottableQuantities,
     importMostab,
     metaScalars,
+    noiseSource,
+    noiseSourceLabel,
     formatEng,
     formatSI,
     validate,
@@ -351,11 +353,15 @@
     );
     return [
       ...pq.base.map((k) => ({ value: k, label: `${k} [${baseUnit.get(k)}]` })),
-      ...pq.derived.map((k) => ({
-        value: k,
-        label: `${k} = ${derivedExpr.get(k)}`,
-        formula: derivedExpr.get(k),
-      })),
+      // A stored column shadows the quantity of the same name it could otherwise derive (a
+      // `gamma` column beside `sth`), so it is offered once, as the column.
+      ...pq.derived
+        .filter((k) => !pq.base.includes(k))
+        .map((k) => ({
+          value: k,
+          label: `${k} = ${derivedExpr.get(k)}`,
+          formula: derivedExpr.get(k),
+        })),
     ];
   });
   const defaultFamily = $derived(multiAxes.includes(LENGTH_AXIS) ? LENGTH_AXIS : '');
@@ -729,6 +735,10 @@
           <dd>{device.meta.date}</dd>{/if}
         {#if device.meta.polarity}<dt>polarity</dt>
           <dd>{device.meta.polarity}</dd>{/if}
+        <dt>noise</dt>
+        <dd data-noise title={CONTROL_HELP.noiseSource}>
+          {noiseSourceLabel(noiseSource(device.grid))}
+        </dd>
         {#each Object.entries(device.meta.extra ?? {}) as [k, v]}
           <dt>{k}</dt>
           <dd>{v}</dd>

@@ -132,7 +132,7 @@ Each entry in `params` is a named scalar input:
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
 | `solveFor` | string, optional | Makes this parameter solved: it names the value the parameter must agree with, closing a bias loop, and the engine searches the parameter between `min` and `max` until the two agree (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
-| `hold` | string, optional | Marks a node voltage that hangs under a transistor's gate and names the quantity that stays fixed where the design is held: the gate voltage, written as the node plus the device's gate-source voltage (see [A node under a gate](#a-node-under-a-gate-hold)). The parameter stays an ordinary, sweepable input at the design point. |
+| `hold` | string, optional | Names the quantity that stays fixed where the design is held, and makes this parameter the one re-solved to keep it there. For a node voltage that hangs under a transistor's gate it is the gate voltage, written as the node plus the device's gate-source voltage (see [A node under a gate](#a-node-under-a-gate-hold)); for a current the design point types, it is the balance of the currents that current sets (see [A current the design point chooses](#a-current-the-design-point-chooses)). The parameter stays an ordinary, sweepable input at the design point. |
 | `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: nothing on the sheet determines it, so the designer states it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe, an output level that a feedback loop outside the sheet holds, a voltage across a device whose surrounding circuit is not on the sheet). `assumed`: the sheet's own parts determine it, but the sheet types a value for now instead of deriving it (an internal stack node, a guessed gate-source drop). An assumed voltage is not a permanent state: it marks a value the sheet still has to derive, and deriving it removes the assumption. Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a range end's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `designConstraint` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `designConstraint` or `solveFor` is *solved*, and one that carries `hold` is *held*; those classes are derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
 
 The `role` separates *what the sheet is for* from *how it gets there*:
@@ -234,8 +234,10 @@ which column is missing. Expression strings accept engineering-notation literals
 full expression language (see [The expression language](#the-expression-language)).
 
 Once sized, the operating point is merged into the namespace as flat scalars: `gm`, `gm_id`,
-`id`, `W`, `vgs`, `vstar`, `cgg`, the intrinsic gain `av0`, the γ-model noise density
-`vnth_m`, the stored noise PSDs `svth`/`svfl`, the flicker corner `fco`, the gm/ID `ceiling`,
+`id`, `W`, `vgs`, `vstar`, `cgg`, the intrinsic gain `av0`, the thermal-noise density `vnth_m`
+(read from the table's own noise where it stores it; see
+[Body effect and noise-model defaults](#body-effect-and-noise-model-defaults)), the stored noise
+PSDs `svth`/`svfl`, the flicker corner `fco`, the gm/ID `ceiling`,
 and so on — every base and derived quantity the table supports, reported at the **sized
 width** (see [The width contract](#the-width-contract)). Equations and checks read these by name.
 
@@ -324,7 +326,11 @@ saturation and `abs(vds) <= vdsat` in triode, where `vds` is the drain-source vo
 state — not the value a table that does not reach it was read at; that clamp is reported on its
 own — and `vdsat` is the sizing's own. It gates feasibility, has a margin, can be the binding or limiting
 check, rides sweeps, and is asked again at every range end and process condition, exactly as an
-authored physical check would. On a table with no `vdsat` column it reads `na`, which a hard check
+authored physical check would. The magnitude is compared only where the stated voltage points the
+way the table's own `vds` axis does: a negative `vds` on a table whose axis holds no negative
+value, or a positive one on a signed-PMOS export, is the device with drain and source the other way
+round. The table characterizes no such point, so the check fails, in either region, with a margin
+of `-abs(vds)` and the reason. On a table with no `vdsat` column it reads `na`, which a hard check
 fails closed on: the design reads infeasible until the table carries the column. Validation
 refuses any other word, a `region` beside `diode: true` (the drain is the gate, so the question
 does not arise), and an authored check with the id `region` on a device that declares one.
@@ -434,9 +440,12 @@ for combining conductances or capacitances.
 
 **Named constants** (always in scope): `pi`, `k` (Boltzmann), `q` (elementary charge), `T`
 (the table's characterization temperature, in kelvin), `UT` (thermal voltage `kT/q`), and
-`gamma` (the thermal-noise factor, the table's per-point value when it carries one, else the
-model default). A stored or bound name of the same spelling shadows a constant, so explicit
-values win.
+`gamma` (the thermal-noise factor: at a level that sizes a device, that device's own where its
+table carries thermal noise, else the default 1.0; see below). A stored or bound name of the same
+spelling shadows a constant, so explicit values win — with one exception: a level that sizes a
+device merges everything the sizing publishes into its scope after its params, so a param named
+like one of those quantities (`T`, `gamma`, `vds`, …) is overwritten there on a table that
+carries it, and validation warns about it (`sheet-collision`); rename the param.
 
 ### Body effect and noise-model defaults
 
@@ -452,15 +461,32 @@ and would show a model zero where the tool promises data. Wherever the body term
 tied to the source, `gmb` belongs in the expression; write it, and let a table that cannot
 support the sheet say so.
 
-`gamma` is a **model default**. It is a named constant, so it is always in scope, and a table
-carrying its own per-point `gamma` column shadows it — real data wins. The default is 1.0.
-A simulation of sky130 bears that out for the PMOS in strong inversion (1.00) and not for the
-NMOS (about 1.95 at gm/ID 12; see [tools/verify](../tools/verify/README.md)); the textbook
-long-channel value 2/3 describes no table anyone ships here, and for a noise *floor* an optimistic
-assumption is the dangerous direction. Every quantity built on it is `_m`-marked (`svth_m`,
-`vnth_m`) so a model estimate is never mistaken for a measurement. It remains an estimate:
-against measured silicon noise on comparable topologies, γ = 1.0 closes only about half the
-gap, so treat a γ-model density as a lower bound and set a real target above it.
+`gamma` is **data where the table has it, and a default where it does not**. It is a named
+constant, so it is always in scope. A table that stores its drain thermal-noise PSD `sth` gives
+it at every point, read back through `sth = 4*k*T*gamma*gm` at the table's own temperature:
+γ = `sth/(4*k*T*gm)`. Every quantity a sized device publishes built on it then follows the
+data — `svth_m`, `vnth_m`, and an author's own `4*k*T*gamma/gm` written at the level that sizes
+the device — so on such a table `vnth_m` equals the measured `vnth = sqrt(sth)/gm` point for point,
+and the library's noise rows, which read each device's `vnth_m`, read measured noise without a
+change to any sheet. The measured γ is a property of a sized device, so it is in scope only where
+one is: an unqualified `gamma` in a parent's row — a level with no device of its own — is the
+constant 1.0, and the device's value there is `<block>__gamma`, published by the block. The
+current-mirror OTA's `vn_gbw` row is one such parent row: it reads the constant. A table that stores a `gamma` column
+of its own is read from that column instead, as every stored column wins. A table with neither
+gets the default, 1.0. A simulation of sky130 bears the default out for the PMOS in strong
+inversion (1.00) and not for the NMOS (about 1.95 at gm/ID 12; see
+[tools/verify](../tools/verify/README.md)); the textbook long-channel value 2/3 describes no
+table anyone ships here, and for a noise *floor* an optimistic assumption is the dangerous
+direction. On the sky130 tables the generator writes, which carry `sth`, the five-transistor
+OTA's input-referred thermal density reads about 28 nV/√Hz against 28.24 nV/√Hz simulated,
+where the 1.0 default read 22.7.
+
+Every result says which reading it used. Each sized device's report carries `noise`:
+`measured` (γ from `sth`), `column` (the table's own `gamma` column) or `estimated` (the
+default), and the sheet panel shows it beside the sizing as "noise: measured" or "noise:
+estimated, γ = 1.0", device by device where they differ. A density computed from the default
+is an estimate: against measured silicon noise on comparable topologies, γ = 1.0 closes only
+about half the gap, so treat it as a lower bound and set a real target above it.
 
 ### Author-callable functions
 
@@ -739,14 +765,14 @@ does not provide is stated at the design point and re-solved wherever the design
 your own that still does labels it `assumed`, and it is listed with each result.
 
 `solveFor` remains for the loops that survive reparameterization: a quantity defined in terms of
-the device's *own* answer. One live example is the wide-swing mirror's node — a real wide-swing
-bias generator parks the mirror node at the mirror device's own `vdsat` plus a margin, and that
-`vdsat` is only known once the device is sized at that very node:
+the device's *own* answer. One live example is the wide-swing mirror's reference node — a real
+wide-swing bias generator parks the reference device's drain at its own `vdsat` plus a margin,
+and that `vdsat` is only known once the device is sized at that very node:
 
 ```json
 { "name": "vds_lo", "value": 0.3, "min": 0, "max": 1.8, "unit": "V", "role": "choice",
   "solveFor": "wideswing_node",
-  "note": "the wide-swing mirror node, solved to the mirror's own vdsat + node_margin" }
+  "note": "the reference node, solved to the reference device's own vdsat + node_margin" }
 ```
 
 The target is any name resolvable in this sheet's namespace once its body has run — an equation (as
@@ -759,12 +785,17 @@ threshold region and the supply. The current-mirror OTA
 is a third, with a child's provided scalar as the target: a PMOS mirror output
 device has its drain on the node of an NMOS diode, the current it delivers there is the diode's,
 and the diode's gate-source voltage at that current is the node, so `V_nmir` solves for
-`nmir__vgs`. The 5T OTA and the two-stage Miller OTA solve a ratio: the share of the tail
-current the input pair's output-side transistor carries, solved to that transistor's fraction
-of the pair's current, so the two transistors add up to what the tail delivers although they
-sit at different drain voltages. The cascode current mirror solves the node between its output
+`nmir__vgs`. (The 5T OTA and the two-stage OTAs state the share of the tail current their
+input pair's output-side transistor carries as a design constraint rather than a solved
+parameter: the current law at the output node, the output-side transistor's current equal to
+the load's.) The cascode current mirror solves the node between its output
 device and the cascode above it, as a multiple of the reference device's gate-source voltage
-(`k_x` solves for `k_casc`), so the two devices in series carry one current.
+(`k_x` solves for `k_casc`), so the two devices in series carry one current. The wide-swing
+mirror solves its output-branch node the same way, as a fraction of the cascode bias (`k_x`
+solves for `k_casc`), so the output device and its cascode carry one current; and the degenerated
+mirror solves its output device's source as a multiple of the reference leg's drop `I_in*R_s`
+(`k_s` solves for `k_src`), so the output current and the drop it makes across its resistor
+agree.
 
 A solved parameter is found the way a design constraint is (see
 [Entering from a spec](#entering-from-a-spec-designconstraint)): the engine searches it between
@@ -833,7 +864,7 @@ root in its range would land wherever the neighbour led it, so the sweep would b
 cell could report a different verdict than the same parameters evaluated on their own. The honest
 version costs real time: a 41-point common-mode sweep of the library's 5T OTA, which settles two
 solved parameters that depend on each other and asks both range ends at every sample, takes about
-15 s on the demo table, run synchronously. Each declared bias axis adds a table slice per
+13 s on the demo table, run synchronously. Each declared bias axis adds a table slice per
 evaluation, so much of that is the cost of not assuming.
 
 ## Entering from a spec (`designConstraint`)
@@ -924,9 +955,13 @@ A sheet may solve more than one parameter — design constraints, `solveFor` par
 the hardware is held, held nodes alike. The engine reads which other solved parameters of the same
 sheet each relation reads, groups the ones that read each other into sets, and solves the sets in
 an order where each comes after the ones its relations read. A set of one is one search, with every
-earlier set held at the values it landed on. The telescopic OTA at a range end is the example — its
-tail node is solved after the cascode node its relation reads; the other cascode node, which
-nothing else reads, can fall anywhere in the order. Between sets, document order does not matter.
+earlier set held at the values it landed on. The telescopic OTA where its design is held is the
+example. Its tail node, constrained to the common mode, and the NMOS cascode node, held under its
+gate, read each other: the tail current the tail node lets through is the current the input pair
+and the cascodes carry (`in__id = tail__id/2`), and the cascode node sets the pair's drain. So the
+two form one set and settle together. The PMOS cascode node is held under its own gate and reads
+the tail node through the same current, while nothing in that set reads it back, so it is solved
+after them, alone. Between sets, document order does not matter.
 
 A set of several — parameters that read each other, like the 5T's tail node and the share of the
 tail current its output-side pair transistor carries — is settled by **sweeps**. Each sweep
@@ -1005,6 +1040,42 @@ A `hold` keeps the **design point's** gate voltage. A gate bias that itself move
 condition — a replica that tracks the device — is a provided bias: write it as an expression and
 constrain the node to it with a `designConstraint`.
 
+### A current the design point chooses
+
+A device given its gate voltage, a current and no width says two things the design point cannot
+tell apart and a held design has to: whether its **gate** is the fixed thing — the PMOS of an
+inverter, on the NMOS's gate and carrying the NMOS's current — or its **current** is, with the gate
+voltage typed as an operating point. Where the design is held it is held at its width and that
+current, as a current source, unless the sheet declares otherwise. The declaration is a `hold`
+that reads the device's current, with the balance as the expression:
+
+```json
+{ "name": "I_bias", "value": 20e-6, "min": 2e-6, "max": 200e-6, "unit": "A", "role": "choice",
+  "hold": "I_bias - p__id",
+  "note": "the bias current, typed at the design point; where the design is held, the current both devices carry" }
+```
+
+with `id` among the PMOS block's `provides` (for the sheet's own device the hold reads `id`).
+That hold does two things. It declares the PMOS's gate the fixed thing, so where the design is held
+the PMOS is held at its width and **its gate voltage**, and its current is read from the table (see
+[What "the same design" means at a range end](#what-the-same-design-means-at-a-range-end)). And it
+fixes the typed current there: at the design point the balance reads zero by construction (the
+PMOS was sized to carry `n__id`) and `I_bias` is an ordinary input; wherever the design is held the
+balance is held at zero and `I_bias` is searched between `min` and `max` — the NMOS, held at its
+width with `I_bias` through it, settles its gate voltage, the input level, and the PMOS at the
+supply less that carries what the table gives, until the two agree. The inverter keeps its supply,
+and its current and input level follow the condition.
+
+| situation | result |
+|-|-|
+| a hold that reads a device's current does not read zero at the design point (`2*I_bias - p__id`) | the run fails closed: a current balance must be zero where the design is sized, and the message says what it read |
+| where the design is held, the held param reaches no current but the balanced device's own | validation error — solving it to the balance would move nothing but its own number; give the param to the device it programs |
+| a no-width device given a gate voltage and a current that is not a number, and no hold on its sheet reads its `id` (a balance) or its `vgs` (its gate held on a node) | `sheet-held-current` warning, naming both ways out: a series partner on a shared gate gets a balance; a mirror copy of a reference gets the reference's width and gate voltage (`W`, `vgs`), so its current follows the data |
+
+The warning is raised for blocks, through the parent's overrides, and for the sheet's own device at
+the top of a tree; a child's own device is asked about from its parent's block, where the holds
+that could settle it are. A current given as a number is a source by statement and draws nothing.
+
 ## The operating range (`operatingRange`)
 
 A sheet that claims a RANGE — "this amplifier accepts any input common mode in
@@ -1024,11 +1095,12 @@ or provided scalars. It is a compliance point, so the run is not free to build a
 there: every device in the tree is held at the width and length the base run sized it to, and
 what re-settles is the bias. That re-settling is the machinery the engine already has — the
 solves run again over their full stated ranges, `vds` subtractions re-evaluate
-against the moved nodes, each transformed device's `vgs` comes back out of the lookup at its held
-width — with its own children and its own solver budget. Both tree-key separators are reserved:
+against the moved nodes, each transformed device's `vgs` — or, for a device held on its gate
+voltage, its current — comes back out of the lookup at its held width — with its own children and
+its own solver budget. Both tree-key separators are reserved:
 check ids, range-end names, AND block names may contain neither `@` nor `.` — every one of them
 becomes part of a key in the single map check outcomes share (a range end's check is named
-`cm-lo@tail-saturated`), and a name carrying a separator could silently shadow another check's
+`cm-lo@sr-spec`), and a name carrying a separator could silently shadow another check's
 result (validation refuses them).
 
 **Four outcomes, two of them verdicts.** Each range end reports a `state`:
@@ -1126,10 +1198,15 @@ exactly — an author reading a green chip should know what it is and is not a s
   survive: a `vgs` bound to another block's gate voltage re-reads that block's newly settled
   voltage at the end, so the two devices stay on one wire. Width-first givens whose partner is
   an operating-point TARGET instead hold a ratio rather than a wire, and reproduce the tie
-  only under a drain-voltage move. Givens
-  that name neither a width nor a current have both held numerically, and the run lists those
-  blocks in `assumedSource` — the sheet never said where their current comes from, so holding it
-  is an ideal-source assumption, and the fix is to author the current.
+  only under a drain-voltage move. Givens that name a gate voltage and no width, where a `hold`
+  on their sheet balances the device's current, become `(W, vgs)`: the gate-voltage expression is
+  kept, whatever it was paired with (a current, a transconductance) goes, and the current is read
+  from the table at the held width (see
+  [A current the design point chooses](#a-current-the-design-point-chooses)); undeclared, a gate
+  voltage is an operating-point spec like a gm/ID, and the device is held at `(W, I_D)`. Givens
+  that name neither a width nor a current, and no balanced gate, have both held numerically, and
+  the run lists those blocks in `assumedSource` — the sheet never said where their current comes
+  from, so holding it is an ideal-source assumption, and the fix is to author the current.
 - **A node under a gate is re-solved, and the gate is what is held.** A parameter that carries
   `hold` is not kept at its design-point value: the expression it names — the gate voltage — is,
   and the node is solved again under it (see [A node under a gate](#a-node-under-a-gate-hold)).
@@ -1141,7 +1218,10 @@ exactly — an author reading a green chip should know what it is and is not a s
   residual below the base's, about 0.1% on the demo model, even where nothing about the condition
   changed. Read a base-against-end comparison with that floor already under it.
 - **The authored current expression IS the hardware model.** `I_f = I_branch - in__id`
-  re-evaluates at the range end, and that difference is the folding node's current law. What a
+  re-evaluates at the range end, and that difference is the folding node's current law. The one
+  exception is a device held on its gate voltage because a hold balances its current: its
+  authored current is the design point's, and where the design is held its current is the table's
+  at that gate voltage, with the balance fixing the typed current that sets the other side. What a
   typed current does not model is a real source's own output resistance re-settling the current
   as its drain moves: a device handed
   `I_tail` carries exactly `I_tail` wherever its drain goes. A device written as a copy of its
@@ -1153,18 +1233,23 @@ exactly — an author reading a green chip should know what it is and is not a s
   the sheet's authority ends where the lookup table's does. For typed currents, comparison
   against fixed-netlist simulation put the divergence at ~10% at the far ends of the shipped
   range claims, without changing any of their verdicts.
-- **A device whose GATE is the fixed thing has to say so.** Bind `(W, vgs)` and the gate tie
-  holds under any move a range end makes — drain, body bias, supply, temperature — because the
-  givens re-read the gate voltage the partner settles to there. Written any other way, the device
-  is current-driven by assumption at a range end, and two devices sharing a gate node stay at one
+- **A device whose GATE is the fixed thing has to say so.** Bind `(W, vgs)` — or give `vgs`
+  beside a current and no width and balance that current with a hold, which is held as
+  `(W, vgs)` — and the gate tie holds under any
+  move a range end makes — drain, body bias, supply, temperature — because the givens re-read
+  the gate voltage the partner settles to there. Written any other way, the device is
+  current-driven by assumption at a range end, and two devices sharing a gate node stay at one
   voltage only while the end moves `vds` alone. Validation warns when width-first givens sit
   under a range end that reaches them through any other path — a given gate voltage excepted,
-  since that is the tie itself — and says so differently when the end reaches the givens' own
+  since that is the tie itself, and a current written as an expression the end reaches, since the
+  current then follows what it reads and the table is read at it — and says so differently when
+  the end reaches the givens' own
   `W` or `L`, because then the run is sizing a different transistor rather than re-biasing this
   one. Both are advisory. Where a range end changes a device's CURRENT, validation says that
-  too, as a note and not a warning: a device given a width and no current reads its current from
-  the table, so it carries a different one once the end moves its drain or its gate, and so does
-  every device whose current is written as a share of it. That is the circuit behaving as drawn;
+  too, as a note and not a warning: a device given a width and no current, or held on its gate
+  voltage by a balance, reads its current from the table, so it carries a different one once the
+  end moves its drain or its gate, and so does every device whose current is written as a share
+  of it. That is the circuit behaving as drawn;
   the note is there because a claim about the range rests on it. Separately, `validateSheet` names two blocks whose
   `wiring` puts them on one gate and one source while each is sized at its own operating point —
   the declaration is never allowed to drive the sizing, only to point out that nothing does.
@@ -1261,12 +1346,12 @@ silently repairs one.
    explicit `*_est` parameters with notes.
 8. **Say "estimate" where the sheet estimates — and never gate feasibility on one.** Stability,
    dynamics, and anything a simulator owns is labeled estimate-grade in its note. The sheet's
-   authority ends where the lookup table's does. The standing case is noise: a check computed
-   from the γ-model thermal floor, on a table carrying no measured noise, ships as an
-   `advisory` check with a note saying why — it advises until the table carries measured noise
-   density, at which point it may be promoted back to a spec check. The exception
-   proves the rule: a kT/C noise bound is thermodynamics, not a γ-model estimate, and stays
-   a hard spec check.
+   authority ends where the lookup table's does. The standing case is noise: a noise row reads
+   the table's own thermal noise where the table stores it and the γ = 1.0 estimate where it
+   does not, and a sheet cannot know which table it will meet, so a check on that row ships as
+   an `advisory` check with a note saying why; each run's result says which reading it used.
+   The exception proves the rule: a kT/C noise bound is thermodynamics, not a γ-model estimate,
+   and stays a hard spec check.
 9. **Respect polarity by declaration, not sign-fixing.** Signed PMOS tables pair with
    `*_sign` parameters; value columns are magnitudes, axes keep their signs (see
    *Signed-table sign parameters*). Backstop: the panel warns when a sign parameter
@@ -1293,12 +1378,12 @@ silently repairs one.
     where the circuit would have let all but one of them follow. The library's 5T OTA is the
     worked example — its bias reference alone is programmed, the tail device is that reference's
     width on that reference's gate, the pair's output-side transistor takes its solved share of
-    what the tail delivers and its partner is that transistor's width on its gate-source
-    voltage, the load's diode side takes the rest, and the load mirror's output side sits on
-    its diode side's gate. Backstop: the library's vetting suite
+    what the tail delivers and its partner is that transistor's width carrying the rest, the
+    load's diode side carries what its pair transistor does, and the load mirror's output side
+    sits on its diode side's gate. Backstop: the library's vetting suite
     counts, for each parameter in amperes, the devices whose bound current reads it without
-    reading another block's output, and lists by name the curated sheets where that is still
-    more than one; `validateSheet` does not check this.
+    reading another block's output, and fails on any curated sheet where that is more than
+    one; `validateSheet` does not check this.
 
 ## A complete worked example
 
@@ -1341,7 +1426,7 @@ GBW (so it is not a tautology on a given value):
 ```
 
 Reading it: `gm` is fixed from the spec and `gm/ID` chosen, so the givens size the device and
-surface `vstar`, `cgg`, `ceiling`, and the γ-model noise density `vnth_m`. The givens also fix
+surface `vstar`, `cgg`, `ceiling`, and the thermal-noise density `vnth_m`. The givens also fix
 the operating point with `vds` (from `V_ds`) and `vsb` (0, body-grounded), so the sizing
 slices the table at a stated point instead of borrowing the caller's bias. Stating a drain
 voltage means the sheet runs on a table that sweeps `vds`, or was taken at exactly that drain

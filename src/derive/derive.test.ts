@@ -1,9 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { derive, deriveColumn, compileExpr, evalColumn, tableScope, metaScalars } from './index';
+import {
+  derive,
+  deriveColumn,
+  compileExpr,
+  evalColumn,
+  tableScope,
+  metaScalars,
+  noiseSource,
+  noiseSourceLabel,
+  DEFAULTED_DERIVED,
+} from './index';
 import type { Axis, Grid } from '../types';
-import { generateDemoDevice } from '../demo';
+import { generateDemoDevice, scaleQuantities, withoutColumns } from '../demo';
 import { makeGrid } from '../grid';
-import { PHYS, UT } from '../constants';
+import { GAMMA_DEFAULT, PHYS, UT } from '../constants';
 
 function col(grid: Grid, key: string): Float64Array {
   const c = grid.quantities.get(key);
@@ -194,5 +204,65 @@ describe('metaScalars temperature', () => {
     const s = metaScalars({ temp: 125 });
     expect(s.T).toBeCloseTo(398.15, 12);
     expect(s.UT).toBeCloseTo((PHYS.k * 398.15) / PHYS.q, 18);
+  });
+});
+
+describe('γ from the table where it carries thermal noise, the default where it does not', () => {
+  // The demo stores a `gamma` column and an `sth` made from it; the cases below take one or both
+  // away, and double `sth`, so a γ read from the data cannot pass for the default.
+  const dev = generateDemoDevice();
+  const measured = scaleQuantities(withoutColumns(dev, ['gamma']), { sth: 2 });
+  const bare = withoutColumns(dev, ['gamma', 'sth']);
+  const k4T = 4 * PHYS.k * PHYS.T; // the demo is characterized at 27 °C
+
+  it('reads γ = sth/(4kT·gm) off a table that carries sth, and every γ-model key follows', () => {
+    const gamma = derive(measured, 'gamma');
+    const sth = col(measured.grid, 'sth');
+    const gm = col(measured.grid, 'gm');
+    for (const i of [10, 60, 110]) {
+      expect(gamma[i]).toBeCloseTo(sth[i] / (k4T * gm[i]), 12);
+      expect(gamma[i]).toBeCloseTo(2 * GAMMA_DEFAULT, 12);
+    }
+    // The estimate keys are then the measured ones, point for point.
+    const vnthM = derive(measured, 'vnth_m');
+    const vnth = derive(measured, 'vnth');
+    const svthM = derive(measured, 'svth_m');
+    const svth = derive(measured, 'svth');
+    for (const i of [10, 60, 110]) {
+      expect(vnthM[i] / vnth[i]).toBeCloseTo(1, 12);
+      expect(svthM[i] / svth[i]).toBeCloseTo(1, 12);
+    }
+    // At another temperature the same stored noise is the same noise: kT cancels.
+    const hot = { ...measured, meta: { ...measured.meta, temp: 125 } };
+    expect(derive(hot, 'vnth_m')[60] / vnthM[60]).toBeCloseTo(1, 12);
+    expect(derive(hot, 'gamma')[60] / gamma[60]).toBeCloseTo(PHYS.T / (125 + 273.15), 12);
+  });
+
+  it('falls back to GAMMA_DEFAULT on a table without sth', () => {
+    const gamma = derive(bare, 'gamma');
+    expect(new Set(gamma)).toEqual(new Set([GAMMA_DEFAULT]));
+    const vnthM = derive(bare, 'vnth_m');
+    const gm = col(bare.grid, 'gm');
+    expect(vnthM[60]).toBeCloseTo(Math.sqrt((k4T * GAMMA_DEFAULT) / gm[60]), 18);
+    // Any expression reading the name gets the same default, through the constant map.
+    expect(deriveColumn(bare.grid, 'gamma*2')[60]).toBe(2 * GAMMA_DEFAULT);
+    // A quantity with no default still needs its column.
+    expect(() => derive(bare, 'vnth')).toThrow();
+  });
+
+  it('keeps a stored gamma column ahead of both', () => {
+    const own = scaleQuantities(dev, { gamma: 1.5 });
+    expect(derive(own, 'gamma')[60]).toBe(1.5 * GAMMA_DEFAULT);
+    expect(tableScope(own.grid).resolve('gamma')).toBe(own.grid.quantities.get('gamma'));
+  });
+
+  it('says per table which of the three the noise figures are', () => {
+    expect(noiseSource(measured.grid)).toBe('measured');
+    expect(noiseSource(bare.grid)).toBe('estimated');
+    expect(noiseSource(dev.grid)).toBe('column');
+    expect(noiseSourceLabel('measured')).toBe('measured');
+    expect(noiseSourceLabel('estimated')).toBe('estimated, γ = 1.0');
+    expect(noiseSourceLabel('column')).toBe('γ from the table');
+    expect(DEFAULTED_DERIVED).toEqual(new Set(['gamma']));
   });
 });

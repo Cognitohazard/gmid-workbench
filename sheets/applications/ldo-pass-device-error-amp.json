@@ -1,6 +1,6 @@
 {
   "title": "LDO (pass device + error amp)",
-  "description": "A low-dropout regulator sized around its pass device, with the error amplifier represented by its DC gain. The teaching point is the operating point: the dropout spec IS the pass device's $V_{DS}$, so the device is bound at the maximum load current with $V_{DS} = V_{dropout}$, and the dropout invariant just asks that it stays saturated there. The DC loop gain ($A_{ea}*g_{m,pass}*r_{o,pass}$) sets load regulation ($dV_{out}/dI_{load} \\approx 1/(A_{ea}*g_{m,pass})$) and the low-frequency PSRR; both are estimates that sim signs off. Quiescent current is budgeted directly. Loop stability (phase margin, the output-pole/ESR-zero placement) is sim-only and not modeled here. Design the error amp itself with an OTA sheet to $A_{req}$ = the loop-gain requirement.",
+  "description": "A low-dropout regulator sized around its pass device, with the error amplifier represented by its DC gain. The teaching point is the operating point: the dropout spec IS the pass device's $V_{DS}$, so the device is bound at the maximum load current with $V_{DS} = V_{dropout}$, and the device declares that it stays saturated there, which the engine checks as its saturation region. The DC loop gain ($A_{ea}*g_{m,pass}*r_{o,pass}$) sets load regulation ($dV_{out}/dI_{load} \\approx 1/(A_{ea}*g_{m,pass})$) and the low-frequency PSRR; both are estimates that sim signs off. Quiescent current is budgeted directly. Loop stability (phase margin, the output-pole/ESR-zero placement) is sim-only and not modeled here. Design the error amp itself with an OTA sheet to $A_{req}$ = the loop-gain requirement.",
   "polarity": "n",
   "params": [
     {
@@ -74,7 +74,13 @@
       "note": "minimum DC loop gain for regulation accuracy"
     }
   ],
-  "givens": { "L": "L_pass", "id": "I_load_max", "gm_id": "gm_id_pass", "vds": "V_dropout" },
+  "givens": {
+    "L": "L_pass",
+    "id": "I_load_max",
+    "gm_id": "gm_id_pass",
+    "vds": "V_dropout",
+    "region": "saturation"
+  },
   "equations": [
     {
       "name": "gm_pass",
@@ -109,14 +115,6 @@
       "op": "<=",
       "rhs": "ceiling",
       "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
-    },
-    {
-      "id": "dropout",
-      "kind": "physical",
-      "lhs": "vdsat",
-      "op": "<=",
-      "rhs": "V_dropout",
-      "note": "the pass device must stay saturated within the dropout voltage"
     },
     {
       "id": "quiescent-budget",

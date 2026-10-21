@@ -104,7 +104,7 @@
           { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.6, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -137,7 +137,7 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {

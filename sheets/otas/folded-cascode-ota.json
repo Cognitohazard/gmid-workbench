@@ -1,6 +1,6 @@
 {
   "title": "Folded cascode OTA",
-  "description": "A folded cascode: the input pair steers current into a folding node, and a cascoded output branch carries it to a high-impedance output. It is the branch-current bookkeeping showcase. The input pair evaluates FIRST at half the tail current; each folding-branch current source is biased at $I_{branch}$, and the output cascode and mirror carry the fold current $I_{fold} = I_{branch} - I_{tail}/2$ — a later child reads the earlier input device's provided current to compute its own bias. The fold current is a real design knob: it must exceed the peak steered current ($I_{tail}/2$) so the branch never starves during slew, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is $g_{m,in}$ times the folded-cascode output resistance; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the folding node $V_{fold}$ and the mirror-drain node $V_c$ are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction. The retired per-device estimates could not even agree on where the folding node sat; the node form makes that inconsistency inexpressible.",
+  "description": "A folded cascode: the input pair steers current into a folding node, and a cascoded output branch carries it to a high-impedance output. It is the branch-current bookkeeping showcase. The tail is drawn the way the circuit sets it: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and the input pair carries half of what it delivers. Each folding-branch current source is biased at $I_{branch}$, and the output cascode and mirror carry the fold current $I_{fold}$, the branch bias less the input device's current — a later child reads the earlier input device's provided current to compute its own bias. The fold current is a real design knob: it must be at least the input device's current, so that when slewing steers the whole tail current into one folding node the branch there never starves, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is $g_{m,in}$ times the folded-cascode output resistance; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the folding node $V_{fold}$ and the mirror-drain node $V_c$ are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction. The retired per-device estimates could not even agree on where the folding node sat; the node form makes that inconsistency inexpressible.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -13,21 +13,21 @@
       "value": 40e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget. The folding current sources are the fold's noise price: the gamma-model total lands near 30 nV/rtHz at the default currents, well above a telescopic at the same gm. the budget carries about 30% headroom over the gamma-model row (no measured floor exists for this topology)"
+      "note": "input-referred thermal density budget. The folding current sources are the fold's noise price: with each device's noise read from the tables, the row lands near 42.4 nV/rtHz on a sky130 tt realization with the PMOS devices on the pfet table, over this budget and well above a telescopic at the same gm. No simulated floor exists for this topology"
     },
     {
       "name": "vos_target",
       "value": 12e-3,
       "unit": "V",
       "role": "spec",
-      "note": "input offset budget, 1 sigma; the output mirror's spread referred through the fold puts the total near 10 mV at half-micron areas"
+      "note": "input offset budget, 1 sigma; the output mirror's spread referred through the fold puts the total near 5.9 mV on a sky130 tt realization, with the pair, the folding sources and the mirror all at 1 um"
     },
     {
       "name": "CM_lo",
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.95 up to the 1.55 probe ceiling V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.92-1.64 V on sky130 tt at the shipped choices: below it the tail device leaves saturation, and above it the tail node runs out of its search range). The edge checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -102,7 +102,7 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "input-pair tail current; sets gm_in and the slew current into CL"
+      "note": "the current the bias reference is programmed to — the one tail current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node sits below the reference's diode drop); the input pair's transconductance and the slew rate are computed from what is delivered, not from this number"
     },
     {
       "name": "I_branch",
@@ -111,7 +111,7 @@
       "max": 400e-6,
       "unit": "A",
       "role": "choice",
-      "note": "folding-branch bias current; the fold current I_fold = I_branch - I_tail/2 must stay positive (slew headroom vs current-source noise)"
+      "note": "folding-branch bias current; the fold current I_fold, this less the input device's current, must stay at least that current (slew headroom vs current-source noise)"
     },
     {
       "name": "gm_id_in",
@@ -140,7 +140,15 @@
       "role": "choice",
       "note": "current-source and mirror inversion: lower gm/ID adds less noise and offset"
     },
-    { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
+    {
+      "name": "L_in",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the input pair: at 1 um its area takes the pair's share of the offset under budget with the pair carrying half of what the tail delivers"
+    },
     {
       "name": "L_casc",
       "value": 0.5e-6,
@@ -149,14 +157,143 @@
       "unit": "m",
       "role": "choice"
     },
-    { "name": "L_cs", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" }
+    {
+      "name": "L_cs",
+      "value": 1e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the folding current sources and of the output mirror. Their output resistance sets the gain and the mirror's area the larger part of the offset, so they are long — 1 um, with the input pair at the same length: at half a micron, pair and current sources both, the design misses its offset budget at the low end of its common-mode range on a sky130 tt realization"
+    },
+    {
+      "name": "gm_id_tail",
+      "value": 8,
+      "min": 4,
+      "max": 14,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the bias reference, which the tail device inherits through the shared gate: a higher V* costs headroom at the tail node"
+    },
+    {
+      "name": "L_tail",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
+    }
   ],
   "blocks": [
+    {
+      "name": "bias",
+      "doc": {
+        "title": "Tail bias reference",
+        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "I_b",
+            "value": 20e-6,
+            "unit": "A",
+            "role": "spec"
+          },
+          {
+            "name": "L_b",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
+          {
+            "name": "gm_id_b",
+            "value": 8,
+            "unit": "1/V",
+            "role": "choice"
+          }
+        ],
+        "givens": {
+          "L": "L_b",
+          "id": "I_b",
+          "gm_id": "gm_id_b",
+          "diode": true
+        },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_b",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["W", "vgs"]
+      },
+      "params": {
+        "I_b": "I_tail",
+        "L_b": "L_tail",
+        "gm_id_b": "gm_id_tail"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with $V_{tail}$ as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It has to stay saturated, and it leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what sets the low end of the usable common-mode range.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_t",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width — a 1:1 copy"
+          },
+          {
+            "name": "vgs_t",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          {
+            "name": "L_t",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
+          {
+            "name": "vds_t",
+            "value": 0.4,
+            "unit": "V",
+            "role": "spec",
+            "note": "the tail node"
+          }
+        ],
+        "givens": {
+          "L": "L_t",
+          "W": "W_t",
+          "vgs": "vgs_t",
+          "vds": "vds_t",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "W_t": "bias__W",
+        "vgs_t": "bias__vgs",
+        "L_t": "L_tail",
+        "vds_t": "V_tail"
+      }
+    },
     {
       "name": "in",
       "doc": {
         "title": "Input-pair device",
-        "description": "Half-circuit input device at half the tail current; evaluates first so the folding branch can read its current.",
+        "description": "Half-circuit input device, carrying half of what the tail delivers; it evaluates before the folding branch so the branch can read its current.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -170,7 +307,8 @@
           "id": "I_half",
           "gm_id": "gm_id_i",
           "vds": "vds_i",
-          "vsb": "vsb_i"
+          "vsb": "vsb_i",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -185,43 +323,11 @@
         "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "tail__id/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
         "vds_i": "V_fold - V_tail",
         "vsb_i": "V_tail"
-      }
-    },
-    {
-      "name": "tail",
-      "doc": {
-        "title": "Tail current source",
-        "description": "Carries the full bias current; its drain-source voltage IS the tail node.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_t", "value": 8, "unit": "1/V", "role": "choice" },
-          { "name": "vds_t", "value": 0.35, "unit": "V", "role": "spec" }
-        ],
-        "givens": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_t",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["gds", "vdsat"]
-      },
-      "params": {
-        "I_t": "I_tail",
-        "L_t": "L_cs",
-        "gm_id_t": "gm_id_cs",
-        "vds_t": "V_tail"
       }
     },
     {
@@ -236,7 +342,13 @@
           { "name": "gm_id_p", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vds_p", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_p", "id": "I_b", "gm_id": "gm_id_p", "vds": "vds_p" },
+        "givens": {
+          "L": "L_p",
+          "id": "I_b",
+          "gm_id": "gm_id_p",
+          "vds": "vds_p",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -260,7 +372,7 @@
       "name": "pcasc",
       "doc": {
         "title": "PMOS cascode (folded branch)",
-        "description": "Cascodes the folding current source; carries the fold current I_fold = I_branch - I_tail/2 read from the input device. Its av0 sets the PMOS-side cascode boost.",
+        "description": "Cascodes the folding current source; carries the fold current I_fold, the branch bias less the current read from the input device. Its av0 sets the PMOS-side cascode boost.",
         "polarity": "p",
         "params": [
           { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -269,7 +381,14 @@
           { "name": "vds_c", "value": 0.5, "unit": "V", "role": "spec" },
           { "name": "vsb_c", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
+        "givens": {
+          "L": "L_c",
+          "id": "I_f",
+          "gm_id": "gm_id_c",
+          "vds": "vds_c",
+          "vsb": "vsb_c",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -303,7 +422,14 @@
           { "name": "vds_c", "value": 0.6, "unit": "V", "role": "spec" },
           { "name": "vsb_c", "value": 0.3, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_c", "id": "I_f", "gm_id": "gm_id_c", "vds": "vds_c", "vsb": "vsb_c" },
+        "givens": {
+          "L": "L_c",
+          "id": "I_f",
+          "gm_id": "gm_id_c",
+          "vds": "vds_c",
+          "vsb": "vsb_c",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -336,7 +462,13 @@
           { "name": "gm_id_m", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vds_m", "value": 0.3, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_m", "id": "I_f", "gm_id": "gm_id_m", "vds": "vds_m" },
+        "givens": {
+          "L": "L_m",
+          "id": "I_f",
+          "gm_id": "gm_id_m",
+          "vds": "vds_m",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -401,7 +533,12 @@
       "note": "folded-cascode gain gm_in * Rout"
     },
     { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
-    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "SR",
+      "expr": "tail__id/CL",
+      "unit": "V/s",
+      "note": "the whole tail current steered into the load — the current the tail device delivers, not the number the reference is programmed to"
+    },
     {
       "name": "vn_in",
       "expr": "sqrt(2*(in__vnth_m^2 + pcs__vnth_m^2*(pcs__gm/in__gm)^2 + nmir__vnth_m^2*(nmir__gm/in__gm)^2))",
@@ -424,7 +561,7 @@
       "name": "I_q",
       "expr": "2*I_branch",
       "unit": "A",
-      "note": "estimate: quiescent supply current — both folding current sources, which are the only devices sitting on the supply rail. The tail current is not a third branch: it is drawn down THROUGH those sources and returned to ground by the tail device, so 2*I_branch already contains it and equals the other way of writing the same number, I_tail + 2*I_fold. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — both folding current sources, which are the only devices sitting on the supply rail. The tail current is not a third branch: it is drawn down THROUGH those sources and returned to ground by the tail device, so 2*I_branch already contains it and equals the other way of writing the same number, what the tail delivers plus 2*I_fold. The reference branch that programs the tail is shared bias infrastructure and is not counted here. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "checks": [
@@ -432,20 +569,12 @@
     { "id": "gbw-spec", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
     { "id": "sr-spec", "kind": "spec", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
-      "id": "tail-saturated",
-      "kind": "physical",
-      "lhs": "tail_headroom",
-      "op": ">=",
-      "rhs": "0",
-      "note": "below this the tail source drops out of saturation and the bias current collapses; the mechanism behind the low end of the common-mode range"
-    },
-    {
       "id": "fold-current",
       "kind": "physical",
       "lhs": "I_fold",
       "op": ">=",
-      "rhs": "I_tail/2",
-      "note": "the folded branch must carry at least the peak steered current so it does not starve during slew"
+      "rhs": "in__id",
+      "note": "the folded branch must carry at least what the input device does, so that when slewing steers the whole tail current into one folding node the branch there does not starve"
     },
     {
       "id": "noise-spec",
@@ -453,49 +582,9 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "reads each device's thermal noise from the table where the table carries it, and the gamma = 1 estimate where it does not; it stays advisory because a sheet cannot know which table it will be evaluated on, and the simulator owns noise sign-off"
     },
     { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
-    {
-      "id": "input-sat",
-      "kind": "advisory",
-      "lhs": "V_fold - V_tail - in__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "node placement: the folding node must sit at least a vdsat above the tail node. The branch drops close by construction — what is left to check is that each node leaves its device saturated"
-    },
-    {
-      "id": "pcs-sat",
-      "kind": "advisory",
-      "lhs": "VDD - V_fold - pcs__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "node placement: the folding node must leave the folding source at least a vdsat below VDD"
-    },
-    {
-      "id": "pcasc-sat",
-      "kind": "advisory",
-      "lhs": "V_fold - V_out_dc - pcasc__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "node placement: the folding node must sit at least a vdsat above the output DC"
-    },
-    {
-      "id": "ncasc-sat",
-      "kind": "advisory",
-      "lhs": "V_out_dc - V_c - ncasc__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "node placement: the output DC must sit at least a vdsat above V_c"
-    },
-    {
-      "id": "nmir-sat",
-      "kind": "advisory",
-      "lhs": "V_c - nmir__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "node placement: V_c must leave the mirror at least a vdsat above ground"
-    },
     {
       "id": "cm-not-below",
       "kind": "physical",

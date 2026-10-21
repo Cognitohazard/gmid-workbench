@@ -217,7 +217,13 @@
             "note": "the node under the output cascode"
           }
         ],
-        "givens": { "L": "L_o", "W": "W_o", "vgs": "vgs_o", "vds": "vds_o" },
+        "givens": {
+          "L": "L_o",
+          "W": "W_o",
+          "vgs": "vgs_o",
+          "vds": "vds_o",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["W", "id", "gm_id", "ro"]
@@ -235,7 +241,8 @@
     "W": "K*ref_casc__W",
     "id": "out__id",
     "vds": "V_out - k_x*ref__vgs",
-    "vsb": "k_x*ref__vgs"
+    "vsb": "k_x*ref__vgs",
+    "region": "saturation"
   },
   "equations": [
     {

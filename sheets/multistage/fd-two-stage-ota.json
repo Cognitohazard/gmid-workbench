@@ -205,7 +205,7 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -271,7 +271,7 @@
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "vx", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
         ],
-        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx" },
+        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [],
         "provides": ["gds", "vdsat", "id"]
@@ -296,7 +296,7 @@
             "note": "signed to this table's axis convention. The parent drives it from the supply minus the stage-1 output level, which is the V1 row's expression written out — use params are evaluated before rows, so the level is restated here rather than referenced"
           }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -335,7 +335,14 @@
           },
           { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "id": "Ix",
+          "gm_id": "gx",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -368,7 +375,7 @@
           { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vx", "value": 0.9, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -546,30 +553,6 @@
       "op": ">=",
       "rhs": "PM_target",
       "note": "ESTIMATE-grade phase margin; the simulator owns the real stability sign-off. This is also the sheet’s only check on pole spacing: PM falls as the second pole approaches the crossover, so a design that crowds them fails here rather than needing a separate zero/pole guardrail"
-    },
-    {
-      "id": "stage2-sat",
-      "kind": "physical",
-      "lhs": "VDD - V_out2",
-      "op": ">=",
-      "rhs": "s2__vdsat",
-      "note": "stage-2 device saturated at the output common mode"
-    },
-    {
-      "id": "load2-sat",
-      "kind": "physical",
-      "lhs": "V_out2",
-      "op": ">=",
-      "rhs": "ld2__vdsat",
-      "note": "stage-2 load saturated at the output common mode"
-    },
-    {
-      "id": "tail-saturated",
-      "kind": "physical",
-      "lhs": "tail_headroom",
-      "op": ">=",
-      "rhs": "0",
-      "note": "below this the tail device drops out of saturation and the first-stage current collapses; this is the mechanism behind the low end of the input common-mode range"
     },
     {
       "id": "input-sat-margin",

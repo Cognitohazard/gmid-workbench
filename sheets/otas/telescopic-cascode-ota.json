@@ -1,6 +1,6 @@
 {
   "title": "Telescopic cascode OTA",
-  "description": "A single-branch telescopic cascode: an input pair, an input (NMOS) cascode, a load (PMOS) cascode, and a load mirror stacked between the rails, all carrying half the tail current, plus the tail source. Cascoding multiplies each side's output resistance by the cascode intrinsic gain, so $A_v = g_{m,in} * R_{out}$ with $R_{out}$ = par(NMOS side, PMOS side) and each side's $R_{out} \\approx A_{v0,casc} / g_{ds}$ of the device it cascodes. That is the topology's headline: the highest single-stage gain per unit current, bought with output-swing headroom — the four stacked $V_{dsat}$ plus the tail eat the rail. The stack is parameterized by its NODES, not by per-device drops: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the two internal nodes $V_a$ (input drain / NMOS-cascode source) and $V_b$ (mirror drain / PMOS-cascode source) are choice params. Every device $V_{DS}$ is then a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias — the drops sum to the rail by construction, so there is no consistency guardrail to retune. The cascode-pole and settling behaviour is estimate-grade; sim owns sign-off.",
+  "description": "A single-branch telescopic cascode: an input pair, an input (NMOS) cascode, a load (PMOS) cascode, and a load mirror stacked between the rails, each carrying half of what the tail delivers, plus the tail and the bias reference it copies. Only the reference is programmed, with $I_{tail}$; the tail device shares its gate and width, so it delivers the programmed current less the mirror's drain-voltage error, and every device in the stack takes its half of that. Held fixed and asked about at another process condition, the tail therefore follows its reference instead of carrying a typed current. Cascoding multiplies each side's output resistance by the cascode intrinsic gain, so $A_v = g_{m,in} * R_{out}$ with $R_{out}$ = par(NMOS side, PMOS side) and each side's $R_{out} \\approx A_{v0,casc} / g_{ds}$ of the device it cascodes. That is the topology's headline: the highest single-stage gain per unit current, bought with output-swing headroom — the four stacked $V_{dsat}$ plus the tail eat the rail. The stack is parameterized by its NODES, not by per-device drops: the tail node is pinned so the produced $CM_{in}$ equals $CM_{dc}$, and the two internal nodes $V_a$ (input drain / NMOS-cascode source) and $V_b$ (mirror drain / PMOS-cascode source) are choice params. Every device $V_{DS}$ is then a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias — the drops sum to the rail by construction, so there is no consistency guardrail to retune. The cascode-pole and settling behaviour is estimate-grade; sim owns sign-off.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -13,7 +13,7 @@
       "value": 25e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget; the gamma-model total (pair plus load mirror) lands near 19 nV/rtHz at the default currents. the budget carries about 30% headroom over the gamma-model row (no measured floor exists for this topology)"
+      "note": "input-referred thermal density budget. The row (pair plus load mirror) reads each device's noise from the tables where they carry it: near 25.8 nV/rtHz on a sky130 tt realization with the PMOS devices on the pfet table, just over this budget. No simulated floor exists for this topology"
     },
     {
       "name": "vos_target",
@@ -34,7 +34,7 @@
       "value": 0.95,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.92-1.16 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.92-1.21 V on a sky130 tt realization with the PMOS devices on the pfet table, at the shipped choices: below it the tail device leaves saturation, above it the gain falls short). The edge checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -63,7 +63,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the tail node — the pair's source. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. An end of the range where the relation does not evaluate — the top end, where it leaves the pair too little room below V_a to size — is stepped inward silently, and the searched range is reported only if the search then fails; the input-sat guardrail owns saturation"
+      "note": "the tail node — the pair's source. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. An end of the range where the relation does not evaluate — the top end, where it leaves the pair too little room below V_a to size — is stepped inward silently, and the searched range is reported only if the search then fails; the input device declares that it must stay saturated, so its own saturation check owns that"
     },
     {
       "name": "V_a",
@@ -108,7 +108,8 @@
       "min": 2e-6,
       "max": 200e-6,
       "unit": "A",
-      "role": "choice"
+      "role": "choice",
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node sits below the reference's diode drop); slew rate and supply current are computed from what is delivered, not from this number"
     },
     {
       "name": "gm_id_in",
@@ -153,14 +154,135 @@
       "max": 2e-6,
       "unit": "m",
       "role": "choice"
+    },
+    {
+      "name": "gm_id_tail",
+      "value": 10,
+      "min": 4,
+      "max": 16,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the bias reference, which the tail device inherits through the shared gate: a higher V* costs headroom at the tail node"
+    },
+    {
+      "name": "L_tail",
+      "value": 0.5e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
     }
   ],
   "blocks": [
     {
+      "name": "bias",
+      "doc": {
+        "title": "Tail bias reference",
+        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "I_b",
+            "value": 20e-6,
+            "unit": "A",
+            "role": "spec"
+          },
+          {
+            "name": "L_b",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
+          {
+            "name": "gm_id_b",
+            "value": 10,
+            "unit": "1/V",
+            "role": "choice"
+          }
+        ],
+        "givens": {
+          "L": "L_b",
+          "id": "I_b",
+          "gm_id": "gm_id_b",
+          "diode": true
+        },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_b",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["W", "vgs"]
+      },
+      "params": {
+        "I_b": "I_tail",
+        "L_b": "L_tail",
+        "gm_id_b": "gm_id_tail"
+      }
+    },
+    {
+      "name": "tail",
+      "doc": {
+        "title": "Tail current source",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with $V_{tail}$ as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It has to stay saturated, and it leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what sets the low end of the usable common-mode range.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_t",
+            "value": 1e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width — a 1:1 copy"
+          },
+          {
+            "name": "vgs_t",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          {
+            "name": "L_t",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
+          {
+            "name": "vds_t",
+            "value": 0.4,
+            "unit": "V",
+            "role": "spec",
+            "note": "the tail node"
+          }
+        ],
+        "givens": {
+          "L": "L_t",
+          "W": "W_t",
+          "vgs": "vgs_t",
+          "vds": "vds_t",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [],
+        "provides": ["gm", "gds", "vdsat", "id"]
+      },
+      "params": {
+        "W_t": "bias__W",
+        "vgs_t": "bias__vgs",
+        "L_t": "L_tail",
+        "vds_t": "V_tail"
+      }
+    },
+    {
       "name": "in",
       "doc": {
         "title": "Input-pair device",
-        "description": "Half-circuit input device at half the tail current; its ro sets the NMOS-side cascoded output resistance. Its source sits at the tail node (its body bias) and its drain at V_a.",
+        "description": "Half-circuit input device, carrying half of what the tail delivers; its ro sets the NMOS-side cascoded output resistance. Its source sits at the tail node (its body bias) and its drain at V_a.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -174,7 +296,8 @@
           "id": "I_half",
           "gm_id": "gm_id_i",
           "vds": "vds_i",
-          "vsb": "vsb_i"
+          "vsb": "vsb_i",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -189,7 +312,7 @@
         "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "tail__id/2",
         "L_i": "L_in",
         "gm_id_i": "gm_id_in",
         "vds_i": "V_a - V_tail",
@@ -200,7 +323,7 @@
       "name": "casc_n",
       "doc": {
         "title": "Input (NMOS) cascode",
-        "description": "Cascodes the input device; its intrinsic gain av0 multiplies the input ro to set the NMOS-side Rout. Its source stands on the internal node V_a, so that is its body bias.",
+        "description": "Cascodes the input device; its intrinsic gain av0 multiplies the input ro to set the NMOS-side Rout. It is in the input device's branch and carries that device's current. Its source stands on the internal node V_a, so that is its body bias.",
         "polarity": "n",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -214,7 +337,8 @@
           "id": "I_half",
           "gm_id": "gm_id_c",
           "vds": "vds_c",
-          "vsb": "vsb_c"
+          "vsb": "vsb_c",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -229,7 +353,7 @@
         "provides": ["av0", "gds", "vdsat", "gm", "vgs"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "in__id",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
         "vds_c": "V_out_dc - V_a",
@@ -240,7 +364,7 @@
       "name": "casc_p",
       "doc": {
         "title": "Load (PMOS) cascode",
-        "description": "Cascodes the load mirror; its intrinsic gain av0 multiplies the mirror ro to set the PMOS-side Rout. Its source stands on the internal node V_b, below the bulk at VDD, so its body bias is VDD - V_b (the PMOS tables' vsb axis carries that magnitude).",
+        "description": "Cascodes the load mirror; its intrinsic gain av0 multiplies the mirror ro to set the PMOS-side Rout. It is in the input device's branch and carries that device's current. Its source stands on the internal node V_b, below the bulk at VDD, so its body bias is VDD - V_b (the PMOS tables' vsb axis carries that magnitude).",
         "polarity": "p",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -254,7 +378,8 @@
           "id": "I_half",
           "gm_id": "gm_id_c",
           "vds": "vds_c",
-          "vsb": "vsb_c"
+          "vsb": "vsb_c",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -269,7 +394,7 @@
         "provides": ["av0", "gds", "vdsat", "vgs"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "in__id",
         "L_c": "L_casc",
         "gm_id_c": "gm_id_casc",
         "vds_c": "sign_p*(V_b - V_out_dc)",
@@ -280,7 +405,7 @@
       "name": "mir",
       "doc": {
         "title": "Load mirror device",
-        "description": "One side of the PMOS load mirror at half the tail current; its ro (cascoded by casc_p) sets the PMOS-side output resistance.",
+        "description": "One side of the PMOS load mirror, in the input device's branch and carrying that device's current; its ro (cascoded by casc_p) sets the PMOS-side output resistance.",
         "polarity": "p",
         "params": [
           { "name": "I_half", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -288,7 +413,13 @@
           { "name": "gm_id_m", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vds_m", "value": 0.45, "unit": "V", "role": "spec" }
         ],
-        "givens": { "L": "L_m", "id": "I_half", "gm_id": "gm_id_m", "vds": "vds_m" },
+        "givens": {
+          "L": "L_m",
+          "id": "I_half",
+          "gm_id": "gm_id_m",
+          "vds": "vds_m",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -302,42 +433,10 @@
         "provides": ["gm", "gds", "vdsat", "W", "vnth_m"]
       },
       "params": {
-        "I_half": "I_tail/2",
+        "I_half": "in__id",
         "L_m": "L_mir",
         "gm_id_m": "gm_id_mir",
         "vds_m": "sign_p*(VDD - V_b)"
-      }
-    },
-    {
-      "name": "tail",
-      "doc": {
-        "title": "Tail current source",
-        "description": "Carries the full bias current; its vdsat is the extra headroom below the input source node.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_t", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_t", "value": 10, "unit": "1/V", "role": "choice" },
-          { "name": "vds_t", "value": 0.35, "unit": "V", "role": "spec" }
-        ],
-        "givens": { "L": "L_t", "id": "I_t", "gm_id": "gm_id_t", "vds": "vds_t" },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_t",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["gm", "gds", "vdsat"]
-      },
-      "params": {
-        "I_t": "I_tail",
-        "L_t": "L_casc",
-        "gm_id_t": "gm_id_casc",
-        "vds_t": "V_tail"
       }
     }
   ],
@@ -379,7 +478,12 @@
       "note": "single-stage telescopic gain gm_in * Rout"
     },
     { "name": "GBW", "expr": "in__gm/(2*pi*CL)", "unit": "Hz" },
-    { "name": "SR", "expr": "I_tail/CL", "unit": "V/s" },
+    {
+      "name": "SR",
+      "expr": "tail__id/CL",
+      "unit": "V/s",
+      "note": "the whole tail current steered into the load — the current the tail device delivers, not the number the reference is programmed to"
+    },
     {
       "name": "vn_in",
       "expr": "sqrt(2*(in__vnth_m^2 + mir__vnth_m^2*(mir__gm/in__gm)^2))",
@@ -406,9 +510,9 @@
     },
     {
       "name": "I_q",
-      "expr": "I_tail",
+      "expr": "tail__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the tail current is the whole of it: the cascodes and the mirror load stack in that one branch. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the current the tail device delivers is the whole of it: the cascodes and the mirror load stack in that one branch. The reference branch that programs it is shared bias infrastructure and is not counted here. The datasheet line for comparing designs; no rule reads it"
     }
   ],
   "checks": [
@@ -416,20 +520,12 @@
     { "id": "gbw-spec", "kind": "advisory", "lhs": "GBW", "op": ">=", "rhs": "GBW_target" },
     { "id": "sr-spec", "kind": "spec", "lhs": "SR", "op": ">=", "rhs": "SR_target" },
     {
-      "id": "tail-saturated",
-      "kind": "physical",
-      "lhs": "tail_headroom",
-      "op": ">=",
-      "rhs": "0",
-      "note": "below this the tail source drops out of saturation and the bias current collapses; the mechanism behind the low end of the common-mode range"
-    },
-    {
       "id": "noise-spec",
       "kind": "advisory",
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "reads each device's thermal noise from the table where the table carries it, and the gamma = 1 estimate where it does not; it stays advisory because a sheet cannot know which table it will be evaluated on, and the simulator owns noise sign-off"
     },
     { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
     {
@@ -439,38 +535,6 @@
       "op": ">=",
       "rhs": "2*swing_target",
       "note": "the stacked headroom must leave at least the peak-to-peak output swing"
-    },
-    {
-      "id": "input-sat",
-      "kind": "advisory",
-      "lhs": "V_a - V_tail - in__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "the input device's node placement: V_a must sit at least a vdsat above the tail node. The drops sum to the rail by construction now — what is left to check is that each node leaves its device saturated"
-    },
-    {
-      "id": "casc-n-sat",
-      "kind": "advisory",
-      "lhs": "V_out_dc - V_a - casc_n__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "the input cascode's node placement: the output DC must sit at least a vdsat above V_a"
-    },
-    {
-      "id": "casc-p-sat",
-      "kind": "advisory",
-      "lhs": "V_b - V_out_dc - casc_p__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "the load cascode's node placement: V_b must sit at least a vdsat above the output DC"
-    },
-    {
-      "id": "mir-sat",
-      "kind": "advisory",
-      "lhs": "VDD - V_b - mir__vdsat",
-      "op": ">=",
-      "rhs": "0",
-      "note": "the load mirror's node placement: V_b must leave the mirror at least a vdsat below VDD"
     },
     {
       "id": "cm-not-below",

@@ -83,7 +83,7 @@
       "note": "charge-injection error budget on C_s"
     }
   ],
-  "givens": { "L": "L", "W": "W_sw", "gm_id": "gm_id_on", "vds": "vds_test" },
+  "givens": { "L": "L", "W": "W_sw", "gm_id": "gm_id_on", "vds": "vds_test", "region": "triode" },
   "equations": [
     {
       "name": "C_s_min",

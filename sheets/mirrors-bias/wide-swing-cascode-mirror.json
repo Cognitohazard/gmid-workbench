@@ -1,6 +1,6 @@
 {
   "title": "Wide-swing cascode mirror",
-  "description": "The low-voltage cascode mirror. It keeps the matched-$V_{DS}$ accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full $V_{GS}$ above ground), an explicit bias $V_{bias} = V_{GS,casc} + V_{dsat,mirror}$ places the mirror node at exactly one saturation voltage. The output then only has to clear two stacked saturation voltages, $V_{out}(min) = V_{dsat,mirror} + V_{dsat,casc}$, with no threshold overhead, so the output can swing far lower than a standard cascode's $V_{GS} + V_{dsat}$ floor. The two mirror devices still sit at the same low drain voltage, so the systematic error stays near zero. The output mirror device binds width-first (width = K times the reference) on the reference's own $V_{GS}$, the gate wire they share; the cascode is modelled by one representative device (the matched reference and output cascodes share an inversion level). $V_{bias}$ is author math, and a rule checks it is realizable under the supply.",
+  "description": "The low-voltage cascode mirror. It keeps the matched-$V_{DS}$ accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full $V_{GS}$ above ground), an explicit bias $V_{bias}$ places the reference node one saturation voltage and a small margin above ground. The output then only has to clear two stacked saturation voltages and that margin, with no threshold overhead, so the output can swing far lower than a standard cascode's $V_{GS} + V_{dsat}$ floor. Four devices are drawn. In the reference branch the reference mirror device carries the input current with its drain on the reference node, and the reference cascode stands on that node with its gate on $V_{bias}$ and its drain on the gate the two mirror devices share, where the input current enters. The reference node is solved to the reference device's own saturation voltage plus node_margin, which is what a wide-swing bias generator is designed to produce, and $V_{bias}$ is the reference cascode's gate-source voltage above it; a rule checks the supply can produce it. The output branch is drawn as the cascode current mirror draws it: the output mirror device is K times the reference device's width on the reference device's gate, with its current read off the table at its own drain voltage; the output cascode is K times the reference cascode's width on $V_{bias}$, in series with it and carrying that current; and the node between them is solved so that the gate-source voltage the cascode needs for that current hangs the node under $V_{bias}$. That node equals the reference node only where the output sits level with the reference cascode's drain; elsewhere it settles a few millivolts away, and the systematic-error row reports what that costs. The sheet's own device is the output cascode; the other three are blocks. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
   "polarity": "n",
   "params": [
     { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec", "note": "reference current" },
@@ -21,7 +21,7 @@
       "max": 1.6,
       "unit": "V",
       "role": "spec",
-      "note": "DC level of the node the mirror serves; the wide-swing floor lets this go low",
+      "note": "DC level of the node the mirror serves, which is the output cascode's drain; the wide-swing floor lets this go low, and the output cascode's saturation region holds it above the node under the cascode plus the cascode's saturation voltage",
       "class": "independent"
     },
     {
@@ -58,7 +58,7 @@
       "max": 14,
       "unit": "1/V",
       "role": "choice",
-      "note": "cascode inversion"
+      "note": "cascode inversion, set on the reference cascode. The output cascode takes K times that device's width and the output mirror device's current, so its own inversion level is read off the table"
     },
     {
       "name": "vds_lo",
@@ -68,7 +68,17 @@
       "unit": "V",
       "role": "choice",
       "solveFor": "wideswing_node",
-      "note": "the wide-swing mirror node. Solved, not retuned — the engine searches for the node equal to the mirror device's own reported vdsat plus node_margin (the bias a real wide-swing generator is designed to produce); the stored value is never read. It is searched between its neighbours at their widest, ground and the 1.8 V supply"
+      "note": "the reference node: the reference mirror device's drain and the reference cascode's source. Solved, not retuned — the engine searches for the node equal to the reference device's own reported vdsat plus node_margin (the bias a real wide-swing generator is designed to produce); the stored value is never read. It is searched between its neighbours at their widest, ground and the 1.8 V supply"
+    },
+    {
+      "name": "k_x",
+      "value": 0.3,
+      "min": 0,
+      "max": 1,
+      "unit": "1",
+      "role": "choice",
+      "solveFor": "k_casc",
+      "note": "where the node between the two output devices — the output mirror device's drain and the output cascode's source — sits, as a fraction of the cascode gate bias V_bias. Solved, not set: the current the output mirror device delivers at that node is the current the output cascode carries, and the gate-source voltage the cascode needs for that current hangs the node under V_bias. The engine searches for the node at which the two agree; the stored value is never read. It is stated as a fraction of V_bias so that its range means the same thing whatever the table: the node lies between ground, 0, and the cascode gate itself, 1. Where the output sits level with the reference cascode's drain the node is the reference node vds_lo; it settles a little below or above that where the output sits lower or higher. The V_x row gives the node in volts"
     },
     {
       "name": "node_margin",
@@ -112,7 +122,7 @@
       "name": "ref",
       "doc": {
         "title": "Reference mirror device (bottom)",
-        "description": "The bottom reference device at the input current, biased at the wide-swing low node. Its saturation voltage sets where that node should sit, and the output mirror device shares the same vds.",
+        "description": "The bottom reference device at the input current — the one device on this sheet whose current is typed. Its drain is the reference node and its gate is the reference cascode's drain, where the input current enters. Its saturation voltage sets where the reference node should sit, so it has to stay saturated there. It publishes its width and its gate voltage, which is all the output mirror device needs to copy it.",
         "polarity": "n",
         "params": [
           { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -123,10 +133,16 @@
             "value": 0.3,
             "unit": "V",
             "role": "spec",
-            "note": "the wide-swing mirror node voltage"
+            "note": "the reference node"
           }
         ],
-        "givens": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "vds": "vds_r" },
+        "givens": {
+          "L": "L_r",
+          "id": "I_ref",
+          "gm_id": "gm_id_r",
+          "vds": "vds_r",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -147,10 +163,10 @@
       }
     },
     {
-      "name": "casc",
+      "name": "ref_casc",
       "doc": {
-        "title": "Cascode device (representative)",
-        "description": "One cascode device carrying the reference current; the matched reference-branch and output-branch cascodes share this inversion level. Its vgs sets the cascode gate bias and its saturation voltage sets the second term of the output compliance floor.",
+        "title": "Reference cascode",
+        "description": "The cascode in the reference branch, carrying the reference current, read from the reference device rather than typed. Its gate is the cascode bias, its source the reference node, and its drain the gate the two mirror devices share, so its drain-source voltage is the reference device's gate-source voltage less the reference node. Its source stands on the reference node rather than the bulk, so its body bias is declared as that node. Its gate-source voltage above the reference node is the cascode bias the wide-swing generator has to produce; the output cascode takes K times its width.",
         "polarity": "n",
         "params": [
           { "name": "I_c", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -161,14 +177,14 @@
             "value": 0.3,
             "unit": "V",
             "role": "spec",
-            "note": "a representative cascode vds (its vgs and vdsat are the values used, and both are drain-voltage independent here)"
+            "note": "from the reference node up to the gate the two mirror devices share"
           },
           {
             "name": "vsb_cc",
             "value": 0.3,
             "unit": "V",
             "role": "spec",
-            "note": "the source stands on the wide-swing mirror node, not the bulk"
+            "note": "the source stands on the reference node, not the bulk"
           }
         ],
         "givens": {
@@ -176,7 +192,8 @@
           "id": "I_c",
           "gm_id": "gm_id_cc",
           "vds": "vds_cc",
-          "vsb": "vsb_cc"
+          "vsb": "vsb_cc",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -188,69 +205,145 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["vgs", "vdsat", "W", "gm", "gmb", "gds"]
+        "provides": ["vgs", "vdsat", "W"]
       },
       "params": {
         "I_c": "ref__id",
         "L_cc": "L_c",
         "gm_id_cc": "gm_id_c",
-        "vds_cc": "V_out - vds_lo",
+        "vds_cc": "ref__vgs - vds_lo",
         "vsb_cc": "vds_lo"
+      }
+    },
+    {
+      "name": "out",
+      "doc": {
+        "title": "Output mirror device (bottom)",
+        "description": "The output-branch mirror device: K times the reference device's width on the reference device's gate, with its source at ground like the reference's. Its current is read off the table rather than typed — the reference sits at the reference node and this device at the node under the output cascode, so it delivers K times the reference current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. That current is the output current: the cascode above is in series and carries it. Its own output resistance is what degenerates the cascode.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "W_o",
+            "value": 8e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "K times the reference device's width"
+          },
+          {
+            "name": "vgs_o",
+            "value": 0.6,
+            "unit": "V",
+            "role": "spec",
+            "note": "the reference device's gate voltage — the gate wire the two share"
+          },
+          { "name": "L_o", "value": 1e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "vds_o",
+            "value": 0.3,
+            "unit": "V",
+            "role": "spec",
+            "note": "the node under the output cascode"
+          }
+        ],
+        "givens": {
+          "L": "L_o",
+          "W": "W_o",
+          "vgs": "vgs_o",
+          "vds": "vds_o",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [],
+        "provides": ["W", "id", "gm_id", "ro"]
+      },
+      "params": {
+        "W_o": "K*ref__W",
+        "vgs_o": "ref__vgs",
+        "L_o": "L",
+        "vds_o": "k_x*(ref_casc__vgs + vds_lo)"
       }
     }
   ],
-  "givens": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "vds_lo" },
+  "givens": {
+    "L": "L_c",
+    "W": "K*ref_casc__W",
+    "id": "out__id",
+    "vds": "V_out - k_x*(ref_casc__vgs + vds_lo)",
+    "vsb": "k_x*(ref_casc__vgs + vds_lo)",
+    "region": "saturation"
+  },
   "equations": [
     {
       "name": "wideswing_node",
       "expr": "ref__vdsat + node_margin",
       "unit": "V",
-      "note": "where the wide-swing bias parks the mirror node: the saturation knee plus the design margin. vds_lo is solved to this"
+      "note": "where the wide-swing bias parks the reference node: the saturation knee plus the design margin. vds_lo is solved to this"
     },
-    { "name": "I_out", "expr": "id", "unit": "A" },
+    {
+      "name": "V_bias",
+      "expr": "ref_casc__vgs + vds_lo",
+      "unit": "V",
+      "note": "the cascode gate bias both cascodes share: one reference-cascode gate-source voltage above the reference node where the design parks it. That node is vds_lo — the saturation knee plus node_margin, which is what the solve produces — so biasing to the bare knee instead would sit the node a full node_margin low"
+    },
+    {
+      "name": "V_x",
+      "expr": "k_x*V_bias",
+      "unit": "V",
+      "note": "the node between the two output devices, in volts: the solved fraction of the cascode gate bias. It is the output mirror device's drain voltage and the output cascode's body bias, and what is left of the output level above it is the cascode's drain-source voltage. With the fraction solved it is the cascode gate bias less the output cascode's gate-source voltage"
+    },
+    {
+      "name": "k_casc",
+      "expr": "(V_bias - vgs)/V_bias",
+      "unit": "1",
+      "note": "where the output cascode's gate puts its source, as a fraction of the cascode gate bias: that bias, less the gate-source voltage the cascode needs to carry the output mirror device's current at the body bias and drain voltage the node gives it. k_x is solved to this"
+    },
+    {
+      "name": "I_out",
+      "expr": "id",
+      "unit": "A",
+      "note": "the current delivered at the output: the output cascode's, which is the current the output mirror device below it delivers — the two are in series"
+    },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
     {
       "name": "sys_err",
       "expr": "(I_out - I_target)/I_target",
       "unit": "1",
-      "note": "lambda mismatch between the two mirror devices; near zero because both sit at the same wide-swing node voltage"
+      "note": "lambda mismatch between the two mirror devices: the reference device sits at the reference node and the output mirror device at the solved node under the output cascode. The two agree where the output is level with the reference cascode's drain. Elsewhere the cascode takes up nearly all of the difference between the two levels, the node moves by the millivolts that are left, and the error is those millivolts through the mirror device's gds"
     },
     {
-      "name": "V_bias",
-      "expr": "casc__vgs + vds_lo",
+      "name": "V_out_min",
+      "expr": "V_x + vdsat",
       "unit": "V",
-      "note": "wide-swing cascode gate bias: one cascode vgs above the mirror node where the design actually parks it. That node is vds_lo — the saturation knee plus node_margin, which is what the solve produces — so biasing to the bare knee instead would sit the node a full node_margin low"
+      "note": "the output compliance floor: the node under the output cascode plus the cascode's own saturation voltage — two stacked saturation voltages and the node margin, with no threshold overhead (contrast vgs + vdsat for a standard cascode). The output cascode's saturation region holds the output above it"
     },
     { "name": "irel_ref", "expr": "pelgrom_irel(avt, abeta, ref__W, L, gm_id_m)", "unit": "1" },
-    { "name": "irel_out", "expr": "pelgrom_irel(avt, abeta, W, L, gm_id)", "unit": "1" },
+    {
+      "name": "irel_out",
+      "expr": "pelgrom_irel(avt, abeta, out__W, L, out__gm_id)",
+      "unit": "1",
+      "note": "current spread of the output mirror device, at the inversion level it lands on through the gate it shares with the reference"
+    },
     {
       "name": "sigma_ratio",
       "expr": "sqrt(irel_ref^2 + irel_out^2)",
       "unit": "1",
-      "note": "random 1-sigma error of the K:1 ratio; the K-times-larger output device contributes 1/sqrt(K) of the reference spread"
+      "note": "random 1-sigma error of the K:1 ratio from the bottom mirror pair; the K-times-larger output device contributes 1/sqrt(K) of the reference spread"
     },
     {
       "name": "Rout",
-      "expr": "(1/(K*casc__gds))*(1 + K*(casc__gm + casc__gmb)*ro) + ro",
+      "expr": "(1/gds)*(1 + (gm + gmb)*out__ro) + out__ro",
       "unit": "ohm",
-      "note": "output resistance of the OUTPUT branch. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series; both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. The K factors are what make this the OUTPUT leg rather than the reference one: casc is a representative device carried at the reference current, and the leg described here runs K times that through a K-times-wider device. At a fixed gm/ID, K times the current is exactly K times the transconductance and exactly K times the output conductance, so the scaling is an identity of the sizing rather than an approximation, and no separate output-branch device has to be sized to state it. This is the number a stage loading the mirror sees"
+      "note": "output resistance of the output branch, with the output cascode read at the current it carries and with its source on the solved node. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series; both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. This is the number a stage loading the mirror sees"
     }
   ],
   "checks": [
     {
       "id": "feasible-inversion",
       "kind": "physical",
-      "lhs": "gm_id_m",
+      "lhs": "gm_id_c",
       "op": "<=",
-      "rhs": "ceiling"
-    },
-    {
-      "id": "compliance",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "vds_lo + casc__vdsat",
-      "note": "wide-swing output floor: the mirror node plus the cascode's own saturation voltage, with no threshold overhead (contrast vgs + vdsat for a standard cascode). The floor is measured from where the node is actually parked, vds_lo, not from the bare saturation knee — the node_margin that keeps the mirror out of triode across corners is headroom the output has to clear too"
+      "rhs": "ceiling",
+      "note": "the cascode inversion level against the ceiling of the data the output cascode is read from. The output cascode is given a width and a current, so its own level is an outcome; the reference device and the reference cascode, which are sized for an inversion level, carry the same check on their own data"
     },
     {
       "id": "vbias-realizable",

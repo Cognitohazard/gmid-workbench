@@ -7,20 +7,20 @@
 *
 *   block               W [um]  id [uA]  vgs [mV]  gm [uS]  gm/id
 *   bias  (XMB)         2.5031  20.000     810.56  200.00   10.00   diode-connected, programmed
-*   tail  (XMT)         2.5031  17.875     810.56  175.17    9.80   bias gate, vds = V_tail
-*   in    (XM2)         1.8066   9.1242    825.63  109.49   12.00   pair, output side: 51.04 % of the tail's
-*   ldr   (XM3)         2.4740   8.7507  -1132.19   70.01    8.00   diode side of the load: the rest
-*   inr   (XM1)         1.8066   8.7507    825.63  105.09   12.01   pair, diode side: in's W and vgs
-*   ld    (XM4)         2.4740   8.6106  -1132.19   68.95    8.01   output side, ldr's gate
+*   tail  (XMT)         2.5031  18.103     810.56  179.73    9.93   bias gate, vds = V_tail
+*   in    (XM2)         1.7808   8.9782    825.04  107.74   12.00   pair, output side: 49.60 % of the tail's
+*   ldr   (XM3)         2.5797   9.1243  -1132.19   72.99    8.00   diode side of the load: the rest
+*   inr   (XM1)         1.7808   9.1243    829.82  107.29   11.76   pair, diode side: in's W, the rest of the tail
+*   ld    (XM4)         2.5797   8.9782  -1132.19   71.90    8.01   output side, ldr's gate
 *
-*   V_tail 274.37 mV   tail__id = I_q 17.875 uA   pair_split 0.5104   vos_sys 4.7889 mV
-*   in__gds 1.3584 uS   ld__gds 0.6497 uS   Rout 497.99 kohm   gm_pair 107.25 uS   Av 53.41
+*   V_tail 272.57 mV   tail__id = I_q 18.103 uA   out_share 0.4960   vos_sys 4.7845 mV
+*   in__gds 1.3346 uS   ld__gds 0.6774 uS   Rout 497.02 kohm   gm_pair 107.52 uS   Av 53.44
 *
-* The pair and load rows, pair_split and vos_sys describe the OTA with its inputs balanced and
-* the output forced to V_out_dc. The servo below leaves the inputs apart by the offset instead,
-* which moves about a quarter of a microamp from the output branch to the diode branch; v(os)
-* is what to hold against vos_sys, and the README says how to put this deck in the balanced
-* state.
+* The sheet draws the OTA at rest, the state this deck puts it in: the output held at V_out_dc,
+* the two inputs apart by the offset that takes. The split of the tail current is solved so the
+* output node's currents balance (in carries what ld returns), and vos_sys is the difference of
+* the two pair transistors' gate-source voltages, inr__vgs - in__vgs. v(os) is what to hold
+* against it, and the pair and load rows against the rows above.
 *
 * Widths. The tables are characterized at W = 1 um, and the sheet scales them per um. Each
 * device here is that same 1 um single-finger device with a multiplier m equal to the sized
@@ -44,10 +44,10 @@ VDD  vdd  0    1.8
 IB   vdd  nb   20u
 XMB  nb   nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
 XMT  tail nb   0    0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=2.5031
-XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.8066
-XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.8066
-XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.4740
-XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.4740
+XM1  n1   inp  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7808
+XM2  out  inn  tail 0    sky130_fd_pr__nfet_01v8 L=0.5 W=1 nf=1 m=1.7808
+XM3  n1   n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5797
+XM4  out  n1   vdd  vdd  sky130_fd_pr__pfet_01v8 L=0.5 W=1 nf=1 m=2.5797
 CL   out  0    2p
 
 * inputs: v(inp) - v(inn) = VID + v(os), centred on CM_dc

@@ -20,13 +20,17 @@ export const QUANTITY_HELP: Readonly<Record<string, string>> = {
   gm_cgd: 'gm/C_gd (rad/s).',
   cgd_cgg: 'C_gd/C_gg — the feedback-capacitance fraction.',
   gmb_gm: 'Body-effect ratio g_mb/gm.',
-  // input-referred noise (measured from stored PSDs, and the γ-model estimate)
+  // input-referred noise (measured from stored PSDs, and the γ-model keys, which read the
+  // table's own γ where it stores thermal noise)
   vnth: 'Input-referred thermal-noise density √S_id/gm (V/√Hz), from the stored drain-noise PSD (measured).',
   vnth_m:
-    'Input-referred thermal-noise density (γ-model): √(4kTγ/gm) (V/√Hz). Always available; falls as 1/√gm.',
+    'Input-referred thermal-noise density √(4kTγ/gm) (V/√Hz). Always available; falls as 1/√gm. γ is read from the table’s stored drain noise where it has one, so this equals the measured v_n,th there; from the table’s own gamma column where it stores one, ahead of the drain noise; and is 1.0 (an estimate) where it has neither.',
   vnfl: 'Input-referred 1/f (flicker) noise density at 1 Hz (V/√Hz), from the stored flicker PSD (measured).',
   svth: 'Input-referred thermal-noise PSD S_id/gm² (V²/Hz), measured.',
-  svth_m: 'Input-referred thermal-noise PSD (γ-model) 4kTγ/gm (V²/Hz).',
+  svth_m:
+    'Input-referred thermal-noise PSD 4kTγ/gm (V²/Hz), with γ from the table’s own gamma column or its stored drain noise where it has either, and 1.0 where it has neither.',
+  gamma:
+    'Thermal-noise factor γ = S_th/(4kT·gm), read from the stored drain-noise PSD at the table’s temperature. Where the table stores no thermal noise it is the 1.0 default.',
   svfl: 'Input-referred 1/f noise PSD at 1 Hz (V²/Hz), measured.',
   // base quantities
   vgs: 'Gate-source voltage (V) — the usual sweep axis.',
@@ -74,7 +78,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail checks with margins, sized on the active device.',
   assumptions:
     'Voltages this design was sized under rather than solved for: the ones the sheet marks “assumed” — an internal stack node, a guessed gate-source drop — that feed at least one device’s sizing. The sheet’s own parts determine each of them, but the sheet types a value for now instead of deriving it. The verdict holds only while those typed values are right, so they are listed with it. A voltage nothing on the sheet determines — a supply, an input level, an output held by a feedback loop outside the sheet, a voltage across a device whose surroundings are not on the sheet — is one you state, and is not listed here.',
-  held: 'Node voltages that hang under a transistor’s gate — a cascode’s source, a pair’s tail. The sheet states each node at this design point, and this is the gate voltage that puts it there: the node plus the device’s gate-source voltage. Where the design is held fixed and re-checked — at a range end — that gate voltage is what stays put, and the node is re-solved under it.',
+  held: 'What this design keeps where it is held fixed and re-checked — at a range end or another condition. For a node under a transistor’s gate (a cascode’s source, a pair’s tail) it is the gate voltage that puts the node where the sheet states it, and the node is re-solved under it. For a current the design point types (an inverter’s bias), it is the balance of the two currents it sets, zero here, and the current is re-solved to keep it.',
   feasBadge:
     'Can this design type meet the spec — on the device and at the condition the design is sized at, with the current variables? Feasible = every hard check (physical + spec) passes there; advisory checks never gate it. When it is not, the badge names the binding check: the failing hard check with the worst margin, anywhere in the composition (a child’s check is shown by path). Nothing that happens at another condition or at an end of the operating range moves this badge — that is compliance, counted beside it. “No answer” means the evaluation started and did not complete; “not evaluated” means it never started.',
   sensitivity:
@@ -131,8 +135,9 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Where on the curve the device sits. Each of these is width-independent, so any ONE of them pins the operating point (and the other two follow) without saying how big the device is. Enter the spec you actually have: f_T for a speed target, gm/g_ds for a gain target, gm/ID to work the efficiency axis directly. If the target is out of reach at this L, the lengths that do reach it are listed.',
   bindSize:
     'How big the device is. Pick ONE to scale the operating point above into a real device — or two of these on their own, which pins the operating point between them (gm and I_D fix gm/ID; W with either fixes a current or transconductance density).',
-  noise:
-    'Input-referred noise at the sized gm: thermal density (γ-model) and the total RMS over the band.',
+  noise: 'Input-referred noise at the sized gm: thermal density and the total RMS over the band.',
+  noiseSource:
+    'Where the thermal-noise figures come from: “measured” reads γ from the drain noise the table stores (sth), “γ from the table” from its own gamma column, and “estimated” uses γ = 1.0 because it stores neither — which can be half the real noise power of a short-channel NMOS.',
   fco: 'Flicker (1/f) noise corner frequency f_co (Hz).',
   band: 'Integration band [f_lo, f_hi] (Hz) for the total RMS input-referred noise.',
   matching: 'Pelgrom mismatch budget on the sized geometry: σ(V_th), pair offset, and σ(I)/I.',

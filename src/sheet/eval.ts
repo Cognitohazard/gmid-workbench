@@ -7,7 +7,7 @@
 import { LOOKUP_RANGE_MESSAGE } from '../types';
 import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
-import { compileExpr, metaScalars } from '../derive';
+import { compileExpr, metaScalars, noiseSource } from '../derive';
 import { AXIS_DEFAULT_BIAS } from '../namespace';
 import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
@@ -17,6 +17,7 @@ import {
   BIAS_AXES,
   MAX_BLOCK_DEPTH,
   PATH_SEP,
+  balancedBy,
   clampedIn,
   engineSolved,
   holds,
@@ -519,6 +520,9 @@ function applyGivensBias(
 interface RegionPoint {
   vds?: number;
   vdsat?: number;
+  /** The direction of the table's own vds axis: +1 where it holds no negative value, −1 where it
+   *  holds no positive one (a signed PMOS export), undefined where it spans both or is absent. */
+  axis?: 1 | -1;
 }
 
 /** Resolve the givens, call sizeDevice, and merge its operating point into `values`. `point`
@@ -595,7 +599,14 @@ function runSizing(
     for (const m of res.warnings) {
       warn({ rule: 'sheet-givens', severity: 'warning', message: m, location: 'givens' });
     }
-    const report: SizingReport = { ok: true, W: res.W, L, vgs: res.vgs, id: res.id };
+    const report: SizingReport = {
+      ok: true,
+      W: res.W,
+      L,
+      vgs: res.vgs,
+      id: res.id,
+      noise: noiseSource(table.grid),
+    };
     if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
     // The drain voltage the region check compares: the one the givens STATE, not the one a
     // table that does not reach it was read at. A clamp is reported where it happens (`clamped`
@@ -604,6 +615,12 @@ function runSizing(
     // own column is the drain voltage.
     point.vds = sliced.stated.vds ?? (sliced.diode ? res.quantities.vds : undefined);
     point.vdsat = res.quantities.vdsat;
+    const vdsAxis = table.grid.axes.find((a) => a.name === 'vds')?.values;
+    if (vdsAxis?.length) {
+      const lo = Math.min(...vdsAxis);
+      const hi = Math.max(...vdsAxis);
+      point.axis = lo >= 0 ? 1 : hi <= 0 ? -1 : undefined;
+    }
     if (sliced.assumed.length) report.assumed = sliced.assumed;
     const clamped = [...sliced.clamped, ...res.clamped];
     // A diode connection is read on the vds = vgs diagonal. Where the gate voltage this device
@@ -719,10 +736,16 @@ function classify(
 
 /**
  * The check a declared region adds to its device (see SheetGivens.region): `abs(vds) >= vdsat` in
- * saturation, `abs(vds) <= vdsat` in triode, with the stated drain voltage and the sizing's vdsat. A physical check like any
- * authored one, so it gates feasibility, sweeps and compliance the same way. Everything that
- * leaves it without two numbers — no vdsat column, a device that did not size, a region the
- * validator refuses — reads `na`, which a hard check fails closed on.
+ * saturation, `abs(vds) <= vdsat` in triode, with the stated drain voltage and the sizing's vdsat.
+ * A physical check like any authored one, so it gates feasibility, sweeps and compliance the same
+ * way. Everything that leaves it without two numbers — no vdsat column, a device that did not
+ * size, a region the validator refuses — reads `na`, which a hard check fails closed on.
+ *
+ * The magnitude is compared only where the stated voltage points the way the table's own vds axis
+ * does. One of the other sign is a device with its drain and source the other way round: the
+ * table characterizes no such point (the sizing reads it at the axis's edge, with a warning), and
+ * its magnitude clearing vdsat says nothing about saturation, so the check fails, in either
+ * region, with the reason.
  */
 function regionCheck(
   b: SheetGivens,
@@ -743,6 +766,24 @@ function regionCheck(
     return na('the drain-source voltage the givens state is not known');
   if (point.vdsat === undefined || !Number.isFinite(point.vdsat))
     return na('the table has no vdsat column');
+  // Float rounding about zero is a drain at the source, not a reversed one (HULL_SNAP_V).
+  if (point.axis !== undefined && point.vds * point.axis < -HULL_SNAP_V) {
+    // Read the other way round, the drain sits |vds| on the wrong side of the source: a margin of
+    // that size below zero, whichever region was declared.
+    const margin = -Math.abs(point.vds);
+    return {
+      ...classify(check, Math.abs(point.vds), point.vdsat),
+      lhsValue: point.vds * point.axis,
+      margin,
+      rawMargin: margin,
+      marginPct: margin / Math.max(Math.abs(point.vdsat), TINY),
+      status: 'fail',
+      detail:
+        `the stated drain-source voltage ${shown(point.vds)} V points against this table's vds ` +
+        `axis, so the device is reverse-biased — drain and source the other way round — which ` +
+        `the table does not characterize`,
+    };
+  }
   return classify(check, Math.abs(point.vds), point.vdsat);
 }
 
@@ -798,7 +839,7 @@ function applyBlockParams(
         severity: 'warning',
         message:
           constrained(child) && child.designConstraint.held
-            ? `block "${block.name}": override "${k}" sets a node the child holds under a gate — here the hardware is held, so the child re-solves it and the override is ignored`
+            ? `block "${block.name}": override "${k}" sets a param the child holds — a node under a gate, or a current its balance fixes — and here the hardware is held, so the child re-solves it and the override is ignored`
             : `block "${block.name}": override "${k}" sets a param the child SOLVES — the engine searches it in its own range, so the override is ignored entirely`,
         location: block.name,
       });
@@ -1153,8 +1194,10 @@ export const SOLVE_TOL_REL = 1e-6;
 
 /** The least a held expression may move across its range, as a fraction of what its own param's
  *  term moves. For a node under a gate the rest of the expression is a gate-source voltage, which
- *  moves the same way as the node, so the true ratio is at least one; a cancelled or unresponsive
- *  relation leaves rounding error, some ten orders below this. */
+ *  moves the same way as the node, and for a current balance (`I_bias - p__id`) it is the other
+ *  branch's current, which moves against the param's own: either way the true ratio is at least
+ *  one, and a cancelled or unresponsive relation leaves rounding error, some ten orders below
+ *  this. */
 const HOLD_SLOPE_MIN = 1e-6;
 
 /**
@@ -1252,9 +1295,20 @@ function evaluateNode(
   return checkWiring(doc, withHeld(doc, solveNode(doc, table, resolveDevice, _depth, budget)));
 }
 
+/**
+ * How far from zero a current balance may read where the design is sized, as a fraction of its
+ * param's own magnitude. The balance is zero by construction — the device was sized to carry the
+ * current the param sets — so what is left is rounding, some ten orders below this; anything
+ * larger is a hold that does not balance what it names.
+ */
+const BALANCE_TOL_REL = 1e-6;
+
 /** The finished run with each of the doc's `hold` expressions evaluated against it (see
  *  SheetResult.held). One that does not evaluate fails the run: a fixed-hardware run would have
- *  nothing to hold it at. */
+ *  nothing to hold it at. So does a current balance (a hold that reads a device's current, see
+ *  balancedBy) that is not zero here: held at whatever it read, it would carry an offset between
+ *  the two currents to every condition the design is asked about, and the declaration that the
+ *  two are one current would be false at the very point it was made. */
 function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
   const params = doc.params.filter(holds);
   if (params.length === 0) return res;
@@ -1263,12 +1317,25 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
   let out = res;
   for (const p of params) {
     const v = evalScalar(p.hold, res.values, scope, NO_WARN, `hold ${p.name}`);
-    if (v !== undefined && Number.isFinite(v)) held[p.name] = v;
-    else
+    if (v === undefined || !Number.isFinite(v)) {
       out = solveFailed(
         out,
         `param "${p.name}": hold "${p.hold}" did not evaluate to a finite number`,
       );
+      continue;
+    }
+    const tol = BALANCE_TOL_REL * Math.abs(res.values[p.name] ?? p.value);
+    if (balancedBy(doc, p).length && !(Math.abs(v) <= tol)) {
+      out = solveFailed(
+        out,
+        `param "${p.name}": hold "${p.hold}" reads a device's current, so it is a current ` +
+          `balance, and a current balance must be zero where the design is sized — it reads ` +
+          `${v.toExponential(3)} here (tolerance ${tol.toExponential(3)}, a millionth of ` +
+          `${p.name}). Write it as the param less the current it has to equal`,
+      );
+      continue;
+    }
+    held[p.name] = v;
   }
   return { ...out, held };
 }

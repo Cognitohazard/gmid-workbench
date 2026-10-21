@@ -69,7 +69,8 @@
     "id": "I_bias",
     "gm_id": "gm_id",
     "vds": "V_out - I_bias*R_s",
-    "vsb": "I_bias*R_s"
+    "vsb": "I_bias*R_s",
+    "region": "saturation"
   },
   "equations": [
     {
@@ -130,14 +131,6 @@
       "rhs": "ceiling",
       "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
     },
-    {
-      "id": "headroom",
-      "kind": "physical",
-      "lhs": "V_out - I_bias*R_s",
-      "op": ">=",
-      "rhs": "vdsat",
-      "note": "device saturated: the drain-to-source voltage is the drain level minus the I*R_s source lift"
-    },
     { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
@@ -145,7 +138,7 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "read from the table's own noise where it carries it, and from the γ = 1 estimate otherwise; the simulator owns noise sign-off"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"]

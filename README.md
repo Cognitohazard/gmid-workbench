@@ -36,8 +36,9 @@ turns them into gm/ID design charts, operating-point lookups, and sized devices.
   disclosures — how much of your spec each sheet could use, whether the search ran out of
   budget rather than the design failing, and whether a reported current is really the author's
   slider floor. Picking a result opens it as a new design sheet with the values found.
-- **Noise and mismatch** — input-referred thermal noise (from stored PSDs when the
-  table carries them, or a γ-model estimate), 1/f noise and the flicker corner,
+- **Noise and mismatch** — input-referred thermal noise (from the table's stored
+  noise when it carries it, else a γ = 1.0 estimate, and the result says which),
+  1/f noise and the flicker corner,
   integrated RMS noise over a band, and a Pelgrom mismatch budget on the sized geometry.
 - **Data-trust QA** — gm and gds are derivatives and are exquisitely sensitive to sweep
   quality, so imports are validated (grid completeness, vgs step size, monotonicity,
@@ -141,11 +142,14 @@ characterization width conducts up to 1.9× more per µm in moderate inversion.
 Realized as **fingers of the characterization width** the table tracks simulation to
 a fraction of a percent, so treat a sized W as "N fingers of W<sub>char</sub>" (the
 sizer suggests the finger count). Cross-check decks and measured numbers live in
-[tools/verify/](tools/verify/README.md). The γ-model noise density assumes γ = 1
-and thermal noise only; real devices can run hotter (in simulation sky130's PMOS sits at
-γ ≈ 1 in strong inversion, but its NMOS at about 1.95 at gm/ID 12) and
-flicker can dominate far past the audio band — treat table-derived noise as a floor,
-not a budget.
+[tools/verify/](tools/verify/README.md). The thermal-noise density reads the
+table's own drain noise (`sth`) where the table carries it — the tables the
+generator produces do, and the five-transistor OTA then reads about 28 nV/√Hz
+against its simulated 28.24 — and falls back to γ = 1.0 where it does not, which
+understates a device that runs
+hotter (in simulation sky130's NMOS sits at about γ = 1.95 at gm/ID 12); every result
+says which it used. It is thermal noise only, and flicker can dominate far past the
+audio band — treat table-derived noise as a floor, not a budget.
 
 ## Scripting the core
 

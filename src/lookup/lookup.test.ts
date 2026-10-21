@@ -3,7 +3,7 @@ import { lookup, lookupByGmId, lookupByQuantity } from './index';
 import { invertX } from '../series';
 import { makeGrid } from '../grid';
 import { type Axis, type DeviceTable, LookupError } from '../types';
-import { generateDemoDevice, withoutColumns } from '../demo';
+import { generateDemoDevice, scaleQuantities, withoutColumns } from '../demo';
 import { importMostab } from '../import';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
 
@@ -264,6 +264,33 @@ describe('lookupByGmId (inverse)', () => {
     // missing column — no length would help — stays a plain Error.
     expect(() => lookupByGmId(table, 2, L)).toThrow(LookupError);
     expect(() => lookupByQuantity(table, 'ft', 1e9, L)).not.toThrow(LookupError);
+  });
+});
+
+describe('lookup — γ from the table where it carries thermal noise', () => {
+  // sth doubled and the stored gamma column dropped, so a γ read from the data is 2, not the
+  // default.
+  const dev = generateDemoDevice();
+  const L = dev.grid.axes[0].values[1];
+  const measured = scaleQuantities(withoutColumns(dev, ['gamma']), { sth: 2 });
+  const bare = withoutColumns(dev, ['gamma', 'sth']);
+
+  it('reports the measured γ at the point, and the γ-model keys read it', () => {
+    const out = lookup(measured, { l: L, vgs: 0.6 });
+    expect(out.gamma).toBeCloseTo(out.sth / (4 * PHYS.k * PHYS.T * out.gm), 12);
+    expect(out.gamma).toBeCloseTo(2 * GAMMA_DEFAULT, 12);
+    expect(out.vnth_m / out.vnth).toBeCloseTo(1, 12);
+    expect(out.svth_m / out.svth).toBeCloseTo(1, 12);
+    // Asked for alone, the γ-model key still reads the measured γ.
+    const alone = lookup(measured, { l: L, vgs: 0.6 }, ['vnth_m']);
+    expect(alone.vnth_m).toBe(out.vnth_m);
+  });
+
+  it('takes the default where the table carries no sth, and says so when asked by name', () => {
+    const out = lookup(bare, { l: L, vgs: 0.6 });
+    expect(out).not.toHaveProperty('gamma');
+    expect(out.vnth_m).toBeCloseTo(Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / out.gm), 18);
+    expect(lookup(bare, { l: L, vgs: 0.6 }, ['gamma'])).toEqual({ gamma: GAMMA_DEFAULT });
   });
 });
 

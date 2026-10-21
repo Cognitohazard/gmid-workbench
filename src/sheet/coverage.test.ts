@@ -18,7 +18,11 @@
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice, BODY_FACTOR } from '../demo';
 import { compileExpr } from '../derive';
+import { sizeDevice } from '../device';
 import { scalarScope } from '../expr';
+import { makeGrid } from '../grid';
+import { fixTable } from '../series';
+import type { DeviceTable } from '../types';
 import {
   runSheet,
   evaluateSheet,
@@ -47,7 +51,7 @@ const dev = generateDemoDevice({
 // The transformation alone
 // ---------------------------------------------------------------------------------------
 
-describe('the fixed-hardware transformation — decided on two booleans', () => {
+describe('the fixed-hardware transformation — decided on which givens are present', () => {
   const report = (over: Partial<SizingReport> = {}): SizingReport => ({
     ok: true,
     W: 1.194e-6,
@@ -97,13 +101,64 @@ describe('the fixed-hardware transformation — decided on two booleans', () => 
     expect(p.assumedSource).toEqual(['givens']);
   });
 
-  it('drops EVERY operating-point selector, not a hand-copied subset', () => {
+  it('drops EVERY operating-point target, not a hand-copied subset', () => {
     // The list is derived from the device module's own selectors; a selector left behind would
     // re-size the transistor at the range end, which is what a fixed-hardware check must not do.
-    for (const k of ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar', 'vgs', 'gm']) {
+    // A gate voltage is the one selector that is not a target, and has its own test below.
+    for (const k of ['gm_id', 'ft', 'gm_gds', 'av0', 'vstar', 'gm']) {
       const out = hold({ L: 'L_p', [k]: '3', id: 'I_d', vds: 'V_o' });
       expect(Object.keys(out!).sort(), k).toEqual(['L', 'W', 'id', 'vds']);
     }
+  });
+
+  it('keeps a given gate voltage only where a hold balances the current — the declaration', () => {
+    // An inverter's PMOS is written (id, vgs): the NMOS's current, at the gate voltage the supply
+    // leaves. So is a device whose gate voltage is a typed operating point. The two are told apart
+    // by what the sheet declares: a hold that reads this device's current (`id`, for the sheet's
+    // own device) balances it, and then the gate is what stays where the design is held and the
+    // current is read from the table — not kept, and not reported as assumed either.
+    const tied = (hold?: string): SheetDoc => ({
+      ...doc({ L: 'L_p', id: 'n__id', vgs: 'VDD - n__vgs', vds: 'V_o', region: 'saturation' }),
+      params: [{ name: 'I_d', value: 2e-5, min: 1e-6, max: 1e-4, ...(hold ? { hold } : {}) }],
+    });
+    const balanced = holdHardware(tied('I_d - id'), { sizing: report(), held: { I_d: 0 } });
+    expect(balanced.doc.givens).toEqual({
+      L: '5e-7',
+      W: '0.000001194',
+      vgs: 'VDD - n__vgs',
+      vds: 'V_o',
+      region: 'saturation',
+    });
+    expect(balanced.assumedSource).toEqual([]);
+    // Undeclared, the gate voltage is an operating-point spec like any other: held at the width
+    // and the current, as it always was.
+    const asBefore = {
+      L: '5e-7',
+      W: '0.000001194',
+      id: 'n__id',
+      vds: 'V_o',
+      region: 'saturation',
+    };
+    expect(holdHardware(tied(), { sizing: report() }).doc.givens).toEqual(asBefore);
+    // A hold that reads no current declares nothing about one.
+    expect(
+      holdHardware(tied('I_d + vgs'), { sizing: report(), held: { I_d: 0 } }).doc.givens,
+    ).toEqual(asBefore);
+    // Whatever a balanced gate voltage was paired with goes the same way, a transconductance
+    // included.
+    const gm = holdHardware(
+      { ...tied('I_d - id'), givens: { L: 'L_p', gm: '1e-4', vgs: '0.6', vds: 'V_o' } },
+      { sizing: report(), held: { I_d: 0 } },
+    );
+    expect(gm.doc.givens).toEqual({ L: '5e-7', W: '0.000001194', vgs: '0.6', vds: 'V_o' });
+    // Beside a width, nothing is rewritten at all (the first test above), so a mirror's tie is
+    // unchanged by this rule.
+    expect(hold({ L: 'L_p', W: 'ref__W', vgs: 'ref__vgs', vds: 'V_o' })).toEqual({
+      L: 'L_p',
+      W: 'ref__W',
+      vgs: 'ref__vgs',
+      vds: 'V_o',
+    });
   });
 
   it('holds the length the sizing used, not the authored expression', () => {
@@ -182,6 +237,379 @@ describe('the fixed-hardware transformation — decided on two booleans', () => 
     expect(p.equations).toEqual([{ name: 'r', expr: 'I_d * 2' }]);
     expect(p.checks).toEqual([{ id: 'x', kind: 'physical', lhs: 'r', op: '>=', rhs: '0' }]);
     expect(p.givens?.diode).toBe(true); // wiring, not a sizing spec
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// A gate on a shared node, held at a condition where the thresholds moved
+// ---------------------------------------------------------------------------------------
+
+/** The same device with its threshold moved by `dv`: everything the table held at a gate voltage
+ *  is now found `dv` higher. The vgs axis is shifted and the vth column with it — a process
+ *  condition reduced to the one thing these tests need it to change. */
+function shiftedThreshold(t: DeviceTable, dv: number): DeviceTable {
+  const axisNames = new Set(t.grid.axes.map((a) => a.name));
+  const axes = t.grid.axes.map((a) =>
+    a.name === 'vgs' ? { name: a.name, values: a.values.map((v) => v + dv) } : a,
+  );
+  const quantities = new Map(
+    [...t.grid.quantities]
+      .filter(([k]) => !axisNames.has(k))
+      .map(([k, c]) => [k, k === 'vth' ? c.map((v) => v + dv) : c] as const),
+  );
+  return { ...t, grid: makeGrid(axes, quantities) };
+}
+
+describe('a gate on a shared node keeps its supply where the design is held', () => {
+  // The demo's gate-source voltage at gm/ID = 12, L = 0.5 µm, body grounded (the library's
+  // VGS_GMID12_L05). With the supply at twice it and the output at half the supply, the inverter's
+  // two devices sit at the same gate-source voltage and the same drain voltage on the same table,
+  // so they size to the same width — and held on tables whose thresholds moved by dn and dp, the
+  // currents balance where V_in - dn = VDD - V_in - dp: V_in = (VDD + dn - dp)/2, in closed form.
+  const V0 = 0.567023;
+  const VDD = 2 * V0;
+  const L = 5e-7;
+  const DN = 0.04; // the NMOS slower
+  const DP = -0.02; // the PMOS faster
+
+  /** The inverter-based OTA's two devices, in the library's spelling: the NMOS sized from the
+   *  bias current and its gm/ID, the PMOS given that current and the gate voltage the supply
+   *  leaves. `hold` goes on the typed current. */
+  const inverter = (hold?: string): SheetDoc => ({
+    title: 'inverter',
+    polarity: 'n',
+    params: [
+      { name: 'VDD', value: VDD, unit: 'V', class: 'independent' },
+      { name: 'V_out', value: V0, unit: 'V', class: 'independent' },
+      { name: 'I_bias', value: 2e-5, min: 2e-6, max: 2e-4, unit: 'A', ...(hold ? { hold } : {}) },
+    ],
+    blocks: [
+      {
+        name: 'n',
+        doc: {
+          title: 'n',
+          polarity: 'n',
+          params: [
+            { name: 'I_d', value: 2e-5, unit: 'A' },
+            { name: 'vds_d', value: 0.5, unit: 'V' },
+          ],
+          givens: { L: String(L), id: 'I_d', gm_id: '12', vds: 'vds_d' },
+          equations: [],
+          checks: [],
+          provides: ['vgs', 'id', 'W'],
+        },
+        params: { I_d: 'I_bias', vds_d: 'V_out' },
+      },
+      {
+        name: 'p',
+        device: 'pmos',
+        doc: {
+          title: 'p',
+          polarity: 'p',
+          params: [
+            { name: 'I_d', value: 2e-5, unit: 'A' },
+            { name: 'vgs_d', value: 0.5, unit: 'V' },
+            { name: 'vds_d', value: 0.5, unit: 'V' },
+          ],
+          givens: { L: String(L), id: 'I_d', vgs: 'vgs_d', vds: 'vds_d' },
+          equations: [],
+          checks: [],
+          provides: ['vgs', 'id', 'W'],
+        },
+        params: { I_d: 'n__id', vgs_d: 'VDD - n__vgs', vds_d: 'VDD - V_out' },
+        wiring: { gate: 'V_in', source: 'VDD' },
+      },
+    ],
+    equations: [{ name: 'V_in', expr: 'n__vgs', unit: 'V' }],
+    checks: [],
+  });
+
+  const nHeld = shiftedThreshold(dev, DN);
+  const pHeld = shiftedThreshold(dev, DP);
+  /** Sized on the demo device for both halves, then held on the moved tables. */
+  const heldRun = (doc: SheetDoc) => {
+    const base = evaluateSheet(doc, dev, (id) => (id === 'pmos' ? dev : undefined));
+    expect(stands(base)).toBe(true);
+    const held = holdHardware(doc, base);
+    return {
+      base,
+      held,
+      res: evaluateSheet(held.doc, nHeld, (id) => (id === 'pmos' ? pHeld : undefined)),
+    };
+  };
+  /** A device's current at a held width and gate voltage, read straight off a table. */
+  const currentAt = (t: DeviceTable, W: number, vgs: number, vds: number): number =>
+    sizeDevice({ table: fixTable(t, { vds, vsb: 0 }), L, W, vgs }).id;
+
+  it('sizes the two halves alike at the design point, so the closed form applies', () => {
+    // Alike to the gm/ID inversion's interpolation: the NMOS lands some 50 µV off V0, which
+    // hands the PMOS 50 µV less and parts the widths by about 0.13 %. That moves the balance by
+    // about 0.13 %/(2 gm/ID) ≈ 0.05 mV, well inside the 0.5 mV the closed form is held to below.
+    const { base } = heldRun(inverter('I_bias - p__id'));
+    expect(relErr(base.values.n__W, base.values.p__W)).toBeLessThan(2e-3);
+    // The balance is zero there by construction: the PMOS was sized to carry the NMOS's current.
+    expect(base.held).toEqual({ I_bias: 0 });
+  });
+
+  it('keeps the gate on its wire, balances the currents, and reports the input level', () => {
+    const { held, res } = heldRun(inverter('I_bias - p__id'));
+    expect(res.feasible).toBe(true);
+    expect(res.warnings.filter((w) => w.severity !== 'info')).toEqual([]);
+    const v = res.values;
+    // The two gate-source voltages add up to the supply — the PMOS kept its gate expression.
+    expect(v.n__vgs + v.p__vgs).toBeCloseTo(VDD, 12);
+    // One current through both devices, to the search's tolerance.
+    expect(relErr(v.n__id, v.p__id)).toBeLessThan(1e-5);
+    // The input level the balance lands on, against the closed form; the bias current that
+    // is solved for is the current both carry.
+    expect(v.V_in).toBeCloseTo((VDD + DN - DP) / 2, 3);
+    expect(v.V_in).toBe(v.n__vgs);
+    expect(relErr(v.I_bias, v.n__id)).toBeLessThan(1e-12);
+    // Read straight off the moved tables at the held widths and the reported gate voltages,
+    // with no sheet in between, the two devices carry that current.
+    const W = { n: held.doc.blocks?.[0].doc?.givens?.W, p: held.doc.blocks?.[1].doc?.givens?.W };
+    const iN = currentAt(nHeld, Number(W.n), v.V_in, V0);
+    const iP = currentAt(pHeld, Number(W.p), VDD - v.V_in, VDD - V0);
+    expect(relErr(iN, v.I_bias)).toBeLessThan(1e-5);
+    expect(relErr(iP, v.I_bias)).toBeLessThan(1e-5);
+    // The NMOS lost overdrive (V_in - DN sits 10 mV below V0), so the current fell.
+    expect(v.I_bias).toBeLessThan(0.95 * 2e-5);
+  });
+
+  it('holds the NMOS the old way, and the PMOS at its width and gate voltage', () => {
+    const { held } = heldRun(inverter('I_bias - p__id'));
+    const [n, p] = held.doc.blocks?.map((b) => b.doc?.givens) ?? [];
+    expect(Object.keys(n ?? {}).sort()).toEqual(['L', 'W', 'id', 'vds']);
+    expect(n?.id).toBe('I_d');
+    expect(Object.keys(p ?? {}).sort()).toEqual(['L', 'W', 'vds', 'vgs']);
+    expect(p?.vgs).toBe('vgs_d');
+    expect(held.assumedSource).toEqual([]);
+    // The typed current is re-solved where the design is held: the hold became its constraint.
+    expect(held.doc.params.find((q) => q.name === 'I_bias')?.designConstraint).toEqual({
+      lhs: 'I_bias - p__id',
+      rhs: '0',
+      held: true,
+    });
+  });
+
+  const flagged = (doc: SheetDoc): string[] =>
+    validateSheet(doc)
+      .filter((w) => w.rule === 'sheet-held-current')
+      .map((w) => `${w.severity} ${w.location}`);
+  /** The inverter with the PMOS handed a different current expression. */
+  const pCurrent = (doc: SheetDoc, id: string): SheetDoc => ({
+    ...doc,
+    blocks: doc.blocks?.map((b) =>
+      b.name === 'p' ? { ...b, params: { ...b.params, I_d: id } } : b,
+    ),
+  });
+
+  it('holds the PMOS as a current source where nothing declares the gate, and says so', () => {
+    // Undeclared, the PMOS is held as it always was: its width and the NMOS's current. The two
+    // currents agree by construction and the gates part — which the PMOS's wiring declaration
+    // reports — and validation names the choice the sheet has not made, both ways out included.
+    const { res } = heldRun(inverter());
+    const v = res.values;
+    expect(v.n__id).toBe(2e-5);
+    expect(v.p__id).toBe(2e-5);
+    expect(Math.abs(v.n__vgs + v.p__vgs - VDD)).toBeGreaterThan(0.01);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-wiring').map((w) => w.location)).toEqual([
+      'p',
+    ]);
+    expect(flagged(inverter())).toEqual(['warning p']);
+    const said = validateSheet(inverter()).find((w) => w.rule === 'sheet-held-current');
+    expect(said?.message).toMatch(/hold that balances the two currents/);
+    expect(said?.message).toMatch(/mirror copy of a reference gets the reference's width and gate/);
+    expect(flagged(inverter('I_bias - p__id'))).toEqual([]);
+    // A current the sheet types as its own param is no different from one read off a partner.
+    expect(flagged(pCurrent(inverter(), 'I_bias'))).toEqual(['warning p']);
+    // A current given as a number is a source by statement, and draws nothing.
+    expect(flagged(pCurrent(inverter(), '2e-5'))).toEqual([]);
+  });
+
+  it('asks the same of the sheet’s own device, at the top of a tree only', () => {
+    // The PMOS as the sheet's own device, beside the NMOS block.
+    const own: SheetDoc = {
+      ...inverter(),
+      polarity: 'p',
+      blocks: inverter().blocks?.filter((b) => b.name === 'n'),
+      givens: { L: String(L), id: 'n__id', vgs: 'VDD - n__vgs', vds: 'VDD - V_out' },
+    };
+    expect(flagged(own)).toEqual(['warning givens']);
+    expect(
+      flagged({
+        ...own,
+        params: own.params.map((p) => (p.name === 'I_bias' ? { ...p, hold: 'I_bias - id' } : p)),
+      }),
+    ).toEqual([]);
+    // Embedded, a child's own givens are its parent's to settle: the inverter's PMOS block alone
+    // reads as undeclared, and inside the inverter with its balance nothing is raised anywhere.
+    const pDoc = inverter().blocks?.find((b) => b.name === 'p')?.doc as SheetDoc;
+    expect(flagged(pDoc)).toEqual(['warning givens']);
+    expect(
+      validateSheet(inverter('I_bias - p__id')).filter((w) => w.rule === 'sheet-held-current'),
+    ).toEqual([]);
+  });
+
+  it('refuses a current balance that is not zero where the design is sized', () => {
+    for (const hold of ['2*I_bias - p__id', 'I_bias - p__id - 1e-6']) {
+      const base = evaluateSheet(inverter(hold), dev, (id) => (id === 'pmos' ? dev : undefined));
+      expect(stands(base), hold).toBe(false);
+      expect(base.held, hold).toEqual({});
+      expect(base.warnings.find((w) => w.rule === 'sheet-solve')?.message, hold).toMatch(
+        /a current balance must be zero where the design is sized — it reads -?[\d.]+e/,
+      );
+    }
+    // A hold that reads no current holds whatever it read, as a node's gate voltage does.
+    const node = evaluateSheet(inverter('I_bias + 1e-6'), dev, (id) =>
+      id === 'pmos' ? dev : undefined,
+    );
+    expect(stands(node)).toBe(true);
+  });
+
+  it('refuses a balance whose param reaches no other current where the design is held', () => {
+    // A lone device given its gate voltage and a current, with its own current balanced against
+    // the param it was given: where the design is held the device keeps its gate, and the param
+    // feeds nothing but the balance — solving it would set a number and move no current.
+    const lone: SheetDoc = {
+      title: 'lone',
+      polarity: 'n',
+      params: [{ name: 'I_set', value: 2e-5, min: 2e-6, max: 2e-4, unit: 'A', hold: 'I_set - id' }],
+      givens: { L: String(L), id: 'I_set', vgs: '0.6', vds: '0.6' },
+      equations: [],
+      checks: [],
+    };
+    const errors = validateSheet(lone).filter((w) => w.severity === 'error');
+    expect(errors.map((w) => `${w.rule} ${w.location}`)).toEqual(['sheet-param I_set']);
+    expect(errors[0].message).toMatch(/reaches no other device's current/);
+    // The NMOS's own current against the param it carries cancels: the balanced device is the
+    // only one the param reaches, which counts for nothing.
+    expect(
+      validateSheet(inverter('I_bias - n__id'))
+        .filter((w) => w.severity === 'error')
+        .map((w) => `${w.rule} ${w.location}`),
+    ).toEqual(['sheet-param I_bias']);
+    expect(validateSheet(inverter('I_bias - p__id')).filter((w) => w.severity === 'error')).toEqual(
+      [],
+    );
+  });
+
+  it('balances two halves that were both given a gate voltage, keeping the PMOS’s alone', () => {
+    // Both halves written (id, vgs) on a typed input level. The balance names the PMOS's current,
+    // so the PMOS keeps its gate; the NMOS, undeclared, is held at its width and the bias current,
+    // which the balance solves — the two currents agree. The NMOS is still reported: where the
+    // design is held its gate is no longer the input level.
+    const both: SheetDoc = {
+      ...inverter('I_bias - p__id'),
+      params: [
+        ...inverter('I_bias - p__id').params,
+        { name: 'V_in', value: V0, unit: 'V', class: 'independent' },
+      ],
+      equations: [],
+      blocks: inverter().blocks?.map((b) =>
+        b.name === 'n'
+          ? {
+              ...b,
+              doc: {
+                ...(b.doc as SheetDoc),
+                params: [...(b.doc as SheetDoc).params, { name: 'vg', value: 0.5, unit: 'V' }],
+                givens: { L: String(L), id: 'I_d', vgs: 'vg', vds: 'vds_d' },
+              },
+              params: { ...b.params, vg: 'V_in' },
+            }
+          : { ...b, params: { ...b.params, vgs_d: 'VDD - V_in' }, wiring: undefined },
+      ),
+    };
+    expect(validateSheet(both).filter((w) => w.severity === 'error')).toEqual([]);
+    expect(flagged(both)).toEqual(['warning n']);
+    const { held, res } = heldRun(both);
+    expect(held.doc.blocks?.[0].doc?.givens?.id).toBe('I_d');
+    expect(held.doc.blocks?.[1].doc?.givens?.vgs).toBe('vgs_d');
+    expect(relErr(res.values.n__id, res.values.p__id)).toBeLessThan(1e-5);
+    expect(res.values.I_bias).toBe(res.values.n__id);
+  });
+
+  it('keeps a gate on a node by re-solving the node, as before, with nothing to declare', () => {
+    // A cascode written (id, vgs) on a typed gate voltage, the node under it held: the hold reads
+    // its gate-source voltage, so the sheet has said what stays — the gate — and the device is
+    // held at its width and current, the node re-solved under it. On the slower table the node
+    // drops by about the threshold shift over (1 + the body factor): 40 mV/1.2 = 33 mV.
+    const stack: SheetDoc = {
+      title: 'stack',
+      polarity: 'n',
+      params: [
+        { name: 'I', value: 2e-5, unit: 'A' },
+        { name: 'V_out', value: 1.0, unit: 'V', class: 'independent' },
+        { name: 'V_a', value: 0.4, min: 0.1, max: 0.8, unit: 'V', hold: 'V_a + c__vgs' },
+      ],
+      blocks: [
+        {
+          name: 'in',
+          doc: {
+            title: 'in',
+            polarity: 'n',
+            params: [
+              { name: 'I_d', value: 2e-5, unit: 'A' },
+              { name: 'vd', value: 0.4, unit: 'V' },
+            ],
+            givens: { L: String(L), id: 'I_d', gm_id: '12', vds: 'vd' },
+            equations: [],
+            checks: [],
+            provides: ['id'],
+          },
+          params: { I_d: 'I', vd: 'V_a' },
+        },
+        {
+          name: 'c',
+          doc: {
+            title: 'c',
+            polarity: 'n',
+            params: [
+              { name: 'I_d', value: 2e-5, unit: 'A' },
+              { name: 'vd', value: 0.6, unit: 'V' },
+              { name: 'vs', value: 0.4, unit: 'V' },
+            ],
+            givens: { L: String(L), id: 'I_d', vgs: '0.6', vds: 'vd', vsb: 'vs' },
+            equations: [],
+            checks: [],
+            provides: ['vgs', 'id'],
+          },
+          params: { I_d: 'I', vd: 'V_out - V_a', vs: 'V_a' },
+        },
+      ],
+      equations: [],
+      checks: [],
+    };
+    expect(flagged(stack)).toEqual([]);
+    const base = evaluateSheet(stack, dev);
+    const held = holdHardware(stack, base);
+    expect(held.doc.blocks?.[1].doc?.givens?.id).toBe('I_d');
+    const res = evaluateSheet(held.doc, nHeld);
+    expect(res.feasible).toBe(true);
+    expect(res.values.in__id).toBe(2e-5);
+    expect(res.values.c__id).toBe(2e-5);
+    const drop = base.values.V_a - res.values.V_a;
+    expect(drop).toBeGreaterThan(0.03);
+    expect(drop).toBeLessThan(0.037);
+  });
+
+  it('holds a lone device with a typed gate voltage at its width and current, as before', () => {
+    // Nothing declares the gate, so the current is what stays: on the table whose threshold sits
+    // DN higher, the same current needs exactly DN more gate-source voltage.
+    const one: SheetDoc = {
+      title: 'one',
+      polarity: 'n',
+      params: [],
+      givens: { L: String(L), id: '2e-5', vgs: '0.6', vds: '0.6' },
+      equations: [],
+      checks: [],
+    };
+    const base = evaluateSheet(one, dev);
+    const res = evaluateSheet(holdHardware(one, base).doc, nHeld);
+    expect(res.sizing?.ok).toBe(true);
+    expect(res.sizing?.W).toBe(base.sizing?.W);
+    expect(res.sizing?.id).toBe(2e-5);
+    expect(res.sizing?.vgs).toBeCloseTo(0.6 + DN, 9);
   });
 });
 
@@ -1052,6 +1480,24 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     ).toEqual([]);
   });
 
+  it('does not mark a width-and-current device whose current follows what the range end moves', () => {
+    // The diode-side half of a matched pair: its partner's width, carrying the rest of what the
+    // tail delivers, on the tail node. Nothing authored is kept across the move — the current is
+    // re-read from the expression and the table is read at it and at the new body bias.
+    expect(
+      warnings(
+        withK(
+          { L: '0.5u', W: '10u', id: 'I_t*(1 - s)', vds: '0.6', vsb: 'V_x' },
+          { V_x: 'V_t', I_t: 'V_t*1e-4' },
+        ),
+      ),
+    ).toEqual([]);
+    // A typed current beside a moved body bias is still a spec kept across the move.
+    expect(
+      warnings(withK({ L: '0.5u', W: '10u', id: '20e-6', vds: '0.6', vsb: 'V_x' }, { V_x: 'V_t' })),
+    ).toHaveLength(1);
+  });
+
   it('follows a range end through a node held under a gate', () => {
     // The node is re-solved at the range end from the expression it holds, which reads the
     // constrained V_t the range end moves. So a width-first device with its body on that node is
@@ -1247,6 +1693,69 @@ describe('validation marks the reach of a range claim, and never repairs it', ()
     );
     expect(w).toHaveLength(1);
     expect(w[0]).toMatch(/range end "hi" moves the "W" of the givens at "k" — it sizes a/);
+  });
+
+  it('reads a gate-tied device whose current a hold balances as one read from the table', () => {
+    // Given a gate voltage, a current and no width, a device is held at its width and its current
+    // unless a hold balances that current — then at its width and gate voltage, its authored
+    // current not kept. So the same givens draw the old note undeclared, and the read-current
+    // note declared.
+    const balanced = (over: Partial<SheetDoc>, device: string): SheetDoc =>
+      parent({
+        ...over,
+        params: [
+          ...parent({}).params,
+          { name: 'I_k', value: 2e-5, min: 1e-6, max: 1e-4, hold: `I_k - ${device}__id` },
+        ],
+      });
+    const budget = {
+      blocks: [
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', id: 'I_c', vgs: '0.6', vds: '0.6' }),
+          params: { I_c: '20u * CM_dc' },
+        },
+      ],
+    };
+    expect(notes(parent(budget))).toEqual([
+      expect.stringMatching(/^range end "hi" changes the current in the givens at "k"/),
+    ]);
+    expect(notes(balanced(budget, 'k'))).toEqual([]);
+    const gate = {
+      blocks: [
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', id: '20u', vgs: 'V_x', vds: '0.6' }),
+          params: { V_x: 'V_t' },
+        },
+      ],
+    };
+    expect(notes(parent(gate))).toEqual([]);
+    expect(warnings(balanced(gate, 'k'))).toEqual([]);
+    expect(notes(balanced(gate, 'k'))).toEqual([
+      'range end "hi" moves the "vgs" of the givens at "k", whose current is read from the table ' +
+        'rather than given — that current is different there, and so is any current derived from it',
+    ]);
+    // And the current it reads moves whatever takes a share of it.
+    const share: Partial<SheetDoc> = {
+      blocks: [
+        {
+          name: 't',
+          doc: child({ L: '0.5u', id: '20u', vgs: 'V_x', vds: '0.6' }),
+          params: { V_x: 'V_t' },
+        },
+        {
+          name: 'k',
+          doc: child({ L: '0.5u', gm_id: '10', id: 'I_c', vds: '0.6' }, ['gm']),
+          params: { I_c: 't__id/2' },
+        },
+      ],
+    };
+    expect(notes(balanced(share, 't'))).toEqual([
+      expect.stringMatching(/^range end "hi" moves the "vgs" of the givens at "t"/),
+      expect.stringMatching(/^range end "hi" changes the current in the givens at "k"/),
+    ]);
+    expect(notes(parent(share))).toEqual([]);
   });
 
   it('says nothing about a current that is simply a parent budget', () => {

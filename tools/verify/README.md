@@ -3,10 +3,9 @@
 Small ngspice decks that close the loop between the shipped sky130 gm/ID tables
 (`data/pdk/sky130/`, characterized at W = 1 µm) and the compact models they were
 simulated from. Run them after touching the lookup or sizing math, after regenerating
-the tables, or after changing the five-transistor OTA sheet:
+the tables, or after changing the five-transistor OTA sheet. From the repository root:
 
-    cd tools/verify
-    ngspice -b ota_op.cir
+    ngspice -b tools/verify/ota_op.cir
 
 Each deck prints a short labelled list of numbers and writes no files. The header
 comment of each deck states what the tables or the sheet predict for those numbers.
@@ -17,7 +16,8 @@ fetched into the repository's `.pdk/` directory
 directory it is started in, so run the decks from the repository root
 (`ngspice -b tools/verify/ota_op.cir`). If your PDK lives elsewhere, edit the `.include`
 line near the top of each deck. No `.spiceinit` is needed. The noise decks also print
-`Source conductance reset to 1.0e3 mho` warnings; that is expected with these models.
+`Source conductance reset to 1.0e3 mho` and `Drain conductance reset to 1.0e3 mho`
+warnings; that is expected with these models.
 
 ## Decks
 
@@ -60,8 +60,8 @@ table is exported signed. Then copy from the result's values:
 
 Two choices in the OTA decks go beyond what the sheet states:
 
-- **Widths are multiples of the 1 µm device.** The sized widths (2.5031, 1.8066 and
-  2.4740 µm) are not whole numbers of microns, so each device is the 1 µm single-finger
+- **Widths are multiples of the 1 µm device.** The sized widths (2.5031, 1.7808 and
+  2.5797 µm) are not whole numbers of microns, so each device is the 1 µm single-finger
   device the tables were made from with a fractional multiplier `m`. That is the
   tables' own per-µm scaling rather than a layout, and it keeps the comparison about
   the sheet's arithmetic. What a layout does instead is measured below.
@@ -75,107 +75,91 @@ Two choices in the OTA decks go beyond what the sheet states:
 
 ## What the last run established
 
-ngspice-42; sky130A as built by open_pdks `c6d73a35` (the volare install records it in
-`~/.volare/sky130A/SOURCES`); tt corner, 27 °C.
+ngspice-42; sky130A as built by open_pdks `c6d73a35` (the version directory that
+`.pdk/sky130A` points to is named after it); tt corner, 27 °C.
 
 ### The sheet against the simulated OTA
 
-The sheet describes the OTA with its inputs balanced and its output held at `V_out_dc`.
-The decks as shipped hold the output with the servo instead, which leaves the inputs
-apart by the offset. The small-signal figures and the offset are compared in that state:
+The sheet draws the OTA at rest, the state the servo puts the decks in: the output held at
+`V_out_dc`, the two inputs apart by the offset that takes. The two pair devices are one
+width, each carrying its own share of the tail current; the share is solved so that the
+output-side device takes exactly the current the mirror's output side returns, and the
+systematic offset `vos_sys` is the difference of the two devices' gate-source voltages. So
+every row below is compared directly, in one state, with nothing forced:
 
-| Quantity                                       | Sheet        | Simulated    | Difference |
-| ---------------------------------------------- | ------------ | ------------ | ---------- |
-| Tail current (`tail__id`, also `I_q`)          | 17.875 µA    | 18.102 µA    | +1.3 %     |
-| … as a share of the programmed 20 µA           | 89.4 %       | 90.5 %       |            |
-| Tail node (`V_tail`)                           | 274.4 mV     | 272.3 mV     | −2.0 mV    |
-| Bias reference VGS, shared with the tail       | 810.56 mV    | 810.59 mV    | +0.03 mV   |
-| Bias reference gm/ID                           | 10.00        | 10.00        | −0.03 %    |
-| Tail gm/ID                                     | 9.80         | 9.93         | +1.3 %     |
-| Low-frequency gain (`Av`)                      | 53.41        | 54.12        | +1.3 %     |
-| Unity-gain frequency (`GBW`)                   | 8.534 MHz    | 8.461 MHz    | −0.9 %     |
-| Phase margin (`PM`)                            | 89.7°        | 90.7°        | +1.0°      |
-| Input-referred thermal noise density (`vn_in`) | 22.57 nV/√Hz | 28.07 nV/√Hz | +24 %      |
-| Input offset that holds `V_out_dc` (`vos_sys`) | 4.79 mV      | 4.85 mV      | +1.2 %     |
+| Quantity                                           | Sheet              | Simulated          | Difference      |
+| -------------------------------------------------- | ------------------ | ------------------ | --------------- |
+| Tail current (`tail__id`, also `I_q`)              | 18.103 µA          | 18.095 µA          | −0.04 %         |
+| … as a share of the programmed 20 µA               | 90.5 %             | 90.5 %             |                 |
+| Tail node (`V_tail`)                               | 272.57 mV          | 271.41 mV          | −1.2 mV         |
+| Bias reference VGS, shared with the tail           | 810.56 mV          | 810.59 mV          | +0.03 mV        |
+| Bias reference gm/ID / tail gm/ID                  | 10.00 / 9.93       | 10.00 / 9.93       | 0.0 %           |
+| Output side's share of the tail (`out_share`)      | 0.4960             | 0.4960             | 0.0 %           |
+| Pair current, output side (`in__id`), also `ld`'s  | 8.978 µA           | 8.975 µA           | −0.04 %         |
+| Pair current, diode side (`inr__id`), also `ldr`'s | 9.124 µA           | 9.120 µA           | −0.05 %         |
+| Pair VGS, output side / diode side                 | 825.04 / 829.82 mV | 826.22 / 830.96 mV | +1.2 / +1.1 mV  |
+| Input offset that holds `V_out_dc` (`vos_sys`)     | 4.785 mV           | 4.743 mV           | −0.9 %          |
+| Pair gm, output side / diode side                  | 107.74 / 107.29 µS | 108.76 / 108.34 µS | +0.9 % / +1.0 % |
+| Pair gm/ID, output side / diode side               | 12.00 / 11.76      | 12.12 / 11.88      | +1.0 % / +1.0 % |
+| The two in series, doubled (`gm_pair`)             | 107.52 µS          | 108.55 µS          | +1.0 %          |
+| Load VGS, both sides (`ldr__vgs`)                  | −1132.19 mV        | −1132.15 mV        | +0.04 mV        |
+| Load gm/ID, diode side / output side               | 8.00 / 8.01        | 8.00 / 8.01        | 0.0 %           |
+| Output gds, pair / load (`in__gds`, `ld__gds`)     | 1.3346 / 0.6774 µS | 1.3240 / 0.6714 µS | −0.8 % / −0.9 % |
+| Low-frequency gain (`Av`)                          | 53.44              | 53.90              | +0.9 %          |
+| Unity-gain frequency (`GBW`)                       | 8.556 MHz          | 8.420 MHz          | −1.6 %          |
+| Phase margin (`PM`)                                | 89.7°              | 90.7°              | +1.0°           |
+| Input-referred thermal noise density (`vn_in`)     | 28.39 nV/√Hz       | 28.24 nV/√Hz       | −0.5 %          |
 
 Slew rate was not simulated; the sheet computes it as `tail__id/CL`, so it follows the
 tail current.
 
-The pair and the load are compared with the inputs balanced, the state the sheet's
-blocks are drawn in. The pair's two devices share a gate-source voltage there but not a
-drain, for the same reason the mirror's two sides do: the diode-side drain is one PMOS
-VGS below the supply (0.67 V) while the output-side drain is at `V_out_dc` (0.9 V). So
-the tail current does not split in half, and the sheet solves the split (`out_share`,
-reported as `pair_split`) so that the two pair currents add up to what the tail delivers.
-To put the simulation in that state, replace GSV and CSV in `ota_op.cir` with a 0.9 V
-source on `out` and a resistor from `os` to ground. The deck then prints the two
-differences under `output held at V_out_dc`, and the current of the added source is what
-the output node is short of.
+Every current agrees within 0.05 %, every voltage within 1.2 mV, every gm, gm/ID and output
+conductance within 1 %, the gain within 0.9 %, the offset within 0.9 %, the bandwidth within
+1.6 % and the thermal noise within 0.5 %. The gate-source voltages sit about a millivolt low
+and the pair's gm/ID 1 % low for one reason, the pair's body bias (below). The
+thermal-noise row is read from the noise the tables store for each device, which is the
+simulator's own:
 
-| Quantity                                           | Sheet              | Simulated          | Difference      |
-| -------------------------------------------------- | ------------------ | ------------------ | --------------- |
-| Output side's share of the tail (`pair_split`)     | 0.5104             | 0.5103             | −0.02 %         |
-| Pair current, output side (`in__id`)               | 9.124 µA           | 9.238 µA           | +1.2 %          |
-| Pair current, diode side (`inr__id`), also `ldr`'s | 8.751 µA           | 8.864 µA           | +1.3 %          |
-| Pair VGS, both sides (`in__vgs`)                   | 825.6 mV           | 827.6 mV           | +2.0 mV         |
-| Pair gm, output side / diode side                  | 109.49 / 105.09 µS | 111.34 / 107.04 µS | +1.7 % / +1.9 % |
-| Pair gm/ID, output side / diode side               | 12.00 / 12.01      | 12.05 / 12.08      | +0.4 % / +0.6 % |
-| The two in series, doubled (`gm_pair`)             | 107.25 µS          | 109.15 µS          | +1.8 %          |
-| Load current, output side (`ld__id`)               | 8.611 µA           | 8.722 µA           | +1.3 %          |
-| Load VGS, both sides (`ldr__vgs`)                  | −1132.2 mV         | −1133.8 mV         | −1.6 mV         |
-| Load gm/ID, diode side / output side               | 8.00 / 8.01        | 7.95 / 7.97        | −0.6 % / −0.5 % |
-| Pair, output side over diode side                  | 0.373 µA           | 0.374 µA           | +0.2 %          |
-| Load mirror, diode side over output side           | 0.140 µA           | 0.142 µA           | +1.1 %          |
-| Current the output node is short of                | 0.514 µA           | 0.516 µA           | +0.5 %          |
-
-Every current, voltage, gm and gm/ID agrees within 1.9 %, gain and bandwidth within
-1.3 %, and the systematic offset within 1.2 %. The currents in the second table sit
-1.2–1.3 % under the simulated ones because the tail current does; how the tail current
-splits, and the two differences `vos_sys` is built from, agree more closely than that.
-`vos_sys` is the current the output node is short of, divided by `gm_pair`: the sheet's
-0.514 µA over 107.25 µS is 4.79 mV where the servo applies 4.85 mV. One line does not
-agree, and it comes from what the sheet models rather than from the tables:
-
-- **The thermal-noise figure reads 20 % low, because of the nfet.** The simulated
-  thermal floor is 28.07 nV/√Hz, flat from 1 Hz to beyond 10 MHz. It is read at 1 kHz as
+- **The thermal-noise figure agrees because it is the simulator's noise.** The simulated
+  thermal floor is 28.24 nV/√Hz, flat from 1 Hz to beyond 10 MHz. It is read at 1 kHz as
   the total less every device's flicker term, because the total itself is
-  flicker-dominated there. The reference decks trace the gap to one device type. At the
-  output-side pair device's bias point the nfet's own density is 17.18 nV/√Hz where the
-  tables' γ = 1 model gives 12.31: an effective γ of 1.95. With VD in that deck lowered
-  to the diode-side pair device's 393.43 mV it is 17.44 against 12.56, γ 1.93. At the
-  load's bias point the pfet's is 15.40 nV/√Hz against 15.39: an effective γ of 1.00.
-  Putting the simulated densities into the sheet's own formula gives 28.3 nV/√Hz, so
-  the formula is right and the nfet's γ is not. Neither γ is a constant: moving VG in
-  the reference decks takes the nfet from 1.4 at gm/ID 22 to 1.9 at gm/ID 6–12, and the
-  pfet from 0.5 at gm/ID 17 to 1.0 at gm/ID 4–8. This is consistent with the two
-  models' thermal-noise parameters (`tnoimod = 1` in both; `rnoia` is 0.94 for the nfet
-  and 0.69 for the pfet).
+  flicker-dominated there. The reference decks show why a γ = 1 estimate, which is what a
+  table without stored noise gets, would not: at the output-side pair device's bias point
+  the nfet's own density is 17.32 nV/√Hz, an effective γ of 1.95, where the table's stored
+  noise reads 17.31; at the load's bias point the pfet's is 15.08 nV/√Hz against the
+  table's 15.08, γ 1.00. With γ = 1 for both, the row would read 22.7 nV/√Hz, 20 % low.
+  Neither γ is a constant: moving VG in the reference decks takes the nfet from 1.4 at
+  gm/ID 22 to 1.9 at gm/ID 6–12, and the pfet from 0.5 at gm/ID 17 to 1.0 at gm/ID 4–8.
+  This is consistent with the two models' thermal-noise parameters (`tnoimod = 1` in both;
+  `rnoia` is 0.94 for the nfet and 0.69 for the pfet).
 
 ### Findings
 
 - **The tail delivers less than it is programmed to, as the sheet says.** The tail
   device shares the bias reference's gate, but its drain sits at 0.27 V where the
   reference's sits at its 0.81 V diode drop, so it delivers 18.10 µA of the programmed
-  20 µA. The sheet predicts 17.87 µA. The 1.3 % between them comes from the tables'
-  0.2 V VDS grid: the tail's drain falls between the 0.2 V and 0.4 V nodes, just above
-  its 0.16 V saturation voltage, where the curve still bends and straight-line
-  interpolation reads the current low and the output conductance high (`tail__gds` is
-  11.5 µS against a simulated 7.5 µS). Nothing on the sheet reads that conductance. The
-  tail and the bias reference together add 0.07 % to the input-referred thermal noise
-  power, so the sheet is right to leave them out of `vn_in`.
+  20 µA. The sheet predicts the same to 0.04 %. The tables step the drain voltage by
+  25 mV up to 0.3 V, so the tail's drain falls between two close nodes, and the sheet
+  reads its output conductance as 7.53 µS against a simulated 7.56 µS. Nothing on the
+  sheet reads that conductance. The tail and the bias reference together add 0.07 % to
+  the input-referred thermal noise power, so the sheet is right to leave them out of
+  `vn_in`.
 - **The tail current does not split in half, and the sheet's split is the simulated
-  one.** With the inputs balanced the output-side pair device has 0.23 V more
-  drain-source voltage than its partner and carries 51.03 % of the tail current; the
-  sheet solves 51.04 %. The servo then moves the inputs apart by 4.85 mV, which takes
-  0.26 µA from the output branch and gives it to the diode branch, so as shipped the
-  decks print 8.977 µA on the output side and 9.125 µA on the diode side.
+  one.** At rest the output-side pair device carries 49.60 % of the tail current, in the
+  sheet and in simulation: it takes what the mirror's output side returns, and the mirror,
+  its output side 0.23 V further from the supply than its diode side, returns less than
+  the diode side carries. The diode-side device carries the rest at a drain 0.23 V lower,
+  and needs 4.74 mV more gate-source voltage for it in simulation (4.78 mV in the sheet):
+  that is the input offset the servo applies.
 - **Interpolation is exact at the characterization width.** At the `nfet_width_op.cir`
   point the 1 µm device, scaled by its multiplier, matches the table lookup to −0.06 %
   on id, +0.01 % on gm and −0.5 % on gds. The pfet at the load's bias point matches to
-  0.03 % on id and gm. The grid shows in two places in the OTA: the tail's drain
-  (above), and the pair's 0.27 V body bias, which falls between the 0 V and 0.3 V VSB
-  nodes. At the sheet's exact coordinates the model gives 8.974 µA where the table
-  reads 9.124 µA (−1.6 %), with gm within 0.13 %; `cs_n_noise.cir` prints both.
+  0.02 % on id and gm. The grid shows in one place in the OTA: the pair's 0.27 V body
+  bias, which falls between the 0 V and 0.3 V VSB nodes. At the sheet's exact coordinates
+  the model gives 8.822 µA where the table reads 8.978 µA (−1.7 %), with gm within
+  0.12 %; `cs_n_noise.cir` prints both. In the OTA that costs the pair about a millivolt
+  of gate-source voltage and 1 % of gm/ID, which is the largest difference in the table
+  above.
 - **Width scaling is the dominant sizing error.** A single-finger W = 25.77 µm device
   conducts 1.82× the current the W = 1 µm table predicts at the deck's operating point
   (gm 1.71×), and up to 1.87× across a gate sweep — worst in moderate inversion, at
@@ -187,30 +171,30 @@ agree, and it comes from what the sheet models rather than from the tables:
   model bin from the total width and stops with `u0 … is not positive`.
 - **A current-biased circuit absorbs most of what is left.** Replacing the fractional
   multipliers in the OTA decks with whole fingers nearest 1 µm (`W=2.5031 nf=3`,
-  `W=1.8066 nf=2`, `W=2.4740 nf=3`, plus `.option wnflag=1`) leaves every current, gm,
-  the gain and the unity-gain frequency within 0.3 % of what the decks print as
-  shipped; only the gate voltages move, by up to 11 mV. As single fingers (`nf=1`) the
-  same widths move further: a tail current of 18.47 µA (+2.0 %), an output-side pair gm
-  of 113.5 µS (+3.8 %) at gm/ID 12.4, a gain of 59.3 (+9.6 %) and a unity-gain
-  frequency of 8.77 MHz (+3.7 %).
-- **The 5T OTA meets its gain and bandwidth specs in simulation.** Gain is 54.1 against
-  a target of 15, and the unity-gain frequency is 8.46 MHz against a target of 8 MHz.
-  2π × 8.461 MHz × 2 pF is 106.3 µS of effective transconductance, and the current the
-  output node is short of over the offset the servo applies gives 106.4 µS. That is
-  2.6 % under the 109.1 µS the simulated pair devices have in series (108.9 and
-  109.4 µS as shipped). The mirror passes on the diode side's half of the signal with a
-  gain of 0.985 (70.6 µS over 71.7 µS), which accounts for 0.7 %; the rest was not
-  separated out. The sheet's `gm_pair` is 107.25 µS, 1.8 % under the simulated devices
-  mostly because its tail current reads 1.3 % low, so its `GBW` lands 0.9 % above the
-  simulated unity-gain frequency. The devices add only about 1 fF to the 2 pF load.
-- **Input-referred noise is two-sided.** The two pair devices contribute 17.09 and
-  17.24 nV/√Hz of thermal noise at the input, and the two load devices 9.74 and
-  10.17 nV/√Hz. All four together give 1.40× the density of one pair device and one
+  `W=1.7808 nf=2`, `W=2.5797 nf=3`, plus `.option wnflag=1`) leaves every current, gm,
+  the gain and the unity-gain frequency within 0.2 % of what the decks print as
+  shipped; the gate voltages move by up to 9 mV and the input offset by 0.21 mV, to
+  4.53 mV. As single fingers (`nf=1`) the same widths move further: a tail current of
+  18.46 µA (+2.0 %), an output-side pair gm of 112.9 µS (+3.8 %) at gm/ID 12.4, a gain
+  of 58.9 (+9.4 %), a unity-gain frequency of 8.73 MHz (+3.6 %) and an offset of
+  5.20 mV.
+- **The 5T OTA meets its gain and bandwidth specs in simulation.** Gain is 53.9 against
+  a target of 15, and the unity-gain frequency is 8.42 MHz against a target of 8 MHz.
+  2π × 8.420 MHz × 2 pF is 105.8 µS of effective transconductance, 2.5 % under the
+  108.6 µS the simulated pair devices have in series (108.76 and 108.34 µS). The mirror
+  passes on the diode side's half of the signal with a gain of 0.986 (71.91 µS over
+  72.96 µS), which accounts for 0.7 %; the rest was not separated out. The sheet's
+  `gm_pair` is 107.52 µS, 1.0 % under the simulated devices because of the body-bias
+  interpolation above, so its `GBW` lands 1.6 % above the simulated unity-gain
+  frequency. The devices add only about 1 fF to the 2 pF load.
+- **Input-referred noise is two-sided.** The two pair devices contribute 17.14 and
+  17.29 nV/√Hz of thermal noise at the input, and the two load devices 9.88 and
+  10.31 nV/√Hz. All four together give 1.40× the density of one pair device and one
   load device, a factor of 2 in power, which is why the sheet's `vn_in` adds up all
-  four. The same 1.40× holds in the flicker band: 1.36 µV/√Hz at 1 kHz against
-  0.97 µV/√Hz composed from the two reference decks.
+  four. The same 1.40× holds in the flicker band: 1.37 µV/√Hz at 1 kHz against
+  0.98 µV/√Hz composed from the two reference decks.
 - **Flicker dominates in-band.** In the OTA the flicker part falls to the thermal floor
-  only at 9.6 MHz, above the 8.5 MHz unity-gain frequency. The total input-referred
-  density is 1.36 µV/√Hz at 1 kHz, 196 nV/√Hz at 100 kHz and still 30.1 nV/√Hz at
+  only at 9.8 MHz, above the 8.4 MHz unity-gain frequency. The total input-referred
+  density is 1.37 µV/√Hz at 1 kHz, 197 nV/√Hz at 100 kHz and still 30.3 nV/√Hz at
   100 MHz. Alone, the nfet's flicker corner is 13.9 MHz and the pfet's 0.51 MHz at
   these gate areas. Treat table-derived noise as a floor, not a budget.

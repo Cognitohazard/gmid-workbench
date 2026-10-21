@@ -110,7 +110,13 @@
       "note": "how many times faster than f_c the transconductor must be"
     }
   ],
-  "givens": { "L": "L", "gm": "2*pi*f_c*C_int*(1 + od_factor)", "gm_id": "gm_id", "vds": "vds" },
+  "givens": {
+    "L": "L",
+    "gm": "2*pi*f_c*C_int*(1 + od_factor)",
+    "gm_id": "gm_id",
+    "vds": "vds",
+    "region": "saturation"
+  },
   "equations": [
     {
       "name": "V_lin",
@@ -122,7 +128,7 @@
       "name": "vn_dens",
       "expr": "vnth_m",
       "unit": "V/sqrt(Hz)",
-      "note": "input-referred thermal density (gamma-model)"
+      "note": "input-referred thermal density, read from the table's own noise where it carries it and from the γ = 1 estimate otherwise"
     },
     {
       "name": "vn_int",
@@ -172,7 +178,7 @@
       "lhs": "vn_int",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "integrated input noise under budget; computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "integrated input noise under budget; read from the table's own noise where it carries it, and from the γ = 1 estimate otherwise; the simulator owns noise sign-off"
     },
     {
       "id": "dynamic-range",

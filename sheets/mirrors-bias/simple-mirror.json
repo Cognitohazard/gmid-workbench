@@ -102,7 +102,13 @@
       }
     }
   ],
-  "givens": { "L": "L", "W": "K*ref__W", "vgs": "ref__vgs", "vds": "V_out" },
+  "givens": {
+    "L": "L",
+    "W": "K*ref__W",
+    "vgs": "ref__vgs",
+    "vds": "V_out",
+    "region": "saturation"
+  },
   "equations": [
     { "name": "I_out", "expr": "id", "unit": "A" },
     { "name": "I_target", "expr": "K*I_in", "unit": "A" },
@@ -143,14 +149,6 @@
       "lhs": "gm_id_m",
       "op": "<=",
       "rhs": "ceiling"
-    },
-    {
-      "id": "compliance",
-      "kind": "physical",
-      "lhs": "V_out",
-      "op": ">=",
-      "rhs": "vdsat",
-      "note": "output device saturated at the served node"
     },
     {
       "id": "systematic-error",

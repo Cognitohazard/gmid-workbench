@@ -1,6 +1,6 @@
 {
   "title": "Two-stage Miller OTA",
-  "description": "The classic two-stage Miller operational transconductance amplifier: a differential input stage (input pair + current-mirror load) driving a common-source second stage, with a compensation capacitor $C_c$ bridging the second stage (Miller pole-splitting). $C_c$ is the compensation knob: it sets the dominant pole and hence the unity-gain bandwidth GBW = $g_{m1}/(2*\\pi*C_c)$. The feedforward path through $C_c$ creates a right-half-plane zero $z = g_{m2}/C_c$ that erodes phase; the $R_z = 1/g_{m2}$ nulling resistor removes it. The phase-margin and second-pole rows are ESTIMATE-grade small-signal approximations for sizing intuition — the simulator owns stability sign-off. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply. On the output side the mirror's output device and the pair's output-side device share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. Each output-side device is tied to its diode-side partner — the same width at the same gate-source voltage — and its current is read from the table at its own drain voltage, so the two sides carry different currents wherever the two levels differ, and the systematic-offset row reports what that costs at the input. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices carry what the tail delivers between them, and the second stage carries its own programmed $I_2$. The pair does not split the tail current evenly — its two devices share a gate-source voltage and sit at different drain voltages — so the split is solved rather than typed as a half each. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$, fixing the pair's body bias and both drain-source voltages outright. On the demo NMOS table every device sizes against the same data, so the sign params stay at +1.",
+  "description": "The classic two-stage Miller operational transconductance amplifier: a differential input stage (input pair + current-mirror load) driving a common-source second stage, with a compensation capacitor $C_c$ bridging the second stage (Miller pole-splitting). $C_c$ is the compensation knob: it sets the dominant pole and hence the unity-gain bandwidth GBW = $g_{m1}/(2*\\pi*C_c)$. The feedforward path through $C_c$ creates a right-half-plane zero $z = g_{m2}/C_c$ that erodes phase; the $R_z = 1/g_{m2}$ nulling resistor removes it. The phase-margin and second-pole rows are ESTIMATE-grade small-signal approximations for sizing intuition — the simulator owns stability sign-off. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply. On the output side the mirror's output device and the pair's output-side device share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. The stage is drawn at rest, as the feedback around the amplifier holds it: the output, and with it the second stage's gate, sits where the loop puts it, and the two inputs sit apart by whatever offset that takes. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices are one width and carry what the tail delivers between them, each its own share, and the second stage carries its own programmed $I_2$. The mirror's output device is tied to its diode-side partner — the same width at the same gate-source voltage — and its current is read from the table at its own drain voltage. The share is solved so that the currents at the stage-1 output balance: the pair's output-side device takes exactly what the mirror's output device returns. Wherever the two levels differ, the two input devices then need different gate-source voltages for their currents, and the systematic-offset row reports that difference directly. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved so the produced $CM_{in}$, the tail node plus the mean of the two gate-source voltages, equals $CM_{dc}$, fixing the pair's body bias and both drain-source voltages outright. On the demo NMOS table every device sizes against the same data, so the sign params stay at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -46,7 +46,7 @@
       "unit": "V",
       "role": "choice",
       "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
-      "note": "the input pair's tail node. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. Fixes the pair's body bias and both of its drain-source voltages in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers. An end of the range where the relation does not evaluate is stepped inward silently, and the searched range is reported only if the search then fails. Its diode-side partner is read from the table, not sized, so an end that leaves that one almost no drain-source voltage under the mirror diode drop — on a process whose PMOS diode eats most of the rail — does not stop the solve; raising gm_id_ld1 (a smaller diode drop) is the knob that gives it room"
+      "note": "the input pair's tail node. Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. Fixes the pair's body bias and both of its drain-source voltages in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers. An end of the range where the relation does not evaluate is stepped inward silently, and the searched range is reported only if the search then fails. On a process whose PMOS diode eats most of the rail, the top of the range leaves the diode-side input device almost no drain-source voltage under the mirror diode drop; raising gm_id_ld1 (a smaller diode drop) is the knob that gives it room"
     },
     {
       "name": "Cc",
@@ -82,8 +82,8 @@
       "max": 0.99,
       "unit": "1",
       "role": "choice",
-      "solveFor": "pair_split",
-      "note": "the share of the tail current the pair's output-side device carries with the inputs balanced — solved, not set. The pair's two devices are one width at one gate-source voltage, but one drain is the stage-1 output and the other the mirror node, so they do not carry equal currents and the tail current does not split in half. The engine searches for the share at which this equals the output-side device's fraction of the pair's current as the table reads the two (the pair_split row), which is the current law at the tail node: the two currents add up to what the tail delivers. The stored value is never read. It is searched between 0.01 and 0.99, a share of the tail current that leaves each device some of it"
+      "designConstraint": { "lhs": "ino__id", "rhs": "ld1o__id" },
+      "note": "the share of the tail current the pair's output-side device carries at rest — solved, not set. The stage-1 output is a high-impedance node, held where it is by the feedback around the amplifier, so in the resting circuit the current the pair's output-side device takes is exactly the current the mirror's output device returns: the engine searches for the share at which the two are equal, the current law at the stage-1 output. The diode-side device carries the rest, so the two add up to what the tail delivers by construction. The share is one half only where the second stage's gate-source voltage equals the mirror's diode drop. It is searched between 0.01 and 0.99, a share of the tail current that leaves each device some of it; the stored value is never read"
     },
     {
       "name": "gm_id_in",
@@ -92,7 +92,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "input-pair inversion, set on the output-side device; the diode-side device shares its gate-source voltage and its width"
+      "note": "input-pair inversion, set on the output-side device; the diode-side device copies its width and carries the rest of the tail current"
     },
     {
       "name": "gm_id_ld1",
@@ -240,7 +240,7 @@
           { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "vx", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
         ],
-        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx" },
+        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [],
         "provides": ["gds", "vdsat", "id"]
@@ -291,7 +291,7 @@
             "note": "signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx" },
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [
           {
@@ -336,7 +336,7 @@
             "note": "the supply down to the stage-1 output, signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx" },
+        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "id"]
@@ -352,7 +352,7 @@
       "name": "ino",
       "doc": {
         "title": "Stage-1 input-pair device, output side",
-        "description": "The input device whose drain is the stage-1 output — the second stage's gate — sized at its share of what the tail delivers. The pair's two devices share a gate drive and a source but not a drain, so the tail current does not split evenly between them, and this is the one whose output conductance loads the first-stage gain. Its source sits at the tail node — that is its body bias — and its drain-source voltage is what is left between the stage-1 output and that source. Its width and its gate-source voltage are what its partner on the diode side shares.",
+        "description": "The input device whose drain is the stage-1 output — the second stage's gate — sized at its share of what the tail delivers. The pair's two devices share a gate drive and a source but not a drain, so the tail current does not split evenly between them, and this is the one whose output conductance loads the first-stage gain. Its source sits at the tail node — that is its body bias — and its drain-source voltage is what is left between the stage-1 output and that source. Its width is what its partner on the diode side copies; its gate-source voltage differs from its partner's by the input offset that holds the stage-1 output where it is.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -367,7 +367,14 @@
           },
           { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
         ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "id": "Ix",
+          "gm_id": "gx",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [
           {
@@ -392,7 +399,7 @@
       "name": "in",
       "doc": {
         "title": "Stage-1 input-pair device, diode side",
-        "description": "The input device whose drain is the mirror node, in one branch with the diode-connected mirror device above it. It is the output-side device's width at the output-side device's gate-source voltage, which is what a matched pair with balanced inputs on a common source is. Its source sits at the tail node like its partner's, but its drain sits one mirror diode drop below VDD instead of at the stage-1 output, so its current is read off the table at that drain voltage rather than typed. Wherever the two drains differ it carries a different current than its partner, and the split of the tail current between the two is solved so that they add up to what the tail delivers. Because it is read and not sized, it still evaluates where it is left almost no drain-source voltage.",
+        "description": "The input device whose drain is the mirror node, in one branch with the diode-connected mirror device above it. It is the output-side device's width, carrying the rest of what the tail delivers: a matched pair is one width, so its width is copied, and its current is given, which makes this a width-and-current sizing — the table is inverted at that current density for the gate-source voltage it takes. Its source sits at the tail node like its partner's, but its drain sits one mirror diode drop below VDD instead of at the stage-1 output. Wherever the two drains or the two currents differ, its gate-source voltage differs from its partner's, and that difference is the input offset the sheet reports.",
         "polarity": "n",
         "params": [
           {
@@ -403,13 +410,18 @@
             "note": "the output-side device's width — the pair is matched"
           },
           {
-            "name": "vgsx",
-            "value": 0.64,
-            "unit": "V",
+            "name": "Ix",
+            "value": 10e-6,
+            "unit": "A",
             "role": "spec",
-            "note": "the output-side device's gate-source voltage — one gate drive at balance, one source"
+            "note": "what the tail delivers less the output-side device's share"
           },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "Lx",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
           {
             "name": "vx",
             "value": 0.77,
@@ -417,16 +429,29 @@
             "role": "spec",
             "note": "from the mirror node down to the tail node"
           },
-          { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
+          {
+            "name": "vsbx",
+            "value": 0.4,
+            "unit": "V",
+            "role": "spec",
+            "note": "the tail node"
+          }
         ],
-        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "vsb": "vsbx" },
+        "givens": {
+          "L": "Lx",
+          "W": "Wx",
+          "id": "Ix",
+          "vds": "vx",
+          "vsb": "vsbx",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "vdsat", "vnth_m", "cgg", "id"]
+        "provides": ["gm", "vgs", "vdsat", "vnth_m", "cgg", "id"]
       },
       "params": {
         "Wx": "ino__W",
-        "vgsx": "ino__vgs",
+        "Ix": "tail__id*(1 - out_share)",
         "Lx": "L_in",
         "vx": "VDD - abs(ld1__vgs) - V_tail",
         "vsbx": "V_tail"
@@ -441,9 +466,9 @@
   "equations": [
     {
       "name": "CM_in",
-      "expr": "V_tail + ino__vgs",
+      "expr": "V_tail + (ino__vgs + in__vgs)/2",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two input devices' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
     },
     {
       "name": "V_mir",
@@ -456,12 +481,6 @@
       "expr": "VDD - abs(s2__vgs)",
       "unit": "V",
       "note": "stage-1 output DC. Derived, not typed: this node is the second stage's gate, so it sits one second-stage gate-source voltage below the supply (abs() keeps both table conventions working). It is the drain of the mirror's output device and of the pair's output-side device, and it is not the mirror node: the two levels differ by the difference between the second stage's gate-source voltage and the mirror's diode drop"
-    },
-    {
-      "name": "pair_split",
-      "expr": "ino__id/(in__id + ino__id)",
-      "unit": "1",
-      "note": "the fraction of the pair's current that its output-side device carries with the inputs balanced, as the table reads the two — what out_share is solved to. One half when the second stage's gate-source voltage equals the mirror's diode drop; above one half when the stage-1 output sits higher than the mirror node, because the output-side device then has the larger drain-source voltage, and below it when the output sits lower"
     },
     {
       "name": "gm1",
@@ -543,9 +562,9 @@
     },
     {
       "name": "vos_sys",
-      "expr": "abs(ld1o__id - ino__id)/gm1",
+      "expr": "abs(in__vgs - ino__vgs)",
       "unit": "V",
-      "note": "estimate: input-referred systematic offset. At the stage-1 output the mirror's output device delivers one current and the pair's output-side device takes another: each is tied to its diode-side partner but sits at the second stage's gate voltage instead of the mirror's diode drop. The feedback the application closes around the amplifier holds the output, and with it the second stage's gate, so the current missing at that node has to come from an input imbalance of this size. It is zero when the second stage's gate-source voltage equals the mirror's diode drop — the classic condition that the second-stage device and the mirror devices run at one current density"
+      "note": "input-referred systematic offset — the difference of the two input devices' gate-source voltages at rest, read directly: the input offset the feedback holding the output, and with it the second stage's gate, has to apply. The mirror's output device sits at the second stage's gate voltage instead of the mirror's diode drop, so it returns a different current than its diode side carries, and the pair's output-side device has to carry that current instead of an even share; its drain sits at that same level instead of at the mirror node, so even at equal currents the two input devices would need different gate-source voltages. It is zero when the second stage's gate-source voltage equals the mirror's diode drop — the classic condition that the second-stage device and the mirror devices run at one current density"
     },
     {
       "name": "tail_headroom",
@@ -612,30 +631,6 @@
       "op": ">=",
       "rhs": "wc",
       "note": "where the RHP zero would sit WITHOUT the nulling resistor: above crossover (equivalently gm2 >= gm1), or an uncompensated version of this stage loses its phase margin. With Rz = 1/gm2 in place the zero is gone and this is a design-margin reading, not a stability condition"
-    },
-    {
-      "id": "stage2-sat",
-      "kind": "physical",
-      "lhs": "VDD - V_out2",
-      "op": ">=",
-      "rhs": "s2__vdsat",
-      "note": "stage-2 device saturated at the output DC level"
-    },
-    {
-      "id": "load2-sat",
-      "kind": "physical",
-      "lhs": "V_out2",
-      "op": ">=",
-      "rhs": "ld2__vdsat",
-      "note": "stage-2 load saturated at the output DC level"
-    },
-    {
-      "id": "tail-saturated",
-      "kind": "physical",
-      "lhs": "tail_headroom",
-      "op": ">=",
-      "rhs": "0",
-      "note": "below this the tail device drops out of saturation and the first-stage current collapses; this is the mechanism behind the low end of the input common-mode range"
     },
     {
       "id": "input-sat-margin",

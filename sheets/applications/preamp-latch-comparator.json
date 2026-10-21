@@ -96,14 +96,25 @@
       "note": "preamp settling/overdrive-recovery time budget"
     }
   ],
-  "givens": { "L": "L_pre", "id": "I_pre", "gm_id": "gm_id_pre", "vds": "vds_pre" },
+  "givens": {
+    "L": "L_pre",
+    "id": "I_pre",
+    "gm_id": "gm_id_pre",
+    "vds": "vds_pre",
+    "region": "saturation"
+  },
   "equations": [
-    { "name": "ro", "expr": "1/gds", "unit": "ohm", "note": "preamp intrinsic output resistance" },
+    {
+      "name": "ro_pre",
+      "expr": "1/gds",
+      "unit": "ohm",
+      "note": "preamp intrinsic output resistance"
+    },
     {
       "name": "Rout",
-      "expr": "par(R_L, ro)",
+      "expr": "par(R_L, ro_pre)",
       "unit": "ohm",
-      "note": "output resistance: load resistor in parallel with the device ro"
+      "note": "output resistance: load resistor in parallel with the device's own output resistance"
     },
     {
       "name": "A_pre",

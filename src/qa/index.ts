@@ -17,7 +17,7 @@ import {
 } from '../corners';
 import { PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
-import { AXIS_DEFAULT_BIAS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
+import { AXIS_DEFAULT_BIAS, BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 
 // --- physical thresholds -----------------------------------------------------
 
@@ -41,6 +41,16 @@ const VGS_STEP_WARN = 0.01; // 10 mV
  *  as a percentage, or a wrong-model γ≈10) without flagging valid deep-submicron γ. */
 const GAMMA_LO = 0.4;
 const GAMMA_HI = 4.0;
+
+/** The band the thermal-noise factor γ = sth/(4kT·gm) has to fall in at a table's full-drive
+ *  point (see fullDrive). Real devices spread wider there than the textbook suggests: across the
+ *  generated sky130 and gf180 tables, every corner and temperature, it runs from 0.22 (the 5 V
+ *  pfet, cold) to 11.4 (the low-threshold nfet at the shortest length) — so a narrow band would
+ *  flag good data. The unit slips this exists for are orders of magnitude (a µ-prefixed export is
+ *  off by 1e6, a density left unsquared by about 1e12, a lost 4kT by about 1e20), and this is the
+ *  window the table generator applies to its own output, so the two agree. */
+const NOISE_FACTOR_LO = 0.01;
+const NOISE_FACTOR_HI = 100;
 
 /** |vgs| above this (in volts) means the axis is probably in mV, not V. */
 const VGS_UNIT_ERROR = 100;
@@ -160,6 +170,35 @@ function countWhere(col: Float64Array, pred: (x: number) => boolean): number {
   let n = 0;
   for (let i = 0; i < col.length; i++) if (pred(col[i])) n++;
   return n;
+}
+
+/** A table's full-drive point: the shortest length, the largest gate-source and drain-source
+ *  voltages in magnitude (a signed PMOS export sweeps them negative), and the source at the body
+ *  (the vsb nearest 0). Any other axis is read at its first value. The flat index, and the point
+ *  in words; undefined for a grid with no vgs axis. */
+function fullDrive(grid: Grid): { at: number; where: string } | undefined {
+  if (!grid.axes.some((a) => a.name === 'vgs')) return undefined;
+  const st = strides(grid.shape);
+  let at = 0;
+  const where: string[] = [];
+  grid.axes.forEach((a, d) => {
+    const v = a.values;
+    let best = 0;
+    for (let i = 1; i < v.length; i++) {
+      const better =
+        a.name === 'l'
+          ? v[i] < v[best]
+          : a.name === 'vgs' || a.name === 'vds'
+            ? Math.abs(v[i]) > Math.abs(v[best])
+            : a.name === 'vsb'
+              ? Math.abs(v[i]) < Math.abs(v[best])
+              : false;
+      if (better) best = i;
+    }
+    at += best * st[d];
+    where.push(`${a.name} = ${v[best]}`);
+  });
+  return { at, where: where.join(', ') };
 }
 
 /**
@@ -375,6 +414,31 @@ export function validate(table: DeviceTable): QAWarning[] {
     }
   }
 
+  // --- the γ the stored thermal noise implies, read at full drive ---
+  // Every thermal-noise figure on a table that stores `sth` is read from it (see noiseSource), so a
+  // unit error there ships as measured noise. The γ it implies varies a great deal over the grid —
+  // in triode gm falls while the channel noise does not, so γ runs far past any plausible band
+  // there, and it is infinite where gm is 0 — so it is read at ONE point where the device is
+  // unambiguously saturated and strongly inverted — the point the table generator checks its own
+  // output at — and nowhere else.
+  const sth = q.get('sth');
+  const drive = sth && gm ? fullDrive(grid) : undefined;
+  if (sth && gm && drive) {
+    const g = sth[drive.at] / (4 * PHYS.k * kelvin(table.meta.temp ?? 27) * gm[drive.at]);
+    if (Number.isFinite(g) && (g < NOISE_FACTOR_LO || g > NOISE_FACTOR_HI)) {
+      out.push({
+        rule: 'noise-factor',
+        severity: 'warning',
+        message:
+          `the stored thermal noise (sth) gives γ = sth/(4kT·gm) = ${g.toPrecision(3)} at the ` +
+          `table's full-drive point (${drive.where}), outside [${NOISE_FACTOR_LO}, ` +
+          `${NOISE_FACTOR_HI}], far past any transistor in saturation, so sth is probably in ` +
+          `the wrong unit — and every thermal-noise figure on this table is read from it`,
+        location: 'sth',
+      });
+    }
+  }
+
   // --- id monotonic in vgs + stored gm consistent with d(id)/d(vgs) ---
   // The headline trust check: gm IS the vgs-derivative of id, so a central
   // difference must track the stored column. Evaluated PER SWEEP LINE (each fixed
@@ -506,16 +570,20 @@ export function validate(table: DeviceTable): QAWarning[] {
   // Unknown columns pass through on import (the strict-superset rule), so an export can
   // carry its own `ft`/`gm_gds`/`gm_id` alongside the raw quantities they are computed
   // from. Nothing here repairs that — but the two are read by different code: expression
-  // scopes prefer the stored column, while the operating-point path re-derives from the
-  // definition, so a chart and a sizing can disagree without either being wrong. Naming
+  // scopes prefer the stored column, while the operating-point path (the forward lookup, which
+  // interpolates base columns only, and the sizer, which re-derives at the sized width) computes
+  // from the definition, so a chart and a sizing can disagree without either being wrong. Naming
   // the column is the only way the difference is ever visible.
+  // A base quantity the namespace also knows how to derive (`gamma`, which it reads from `sth`)
+  // is no shadow: a stored column of it is the documented input, read as stored by the charts and
+  // the operating-point path alike, so nothing disagrees.
   for (const def of DERIVED_QUANTITIES) {
-    if (!q.has(def.key)) continue;
+    if (!q.has(def.key) || BASE_KEYS.has(def.key)) continue;
     out.push({
       rule: 'derived-shadow',
       severity: 'warning',
       symbol: def.key,
-      message: `the table stores a "${def.key}" column, which shadows the quantity computed from ${def.expr} — charts read the stored column while sizing re-derives it, so the two disagree if this column was made a different way; drop or rename it to remove the ambiguity`,
+      message: `the table stores a "${def.key}" column, which shadows the quantity computed from ${def.expr} — charts and expressions read the stored column, while an operating-point lookup and a sizing compute it from that definition, so the two disagree if this column was made a different way; drop or rename it to remove the ambiguity`,
       location: def.key,
     });
   }

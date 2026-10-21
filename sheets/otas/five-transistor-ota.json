@@ -1,6 +1,6 @@
 {
   "title": "5T OTA",
-  "description": "The five-transistor OTA, biased from the TAIL NODE and entered from the COMMON MODE. Internally the tail node is the one free bias variable: the pair's source sits at $V_{tail}$, so both of its transistors have $V_{tail}$ as their body bias and a drain-source voltage measured up from it — to the output on one side, to the load's diode node on the other — and every device is read straight out of the table. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; the pair's output-side transistor carries its share of what the tail delivers, and its partner is the same width on the same gate-source voltage with its drain on the load's diode side, so its current is read from the table at that drain; the load's diode side carries what that partner passes; and the load mirror's output side shares its diode side's gate, so the two sides differ by their drain voltages in the same way. The share is the one thing solved besides the tail node: with the inputs balanced the pair's two currents have to add up to what the tail delivers, and wherever the output does not sit one load $V_{GS}$ below the supply the pair's two drains differ, so the split is not one half each. The mirror's two drains differ there as well, and the current the two differences leave missing at the output is reported as a systematic input offset. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. Externally the designer types the common mode the application presents: $CM_{in} = V_{tail} + V_{GS}$ rises monotonically with the tail node, so the engine searches $V_{tail}$ inside its stated range until the produced common mode equals $CM_{dc}$ — a search that keeps the answer enclosed and owes nothing to a starting guess. Sweep $CM_{dc}$ to trace the common-mode axis. Gain falls as the common mode rises, because lifting the tail node squeezes the pair's own $v_{ds}$ — and it collapses well before the pair leaves saturation, which is why the gain check, not a saturation edge, sets the usable ceiling.",
+  "description": "The five-transistor OTA, biased from the TAIL NODE and entered from the COMMON MODE, and drawn at rest: the feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. Internally the tail node is the one free bias variable: the pair's source sits at $V_{tail}$, so both of its transistors have $V_{tail}$ as their body bias and a drain-source voltage measured up from it — to the output on one side, to the load's diode node on the other — and every device is read straight out of the table. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; the pair's two transistors are one width, each carrying its own share of what the tail delivers, so the two add up to it; the load's diode side carries the diode-side transistor's current; and the load mirror's output side shares its diode side's gate, so what it returns to the output is read from the table at its own drain voltage. The share is the one thing solved besides the tail node: it is solved so that the currents at the output node balance — the output-side transistor takes exactly what the mirror's output side returns. Wherever the output does not sit one load $V_{GS}$ below the supply, the mirror's two sides and the pair's two drains sit at different voltages, the share is not one half, and the two pair transistors need different gate-source voltages for their currents. That difference is the input offset the feedback has to apply to hold the output, and the sheet reports it directly as the systematic offset. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. Externally the designer types the common mode the application presents: $CM_{in}$, the tail node plus the mean of the two gate-source voltages, rises monotonically with the tail node, so the engine searches $V_{tail}$ inside its stated range until the produced common mode equals $CM_{dc}$ — a search that keeps the answer enclosed and owes nothing to a starting guess. Sweep $CM_{dc}$ to trace the common-mode axis. Gain falls as the common mode rises, because lifting the tail node squeezes the pair's own $v_{ds}$, but it is the pair's diode-side transistor, whose drain sits one load $V_{GS}$ below the supply, that runs out first: its saturation check ends the usable common-mode range while the gain still has room (on a sky130 tt realization at 1.40 V, where the gain is 34.9 against 15).",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -13,7 +13,7 @@
       "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor measured on a sky130 tt realization of this OTA rather than above the gamma-model row (22.6 nV/rtHz there at the default 20 uA and gm/ID split, the pair receiving a little under the programmed current). Clearing only the model is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
+      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor a sky130 tt realization of this OTA shows in simulation. The row reads each device's noise from the tables where they carry it and lands at 28.4 nV/rtHz on that realization; the gamma = 1 estimate a table without stored noise gets would read 22.7 nV/rtHz at the same operating points. Clearing only the estimate is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
     },
     {
       "name": "vos_target",
@@ -27,7 +27,7 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge. The cm-lo edge re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (from 0.96 V up to the 1.45 V top of the CM_dc slider on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low edge. The cm-lo edge re-evaluates the whole sheet here, so this claim is CHECKED at every evaluation, on the design this run produced — the sweep shows the widest range that would close (from 0.96 V up to 1.39 V on a sky130 tt realization at the shipped choices: below it the tail device leaves saturation, and above it the pair's diode-side transistor does). The edge checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -76,8 +76,8 @@
       "max": 0.99,
       "unit": "1",
       "role": "choice",
-      "solveFor": "pair_split",
-      "note": "the share of the tail current the pair's output-side transistor carries with the inputs balanced — solved, not set. The pair's two transistors are one width on one gate-source voltage, but one drain is the output and the other the load's diode node, so they do not carry equal currents and the tail current does not split in half. The engine searches for the share at which this equals the output-side transistor's fraction of the pair's current as the table reads the two (the pair_split row), which is the current law at the tail node: the two currents add up to what the tail delivers. The stored value is never read. It is searched between 0.01 and 0.99, a share of the tail current that leaves each transistor some of it"
+      "designConstraint": { "lhs": "in__id", "rhs": "ld__id" },
+      "note": "the share of the tail current the pair's output-side transistor carries at rest — solved, not set. The output is a high-impedance node that the feedback around the amplifier holds at V_out_dc, so in the resting circuit the current the output-side transistor takes is exactly the current the mirror's output side returns: the engine searches for the share at which the two are equal, the current law at the output node. The diode-side transistor carries the rest, so the two add up to what the tail delivers by construction. The share is one half only where the output sits one load V_GS below the supply. It is searched between 0.01 and 0.99, a share of the tail current that leaves each transistor some of it; the stored value is never read"
     },
     {
       "name": "I_tail",
@@ -95,7 +95,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "input-pair inversion, set on the output-side transistor; its partner sits at the same gate-source voltage. Sets gm per current, noise, and the CM-low edge"
+      "note": "input-pair inversion, set on the output-side transistor; its partner copies its width and carries the rest of the tail current. Sets gm per current, noise, and the CM-low edge"
     },
     {
       "name": "gm_id_ld",
@@ -189,7 +189,13 @@
           { "name": "L_t", "value": 0.5e-6, "unit": "m", "role": "choice" },
           { "name": "vds_t", "value": 0.4, "unit": "V", "role": "spec", "note": "the tail node" }
         ],
-        "givens": { "L": "L_t", "W": "W_t", "vgs": "vgs_t", "vds": "vds_t" },
+        "givens": {
+          "L": "L_t",
+          "W": "W_t",
+          "vgs": "vgs_t",
+          "vds": "vds_t",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "vdsat", "id"]
@@ -205,7 +211,7 @@
       "name": "in",
       "doc": {
         "title": "Input-pair device, output side",
-        "description": "The pair transistor whose drain is the output, sized at its share of what the tail delivers. The pair's two transistors share a gate drive and a source but not a drain, so the tail current does not split evenly between them, and this is the one whose $g_{ds}$ loads the output. Both of its bias coordinates come from the tail node directly: the source sits at $V_{tail}$, so that is its body bias, and its drain-source voltage is what is left between the output level and that source. It publishes its width and its gate-source voltage, which is all its partner on the diode side needs to copy it.",
+        "description": "The pair transistor whose drain is the output, sized at its share of what the tail delivers. The pair's two transistors share a gate drive and a source but not a drain, so the tail current does not split evenly between them, and this is the one whose $g_{ds}$ loads the output. Both of its bias coordinates come from the tail node directly: the source sits at $V_{tail}$, so that is its body bias, and its drain-source voltage is what is left between the output level and that source. It publishes its width, which its partner on the diode side copies, and its gate-source voltage, which differs from its partner's by the input offset that holds the output where it is.",
         "polarity": "n",
         "params": [
           { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -219,7 +225,8 @@
           "id": "I_side",
           "gm_id": "gm_id_i",
           "vds": "vds_i",
-          "vsb": "vsb_i"
+          "vsb": "vsb_i",
+          "region": "saturation"
         },
         "equations": [],
         "checks": [
@@ -275,7 +282,7 @@
       "name": "inr",
       "doc": {
         "title": "Input-pair device, diode side",
-        "description": "The pair transistor whose drain is the load's diode node: the output-side transistor's width on the output-side transistor's gate-source voltage, which is what a matched pair with balanced inputs on a common source is. Its body bias is the tail node, like its partner's, but its drain sits one load $V_{GS}$ below the supply instead of at the output, so its current is read off the table at that drain, not typed. Wherever the two drains differ it carries a different current than its partner, and the split of the tail current between the two is solved so that they add up to what the tail delivers.",
+        "description": "The pair transistor whose drain is the load's diode node: the output-side transistor's width, carrying the rest of what the tail delivers. A matched pair is one width, so its width is copied, and its current is given, which makes this a width-and-current sizing: the table is inverted at that current density for the gate-source voltage it takes. Its body bias is the tail node, like its partner's, but its drain sits one load $V_{GS}$ below the supply instead of at the output. Wherever the two drains or the two currents differ, its gate-source voltage differs from its partner's, and that difference is the input offset the sheet reports.",
         "polarity": "n",
         "params": [
           {
@@ -286,13 +293,18 @@
             "note": "the output-side transistor's width — a matched pair"
           },
           {
-            "name": "vgs_i",
-            "value": 0.65,
-            "unit": "V",
+            "name": "I_side",
+            "value": 10e-6,
+            "unit": "A",
             "role": "spec",
-            "note": "the output-side transistor's gate-source voltage — balanced inputs on the source node the two share"
+            "note": "what the tail delivers less the output-side transistor's share"
           },
-          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          {
+            "name": "L_i",
+            "value": 0.5e-6,
+            "unit": "m",
+            "role": "choice"
+          },
           {
             "name": "vds_i",
             "value": 0.7,
@@ -300,16 +312,28 @@
             "role": "spec",
             "note": "from the tail node up to the load's diode node"
           },
-          { "name": "vsb_i", "value": 0.4, "unit": "V", "role": "spec" }
+          {
+            "name": "vsb_i",
+            "value": 0.4,
+            "unit": "V",
+            "role": "spec"
+          }
         ],
-        "givens": { "L": "L_i", "W": "W_i", "vgs": "vgs_i", "vds": "vds_i", "vsb": "vsb_i" },
+        "givens": {
+          "L": "L_i",
+          "W": "W_i",
+          "id": "I_side",
+          "vds": "vds_i",
+          "vsb": "vsb_i",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "vdsat", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "vgs", "vdsat", "id", "vnth_m", "cgg"]
       },
       "params": {
         "W_i": "in__W",
-        "vgs_i": "in__vgs",
+        "I_side": "tail__id*(1 - out_share)",
         "L_i": "L_in",
         "vds_i": "VDD - abs(ldr__vgs) - V_tail",
         "vsb_i": "V_tail"
@@ -345,7 +369,13 @@
             "note": "output-side vds, signed to this table's axis convention"
           }
         ],
-        "givens": { "L": "L_l", "W": "W_l", "vgs": "vgs_l", "vds": "vds_l" },
+        "givens": {
+          "L": "L_l",
+          "W": "W_l",
+          "vgs": "vgs_l",
+          "vds": "vds_l",
+          "region": "saturation"
+        },
         "equations": [],
         "checks": [],
         "provides": ["gm", "gds", "vnth_m", "cgg", "id"]
@@ -361,15 +391,9 @@
   "equations": [
     {
       "name": "CM_in",
-      "expr": "V_tail + in__vgs",
+      "expr": "V_tail + (in__vgs + inr__vgs)/2",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting. It rises monotonically with the tail node — which is why the pin that places the tail node from $CM_{dc}$ is a well-posed one-unknown search"
-    },
-    {
-      "name": "pair_split",
-      "expr": "in__id/(in__id + inr__id)",
-      "unit": "1",
-      "note": "the fraction of the pair's current that its output-side transistor carries with the inputs balanced and the output at $V_{out,dc}$, as the table reads the two — what out_share is solved to. One half when the output sits one load $V_{GS}$ below the supply; above one half when the output is higher than that, because the output-side transistor then has the larger drain-source voltage, and below it when the output is lower"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two pair transistors' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node — which is why the pin that places the tail node from $CM_{dc}$ is a well-posed one-unknown search"
     },
     {
       "name": "gm_pair",
@@ -427,9 +451,9 @@
     },
     {
       "name": "vos_sys",
-      "expr": "abs(in__id - ld__id)/gm_pair",
+      "expr": "abs(inr__vgs - in__vgs)",
       "unit": "V",
-      "note": "estimate: input-referred systematic offset — the current missing at the output node with the inputs balanced, over the pair's transconductance: what the output-side pair transistor takes, less what the mirror's output side returns. Two differences are in it, both read from the table. The pair's two transistors share a width and a gate-source voltage, but the diode-side drain sits one load $V_{GS}$ below the supply and the output-side drain at $V_{out,dc}$, so the output side takes a different current than its partner passes on to the mirror's diode side. The mirror's output side shares the diode side's gate but sits at $V_{DD} - V_{out,dc}$ while the diode side sits at its own diode drop, so it returns a different current than the diode side receives. The two differences always push the output the same way, and both are zero when the output sits one load $V_{GS}$ below the supply. With $V_{out,dc}$ held by a loop outside this sheet, the missing current has to come from an input imbalance of this size. Reported only; no check reads it"
+      "note": "input-referred systematic offset — the difference of the two pair transistors' gate-source voltages at rest, read directly: the input offset the feedback holding the output at $V_{out,dc}$ has to apply. Two differences are in it, both read from the table. The mirror's output side shares the diode side's gate but sits at $V_{DD} - V_{out,dc}$ while the diode side sits at its own diode drop, so it returns a different current than the diode side carries, and the output-side transistor has to carry that current instead of an even share. The pair's two transistors share a width and a source but not a drain — the diode-side drain sits one load $V_{GS}$ below the supply and the output-side drain at $V_{out,dc}$ — so even at equal currents they would need different gate-source voltages. The two differences always push the same way, and both are zero when the output sits one load $V_{GS}$ below the supply. Reported only; no check reads it"
     },
     {
       "name": "tail_headroom",
@@ -468,17 +492,9 @@
       "lhs": "vn_in",
       "op": "<=",
       "rhs": "vn_target",
-      "note": "computed from the gamma-model floor; this table carries no measured noise; the simulator owns noise sign-off"
+      "note": "reads each device's thermal noise from the table where the table carries it, and the gamma = 1 estimate where it does not; it stays advisory because a sheet cannot know which table it will be evaluated on, and the simulator owns noise sign-off"
     },
     { "id": "offset-spec", "kind": "spec", "lhs": "vos", "op": "<=", "rhs": "vos_target" },
-    {
-      "id": "tail-saturated",
-      "kind": "physical",
-      "lhs": "tail_headroom",
-      "op": ">=",
-      "rhs": "0",
-      "note": "below this the tail source drops out of saturation and the bias current collapses; this is the mechanism behind the low end of the common-mode range"
-    },
     {
       "id": "cm-not-below",
       "kind": "physical",
@@ -501,8 +517,8 @@
       "lhs": "min(VDD - abs(ldr__vgs) - V_tail - inr__vdsat, V_out_dc - V_tail - in__vdsat)",
       "op": ">=",
       "rhs": "0.1",
-      "justification": "the pair's two drains sit at different levels — one a diode drop below the supply, the other at the output — so each transistor is held against its own saturation voltage and this watches whichever has less to spare. Gain collapses well before this trips, so treat it as a floor rather than as the usable ceiling",
-      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage — lower V_tail, or spend less diode drop (lower gm_id_ld)"
+      "justification": "the pair's two drains sit at different levels — one a diode drop below the supply, the other at the output — so each transistor is held against its own saturation voltage and this watches whichever has less to spare. As the common mode rises the diode-side transistor is the one that runs out, and its saturation declaration — not this margin and not the gain — is what ends the usable range; this margin warns 0.1 V before it does",
+      "note": "trips when the tail node is pushed so high the pair runs out of drain-source voltage — lower V_tail, or spend less diode drop (higher gm_id_ld)"
     }
   ],
   "operatingRange": [

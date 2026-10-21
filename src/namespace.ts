@@ -27,7 +27,9 @@ export const BASE_QUANTITIES: readonly BaseQuantity[] = [
   { key: 'w', unit: 'm', required: false, perWidth: true }, // may be metadata instead of a column
   { key: 'sth', unit: 'A^2/Hz', required: false, perWidth: true }, // thermal noise PSD
   { key: 'sfl', unit: 'A^2/Hz', required: false, perWidth: true }, // flicker noise PSD @ 1 Hz
-  { key: 'gamma', unit: '1', required: false }, // thermal-noise factor γ (defaults to GAMMA_DEFAULT)
+  // thermal-noise factor γ: a stored column wins; without one it is derived from `sth` where the
+  // table carries it, and is GAMMA_DEFAULT where it does not (see the `gamma` definition below)
+  { key: 'gamma', unit: '1', required: false },
   { key: 'igd', unit: 'A', required: false, perWidth: true },
   { key: 'igs', unit: 'A', required: false, perWidth: true },
 ];
@@ -86,12 +88,19 @@ export const DERIVED_QUANTITIES: readonly DerivedQuantity[] = [
   // resolvable when the table actually carries `sth`, so a model is never shown as data.
   { key: 'svth', expr: 'sth/(gm^2)', unit: 'V^2/Hz' }, // input-referred thermal PSD (data)
   { key: 'vnth', expr: 'sqrt(sth)/gm', unit: 'V/sqrt(Hz)' }, // input-referred thermal density (data)
-  // MODEL estimate: Sid = 4kTγ·gm. Always available (needs only gm); γ from a `gamma`
-  // column when present, else GAMMA_DEFAULT (a sub-micron stand-in, not the long-channel
-  // 2/3). The `_m` keys + visible formula mark it as a model so it is never mistaken for
-  // measured device noise.
-  { key: 'svth_m', expr: '4*k*T*gamma/gm', unit: 'V^2/Hz' }, // input-referred thermal PSD (γ-model)
-  { key: 'vnth_m', expr: 'sqrt(4*k*T*gamma/gm)', unit: 'V/sqrt(Hz)' }, // density (γ-model)
+  // The thermal-noise factor γ read back from the stored PSD: Sid = 4kTγ·gm solved for γ, at the
+  // table's own temperature (T comes from its metadata). It shares its name with the engine
+  // constant `gamma` (GAMMA_DEFAULT), and that constant is its default: on a table without `sth`
+  // the name resolves to the constant instead (see DEFAULTED_DERIVED in derive/). A stored `gamma`
+  // column wins over both, as every stored column does.
+  { key: 'gamma', expr: 'sth/(4*k*T*gm)', unit: '1' },
+  // The γ-model: Sid = 4kTγ·gm. Always available (needs only gm), and it reads `gamma` as above —
+  // so on a table that carries `sth` it IS the measured noise (vnth_m = sqrt(sth)/gm = vnth), and
+  // on one that does not it is the estimate at GAMMA_DEFAULT (a sub-micron stand-in, not the
+  // long-channel 2/3). These are the keys sheets read, because they resolve on every table;
+  // noiseSource (derive/) says per table which of the two they are.
+  { key: 'svth_m', expr: '4*k*T*gamma/gm', unit: 'V^2/Hz' }, // input-referred thermal PSD
+  { key: 'vnth_m', expr: 'sqrt(4*k*T*gamma/gm)', unit: 'V/sqrt(Hz)' }, // input-referred density
   // Input-referred 1/f (flicker) noise from the simulator's stored flicker PSD @ 1 Hz
   // (`sfl`). Area-domain, so unlike thermal there is no universal model default — these
   // are MEASURED-only, resolvable solely when the table carries `sfl`.
