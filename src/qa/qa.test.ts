@@ -60,6 +60,39 @@ describe('validate: vgs step', () => {
     });
     expect(validate(t).some((x) => x.rule === 'vgs-step')).toBe(false);
   });
+
+  // A step is a difference of floats, so an axis at exactly 10 mV measures a hair either side of
+  // 0.01 — 0.07 - 0.06 is 0.010000000000000009. None of these is a coarse sweep.
+  const flatTable = (vgs: number[]): DeviceTable =>
+    makeTable([axis('vgs', vgs)], {
+      gm: vgs.map(() => 1e-3),
+      id: vgs.map(() => 1e-3),
+    });
+  const stepWarning = (vgs: number[]) =>
+    validate(flatTable(vgs)).find((x) => x.rule === 'vgs-step');
+
+  it('does not flag a 10 mV axis built from floats', () => {
+    const n = 121; // 0 … 1.2 V
+    // As the demo device and most exporters build it: start + i·step.
+    const scaled = Array.from({ length: n }, (_, i) => i * 0.01);
+    // As a running sum, which drifts further from the decimal values with every step.
+    const summed: number[] = [];
+    for (let i = 0, v = 0; i < n; i++, v += 0.01) summed.push(v);
+    // As parsed from decimal text ("0.07", …): the nearest double to each value.
+    const parsed = scaled.map((v) => Number(v.toFixed(2)));
+    // Far from zero too, where one ULP is larger: a PMOS sweep from -1.8 V.
+    const negative = Array.from({ length: n }, (_, i) => -1.8 + i * 0.01);
+    for (const vgs of [scaled, summed, parsed, negative]) {
+      expect(Math.max(...vgs.slice(1).map((v, i) => v - vgs[i]))).toBeGreaterThan(0.01); // past it in floats
+      expect(stepWarning(vgs)).toBeUndefined();
+    }
+  });
+
+  it('still flags a step just past 10 mV, and says by how much', () => {
+    const w = stepWarning([0, 0.01, 0.02004, 0.03]);
+    expect(w).toBeDefined();
+    expect(w?.message).toMatch(/10\.04 mV exceeds 10 mV/);
+  });
 });
 
 // --- gm/ID ceiling -----------------------------------------------------------

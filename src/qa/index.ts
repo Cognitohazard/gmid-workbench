@@ -35,6 +35,12 @@ const GM_ID_UNIT_ERROR = 45;
 /** Per-step vgs spacing above this (in volts) is coarse enough to warn. */
 const VGS_STEP_WARN = 0.01; // 10 mV
 
+/** Relative slack on that limit. A step is the difference of two decimal values held as binary
+ *  floats, so an axis at exactly 10 mV measures a few ULP either side of 0.01 (0.07 − 0.06 is
+ *  0.010000000000000009). One part in a million absorbs that at any vgs a table can hold while
+ *  remaining far below any step an exporter actually chose. */
+const VGS_STEP_TOL = 1e-6;
+
 /** Plausible range for the thermal-noise factor γ; outside it is likely a unit/model error.
  *  The long-channel value is 2/3; short-channel devices run higher (hot-carrier / velocity
  *  saturation can reach ~2–3), so the ceiling is generous — it targets gross errors (γ stored
@@ -210,11 +216,16 @@ export function validate(table: DeviceTable): QAWarning[] {
         location: 'vgs',
       });
     }
-    if (maxStep > VGS_STEP_WARN) {
+    if (maxStep > VGS_STEP_WARN * (1 + VGS_STEP_TOL)) {
+      // Enough decimals that the step shown is visibly past the limit: a 10.04 mV step at one
+      // decimal would read "10.0 mV exceeds 10 mV".
+      const mV = maxStep * 1e3;
+      let digits = 1;
+      while (digits < 6 && Number(mV.toFixed(digits)) <= VGS_STEP_WARN * 1e3) digits++;
       out.push({
         rule: 'vgs-step',
         severity: 'warning',
-        message: `vgs step up to ${(maxStep * 1e3).toFixed(1)} mV exceeds 10 mV`,
+        message: `vgs step up to ${mV.toFixed(digits)} mV exceeds 10 mV`,
         location: 'vgs',
       });
     }
