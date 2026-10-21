@@ -411,11 +411,17 @@ and an author's own formula written the same way at the level that sizes the dev
 a table `vnth_m` equals the measured `vnth = sqrt(sth)/gm` point for point, and the library's
 noise rows, which read each device's `vnth_m`, read measured noise without a change to any sheet.
 An author's `4*k*T*gamma/gm` leaves the body-effect term out, and reads low by the factor
-`1 + gmb/gm` on every table. The measured γ is a property of a sized device, so it is in scope
+`1 + gmb/gm` on any table that carries `gmb` (on one without it, γ is itself read against `gm`
+alone and the formula is the fallback the γ-model uses there); validation warns about an
+expression that reads `gamma` against `gm` with neither `gmb` nor a noise figure
+(`sheet-noise-form`). The measured γ is a property of a sized device, so it is in scope
 only where one is: an unqualified `gamma` in a parent's row — a level with no device of its own —
 is the constant 1.0, and the device's value there is `<block>__gamma`, published by the block. The
-current-mirror OTA's `vn_gbw` row is one such parent row: it reads the constant. A table that
-stores a `gamma` column of its own is read from that column instead, as every stored column wins.
+current-mirror OTA's `vn_gbw` row wants the input device's own noise, so it reads it by the
+block's name, as `in__svth_m*in__gm`: the device's `4*k*T*gamma*(gm+gmb)/gm`. A table that
+stores a `gamma` column of its own is read from that column instead, as every stored column wins,
+and against `gm + gmb` like the rest: a column built against `gm` alone reads high by
+`1 + gmb/gm`, and QA compares it with `sth` where both are stored (`gamma-vs-sth`).
 A table with neither gets the default, 1.0. A simulation of sky130 bears the default out for
 neither device once the body effect is separated out: at the five-transistor OTA's bias points
 the PMOS load reads 0.81 and the NMOS pair 1.63 (1.00 and 1.95 against `gm` alone; see
@@ -423,12 +429,13 @@ the PMOS load reads 0.81 and the NMOS pair 1.63 (1.00 and 1.95 against `gm` alon
 anyone ships here, and for a noise *floor* an optimistic assumption is the dangerous direction. On
 the sky130 tables the generator writes, which carry `sth`, the five-transistor OTA's
 input-referred thermal density reads about 28 nV/√Hz against 28.24 nV/√Hz simulated, where the
-1.0 default reads 25.1 (22.7 with the body effect left out as well).
+1.0 default reads 25.0 (22.7 with the body effect left out as well).
 
 On a table without `gmb`, γ is read back as `sth/(4*k*T*gm)`, which carries the body factor
 `1 + gmb/gm`, and `svth_m` and `vnth_m` are read as `4*k*T*gamma/gm` and `sqrt(4*k*T*gamma/gm)`.
 Where the table stores `sth` the two cancel and the figures are still its own noise; where γ is
-the default or a stored column, the floor reads low by `1 + gmb/gm` in power.
+the default, the floor reads low by `1 + gmb/gm` in power, and a stored `gamma` column gives the
+right floor only if it was built against `gm` alone.
 
 Every result says which reading it used. Each sized device's report carries `noise`:
 `measured` (γ from `sth`), `column` (the table's own `gamma` column) or `estimated` (the

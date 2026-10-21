@@ -156,6 +156,21 @@ L,VGS,ID,GM
     expect(ds.tables[0].grid.axes.map((a) => a.name)).toEqual(['l', 'vgs']);
   });
 
+  it('carries a header spelled like an Object.prototype member through under its own name', () => {
+    // `constructor` and `toString` are inherited by every plain object, so a bare map lookup would
+    // hand back a function as the column's key; they are unknown headers like any other.
+    const csv = `L,VGS,ID,GM,constructor,toString
+1e-8,0.3,1e-6,1e-5,1,3
+1e-8,0.5,2e-6,2e-5,2,4
+`;
+    const ds = expectOk(parseMostabCsv(csv));
+    const q = ds.tables[0].grid.quantities;
+    expect([...q.keys()].every((k) => typeof k === 'string')).toBe(true);
+    expect(Array.from(q.get('constructor') ?? [])).toEqual([1, 2]);
+    expect(Array.from(q.get('tostring') ?? [])).toEqual([3, 4]);
+    expect(mostabHeaderKeys(csv)).toEqual(['l', 'vgs', 'id', 'gm', 'constructor', 'tostring']);
+  });
+
   it('sorts axis values ascending regardless of row order', () => {
     const csv = `L,VGS,ID,GM
 6e-8,0.5,9,9

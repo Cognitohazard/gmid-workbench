@@ -98,10 +98,12 @@ export const REQUIRED_KEYS: readonly string[] = BASE_QUANTITIES.filter((q) => q.
 
 /** The γ-model figures without a `gmb` column: the body-effect term of the channel's noise
  *  conductance gm + gmb is lost. Where γ itself was read back from the stored noise against gm
- *  alone it carries that term, so the figure is still the table's own noise. */
+ *  alone it carries that term, so the figure is still the table's own noise. Whether a stored γ
+ *  column carries it depends on how the column was made, which the engine cannot know. */
 const WITHOUT_GMB =
   'the floor has no body-effect term: exact where γ is read back from the stored noise, which ' +
-  'then carries it, and low by the factor 1 + gmb/gm in power where γ is a stand-in or a stored column';
+  'then carries it, low by the factor 1 + gmb/gm in power where γ is the stand-in, and for a ' +
+  'stored gamma column exact only if the column was built against gm alone';
 
 /**
  * Standard derived quantities, each defined as an expression over the base

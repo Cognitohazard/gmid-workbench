@@ -580,6 +580,63 @@ describe('validate: deepened sign / noise / gamma checks', () => {
     expect(validate(ownGamma).filter((x) => x.rule === 'derived-shadow')).toEqual([]);
     const ownFt = makeTable([axis('vgs', [0.1, 0.2, 0.3])], { ...cols, ft: [1e9, 2e9, 3e9] });
     expect(validate(ownFt).map((x) => x.rule)).toContain('derived-shadow');
+    // The form quoted is the one a sizing uses on this table: without gmb, the fallback.
+    const ownVnth = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      ...cols,
+      vnth_m: [1e-9, 1e-9, 1e-9],
+    });
+    expect(validate(ownVnth).find((x) => x.rule === 'derived-shadow')?.message).toContain(
+      'computed from sqrt(4*k*T*gamma/gm) —',
+    );
+    const withGmb = makeTable([axis('vgs', [0.1, 0.2, 0.3])], {
+      ...cols,
+      gmb: [2e-4, 4e-4, 6e-4],
+      vnth_m: [1e-9, 1e-9, 1e-9],
+    });
+    expect(validate(withGmb).find((x) => x.rule === 'derived-shadow')?.message).toContain(
+      'computed from sqrt(4*k*T*gamma*(gm+gmb))/gm —',
+    );
+  });
+
+  it('flags a negative gmb, which lowers the thermal floor, but not a canonicalized signed PMOS one', () => {
+    const dev = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.3 },
+      vsb: { min: 0, max: 0.6, step: 0.3 },
+    });
+    expect(validate(dev).filter((x) => x.rule === 'gmb-sign')).toEqual([]);
+    const flipped = validate(scaleQuantities(dev, { gmb: -1 })).filter(
+      (x) => x.rule === 'gmb-sign',
+    );
+    expect(flipped.map((x) => [x.severity, x.location])).toEqual([['warning', 'gmb']]);
+    // A signed PMOS export carries its gmb signed like its gm; the import folds both to
+    // magnitudes before validating, so the table that reaches QA is clean.
+    const signed = signedMirrorDemo(dev);
+    const raw = scaleQuantities(
+      { ...signed, meta: { ...signed.meta, polarity: { device: 'p', signedInput: true } } },
+      { id: -1, gm: -1, gmb: -1 },
+    );
+    expect(validate(canonicalizeTable(raw)).filter((x) => x.rule === 'gmb-sign')).toEqual([]);
+    expect(validate(signed).filter((x) => x.rule === 'gmb-sign')).toEqual([]);
+  });
+
+  it('compares a stored gamma column with the γ its sth gives, warning past a factor of 1.5', () => {
+    // The demo's gamma column and its sth = 4kTγ·(gm + gmb) agree exactly.
+    const dev = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.3 },
+      vsb: { min: 0, max: 0.6, step: 0.3 },
+    });
+    const apart = (t: DeviceTable) => validate(t).filter((x) => x.rule === 'gamma-vs-sth');
+    expect(apart(dev)).toEqual([]);
+    // A column built against gm alone reads 1 + gmb/gm = 1.2 high here: inside the factor.
+    expect(apart(scaleQuantities(dev, { gamma: 1 + 0.2 }))).toEqual([]);
+    // Twice the noise the table stores is not this device's.
+    const twice = apart(scaleQuantities(dev, { gamma: 2 }));
+    expect(twice.map((x) => [x.severity, x.location])).toEqual([['warning', 'gamma']]);
+    expect(twice[0].message).toMatch(
+      /^the stored gamma column reads 2\.00 at the table's full-drive point \(l = 1\.8e-7, vds = 1\.2, vsb = 0, vgs = 1\.2\), where the stored thermal noise gives γ = sth\/\(4\*k\*T\*\(gm\+gmb\)\) = 1\.00, 2\.0× apart/,
+    );
+    // Low by the same factor is the same disagreement.
+    expect(apart(scaleQuantities(dev, { gamma: 0.5 }))).toHaveLength(1);
   });
 });
 

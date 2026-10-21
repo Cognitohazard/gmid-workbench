@@ -9,6 +9,7 @@
 
 import type { QAWarning } from '../types';
 import { compileExpr } from '../derive';
+import { createEngine } from '../expr';
 import { BINDABLE, bindProblem } from '../device';
 import { PER_WIDTH_KEYS } from '../namespace';
 import { HELD_AT_A_RANGE_END, heldShape } from './coverage';
@@ -1496,6 +1497,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   out.push(...givensProblems(doc, wiredAsDiode));
   out.push(...checkProblems(doc));
   out.push(...rangeProblems(doc));
+  out.push(...noiseFormProblems(doc));
 
   // A diode connection already fixes vds; declaring both means one of them is a fiction, and
   // guessing which the author meant would be worse than saying so.
@@ -1535,6 +1537,63 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
 
   // Composition: validate each block and attribute its findings to it.
   out.push(...blockProblems(doc, _depth));
+  return out;
+}
+
+/** An engine with no constant map, whose free names are every identifier an expression reads —
+ *  `gamma`, `k` and `T` among them, which the shared engine counts as constants and leaves out. */
+const ALL_NAMES = createEngine({});
+
+/** The thermal-noise figures that already carry the body effect where the table has gmb (the
+ *  γ-model keys) or are the table's own noise (the measured ones). */
+const NOISE_FIGURES = ['svth_m', 'vnth_m', 'svth', 'vnth'] as const;
+
+/**
+ * An expression that reads γ against gm and reads neither gmb nor a noise figure computes the
+ * thermal floor as 4kTγ/gm: without body effect, so low by 1 + gmb/gm in power on any table that
+ * carries gmb, where γ itself is read against gm + gmb. A warning, since a sheet may mean it; it is
+ * checked per level, for the sheet's own `gamma` and for each block's published `<block>__gamma`.
+ */
+function noiseFormProblems(doc: SheetDoc): QAWarning[] {
+  const sites: { expr: string; location: string; what: string }[] = [
+    ...doc.equations.map((r) => ({ expr: r.expr, location: r.name, what: `equation "${r.name}"` })),
+    ...doc.checks.flatMap((c) =>
+      [c.lhs, c.rhs].map((expr) => ({ expr, location: c.id, what: `check "${c.id}"` })),
+    ),
+    ...(doc.blocks ?? []).flatMap((u) =>
+      Object.entries(u.params ?? {}).map(([k, expr]) => ({
+        expr,
+        location: u.name,
+        what: `block "${u.name}" param "${k}"`,
+      })),
+    ),
+  ];
+  const out: QAWarning[] = [];
+  for (const { expr, location, what } of sites) {
+    if (typeof expr !== 'string') continue;
+    let names: ReadonlySet<string>;
+    try {
+      names = new Set(ALL_NAMES.compile(expr).names);
+    } catch {
+      continue; // an expression that does not parse is reported where it is read
+    }
+    for (const n of names) {
+      if (n !== 'gamma' && !n.endsWith(`${PROVIDE_SEP}gamma`)) continue;
+      const p = n.slice(0, -'gamma'.length);
+      if (!names.has(`${p}gm`) || names.has(`${p}gmb`)) continue;
+      if (NOISE_FIGURES.some((f) => names.has(`${p}${f}`))) continue;
+      out.push({
+        rule: 'sheet-noise-form',
+        severity: 'warning',
+        symbol: n,
+        message:
+          `${what} reads ${n} against ${p}gm without ${p}gmb, which is the thermal floor without ` +
+          `body effect, low by 1 + gmb/gm in power on a table that carries gmb — read ` +
+          `${p}svth_m or ${p}vnth_m, or include ${p}gmb`,
+        location,
+      });
+    }
+  }
   return out;
 }
 

@@ -56,6 +56,12 @@ const VGS_STEP_TOL = 1e-6;
 const GAMMA_LO = 0.4;
 const GAMMA_HI = 4.0;
 
+/** How far apart, as a ratio, a stored γ column and the γ the stored sth gives may sit at the
+ *  full-drive point before QA says so (rule `gamma-vs-sth`). The body factor 1 + gmb/gm a column
+ *  built against gm alone carries runs 1.10 to 1.42 at full drive on the generated tables, so 1.5
+ *  leaves that convention unflagged on its own and catches a column that is not this device's. */
+const GAMMA_VS_STH = 1.5;
+
 /** The band the thermal-noise factor γ the stored noise implies (the `gamma` definition,
  *  sth/(4kT·(gm + gmb)), or sth/(4kT·gm) on a table without gmb) has to fall in at a table's
  *  full-drive point (see fullDrive). Real devices spread wider there than the textbook suggests:
@@ -399,6 +405,15 @@ export function validate(table: DeviceTable): QAWarning[] {
     'gds',
     'expected a magnitude (a signed PMOS dump needs canonicalization first)',
   );
+  // gmb adds to gm in the channel's noise conductance, so a negative one lowers every γ-model
+  // noise figure (vnth_m, svth_m) where γ is not read back from sth.
+  signCheck(
+    q.get('gmb'),
+    'gmb-sign',
+    'gmb',
+    'expected a magnitude (a signed PMOS dump needs canonicalization first); it adds to gm in ' +
+      'the thermal noise floor, which a negative one lowers',
+  );
   for (const key of MAGNITUDE_CAP_KEYS)
     signCheck(
       q.get(key),
@@ -481,6 +496,33 @@ export function validate(table: DeviceTable): QAWarning[] {
           `the wrong unit — and every thermal-noise figure on this table is read from it`,
         location: 'sth',
       });
+    }
+    // A stored γ column wins over the γ sth gives, so where both are stored they have to tell the
+    // same story; past a factor of GAMMA_VS_STH apart at full drive one of them is not this
+    // device's noise. The usual cause is a column computed against gm alone, which the γ-model
+    // reads against gm + gmb.
+    const stored = gammaCol?.[drive.at];
+    if (
+      stored !== undefined &&
+      stored > 0 &&
+      Number.isFinite(stored) &&
+      g > 0 &&
+      Number.isFinite(g)
+    ) {
+      const apart = Math.max(stored / g, g / stored);
+      if (apart > GAMMA_VS_STH) {
+        out.push({
+          rule: 'gamma-vs-sth',
+          severity: 'warning',
+          message:
+            `the stored gamma column reads ${stored.toPrecision(3)} at the table's full-drive ` +
+            `point (${drive.where}), where the stored thermal noise gives γ = ${form} = ` +
+            `${g.toPrecision(3)}, ${apart.toPrecision(2)}× apart — the column wins, so every ` +
+            `thermal-noise figure on this table follows it rather than sth` +
+            (gmb ? '; a column built against gm alone reads high by 1 + gmb/gm' : ''),
+          location: 'gamma',
+        });
+      }
     }
   }
 
@@ -622,13 +664,19 @@ export function validate(table: DeviceTable): QAWarning[] {
   // A base quantity the namespace also knows how to derive (`gamma`, which it reads from `sth`)
   // is no shadow: a stored column of it is the documented input, read as stored by the charts and
   // the operating-point path alike, so nothing disagrees.
+  // The form quoted is the one the operating-point path uses on this table, which reads base
+  // columns and metadata only: a fallback where the table lacks a column the definition reads.
+  const scalars = metaScalars(table.meta);
+  const opPath = (n: string): boolean =>
+    (BASE_KEYS.has(n) && q.has(n)) || Object.prototype.hasOwnProperty.call(scalars, n);
   for (const def of DERIVED_QUANTITIES) {
     if (!q.has(def.key) || BASE_KEYS.has(def.key)) continue;
+    const form = derivedForm(def.key, opPath)?.compiled.src ?? def.expr;
     out.push({
       rule: 'derived-shadow',
       severity: 'warning',
       symbol: def.key,
-      message: `the table stores a "${def.key}" column, which shadows the quantity computed from ${def.expr} — charts and expressions read the stored column, while an operating-point lookup and a sizing compute it from that definition, so the two disagree if this column was made a different way; drop or rename it to remove the ambiguity`,
+      message: `the table stores a "${def.key}" column, which shadows the quantity computed from ${form} — charts and expressions read the stored column, while an operating-point lookup and a sizing compute it from that form, so the two disagree if this column was made a different way; drop or rename it to remove the ambiguity`,
       location: def.key,
     });
   }

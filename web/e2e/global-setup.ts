@@ -41,10 +41,12 @@ export default function globalSetup(): void {
   // devices: another name, both bias sweeps (vds in coarse 0.3 V steps — those tests check what
   // the app says, and the bias points they use fall on these nodes), and half the current per
   // unit width at every gate voltage. A block pointed at it therefore sizes to twice the width
-  // it has on the demo device, so the choice shows in the block's own numbers.
+  // it has on the demo device, so the choice shows in the block's own numbers. The body
+  // transconductance and the thermal noise halve with gm, so the stored noise still gives the
+  // stored γ and the table passes its own QA.
   const half = scaleQuantities(
     generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 }, vsb: VSB }),
-    { id: 0.5, gm: 0.5 },
+    { id: 0.5, gm: 0.5, gmb: 0.5, sth: 0.5 },
   );
   writeFixture({ ...half, id: { ...half.id, device: 'nmos_half' } }, 'demo-half.mostab.csv');
   // The same oracle recast as a signed-convention PMOS table (negative vgs/vds axes),

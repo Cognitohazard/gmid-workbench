@@ -546,6 +546,7 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
       iDiode,
       rM,
       gmDiode,
+      gmOut,
       // The diode side's half through the mirror, the output side's half direct.
       gmPair: (gmDiode * rM + gmOut) / 2,
     };
@@ -618,6 +619,36 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     expect(relErr(mir__gm / mirr__gm, rest.rM)).toBeLessThan(1e-3);
     expect(relErr(res.values.GBW, res.values.gm_pair / (TWO_PI * CL))).toBeLessThan(1e-12);
     expect(res.values.I_q).toBe(res.values.tail__id);
+  });
+
+  it('input noise counts both pair devices and both mirror devices, the diode side through the mirror', () => {
+    // Each device at its own density sqrt(4kTγ·(gm + gmb))/gm = vnthM(gm). The pair devices enter
+    // as they are; a mirror device's noise current, vnthM(gm)·gm, is referred through gm_pair. The
+    // mirror sits at gm/ID 13, its diode side carrying the diode side's current and its output side
+    // rM times that, which is the output side's current; the diode side's noise current reaches
+    // the output through the mirror's gain rM, as its half of the signal does.
+    const gmMirr = 13 * iDiode;
+    const gmMir = 13 * iOut;
+    const referred = (gm: number, gain: number): number => (vnthM(gm) * gm * gain) / gmPair;
+    const vn = Math.hypot(
+      vnthM(rest.gmDiode),
+      vnthM(rest.gmOut),
+      referred(gmMirr, rest.rM),
+      referred(gmMir, 1),
+    );
+    expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
+    const { inr__vnth_m, in__vnth_m, mirr__vnth_m, mir__vnth_m, mir__gm, gm_pair } = res.values;
+    expect(
+      relErr(
+        res.values.vn_in,
+        Math.hypot(
+          inr__vnth_m,
+          in__vnth_m,
+          (mirr__vnth_m * mir__gm) / gm_pair,
+          (mir__vnth_m * mir__gm) / gm_pair,
+        ),
+      ),
+    ).toBeLessThan(1e-12);
   });
 
   it('the design constraint lands the common mode on CM_dc, with the tail node as the variable', () => {
@@ -786,8 +817,11 @@ describe('tier-3 goldens: folded cascode OTA', () => {
       iTail,
       iOut,
       iPr,
+      iFr,
       iNmir,
       copy,
+      gmOut,
+      gmDiode,
       // The diode side's half through the bottom mirror, the output side's half direct.
       gmPair: (gmDiode * copy + gmOut) / 2,
     };
@@ -828,6 +862,37 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // into one folding node does not starve it: the check compares the two currents the run reads.
     const fold = check(res, 'fold-current');
     expect([fold.lhsValue, fold.rhsValue]).toEqual([res.values.I_fold, res.values.in__id]);
+  });
+
+  it('input noise counts the pair, both folding sources and both mirror devices, the diode side through the mirror', () => {
+    // Each device at its own density vnthM(gm); a source's or a mirror device's noise current
+    // vnthM(gm)·gm is referred through gm_pair. The folding sources and the bottom mirror sit at
+    // gm/ID 8: the output side's source at I_branch, the diode side's at I_pr, the mirror's diode
+    // side at the diode side's fold current I_fr and its output side at the copy of it. The diode
+    // side's source and mirror device put their noise into the diode side's branch, which reaches
+    // the output through the bottom mirror's gain, as the diode side's half of the signal does.
+    const current = (gm: number, gain: number): number => vnthM(gm) * gm * gain;
+    const output = Math.hypot(
+      current(8 * rest.iPr, rest.copy),
+      current(8 * 30e-6, 1),
+      current(8 * rest.iFr, rest.copy),
+      current(8 * rest.iNmir, 1),
+    );
+    const vn = Math.hypot(vnthM(rest.gmDiode), vnthM(rest.gmOut), output / gmPair);
+    expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
+    const v = res.values;
+    const gain = v.nmir__gm / v.nmir_r__gm;
+    const i = (name: string, g = 1): number => v[`${name}__vnth_m`] * v[`${name}__gm`] * g;
+    expect(
+      relErr(
+        v.vn_in,
+        Math.hypot(
+          v.inr__vnth_m,
+          v.in__vnth_m,
+          Math.hypot(i('pcs_r', gain), i('pcs'), i('nmir_r', gain), i('nmir')) / v.gm_pair,
+        ),
+      ),
+    ).toBeLessThan(1e-12);
   });
 
   it('the split is solved so the currents at the output node balance', () => {
@@ -1353,6 +1418,19 @@ describe('tier-3 goldens: current-mirror OTA', () => {
   itIsAMirrorOta(doc, res, 'mload', 'f_pole');
 
   itIsOneInputGate(res);
+
+  it('the noise-for-bandwidth estimate reads the input device’s own channel noise, body effect included', () => {
+    // vn_gbw = sqrt(2·4kTγ·(1 + gmb/gm)/gm_req), gm_req = 2π·CL·GBW_target/K_m the pair gm that
+    // just meets the target. On the demo γ = 1 and gmb/gm = 0.2, so 4kTγ·1.2/gm_req = vnthM(gm_req)².
+    const gmReq = (TWO_PI * CL * 12e6) / 2;
+    // The row reads 4kTγ·(gm + gmb)/gm as in__svth_m·in__gm, svth_m re-derived at the point and gm
+    // the sizing's honoured one, so the two meet to the interpolation residual (~0.1 % in gm).
+    expect(relErr(res.values.vn_gbw, Math.SQRT2 * vnthM(gmReq))).toBeLessThan(1e-3);
+    const { in__svth_m, in__gm } = res.values;
+    expect(relErr(res.values.vn_gbw, Math.sqrt((2 * in__svth_m * in__gm) / gmReq))).toBeLessThan(
+      1e-12,
+    );
+  });
 
   it('PM pays the PMOS node as a FULL pole and the folded NMOS node as a DOUBLET', () => {
     // Structure golden on the sheet's own poles: both branches pass a PMOS mirror (full

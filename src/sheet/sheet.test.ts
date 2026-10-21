@@ -1004,6 +1004,44 @@ describe('a param or equation named like a quantity the sizing publishes', () =>
   });
 });
 
+describe('a sheet that reads γ against gm without gmb is told', () => {
+  const rows = (exprs: string[]): SheetDoc =>
+    boundDoc({ equations: exprs.map((expr, i) => ({ name: `r${i}`, expr })) });
+  const said = (doc: SheetDoc) =>
+    validateSheet(doc)
+      .filter((w) => w.rule === 'sheet-noise-form')
+      .map((w) => [w.severity, w.location, w.symbol]);
+
+  it('warns on the 4kTγ/gm idiom, at the sheet’s own level and through a block’s names', () => {
+    expect(said(rows(['4*k*T*gamma/gm', 'sqrt(2*4*k*T*in__gamma/in__gm)']))).toEqual([
+      ['warning', 'r0', 'gamma'],
+      ['warning', 'r1', 'in__gamma'],
+    ]);
+    expect(
+      validateSheet(rows(['4*k*T*gamma/gm'])).find((w) => w.rule === 'sheet-noise-form'),
+    ).toMatchObject({
+      message:
+        'equation "r0" reads gamma against gm without gmb, which is the thermal floor without ' +
+        'body effect, low by 1 + gmb/gm in power on a table that carries gmb — read svth_m or ' +
+        'vnth_m, or include gmb',
+    });
+  });
+
+  it('is silent where the row carries the body effect or reads a noise figure', () => {
+    expect(
+      said(
+        rows([
+          '4*k*T*gamma*(gm+gmb)/gm^2',
+          'svth_m*gm/(4*k*T)',
+          'gamma*vnth_m',
+          '2*k*T*gamma/C_x',
+          'in__gamma*gm',
+        ]),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe('thermal noise from the table when it carries it, and the result says which', () => {
   // sth doubled and the demo's own gamma column dropped, so the measured γ is 2 and cannot pass
   // for the default; and the same table with no thermal noise at all.
@@ -1085,7 +1123,7 @@ describe('thermal noise from the table when it carries it, and the result says w
 // so this runs only where the tables have been generated). Simulated, the OTA's input-referred
 // thermal floor is 28.24 nV/√Hz, and the nfet's own effective γ at the pair's bias point is 1.95
 // where the pfet's at the load's is 1.00 (tools/verify/README.md), both against gm alone. The
-// γ = 1 estimate, body effect counted, reads 25.1 nV/√Hz; reading the tables' own thermal noise
+// γ = 1 estimate, body effect counted, reads 25.0 nV/√Hz; reading the tables' own thermal noise
 // has to land near the simulation.
 const SKY130 = fileURLToPath(new URL('../../data/pdk/sky130', import.meta.url));
 const skyTable = (name: string): string =>

@@ -225,6 +225,18 @@ describe('sheet library: vetting lints', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('no sheet reads the thermal floor without body effect', () => {
+    // Every library noise row reads a noise figure (vnth_m, svth_m, or the measured vnth), which
+    // carries the body effect where the table has gmb; a row written as 4kTγ/gm would not.
+    const offenders: string[] = [];
+    for (const { file, doc } of RESOLVED) {
+      for (const w of validateSheet(doc)) {
+        if (w.rule === 'sheet-noise-form') offenders.push(`${file}: ${w.message}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('a range end holds each cascode gate where the design put it', () => {
     // The two cascoded OTAs claim an input common-mode range. At a range end every device keeps
     // its size and the tail node is re-solved for the new common mode; the cascode nodes are
@@ -942,14 +954,30 @@ describe('exemplar goldens: 5T OTA', () => {
     // through the pair's transconductance. The load's diode side
     // carries 9.148 µA at gm/ID 8; its output side is on the same gate at a higher drain voltage,
     // and gm scales with (VA + vds) exactly as id does, so it has rL times that — 8 × 9.817 µA.
+    // The diode side's noise current reaches the output through the mirror, as the diode side's
+    // half of the signal does in gm_pair, so it arrives rL times larger.
     const referred = (gm: number): number => (vnthM(gm) * gm) / gmPair;
     const vn = Math.hypot(
       vnthM(rest.gmDiode),
       vnthM(rest.gmOut),
-      referred(8 * iDiode),
+      referred(8 * iDiode) * rL,
       referred(8 * iDiode * rL),
     );
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(1e-3);
+    // Which quantities the row reads, exactly: the diode side at its own density and the output
+    // device's gm, which is its own gm times the mirror's gain.
+    const { inr__vnth_m, in__vnth_m, ldr__vnth_m, ld__vnth_m, ld__gm, gm_pair } = res.values;
+    expect(
+      relErr(
+        res.values.vn_in,
+        Math.hypot(
+          inr__vnth_m,
+          in__vnth_m,
+          (ldr__vnth_m * ld__gm) / gm_pair,
+          (ld__vnth_m * ld__gm) / gm_pair,
+        ),
+      ),
+    ).toBeLessThan(1e-12);
   });
 
   it('random offset counts each pair transistor and refers the mirror pair through the diode side', () => {

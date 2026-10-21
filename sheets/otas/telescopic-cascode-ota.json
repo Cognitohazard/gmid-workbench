@@ -705,9 +705,9 @@
     },
     {
       "name": "vn_in",
-      "expr": "sqrt(inr__vnth_m^2 + in__vnth_m^2 + (mirr__vnth_m*mirr__gm/gm_pair)^2 + (mir__vnth_m*mir__gm/gm_pair)^2)",
+      "expr": "sqrt(inr__vnth_m^2 + in__vnth_m^2 + (mirr__vnth_m*mir__gm/gm_pair)^2 + (mir__vnth_m*mir__gm/gm_pair)^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "both pair transistors and both mirror devices, each at its own density: a pair transistor's noise is in series with its own input, so it enters as it is; a mirror device's is a current at the output, referred back through the pair's transconductance. Each side is read separately because the two sides sit at different drain voltages. The cascodes add little (they carry the same current at low gm relative to the pair)"
+      "note": "both pair transistors and both mirror devices, each at its own density: a pair transistor's noise is in series with its own input, so it enters as it is; a mirror device's is a current at the output, referred back through the pair's transconductance. The diode side's noise current reaches the output through the load mirror, as the diode side's half of the signal does in gm_pair, so its gm is multiplied by the mirror's gain gm_mir/gm_mirr, which leaves gm_mir. Each side is read separately because the two sides sit at different drain voltages. The cascodes add little (they carry the same current at low gm relative to the pair)"
     },
     {
       "name": "vos",

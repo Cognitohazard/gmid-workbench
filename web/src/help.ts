@@ -24,13 +24,13 @@ export const QUANTITY_HELP: Readonly<Record<string, string>> = {
   // table's own γ where it stores thermal noise)
   vnth: 'Input-referred thermal-noise density √S_id/gm (V/√Hz), from the stored drain-noise PSD (measured).',
   vnth_m:
-    'Input-referred thermal-noise density √(4kTγ/gm) (V/√Hz). Always available; falls as 1/√gm. γ is read from the table’s stored drain noise where it has one, so this equals the measured v_n,th there; from the table’s own gamma column where it stores one, ahead of the drain noise; and is 1.0 (an estimate) where it has neither.',
+    'Input-referred thermal-noise density √(4kTγ·(gm + g_mb))/gm (V/√Hz): the channel’s noise conductance is gm + g_mb in saturation. Always available; falls as 1/√gm. γ is read from the table’s stored drain noise where it has one, so this equals the measured v_n,th there; from the table’s own gamma column where it stores one, ahead of the drain noise; and is 1.0 (an estimate) where it has neither. On a table without a g_mb column it is √(4kTγ/gm), and the result says so.',
   vnfl: 'Input-referred 1/f (flicker) noise density at 1 Hz (V/√Hz), from the stored flicker PSD (measured).',
   svth: 'Input-referred thermal-noise PSD S_id/gm² (V²/Hz), measured.',
   svth_m:
-    'Input-referred thermal-noise PSD 4kTγ/gm (V²/Hz), with γ from the table’s own gamma column or its stored drain noise where it has either, and 1.0 where it has neither.',
+    'Input-referred thermal-noise PSD 4kTγ·(gm + g_mb)/gm² (V²/Hz), with γ from the table’s own gamma column or its stored drain noise where it has either, and 1.0 where it has neither. On a table without a g_mb column it is 4kTγ/gm, and the result says so.',
   gamma:
-    'Thermal-noise factor γ = S_th/(4kT·gm), read from the stored drain-noise PSD at the table’s temperature. Where the table stores no thermal noise it is the 1.0 default.',
+    'Thermal-noise factor γ = S_th/(4kT·(gm + g_mb)), read from the stored drain-noise PSD at the table’s temperature. On a table without a g_mb column it is S_th/(4kT·gm), which carries the body-effect factor 1 + g_mb/gm; where the table stores no thermal noise it is the 1.0 default. Either way the result says so.',
   svfl: 'Input-referred 1/f noise PSD at 1 Hz (V²/Hz), measured.',
   // base quantities
   vgs: 'Gate-source voltage (V) — the usual sweep axis.',
@@ -139,7 +139,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'How big the device is. Pick ONE to scale the operating point above into a real device — or two of these on their own, which pins the operating point between them (gm and I_D fix gm/ID; W with either fixes a current or transconductance density).',
   noise: 'Input-referred noise at the sized gm: thermal density and the total RMS over the band.',
   noiseSource:
-    'Where the thermal-noise figures come from: “measured” reads γ from the drain noise the table stores (sth), “γ from the table” from its own gamma column, and “estimated” uses γ = 1.0 because it stores neither — which can be well under the real noise of a short-channel NMOS (about 60 % of the power for sky130’s at gm/ID 12). The channel’s noise is 4kTγ·(gm + gmb). “No gmb column” names the figures that had to leave the body-effect term out: still the table’s own noise where γ is measured, since γ then carries the term, but low by the factor 1 + gmb/gm in power where γ is the estimate or a stored column. Hover a sheet’s noise line for each fallback in full.',
+    'Where the thermal-noise figures come from: “measured” reads γ from the drain noise the table stores (sth), “γ from the table” from its own gamma column, and “estimated” uses γ = 1.0 because it stores neither — which can be well under the real noise of a short-channel NMOS (about 60 % of the power for sky130’s at gm/ID 12). The channel’s noise is 4kTγ·(gm + gmb). “No gmb column” names the figures that had to leave the body-effect term out: still the table’s own noise where γ is measured, since γ then carries the term, but low by the factor 1 + gmb/gm in power where γ is the estimate; a stored gamma column is right there only if it was built against gm alone. Hover a sheet’s noise line for each fallback in full.',
   passthrough:
     'Columns the table carries that the format has no name for, which the sheet reads under their own names. Each is read as characterized — at the characterization width w0, not rescaled to the sized width W, because nothing says how it scales. Where one is per unit of width, scale it yourself with W/w0.',
   fco: 'Flicker (1/f) noise corner frequency f_co (Hz).',

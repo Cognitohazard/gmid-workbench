@@ -291,7 +291,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "svth_m", "cgg"]
       },
       "params": {
         "I_side": "tail__id*out_share",
@@ -601,9 +601,9 @@
     },
     {
       "name": "vn_gbw",
-      "expr": "sqrt(2*4*k*T*gamma/(2*pi*CL*GBW_target/K_m))",
+      "expr": "sqrt(2*in__svth_m*in__gm/(2*pi*CL*GBW_target/K_m))",
       "unit": "V/sqrt(Hz)",
-      "note": "estimate: the input pair's own share of the input density if the pair were sized to just meet GBW_target at this K_m — grows as sqrt(K_m), the current-mirror OTA's noise-for-bandwidth trade. The mirror devices add to it, as the vn_in row counts"
+      "note": "estimate: the input pair's own share of the input density if the pair were sized to just meet GBW_target at this K_m — grows as sqrt(K_m), the current-mirror OTA's noise-for-bandwidth trade. Each pair device's channel noise against its gm, 4kT*gamma*(gm + gmb)/gm, is read off the input device at its own bias as in__svth_m*in__gm, so the table's own noise and the body effect follow. The mirror devices add to it, as the vn_in row counts"
     },
     {
       "name": "f_pole",

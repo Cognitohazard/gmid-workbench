@@ -202,17 +202,20 @@ export function lookupByGmId(
  * `lookup`, passthroughKeys and sizeDevice's re-evaluation at the sized width), so inverting a stored
  * `ft` or `gm_id` column would place the operating point on a curve nothing downstream
  * agrees with: the sizer would silently return a device whose reported fT is not the fT it
- * was asked for. Stored columns serve the base keys (gm, id) that have no definition.
+ * was asked for. Stored columns serve the base keys (gm, id) that have no definition, and a base
+ * key that also has one (`gamma`), which is read as stored here as it is everywhere else.
  *
- * Fails closed naming the missing input when this table cannot compute `key` at all —
- * "size by fT" on a table with no cgg column is a data limit, not a bad bind, and must
- * say so rather than surface as an out-of-range or non-monotonic complaint.
+ * Fails closed naming the missing input when this table cannot compute `key` at all, or only by a
+ * stand-in that reads no column — "size by fT" on a table with no cgg column is a data limit, not
+ * a bad bind, and must say so rather than surface as an out-of-range or non-monotonic complaint.
  */
 function sliceColumn(table: DeviceTable, slice: Grid, key: string): Float64Array {
   const forms = DERIVED_FORMS.get(key);
+  // A base quantity the namespace also derives (a `gamma` column beside `sth`) is read as stored,
+  // the way derive() and the forward lookup read it, so the curve inverted is the one reported.
+  const stored = slice.quantities.get(key);
+  if (stored && (!forms || BASE_KEYS.has(key))) return stored;
   if (!forms) {
-    const stored = slice.quantities.get(key);
-    if (stored) return stored;
     throw new Error(
       `inverse lookup: "${key}" is neither a present base column nor a known derived quantity`,
     );
@@ -221,7 +224,9 @@ function sliceColumn(table: DeviceTable, slice: Grid, key: string): Float64Array
   const has = (n: string): boolean =>
     slice.quantities.has(n) || Object.prototype.hasOwnProperty.call(scalars, n);
   const form = derivedForm(key, has);
-  if (!form) {
+  // A form that reads no column (γ's stand-in) is not a curve of this table: there is nothing to
+  // invert, as the forward lookup and the chart picker leave it out too.
+  if (!form || form.compiled.names.length === 0) {
     throw new Error(
       `inverse lookup: cannot invert "${key}" on this table — it carries no "${missingInput(forms[0].compiled.names, has)}" column`,
     );

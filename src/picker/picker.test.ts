@@ -232,7 +232,7 @@ describe('the search', () => {
   // search ranks the knobs against `offset-spec` and moves one of them: the input pair goes
   // further into weak inversion, to the top of its slider, and that alone closes the sheet.
   // Stage 2 backs the programmed current off from there until the offset target binds again, at
-  // 19.2 µA. Pinned after the algorithm was frozen; the assertion below re-evaluates that point
+  // 18.3 µA. Pinned after the algorithm was frozen; the assertion below re-evaluates that point
   // standalone rather than trusting the search's own verdict.
   it('repairs the five-transistor OTA at its tight spec, and the endpoint stands alone', () => {
     const c = pick('otas/five-transistor-ota.json', {

@@ -13,7 +13,7 @@
       "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor a sky130 tt realization of this OTA shows in simulation. The row reads each device's noise from the tables where they carry it and lands at 28.4 nV/rtHz on that realization; the gamma = 1 estimate a table without stored noise gets, body effect included, would read 25.1 nV/rtHz at the same operating points. Clearing only the estimate is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
+      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor a sky130 tt realization of this OTA shows in simulation. The row reads each device's noise from the tables where they carry it and lands at 28.4 nV/rtHz on that realization; the gamma = 1 estimate a table without stored noise gets, body effect included, would read 25.0 nV/rtHz at the same operating points. Clearing only the estimate is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
     },
     {
       "name": "vos_target",
@@ -447,9 +447,9 @@
     },
     {
       "name": "vn_in",
-      "expr": "sqrt(inr__vnth_m^2 + in__vnth_m^2 + (ldr__vnth_m*ldr__gm/gm_pair)^2 + (ld__vnth_m*ld__gm/gm_pair)^2)",
+      "expr": "sqrt(inr__vnth_m^2 + in__vnth_m^2 + (ldr__vnth_m*ld__gm/gm_pair)^2 + (ld__vnth_m*ld__gm/gm_pair)^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "both pair transistors and both mirror devices contribute, each at its own density: vn_inr^2 + vn_in^2 + (vn_ldr*gm_ldr/gm_pair)^2 + (vn_ld*gm_ld/gm_pair)^2. A pair transistor's noise is in series with its own input, so it enters as it is; a mirror device's is a current at the output, referred back through the pair's transconductance. Each side of the pair and of the mirror is read separately because the two sides sit at different drain voltages; counting all four devices is the simulation-verified two-sided total"
+      "note": "both pair transistors and both mirror devices contribute, each at its own density: vn_inr^2 + vn_in^2 + (vn_ldr*gm_ld/gm_pair)^2 + (vn_ld*gm_ld/gm_pair)^2. A pair transistor's noise is in series with its own input, so it enters as it is; a mirror device's is a current at the output, referred back through the pair's transconductance. The diode side's noise current reaches the output through the mirror, as the diode side's half of the signal does in gm_pair, so its gm_ldr is multiplied by the mirror's gain gm_ld/gm_ldr, which leaves gm_ld. Each side of the pair and of the mirror is read separately because the two sides sit at different drain voltages; counting all four devices is the simulation-verified two-sided total"
     },
     {
       "name": "vos",

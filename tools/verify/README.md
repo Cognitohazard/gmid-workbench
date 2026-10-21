@@ -108,14 +108,14 @@ every row below is compared directly, in one state, with nothing forced:
 | Low-frequency gain (`Av`)                          | 53.04              | 53.90              | +1.6 %          |
 | Unity-gain frequency (`GBW`)                       | 8.492 MHz          | 8.420 MHz          | −0.8 %          |
 | Phase margin (`PM`)                                | 89.7°              | 90.7°              | +1.0°           |
-| Input-referred thermal noise density (`vn_in`)     | 28.44 nV/√Hz       | 28.24 nV/√Hz       | −0.7 %          |
+| Input-referred thermal noise density (`vn_in`)     | 28.39 nV/√Hz       | 28.24 nV/√Hz       | −0.5 %          |
 
 Slew rate was not simulated; the sheet computes it as `tail__id/CL`, so it follows the
 tail current.
 
 Every current agrees within 0.05 %, every voltage within 1.2 mV, every gm, gm/ID and output
 conductance within 1 %, the gain within 1.6 %, the offset within 0.9 %, the bandwidth within
-0.8 % and the thermal noise within 0.7 %. The gate-source voltages sit about a millivolt low
+0.8 % and the thermal noise within 0.5 %. The gate-source voltages sit about a millivolt low
 and the pair's gm/ID 1 % low for one reason, the pair's body bias (below). The
 thermal-noise row is read from the noise the tables store for each device, which is the
 simulator's own:
@@ -128,7 +128,7 @@ simulator's own:
   the nfet's own density is 17.32 nV/√Hz, an effective γ of 1.95 against gm alone (1.63
   against the channel's noise conductance gm + gmb), where the table's stored noise reads
   17.31; at the load's bias point the pfet's is 15.08 nV/√Hz against the table's 15.08, γ 1.00
-  (0.81). With γ = 1 for both, the body effect counted, the row would read 25.1 nV/√Hz, 11 %
+  (0.81). With γ = 1 for both, the body effect counted, the row would read 25.0 nV/√Hz, 11 %
   low; with the body effect left out as well, 22.7 nV/√Hz, 20 % low.
   Neither γ is a constant: moving VG in the reference decks takes the nfet from 1.4 at
   gm/ID 22 to 1.9 at gm/ID 6–12, and the pfet from 0.5 at gm/ID 17 to 1.0 at gm/ID 4–8.

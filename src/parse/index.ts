@@ -52,7 +52,10 @@ function detectDelimiter(header: string): string {
 function canonicalizeHeader(raw: string): { key: string; negate: boolean } {
   const lower = raw.trim().toLowerCase();
   const negate = lower === 'vbs'; // body-source sign convention: vsb = -vbs
-  return { key: ALIASES[lower] ?? lower, negate };
+  // An own key only: a header spelled like an Object.prototype member (`constructor`,
+  // `tostring`) must pass through under its own name, not resolve to an inherited function.
+  const alias = Object.prototype.hasOwnProperty.call(ALIASES, lower) ? ALIASES[lower] : undefined;
+  return { key: alias ?? lower, negate };
 }
 
 interface ParsedMeta {

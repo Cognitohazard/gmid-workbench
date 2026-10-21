@@ -12,9 +12,10 @@ export const PHYS = {
 export const UT: number = (PHYS.k * PHYS.T) / PHYS.q;
 
 /**
- * Default channel thermal-noise factor γ (Sid = 4kTγ·(gm + gmb)). In simulation 1.0 matches
- * sky130's PMOS in strong inversion and understates its NMOS (about 1.95 at gm/ID 12);
- * the long-channel 2/3 understates both — the full argument lives in
+ * Default channel thermal-noise factor γ (Sid = 4kTγ·(gm + gmb)). In simulation, read against
+ * gm + gmb, sky130's PMOS sits near 0.81 at gm/ID 8 and its NMOS near 1.63 at gm/ID 12, so 1.0
+ * overstates the one and understates the other; the long-channel 2/3 understates the NMOS by
+ * more still — the full argument lives in
  * docs/sheet-format.md ("Body effect and noise-model defaults"). Only a default: a
  * table's own per-point `gamma` column shadows it.
  */
@@ -38,7 +39,7 @@ export const kelvin = (tempC: number): number => tempC + 273.15;
 /**
  * Temperature-dependent constant overrides {T, UT} for a table characterized at
  * `tempC` [°C], for seeding an evaluation scope. A scope binding shadows the
- * engine's constant map, so expressions like the γ-model noise (4·k·T·γ/gm)
+ * engine's constant map, so expressions like the γ-model noise (4·k·T·γ·(gm + gmb)/gm²)
  * evaluate at the table's own temperature instead of the 27 °C default. Returns
  * {} when `tempC` is absent/non-finite, leaving the defaults untouched.
  */

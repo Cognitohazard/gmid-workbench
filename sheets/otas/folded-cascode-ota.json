@@ -807,9 +807,9 @@
     },
     {
       "name": "vn_in",
-      "expr": "sqrt(inr__vnth_m^2 + in__vnth_m^2 + ((pcs_r__vnth_m*pcs_r__gm)^2 + (pcs__vnth_m*pcs__gm)^2 + (nmir_r__vnth_m*nmir_r__gm)^2 + (nmir__vnth_m*nmir__gm)^2)/gm_pair^2)",
+      "expr": "sqrt(inr__vnth_m^2 + in__vnth_m^2 + ((pcs_r__vnth_m*pcs_r__gm*nmir__gm/nmir_r__gm)^2 + (pcs__vnth_m*pcs__gm)^2 + (nmir_r__vnth_m*nmir__gm)^2 + (nmir__vnth_m*nmir__gm)^2)/gm_pair^2)",
       "unit": "V/sqrt(Hz)",
-      "note": "both pair transistors plus both folding sources and both mirror devices, each at its own density: a pair transistor's noise is in series with its own input; a folding source's or a mirror device's is a current at its folding node or at the output, referred back through the pair's transconductance. Each side is read separately because the two sides sit at different voltages; the folding sources are the price of the fold"
+      "note": "both pair transistors plus both folding sources and both mirror devices, each at its own density: a pair transistor's noise is in series with its own input; a folding source's or a mirror device's is a current at its folding node or at the output, referred back through the pair's transconductance. The diode side's two, its folding source and the mirror's diode device, reach the output through the bottom mirror, as the diode side's half of the signal does in gm_pair, so each is multiplied by the mirror's gain gm_nmir/gm_nmir_r (which leaves the diode device at gm_nmir). Each side is read separately because the two sides sit at different voltages; the folding sources are the price of the fold"
     },
     {
       "name": "vos",

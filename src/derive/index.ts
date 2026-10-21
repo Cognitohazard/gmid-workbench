@@ -181,22 +181,21 @@ export function noiseSourceLabel(source: NoiseSource): string {
   return `estimated, γ = ${GAMMA_DEFAULT_LABEL}`;
 }
 
-/** The thermal-noise figures: the quantities a noise source and its fallbacks are about. */
-const NOISE_KEYS: ReadonlySet<string> = new Set(['gamma', 'svth_m', 'vnth_m']);
-
 /**
  * A device's thermal noise in one line, after "noise: " — its source (noiseSourceLabel), then, for
- * each column the noise figures fell back for, the figures that did: `measured · no gmb column:
- * gamma, svth_m, vnth_m`. The γ stand-in is stated once, by the `estimated` label, so its own note
- * is not repeated. Notes about anything other than the noise figures are left to their own report.
+ * each column a figure fell back for, every quantity that did: `measured · no gmb column: gamma,
+ * svth_m, vnth_m`. Every fallback that fired is named, noise figure or not, since this line is
+ * where a sheet's panel says them. The γ stand-in is stated once, by the `estimated` label, so its
+ * own note is not repeated.
  */
 export function noiseLabel(source: NoiseSource, fallbacks: readonly FallbackNote[] = []): string {
   const byColumn = new Map<string, string[]>();
   for (const f of fallbacks) {
-    if (!NOISE_KEYS.has(f.quantity)) continue;
     if (source === 'estimated' && f.quantity === 'gamma') continue;
     const column = f.missing.join(' or ');
-    byColumn.set(column, [...(byColumn.get(column) ?? []), f.quantity]);
+    const qs = byColumn.get(column) ?? [];
+    if (!qs.includes(f.quantity)) qs.push(f.quantity);
+    byColumn.set(column, qs);
   }
   return [
     noiseSourceLabel(source),
@@ -204,9 +203,16 @@ export function noiseLabel(source: NoiseSource, fallbacks: readonly FallbackNote
   ].join(' · ');
 }
 
-/** The noise fallbacks among `fallbacks`, for a tooltip that spells out what noiseLabel names. */
-export const noiseFallbacks = (fallbacks: readonly FallbackNote[]): FallbackNote[] =>
-  fallbacks.filter((f) => NOISE_KEYS.has(f.quantity));
+const FORM_ORDER: readonly string[] = [...DERIVED_FORMS.keys()];
+
+/** The sentences of `fallbacks` (fallbackMessage), each once, grouped by quantity in namespace
+ *  order — what a tooltip spells out behind noiseLabel, over one device or several. */
+export function fallbackSentences(fallbacks: readonly FallbackNote[]): string[] {
+  const ordered = [...fallbacks].sort(
+    (a, b) => FORM_ORDER.indexOf(a.quantity) - FORM_ORDER.indexOf(b.quantity),
+  );
+  return [...new Set(ordered.map(fallbackMessage))];
+}
 
 /** Broadcast a scalar engine result into a full-length grid column. */
 function asColumn(v: Value, size: number): Float64Array {

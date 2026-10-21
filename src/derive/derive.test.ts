@@ -9,6 +9,7 @@ import {
   noiseSource,
   noiseSourceLabel,
   noiseLabel,
+  fallbackSentences,
   derivedFallbacks,
   derivedForm,
   fallbackMessage,
@@ -298,7 +299,8 @@ describe('γ from the table where it carries thermal noise, the default where it
     expect(fallbackMessage(notes[2])).toBe(
       'vnth_m is read as sqrt(4*k*T*gamma/gm) because the table has no gmb column — the floor ' +
         'has no body-effect term: exact where γ is read back from the stored noise, which then ' +
-        'carries it, and low by the factor 1 + gmb/gm in power where γ is a stand-in or a stored column',
+        'carries it, low by the factor 1 + gmb/gm in power where γ is the stand-in, and for a ' +
+        'stored gamma column exact only if the column was built against gm alone',
     );
     // On a table with neither, the estimate is low by the body factor and both notes are owed.
     const neither = withoutColumns(bare, ['gmb']);
@@ -353,5 +355,26 @@ describe('γ from the table where it carries thermal noise, the default where it
     expect(line(noGmb(measured))).toBe('measured · no gmb column: gamma, svth_m, vnth_m');
     expect(line(noGmb(bare))).toBe('estimated, γ = 1.0 · no gmb column: svth_m, vnth_m');
     expect(line(noGmb(dev))).toBe('γ from the table · no gmb column: svth_m, vnth_m');
+    // Every fallback that fired is named there, a noise figure or not: the line is where a sheet's
+    // panel says them.
+    const other = {
+      quantity: 'ft',
+      missing: ['cgg'],
+      form: 'gm/(2*pi*cgs)',
+      says: 'gate charge only',
+    };
+    expect(noiseLabel('measured', [other])).toBe('measured · no cgg column: ft');
+  });
+
+  it('spells the fallbacks out once each, grouped by quantity, over several devices', () => {
+    const a = derivedFallbacks(withoutColumns(bare, ['gmb']).grid);
+    const b = derivedFallbacks(withoutColumns(measured, ['gmb']).grid);
+    // b lists vnth_m and svth_m in the same words as a, and gamma in other words (no gmb).
+    expect(fallbackSentences([...b, ...a]).map((m) => m.split(' ')[0])).toEqual([
+      'gamma',
+      'gamma',
+      'svth_m',
+      'vnth_m',
+    ]);
   });
 });

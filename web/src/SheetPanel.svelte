@@ -29,8 +29,7 @@
     unreadFormat,
     formatEng,
     formatSI,
-    fallbackMessage,
-    noiseFallbacks,
+    fallbackSentences,
     noiseLabel,
     noiseSourcesIn,
     devicesIn,
@@ -361,14 +360,14 @@
       ? devicesIn(result, (s) => s.passthrough ?? []).filter((k, i, all) => all.indexOf(k) === i)
       : [],
   );
-  /** The noise line's tooltip: what the sources mean, then every fallback the line names, each in
-   *  full — the quantity, the missing column, the form used and what it costs — said once. */
-  const noiseTitle = $derived.by((): string => {
-    const said = noiseDevices
-      .flatMap((d) => noiseFallbacks(d.fallbacks).map(fallbackMessage))
-      .filter((m, i, all) => all.indexOf(m) === i);
-    return [CONTROL_HELP.noiseSource, ...said].join('\n\n');
-  });
+  /** The noise line's tooltip: what the sources mean, then every fallback that fired on any sized
+   *  device, each in full — the quantity, the missing column, the form used and what it costs —
+   *  said once and grouped by quantity. */
+  const noiseTitle = $derived.by((): string =>
+    [CONTROL_HELP.noiseSource, ...fallbackSentences(noiseDevices.flatMap((d) => d.fallbacks))].join(
+      '\n\n',
+    ),
+  );
   /** The projection at the reference condition, for what the panel itself reads off a child's
    *  bound table (the sign hints). The evaluations project in the worker through the same core
    *  function, so nothing on the panel can mix conditions the verdict above it did not. */

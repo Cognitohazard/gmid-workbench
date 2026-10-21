@@ -366,7 +366,11 @@
       ...pq.derived
         .filter((k) => !pq.base.includes(k))
         .map((k) => {
-          // The form plotted on this device: a fallback says so, with the column it lacks.
+          // What a chart of the name plots on this device: a column the table stores under it
+          // (an export's own `ft`, which QA names as a shadow), else the form the table computes
+          // it by — a fallback saying so, with the column it lacks.
+          if (device?.grid.quantities.has(k))
+            return { value: k, label: `${k} (the table’s column)` };
           const f = deviceFallbacks.find((n) => n.quantity === k);
           const formula = f?.form ?? derivedExpr.get(k);
           const lacks = f ? ` (no ${f.missing.join(' or ')} column)` : '';

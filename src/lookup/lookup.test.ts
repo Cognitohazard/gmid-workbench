@@ -307,6 +307,29 @@ describe('lookup — γ from the table where it carries thermal noise', () => {
   });
 });
 
+describe('inverse lookup by γ reads it the way the forward lookup does', () => {
+  const dev = generateDemoDevice();
+  const L = dev.grid.axes[0].values[1];
+
+  it('refuses the stand-in on a table without sth, naming the column, as before', () => {
+    // A flat curve of the 1.0 default is no reading of the table: inverting it would land on an
+    // arbitrary gate voltage.
+    const bare = withoutColumns(dev, ['gamma', 'sth']);
+    expect(() => lookupByQuantity(bare, 'gamma', 1, L)).toThrow(
+      'inverse lookup: cannot invert "gamma" on this table — it carries no "sth" column',
+    );
+  });
+
+  it('inverts a stored gamma column as stored, not the γ its sth would give', () => {
+    // The column is 1.5 everywhere while sth/(4kT·(gm + gmb)) is 1: the forward lookup reports
+    // the column, so the inverse looks for the target on the column too (a flat one here, which
+    // the target 1 is outside).
+    const own = scaleQuantities(dev, { gamma: 1.5 });
+    expect(lookup(own, { l: L, vgs: 0.6 }).gamma).toBeCloseTo(1.5, 12);
+    expect(() => lookupByQuantity(own, 'gamma', 1, L)).toThrow(/\[1\.5, 1\.5\]/);
+  });
+});
+
 describe('lookup temperature', () => {
   it('evaluates the γ-model noise at the table temperature, not the 27 °C default', () => {
     const dev = generateDemoDevice();

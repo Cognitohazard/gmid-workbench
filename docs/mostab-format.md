@@ -147,7 +147,7 @@ the drain current bends into saturation, and by their coarser step above that.
 | `gmb` | S | optional: body transconductance; the body effect, and the second half of the channel's noise conductance `gm + gmb` |
 | `sth` | A²/Hz | optional: drain thermal-noise current PSD; where present, the thermal-noise figures are read from it |
 | `sfl` | A²/Hz | optional: drain flicker-noise current PSD at 1 Hz |
-| `gamma` | 1 | optional: thermal-noise factor γ; read as stored, ahead of the γ that `sth` gives |
+| `gamma` | 1 | optional: thermal-noise factor γ against `gm + gmb`; read as stored, ahead of the γ that `sth` gives |
 | `igd`, `igs` | A | optional gate leakage |
 | `w` | m | optional (usually `# W:` metadata instead) |
 
@@ -167,7 +167,9 @@ The channel's thermal noise is `Sid = 4kTγ·(gm + gmb)`: in saturation its nois
 
 They follow `sth` where a table carries it: γ is read back from it at the table's own
 temperature, so `vnth_m` equals the measured `sqrt(sth)/gm` (and `svth_m` the measured
-`sth/gm^2`). A stored `gamma` column is read as it stands instead. A table with neither falls
+`sth/gm^2`). A stored `gamma` column is read as it stands instead, against `gm + gmb` like the γ
+`sth` gives: a column built against `gm` alone reads high by `1 + gmb/gm` on a table with `gmb`,
+and QA compares the column with `sth` where both are stored. A table with neither falls
 back to γ = 1.0, an estimate that understates a device that runs hotter (sky130's NMOS sits near
 1.6 at gm/ID 12 in simulation, 1.95 against `gm` alone). The app shows which a table gives in the
 device's details, and each sized device reports it.
@@ -176,8 +178,9 @@ device's details, and each sized device reports it.
 forms in the last column, and every result says so: the sizing's notes, the sheet's sizing report
 and the panel's noise line name the quantity, the missing column and the form used. On a table
 that stores `sth` the two lesser forms cancel and the figures are still its own noise, though γ
-then carries the body factor `1 + gmb/gm`; on one that does not, or that stores a `gamma` column,
-the thermal floor reads low by that factor in power. A ratio `gmb/gm` of 0.2 to 0.4 is typical.
+then carries the body factor `1 + gmb/gm`; on one that does not, the thermal floor reads low by
+that factor in power, and a stored `gamma` column gives the right floor only if it was built
+against `gm` alone. A ratio `gmb/gm` of 0.2 to 0.4 is typical.
 
 ### Data cells
 
@@ -279,7 +282,12 @@ importer's QA pass warns (it never edits data) when:
   devices span about 0.2 to 10 there (rule `noise-factor`). γ is the `gamma` definition above,
   `sth/(4kT·(gm + gmb))`, or `sth/(4kT·gm)` on a table without `gmb`, and the warning names which.
   It is read at that one point only: in triode, where gm collapses and the channel noise does not,
-  the factor runs far outside any band on good data.
+  the factor runs far outside any band on good data;
+- a stored `gamma` column and the γ the stored `sth` gives sit more than a factor of 1.5 apart at
+  that same point (rule `gamma-vs-sth`): the column wins, so the noise figures follow it rather
+  than `sth`;
+- `gmb` is negative anywhere (rule `gmb-sign`): it adds to `gm` in the thermal floor, which a
+  negative one lowers.
 
 ## Example
 
