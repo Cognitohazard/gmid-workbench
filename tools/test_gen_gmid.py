@@ -47,10 +47,16 @@ def _with(row, **cols):
     return tuple(r)
 
 
+def qa(p, rows, head=HEAD, dev="n", **kw):
+    """Write ``rows`` under ``head`` to ``p`` and run the sanity gate on it as device ``dev``:
+    its (faults, warns). Keyword arguments go to the gate."""
+    _write(p, rows, head)
+    return gen_gmid._qa(p, dev, **kw)
+
+
 def check_qa(p) -> None:
     # Clean NMOS: no faults, no warnings.
-    _write(p, CLEAN)
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, CLEAN)
     assert not faults and not warns, (faults, warns)
 
     # Same table read as PMOS: a positive vgs axis is a polarity mix-up -> fault.
@@ -58,72 +64,59 @@ def check_qa(p) -> None:
     assert any("PMOS" in m for m in faults), (faults, warns)
 
     # A missing required column -> fault.
-    _write(p, [r[:6] for r in CLEAN], head=HEAD[:6])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [r[:6] for r in CLEAN], HEAD[:6])
     assert any("GDS" in m for m in faults), (faults, warns)
 
     # A non-finite value -> fault.
-    _write(p, [_with(CLEAN[0], id=float("nan")), *CLEAN[1:]])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [_with(CLEAN[0], id=float("nan")), *CLEAN[1:]])
     assert any("non-finite" in m for m in faults), (faults, warns)
 
     # An incomplete VGS x VDS grid (3 of 4 points) -> fault.
-    _write(p, CLEAN[:3])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, CLEAN[:3])
     assert any("incomplete" in m for m in faults), (faults, warns)
 
     # A duplicated point masking a missing one keeps the row count (2x2 = 4 rows)
     # but is still a hole in the grid -> fault. A row-count-only check blesses this.
-    _write(p, [CLEAN[0], CLEAN[0], CLEAN[1], CLEAN[2]])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [CLEAN[0], CLEAN[0], CLEAN[1], CLEAN[2]])
     assert any("duplicate" in m for m in faults), (faults, warns)
 
     # A dead device (id ~ 0 at full drive) -> fault.
-    _write(p, [_with(r, id=1e-12, gm=2e-11, gds=1e-13, sth=1e-35, sfl=1e-35) for r in CLEAN])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [_with(r, id=1e-12, gm=2e-11, gds=1e-13, sth=1e-35, sfl=1e-35) for r in CLEAN])
     assert any("dead" in m for m in faults), (faults, warns)
 
     # A gm/Id peak outside [5,60] is a soft warning, not a fault.
-    _write(p, [_with(r, gm=r[HEAD.index("id")] * 100, sth=1e-23) for r in CLEAN])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [_with(r, gm=r[HEAD.index("id")] * 100, sth=1e-23) for r in CLEAN])
     assert not faults and any("gm/Id" in m for m in warns), (faults, warns)
 
 
 def check_noise(p) -> None:
     # The noise columns are required unless the device omits one on purpose.
-    _write(p, [r[:8] for r in CLEAN], head=HEAD[:8])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [r[:8] for r in CLEAN], HEAD[:8])
     assert any("SFL" in m for m in faults), (faults, warns)
-    _write(p, [(*r[:7], r[8]) for r in CLEAN], head=[*HEAD[:7], "sfl"])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [(*r[:7], r[8]) for r in CLEAN], [*HEAD[:7], "sfl"])
     assert any("STH" in m for m in faults), (faults, warns)
     faults, warns = gen_gmid._qa(p, "n", noise=("sfl",))   # sth omitted on purpose
     assert not faults and not warns, (faults, warns)
 
     # Thermal noise is present at every bias, so a zero sth is a fault.
-    _write(p, [_with(CLEAN[0], sth=0.0), *CLEAN[1:]])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [_with(CLEAN[0], sth=0.0), *CLEAN[1:]])
     assert any("STH" in m and "non-positive" in m for m in faults), (faults, warns)
 
     # A negative flicker PSD -> fault.
-    _write(p, [_with(CLEAN[0], sfl=-1e-18), *CLEAN[1:]])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [_with(CLEAN[0], sfl=-1e-18), *CLEAN[1:]])
     assert any("SFL" in m and "negative" in m for m in faults), (faults, warns)
 
     # Flicker noise is 0 exactly where no current flows (vds = 0) ...
     zero_vds = [(1e-7, 0.0, 0.0, vg, 0.0, 0.0, 1e-6, 1e-25, 0.0) for vg in (0.4, 0.8)]
-    _write(p, [*zero_vds, *CLEAN])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [*zero_vds, *CLEAN])
     assert not faults and not warns, (faults, warns)
     # ... and nowhere else: a zero sfl at a point carrying current is a fault.
-    _write(p, [_with(CLEAN[0], sfl=0.0), *CLEAN[1:]])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [_with(CLEAN[0], sfl=0.0), *CLEAN[1:]])
     assert any("carry drain current" in m for m in faults), (faults, warns)
 
     # A density written where the PSD belongs (sth = sqrt of the PSD, about 1e-12) puts
     # the noise factor near 1e12: a soft warning, not a fault.
-    _write(p, [_with(r, sth=1e-12) for r in CLEAN])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, [_with(r, sth=1e-12) for r in CLEAN])
     assert not faults and any("noise factor" in m for m in warns), (faults, warns)
 
 
@@ -147,12 +140,10 @@ def check_axis(p) -> None:
     # A full grid on a non-uniform vds axis passes the grid check ...
     rows = [(1e-7, vd, 0.0, vg, 1e-6 * vd + vg * 1e-6, 2e-5 * vg, 1e-7, 1e-24, 1e-18)
             for vd in (0.025, 0.05, 0.3, 1.0) for vg in (0.4, 0.8)]
-    _write(p, rows)
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, rows)
     assert not faults, (faults, warns)
     # ... and a missing dense point is a hole in it.
-    _write(p, rows[1:])
-    faults, warns = gen_gmid._qa(p, "n")
+    faults, warns = qa(p, rows[1:])
     assert any("incomplete" in m for m in faults), (faults, warns)
 
 

@@ -38,6 +38,7 @@ import { holdHardware } from './coverage';
 import { gdsOf, relErr } from './library.math';
 import { clampedIn, stands, treeCheckResults } from './types';
 import type { SizingReport, SheetBlockReport, SheetDoc } from './types';
+import { notACircuit } from './library.fixtures';
 
 /** A four-dimensional [l, vds, vsb, vgs] table — the shape a real PDK export has. The 0.05 V
  *  vsb step lands each body-effect threshold shift (BODY_FACTOR × step) exactly on the 0.01 V
@@ -50,11 +51,6 @@ const dev = generateDemoDevice({
 // ---------------------------------------------------------------------------------------
 // The transformation alone
 // ---------------------------------------------------------------------------------------
-
-/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
- *  names no wires. The sheets below exercise holding, range ends and compliance, not a netlist, so
- *  the ones that size a device say so rather than draw one. */
-const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
 
 describe('the fixed-hardware transformation — decided on which givens are present', () => {
   const report = (over: Partial<SizingReport> = {}): SizingReport => ({
@@ -498,9 +494,16 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
       const base = evaluateSheet(inverter(hold), dev, (id) => (id === 'pmos' ? dev : undefined));
       expect(stands(base), hold).toBe(false);
       expect(base.held, hold).toEqual({});
-      expect(base.warnings.find((w) => w.rule === 'sheet-solve')?.message, hold).toMatch(
-        /a current balance must be zero where the design is sized — it reads -?[\d.]+e/,
+      const said = base.warnings.find((w) => w.rule === 'sheet-solve')?.message;
+      expect(said, hold).toMatch(
+        /a current balance must be zero where the design is sized — it reads -?[\d.]+ [pnµm]?A here \(tolerance [\d.]+ [pnµm]?A/,
       );
+      // The declaration is false where it was made: its own outcome, not a solve that failed.
+      expect(base.solve, hold).toEqual({
+        kind: 'declaration-false',
+        param: 'I_bias',
+        message: said,
+      });
     }
     // A hold that reads no current holds whatever it read, as a node's gate voltage does.
     const node = evaluateSheet(inverter('I_bias + 1e-6'), dev, (id) =>
@@ -1431,6 +1434,7 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
       ...run(),
       feasible: false,
       warnings: [{ rule: 'sheet-solve', severity: 'error', message: quoted }],
+      solve: { kind: 'no-solution', unknown: 'V', range: [0.2, 0.8], message: quoted },
     };
     expect(heldOutcome(solve)).toEqual({ state: 'no-answer', error: quoted });
   });

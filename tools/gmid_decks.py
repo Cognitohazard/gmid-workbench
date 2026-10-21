@@ -164,6 +164,12 @@ def build_deck(
     vmax = _g(s * vdd)
     gstep, dstep = _g(s * vgs_step), _g(s * vds_step)
     vb = _g(-s * vsb)                           # NMOS bulk -vsb; PMOS bulk +vsb
+
+    def dc_args(vd_stop: str, vd_step: str) -> str:
+        # The nested sweep both DC analyses run: the gate over the supply, inside the drain to
+        # `vd_stop` in steps of `vd_step`.
+        return f"vg 0 {vmax} {gstep} vd 0 {vd_stop} {vd_step}"
+
     inst = "XM1" if pdk.is_subckt else "M1"
     lw = (lambda x: f"{_g(x)}u") if pdk.si_units else _g   # gf180/IHP: SI; sky130: bare microns
 
@@ -181,7 +187,7 @@ def build_deck(
         # The noise analysis takes its input at vg and reads the drain current as v(o).
         "vg g 0 0 ac 1" if noise_to else "vg g 0 0",
         *(["ho o 0 vd 1"] if noise_to else []),
-        f".dc vg 0 {vmax} {gstep} vd 0 {vmax} {dstep}",
+        f".dc {dc_args(vmax, dstep)}",
         f".save {save_line(pdk, subckt)}",
     ]
     if wrdata_to:
@@ -194,7 +200,7 @@ def build_deck(
             # drain voltage the coarse rows come first in the file.
             fstep, fstop = vds_fine
             lines += ["set appendwrite",
-                      f"dc vg 0 {vmax} {gstep} vd 0 {_g(s * fstop)} {_g(s * fstep)}", wrdata]
+                      f"dc {dc_args(_g(s * fstop), _g(s * fstep))}", wrdata]
         if noise_to:
             # One 1 Hz noise analysis per grid point. A single-frequency noise analysis
             # makes one plot, the spectrum, and leaves it current, so the vectors are read

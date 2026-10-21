@@ -120,10 +120,9 @@ export interface DeviceOutline extends Omit<CharacterizedDevice, 'conditions' | 
 export interface JobRequest {
   id: number;
   job: SheetJob;
-  /** Tables the worker does not hold yet, by id. */
+  /** Tables the worker does not hold yet, by id. The worker keeps only the tables the request's
+   *  devices hold, and drops any other. */
   tables: [string, DeviceTable][];
-  /** Every table id the request's devices hold: the worker drops any other it holds. */
-  retain: string[];
   /** The sheet library, when it changed since the worker last received it. */
   refs?: [string, SheetRefHit][];
   /** The primary device and every device a binding in the sheet names. */
@@ -135,6 +134,16 @@ export interface JobRequest {
 
 export type JobReply =
   { id: number; ok: true; result: JobResults[JobKind] } | { id: number; ok: false; error: string };
+
+/** The reply to job `id`: what `run` answers, or the error it threw. The one shape the worker and
+ *  the page reply in, so the two paths cannot report a failure differently. */
+export function jobReply(id: number, run: () => JobResults[JobKind]): JobReply {
+  try {
+    return { id, ok: true, result: run() };
+  } catch (err) {
+    return { id, ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 /** What the worker says once, as soon as it has loaded: from then on it can run jobs here. */
 export interface WorkerReady {

@@ -34,7 +34,6 @@ import {
   sheetSensitivities,
   withParams,
   isHardCheck,
-  MAX_TORN_PARAMS,
   SOLVE_EVALUATIONS,
   SOLVE_SWEEPS,
   SOLVE_TOL_REL,
@@ -44,6 +43,7 @@ import { EXAMPLES } from './examples';
 import { ueffAt, demoCsvWith, importOne, withUeff } from '../import/passthrough.fixtures';
 import type { DeviceTable } from '../types';
 import type { SheetDoc, SheetResult, SheetVar } from './types';
+import { notACircuit } from './library.fixtures';
 
 // The demo device characterized over drain voltage. Every sized device states its drain voltage,
 // so every document here that sizes one does — 0.6 V, unless the test is about another — and
@@ -69,11 +69,6 @@ const devBias = generateDemoDevice({
 
 /** gm/gds on the 0.5 µm slice at a chosen vgs — used to pick a sizing target off-node. */
 const lookupAt = (vgs: number): number => lookup(devAt, { l: 0.5e-6, vgs }).gm_gds;
-
-/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
- *  names no wires. The synthetic sheets in this file exercise sizing, evaluation and validation,
- *  not a netlist, so the ones that size a device say so rather than draw one. */
-const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
 
 /** A minimal sheet with givens at a known in-range operating point (gm/ID = 12, L = 0.5 µm,
  *  vds = 0.6 V), declared not a circuit. */
@@ -416,6 +411,39 @@ describe('evaluateSheet — closing a bias loop (solveFor)', () => {
     ]);
   });
 
+  it('carries the outcome as data beside its message: settled, no solution, not settled', () => {
+    expect(evaluateSheet(loopDoc(), dev).solve).toEqual({ kind: 'settled' });
+    // The relation keeps one sign over the whole range: no solution in the stretch searched.
+    const none = evaluateSheet(
+      solving(
+        { name: 'run', value: 1, min: -10, max: 10, unit: 'V', solveFor: 'onward' },
+        { givens: undefined, equations: [{ name: 'onward', expr: '0.5*run + 20' }] },
+      ),
+      dev,
+    );
+    expect(none.solve).toEqual({
+      kind: 'no-solution',
+      unknown: 'run',
+      range: [-10, 10],
+      message: solveErrors(none)[0],
+    });
+    // Nothing of the range evaluates: not settled, which is not the same answer.
+    const blind = evaluateSheet(
+      solving({ name: 'vstar_est', value: 0.2, min: 0.05, max: 0.6, solveFor: 'no_such_value' }),
+      dev,
+    );
+    expect(blind.solve).toEqual({
+      kind: 'not-settled',
+      unknowns: ['vstar_est'],
+      why: 'unevaluable',
+      message: solveErrors(blind)[0],
+    });
+    // A sheet with nothing to solve has no outcome to report.
+    expect(evaluateSheet(loopDoc({ params: loopDoc().params.slice(0, 2) }), dev).solve).toBe(
+      undefined,
+    );
+  });
+
   it('refuses a relation that does not depend on its param, however it got that way', () => {
     // `run = run + 1` reads -1 at every run; `x` solving for an equation that is x itself reads 0
     // at every x. Neither singles its param out, and the first value tried is not an answer: the
@@ -618,24 +646,49 @@ describe('evaluateSheet — closing a bias loop (solveFor)', () => {
     expect(res.values.c__fx).toBeCloseTo(1, 6); // solved, not 42
   });
 
-  it('refuses more solveFor params than the scope rule allows', () => {
-    const doc: SheetDoc = {
-      title: 'too many',
+  it('puts no cap on how many params carry solveFor: the search rule bounds the work', () => {
+    // Five independent loops, each closed by its own solveFor. Each is one search in its own
+    // range, and the sweeps and the shared budget bound what a set of them may cost, so the count
+    // alone is nothing to refuse.
+    const doc: SheetDoc = notACircuit({
+      title: 'five loops',
       polarity: 'n',
-      params: Array.from({ length: MAX_TORN_PARAMS + 1 }, (_, i) => ({
+      params: Array.from({ length: 5 }, (_, i) => ({
         name: `e${i}`,
         value: 1,
         min: 0,
         max: 2,
         solveFor: `t${i}`,
       })),
-      equations: [],
+      equations: Array.from({ length: 5 }, (_, i) => ({ name: `t${i}`, expr: `0.5*e${i} + 0.5` })),
       checks: [],
-    };
-    const w = validateSheet(doc);
-    expect(w.some((v) => v.severity === 'error' && /not a circuit solver/.test(v.message))).toBe(
-      true,
-    );
+    });
+    expect(validateSheet(doc)).toEqual([]);
+    const res = evaluateSheet(doc, dev);
+    expect(res.solve).toEqual({ kind: 'settled' });
+    for (let i = 0; i < 5; i++) expect(res.values[`e${i}`]).toBeCloseTo(1, 5);
+  });
+
+  it('refuses a design constraint that writes the engine-only held flag', () => {
+    const doc = solving({
+      name: 'vstar_est',
+      value: 0.3,
+      min: 0.05,
+      max: 0.6,
+      designConstraint: { lhs: 'vstar_est', rhs: 'vstar_actual', held: true },
+    });
+    const errors = validateSheet(doc).filter((w) => w.severity === 'error');
+    expect(errors.map((w) => `${w.rule} ${w.location}`)).toEqual(['sheet-param vstar_est']);
+    expect(errors[0].message).toMatch(/carries "held", which the engine sets/);
+    // Written as false it is still the engine's flag, and still refused by name.
+    const unheld = solving({
+      name: 'vstar_est',
+      value: 0.3,
+      min: 0.05,
+      max: 0.6,
+      designConstraint: { lhs: 'vstar_est', rhs: 'vstar_actual', held: false },
+    });
+    expect(validateSheet(unheld).some((w) => /carries "held"/.test(w.message))).toBe(true);
   });
 
   it('excludes a solved param from the sweepable set', () => {
@@ -1304,6 +1357,8 @@ describe('pass-through columns reach the sheet scope', () => {
     expect(res.values.U).toBe(res.values.ueff);
     expect(res.values.U_scaled / res.values.U).toBeCloseTo(res.sizing!.W / extra.meta.W!, 12);
     expect(res.feasible).toBe(true);
+    // The sizing says which of its numbers are read at w0, so a reader need not know the table.
+    expect(res.sizing?.passthrough).toEqual(['ueff']);
   });
 
   it('a child provides the column to its parent, which reads child__ueff', () => {
@@ -1373,6 +1428,8 @@ describe('pass-through columns reach the sheet scope', () => {
     expect(notes).toHaveLength(2);
     expect(notes.find((m) => m.includes('"k"'))).toMatch(/expression constant/);
     expect(notes.find((m) => m.includes('"ueff"'))).toMatch(/already defines/);
+    // Neither reached the scope, so the sizing lists neither as read.
+    expect(res.sizing?.passthrough).toBeUndefined();
     // An advisory note, not a failure: the sheet still means what it says.
     expect(res.feasible).toBe(true);
   });

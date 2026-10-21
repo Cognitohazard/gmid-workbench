@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { importMostab } from './index';
+import { passthroughKeys } from '../namespace';
+import { demoCsvWith, importOne, ueffAt } from './passthrough.fixtures';
 
 const SAMPLE = `# mostab: 0.1
 # device: nch_lvt
@@ -187,6 +189,18 @@ L,VGS,ID,GM,CDD,CDB,CSS,CSB,CBB,CBD,CAPBD,CAPBS,QG,UEFF
     expect(notes[0].severity).toBe('info');
     expect(notes[0].message).toMatch(/not recognized: ueff — kept under its own name/);
     expect(notes[0].message).toMatch(/not rescaled when a device is sized/);
+  });
+
+  it('records as pass-through exactly the columns the namespace reads as pass-through', () => {
+    // A stored column named like a derived quantity (`ft`) is not pass-through: lookup and sizing
+    // evaluate that name from its definition, and QA flags the stored copy instead. The field is
+    // the namespace's own reading of the grid, so the two cannot disagree.
+    const t = importOne(demoCsvWith({ ft: () => 1e9, ueff: ueffAt }));
+    expect(t.grid.quantities.has('ft')).toBe(true);
+    expect([...(t.passthrough ?? [])]).toEqual(['ueff']);
+    expect([...(t.passthrough ?? [])]).toEqual(passthroughKeys(t.grid));
+    // A table whose only extra column is derived-named carries no pass-through set at all.
+    expect(importOne(demoCsvWith({ ft: () => 1e9 })).passthrough).toBeUndefined();
   });
 
   it('says nothing about pass-through on a file whose every column is named', () => {

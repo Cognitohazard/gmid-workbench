@@ -7,11 +7,11 @@ import { describe, it, expect } from 'vitest';
 import { compileExpr } from '../derive';
 import { additiveCoefficient } from '../expr';
 import { dcInputs, EXAMPLES, exprRoots, runSheet, validateSheet } from './index';
-import { reachedGivens, solvePlan, type ReachedGivens } from './validate';
+import { reachedGivens, solvePlan } from './validate';
 import { heldShape } from './coverage';
 import { holdAsConstraint, holds } from './types';
 import { GIVENS_FLAGS, type SheetGivens, type SheetDoc, type SheetVar } from './types';
-import { loadLibrary, REFS, sheet, table } from './library.fixtures';
+import { loadLibrary, REFS, sheet, table, notACircuit } from './library.fixtures';
 import { resolveSheetRefs } from './resolve';
 
 /** A leaf that sizes one device with its drain bias taken from the param `vd`. */
@@ -29,11 +29,6 @@ const leaf = (givens: Partial<SheetGivens> = {}, params: SheetVar[] = []): Sheet
   checks: [],
   provides: ['vgs', 'id'],
 });
-
-/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
- *  names no wires. The documents below that must validate clean exercise the DC-input walk, not a
- *  netlist, so they say so rather than draw one. */
-const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
 
 /** The leaf with its drain-bias param `vd` amended. */
 const withVd = (patch: Partial<SheetVar>): SheetDoc => {
@@ -777,9 +772,7 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
 /** Every `<block path>.<givens key>:<name>` whose expression reads a name that moves with `moved`,
  *  by reachedGivens. */
 const forwardHits = (doc: SheetDoc, moved: string): string[] => {
-  const allGivens: ReachedGivens[] = [];
-  reachedGivens(doc, [moved], '', allGivens, 0);
-  return allGivens.flatMap(({ path, givens, reached }) =>
+  return reachedGivens(doc, [moved]).flatMap(({ path, givens, reached }) =>
     Object.entries(givens).flatMap(([k, v]) =>
       !GIVENS_FLAGS.has(k) && typeof v === 'string'
         ? compileExpr(v)

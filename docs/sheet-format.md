@@ -574,7 +574,9 @@ actually sized.
 The one exception: a quantity from an **unknown pass-through column** (a header the importer
 did not recognize) is *not* rescaled, because its width law is unknowable — it stays at `w0`.
 The characterization width is exposed as `w0`, so if you need to refer such a column to the
-sized width you can scale it yourself with `w0/W` (or `W/w0`).
+sized width you can scale it yourself with `w0/W` (or `W/w0`). Each sized device's report lists
+the pass-through columns it read (`passthrough`), so a result says which of its numbers are at
+`w0`; the panel shows them beside the noise line.
 
 A pass-through column is read under its lower-cased header, in the sheet's own equations and
 checks and in its `provides`, like any quantity of the sized device. It never takes a name the
@@ -1145,7 +1147,6 @@ its own:
 | a param solves for itself by name | validation error (the relation reads zero everywhere, and hides the loop) |
 | a param solves for itself through an equation, or its relation reads the same everywhere | infeasible, `sheet-solve` error: the same value at both ends of the range and at its middle — the relation does not depend on the param, so no value of it is singled out |
 | the parameter also carries `designConstraint` | validation error — one relation per parameter |
-| more than four params carry `solveFor` | validation error — see the scope note below |
 
 The search's tolerance is relative to the stated range, never to the value, and has no absolute
 floor: the core is SI throughout, so a solved parameter is as likely to be a capacitance near
@@ -1153,10 +1154,11 @@ floor: the core is SI throughout, so a solved parameter is as likely to be a cap
 
 ### Scope: a few named loops, not a circuit solver
 
-At most **four** params per sheet may carry `solveFor`. The architecture finds every unknown by a
-one-unknown search and never solves a node set; cutting many loops at once stops being a few named
-unknowns and becomes relaxation over a node set. The limit makes that boundary checkable rather
-than aspirational. Nested solves also share one evaluation budget for the whole composed tree
+The architecture finds every unknown by a one-unknown search inside the range its author states,
+and never solves a node set. What keeps that boundary is the search rule itself, not a count of
+solved parameters: parameters that read each other are settled only by repeating their searches a
+fixed number of times (six sweeps, below), and a set still moving after them is reported, not
+iterated further. Nested solves also share one evaluation budget for the whole composed tree
 (10 000 evaluations of any document in it), since a parent's every probe re-solves each child and
 the cost would otherwise multiply with depth; a solve that runs out of it says so, and says that it
 was not shown to be unsolvable.
@@ -1239,6 +1241,17 @@ error that names the parameter and the range:
 | no solution found in its range | `lhs − rhs` does not change sign across the searched range, and neither end reads within its tolerance of zero — none, or an even number, of roots there; the bracket closes on a step — on both sides of it the relation barely moves, so the slope there leaves no room for the step's height (a table edge or a fold); the relation reads the same at both ends and the middle, so it does not appear to depend on the parameter | `solved param "V_tail" found no solution in [0.1, 0.55] V: …` |
 | did not settle | nothing of the range could be evaluated — both ends and the middle fail, which shows nothing about the stretch between them; the sign changes across a stretch inside the bracket where the points tried do not evaluate, even after stepping round it, so the crossing could not be followed; a member of a set still found nothing when searched again, or the set still moves after six sweeps (below); a relation read from the final evaluation is out of tolerance; the shared evaluation budget ran out first, here or in a child it reads (the parameter was not shown to be unsolvable); the probe backstop of 200 per search was hit | `solved params "V_tail" in [0.15, 0.8] V and "out_share" in [0.01, 0.99] did not settle in 6 sweeps: …` |
 
+The outcome is also on the result as data, beside the message: `solve` on the sheet's result and
+on each block's report, for that sheet's own solved parameters — `{ kind: "settled" }`,
+`{ kind: "no-solution", unknown, range }` with the stretch actually searched, or
+`{ kind: "not-settled", unknowns, why }`, where `why` is `budget`, `probes`, `unevaluable`,
+`member` (one member of a set failed where the others stood), `sweeps`, `verification` or
+`malformed` (the declarations cannot be solved as written). A `hold` that does not hold where the
+design is sized — it does not evaluate, or a current balance does not read zero — is
+`{ kind: "declaration-false", param }`: no search failed, the declaration is false there. Each
+failure carries its `message`, the same words as the error. `solve` is absent on a run with nothing
+to solve.
+
 Where the hardware is held — a range end, another process condition — either failure is
 `no-answer`: nothing was measured there. Validation adds:
 
@@ -1246,6 +1259,7 @@ Where the hardware is held — a range end, another process condition — either
 |-|-|
 | the parameter also carries `solveFor` | validation error — one relation per parameter |
 | `designConstraint` missing `lhs` or `rhs` | validation error — a half-written design constraint would freeze the parameter without solving it |
+| `designConstraint` carries `held` | validation error — the engine sets that flag on the constraint it generates from a `hold` where the hardware is held; it is never written |
 | the relation does not read the parameter it solves at all | validation error — it cannot single the parameter out |
 | `min`/`max` missing or inverted | validation error — the range is required |
 

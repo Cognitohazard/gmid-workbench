@@ -26,6 +26,7 @@ import SheetWorker from './sheet.worker.ts?worker&inline';
 import { tableUid } from './dashboard';
 import type { Bench } from './families';
 import {
+  jobReply,
   runJob,
   type DeviceOutline,
   type JobKind,
@@ -46,16 +47,26 @@ const GRACE_MS = 150;
 
 export type JobOf<K extends JobKind> = Extract<SheetJob, { kind: K }>;
 
+/** The request an answer belongs to, delivered with it: the job as it was asked for, and what the
+ *  caller said the request is about (`about`, see SheetEvaluator.request). A caller reads whether
+ *  an answer still belongs on screen from this, and from nothing it remembered on the side. */
+export interface Answered<K extends JobKind, A = unknown> {
+  job: JobOf<K>;
+  about: A;
+}
+
 interface Pending {
   kind: JobKind;
   job: SheetJob;
   /** Identity of the request — job plus everything it reads — so asking again for exactly the
    *  same thing neither re-runs nor cancels it. */
   key: string;
+  /** What the caller says the request is about; delivered back, never read here. */
+  about: unknown;
   bench: Bench;
   primary: CharacterizedDevice;
   refs: SheetRefIndex;
-  deliver: (result: unknown) => void;
+  deliver: (result: unknown, answered: Answered<JobKind>) => void;
   fail: (error: string) => void;
 }
 
@@ -69,17 +80,17 @@ interface Running extends Pending {
 
 /** A table as the worker can receive it. The bench keeps its tables in Svelte state, whose
  *  proxies cannot cross to a worker; the bulk columns inside are never proxied, so this copies
- *  only the small parts and hands the typed arrays over as they are. */
+ *  only the small parts and hands the typed arrays over as they are. Every field but the grid is
+ *  copied as it is, so a field a table gains reaches the worker as it reaches the page. */
 function plainTable(t: DeviceTable): DeviceTable {
+  const { grid, ...rest } = t;
   return {
-    id: $state.snapshot(t.id),
-    meta: $state.snapshot(t.meta),
+    ...($state.snapshot(rest) as Omit<DeviceTable, 'grid'>),
     grid: {
-      axes: t.grid.axes.map((a) => ({ name: a.name, values: a.values })),
-      shape: [...t.grid.shape],
-      quantities: new Map(t.grid.quantities),
+      axes: grid.axes.map((a) => ({ name: a.name, values: a.values })),
+      shape: [...grid.shape],
+      quantities: new Map(grid.quantities),
     },
-    ...(t.passthrough ? { passthrough: new Set(t.passthrough) } : {}),
   };
 }
 
@@ -129,44 +140,50 @@ export class SheetEvaluator {
 
   /**
    * Ask for `job`, replacing any earlier request of its kind that has not started. `deliver`
-   * receives the answer. Answers of one kind arrive in the order they were asked for, so the last
-   * one delivered is always the latest that finished; a job that was cancelled (superseded past
-   * its grace, or withdrawn) is never delivered. A request whose answer was the last one
-   * delivered is answered again at once from that answer, so asking for the same thing again
-   * (after an unrelated change, or after going back to an earlier value) does not run it twice.
-   * `fail` is called for a job that could not run at all (the core itself never throws).
+   * receives the answer with the request it answers (Answered): the job, and `ctx.about` — what
+   * the caller says this request is about, which it compares with what it shows now. Answers of
+   * one kind arrive in the order they were asked for, so the last one delivered is always the
+   * latest that finished; a job that was cancelled (superseded past its grace, or withdrawn) is
+   * never delivered. A request whose answer was the last one delivered is answered again at once
+   * from that answer, so asking for the same thing again (after an unrelated change, or after
+   * going back to an earlier value) does not run it twice. An answer that serves a later request
+   * with the same key is delivered as that request's. `fail` is called for a job that could not
+   * run at all (the core itself never throws).
    */
-  request<K extends JobKind>(
+  request<K extends JobKind, A = undefined>(
     job: JobOf<K>,
-    ctx: { bench: Bench; primary: CharacterizedDevice; refs: SheetRefIndex },
-    deliver: (result: JobResults[K]) => void,
+    ctx: { bench: Bench; primary: CharacterizedDevice; refs: SheetRefIndex; about?: A },
+    deliver: (result: JobResults[K], answered: Answered<K, A>) => void,
     fail: (error: string) => void = () => {},
   ): void {
     if (this.#disposed) return;
     const snap = $state.snapshot(job) as SheetJob;
     const key = `${JSON.stringify(snap)}|${ctx.bench.revision}|${refsId(ctx.refs)}`;
+    const { about, ...bench } = ctx;
     const done = this.#done.get(job.kind);
     if (done?.key === key) {
       // This request was already answered. Withdraw any newer request of this kind, so that its
       // answer cannot arrive after this one.
       this.cancel(job.kind);
-      deliver(done.result as JobResults[K]);
+      deliver(done.result as JobResults[K], { job: snap as JobOf<K>, about: about as A });
       return;
     }
     const p: Pending = {
       kind: job.kind,
       job: snap,
       key,
-      ...ctx,
-      deliver: deliver as (r: unknown) => void,
+      about,
+      ...bench,
+      deliver: deliver as unknown as Pending['deliver'],
       fail,
     };
     const running = this.#running;
     if (running?.kind === job.kind && running.key === key) {
-      // The running job already answers this request. Send its answer to this caller, and drop
-      // any request of this kind queued since, because this one replaces it.
+      // The running job already answers this request. Send its answer to this caller, as this
+      // request's, and drop any request of this kind queued since, because this one replaces it.
       running.deliver = p.deliver;
       running.fail = p.fail;
+      running.about = p.about;
       running.superseded = false;
       this.#queue.delete(job.kind);
       this.#mark();
@@ -285,7 +302,7 @@ export class SheetEvaluator {
     this.#running = null;
     if (r.ok) {
       this.#done.set(job.kind, { key: job.key, result: r.result });
-      job.deliver(r.result);
+      job.deliver(r.result, { job: job.job as JobOf<JobKind>, about: job.about });
     } else job.fail(r.error);
     this.#settle();
   }
@@ -316,14 +333,11 @@ export class SheetEvaluator {
       this.#settle();
       return;
     }
-    let reply: JobReply;
-    try {
-      const bench = { primary: job.primary, deviceOf: job.bench.deviceOf, refs: job.refs };
-      reply = { id, ok: true, result: runJob(job.job, bench) };
-    } catch (err) {
-      reply = { id, ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-    this.#finish(job, reply);
+    const bench = { primary: job.primary, deviceOf: job.bench.deviceOf, refs: job.refs };
+    this.#finish(
+      job,
+      jobReply(id, () => runJob(job.job, bench)),
+    );
   }
 
   /** The request for `p`: its job, an outline of the devices it reads, and whatever the worker
@@ -345,9 +359,8 @@ export class SheetEvaluator {
       conditions: d.conditions.map(tableUid),
       nominal: d.nominal === undefined ? undefined : tableUid(d.nominal),
     }));
-    const retain = outlines.flatMap((o) => o.conditions);
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- scratch for one message
-    const kept = new Set(retain);
+    const kept = new Set(outlines.flatMap((o) => o.conditions));
     for (const uid of [...this.#sent]) if (!kept.has(uid)) this.#sent.delete(uid);
     const tables: [string, DeviceTable][] = [];
     for (const d of devices.values())
@@ -361,7 +374,6 @@ export class SheetEvaluator {
       id,
       job: p.job,
       tables,
-      retain,
       devices: outlines,
       primary: p.primary.deviceUid,
       bindings,

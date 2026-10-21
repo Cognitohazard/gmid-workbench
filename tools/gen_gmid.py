@@ -67,6 +67,8 @@ VGS_STEP = 0.008  # 10 mV is the workbench's gm/ID-fidelity bar; 8 mV clears it 
 VDS_FINE = (0.025, 0.3)
 
 BOLTZMANN = 1.380649e-23  # J/K, for the noise-factor sanity check
+# The window the noise factor sth/(4kT gm) is expected in at full drive (see _qa).
+NOISE_FACTOR_LO, NOISE_FACTOR_HI = 0.01, 100
 
 # Noise columns a device's tables leave out, with the reason. The sky130 5 V nfet's model
 # cards declare BSIM4 version 4.5, and for that version ngspice evaluates the channel
@@ -294,9 +296,9 @@ def _qa(path, dev_type, noise=tuple(NOISE_PARAMS)):
         gmv = abs(float(drive[col["GM"]]))
         if "sth" in noise and gmv > 0:
             nf = float(drive[col["STH"]]) / (4 * BOLTZMANN * (temp + 273.15) * gmv)
-            if not (0.01 < nf < 100):
+            if not (NOISE_FACTOR_LO < nf < NOISE_FACTOR_HI):
                 warns.append(f"noise factor sth/(4kT gm) {nf:.3g} at full drive outside "
-                             f"[0.01,100] (suspect)")
+                             f"[{NOISE_FACTOR_LO},{NOISE_FACTOR_HI}] (suspect)")
     return faults, warns
 
 
@@ -337,7 +339,8 @@ def main(argv=None) -> None:
             # Every run yields SAVE_PARAMS then NOISE_PARAMS; keep all but the omitted.
             noise = [n for n in NOISE_PARAMS if n not in NOISE_OMIT.get(subckt, ())]
             cols = [*SAVE_PARAMS, *NOISE_PARAMS]
-            keep = [i for i, c in enumerate(cols) if c in SAVE_PARAMS or c in noise]
+            names = [*SAVE_PARAMS, *noise]
+            keep = [cols.index(c) for c in names]
             rows = []
             for L in LS:
                 for vsb in spec["vsb"]:
@@ -361,7 +364,7 @@ def main(argv=None) -> None:
                     "source": SOURCES.get(pdk.name, pdk.name),
                     "pdk": pdk.name, "polarity": t}
             out = os.path.join(outdir, f"{subckt}__{corner}__{int(temp)}C.mostab.csv")
-            write_mostab(out, ["l", "vds", "vsb", "vgs", *(cols[i] for i in keep)], rows, meta)
+            write_mostab(out, ["l", "vds", "vsb", "vgs", *names], rows, meta)
             faults, warns = _qa(out, t, noise)
             if faults:
                 qa_faults += 1

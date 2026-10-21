@@ -8,7 +8,7 @@
 import type { QAWarning } from '../types';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
-import { BINDABLE } from '../device';
+import { BINDABLE, SIZING_SCALARS } from '../device';
 import { additiveCoefficient } from '../expr';
 
 /** How a name is spelt: a param, an equation, a wire, an element. */
@@ -17,6 +17,27 @@ export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** Whether a value read from a document is an object with keys (not a list, not null). */
 export const isObject = (x: unknown): x is Record<string, unknown> =>
   !!x && typeof x === 'object' && !Array.isArray(x);
+
+/** Whether an expression parses at all — distinct from namesOf, whose empty result also describes
+ *  a legal literal like "0.9". */
+export function parses(expr: string): boolean {
+  try {
+    compileExpr(expr);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Free names of an expression, or none when it is not a string or does not parse. */
+export function namesOf(expr: unknown): readonly string[] {
+  if (typeof expr !== 'string') return [];
+  try {
+    return compileExpr(expr).names;
+  } catch {
+    return [];
+  }
+}
 
 /**
  * A named scalar design input. `min`/`max` bound the GUI slider only. `role`
@@ -75,7 +96,7 @@ export interface SheetVar {
    * searches a fixed number of times (see solvePlan, and SOLVE_SWEEPS in eval.ts).
    *
    * `held` is set by the engine, never authored: it marks the constraint a fixed-hardware run
-   * generates from a `hold` (see below).
+   * generates from a `hold` (see below), and validation refuses a document that writes it.
    */
   designConstraint?: { lhs: string; rhs: string; held?: boolean };
   /**
@@ -169,6 +190,22 @@ export function holdAsConstraint(p: SheetVar & { hold: string }, rhs: string): S
 }
 
 /**
+ * The devices whose quantity `key` (`id`, `vgs`) a param's `hold` reads, in the order it reads
+ * them: the sheet's own as '' (`key` itself, where the sheet sizes one), a block's by name
+ * (`<block>__key`). Empty for a param with no hold, and for a hold that does not parse.
+ */
+function holdReads(doc: SheetDoc, p: SheetVar, key: string): string[] {
+  if (!holds(p)) return [];
+  const out: string[] = [];
+  for (const n of namesOf(p.hold)) {
+    if (n === key && doc.givens) out.push('');
+    const split = splitProvide(n);
+    if (split && split[1] === key) out.push(split[0]);
+  }
+  return out;
+}
+
+/**
  * The devices whose CURRENT a param's `hold` reads: a block of `doc`, by name (`<block>__id`), or
  * the sheet's own device, as '' (`id`, where the sheet sizes one). A hold that reads one is a
  * current balance (see SheetVar.hold) — the declaration that a device given a gate voltage and a
@@ -176,21 +213,8 @@ export function holdAsConstraint(p: SheetVar & { hold: string }, rhs: string): S
  * that reads no current, and for an expression that does not parse.
  */
 export function balancedBy(doc: SheetDoc, p: SheetVar): string[] {
-  if (!holds(p)) return [];
-  let names: readonly string[];
-  try {
-    names = compileExpr(p.hold).names;
-  } catch {
-    return [];
-  }
   const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
-  const out: string[] = [];
-  for (const n of names) {
-    if (n === 'id' && doc.givens) out.push('');
-    const split = splitProvide(n);
-    if (split && split[1] === 'id' && blocks.some((b) => b.name === split[0])) out.push(split[0]);
-  }
-  return out;
+  return holdReads(doc, p, 'id').filter((d) => d === '' || blocks.some((b) => b.name === d));
 }
 
 /**
@@ -201,19 +225,9 @@ export function balancedBy(doc: SheetDoc, p: SheetVar): string[] {
  * validation (which wires a hold may be held on) and by the wiring proposal (which it drafts).
  */
 export function heldGateOf(doc: SheetDoc, p: SheetVar): string | undefined {
-  if (!holds(p) || balancedBy(doc, p).length) return undefined;
-  let names: readonly string[];
-  try {
-    names = compileExpr(p.hold).names;
-  } catch {
-    return undefined;
-  }
-  for (const n of names) {
-    if (n === 'vgs' && doc.givens) return 'givens';
-    const split = splitProvide(n);
-    if (split && split[1] === 'vgs') return split[0];
-  }
-  return undefined;
+  if (balancedBy(doc, p).length) return undefined;
+  const [first] = holdReads(doc, p, 'vgs');
+  return first === undefined ? undefined : first || 'givens';
 }
 
 /** Every device of `doc` whose current one of its own holds balances (see balancedBy). */
@@ -242,46 +256,58 @@ export function heldOnGate(doc: SheetDoc, parentBalances: boolean): boolean {
  * solved.
  */
 export function constraintProblem(params: readonly SheetVar[]): string | null {
+  return constraintIssue(params)?.message ?? null;
+}
+
+/** constraintProblem with the param it is about — what a failed solve names as its unknown. */
+export function constraintIssue(
+  params: readonly SheetVar[],
+): { param: string; message: string } | null {
+  const issue = (p: SheetVar, message: string) => ({ param: p.name, message });
   const half = params.find((p) => p.designConstraint !== undefined && !constrained(p));
   if (half)
-    return (
+    return issue(
+      half,
       `param "${half.name}": its design constraint needs both lhs and rhs — half-written, it would freeze the ` +
-      `param without solving it`
+        `param without solving it`,
     );
   const constrainedParams = params.filter(constrained);
   const both = constrainedParams.find((p) => torn(p));
   if (both)
-    return (
+    return issue(
+      both,
       `param "${both.name}" has a design constraint and also carries solveFor — the two would fight over ` +
-      `it; keep one relation`
+        `it; keep one relation`,
     );
-  const ranged = (p: SheetVar): boolean =>
-    Number.isFinite(p.min) && Number.isFinite(p.max) && (p.min as number) < (p.max as number);
   const unranged = params.find((p) => engineSolved(p) && !ranged(p));
   if (unranged)
-    return (
+    return issue(
+      unranged,
       `solved param "${unranged.name}" needs finite min < max — they are the range it is searched ` +
-      `in, not slider bounds`
+        `in, not slider bounds`,
     );
   const held = params.filter(holds);
   const twice = held.find((p) => p.designConstraint !== undefined || torn(p));
   if (twice)
-    return (
+    return issue(
+      twice,
       `param "${twice.name}" carries hold and also has a design constraint or carries solveFor — a param ` +
-      `takes one of the three`
+        `takes one of the three`,
     );
   const loose = held.find((p) => !ranged(p));
   if (loose)
-    return (
+    return issue(
+      loose,
       `held param "${loose.name}" needs finite min < max — the range it is re-solved in ` +
-      `where the hardware is held`
+        `where the hardware is held`,
     );
   const shapeless = held.find((p) => additiveCoefficient(p.hold, p.name) === undefined);
   if (shapeless)
-    return (
+    return issue(
+      shapeless,
       `param "${shapeless.name}": hold "${shapeless.hold}" must be a sum of terms in which ` +
-      `${shapeless.name} appears exactly once, bare or times a number — write any other ` +
-      `relation as a design constraint`
+        `${shapeless.name} appears exactly once, bare or times a number — write any other ` +
+        `relation as a design constraint`,
     );
   return null;
 }
@@ -381,6 +407,20 @@ export interface SheetGivens {
 /** The regions a device may declare (see SheetGivens.region). */
 export type Region = 'saturation' | 'triode';
 export const REGIONS: ReadonlySet<string> = new Set<Region>(['saturation', 'triode']);
+
+/** The id of the check a declared region adds to its device (see SheetGivens.region). */
+export const REGION_CHECK_ID = 'region';
+
+/**
+ * The checks the engine adds to a sheet's own beside the authored ones, from its givens: today the
+ * region check, where a region is declared. Each is a physical check of that sheet, so it gates,
+ * sweeps and complies like an authored one, and its id is reserved — an authored check may not
+ * take it, because results are keyed by id. The one list the evaluation, the sweep's check
+ * collection and validation read.
+ */
+export function engineChecks(givens: SheetGivens | undefined): { id: string; kind: CheckKind }[] {
+  return givens?.region !== undefined ? [{ id: REGION_CHECK_ID, kind: 'physical' }] : [];
+}
 
 /** The bias axes the givens may declare — every namespace sweep axis except the inversion
  *  sweep (vgs) and the geometry axis (l). Derived from the axis flags so a table axis
@@ -629,12 +669,6 @@ export const ANALYSIS_SHAPES: Readonly<
  *  cycle guard). Shared by the evaluator and the validator. */
 export const MAX_BLOCK_DEPTH = 8;
 
-/** Maximum params carrying `solveFor` one sheet may declare. The scope rule finds every unknown
- *  by a one-unknown search and forbids solving a node set; cutting many loops at once crosses
- *  that line into relaxation over a node set. Shared by the validator and the format docs so the
- *  limit is stated once. */
-export const MAX_TORN_PARAMS = 4;
-
 /** A param solved for the value it names (see SheetVar.solveFor) — the ONE definition of
  *  "torn", mirroring how `sweepable` owns the notion of a free slider variable. A type guard,
  *  so a caller that narrows gets `solveFor` as a plain string instead of casting it. */
@@ -651,6 +685,11 @@ export function engineSolved(p: SheetVar): boolean {
   return torn(p) || constrained(p);
 }
 
+/** Whether a param states a finite range, min below max: what a slider sweeps, and what a solved
+ *  or held param is searched in. */
+const ranged = (v: { min?: number; max?: number }): v is { min: number; max: number } =>
+  Number.isFinite(v.min) && Number.isFinite(v.max) && (v.min as number) < (v.max as number);
+
 /** True when a param is a finitely-bounded slider variable (sweepable). The ONE
  *  definition of a free, finitely-bounded variable — the sweep UIs and the sensitivity
  *  step-scaler both read it, so they can never disagree about what "bounded" means. A param
@@ -659,16 +698,7 @@ export function engineSolved(p: SheetVar): boolean {
 export function sweepable(
   v: { min?: number; max?: number; solveFor?: string; designConstraint?: unknown } | undefined,
 ): v is { min: number; max: number } {
-  return (
-    !!v &&
-    !v.solveFor &&
-    !v.designConstraint &&
-    v.min !== undefined &&
-    v.max !== undefined &&
-    Number.isFinite(v.min) &&
-    Number.isFinite(v.max) &&
-    v.max > v.min
-  );
+  return !!v && !v.solveFor && !v.designConstraint && ranged(v);
 }
 
 /**
@@ -733,14 +763,12 @@ export const META_PUBLISHED: ReadonlySet<string> = new Set(
 );
 
 /** Every name a sized device puts in its sheet's scope: the namespace quantities, the selectors,
- *  what the sizer adds beside them (`w0`, `ceiling`, `feasible`), and the table's own scalars. */
+ *  what the sizer adds beside them (SIZING_SCALARS), and the table's own scalars. */
 export const DEVICE_NAMES: ReadonlySet<string> = new Set([
   ...BASE_KEYS,
   ...DERIVED_QUANTITIES.map((d) => d.key),
   ...BINDABLE,
-  'w0',
-  'ceiling',
-  'feasible',
+  ...SIZING_SCALARS,
   ...META_PUBLISHED,
 ]);
 
@@ -773,10 +801,19 @@ export function withParams(doc: SheetDoc, o: Record<string, number>): SheetDoc {
 export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
   return {
     ...w,
-    message: `block "${blockName}": ${w.message}`,
+    message: blockMessage(blockName, w.message),
     location: `${blockName}${PATH_SEP}${w.location ?? ''}`,
   };
 }
+
+/** A child's message as its parent reports it: attributed to the block. */
+const blockMessage = (blockName: string, message: string): string =>
+  `block "${blockName}": ${message}`;
+
+/** A warning raised at the block path `segments` (top first), as the top of the tree reports it:
+ *  attributed to each block on the way up. */
+export const prefixBlockPath = (segments: readonly string[], w: QAWarning): QAWarning =>
+  segments.reduceRight((acc, seg) => prefixBlockWarning(seg, acc), w);
 
 /**
  * One end of the sheet's claimed operating range: one more full evaluation of THIS doc with the
@@ -979,6 +1016,8 @@ export interface SheetBlockReport {
   /** The block's held levels and element values, where its wiring joins its parent's walk (see
    *  SheetResult.wiringValues). */
   wiringValues?: WiringValues;
+  /** How the block's own solved params came out (see SheetResult.solve). */
+  solve?: SolveOutcome;
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
@@ -1229,6 +1268,11 @@ export interface SizingReport {
    *  Like `noise`, a fact about the table, carried on the sizing so a result says which of its
    *  rows rest on a lesser form. Present on a sizing that succeeded and fell back somewhere. */
   fallbacks?: FallbackNote[];
+  /** The table's pass-through columns (see passthroughKeys) this sizing put in the sheet's scope,
+   *  under their own names. Each is read as characterized, at the characterization width `w0`,
+   *  not rescaled to `W`: nothing says how it scales. Present on a sizing that succeeded and
+   *  read any. */
+  passthrough?: string[];
   error?: string;
 }
 
@@ -1289,6 +1333,73 @@ export interface SheetResult {
   /** This run as one point of the compliance question (see pointOutcome): set on a top-level
    *  evaluation. */
   point?: PointOutcome;
+  /** How this sheet's own solved params came out (see SolveOutcome); a child's own are on its
+   *  report. */
+  solve?: SolveOutcome;
+}
+
+/**
+ * How the params one sheet solves came out: the scope rule's outcomes as data, written beside the
+ * `sheet-solve` error that says the same in words (`message`, verbatim).
+ *  - `settled`: every solved param was found, and verified on the evaluation returned;
+ *  - `no-solution`: the named unknown has no solution in `range`, the stretch actually searched;
+ *  - `not-settled`: the named unknowns did not settle, for the reason `why` gives;
+ *  - `declaration-false`: a `hold` of the sheet does not hold where the design is sized — it does
+ *    not evaluate, or it is a current balance that does not read zero — so the run has nothing to
+ *    hold it at. No search failed here: the declaration itself is false at the design point.
+ * Absent on a run with no solved param to find whose holds, if any, all evaluated. Where several
+ * failures are raised, it is the last of them, as the warnings list them.
+ */
+export type SolveOutcome =
+  | { kind: 'settled' }
+  | { kind: 'no-solution'; unknown: string; range: [number, number]; message: string }
+  | { kind: 'not-settled'; unknowns: string[]; why: NotSettledWhy; message: string }
+  | { kind: 'declaration-false'; param: string; message: string };
+
+/** A solve outcome that is not `settled`. */
+export type SolveFailure = Exclude<SolveOutcome, { kind: 'settled' }>;
+
+/**
+ * Why solved params did not settle:
+ *  - `budget`: the tree's shared evaluation budget ran out, here or in a child a probe evaluated;
+ *  - `probes`: one search used up the probes it may spend;
+ *  - `unevaluable`: the relation could not be evaluated across the range, or across the stretch
+ *    where it changes sign;
+ *  - `member`: one member of a set of params that depend on each other failed with the others
+ *    where they stood, which says nothing about the set;
+ *  - `sweeps`: such a set was still moving after the fixed number of sweeps;
+ *  - `verification`: read from the final evaluation, a relation was outside its tolerance;
+ *  - `malformed`: the declarations cannot be solved as written (see constraintProblem).
+ */
+export type NotSettledWhy =
+  'budget' | 'probes' | 'unevaluable' | 'member' | 'sweeps' | 'verification' | 'malformed';
+
+const isSolveFailure = (o: SolveOutcome | undefined): o is SolveFailure =>
+  o !== undefined && o.kind !== 'settled';
+
+/** Whether a solve failed anywhere in one evaluation's tree: its own, or a block's at any depth. */
+export function solveFailedIn(res: {
+  solve?: SolveOutcome;
+  blocks?: readonly SheetBlockReport[];
+}): boolean {
+  return isSolveFailure(res.solve) || (res.blocks ?? []).some(solveFailedIn);
+}
+
+/** The message of the solve failure an evaluation's warnings list last, in the words they list it
+ *  in: its own, which is raised after everything below it, else the last block's that has one,
+ *  attributed to the block as a rolled-up warning is (prefixBlockWarning). Undefined where every
+ *  solve in the tree settled. */
+export function lastSolveFailure(res: {
+  solve?: SolveOutcome;
+  blocks?: readonly SheetBlockReport[];
+}): string | undefined {
+  if (isSolveFailure(res.solve)) return res.solve.message;
+  const blocks = res.blocks ?? [];
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const below = lastSolveFailure(blocks[i]);
+    if (below !== undefined) return blockMessage(blocks[i].name, below);
+  }
+  return undefined;
 }
 
 /**
@@ -1321,6 +1432,14 @@ export function stands(res: SheetResult): boolean {
   return !res.warnings.some((w) => w.severity === 'error');
 }
 
+/** Why an evaluation that did not stand did not complete, in its own words: its error
+ *  diagnostics, in order. Never empty — a refusal with no reason is indistinguishable from a
+ *  verdict — so a run with none reads that the evaluation did not complete. */
+export function unfinishedBecause(res: SheetResult): string[] {
+  const errors = res.warnings.filter((w) => w.severity === 'error').map((w) => w.message);
+  return errors.length ? errors : ['the evaluation did not complete'];
+}
+
 /** The range end was run and left no check outcomes to read: it could not be answered, or a held
  *  device could not carry its current there. As distinct from `not-run`, where nothing was
  *  attempted at all. Named once rather than retyped at each consumer: it is a two-field
@@ -1340,13 +1459,21 @@ export function withoutRange(doc: SheetDoc): SheetDoc {
  *  table does not reach (see SizingReport.clamped) — `givens vds` for the sheet's own device,
  *  `stage1.load l` for a child's. Empty when every operating point was read where it was asked
  *  for. A held design's run consults it before calling its outcome an answer. */
-export function clampedIn(
-  res: { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] },
+export const clampedIn = (res: TreeSizings): string[] =>
+  devicesIn(res, (s, at) => (s.clamped ?? []).map((axis) => `${at} ${axis}`));
+
+/** One evaluation's tree as the walks over its sizings read it. */
+type TreeSizings = { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] };
+
+/** What `f` reads of every device sized anywhere in one evaluation's tree, in tree order — each
+ *  named as findings name it: `givens` for the sheet's own device, the block path below it. */
+export function devicesIn<T>(
+  res: TreeSizings,
+  f: (sizing: SizingReport, device: string) => T[],
   path = '',
-): string[] {
-  const out = (res.sizing?.clamped ?? []).map((axis) => `${path || 'givens'} ${axis}`);
-  for (const c of res.blocks ?? [])
-    out.push(...clampedIn(c, path ? `${path}${PATH_SEP}${c.name}` : c.name));
+): T[] {
+  const out = res.sizing ? f(res.sizing, path || 'givens') : [];
+  for (const c of res.blocks ?? []) out.push(...devicesIn(c, f, childPath(path, c.name)));
   return out;
 }
 
@@ -1355,12 +1482,9 @@ export function clampedIn(
  *  carries it in, `block "pair": given vsb = 0.3 asks for …`. Empty when every device had the
  *  data it asked for. Consulted before any reading of the run's other failures: with a device
  *  missing, what the rest of the design then did is not a finding about the design. */
-export function refusedIn(res: {
-  sizing?: SizingReport;
-  blocks?: readonly SheetBlockReport[];
-}): string[] {
+export function refusedIn(res: TreeSizings): string[] {
   const out = res.sizing?.unswept?.length ? [res.sizing.error ?? 'the device is not sized'] : [];
-  for (const c of res.blocks ?? []) out.push(...refusedIn(c).map((m) => `block "${c.name}": ${m}`));
+  for (const c of res.blocks ?? []) out.push(...refusedIn(c).map((m) => blockMessage(c.name, m)));
   return out;
 }
 
@@ -1368,23 +1492,12 @@ export function refusedIn(res: {
  *  come from (SizingReport.noise) and the fallback forms its table forced (SizingReport.fallbacks,
  *  empty when none), named as clampedIn names them (`givens` for the sheet's own device, a block
  *  path below it) and in tree order. A device that did not size is not listed. */
-export function noiseSourcesIn(
-  res: { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] },
-  path = '',
-): { device: string; source: NoiseSource; fallbacks: FallbackNote[] }[] {
-  const out = res.sizing?.noise
-    ? [
-        {
-          device: path || 'givens',
-          source: res.sizing.noise,
-          fallbacks: res.sizing.fallbacks ?? [],
-        },
-      ]
-    : [];
-  for (const c of res.blocks ?? [])
-    out.push(...noiseSourcesIn(c, path ? `${path}${PATH_SEP}${c.name}` : c.name));
-  return out;
-}
+export const noiseSourcesIn = (
+  res: TreeSizings,
+): { device: string; source: NoiseSource; fallbacks: FallbackNote[] }[] =>
+  devicesIn(res, (s, device) =>
+    s.noise ? [{ device, source: s.noise, fallbacks: s.fallbacks ?? [] }] : [],
+  );
 
 /** `pre` — what resolving and validating a sheet found — without the findings the evaluation
  *  then repeats in the same words at the same place. A device that states no drain voltage is

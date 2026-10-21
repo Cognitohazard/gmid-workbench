@@ -52,6 +52,7 @@ import {
   namedBindings,
   resolvedSheet,
   stands,
+  unfinishedBecause,
   withValidation,
   validateSheet,
 } from '../sheet';
@@ -850,16 +851,9 @@ function memberFor(
   return tableAt(device, key);
 }
 
-/** Why an evaluation did not complete, from the result itself: its error diagnostics. */
-function runtimeIssues(res: SheetResult): ConditionIssue[] {
-  const issues: ConditionIssue[] = res.warnings
-    .filter((w) => w.severity === 'error')
-    .map((w) => ({ kind: 'runtime-evaluation' as const, message: w.message }));
-  // A refusal with no reason is indistinguishable from a verdict, so this list is never empty.
-  if (!issues.length)
-    issues.push({ kind: 'runtime-evaluation', message: 'the evaluation did not complete' });
-  return issues;
-}
+/** Why an evaluation did not complete, from the result itself (see unfinishedBecause). */
+const runtimeIssues = (res: SheetResult): ConditionIssue[] =>
+  unfinishedBecause(res).map((message) => ({ kind: 'runtime-evaluation', message }));
 
 // --- aggregation -------------------------------------------------------------
 

@@ -17,9 +17,7 @@ import {
   deviceGateWires,
   formatOf,
   formatProblems,
-  namesOf,
   nodesProblems,
-  parses,
   structuralDiode,
   wiringRefusal,
 } from './nodes';
@@ -30,7 +28,6 @@ import {
   PATH_SEP,
   blockPath,
   idSepProblem,
-  MAX_TORN_PARAMS,
   MAX_BLOCK_DEPTH,
   docExpressions,
   engineSolved,
@@ -42,20 +39,25 @@ import {
   PARAM_CLASSES,
   PROVIDE_SEP,
   REGIONS,
+  REGION_CHECK_ID,
   CHECK_KINDS,
   CHECK_OPS,
   joinProvide,
   providedNames,
+  prefixBlockPath,
   prefixBlockWarning,
   splitProvide,
   balancedBy,
   balancesOf,
+  blockOverride,
   deviceName,
   DEVICE_NAMES,
   heldGateOf,
   heldOnGate,
   isObject,
   META_PUBLISHED,
+  namesOf,
+  parses,
   type ParamClass,
   type SheetDoc,
   type SheetGivens,
@@ -206,16 +208,19 @@ function assumptionEstimates(doc: SheetDoc): QAWarning[] {
 function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
   const out: QAWarning[] = [];
   const read = new Set(doc.params.filter(holds).flatMap((p) => namesOf(p.hold)));
+  /** Ask of one device: the sheet's own, or the device of `block`, read through the block — a
+   *  child param the parent overrides reads what the parent wires into it, and the device's names
+   *  are the ones it provides to this sheet. */
   const ask = (
     givens: SheetGivens | undefined,
-    current: (id: string) => string,
-    name: (key: string) => string,
+    block: SheetBlock | undefined,
     who: string,
     location: string,
   ): void => {
     if (!givens || givens.W !== undefined || givens.vgs === undefined) return;
     if (typeof givens.id !== 'string') return;
-    const id = current(givens.id).trim();
+    const id = ((block && blockOverride(block, givens.id.trim())) ?? givens.id).trim();
+    const name = (k: string): string => (block ? joinProvide(block.name, k) : k);
     // A number reads no name: an expression of literals (and constants) is a source by statement.
     const literal = parses(id) && namesOf(id).length === 0;
     if (literal || read.has(name('id')) || read.has(name('vgs'))) return;
@@ -233,25 +238,9 @@ function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
       location,
     });
   };
-  if (top)
-    ask(
-      doc.givens,
-      (id) => id,
-      (k) => k,
-      "this sheet's own device",
-      'givens',
-    );
-  for (const block of doc.blocks ?? []) {
-    const over = block.params ?? {};
-    ask(
-      block.doc?.givens,
-      // A child param the parent overrides reads what the parent wires into it.
-      (id) => (Object.prototype.hasOwnProperty.call(over, id.trim()) ? over[id.trim()] : id),
-      (k) => joinProvide(block.name, k),
-      `block "${block.name}"`,
-      block.name,
-    );
-  }
+  if (top) ask(doc.givens, undefined, deviceName('givens'), 'givens');
+  for (const block of doc.blocks ?? [])
+    ask(block.doc?.givens, block, `block "${block.name}"`, block.name);
   return out;
 }
 
@@ -271,9 +260,8 @@ function looseBalances(doc: SheetDoc): QAWarning[] {
   const held = heldShape(doc);
   for (const { p, named } of balances) {
     if (!named.length) continue;
-    const entries: ReachedGivens[] = [];
-    reachedGivens(held, [p.name], '', entries, 0);
-    const skip = new Set(named.map((d) => blockPath(d === '' ? '' : `${d}${PATH_SEP}`)));
+    const entries = reachedGivens(held, [p.name]);
+    const skip = new Set(named.map((d) => d || 'givens'));
     const reaches = entries.some(({ path, givens, reached }) => {
       if (skip.has(path)) return false;
       const reads = (k: string): boolean => {
@@ -292,7 +280,7 @@ function looseBalances(doc: SheetDoc): QAWarning[] {
       severity: 'error',
       message:
         `param "${p.name}": its hold "${p.hold}" balances the current of ` +
-        `${quoted(named.map((d) => (d === '' ? "this sheet's own device" : d)))}, but where the ` +
+        `${named.map((d) => deviceName(d || 'givens')).join(', ')}, but where the ` +
         `design is held "${p.name}" reaches no other device's current, so solving it to the ` +
         `balance would move nothing but its own number. Give it to the device it programs (that ` +
         `device's id), so the balance is between two currents`,
@@ -415,6 +403,16 @@ const childLevel = (lv: Level, block: SheetBlock, doc: SheetDoc): Level => ({
   kids: new Map(),
 });
 
+/** A block path (`a.b`, `''` at the top) as the prefix its level's names carry (`a.b.`). */
+const levelPrefix = (level: string): string => (level === '' ? '' : `${level}${PATH_SEP}`);
+
+/** The block path a level is at — the inverse of levelPrefix. */
+const levelName = (lv: Level): string => (lv.path === '' ? '' : lv.path.slice(0, -PATH_SEP.length));
+
+/** The level at block path `level`, if the tree has one. */
+const levelAt = (levels: readonly Level[], level: string): Level | undefined =>
+  levels.find((l) => l.path === levelPrefix(level));
+
 /** Every level of the tree under `doc` in preorder: the first embedded block of each name, down to
  *  MAX_BLOCK_DEPTH. */
 function levelsOf(doc: SheetDoc): Level[] {
@@ -448,12 +446,6 @@ function levelsOf(doc: SheetDoc): Level[] {
 const DEVICE_QUANTITIES: ReadonlySet<string> = new Set(
   [...DEVICE_NAMES].filter((k) => !META_PUBLISHED.has(k)),
 );
-
-/** Every name a sizing writes into its level's scope (eval.ts, runSizing): the device quantities,
- *  and the table scalars it re-reads beside them (META_PUBLISHED — scalars every evaluation seeds
- *  from the table's metadata, givens or no givens, so a sheet may name one in `provides` without
- *  declaring it). */
-const SIZING_PUBLISHES: ReadonlySet<string> = DEVICE_NAMES;
 
 /** The metadata scalars sizing writes over with the sized device's own — the per-width ones,
  *  which is the width `w` (eval.ts, runSizing). Read after a level's sizing, such a name is that
@@ -890,8 +882,8 @@ export function exprRoots(
   policy: RootsPolicy,
 ): ExprRoots {
   const levels = levelsOf(doc);
-  const path = level === '' ? '' : `${level}${PATH_SEP}`;
-  const lv = levels.find((l) => l.path === path);
+  const path = levelPrefix(level);
+  const lv = levelAt(levels, level);
   const roots: Roots = new Map();
   const self = typeof policy === 'object' && lv ? { lv, name: policy.residual } : undefined;
   const { visit, found } = walkBack(
@@ -931,7 +923,7 @@ export interface ExprProvenance {
   unresolved: string[];
   /** What the paths crossed: a sized device's published quantity, an equation, the relation of a
    *  solved param, an analysis. */
-  crossings: { device: string[]; equation: string[]; solvedRelation: string[]; analysis: string[] };
+  crossings: { device: string[]; equation: string[]; solved: string[]; analysis: string[] };
   /** Every dependency cycle reached, as the names on it. The walk terminates on every input; a
    *  cycle is a result, not a silent cut. */
   cycles: { via: string[]; closed: boolean }[];
@@ -960,12 +952,7 @@ export function exprProvenance(doc: SheetDoc, level: string, expr: string): Expr
   return {
     roots: r.roots,
     unresolved: r.unresolved.filter((n) => !analyses.has(n)),
-    crossings: {
-      device: r.crossings.device,
-      equation: r.crossings.equation,
-      solvedRelation: r.crossings.solved,
-      analysis: r.unresolved.filter((n) => analyses.has(n)),
-    },
+    crossings: { ...r.crossings, analysis: r.unresolved.filter((n) => analyses.has(n)) },
     cycles: r.cycles,
   };
 }
@@ -999,8 +986,8 @@ function provenanceProblems(
       );
   if (!cross.includes('equation'))
     for (const e of p.crossings.equation) out.push(`it reads equation "${e}"`);
-  if (!cross.includes('solvedRelation'))
-    for (const q of p.crossings.solvedRelation)
+  if (!cross.includes('solved'))
+    for (const q of p.crossings.solved)
       if (!p.roots.solved.includes(q)) out.push(`it reads through the relation that solves "${q}"`);
   if (!cross.includes('analysis'))
     for (const a of p.crossings.analysis) out.push(`it reads analysis "${a}"`);
@@ -1035,7 +1022,7 @@ export function levelEligibility(
   | { kind: 'held' }
   | { kind: 'held-gate'; hold: string; device: string }
   | { kind: 'refused'; problems: string[] } {
-  const lv = levelsOf(doc).find((l) => l.path === (level === '' ? '' : `${level}${PATH_SEP}`));
+  const lv = levelAt(levelsOf(doc), level);
   // The device whose gate-source voltage the hold reads: a block's (`casc__vgs`), or the sheet's
   // own (`vgs`).
   for (const p of lv?.doc.params ?? []) {
@@ -1071,7 +1058,7 @@ function treeNodesProblems(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
   for (const lv of levelsOf(doc)) {
     if (formatOf(lv.doc) !== 2) continue;
-    const level = lv.path === '' ? '' : lv.path.slice(0, -PATH_SEP.length);
+    const level = levelName(lv);
     const found: QAWarning[] = [];
     const levels: unknown = lv.doc.levels;
     if (isObject(levels))
@@ -1104,7 +1091,7 @@ function treeNodesProblems(doc: SheetDoc): QAWarning[] {
                 (gates.length > 1 ? 'wires' : 'wire') +
                 ' — ' +
                 (gates.length
-                  ? `${who} has its gate${gates.length > 1 ? 's' : ''} on ${gates.map((g) => `"${g}"`).join(', ')}`
+                  ? `${who} has its gate${gates.length > 1 ? 's' : ''} on ${quoted(gates)}`
                   : `${who} names no wires`),
               location: 'levels',
             });
@@ -1128,8 +1115,7 @@ function treeNodesProblems(doc: SheetDoc): QAWarning[] {
     for (const a of Array.isArray(lv.doc.analyses) ? lv.doc.analyses : [])
       config(a?.at, `analysis "${String(a?.name)}" at`);
     const segments = level === '' ? [] : level.split(PATH_SEP);
-    for (const w of found)
-      out.push(segments.reduceRight((acc, seg) => prefixBlockWarning(seg, acc), w));
+    for (const w of found) out.push(prefixBlockPath(segments, w));
   }
   return out;
 }
@@ -1239,6 +1225,30 @@ function dcInputProblems(doc: SheetDoc): QAWarning[] {
 /** A list of givens keys as a warning spells them. */
 const quoted = (ks: string[]): string => ks.map((k) => `"${k}"`).join(', ');
 
+/** A `sheet-collision` warning for each param, then each equation, of `doc` whose name is in
+ *  `names` — something else writes that name into the sheet's scope — in the words `param` and
+ *  `equation` give. `exempt` spares a param. */
+function collisions(
+  doc: SheetDoc,
+  names: ReadonlySet<string>,
+  param: (name: string) => string,
+  equation: (name: string) => string,
+  exempt: (p: SheetVar) => boolean = () => false,
+): QAWarning[] {
+  const warning = (name: string, message: string): QAWarning => ({
+    rule: 'sheet-collision',
+    severity: 'warning',
+    message,
+    location: name,
+  });
+  return [
+    ...doc.params
+      .filter((p) => names.has(p.name) && !exempt(p))
+      .map((p) => warning(p.name, param(p.name))),
+    ...doc.equations.filter((r) => names.has(r.name)).map((r) => warning(r.name, equation(r.name))),
+  ];
+}
+
 /** One device's givens in a tree, with the names a range end's overrides can reach at the point
  *  they are evaluated. `path` spells the block the way warnings spell it: `givens` for the sheet's
  *  own device, the block path for anything below. */
@@ -1268,14 +1278,10 @@ export interface ReachedGivens {
  * Exported for the test that holds it and dcInputs to the same reach; not part of the public
  * API (the package index does not re-export it).
  */
-export function reachedGivens(
-  doc: SheetDoc,
-  moved: readonly string[],
-  path: string,
-  out: ReachedGivens[],
-  depth: number,
-): ReadonlySet<string> {
-  return movedBy({ doc, path, kids: new Map() }, moved, out, depth);
+export function reachedGivens(doc: SheetDoc, moved: readonly string[]): ReachedGivens[] {
+  const out: ReachedGivens[] = [];
+  movedBy({ doc, path: '', kids: new Map() }, moved, out, 0);
+  return out;
 }
 
 function movedBy(
@@ -1374,9 +1380,7 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
   for (const e of doc.operatingRange ?? []) {
     const name = e.name?.trim();
     if (!name) continue; // shape errors are named above; this check needs a usable name
-    const allGivens: ReachedGivens[] = [];
-    reachedGivens(doc, Object.keys(e.set ?? {}), '', allGivens, 0);
-    for (const { path, givens, reached } of allGivens) {
+    for (const { path, givens, reached } of reachedGivens(doc, Object.keys(e.set ?? {}))) {
       const readsMoved = (expr: unknown): boolean =>
         typeof expr === 'string' && namesOf(expr).some((n) => reached.has(n));
       const keyMoved = (k: string): boolean =>
@@ -1488,6 +1492,55 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   // say so — its own `nodes`, or the parent block's (`_wiredBy`) — and is sized on the diagonal.
   const wiredAsDiode = structuralDiode(doc, _wiredBy);
 
+  out.push(...paramProblems(doc));
+  out.push(...givensProblems(doc, wiredAsDiode));
+  out.push(...checkProblems(doc));
+  out.push(...rangeProblems(doc));
+
+  // A diode connection already fixes vds; declaring both means one of them is a fiction, and
+  // guessing which the author meant would be worse than saying so.
+  //
+  // `vgs` alongside a diode connection is a different case and is deliberately LEGAL — do not
+  // add a symmetric check. The connection says vds FOLLOWS vgs, collapsing the table onto its
+  // vds = vgs diagonal; a given vgs then names the point on that diagonal. The two statements
+  // are independent and both hold, exactly as a diode connection plus a given gm/ID already
+  // does. It is vds that cannot also be declared, because that one names the same coordinate
+  // twice with two different numbers.
+  if ((doc.givens?.diode || wiredAsDiode) && doc.givens?.vds !== undefined) {
+    out.push({
+      rule: 'sheet-givens',
+      severity: 'error',
+      message: !wiredAsDiode
+        ? 'the givens declare both a diode connection and a vds — the connection ties vds to vgs, so a ' +
+          'separate vds cannot also hold. Drop one'
+        : 'the wires put the gate on the drain — a diode connection, which ties vds to vgs — and the ' +
+          'givens declare a vds, which cannot also hold. Drop the vds, or move the gate',
+      location: 'givens',
+    });
+  }
+
+  // The format contract, and the netlist's own structure where the document is in the format
+  // that has one. The questions about the whole tree — what a held level rests on, whether every
+  // device is wired — are asked once, at the top.
+  out.push(...formatProblems(doc));
+  if (formatOf(doc) === 2) out.push(...nodesProblems(doc));
+  if (_depth === 0)
+    out.push(...treeNodesProblems(doc), ...wiringRefusal(doc), ...dcInputProblems(doc));
+  out.push(...unsettledGates(doc, _depth === 0));
+  out.push(...looseBalances(doc));
+
+  // The composition interface, both ways: names read across a block boundary, and names this
+  // sheet declares it exposes. Runs for every doc — a leaf with no children still publishes.
+  out.push(...provideCoverage(doc));
+
+  // Composition: validate each block and attribute its findings to it.
+  out.push(...blockProblems(doc, _depth));
+  return out;
+}
+
+/** The params' own problems: each param on its own, then the solved params' structure. */
+function paramProblems(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
   for (const p of doc.params) {
     if (!Number.isFinite(p.value)) {
       out.push({
@@ -1534,6 +1587,20 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
         location: p.name,
       });
     }
+    // `held` marks the constraint a held run generates from a hold (holdAsConstraint). Written in
+    // a document it would make an ordinary constraint read as a node under a gate.
+    const dc: unknown = p.designConstraint;
+    if (isObject(dc) && Object.prototype.hasOwnProperty.call(dc, 'held')) {
+      out.push({
+        rule: 'sheet-param',
+        severity: 'error',
+        message:
+          `param "${p.name}": its design constraint carries "held", which the engine sets on the ` +
+          `constraint it generates from a hold where the hardware is held, and is never written — ` +
+          `drop it, or write the relation as a hold`,
+        location: p.name,
+      });
+    }
     // A relation that never reads its own param cannot single it out: whatever it reads is the
     // same at every value of the param, so a search would land on `min` and call it found. Only
     // asserted where the walk could place every name the relation reads — a table column it
@@ -1553,23 +1620,6 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
     }
   }
 
-  // The architecture finds every unknown by a one-unknown search and never solves a node set. A
-  // sheet cutting many loops at once stops being a few named unknowns and becomes relaxation over
-  // a node set, so the limit is enforced here rather than left as an aspiration.
-  const unknowns = doc.params.filter(torn);
-  if (unknowns.length > MAX_TORN_PARAMS) {
-    out.push({
-      rule: 'sheet-param',
-      severity: 'error',
-      message:
-        `${unknowns.length} params carry solveFor (${unknowns.map((p) => p.name).join(', ')}); ` +
-        `at most ` +
-        `${MAX_TORN_PARAMS} are allowed — a sheet solves a few named bias loops, it is not a ` +
-        `circuit solver over a node set`,
-      location: 'params',
-    });
-  }
-
   // Constrained params: one home for the structural checks (constraintProblem), so evaluation fails
   // closed on the SAME words this raises as an error — the bindProblem discipline. This also
   // catches a half-written constraint ({lhs} only), which the constrained() shape guard rejects and
@@ -1584,7 +1634,13 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
       location: 'params',
     });
   }
+  return out;
+}
 
+/** The givens' problems, and the params and equations the sizing publishes over. `wiredAsDiode`:
+ *  the wires put the device's gate on its drain (see structuralDiode). */
+function givensProblems(doc: SheetDoc, wiredAsDiode: boolean): QAWarning[] {
+  const out: QAWarning[] = [];
   if (doc.givens) {
     const problem = bindProblem(BINDABLE.filter((k) => doc.givens?.[k] !== undefined));
     if (problem) {
@@ -1636,15 +1692,15 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
           location: 'givens',
         });
       // The region check is reported under its own id beside the authored ones, and results are
-      // keyed by id.
-      if (doc.checks.some((r) => r.id === 'region'))
+      // keyed by id (see engineChecks).
+      if (doc.checks.some((r) => r.id === REGION_CHECK_ID))
         out.push({
           rule: 'sheet-check',
           severity: 'error',
           message:
-            'check id "region" is the id of the check the givens\' region adds — rename the ' +
-            'authored check, or drop it in favour of the region',
-          location: 'region',
+            `check id "${REGION_CHECK_ID}" is the id of the check the givens' region adds — ` +
+            'rename the authored check, or drop it in favour of the region',
+          location: REGION_CHECK_ID,
         });
     }
   }
@@ -1660,26 +1716,24 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   // the number it was handed.
   if (doc.givens) {
     const givens = doc.givens as unknown as Record<string, unknown>;
-    for (const p of doc.params) {
-      if (!SIZING_PUBLISHES.has(p.name) || givens[p.name] === p.name) continue;
-      out.push({
-        rule: 'sheet-collision',
-        severity: 'warning',
-        message: `param "${p.name}": the sizing publishes a quantity named ${p.name}, which overwrites this param where a device is sized; rename it`,
-        location: p.name,
-      });
-    }
-    for (const r of doc.equations) {
-      if (!SIZING_PUBLISHES.has(r.name)) continue;
-      out.push({
-        rule: 'sheet-collision',
-        severity: 'warning',
-        message: `equation "${r.name}": the sizing publishes a quantity named ${r.name}, which this equation replaces for every row after it — the device's own value included; rename it`,
-        location: r.name,
-      });
-    }
+    out.push(
+      ...collisions(
+        doc,
+        DEVICE_NAMES,
+        (n) =>
+          `param "${n}": the sizing publishes a quantity named ${n}, which overwrites this param where a device is sized; rename it`,
+        (n) =>
+          `equation "${n}": the sizing publishes a quantity named ${n}, which this equation replaces for every row after it — the device's own value included; rename it`,
+        (p) => givens[p.name] === p.name,
+      ),
+    );
   }
+  return out;
+}
 
+/** The checks' problems: duplicate ids, then each check's id, kind, operator and tolerance. */
+function checkProblems(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
   // Duplicate check ids collapse silently downstream: indexTreeResults keys results by id, so
   // the sweep charts one curve where two checks exist and bindingCheck can name the WRONG
   // worst check. (A child reusing a parent's id is fine — paths disambiguate across levels.)
@@ -1745,7 +1799,13 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
       });
     }
   }
+  return out;
+}
 
+/** The operating range's problems: each range end's shape, then what it reaches (see
+ *  complianceReach). */
+function rangeProblems(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
   // The operating range: structural checks only — whether the overridden evaluation complies
   // is eval's verdict, not a shape question.
   if (doc.operatingRange?.length) {
@@ -1820,44 +1880,14 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
     }
     out.push(...complianceReach(doc));
   }
+  return out;
+}
 
-  // A diode connection already fixes vds; declaring both means one of them is a fiction, and
-  // guessing which the author meant would be worse than saying so.
-  //
-  // `vgs` alongside a diode connection is a different case and is deliberately LEGAL — do not
-  // add a symmetric check. The connection says vds FOLLOWS vgs, collapsing the table onto its
-  // vds = vgs diagonal; a given vgs then names the point on that diagonal. The two statements
-  // are independent and both hold, exactly as a diode connection plus a given gm/ID already
-  // does. It is vds that cannot also be declared, because that one names the same coordinate
-  // twice with two different numbers.
-  if ((doc.givens?.diode || wiredAsDiode) && doc.givens?.vds !== undefined) {
-    out.push({
-      rule: 'sheet-givens',
-      severity: 'error',
-      message: !wiredAsDiode
-        ? 'the givens declare both a diode connection and a vds — the connection ties vds to vgs, so a ' +
-          'separate vds cannot also hold. Drop one'
-        : 'the wires put the gate on the drain — a diode connection, which ties vds to vgs — and the ' +
-          'givens declare a vds, which cannot also hold. Drop the vds, or move the gate',
-      location: 'givens',
-    });
-  }
-
-  // The format contract, and the netlist's own structure where the document is in the format
-  // that has one. The questions about the whole tree — what a held level rests on, whether every
-  // device is wired — are asked once, at the top.
-  out.push(...formatProblems(doc));
-  if (formatOf(doc) === 2) out.push(...nodesProblems(doc));
-  if (_depth === 0)
-    out.push(...treeNodesProblems(doc), ...wiringRefusal(doc), ...dcInputProblems(doc));
-  out.push(...unsettledGates(doc, _depth === 0));
-  out.push(...looseBalances(doc));
-
-  // The composition interface, both ways: names read across a block boundary, and names this
-  // sheet declares it exposes. Runs for every doc — a leaf with no children still publishes.
-  out.push(...provideCoverage(doc));
-
-  // Composition: validate each block and attribute its findings to it.
+/** The composition's problems: collisions with what the blocks provide, hand-tuned assumptions,
+ *  forward references, each block's shape, and each embedded child's own findings, attributed to
+ *  its block. `depth` is how deep `doc` sits in the tree. */
+function blockProblems(doc: SheetDoc, depth: number): QAWarning[] {
+  const out: QAWarning[] = [];
   if (doc.blocks) {
     // Collision guard: a child exposes scalars into the parent scope as `name__key`. If a
     // parent param or equation is named identically, the child injection silently overwrites it
@@ -1865,27 +1895,15 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
     // A ref-only block's provides are unknown until resolution, so these structural
     // checks cover embedded children only — run validation on the RESOLVED doc (as
     // runSheet does when given a ref index) for full coverage.
-    const injected = new Set(doc.blocks.flatMap(providedNames));
-    for (const p of doc.params) {
-      if (injected.has(p.name)) {
-        out.push({
-          rule: 'sheet-collision',
-          severity: 'warning',
-          message: `param "${p.name}" collides with a scalar a block provides — the block's value would silently override it`,
-          location: p.name,
-        });
-      }
-    }
-    for (const r of doc.equations) {
-      if (injected.has(r.name)) {
-        out.push({
-          rule: 'sheet-collision',
-          severity: 'warning',
-          message: `equation "${r.name}" collides with a scalar a block provides`,
-          location: r.name,
-        });
-      }
-    }
+    out.push(
+      ...collisions(
+        doc,
+        new Set(doc.blocks.flatMap(providedNames)),
+        (n) =>
+          `param "${n}" collides with a scalar a block provides — the block's value would silently override it`,
+        (n) => `equation "${n}" collides with a scalar a block provides`,
+      ),
+    );
 
     out.push(...assumptionEstimates(doc));
 
@@ -2014,7 +2032,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
           }
         }
       }
-      if (_depth >= MAX_BLOCK_DEPTH) {
+      if (depth >= MAX_BLOCK_DEPTH) {
         out.push({
           rule: 'sheet-block',
           severity: 'error',
@@ -2036,12 +2054,11 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
             location: block.name,
           });
         }
-        for (const w of validateSheet(block.doc, _depth + 1, blockWires(doc, block))) {
+        for (const w of validateSheet(block.doc, depth + 1, blockWires(doc, block))) {
           out.push(prefixBlockWarning(block.name, w));
         }
       }
     }
   }
-
   return out;
 }

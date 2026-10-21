@@ -5,6 +5,7 @@
 import type { DeviceTable } from '../types';
 import {
   RANGE_END_SEP,
+  engineChecks,
   indexTreeResults,
   isHardCheck,
   sweepable,
@@ -121,10 +122,10 @@ function collectTreeChecks(doc: SheetDoc, prefix: string, into: SheetSweepCheck[
     if (prefix === '' || isHardCheck(r.kind))
       into.push({ id: prefix + r.id, kind: r.kind, marginPct: [] });
   }
-  // The check a declared region adds to the device is a physical check of this doc like the
-  // authored ones (see SheetGivens.region), so it rides the sweep beside them.
-  if (doc.givens?.region !== undefined)
-    into.push({ id: `${prefix}region`, kind: 'physical', marginPct: [] });
+  // The checks the engine adds (a declared region's) are checks of this doc like the authored
+  // ones, so they ride the sweep beside them.
+  for (const c of engineChecks(doc.givens))
+    into.push({ id: prefix + c.id, kind: c.kind, marginPct: [] });
   // A docless (unresolved-ref) block has no visible checks; the sweep is all-infeasible
   // there anyway via eval's fail-closed guard.
   for (const u of doc.blocks ?? []) {

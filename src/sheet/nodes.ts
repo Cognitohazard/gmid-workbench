@@ -48,6 +48,8 @@ import {
   childPath,
   deviceName,
   isObject,
+  namesOf,
+  parses,
   providePrefix,
   providedNames,
   splitProvide,
@@ -296,27 +298,6 @@ export function structuralDiodes(doc: SheetDoc): SheetDoc {
   return walk(doc, undefined);
 }
 
-/** Whether an expression parses at all — distinct from namesOf, whose empty result also describes
- *  a legal literal like "0.9". */
-export function parses(expr: string): boolean {
-  try {
-    compileExpr(expr);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Free names of an expression, or none when it is not a string or does not parse. */
-export function namesOf(expr: unknown): readonly string[] {
-  if (typeof expr !== 'string') return [];
-  try {
-    return compileExpr(expr).names;
-  } catch {
-    return [];
-  }
-}
-
 /** The bias-axis givens — the expressions a selector multiplies. */
 const AXIS_GIVENS = ['vgs', 'vds', 'vsb'] as const;
 
@@ -475,8 +456,10 @@ export function carriedDocWiring(o: Record<string, unknown>, lost?: string[]): P
   return out;
 }
 
-/** The format-version-2 keys of one raw block, carried as carriedDocWiring carries a document's;
- *  `at` is the block's path in the loader's loss report (`blocks[2].`). */
+/** The format-version-2 keys of one raw block, carried as carriedDocWiring carries a document's,
+ *  and the keys a block no longer carries in any format (EARLIER_BLOCK_KEYS), copied as they are
+ *  so validation can say how to migrate them; `at` is the block's path in the loader's loss report
+ *  (`blocks[2].`). */
 export function carriedBlockWiring(
   o: Record<string, unknown>,
   at: string,
@@ -493,6 +476,8 @@ export function carriedBlockWiring(
       lost,
     );
   else if (o.ports !== undefined) lost?.push(`${at}ports`);
+  for (const k of EARLIER_BLOCK_KEYS)
+    if (o[k] !== undefined) (out as Record<string, unknown>)[k] = copied(o[k]);
   return out;
 }
 
@@ -1065,29 +1050,42 @@ function valueIn(src: unknown, scope: Scope): number | undefined {
 }
 
 /** The directions of a table's axes, read once per table (they depend on nothing else). */
+/** Each table's axis directions by axis name, worked out once per table (see axisDirection). */
+const AXIS_DIRECTION = new WeakMap<DeviceTable, Map<string, 1 | -1 | undefined>>();
+
+/** The direction of a table's axis `name`: +1 where it holds no negative value, -1 where it holds
+ *  no positive one (a signed p export), undefined where it holds both or is absent. The one rule
+ *  the wiring walk reads the vgs axis by (DevicePoint.axis) and the region check the vds axis. */
+export function axisDirection(table: DeviceTable, name: string): 1 | -1 | undefined {
+  let byAxis = AXIS_DIRECTION.get(table);
+  if (!byAxis) AXIS_DIRECTION.set(table, (byAxis = new Map()));
+  if (byAxis.has(name)) return byAxis.get(name);
+  const values = table.grid.axes.find((a) => a.name === name)?.values;
+  let dir: 1 | -1 | undefined;
+  if (values?.length) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of values) {
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+    dir = lo >= 0 ? 1 : hi <= 0 ? -1 : undefined;
+  }
+  byAxis.set(name, dir);
+  return dir;
+}
+
 const AXIS_CACHE = new WeakMap<DeviceTable, { axis?: 1 | -1; bodyAxis: 1 | -1 }>();
 
-/** The direction of a table's vgs axis (+1 where it holds no negative value, -1 where it holds no
- *  positive one, undefined where it holds both or is absent; see DevicePoint.axis), and of its vsb
- *  axis (-1 where it holds a negative value, +1 otherwise — a magnitude, or no vsb axis at all;
- *  see DevicePoint.bodyAxis). */
+/** The direction of a table's vgs axis (axisDirection; see DevicePoint.axis), and of its vsb axis
+ *  (-1 where it holds a negative value, +1 otherwise — a magnitude, or no vsb axis at all; see
+ *  DevicePoint.bodyAxis). */
 function axesOf(table: DeviceTable | undefined): { axis?: 1 | -1; bodyAxis: 1 | -1 } {
   if (!table) return { bodyAxis: 1 };
   const cached = AXIS_CACHE.get(table);
   if (cached) return cached;
-  const values = (name: string) => table.grid.axes.find((a) => a.name === name)?.values;
-  let axis: 1 | -1 | undefined;
-  const vgs = values('vgs');
-  if (vgs?.length) {
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (const v of vgs) {
-      lo = Math.min(lo, v);
-      hi = Math.max(hi, v);
-    }
-    axis = lo >= 0 ? 1 : hi <= 0 ? -1 : undefined;
-  }
-  const vsb = values('vsb');
+  const axis = axisDirection(table, 'vgs');
+  const vsb = table.grid.axes.find((a) => a.name === 'vsb')?.values;
   let bodyAxis: 1 | -1 = 1;
   if (vsb) for (const v of vsb) if (v < 0) bodyAxis = -1;
   const out = { ...(axis !== undefined ? { axis } : {}), bodyAxis };
@@ -1541,7 +1539,7 @@ export const CLOSURE_NOTE =
 const volts = (v: number): string => `${Number(v.toPrecision(4))} V`;
 
 /** A current as a reader reads one: an SI prefix, `10 µA` rather than `0.00001 A`. */
-function amps(i: number): string {
+export function amps(i: number): string {
   const s = formatSI(i);
   const m = /^(-?[\d.]+(?:e[+-]?\d+)?)(\D*)$/.exec(s);
   return m ? `${m[1]} ${m[2]}A` : `${s} A`;
@@ -2438,8 +2436,12 @@ export function unwalkedReport(doc: SheetDoc, childFindings = 0): NodesReport | 
 }
 
 /** The wiring part of a node's evaluation where its point has no answer: the run with the report
- *  unwalkedReport gives in place of a walk. */
-export function withoutWalk(doc: SheetDoc, res: SheetResult): SheetResult {
+ *  unwalkedReport gives in place of a walk — none where the report is its parent's to give (see
+ *  parentReports). */
+export function withoutWalk<
+  T extends { blocks?: readonly SheetBlockReport[]; nodes?: NodesReport },
+>(doc: SheetDoc, res: T, mode: WiringMode = STANDALONE): T {
+  if (parentReports(doc, mode)) return res;
   const nodes = unwalkedReport(doc, childFindingsOf(res));
   return nodes ? { ...res, nodes } : res;
 }
@@ -2458,6 +2460,15 @@ export interface WiringMode {
   wired: boolean;
   flattened: boolean;
 }
+
+/** How a sheet no parent reads asks for its wiring: it runs its own walk. */
+export const STANDALONE: WiringMode = { wired: false, flattened: false };
+
+/** Whether a node's own wiring report is its parent's to give: its wiring joins the parent's walk,
+ *  or it is in the earlier format, which reads no wiring key, and the parent reads only its device
+ *  point. The one rule withNodes and withoutWalk both leave a node's report out by. */
+const parentReports = (doc: SheetDoc, mode: WiringMode): boolean =>
+  mode.flattened || (mode.wired && formatOf(doc) === 'earlier');
 
 /**
  * The wiring part of one node's evaluation, run on its finished result. Where its parent reads it,
@@ -2487,10 +2498,7 @@ export function withNodes(
   let out: SheetResult =
     (mode.wired || mode.flattened) && point ? { ...res, terminals: point } : res;
   if (mode.flattened) return { ...out, wiringValues: wiringValuesOf(doc, res) };
-  if (format === 'earlier') {
-    const nodes = mode.wired ? undefined : unwalkedReport(doc, childFindingsOf(res));
-    return nodes ? { ...out, nodes } : out;
-  }
+  if (format === 'earlier') return withoutWalk(doc, out, mode);
   let warnings: QAWarning[];
   if (statesWiring(doc) && doc.nodes !== 'none') {
     const checked = nodesCheck(doc, res, point);

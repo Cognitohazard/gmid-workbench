@@ -6,7 +6,14 @@
 // feasibility. Pure, deterministic, zero DOM imports.
 
 import { type DeviceTable, LookupRangeError } from '../types';
-import { lookup, lookupByGmId, lookupByQuantity, operatingPointAxis } from '../lookup';
+import {
+  lookup,
+  lookupByGmId,
+  lookupByQuantity,
+  operatingPointAxis,
+  reportsDerived,
+  storedKeys,
+} from '../lookup';
 import { offHull, sliceGrid } from '../grid';
 import { registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
@@ -49,6 +56,12 @@ export interface SizeQuery {
    *  signed-export PMOS vgs is negative). See OP_SELECTORS for why it is a selector. */
   vgs?: number;
 }
+
+/** The names a sheet reads a sizing by beyond the namespace quantities and the selectors: `w0`,
+ *  the characterization width (in SizeResult.quantities), and `ceiling` and `feasible`, the
+ *  slice's gm/ID ceiling and the verdict against it — SizeResult's own fields, which the sheet
+ *  engine puts in scope under these names. */
+export const SIZING_SCALARS = ['w0', 'ceiling', 'feasible'] as const;
 
 /** A solved operating point with the sized width and feasibility against the slice ceiling. */
 export interface SizeResult {
@@ -195,9 +208,10 @@ function atDensity(
   bound: number,
   scale: number,
   L: number,
+  keys: string[],
 ): Record<string, number> {
   try {
-    return lookupByQuantity(table, key, bound * scale, L);
+    return lookupByQuantity(table, key, bound * scale, L, keys);
   } catch (e) {
     throw e instanceof LookupRangeError ? e.rescaled(scale) : e;
   }
@@ -227,6 +241,7 @@ function atGateVoltage(
   L: number,
   warnings: string[],
   clamped: string[],
+  keys: string[],
 ): Record<string, number> {
   const vgsAxis = operatingPointAxis(
     table.grid,
@@ -242,7 +257,7 @@ function atGateVoltage(
       `requested vgs ${vgs} V is outside the table's vgs range [${lo}, ${hi}] V at L=${L} m; clamped to the nearest characterized gate voltage`,
     );
   }
-  return lookup(table, { l: L, vgs: used });
+  return lookup(table, { l: L, vgs: used }, keys);
 }
 
 /**
@@ -308,7 +323,10 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   }
 
   // Resolve the bound pair to the full (gm, gm_id, id, W) + the characterization-width
-  // operating point. Each path inverts exactly one monotone curve on the L-slice.
+  // operating point. Each path inverts exactly one monotone curve on the L-slice. The point holds
+  // the stored columns alone: every derived quantity is evaluated below, at the sized width, so
+  // one evaluated at w0 would only be discarded.
+  const keys = storedKeys(q.table);
   let gm: number;
   let gm_id: number;
   let id: number;
@@ -323,8 +341,8 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     // invert, the point is read forward at the gate voltage given.
     point =
       selector === 'vgs'
-        ? atGateVoltage(q.table, q.vgs as number, L, warnings, clamped)
-        : lookupByQuantity(q.table, selector, q[selector] as number, L);
+        ? atGateVoltage(q.table, q.vgs as number, L, warnings, clamped, keys)
+        : lookupByQuantity(q.table, selector, q[selector] as number, L, keys);
     // A bound gm/ID is honoured exactly: interpolating gm and id separately does not
     // preserve their ratio, so reading it back off the point would return a hair off what
     // the designer asked for — and a gm to match. Every other selector has no such closed
@@ -343,14 +361,14 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     gm = q.gm as number;
     id = q.id as number;
     gm_id = gm / id;
-    point = lookupByGmId(q.table, gm_id, L);
+    point = lookupByGmId(q.table, gm_id, L, keys);
     W = (id / point.id) * Wchar;
   } else {
     // W + gm or W + id: invert whichever characterization column was bound, at its
     // density target. The two differ only in that column.
     W = q.W;
     const key = q.id !== undefined ? 'id' : 'gm';
-    point = atDensity(q.table, key, q[key] as number, Wchar / W, L);
+    point = atDensity(q.table, key, q[key] as number, Wchar / W, L, keys);
     gm_id = point.gm / point.id;
     id = q.id ?? (q.gm as number) / gm_id;
     gm = q.gm ?? gm_id * id;
@@ -396,7 +414,6 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   const bases: Record<string, number> = {};
   const passthrough: Record<string, number> = {};
   for (const [key, val] of Object.entries(point)) {
-    if (DERIVED_FORMS.has(key) && !stored(key)) continue; // re-derived below at the sized width
     if (isPassthroughKey(key)) passthrough[key] = val;
     else bases[key] = PER_WIDTH_KEYS.has(key) ? val * k : val;
   }
@@ -412,8 +429,11 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // Pass-through columns stay out of that scope.
   const scaledScope = pointScope(bases);
   const quantities: Record<string, number> = { ...bases, ...passthrough };
+  // Which derived quantities this point reports is decided without evaluating any: the names
+  // `bases` holds are the ones a forward lookup reads (see reportsDerived).
+  const has = (n: string): boolean => Object.prototype.hasOwnProperty.call(bases, n);
   for (const key of DERIVED_FORMS.keys()) {
-    if (!Object.prototype.hasOwnProperty.call(point, key)) continue; // not computable on this table
+    if (!reportsDerived(key, has)) continue; // not computable on this table
     if (stored(key)) continue; // kept as read, above
     quantities[key] = scaledScope.resolve(key) as number;
   }

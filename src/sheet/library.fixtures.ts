@@ -11,7 +11,7 @@ import { generateDemoDevice, VA_PER_L, BODY_FACTOR, COX } from '../demo';
 import { GAMMA_DEFAULT, PHYS, UT } from '../constants';
 import { buildSheetRefIndex, type SheetRefEntry, type SheetRefIndex } from './resolve';
 import { gdsOf } from './library.math';
-import type { SheetDoc } from './types';
+import { isHardCheck, type SheetDoc, type SheetResult, type SizingReport } from './types';
 
 export { VA_PER_L, BODY_FACTOR };
 // The demo model's closed forms live in library.math.ts, which has no import-time work; they
@@ -135,8 +135,18 @@ export const sourceNodeUnder = (gate: number, vgs0: number): number =>
 const N_SLOPE = 1.3;
 const softplus = (x: number): number => Math.log1p(Math.exp(x));
 
-/** Threshold of the demo model at length `L`, body at the source. */
+/** Threshold of the demo model at length `L`, body at the source: 0.4 V plus a term that grows
+ *  with length, 0.02·ln(L/0.18 µm + 1) (src/demo/index.ts). Length moves nothing else on the gm/ID
+ *  curve, so this is what carries a gate-source voltage from one length to another and what turns
+ *  one into an overdrive. */
 export const vthDemo = (L: number): number => 0.4 + 0.02 * Math.log(L / 0.18e-6 + 1);
+
+/** Saturation voltage the demo model reports at gate-source voltage `vgs` and length `L`: a 2·UT
+ *  floor plus the overdrive, none below threshold. It depends on the overdrive vgs − vth alone and
+ *  not on the drain voltage, so a device on another's gate reports its reference's. A source above
+ *  the body raises the gate-source voltage and the threshold by the same BODY_FACTOR·vsb, so for a
+ *  device at any body bias this takes the BODY-GROUNDED vgs of its inversion level. */
+export const vdsatDemo = (vgs: number, L: number): number => 2 * UT + Math.max(vgs - vthDemo(L), 0);
 
 /** The gate-source voltage at which a device of the demo model carries `ratio` times the
  *  saturation current it carries at `vgs0`, at the same width, length and body bias: softplus(x)
@@ -166,3 +176,37 @@ export const vgsAtGmId = (gmId: number, L = 0.5e-6): number => {
   }
   return (lo + hi) / 2;
 };
+
+/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
+ *  names no wires. A test document whose subject is not a netlist says so rather than draw one. */
+export const notACircuit = (doc: SheetDoc): SheetDoc => ({
+  ...doc,
+  formatVersion: 2,
+  nodes: 'none',
+});
+
+/** One block's sizing report, by block name. */
+export const block = (r: SheetResult, name: string): SizingReport =>
+  r.blocks!.find((c) => c.name === name)!.sizing!;
+
+/** The saturation check a device's `region` declaration adds to its own results, by block. */
+export const regionOf = (
+  r: Pick<SheetResult, 'blocks'>,
+  name: string,
+): SheetResult['checks'][number] =>
+  r.blocks!.find((c) => c.name === name)!.checks.find((c) => c.id === 'region')!;
+
+/** Every hard check that fails anywhere in an evaluation, the sheet's own by id and a block's
+ *  as `block.id`. */
+export const hardFailsIn = (r: Pick<SheetResult, 'checks' | 'blocks'>): string[] => [
+  ...r.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
+  ...(r.blocks ?? []).flatMap((b) =>
+    b.checks
+      .filter((c) => isHardCheck(c.kind) && c.status === 'fail')
+      .map((c) => `${b.name}.${c.id}`),
+  ),
+];
+
+/** The blocks of a sheet that declare saturation, in document order. */
+export const declaredSaturated = (doc: SheetDoc): string[] =>
+  (doc.blocks ?? []).filter((u) => u.doc?.givens?.region === 'saturation').map((u) => u.name);

@@ -6,6 +6,7 @@
 
 import type { CharacterizedDevice, DeviceTable, SheetRefIndex } from '@gmid/mostab-core';
 import {
+  jobReply,
   runJob,
   type DeviceOutline,
   type JobReply,
@@ -31,10 +32,10 @@ function hydrate(o: DeviceOutline): CharacterizedDevice {
 
 self.onmessage = (e: MessageEvent<JobRequest>): void => {
   const m = e.data;
-  let reply: JobReply;
-  try {
+  const reply: JobReply = jobReply(m.id, () => {
     for (const [uid, t] of m.tables) tables.set(uid, t);
-    const keep = new Set(m.retain);
+    // Only the tables of the devices this request reads are kept.
+    const keep = new Set(m.devices.flatMap((o) => o.conditions));
     for (const uid of [...tables.keys()]) if (!keep.has(uid)) tables.delete(uid);
     if (m.refs) refs = new Map(m.refs);
     const devices = new Map(m.devices.map((o) => [o.deviceUid, hydrate(o)]));
@@ -45,10 +46,8 @@ self.onmessage = (e: MessageEvent<JobRequest>): void => {
       const uid = bound.get(binding);
       return uid === undefined ? undefined : devices.get(uid);
     };
-    reply = { id: m.id, ok: true, result: runJob(m.job, { primary, deviceOf, refs }) };
-  } catch (err) {
-    reply = { id: m.id, ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
+    return runJob(m.job, { primary, deviceOf, refs });
+  });
   self.postMessage(reply);
 };
 

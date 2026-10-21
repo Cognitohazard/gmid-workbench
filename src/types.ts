@@ -59,7 +59,8 @@ export interface DeviceTable {
   readonly id: TableId;
   readonly grid: Grid;
   readonly meta: TableMeta;
-  /** Column keys present beyond the canonical namespace, carried through verbatim. */
+  /** The pass-through columns the grid stores, carried through verbatim: `passthroughKeys(grid)`,
+   *  the namespace's one reading of which columns those are. Absent when there are none. */
   readonly passthrough?: ReadonlySet<string>;
 }
 

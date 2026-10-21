@@ -10,7 +10,7 @@
 // size, and raise no hard-check na on the same table; here we pin the physics.
 
 import { describe, it, expect } from 'vitest';
-import { PHYS, UT } from '../constants';
+import { PHYS } from '../constants';
 import { runSheet, withParams, SOLVE_TOL_REL } from './index';
 import { isHardCheck, type SheetDoc, type SheetResult } from './types';
 import {
@@ -28,16 +28,11 @@ import {
   VGS_GMID10_L05,
   VGS_GMID12_L05,
   vgsAtBody,
+  vdsatDemo,
+  vthDemo,
 } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`stages/${file}`);
-
-// The demo model's threshold at length `len` (src/demo): a touch higher for a longer channel.
-const vthDemo = (len: number): number => 0.4 + 0.02 * Math.log(len / 0.18e-6 + 1);
-
-/** Saturation voltage the demo model reports at gate-source voltage `vgs` and length `len`, body at
- *  the source: 2·UT plus the overdrive above threshold. */
-const vdsatDemo = (vgs: number, len: number): number => 2 * UT + (vgs - vthDemo(len));
 
 // The gate-source voltage the demo model needs for gm/ID 7 at L = 0.5 µm, from the EKV inversion
 // gm/ID = sigmoid(x)/(n·UT·softplus(x)) with n = 1.3 — the same derivation as the fixture

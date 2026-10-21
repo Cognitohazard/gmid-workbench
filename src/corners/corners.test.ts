@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice, scaleQuantities, VA_PER_L } from '../demo';
 import { makeGrid } from '../grid';
 import { validateDevices, validateDeviceConditions } from '../qa';
-import { loadLibrary, REFS, table as libTable } from '../sheet/library.fixtures';
+import { loadLibrary, REFS, table as libTable, notACircuit } from '../sheet/library.fixtures';
 import { clampedIn, evaluateSheet, namedBindings, buildSheetRefIndex } from '../sheet';
 import type { CheckResult, SheetDoc, RangeEndReport, SheetResult } from '../sheet';
 import type { Axis, DeviceTable, TableMeta } from '../types';
@@ -562,11 +562,6 @@ describe('namedBindings', () => {
 });
 
 // --- one run, one condition --------------------------------------------------
-
-/** A document that says it is not a circuit: what the mandatory wiring rule asks of a sheet that
- *  names no wires. The sheets below exercise conditions, projection and holding, not a netlist,
- *  so the ones that size a device say so rather than draw one. */
-const notACircuit = (doc: SheetDoc): SheetDoc => ({ ...doc, formatVersion: 2, nodes: 'none' });
 
 /** The constrained-node idiom the library writes: y = 2x + 1 solved to the typed spec T, with the
  *  claimed range [T_lo, T_hi] checked as range ends. Base T = 5 lands x = 2; the lo

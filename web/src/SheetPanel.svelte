@@ -33,6 +33,7 @@
     noiseFallbacks,
     noiseLabel,
     noiseSourcesIn,
+    devicesIn,
     joinProvide,
     PROVIDE_SEP,
     BIAS_AXES,
@@ -68,7 +69,7 @@
   import { commitEng, pct } from './eng';
   import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
   import { copyText, download } from './export';
-  import { SheetEvaluator, type JobOf } from './sheetEvaluator.svelte';
+  import { SheetEvaluator, type Answered, type JobOf } from './sheetEvaluator.svelte';
   import type { JobKind, JobResults } from './sheetjobs';
 
   let {
@@ -127,26 +128,40 @@
   const failed = (e: string): void => {
     evalError = `evaluation failed: ${e}`;
   };
-  /** Used by every evaluation below: request `job` and pass its answer to `answer`. When there is
+  /** Used by every evaluation below: request `job` and pass its answer to `answer`, with the
+   *  request it answers — what each site reads to tell whether the answer still belongs on screen.
+   *  `about` is what the request is about beyond its job (see SheetEvaluator.request). When there is
    *  no job (nothing to evaluate), withdraw the request and clear the answer. */
-  function ask<K extends JobKind>(
+  function ask<K extends JobKind, A = undefined>(
     kind: K,
     job: JobOf<K> | undefined,
-    answer: (r: JobResults[K] | null) => void,
+    answer: (r: { result: JobResults[K]; answered: Answered<K, A> } | null) => void,
+    about?: A,
   ): void {
     if (!job || !primary || refusal) {
       evaluator.cancel(kind);
       answer(null);
       return;
     }
-    evaluator.request(job, { bench, primary, refs }, answer, failed);
+    evaluator.request(
+      job,
+      { bench, primary, refs, about },
+      (result, answered) => answer({ result, answered }),
+      failed,
+    );
   }
+
+  /** Which sheet this panel holds: a new number each time a sheet is picked into it, while an edit
+   *  keeps it. A verdict belongs on screen only while it answers this sheet, so picking another
+   *  sheet does not show the previous one's verdict while the new one is evaluated — however the
+   *  two are titled. */
+  let sheetSlot = $state(0);
 
   // One unresolved or mis-parameterized child makes every parent expression that
   // reads its provides "not defined" — a ~20-line wall for one root cause. Collapse
   // the fan-out to one line per child prefix; every other warning passes through.
   /** Validation and evaluation diagnostics as one list — walked twice below (warnings, then the
-   *  informational solver notes), so the concatenation is built once. */
+   *  informational range-end notes), so the concatenation is built once. */
   const allWarn = $derived.by(() => [...rr.warnings, ...(result?.warnings ?? [])]);
   const shownWarnings = $derived.by(() => {
     const ws = allWarn.filter((w) => w.severity !== 'info');
@@ -175,7 +190,7 @@
   // The range-end notes are INFO, not warnings: a mirrored current that is different at a
   // range end is the circuit behaving as drawn, not a fault — and an author claiming that range
   // should still see it. Their own quiet line, in the core's words.
-  const solveNotes = $derived(
+  const rangeNotes = $derived(
     allWarn.filter((w) => w.severity === 'info' && w.rule === 'sheet-range').map((w) => w.message),
   );
 
@@ -257,11 +272,16 @@
   // nominal condition's run comes back first even when it was not asked for: the design is
   // sized there, so its home is always on the page, and feasibility is its verdict.
   //
-  // The answer is kept with the title of the sheet it answers, so picking another sheet does not
-  // show the previous sheet's verdict while the new one is evaluated.
-  let runsAnswer = $state.raw<{ title: string; runs: ConditionRun[] } | null>(null);
+  // The answer is kept with the request it answers, and shown while that request was about the
+  // sheet in this panel now: the same sheet slot, and the same title — a slot is minted where a
+  // sheet is picked here, and the title still catches a sheet replaced from outside the panel. So
+  // picking another sheet does not show the previous one's verdict while the new one is
+  // evaluated, while an edit keeps the last verdict on screen until the next arrives.
+  let runsAnswer = $state.raw<{
+    runs: ConditionRun[];
+    answered: Answered<'run', number>;
+  } | null>(null);
   $effect(() => {
-    const title = cfg.title;
     const base = keys.length > 1 ? nominalKey : undefined;
     ask(
       'run',
@@ -269,13 +289,19 @@
         ? { kind: 'run', doc: cfg, keys: [...keys], ...(base ? { base } : {}) }
         : undefined,
       (r) => {
-        runsAnswer = r && { title, runs: r };
+        runsAnswer = r && { runs: r.result, answered: r.answered };
         if (r) evalError = null;
       },
+      sheetSlot,
     );
   });
   const runs = $derived(
-    primary && runsAnswer && runsAnswer.title === cfg.title ? runsAnswer.runs : [],
+    primary &&
+      runsAnswer &&
+      runsAnswer.answered.about === sheetSlot &&
+      runsAnswer.answered.job.doc.title === cfg.title
+      ? runsAnswer.runs
+      : [],
   );
   /** Nothing to show yet: the first verdict for this sheet is still being evaluated. */
   const firstRun = $derived(runs.length === 0 && evaluator.busy('run'));
@@ -328,6 +354,13 @@
         .join(', ');
     return labels.map((label) => `${label} (${carrying(label)})`).join(' · ');
   });
+  /** The pass-through columns the sized devices read, each once: numbers at the characterization
+   *  width rather than the sized one, which the line beside the noise line names. */
+  const unscaled = $derived(
+    result
+      ? devicesIn(result, (s) => s.passthrough ?? []).filter((k, i, all) => all.indexOf(k) === i)
+      : [],
+  );
   /** The noise line's tooltip: what the sources mean, then every fallback the line names, each in
    *  full — the quantity, the missing column, the form used and what it costs — said once. */
   const noiseTitle = $derived.by((): string => {
@@ -364,22 +397,18 @@
       ? 'evaluating…'
       : FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
   );
-  /** The DC wiring check's verdict on the run shown, in a few words — none for a sheet that says it
-   *  is not a circuit or names no wiring (see NodesReport.state). */
-  const wiringText = $derived.by((): string | null => {
+  /** The DC wiring check's verdict on the run shown, in a few words and the badge's class — none
+   *  for a sheet that says it is not a circuit or names no wiring (see NodesReport.state). */
+  const wiring = $derived.by((): { text: string; cls: string } | null => {
     const n = result?.nodes;
     if (!n || n.state === 'not-applicable') return null;
-    if (n.state === 'not-evaluated') return 'wiring: not evaluated';
-    if (n.state === 'checked-clean') return 'wiring: clean';
-    return `wiring: ${n.findings} ${n.findings === 1 ? 'finding' : 'findings'}`;
+    if (n.state === 'not-evaluated') return { text: 'wiring: not evaluated', cls: 'skip' };
+    if (n.state === 'checked-clean') return { text: 'wiring: clean', cls: 'ok' };
+    return {
+      text: `wiring: ${n.findings} ${n.findings === 1 ? 'finding' : 'findings'}`,
+      cls: 'warn',
+    };
   });
-  const wiringClass = $derived(
-    result?.nodes?.state === 'checked-clean'
-      ? 'ok'
-      : result?.nodes?.state === 'checked-with-findings'
-        ? 'warn'
-        : 'skip',
-  );
   /** Whether the sheet claims an operating range at all — read from the doc, so the range
    *  column is there even when no condition could be evaluated. */
   const hasRange = $derived((rr.doc.operatingRange ?? []).length > 0);
@@ -563,10 +592,11 @@
       // Naming the check keeps the probes off the range-end runs unless the check in question
       // lives on one — the difference between 2 and 2*(1 + range ends) evaluations per knob.
       { kind: 'sens', doc, at: refKey, ...(focus ? { check: focus.id } : {}) },
-      { bench, primary, refs },
-      (rows) => {
+      // The design the readout is about: the snapshot is shown while it is the one on screen.
+      { bench, primary, refs, about: { doc, dev, focus } },
+      (rows, answered) => {
         sensFor = null;
-        snap = { doc, dev, focus, rows: rows ?? [] };
+        snap = { ...answered.about, rows: rows ?? [] };
       },
       (e) => {
         sensFor = null;
@@ -624,7 +654,7 @@
   // breakdown row instead. An answer is shown only while it is about the param now selected: a
   // sweep of the previous one stays off the chart rather than being drawn under the new name.
   const sweepDoc = $derived(multi ? withoutRange(rr.doc) : rr.doc);
-  let sweepsAnswer = $state.raw<JobResults['sweeps']>([]);
+  let sweepsAnswer = $state.raw<{ param: string; sweeps: JobResults['sweeps'] } | null>(null);
   $effect(() => {
     const at = runs.filter((r) => r.state === 'evaluated').map((r) => r.key);
     ask(
@@ -632,10 +662,10 @@
       active && at.length
         ? { kind: 'sweeps', doc: sweepDoc, param: active, at, points: SWEEP_POINTS }
         : undefined,
-      (r) => (sweepsAnswer = r ?? []),
+      (r) => (sweepsAnswer = r && { param: r.answered.job.param, sweeps: r.result }),
     );
   });
-  const sweptHere = $derived(sweepsAnswer.filter((e) => e.sweep.param === active));
+  const sweptHere = $derived(sweepsAnswer?.param === active ? sweepsAnswer.sweeps : []);
   const swept = $derived(
     !multi && refKey ? (sweptHere.find((e) => sameCondition(e.key, refKey))?.sweep ?? null) : null,
   );
@@ -653,7 +683,9 @@
     !multi && active && sweep2 && sweepable2.some((p) => p.name === sweep2) ? sweep2 : '',
   );
   const twoD = $derived(active2 !== ''); // active2 is only ever set while `active` is
-  let swept2Answer = $state.raw<SheetSweep2 | null>(null);
+  let swept2Answer = $state.raw<{ answered: Answered<'sweep2'>; map: SheetSweep2 | null } | null>(
+    null,
+  );
   $effect(() => {
     ask(
       'sweep2',
@@ -667,11 +699,13 @@
             points: SWEEP2_POINTS,
           }
         : undefined,
-      (r) => (swept2Answer = r),
+      (r) => (swept2Answer = r && { answered: r.answered, map: r.result }),
     );
   });
   const swept2 = $derived(
-    swept2Answer?.paramX === active && swept2Answer.paramY === active2 ? swept2Answer : null,
+    swept2Answer?.answered.job.param === active && swept2Answer.answered.job.param2 === active2
+      ? swept2Answer.map
+      : null,
   );
   // The distinct hard-check ids (tree-path) that bound the infeasible region — the caption's "what
   // limits it", so the plane is never a wall of red with no named cause.
@@ -778,7 +812,9 @@
     const [gi, si] = sel.value.split(':').map(Number);
     sel.value = '';
     const src = menu[gi]?.sheets[si];
-    if (src) onChange(cloneDoc(src));
+    if (!src) return;
+    sheetSlot += 1;
+    onChange(cloneDoc(src));
   }
   /** A binding the menu does not offer. A document written before children named devices
    *  stores a raw table uid; it still resolves, and is shown as the device it names rather than
@@ -990,8 +1026,9 @@
   const CHIP: Record<CheckStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author check notes by id (a CheckResult carries no note — the physical-meaning note lives on
-  // the authored SheetCheck). Top-level result.checks mirror cfg.checks 1:1, so the id lookup is
-  // exact.
+  // the authored SheetCheck). Top-level result.checks are cfg.checks in order, then the checks the
+  // engine adds (engineChecks), whose ids an authored check may not take — so the id lookup is
+  // exact, and an engine check simply has no note.
   const checkNote = $derived(new Map(cfg.checks.map((r) => [r.id, r.note])));
   const checkWhy = $derived(new Map(cfg.checks.map((r) => [r.id, r.justification])));
   // A check row's tooltip carries the check-SPECIFIC bits (its authored physical-meaning note and
@@ -1002,7 +1039,7 @@
   // A CHILD's check is looked up in `childChecks` — the checks of the doc it was authored in.
   // Check ids are unique only WITHIN a sheet (ten shipped sheets carry a `feasible-inversion`),
   // so reading a child chip out of the top-level maps shows the parent's note for an unrelated
-  // constraint. Absent ⇒ this sheet's own checks, which DO mirror result.checks 1:1.
+  // constraint. Absent ⇒ this sheet's own checks, which result.checks carry under the same ids.
   function checkTitle(r: CheckResult, childChecks?: readonly SheetCheck[]): string {
     const own = childChecks?.find((a) => a.id === r.id);
     const parts: string[] = [];
@@ -1353,9 +1390,9 @@
           >{complianceText}</span
         >
       {/if}
-      {#if wiringText}
-        <span class="wireb {wiringClass}" title={CONTROL_HELP.wiringState} data-wiring
-          >{wiringText}</span
+      {#if wiring}
+        <span class="wireb {wiring.cls}" title={CONTROL_HELP.wiringState} data-wiring
+          >{wiring.text}</span
         >
       {/if}
       {#if busyText}
@@ -1381,6 +1418,12 @@
          missing column made fall back to a lesser form (the tooltip spells each one out). -->
       {#if evaluated && noiseText}
         <span class="snoise" title={noiseTitle}>noise: {noiseText}</span>
+      {/if}
+      <!-- Which numbers are read at the characterization width: the pass-through columns. -->
+      {#if evaluated && unscaled.length}
+        <span class="snoise" data-passthrough title={CONTROL_HELP.passthrough}
+          >at w0, not scaled: {unscaled.join(', ')}</span
+        >
       {/if}
       <!-- What each held expression came to at this run: the gate bias a node under a gate needs,
          or the zero a current balance reads. -->
@@ -1797,9 +1840,9 @@
       <p class="pwarn" title={w}>⚠ {w}</p>
     {/each}
 
-    <!-- Informational, and kept out of the warning list above: nothing went wrong, the loop closed
-       and the verdict stands. -->
-    {#each solveNotes as n}
+    <!-- Informational, and kept out of the warning list above: nothing went wrong — a range end
+       reads a current the circuit as drawn moves there — and the verdict stands. -->
+    {#each rangeNotes as n}
       <p class="pinfo">{n}</p>
     {/each}
   {/if}
@@ -2161,7 +2204,7 @@
     font: inherit;
     font-family: ui-monospace, monospace;
   }
-  /* A solved tearing variable reads as a reported value, not a field you can type into. */
+  /* A param the engine solves reads as a reported value, not a field you can type into. */
   .num.solved {
     border-style: dashed;
     opacity: 0.75;

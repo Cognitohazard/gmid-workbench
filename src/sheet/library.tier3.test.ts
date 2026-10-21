@@ -18,11 +18,11 @@
 //    both have closed forms (see vthDemo below).
 
 import { describe, it, expect } from 'vitest';
-import { PHYS, UT } from '../constants';
+import { PHYS } from '../constants';
 import { BODY_FACTOR, scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
 import { runSheet, withParams } from './index';
-import { isHardCheck, type SizingReport, type SheetDoc, type SheetResult } from './types';
+import { isHardCheck, type SheetDoc, type SheetResult } from './types';
 import {
   table,
   relErr,
@@ -43,6 +43,12 @@ import {
   vgsAtGmId,
   vgsForCurrentRatio,
   gmIdDemo,
+  block,
+  regionOf,
+  hardFailsIn,
+  declaredSaturated,
+  vthDemo,
+  vdsatDemo,
 } from './library.fixtures';
 // Test-only reach across to the condition runs: holding one sized design at a second
 // characterization is that module's transition, and one golden below asks it of a sheet.
@@ -57,49 +63,12 @@ const TWO_PI = 2 * Math.PI;
 const CL = 2e-12;
 const L = 0.5e-6; // every default sheet sizes at 0.5 µm
 
-/** One block's sizing report, by block name. */
-const block = (r: SheetResult, name: string): SizingReport =>
-  r.blocks!.find((c) => c.name === name)!.sizing!;
-
 /** One check's outcome, by id. */
 const check = (r: SheetResult, id: string) => r.checks.find((c) => c.id === id)!;
-
-/** The saturation check a device's `region` declaration adds to its own results, by block. */
-const regionOf = (
-  r: { blocks?: SheetResult['blocks'] },
-  name: string,
-): SheetResult['checks'][number] =>
-  r.blocks!.find((c) => c.name === name)!.checks.find((c) => c.id === 'region')!;
-
-/** Every hard check that fails anywhere in an evaluation, the sheet's own by id and a block's
- *  as `block.id`. */
-const hardFailsIn = (r: Pick<SheetResult, 'checks' | 'blocks'>): string[] => [
-  ...r.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
-  ...(r.blocks ?? []).flatMap((b) =>
-    b.checks
-      .filter((c) => isHardCheck(c.kind) && c.status === 'fail')
-      .map((c) => `${b.name}.${c.id}`),
-  ),
-];
-
-/** The blocks of a sheet that declare saturation, in document order. */
-const declaredSaturated = (doc: SheetDoc): string[] =>
-  (doc.blocks ?? []).filter((u) => u.doc?.givens?.region === 'saturation').map((u) => u.name);
-
-/** Threshold of the demo model at length `len`, body at the source: 0.4 V plus a term that grows
- *  with length, 0.02·ln(len/0.18 µm + 1) (src/demo/index.ts). Length moves nothing else on the
- *  gm/ID curve, so this is what carries a gate-source voltage from one length to another and
- *  what turns one into an overdrive. */
-const vthDemo = (len: number): number => 0.4 + 0.02 * Math.log(len / 0.18e-6 + 1);
 
 /** Gate-source voltage of an inversion level at length `len`, from the value the same level
  *  needs at 0.5 µm: the whole curve moves with the threshold. */
 const vgsAtLength = (vgs05: number, len: number): number => vgs05 + vthDemo(len) - vthDemo(L);
-
-/** Saturation voltage the demo model reports for a device at gate-source voltage `vgs` and
- *  length `len`, body at the source: a 2·UT floor plus the overdrive. It does not move with the
- *  drain voltage, so a device on another's gate reports its reference's. */
-const vdsatDemo = (vgs: number, len: number): number => 2 * UT + (vgs - vthDemo(len));
 
 /** What a tail device delivers of the current its reference is programmed to: the reference's
  *  width on the reference's gate, with the tail node as its drain-source voltage, so the ratio is

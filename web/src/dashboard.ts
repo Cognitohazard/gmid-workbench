@@ -429,9 +429,16 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
         else dropField(pp.solveFor !== undefined, `params[${i}].solveFor`);
         // Same stakes as solveFor: dropping a design constraint silently turns a solved node back
         // into the stale default it displays. An OBJECT field, so it needs its own shape check.
-        const constraint = pp.designConstraint as { lhs?: unknown; rhs?: unknown } | undefined;
+        // A written `held` (the engine's own flag) is carried as it is, so validation refuses it by
+        // name instead of the loader dropping it unsaid.
+        const constraint = pp.designConstraint as
+          { lhs?: unknown; rhs?: unknown; held?: unknown } | undefined;
         if (constraint && typeof constraint.lhs === 'string' && typeof constraint.rhs === 'string')
-          out.designConstraint = { lhs: constraint.lhs, rhs: constraint.rhs };
+          out.designConstraint = {
+            lhs: constraint.lhs,
+            rhs: constraint.rhs,
+            ...('held' in constraint ? { held: constraint.held as boolean } : {}),
+          };
         else dropField(pp.designConstraint !== undefined, `params[${i}].designConstraint`);
         // Same stakes again: a dropped hold leaves the node typed, and a range end would then
         // hold the node where the design holds the gate.
@@ -564,12 +571,10 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
           const ov = strMap(uu.params as Record<string, unknown>, `blocks[${i}].params`);
           if (Object.keys(ov).length) block.params = ov;
         } else if (uu.params !== undefined) lost?.push(`blocks[${i}].params`);
-        // The wires the child's device sits on, and the child's port map: carried by the core's own
-        // walk, so the keys the netlist adds are known in one place.
+        // The wires the child's device sits on, the child's port map, and the keys of the earlier
+        // format: carried by the core's own walk, so the keys the netlist adds are known in one
+        // place.
         Object.assign(block, carriedBlockWiring(uu, `blocks[${i}].`, lost));
-        for (const k of EARLIER_BLOCK_KEYS)
-          if (uu[k] !== undefined)
-            (block as unknown as Record<string, unknown>)[k] = JSON.parse(JSON.stringify(uu[k]));
         return [block];
       })
     : [];

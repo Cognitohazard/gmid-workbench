@@ -35,6 +35,30 @@ function missingInput(
 }
 
 /**
+ * Whether a forward lookup reports derived quantity `key` unasked, on a point holding what `has`
+ * holds: some form of it is computable there and reads something — a stand-in that reads nothing
+ * (γ on a table without `sth`) is not a reading of the table. The one rule behind lookup's default
+ * keys and the sizer's re-derivation at the sized width.
+ */
+export const reportsDerived = (key: string, has: (name: string) => boolean): boolean =>
+  (derivedForm(key, has)?.compiled.names.length ?? 0) > 0;
+
+/**
+ * The keys a forward lookup reports without evaluating anything: every present base column, each
+ * axis coordinate the grid does not store as a column, and every pass-through column — its default
+ * keys less the derived quantities. For a caller that re-derives at another width (the sizer),
+ * which would discard every derived value lookup computed.
+ */
+export function storedKeys(table: DeviceTable): string[] {
+  const base = baseKeysPresent(table.grid);
+  const meta = metaScalars(table.meta);
+  const axes = table.grid.axes
+    .map((a) => a.name)
+    .filter((n) => !base.includes(n) && !Object.prototype.hasOwnProperty.call(meta, n));
+  return [...base, ...axes, ...passthroughKeys(table.grid)];
+}
+
+/**
  * Forward lookup: multilinearly interpolate the stored columns at `point` (axis-space),
  * then evaluate any requested derived quantity from the interpolated base scalars.
  *
@@ -98,7 +122,7 @@ export function lookup(
     ...basePresent,
     ...axisKeys,
     ...extraPresent,
-    ...DERIVED_KEYS.filter((key) => (derivedForm(key, hasBase)?.compiled.names.length ?? 0) > 0),
+    ...DERIVED_KEYS.filter((key) => reportsDerived(key, hasBase)),
   ];
 
   // A point scope rather than a plain scalar one: a definition that reads another derived name

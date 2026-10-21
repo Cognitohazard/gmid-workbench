@@ -111,7 +111,9 @@ a signed PMOS export, and not checked, because nothing says how it scales or wha
 takes. The importer
 lists such columns as an information finding (`passthrough-columns`), so a quantity this
 exporter spells differently shows up instead of going unscaled. Its cells must still be
-numeric.
+numeric. A column named like a derived quantity (`ft`, `gm_id`, …) is kept too, but it is not a
+pass-through column: lookup and sizing compute that name from its definition, and QA flags the
+stored copy (`derived-shadow`).
 
 ## Columns
 

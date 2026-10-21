@@ -12,7 +12,7 @@ import type {
   TableId,
   TableMeta,
 } from '../types';
-import { ALIASES, BASE_KEYS } from '../namespace';
+import { ALIASES, passthroughKeys } from '../namespace';
 import { makeGrid, strides } from '../grid';
 
 // The canonical sweep-axis keys, in their conventional grid order
@@ -47,14 +47,12 @@ function detectDelimiter(header: string): string {
   return best;
 }
 
-/** Canonicalize a raw header cell -> { key, passthrough, negate }. (vbs -> vsb needs vsb = -vbs.) */
-function canonicalizeHeader(raw: string): { key: string; passthrough: boolean; negate: boolean } {
+/** Canonicalize a raw header cell -> { key, negate }: its alias, else the lower-cased header itself
+ *  — a base key, or an unknown column carried under that name. (vbs -> vsb needs vsb = -vbs.) */
+function canonicalizeHeader(raw: string): { key: string; negate: boolean } {
   const lower = raw.trim().toLowerCase();
   const negate = lower === 'vbs'; // body-source sign convention: vsb = -vbs
-  const alias = ALIASES[lower];
-  if (alias !== undefined) return { key: alias, passthrough: false, negate };
-  if (BASE_KEYS.has(lower)) return { key: lower, passthrough: false, negate: false };
-  return { key: lower, passthrough: true, negate: false };
+  return { key: ALIASES[lower] ?? lower, negate };
 }
 
 interface ParsedMeta {
@@ -279,12 +277,10 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
   headers.forEach((h, i) => colIndexByKey.set(h.key, i));
 
   // Non-axis quantity columns (canonical + passthrough), preserving header order.
-  const valueCols: { key: string; index: number; passthrough: boolean }[] = [];
-  const passthroughKeys = new Set<string>();
+  const valueCols: { key: string; index: number }[] = [];
   headers.forEach((h, i) => {
     if (AXIS_KEY_SET.has(h.key)) return;
-    valueCols.push({ key: h.key, index: i, passthrough: h.passthrough });
-    if (h.passthrough) passthroughKeys.add(h.key);
+    valueCols.push({ key: h.key, index: i });
   });
 
   // Parse data rows into numeric tuples.
@@ -419,9 +415,12 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
   }
   if (meta.extra !== undefined) mutMeta.extra = meta.extra;
 
+  // The pass-through set is the namespace's own reading of the grid, so the field and every reader
+  // of `isPassthroughKey` agree on which columns are pass-through.
+  const passthrough = passthroughKeys(grid);
   const table: DeviceTable =
-    passthroughKeys.size > 0
-      ? { id, grid, meta: tableMeta, passthrough: passthroughKeys }
+    passthrough.length > 0
+      ? { id, grid, meta: tableMeta, passthrough: new Set(passthrough) }
       : { id, grid, meta: tableMeta };
 
   const dataset: Dataset = { tables: [table], warnings: [] };

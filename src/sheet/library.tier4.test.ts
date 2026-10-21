@@ -25,18 +25,11 @@
 //     (the ratio minus one) and hold to about 1e-2 of it.
 
 import { describe, it, expect } from 'vitest';
-import { PHYS } from '../constants';
 import { scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
 import { runSheet } from './index';
 import { resolveSheetRefs } from './resolve';
-import {
-  isHardCheck,
-  withParams,
-  type SheetDoc,
-  type SheetResult,
-  type SizingReport,
-} from './types';
+import { withParams, type SheetDoc, type SheetResult } from './types';
 import {
   table,
   relErr,
@@ -57,6 +50,11 @@ import {
   cggOf,
   par,
   stage2Rout,
+  block,
+  regionOf,
+  hardFailsIn,
+  declaredSaturated,
+  vdsatDemo,
 } from './library.fixtures';
 // Test-only reach across to the condition runs: holding one sized design at a second
 // characterization is that module's transition, and the two-stage goldens below ask it of a sheet.
@@ -65,40 +63,9 @@ import { groupDevices, runConditions } from '../corners';
 /** Load a multistage sheet document by file basename. */
 const sheet = (file: string) => libSheet(`multistage/${file}.json`);
 
-/** One block's sizing report, by block name. */
-const block = (r: SheetResult, name: string): SizingReport =>
-  r.blocks!.find((c) => c.name === name)!.sizing!;
-
 /** A check's outcome, by id. */
 const statusOf = (r: SheetResult, id: string): string | undefined =>
   r.checks.find((c) => c.id === id)?.status;
-
-/** The saturation check a device's `region` declaration adds to its own results, by block. */
-const regionOf = (r: Pick<SheetResult, 'blocks'>, name: string): SheetResult['checks'][number] =>
-  r.blocks!.find((c) => c.name === name)!.checks.find((c) => c.id === 'region')!;
-
-/** Every hard check that fails anywhere in an evaluation, the sheet's own by id and a block's
- *  as `block.id`. */
-const hardFailsIn = (r: Pick<SheetResult, 'checks' | 'blocks'>): string[] => [
-  ...r.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
-  ...(r.blocks ?? []).flatMap((b) =>
-    b.checks
-      .filter((c) => isHardCheck(c.kind) && c.status === 'fail')
-      .map((c) => `${b.name}.${c.id}`),
-  ),
-];
-
-/** The blocks of a sheet that declare saturation, in document order. */
-const declaredSaturated = (doc: SheetDoc): string[] =>
-  (doc.blocks ?? []).filter((u) => u.doc?.givens?.region === 'saturation').map((u) => u.name);
-
-// --- Demo-model closed forms shared across the buffer/output goldens ---
-const UT = (PHYS.k * PHYS.T) / PHYS.q;
-const vthDemo = (L: number): number => 0.4 + 0.02 * Math.log(L / 0.18e-6 + 1);
-// vdsat depends on the overdrive vgs − vth alone. A source above the body raises the gate-source
-// voltage and the threshold by the same BODY_FACTOR·vsb, so for a device at any body bias this
-// takes the BODY-GROUNDED vgs of its inversion level, against the body-grounded threshold.
-const vdsatDemo = (vgs: number, L: number): number => 2 * UT + Math.max(vgs - vthDemo(L), 0);
 
 // --- Closed forms shared by the two-stage goldens ---
 // Every default length is 0.5 µm, so VA = 2.5 V throughout, and all three sheets default to

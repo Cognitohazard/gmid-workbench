@@ -1436,6 +1436,62 @@ test('design sheet: evaluation runs off the page — it stays responsive, says s
   expect(errors).toEqual([]);
 });
 
+test('design sheet: picking another sheet of the same title does not show the first one’s verdict while it is evaluated', async ({
+  page,
+}) => {
+  // A verdict belongs to the sheet it answers, and two sheets can share a title. Picking the
+  // second must clear the first one's verdict until its own arrives — while an edit to the same
+  // sheet keeps the last verdict on screen.
+  test.slow();
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  const asFile = (name: string, doc: object) => ({
+    name,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(doc)),
+  });
+  const input = page.locator('.load input[type=file]');
+  // A sheet with nothing to size, which answers at once, and the folded cascode OTA, which takes
+  // seconds — both titled "Twin", imported in that order.
+  await input.setInputFiles(
+    asFile('twin-light.json', {
+      title: 'Twin',
+      polarity: 'n',
+      formatVersion: 2,
+      nodes: 'none',
+      params: [{ name: 'x', value: 2 }],
+      equations: [{ name: 'y', expr: '2*x' }],
+      checks: [{ id: 'y-max', kind: 'spec', lhs: 'y', op: '<=', rhs: '10' }],
+    }),
+  );
+  await expect(page.locator('.usheets .dev', { hasText: 'twin-light' })).toBeVisible();
+  const folded = JSON.parse(readFileSync('../sheets/otas/folded-cascode-ota.json', 'utf8'));
+  await input.setInputFiles(asFile('twin-heavy.json', { ...folded, title: 'Twin' }));
+  await expect(page.locator('.usheets .dev', { hasText: 'twin-heavy' })).toBeVisible();
+
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  const sel = sp.locator('.shead select.rm');
+  const twins = await sel
+    .locator('option', { hasText: 'Twin' })
+    .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+  expect(twins).toHaveLength(2);
+
+  await sel.selectOption(twins[0]);
+  await expect(sp.locator('.feasb')).toHaveText('feasible');
+  await sel.selectOption(twins[1]);
+  // The light sheet's verdict is gone at once, though the title is the same.
+  await expect(sp.locator('.feasb')).toHaveText('evaluating…');
+  await expect(sp.locator('[data-busy]')).toHaveCount(0, { timeout: 60_000 });
+  await expect(sp.locator('.feasb')).not.toHaveText('evaluating…');
+
+  expect(errors).toEqual([]);
+});
+
 test('design sheet: where no worker can be started, the sheet is evaluated on the page instead', async ({
   page,
 }) => {

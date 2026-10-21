@@ -197,69 +197,31 @@ export const passthroughKeys = (grid: Grid): string[] =>
   [...grid.quantities.keys()].filter(isPassthroughKey);
 
 /**
- * Header alias map: lower-cased source header -> canonical key. Used by importers
- * to canonicalize column names. (The vbs -> vsb mapping additionally requires a
- * sign flip vsb = -vbs, handled in canonicalization, not here.)
+ * Header alias map: lower-cased source header -> canonical key, for the headers that are not
+ * already the key they mean. Used by importers to canonicalize column names; a header that is a
+ * base key needs no entry. (The vbs -> vsb mapping additionally requires a sign flip
+ * vsb = -vbs, handled in canonicalization, not here.)
  */
 export const ALIASES: Readonly<Record<string, string>> = {
   // currents
   ids: 'id',
   i_d: 'id',
-  id: 'id',
   // geometry
   length: 'l',
   lch: 'l',
-  l: 'l',
   width: 'w',
-  w: 'w',
   // conductances
   gout: 'gds',
   go: 'gds',
-  gds: 'gds',
-  gm: 'gm',
   gmbs: 'gmb',
-  gmb: 'gmb',
-  // capacitances — each its own key. cdd and css are self-capacitances, not the cross terms
-  // cdb and csb; capbd and capbs are BSIM4's names (in ngspice) for the junction capacitances.
-  cgg: 'cgg',
-  cgs: 'cgs',
-  cgd: 'cgd',
-  cgb: 'cgb',
-  cdd: 'cdd',
-  cdg: 'cdg',
-  cds: 'cds',
-  cdb: 'cdb',
-  css: 'css',
-  csg: 'csg',
-  csd: 'csd',
-  csb: 'csb',
-  cbb: 'cbb',
-  cbg: 'cbg',
-  cbd: 'cbd',
-  cbs: 'cbs',
-  cjd: 'cjd',
-  cjs: 'cjs',
+  // capacitances: capbd and capbs are BSIM4's names (in ngspice) for the junction capacitances.
+  // (cdd and css need no entry: they are self-capacitances, keys of their own, not the cross
+  // terms cdb and csb.)
   capbd: 'cjd',
   capbs: 'cjs',
-  // terminal charges
-  qg: 'qg',
-  qd: 'qd',
-  qs: 'qs',
-  qb: 'qb',
   // voltages
   vt: 'vth',
   vt0: 'vth',
-  vth: 'vth',
   vdssat: 'vdsat',
-  vdsat: 'vdsat',
-  vgs: 'vgs',
-  vds: 'vds',
-  vsb: 'vsb',
   vbs: 'vsb', // NB: vsb = -vbs (sign handled in canonicalization)
-  // noise / leakage
-  sth: 'sth',
-  sfl: 'sfl',
-  gamma: 'gamma',
-  igd: 'igd',
-  igs: 'igs',
 };

@@ -13,7 +13,7 @@
 // zero DOM.
 
 import { levelEligibility, spelled } from './validate';
-import { currentInto, namesOf, placementsOf, unionFind } from './nodes';
+import { currentInto, placementsOf, unionFind } from './nodes';
 import {
   DEVICE_NAMES,
   EARLIER_BLOCK_KEYS,
@@ -31,6 +31,7 @@ import {
   holds,
   isObject,
   joinProvide,
+  namesOf,
   splitProvide,
   type DeviceNodes,
   type SheetBlock,

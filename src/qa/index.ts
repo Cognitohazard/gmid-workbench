@@ -205,18 +205,19 @@ function fullDrive(grid: Grid): { at: number; where: string } | undefined {
   const where: string[] = [];
   grid.axes.forEach((a, d) => {
     const v = a.values;
+    // Whether value `x` drives harder than the best so far, chosen once for the axis: the shortest
+    // length, the largest gate and drain voltage, the body bias nearest 0, and the first node of
+    // any other axis.
+    const better: ((x: number, y: number) => boolean) | undefined =
+      a.name === 'l'
+        ? (x, y) => x < y
+        : a.name === 'vgs' || a.name === 'vds'
+          ? (x, y) => Math.abs(x) > Math.abs(y)
+          : a.name === 'vsb'
+            ? (x, y) => Math.abs(x) < Math.abs(y)
+            : undefined;
     let best = 0;
-    for (let i = 1; i < v.length; i++) {
-      const better =
-        a.name === 'l'
-          ? v[i] < v[best]
-          : a.name === 'vgs' || a.name === 'vds'
-            ? Math.abs(v[i]) > Math.abs(v[best])
-            : a.name === 'vsb'
-              ? Math.abs(v[i]) < Math.abs(v[best])
-              : false;
-      if (better) best = i;
-    }
+    if (better) for (let i = 1; i < v.length; i++) if (better(v[i], v[best])) best = i;
     at += best * st[d];
     where.push(`${a.name} = ${v[best]}`);
   });
