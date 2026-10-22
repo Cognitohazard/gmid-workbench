@@ -36,15 +36,23 @@
 
 import type { DeviceTable, QAWarning, TableId } from '../types';
 import type {
+  CheckKind,
+  CheckResult,
+  CheckStatus,
   DeviceResolver,
   NamedBinding,
   NodesReport,
+  RunOptions,
+  SheetBlockReport,
   SheetDoc,
   PointState,
   SheetRefIndex,
   SheetResult,
+  SheetSweep,
+  Settings,
 } from '../sheet';
 import {
+  SWEEP_POINTS,
   clampMargin,
   dcInputs,
   evaluateSheet,
@@ -52,7 +60,11 @@ import {
   namedBindings,
   resolvedSheet,
   stands,
+  sweepOf,
+  sweepable,
+  treeCheckResults,
   unfinishedBecause,
+  withParams,
   withValidation,
   validateSheet,
 } from '../sheet';
@@ -606,8 +618,9 @@ export function runCondition(
   key: ConditionKey,
   deviceOf: DeviceLookup,
   refs?: SheetRefIndex,
+  opts: RunOptions = {},
 ): ConditionRun {
-  return runPrepared(prepareRun(doc, refs), primaryDevice, key, deviceOf);
+  return runPrepared(prepareRun(doc, refs), primaryDevice, key, deviceOf, undefined, opts.settings);
 }
 
 /**
@@ -638,8 +651,21 @@ export function runConditions(
   deviceOf: DeviceLookup,
   refs?: SheetRefIndex,
   base?: ConditionKey,
+  opts: RunOptions = {},
 ): ConditionRun[] {
-  const prepared = prepareRun(doc, refs);
+  return runSet(prepareRun(doc, refs), primaryDevice, keys, deviceOf, base, opts.settings);
+}
+
+/** runConditions on a sheet already prepared — the one place a design is sized at one condition
+ *  and held at the others, shared by the condition runs and the held sweep (sweepAtCondition). */
+function runSet(
+  prepared: PreparedRun,
+  primaryDevice: CharacterizedDevice,
+  keys: readonly ConditionKey[],
+  deviceOf: DeviceLookup,
+  base: ConditionKey | undefined,
+  settings: Settings | undefined,
+): ConditionRun[] {
   if (keys.length === 0) return [];
   /** A condition that cannot be asked about the held design: what is wrong with THIS condition
    *  comes first — a table missing here, or a sheet that does not validate, is a fact about the
@@ -667,7 +693,7 @@ export function runConditions(
       }),
     );
 
-  const sized = runPrepared(prepared, primaryDevice, at, deviceOf);
+  const sized = runPrepared(prepared, primaryDevice, at, deviceOf, undefined, settings);
   const asked = keys.some((k) => sameCondition(k, at)) ? keys : [at, ...keys];
   if (asked.length === 1) return [sized];
 
@@ -693,9 +719,76 @@ export function runConditions(
 
   return asked.map((key): ConditionRun => {
     if (sameCondition(key, at)) return sized;
-    if (!refusal) return runPrepared(prepared, primaryDevice, key, deviceOf, held);
+    if (!refusal) return runPrepared(prepared, primaryDevice, key, deviceOf, held, settings);
     return declined(key, refusal.state, refusal.issue);
   });
+}
+
+/** A sweep taken at one condition, and whose design each sample measured (see
+ *  sweepAtCondition). */
+export interface ConditionSweep extends SheetSweep {
+  /** The condition every sample was evaluated at. */
+  readonly key: ConditionKey;
+  /** Where each sample's design was sized: `key` itself, or `base`. */
+  readonly base: ConditionKey;
+  /** `sized`: each sample sized the design at `key` with the knob at its value, and `feasible`
+   *  is that design's feasibility. `held`: each sample sized the design at `base` with the knob
+   *  at its value and held it at `key` — widths, lengths, currents and gate biases fixed, the
+   *  operating point re-settled — so its margins are that held design's there, and `feasible`
+   *  reads whether it complies at its own operating point, which is compliance, not
+   *  feasibility. */
+  readonly design: 'sized' | 'held';
+}
+
+/**
+ * Trace a sheet across one parameter's slider range at ONE condition, `key`. Without a `base`, or
+ * with `base` the same condition, each sample sizes the design at `key` — the numbers sweepSheet
+ * gives on `key`'s tables. With another `base`, each sample is the two-condition question
+ * runConditions answers: the design sized at `base` with the knob at that value, then held at
+ * `key` by the same hold (holdHardware), and the sample reads the held run. So the curve is where
+ * the design built for each knob value keeps working at `key`, and it is twice the work of a plain
+ * sweep, not one sweep per condition.
+ *
+ * A sample refused before anything ran — the base did not stand, a table is missing, the design
+ * rests on an assumed level — carries no margins; one that ran and did not complete carries what
+ * it measured with `stands` false, as a plain sweep's does. Neither is feasible, and the reason is
+ * the run's, as the condition breakdown reports it. Validation and binding collection run once
+ * for the sweep, as sweepOf validates once. Pure; never throws.
+ */
+export function sweepAtCondition(
+  doc: SheetDoc,
+  param: string,
+  primaryDevice: CharacterizedDevice,
+  key: ConditionKey,
+  deviceOf: DeviceLookup,
+  refs?: SheetRefIndex,
+  opts: RunOptions & { readonly base?: ConditionKey; readonly points?: number } = {},
+): ConditionSweep {
+  const base = opts.base ?? key;
+  const design = sameCondition(base, key) ? 'sized' : 'held';
+  const v = doc.params.find((p) => p.name === param);
+  // Prepared once, at the stand-in value sweepOf validates with; each sample swaps in its own
+  // document, which differs from it only in the swept value.
+  const prepared = prepareRun(sweepable(v) ? withParams(doc, { [param]: v.min }) : doc, refs);
+  const sweep = sweepOf(doc, param, opts.points ?? SWEEP_POINTS, refs, (d) => {
+    const runs = runSet(
+      { ...prepared, doc: d },
+      primaryDevice,
+      [key],
+      deviceOf,
+      base,
+      opts.settings,
+    );
+    const run = runs.find((r) => sameCondition(r.key, key));
+    if (!run) return { feasible: false, stands: false };
+    const evaluated = run.state === 'evaluated';
+    return {
+      ...(run.result ? { res: run.result } : {}),
+      feasible: design === 'sized' ? evaluated && run.feasible : run.points[0].state === 'complies',
+      stands: evaluated,
+    };
+  });
+  return { ...sweep, key, base, design };
 }
 
 /** A condition nothing was evaluated at: every one of its points in the one `state`, for the
@@ -734,6 +827,7 @@ function runPrepared(
   key: ConditionKey,
   deviceOf: DeviceLookup,
   held?: HeldHardware,
+  settings?: Settings,
 ): ConditionRun {
   const design = held ? 'held' : 'sized';
   if (prepared.blockers.length) return refused(prepared, key, design, 'not-run', prepared.blockers);
@@ -757,7 +851,7 @@ function runPrepared(
     held?.doc ?? prepared.doc,
     primary,
     projectingResolver(deviceOf, key),
-    { held: held !== undefined, assumed: prepared.assumptions },
+    { held: held !== undefined, assumed: prepared.assumptions, settings },
   );
   const result: SheetResult = {
     ...withValidation(prepared.warnings, evaluated),
@@ -899,15 +993,7 @@ export interface ConditionAggregate {
  * end at one corner is feasible and does not comply there — two facts, two places.
  */
 export function aggregateConditionRuns(runs: readonly ConditionRun[]): ConditionAggregate {
-  // One run per condition: the denominator is unique conditions, so a caller that passed the
-  // same key twice must not double-count it. First-wins here is a de-dup of identical
-  // repeats, not a merge policy — producing at most one run per condition is the caller's job.
-  const byKey = new Map<string, ConditionRun>();
-  for (const r of runs) {
-    const id = conditionKeyId(r.key);
-    if (!byKey.has(id)) byKey.set(id, r);
-  }
-  const unique = [...byKey.values()];
+  const unique = uniqueRuns(runs);
 
   const sized = unique.find((r) => r.design === 'sized');
   const feasibility: ConditionAggregate['feasibility'] = !sized
@@ -927,28 +1013,100 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
     'no-answer': 'noAnswer',
     'not-run': 'notRun',
   } as const;
-  let worst: ConditionAggregate['worst'] = null;
-  for (const r of unique) {
-    r.points.forEach((pt, i) => {
+  for (const r of unique)
+    for (const pt of r.points) {
       compliance[BUCKET[pt.state]]++;
       compliance.total++;
-      // Only a point whose checks were measured has a margin to quote: an `error` means its
-      // outcomes were read somewhere other than the point asked about, or not at all.
-      if (pt.error !== undefined || (pt.state !== 'complies' && pt.state !== 'does-not-comply'))
-        return;
-      // points[0] is the run's own tree; points[i] mirrors result.rangeEnds[i - 1].
-      const at = i === 0 ? r.result : r.result?.rangeEnds?.[i - 1];
-      const limiting = at && limitingCheck(at);
-      if (!limiting) return;
-      const marginPct = clampMargin(limiting.marginPct);
-      if (worst === null || marginPct < worst.marginPct)
-        worst = {
-          id: limiting.id,
-          marginPct,
-          key: r.key,
-          ...(pt.rangeEnd === undefined ? {} : { rangeEnd: pt.rangeEnd }),
-        };
-    });
+    }
+  let worst: ConditionAggregate['worst'] = null;
+  for (const { run, point, at } of measuredPoints(unique)) {
+    const limiting = limitingCheck(at);
+    if (!limiting) continue;
+    const marginPct = clampMargin(limiting.marginPct);
+    if (worst === null || marginPct < worst.marginPct)
+      worst = {
+        id: limiting.id,
+        marginPct,
+        key: run.key,
+        ...(point.rangeEnd === undefined ? {} : { rangeEnd: point.rangeEnd }),
+      };
   }
   return { feasibility, ...(sized ? { base: sized.key } : {}), compliance, worst };
+}
+
+/** One run per condition: the denominator of every fold is unique conditions, so a caller that
+ *  passed the same key twice must not double-count it. First-wins here is a de-dup of identical
+ *  repeats, not a merge policy — producing at most one run per condition is the caller's job. */
+function uniqueRuns(runs: readonly ConditionRun[]): ConditionRun[] {
+  const byKey = new Map<string, ConditionRun>();
+  for (const r of runs) {
+    const id = conditionKeyId(r.key);
+    if (!byKey.has(id)) byKey.set(id, r);
+  }
+  return [...byKey.values()];
+}
+
+/** Every point of `runs` whose checks were measured, in run order, the centre before the range
+ *  ends, with the evaluation that measured it — the one walk every margin fold reads. A point with
+ *  an `error`, or one that is not a verdict, is left out: its outcomes were read somewhere other
+ *  than the point asked about, or not at all. */
+function measuredPoints(runs: readonly ConditionRun[]): {
+  run: ConditionRun;
+  point: CompliancePoint;
+  at: { checks: readonly CheckResult[]; blocks?: readonly SheetBlockReport[] };
+}[] {
+  const out: ReturnType<typeof measuredPoints> = [];
+  for (const run of runs)
+    run.points.forEach((point, i) => {
+      if (point.error !== undefined) return;
+      if (point.state !== 'complies' && point.state !== 'does-not-comply') return;
+      // points[0] is the run's own tree; points[i] mirrors result.rangeEnds[i - 1].
+      const at = i === 0 ? run.result : run.result?.rangeEnds?.[i - 1];
+      if (at) out.push({ run, point, at });
+    });
+  return out;
+}
+
+/** Where one check comes closest to failing, or fails worst, over every measured point. */
+export interface CheckWorstPoint {
+  /** The check's tree key: its id on the sheet itself, `block.id` for a block's check. */
+  readonly id: string;
+  readonly kind: CheckKind;
+  /** Its smallest relative margin over the points, clamped like every margin comparison
+   *  (clampMargin). */
+  readonly marginPct: number;
+  /** Its status at that point. */
+  readonly status: CheckStatus;
+  /** The condition of that point. */
+  readonly key: ConditionKey;
+  /** The range end of that point; absent at the design's own operating point (the centre). */
+  readonly rangeEnd?: string;
+}
+
+/**
+ * For each check, the point where its margin is smallest — the condition, and the range end or
+ * the centre — over every point of `runs` whose checks were measured (the same points the
+ * aggregate's tightest margin is read over). Every check that produced a finite margin somewhere
+ * is listed, whatever its kind: the question is where THIS check is tightest, not whether it
+ * gates. A point where the check could not be computed (`na`) is not a reading of it. Ties go to
+ * the earlier point, in run order and the centre before the range ends. Keyed by tree key.
+ */
+export function worstPointByCheck(runs: readonly ConditionRun[]): Map<string, CheckWorstPoint> {
+  const worst = new Map<string, CheckWorstPoint>();
+  for (const { run, point, at } of measuredPoints(uniqueRuns(runs)))
+    for (const [id, c] of treeCheckResults({ checks: at.checks, blocks: at.blocks })) {
+      if (c.status === 'na' || !Number.isFinite(c.marginPct)) continue;
+      const marginPct = clampMargin(c.marginPct);
+      const seen = worst.get(id);
+      if (seen && seen.marginPct <= marginPct) continue;
+      worst.set(id, {
+        id,
+        kind: c.kind,
+        marginPct,
+        status: c.status,
+        key: run.key,
+        ...(point.rangeEnd === undefined ? {} : { rangeEnd: point.rangeEnd }),
+      });
+    }
+  return worst;
 }

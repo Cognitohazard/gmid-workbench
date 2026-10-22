@@ -8,35 +8,47 @@
 import {
   projectingResolver,
   runConditions,
+  sameCondition,
   sheetSensitivities,
+  sweepAtCondition,
   sweepSheet,
   sweepSheet2,
   tableAt,
   type CharacterizedDevice,
   type ConditionKey,
   type ConditionRun,
+  type ConditionSweep,
   type DeviceLookup,
   type DeviceTable,
+  type Settings,
   type SheetDoc,
   type SheetRefHit,
   type SheetRefIndex,
   type SheetSensitivity,
-  type SheetSweep,
   type SheetSweep2,
 } from '@gmid/mostab-core';
 
 /**
  * One evaluation the panel asks for. Each is exactly one core call:
  *  - `run`: the verdict — every asked condition, through `runConditions`;
- *  - `sweeps`: the 1-D margin chart, one sweep per condition asked (one, or the several of the
- *    multi-condition chart);
+ *  - `sweep`: the 1-D margin chart at one condition — the design sized there at every sample, or,
+ *    given a different `base`, sized at `base` and held there (`sweepAtCondition`);
  *  - `sweep2`: the 2-D feasibility map at one condition;
  *  - `sens`: the sensitivity readout at one condition.
  * A condition is always read off the primary device, and every other binding is projected to it.
+ * Every job carries the solver settings it runs under, so a changed setting is a different job.
  */
 export type SheetJob =
-  | { kind: 'run'; doc: SheetDoc; keys: ConditionKey[]; base?: ConditionKey }
-  | { kind: 'sweeps'; doc: SheetDoc; param: string; at: ConditionKey[]; points: number }
+  | { kind: 'run'; doc: SheetDoc; keys: ConditionKey[]; base?: ConditionKey; settings: Settings }
+  | {
+      kind: 'sweep';
+      doc: SheetDoc;
+      param: string;
+      at: ConditionKey;
+      base?: ConditionKey;
+      points: number;
+      settings: Settings;
+    }
   | {
       kind: 'sweep2';
       doc: SheetDoc;
@@ -44,19 +56,20 @@ export type SheetJob =
       param2: string;
       at: ConditionKey;
       points: number;
+      settings: Settings;
     }
-  | { kind: 'sens'; doc: SheetDoc; at: ConditionKey; check?: string };
+  | { kind: 'sens'; doc: SheetDoc; at: ConditionKey; check?: string; settings: Settings };
 
 export type JobKind = SheetJob['kind'];
 
-/** The conditions a job evaluates at: every condition it asks about, and the one a run sizes its
- *  design at. A table at any other condition is never evaluated by it. */
+/** The conditions a job evaluates at: every condition it asks about, and the one a run or a held
+ *  sweep sizes its design at. A table at any other condition is never evaluated by it. */
 export function jobConditions(job: SheetJob): ConditionKey[] {
   switch (job.kind) {
     case 'run':
       return job.base ? [...job.keys, job.base] : [...job.keys];
-    case 'sweeps':
-      return [...job.at];
+    case 'sweep':
+      return job.base ? [job.at, job.base] : [job.at];
     case 'sweep2':
     case 'sens':
       return [job.at];
@@ -66,7 +79,7 @@ export function jobConditions(job: SheetJob): ConditionKey[] {
 /** What each kind of job answers with. */
 export interface JobResults {
   run: ConditionRun[];
-  sweeps: { key: ConditionKey; sweep: SheetSweep }[];
+  sweep: ConditionSweep | null;
   sweep2: SheetSweep2 | null;
   sens: SheetSensitivity[] | null;
 }
@@ -82,20 +95,22 @@ export interface JobBench {
 /** Run one job. Never throws on a well-formed job: the core calls it makes do not. */
 export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): JobResults[JobKind] {
   const at = (key: ConditionKey): DeviceTable | undefined => tableAt(primary, key);
+  const { settings } = job;
   switch (job.kind) {
     case 'run':
-      return runConditions(job.doc, primary, job.keys, deviceOf, refs, job.base);
-    case 'sweeps': {
-      const out: JobResults['sweeps'] = [];
-      for (const key of job.at) {
-        const t = at(key);
-        if (!t) continue;
-        out.push({
-          key,
-          sweep: sweepSheet(job.doc, job.param, t, job.points, projectingResolver(deviceOf, key)),
+      return runConditions(job.doc, primary, job.keys, deviceOf, refs, job.base, { settings });
+    case 'sweep': {
+      const t = at(job.at);
+      if (!t) return null;
+      if (job.base && !sameCondition(job.base, job.at))
+        return sweepAtCondition(job.doc, job.param, primary, job.at, deviceOf, refs, {
+          base: job.base,
+          points: job.points,
+          settings,
         });
-      }
-      return out;
+      const resolve = projectingResolver(deviceOf, job.at);
+      const sweep = sweepSheet(job.doc, job.param, t, job.points, resolve, undefined, { settings });
+      return { ...sweep, key: job.at, base: job.at, design: 'sized' };
     }
     case 'sweep2': {
       const t = at(job.at);
@@ -107,6 +122,8 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
             t,
             job.points,
             projectingResolver(deviceOf, job.at),
+            undefined,
+            { settings },
           )
         : null;
     }
@@ -115,6 +132,7 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
       return t
         ? sheetSensitivities(job.doc, t, projectingResolver(deviceOf, job.at), {
             refs,
+            settings,
             ...(job.check !== undefined ? { check: job.check } : {}),
           })
         : null;

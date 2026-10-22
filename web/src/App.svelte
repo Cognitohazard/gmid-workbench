@@ -38,6 +38,8 @@
     type Settings,
   } from './settings';
   import { loadJSON, removeJSON, saveJSON, SIZER_KEY } from './storage';
+  import SolverSettings from './SolverSettings.svelte';
+  import { resetSolverSettings } from './solver.svelte';
   import { importSheetJSON, removeUserSheet, userSheets } from './sheetlib.svelte';
   import {
     presetDashboard,
@@ -665,6 +667,9 @@
     // The sizer's persisted problem is design data too: "forget everything" must
     // leave no retained record the UI can no longer show or delete.
     removeJSON(SIZER_KEY);
+    // So are the solver settings the bench evaluated under: clearing the bench returns them to
+    // their defaults and retains nothing.
+    resetSolverSettings();
     tables = [];
     activeIdx = 0;
     overlayIdx = [];
@@ -785,6 +790,7 @@
       onclick={() => (pickerOpen = !pickerOpen)}
       title={CONTROL_HELP.picker}>pick</button
     >{/if}
+  <SolverSettings />
   <!-- Escape-to-dismiss is a keyboard ENHANCEMENT on a natively interactive disclosure -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <details class="prefs" onkeydown={closeOnEscape}>

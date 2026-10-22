@@ -34,6 +34,7 @@
   import { SEARCHABLE_SHEETS } from './library';
   import { tableUid } from './dashboard';
   import { sheetRefIndex } from './sheetlib.svelte';
+  import { solverSettings } from './solver.svelte';
   import type { Bench } from './families';
 
   // The picker reads the bench's devices and the curated library; `onOpen` hands a chosen
@@ -84,6 +85,9 @@
    *  redesignating a child device's nominal moves what a search would find without the active
    *  table moving at all. */
   let ranRevision = $state('');
+  /** The solver settings the current results were searched under: a changed tolerance or cap
+   *  moves what a search would find, so the rows then answer the previous settings. */
+  let ranSettings = $state('');
   /** Sheets that were never searched, and why: a device the sheet needs is not characterized at
    *  the condition being searched. Reported apart from the verdicts, like a crash, because
    *  "this was not searched" is not one of the three answers a candidate gives. */
@@ -163,9 +167,11 @@
     const deviceOf = bench.deviceOf;
     const projected = projectingResolver(deviceOf, key);
     const budget = { msBudget, evalBudget };
+    const settings = solverSettings();
     ranSpec = frozen;
     ranTable = tableUid(table);
     ranRevision = bench.revision;
+    ranSettings = JSON.stringify(settings);
     results = [];
     cancelled = false;
     crashed = [];
@@ -202,6 +208,7 @@
       try {
         c = pickTopology(frozen, s, table, projected, {
           refs: index,
+          settings,
           ...budget,
           now: () => performance.now(),
         });
@@ -236,12 +243,13 @@
 
   /** The results on screen answer the spec the run STARTED with. Editing a field afterwards
    *  leaves a table that reads as an answer to the question now on the form, so say it. */
-  const staleCause = $derived.by((): 'spec' | 'bench' | null => {
+  const staleCause = $derived.by((): 'spec' | 'bench' | 'settings' | null => {
     if (results.length === 0) return null;
     if (SPEC_FIELDS.some((f) => (spec[f.name] ?? null) !== (ranSpec[f.name] ?? null)))
       return 'spec';
     const nominalUid = nominalTable ? tableUid(nominalTable) : '';
-    return nominalUid !== ranTable || bench.revision !== ranRevision ? 'bench' : null;
+    if (nominalUid !== ranTable || bench.revision !== ranRevision) return 'bench';
+    return JSON.stringify(solverSettings()) !== ranSettings ? 'settings' : null;
   });
 
   // The ordering, the partition and the coverage denominator are the core's: they are rules
@@ -462,7 +470,9 @@ one that stops the search first on a small table"
           ? 'the spec has been edited — these rows answer the previous one; search again'
           : staleCause === 'bench'
             ? 'the devices have changed — these rows answer the previous bench; search again'
-            : `feasible first · ${view.supplied} field${view.supplied === 1 ? '' : 's'} supplied`}</span
+            : staleCause === 'settings'
+              ? 'the solver settings have changed — these rows answer the previous ones; search again'
+              : `feasible first · ${view.supplied} field${view.supplied === 1 ? '' : 's'} supplied`}</span
       >
     </div>
 

@@ -32,8 +32,10 @@ import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
 import { evaluateSheet, type DeviceResolver } from './eval';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
+import type { Settings } from './settings';
 
 export * from './types';
+export * from './settings';
 export * from './legacy';
 export * from './eval';
 // Named rather than `export *`: validate.ts also exports reachedGivens, for a test that holds it
@@ -79,6 +81,12 @@ export * from './sensitivity';
 export * from './examples';
 export * from './propose';
 
+/** What a public evaluation takes besides its document and its devices. */
+export interface RunOptions {
+  /** The tolerances and caps to evaluate under (see Settings). Absent: DEFAULT_SETTINGS. */
+  readonly settings?: Settings;
+}
+
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a block's
  *  structural error) also forces the feasibility verdict false, so a structurally broken
@@ -92,6 +100,7 @@ export function runSheet(
   table?: DeviceTable,
   resolveDevice?: DeviceResolver,
   refs?: SheetRefIndex,
+  opts: RunOptions = {},
 ): SheetResult {
   // A document in a format this app does not read is opened with that reason and not evaluated —
   // nor resolved, since its blocks are written in terms this engine does not know.
@@ -99,7 +108,10 @@ export function runSheet(
   const r = resolvedSheet(doc, refs);
   const pre = [...r.warnings, ...validateSheet(r.doc)];
   const assumptions = dcInputs(r.doc).assumed;
-  const res = evaluateSheet(r.doc, table, resolveDevice, { assumed: assumptions });
+  const res = evaluateSheet(r.doc, table, resolveDevice, {
+    assumed: assumptions,
+    settings: opts.settings,
+  });
   return {
     ...withValidation(pre, res),
     feasible: res.feasible && !pre.some((w) => w.severity === 'error'),
@@ -265,20 +277,32 @@ export function rangeEndCheck(res: {
   return worstBy(treeCheckResults({ checks: [], rangeEnds: res.rangeEnds }), isFailing);
 }
 
+/** One sample of a sweep, as the caller that evaluated it reads it: the evaluation (absent where
+ *  nothing was evaluated), whether the sample counts as `feasible`, and whether it completed
+ *  (see SheetSweep.stands). */
+export interface SweepSample {
+  readonly res?: SheetResult;
+  readonly feasible: boolean;
+  readonly stands: boolean;
+}
+
 /**
- * Trace a leaf sheet across one parameter's slider range: at each of `n` evenly spaced samples,
- * override that parameter, evaluate, and collect every check's relative margin plus the overall
- * feasibility. Structural validation runs once (its result is constant across the sweep) and
- * forces every point infeasible if the doc is broken, matching `runSheet`. Returns an empty
- * sweep when `param` is not a finitely-bounded slider variable. Pure; never throws.
+ * The one way a sheet is traced across one parameter's slider range: at each of `n` evenly spaced
+ * samples, override that parameter, hand the document to `sample` to evaluate, and collect every
+ * check's relative margin plus the sample's feasibility. What "evaluate" means is the caller's —
+ * the design sized at each sample (sweepSheet), or sized at one condition and held at another
+ * (sweepAtCondition in corners) — and everything else, the check list, the range-end curves and
+ * the structural gate, is the same for both. Structural validation runs once (its result is
+ * constant across the sweep) and forces every sample infeasible if the doc is broken, matching
+ * `runSheet`. Returns an empty sweep when `param` is not a finitely-bounded slider variable.
+ * `sample` receives the resolved document with the sample's value written in.
  */
-export function sweepSheet(
+export function sweepOf(
   doc: SheetDoc,
   param: string,
-  table?: DeviceTable,
-  n = SWEEP_POINTS,
-  resolveDevice?: DeviceResolver,
-  refs?: SheetRefIndex,
+  n: number,
+  refs: SheetRefIndex | undefined,
+  sample: (doc: SheetDoc) => SweepSample,
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -320,10 +344,10 @@ export function sweepSheet(
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
     x.push(t);
-    const res = evaluateSheet(withParams(r.doc, { [param]: t }), table, resolveDevice);
-    feasible.push(!blocked && res.feasible);
+    const { res, feasible: ok, stands: done } = sample(withParams(r.doc, { [param]: t }));
+    feasible.push(!blocked && ok);
     const byPath = new Map<string, CheckResult>();
-    indexTreeResults(res.checks, res.blocks, '', byPath);
+    if (res) indexTreeResults(res.checks, res.blocks, '', byPath);
     for (const rl of checks) {
       const rr = byPath.get(rl.id);
       rl.marginPct.push(
@@ -331,12 +355,12 @@ export function sweepSheet(
       );
     }
     for (let j = 0; j < rangeEndChecks.length; j++) {
-      const rep = res.rangeEnds?.[j];
+      const rep = res?.rangeEnds?.[j];
       rangeEndChecks[j].marginPct.push(rep ? rangeEndMargin(rep) : null);
     }
     // `blocked` too: a structurally broken doc has no design at any sample, exactly as
     // `runSheet` reports it.
-    stood.push(!blocked && stands(res));
+    stood.push(!blocked && done);
   }
   return {
     param,
@@ -346,6 +370,26 @@ export function sweepSheet(
     feasible,
     stands: stood,
   };
+}
+
+/**
+ * Trace a leaf sheet across one parameter's slider range: at each of `n` evenly spaced samples,
+ * override that parameter, evaluate — the design sized afresh at that value — and collect every
+ * check's relative margin plus the overall feasibility (see sweepOf). Pure; never throws.
+ */
+export function sweepSheet(
+  doc: SheetDoc,
+  param: string,
+  table?: DeviceTable,
+  n = SWEEP_POINTS,
+  resolveDevice?: DeviceResolver,
+  refs?: SheetRefIndex,
+  opts: RunOptions = {},
+): SheetSweep {
+  return sweepOf(doc, param, n, refs, (d) => {
+    const res = evaluateSheet(d, table, resolveDevice, { settings: opts.settings });
+    return { res, feasible: res.feasible, stands: stands(res) };
+  });
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */
@@ -384,6 +428,7 @@ export function sweepSheet2(
   n = SWEEP2_POINTS,
   resolveDevice?: DeviceResolver,
   refs?: SheetRefIndex,
+  opts: RunOptions = {},
 ): SheetSweep2 {
   const px = doc.params.find((p) => p.name === paramX);
   const py = doc.params.find((p) => p.name === paramY);
@@ -421,7 +466,9 @@ export function sweepSheet2(
     const frow: boolean[] = [];
     const brow: (string | null)[] = [];
     for (let xi = 0; xi < pts; xi++) {
-      const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice);
+      const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice, {
+        settings: opts.settings,
+      });
       frow.push(!blocked && res.feasible);
       // Name the binding check — null when the cell is feasible, and also when
       // infeasibility came from something other than a failing check (sizing error, child

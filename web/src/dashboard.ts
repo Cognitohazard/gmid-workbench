@@ -245,6 +245,9 @@ export interface Panel {
   // of them a panel asks about is a property of this bench. Absent ⇒ 'nominal'.
   sheetCornerMode?: SheetCornerMode;
   sheetCornerKeys?: ConditionKey[]; // mode 'chosen': the conditions selected, structured
+  // How a single condition other than the nominal one is asked about: absent ⇒ the design is
+  // sized there; true ⇒ the nominal design is held there. Bench state, like the two above.
+  sheetCornerHold?: boolean;
   auto?: boolean; // an auto-generated canonical panel — regenerated per device on a swap, not
   // user-authored; absent on every panel the user adds, so user work survives a device swap.
 }
@@ -712,6 +715,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       // as its own not-evaluated row, which is the honest state — pruning it here would quietly
       // narrow the question the panel is asking.
       const cornerKeys = render === 'sheet' ? sanitizeConditionKeys(pp.sheetCornerKeys) : [];
+      const cornerHold = render === 'sheet' && pp.sheetCornerHold === true;
       panels.push({
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,
@@ -726,6 +730,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
         ...(sheetSweep2 ? { sheetSweep2 } : {}),
         ...(sheetCornerMode ? { sheetCornerMode } : {}),
         ...(cornerKeys.length ? { sheetCornerKeys: cornerKeys } : {}),
+        ...(cornerHold ? { sheetCornerHold: true } : {}),
         ...(pp.auto === true ? { auto: true } : {}),
       });
     }

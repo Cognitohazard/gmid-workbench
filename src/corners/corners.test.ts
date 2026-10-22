@@ -10,7 +10,15 @@ import { generateDemoDevice, scaleQuantities, VA_PER_L } from '../demo';
 import { makeGrid } from '../grid';
 import { validateDevices, validateDeviceConditions } from '../qa';
 import { loadLibrary, REFS, table as libTable, notACircuit } from '../sheet/library.fixtures';
-import { clampedIn, evaluateSheet, namedBindings, buildSheetRefIndex } from '../sheet';
+import {
+  clampedIn,
+  evaluateSheet,
+  namedBindings,
+  buildSheetRefIndex,
+  sweepable,
+  sweepSheet,
+  withParams,
+} from '../sheet';
 import { EXAMPLES } from '../sheet/examples';
 import type { CheckResult, SheetDoc, RangeEndReport, SheetResult } from '../sheet';
 import type { Axis, DeviceTable, TableMeta } from '../types';
@@ -20,9 +28,12 @@ import {
   deviceUidOf,
   groupDevices,
   preflightCondition,
+  projectingResolver,
   runCondition,
   runConditions,
   sameCondition,
+  sweepAtCondition,
+  worstPointByCheck,
   tableAt,
   conditionKeyId,
   conditionKeyOf,
@@ -1871,5 +1882,181 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
 
   it('is null when nothing was measured anywhere', () => {
     expect(aggregateConditionRuns([refusedAt('tt', 'not-run', 1, 'sized')]).worst).toBeNull();
+  });
+});
+
+describe('worstPointByCheck — where each check is tightest', () => {
+  it('names, per check, the condition and the range end where its margin is smallest', () => {
+    // The run's own check `r` is tightest at the ss centre (0.12); the range-end check `e` at
+    // the ss lo end (-0.1), where it fails.
+    const worst = worstPointByCheck([
+      ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.05), end('hi', 'complies')]),
+      ran('ss', 'held', 'complies', 0.12, [
+        end('lo', 'does-not-comply', -0.1),
+        end('hi', 'complies', 0.2),
+      ]),
+    ]);
+    expect(worst.get('r')).toEqual({
+      id: 'r',
+      kind: 'physical',
+      marginPct: 0.12,
+      status: 'pass',
+      key: key('ss'),
+    });
+    expect(worst.get('e')).toEqual({
+      id: 'e',
+      kind: 'physical',
+      marginPct: -0.1,
+      status: 'fail',
+      key: key('ss'),
+      rangeEnd: 'lo',
+    });
+  });
+
+  it('lists every check that has a margin, gating or not, a block’s by its path', () => {
+    const run = ran('tt', 'sized', 'complies', 0.4);
+    const advisory: CheckResult = { ...hardCheck(0.02, 'adv'), kind: 'advisory' };
+    const withMore: ConditionRun = {
+      ...run,
+      result: {
+        ...(run.result as SheetResult),
+        checks: [hardCheck(0.4), advisory],
+        blocks: [
+          { name: 'tail', title: 't', feasible: true, provides: {}, checks: [hardCheck(0.3, 'h')] },
+        ],
+      },
+    };
+    const worst = worstPointByCheck([withMore]);
+    expect([...worst.keys()]).toEqual(['r', 'adv', 'tail.h']);
+    expect(worst.get('adv')?.kind).toBe('advisory');
+    expect(worst.get('tail.h')?.marginPct).toBe(0.3);
+  });
+
+  it('reads nothing from a point that was not measured, or from a check that read n/a', () => {
+    const na: CheckResult = { ...hardCheck(NaN), status: 'na' };
+    const unread = ran('ss', 'held', 'no-answer', -0.9, [], 'off-hull');
+    const blank: ConditionRun = {
+      ...ran('ff', 'held', 'complies', 0.3),
+      result: { values: {}, checks: [na], feasible: false, warnings: [] },
+    };
+    const worst = worstPointByCheck([ran('tt', 'sized', 'complies', 0.4), unread, blank]);
+    expect(worst.get('r')).toMatchObject({ marginPct: 0.4, key: key('tt') });
+  });
+
+  it('gives a tie to the earlier point, the centre before a range end', () => {
+    const worst = worstPointByCheck([
+      ran('tt', 'sized', 'complies', 0.2, [end('lo', 'complies', 0.2, undefined)]),
+      ran('ss', 'held', 'complies', 0.2),
+    ]);
+    // `r` is 0.2 at both centres; `e` is 0.2 at the tt lo end only.
+    expect(worst.get('r')).toMatchObject({ key: key('tt') });
+    expect(worst.get('r')?.rangeEnd).toBeUndefined();
+  });
+
+  it('never reads a check looser than it is at the design’s own centre, on a library sheet', () => {
+    const device = soleDevice([
+      retag(libTable, 'tt', 27),
+      retag(scaleQuantities(libTable, { id: 0.85, gm: 0.85, gds: 0.85 }), 'ss', -40),
+    ]);
+    const doc = loadLibrary().find((s) => s.file === 'otas/five-transistor-ota.json')!.doc;
+    const runs = runConditions(
+      doc,
+      device,
+      [key('tt'), key('ss', -40)],
+      () => undefined,
+      REFS,
+      key('tt'),
+    );
+    const worst = worstPointByCheck(runs);
+    const centre = runs[0].result!;
+    let read = 0;
+    for (const c of centre.checks) {
+      if (c.status === 'na') continue;
+      read++;
+      expect(worst.get(c.id)!.marginPct, c.id).toBeLessThanOrEqual(c.marginPct);
+    }
+    expect(read).toBeGreaterThan(5);
+    // Some check is tightest away from the centre: the two conditions and the range matter.
+    expect([...worst.values()].some((w) => w.rangeEnd !== undefined || w.key.corner === 'ss')).toBe(
+      true,
+    );
+  });
+});
+
+describe('sweepAtCondition — one condition, sized there or held there', () => {
+  const tt = key('tt');
+  const ss = key('ss', -40);
+  const device = soleDevice([
+    retag(libTable, 'tt', 27),
+    retag(scaleQuantities(libTable, { id: 0.85, gm: 0.85, gds: 0.85 }), 'ss', -40),
+  ]);
+  const noDevices = (): undefined => undefined;
+  const doc = loadLibrary().find((s) => s.file === 'otas/five-transistor-ota.json')!.doc;
+  const param = doc.params.find((p) => sweepable(p))!.name;
+
+  it('draws exactly the plain sweep at the condition the design is sized at', () => {
+    const plain = sweepSheet(
+      doc,
+      param,
+      tableAt(device, tt),
+      4,
+      projectingResolver(noDevices, tt),
+      REFS,
+    );
+    const {
+      key: at,
+      base,
+      design,
+      ...sweep
+    } = sweepAtCondition(doc, param, device, tt, noDevices, REFS, { base: tt, points: 4 });
+    expect([at, base, design]).toEqual([tt, tt, 'sized']);
+    expect(sweep).toEqual(plain);
+    // Not vacuous: the sweep carries checks, range-end curves and samples that evaluated.
+    expect(plain.checks.some((c) => c.rangeEnd !== undefined)).toBe(true);
+    expect(plain.stands.some(Boolean)).toBe(true);
+  });
+
+  it('reads, at every sample, the design sized at the base with that value and held here', () => {
+    const swept = sweepAtCondition(doc, param, device, ss, noDevices, REFS, {
+      base: tt,
+      points: 3,
+    });
+    expect([swept.key, swept.base, swept.design]).toEqual([ss, tt, 'held']);
+    swept.x.forEach((x, i) => {
+      const [, held] = runConditions(
+        withParams(doc, { [param]: x }),
+        device,
+        [ss],
+        noDevices,
+        REFS,
+        tt,
+      );
+      expect(held.design).toBe('held');
+      for (const c of swept.checks) {
+        if (c.rangeEnd !== undefined || c.id.includes('.')) continue;
+        const r = held.result?.checks.find((k) => k.id === c.id);
+        const want = !r || r.status === 'na' || !Number.isFinite(r.marginPct) ? null : r.marginPct;
+        expect(c.marginPct[i], `${c.id} at ${x}`).toBe(want);
+      }
+      expect(swept.feasible[i]).toBe(held.points[0].state === 'complies');
+      expect(swept.stands[i]).toBe(held.state === 'evaluated');
+    });
+    // The held design is not the design sized at ss: the two sweeps differ.
+    const sizedThere = sweepAtCondition(doc, param, device, ss, noDevices, REFS, { points: 3 });
+    expect(sizedThere.design).toBe('sized');
+    expect(sizedThere.checks.map((c) => c.marginPct)).not.toEqual(
+      swept.checks.map((c) => c.marginPct),
+    );
+  });
+
+  it('carries no margins where the base cannot be evaluated, and says no sample stood', () => {
+    // The base condition is not characterized: nothing is sized, so nothing is held.
+    const swept = sweepAtCondition(doc, param, device, ss, noDevices, REFS, {
+      base: key('ff'),
+      points: 2,
+    });
+    expect(swept.stands).toEqual([false, false]);
+    expect(swept.feasible).toEqual([false, false]);
+    expect(swept.checks.every((c) => c.marginPct.every((m) => m === null))).toBe(true);
   });
 });

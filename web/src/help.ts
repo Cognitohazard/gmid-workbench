@@ -3,6 +3,8 @@
 // by the same canonical quantity keys as labels.ts / namespace.ts. Surfaced via <Help> (a small
 // "?" with a native title tooltip), so any key missing here simply shows no icon.
 
+import type { Settings } from '@gmid/mostab-core';
+
 /** Design + measured quantities, keyed by canonical quantity key. */
 export const QUANTITY_HELP: Readonly<Record<string, string>> = {
   // the gm/ID design axis and its first-order trade-offs
@@ -67,28 +69,28 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   nominal:
     'The condition this bench means by “nominal”. Sheets evaluate there by default and the topology picker always searches there. Marked “auto” when the tt-at-27 °C rule picked it and nothing has been chosen — click to pin that choice, so a later import cannot move it; click a pinned one to release it back to the rule.',
   cornerMode:
-    'Which conditions this sheet is evaluated at. Every run fixes ONE condition and evaluates the whole composition there — the primary device and every named block — because a verdict assembled from a fast input pair and a slow tail describes a chip that does not exist. nominal = the device’s designated condition; active table = whichever table is selected; chosen = the ones you tick; all = every condition loaded for this device. With one condition the design is sized there. With several it is one design: sized at the nominal condition — which joins the set if you left it out — and held at the others.',
+    'Which conditions this sheet is evaluated at. Every run fixes ONE condition and evaluates the whole composition there — the primary device and every named block — because a verdict assembled from a fast input pair and a slow tail describes a chip that does not exist. nominal = the device’s designated condition; active table = whichever table is selected; chosen = the ones you tick; all = every condition loaded for this device. With one condition the design is sized there — or, at a condition other than the nominal one, the nominal design can be held there instead (the control beside this one). With several it is one design: sized at the nominal condition — which joins the set if you left it out — and held at the others.',
   cornerDesign:
     'One design, asked about at every condition. “sized here” is the run that chose the widths — the nominal condition, or the only one asked about. “held” is that same hardware at another condition: its widths, lengths, currents and gate biases fixed, only the operating point re-settled. A corner is never allowed to re-size the design, because only one chip gets built.',
   compliance:
     'The second of two questions. Feasibility asks whether this design type can meet the spec, and is answered once, where the design is sized. Compliance asks whether that ONE design — its widths, lengths, currents and gate biases held fixed — still works everywhere it is promised to: at each condition selected, at its own operating point and at each end of the sheet’s operating range. Each of those is a point, and the badge counts them. A point either complies, fails, has no answer (it was asked and could not be answered: a solve did not land, the table does not reach that bias, or the design rests on an assumed voltage), or was not run (nothing to ask: no table at that condition, or no design to hold). The four are counted apart and never folded together, so “complies at 5 of 9” always says what happened to the other four. The tightest margin quoted below the badge is read only over points that were measured, and names the check and the point that own it.',
   wiringState:
-    'The DC wiring check of the run shown: whether the voltages and currents the sheet’s netlist states agree with the sized design — every loop of gate, drain and body voltages closes within 10 mV, every wire a held level or a device reaches, every current sum balances. “clean”: nothing to report. “N findings”: the warnings below say what, and the netlist’s own structural problems are counted too. “not evaluated”: the point has no sized design to check — a solve that did not land, a device that did not size, data read off the table — or the document carries wiring in a format that does not read it. No chip: the sheet says it is not a circuit (nodes: "none"), or names no wiring.',
+    'The DC wiring check of the run shown: whether the voltages and currents the sheet’s netlist states agree with the sized design — every loop of gate, drain and body voltages closes within the loop-closure tolerance (10 mV unless the solver settings say otherwise), every wire a held level or a device reaches, every current sum balances. “clean”: nothing to report. “N findings”: the warnings below say what, and the netlist’s own structural problems are counted too. “not evaluated”: the point has no sized design to check — a solve that did not land, a device that did not size, data read off the table — or the document carries wiring in a format that does not read it. No chip: the sheet says it is not a circuit (nodes: "none"), or names no wiring.',
   cornerOneAtATime:
-    'Only with a single condition selected. A design plane and a knob ranking are statements about one operating point, and there is no single point while several conditions are on screen.',
+    'Only where a single condition is asked about and the design is sized there. A design plane and a knob ranking are statements about one operating point the design was sized at: there is no single such point while several conditions are on screen, and a held design was not free to choose its widths.',
   sheet:
     'Load a design sheet — a small example or a curated library topology — with variables, author equations, and pass/fail checks with margins, sized on the active device.',
   assumptions:
     'Voltages this design was sized under rather than solved for: the ones the sheet marks “assumed” — an internal stack node, a guessed gate-source drop — that feed at least one device’s sizing. The sheet’s own parts determine each of them, but the sheet types a value for now instead of deriving it. The verdict holds only while those typed values are right, so they are listed with it. A voltage nothing on the sheet determines — a supply, an input level, an output held by a feedback loop outside the sheet, a voltage across a device whose surroundings are not on the sheet — is one you state, and is not listed here.',
   held: 'What this design keeps where it is held fixed and re-checked — at a range end or another condition. For a node under a transistor’s gate (a cascode’s source, a pair’s tail) it is the gate voltage that puts the node where the sheet states it, and the node is re-solved under it. For a current the design point types (an inverter’s bias), it is the balance of the two currents it sets, zero here, and the current is re-solved to keep it. A gate held this way stands in for a bias line that never moves, where a real bias branch would move it with the corner, so every held run says its figures are approximate there (the ⚠ on a range-end chip or a held condition’s row).',
   feasBadge:
-    'Can this design type meet the spec — on the device and at the condition the design is sized at, with the current variables? Feasible = every hard check (physical + spec) passes there; advisory checks never gate it. When it is not, the badge names the binding check: the failing hard check with the worst margin, anywhere in the composition (a child’s check is shown by path). Nothing that happens at another condition or at an end of the operating range moves this badge — that is compliance, counted beside it. “No answer” means the evaluation started and did not complete; “not evaluated” means it never started.',
+    'Can this design type meet the spec — on the device and at the condition the design is sized at, with the current variables? A design sized at a condition other than the nominal one says so (“sized at ss@125”), since it is not the design the nominal condition would build. Feasible = every hard check (physical + spec) passes there; advisory checks never gate it. When it is not, the badge names the binding check: the failing hard check with the worst margin, anywhere in the composition (a child’s check is shown by path). Nothing that happens at another condition or at an end of the operating range moves this badge — that is compliance, counted beside it. “No answer” means the evaluation started and did not complete; “not evaluated” means it never started.',
   sensitivity:
     'Which knob to turn. For the check the badge names (or, on a feasible design, the check failing at a range end if one is, else the one with the least room left), this ranks the design choices by how far each moves that check’s margin over one small step of its own value — up and down shown separately, since a knob is rarely symmetric and an equality check genuinely differs on the two sides. It is a snapshot: each knob costs two full re-evaluations of the whole sheet, so it is taken when you ask and retired as soon as you change the design.',
   evaluating:
     'This sheet is evaluated in the background, so the page stays responsive while it runs. The numbers on screen are the last finished answer and update when the next one arrives; an edit made in the meantime cancels the run it makes out of date.',
   sheetSweep:
-    'Sweep one variable across its range and chart every check’s margin — the region where the design is feasible.',
+    'Sweep one variable across its range and chart every check’s margin at one condition — the region where the design is feasible, or, at a condition the design is held at, where that one design still complies.',
   sheetSweep2:
     'Add a second variable to sweep the design plane: a feasibility heatmap (green = feasible, red = a hard check fails) instead of the 1-D margin chart.',
   blockDevice:
@@ -97,7 +99,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   checkKind:
     'physical = a hard physical floor; spec = a hard application spec — both must hold for a feasible design. advisory = shown, never blocks.',
   amber:
-    'The check holds but by under 5% margin — a near-miss worth a look. A spec set by its own givens snaps to amber instead of coin-flipping pass/fail on rounding.',
+    'The check holds but by less than the near-miss margin (5 % unless the solver settings say otherwise) — a near-miss worth a look. A spec set by its own givens snaps to amber instead of coin-flipping pass/fail on rounding.',
   checkNa:
     'na = a side could not be computed (an undeclared name or a non-finite value). Never a silent pass: a hard check reading na fails the design closed.',
   provide:
@@ -130,6 +132,18 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Two different questions get asked of a sheet, and this strip answers the second one. Is the design FEASIBLE — can this design type meet the spec at all? The sweeps and the picker’s search work that way, free to re-size the devices while they look. Does it COMPLY — does the design you have right now still work at the ends of the range it claims (e.g. CM_dc = CM_lo, then CM_hi)? Every transistor is held exactly as this run sized it and only the bias re-settles, so a chip describes THIS instance and moves as you turn the knobs. Every hard check must hold at each end. The two answers are never folded: a range end that does not comply leaves the feasibility badge green and is counted in the compliance badge beside it. A ✓ chip shows where the bias landed; a ✗ chip names the check that fails there — and that often yields to re-centering rather than to a bigger device, so read the sensitivity ranking before spending area. A ? chip is no answer: the question was asked and could not be answered — a solve did not land, the table does not reach that bias, or the design rests on an assumed voltage — and it says which. A – chip was not run: the current settings produce no design to hold.',
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
+  exampleSpec:
+    'The specification this sheet opens with — supply, load and the targets it is checked against. Each target is a plausible number for a circuit of this class, chosen so the example evaluates; it is not a requirement of the circuit or of any application. Replace every one with your design’s own before reading a verdict as yours.',
+  worstAt:
+    'Where this check comes closest to failing, or fails worst, over every point the design was measured at: each condition on the page, at the design’s own operating point and at each end of the operating range. Points that were not run or could not be answered are not read.',
+  sweepAt:
+    'The condition the chart is drawn at. At the condition the design is sized at, each sample re-sizes the design with the knob at that value. At another condition, each sample sizes the design at the nominal condition with the knob at that value and holds it here — widths, lengths, currents and gate biases fixed — so the curves are that one design’s margins here.',
+  cornerHold:
+    'How a single condition other than the nominal one is asked about. “sized where asked” sizes the design at that condition, as if it were the one being built. “hold the nominal design here” sizes it at the nominal condition and holds that hardware at this one — widths, lengths, currents and gate biases fixed, the operating point re-settled — and reports whether it still complies here.',
+  solverSettings:
+    'The tolerances and caps every sheet evaluation and the topology picker run under. Each starts at the value the engine was built and tested with; a changed one is kept in this browser only, marked here and on every sheet panel, and can be reset alone or with the rest. Clearing the bench resets them too.',
+  solverNonDefault:
+    'At least one solver setting differs from its default, so these numbers can differ from the same sheet evaluated with the defaults. The settings page (the header’s solver button) lists which.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
   size: 'Sizing: bind an operating point (gm/ID, f_T, or gm/g_ds) and a size (I_D, gm, or W) at a chosen L → width, V_GS, the remaining figures of merit, and feasibility.',
   bind: 'Enter exactly two of gm/ID, f_T, gm/g_ds, I_D, gm, W; everything else — including the geometry — is solved at this L.',
@@ -156,4 +170,46 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'The table is characterized at ONE width; sizing scales it per-µm, and width effects (model bins, narrow-width V_th shifts) are NOT captured — a single wide finger can be off by tens of percent in moderate inversion. Realize the result as this many fingers of the characterization width, which tracks the table. The count is rounded, so the realized total (shown with its deviation) can differ from the sized W — materially at small counts.',
   avth: 'Pelgrom V_th matching coefficient A_Vth (mV·µm): σ(V_th) ≈ A_Vth/√(W·L). The default is a generic placeholder — replace it with your PDK\u2019s measured value.',
   abeta: 'Pelgrom current-factor matching coefficient A_β (%·µm).',
+};
+
+/** The solver settings page: each setting's name, the unit its value is in (none for a count or a
+ *  plain fraction), and what it decides, in one sentence. Keyed by the core's Settings fields. */
+export const SOLVER_HELP: Readonly<
+  Record<keyof Settings, { label: string; unit: string; text: string }>
+> = {
+  solveTolRel: {
+    label: 'solve tolerance',
+    unit: '',
+    text: 'How close a solved value must land to its answer, as a fraction of the range it is searched in.',
+  },
+  solveSweeps: {
+    label: 'rounds for linked unknowns',
+    unit: '',
+    text: 'How many rounds of one-at-a-time searches a group of solved values that depend on each other gets before the sheet reports that they did not settle.',
+  },
+  solveEvaluations: {
+    label: 'evaluation budget',
+    unit: '',
+    text: 'How many evaluations one design, with all of its blocks, may spend on its searches before it stops and says the budget ran out.',
+  },
+  inwardSteps: {
+    label: 'steps in from a range edge',
+    unit: '',
+    text: 'How many times a search halves its way in from an end of its range where nothing can be evaluated, looking for the nearest point that can.',
+  },
+  kclTolRel: {
+    label: 'current-balance tolerance',
+    unit: '',
+    text: 'How large the currents meeting at a wire may fail to add up to zero, as a fraction of the largest of them, before the wiring check reports it.',
+  },
+  closureTol: {
+    label: 'loop-closure tolerance',
+    unit: 'V',
+    text: 'How far apart two statements of one voltage may be — around a wiring loop, or between two placements of one device — before the wiring check reports that they disagree.',
+  },
+  nearMiss: {
+    label: 'near-miss margin',
+    unit: '',
+    text: 'A check that passes by less than this fraction of its limit is marked as a near miss (amber).',
+  },
 };

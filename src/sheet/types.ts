@@ -10,6 +10,7 @@ import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '.
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
 import { additiveCoefficient } from '../expr';
+import { formatQuantity } from '../units';
 
 /** How a name is spelt: a param, an equation, a wire, an element. */
 export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -1182,6 +1183,84 @@ export interface RangeEndReport {
  *  does not reach, has no honest verdict, and inventing one (either way) is what these two
  *  states exist to prevent. */
 export type PointState = 'complies' | 'does-not-comply' | 'no-answer' | 'not-run';
+
+/**
+ * Every declared range end, named the way a reader is told it: the quantity and value its `set`
+ * fixes, then which end of the claimed range it is — `CM_dc = 900 mV, the low end of the claimed
+ * CM_dc range`. The ONE place a range end is put into words, because its bare name (`cm-lo`) says
+ * which end and not where it is, and a reader comparing two conditions needs the where.
+ *
+ * Each value is the one the run resolved (`reports`, RangeEndReport.set) where it has one; else an
+ * expression that is a number, or names a param of the sheet the engine does not solve, reads that
+ * value; else the expression is quoted as written. Which end: among the ends that fix the same
+ * quantity, the one with the lowest value is the low end and the one with the highest the high
+ * end. An end that is neither — the only one, a tie, one in between, a value not known — says its
+ * authored name instead (`CM_dc = 1.2 V, range end cm-mid`). An end that fixes several quantities
+ * names them all and is placed by the first. Keyed by the end's name; every declared end has an
+ * entry.
+ */
+export function rangeEndNames(
+  doc: Pick<SheetDoc, 'params' | 'operatingRange'>,
+  reports: readonly Pick<RangeEndReport, 'name' | 'set'>[] = [],
+): Map<string, string> {
+  const ends = Array.isArray(doc.operatingRange) ? doc.operatingRange : [];
+  const params = new Map((Array.isArray(doc.params) ? doc.params : []).map((p) => [p.name, p]));
+  const valueOf = (expr: string, resolved: number | undefined): number | undefined => {
+    if (resolved !== undefined && Number.isFinite(resolved)) return resolved;
+    const text = String(expr).trim();
+    const literal = text === '' ? NaN : Number(text);
+    if (Number.isFinite(literal)) return literal;
+    const p = params.get(text);
+    return p && !engineSolved(p) && Number.isFinite(p.value) ? p.value : undefined;
+  };
+  const fixed = ends.map((e) => {
+    const report = reports.find((r) => r.name === e.name);
+    return Object.entries(isObject(e.set) ? e.set : {}).map(([param, expr]) => ({
+      param,
+      expr: String(expr),
+      value: valueOf(String(expr), report?.set[param]),
+    }));
+  });
+  const names = new Map<string, string>();
+  ends.forEach((e, i) => {
+    const first = fixed[i][0];
+    const peers = first
+      ? fixed.flatMap((f) => f.filter((q) => q.param === first.param && q.value !== undefined))
+      : [];
+    const values = peers.map((q) => q.value as number);
+    const once = (v: number): boolean => values.filter((w) => w === v).length === 1;
+    const lo = Math.min(...values);
+    const hi = Math.max(...values);
+    const end =
+      first?.value === undefined || values.length < 2 || lo === hi
+        ? undefined
+        : first.value === lo && once(lo)
+          ? 'low'
+          : first.value === hi && once(hi)
+            ? 'high'
+            : undefined;
+    const quantities = fixed[i].map(({ param, expr, value }) =>
+      value === undefined
+        ? `${param} = ${expr}`
+        : `${param} = ${formatQuantity(value, params.get(param)?.unit)}`,
+    );
+    const which = end
+      ? `the ${end} end of the claimed ${first.param} range`
+      : `range end ${e.name}`;
+    names.set(e.name, [...quantities, which].join(', '));
+  });
+  return names;
+}
+
+/** A message with every range end it quotes (`range end "cm-lo"`, the spelling the engine's
+ *  messages use) followed by that end's name from rangeEndNames, so a warning that quotes an end
+ *  says where it is. Ends `names` does not know are left as they are. */
+export function namingRangeEnds(message: string, names: ReadonlyMap<string, string>): string {
+  return message.replace(/range end "([^"]*)"/g, (quoted, name: string) => {
+    const named = names.get(name);
+    return named === undefined ? quoted : `${quoted} (${named})`;
+  });
+}
 
 export type CheckStatus = 'pass' | 'amber' | 'fail' | 'na';
 

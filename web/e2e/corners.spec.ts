@@ -269,6 +269,12 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // Two badges: feasibility stamped with where it was asked, compliance as a count of points.
   await expect(sp.locator('.feasb')).toHaveText('feasible at tt');
   await expect(sp.locator('[data-compliance]')).toHaveText('complies at 1 of 2 points · 1 fail');
+  // Every check row says where that check is tightest over the points measured: the gain target
+  // is missed where the design is held, at its own operating point.
+  await expect(sp.locator('[data-worst-at="gain-spec"]')).toContainText(
+    /^worst -\d+% at ss@-40, its own operating point$/,
+  );
+  await sp.locator('.srules').screenshot({ path: `${SCREENS}/corner-worst-per-check.png` });
 
   // A child bound to a device that is not characterized at every condition: that condition is
   // NOT EVALUATED and says which device is missing — never counted as a design that fails.
@@ -301,9 +307,26 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await condition(page, 'ss@-40', 'nmos_demo').locator('.dname').click();
   await expect(sp.locator('.scorntab')).toHaveCount(0);
   await expect(sp.locator('.scond')).toHaveText('at ss@-40');
-  await expect(sp.locator('.feasb')).toContainText('infeasible');
+  // Sized at a corner, the badge says so: this is not the nominal design.
+  await expect(sp.locator('.feasb')).toHaveText(/^infeasible · sized at ss@-40/);
   await expect(sp.locator('[data-compliance]')).toHaveCount(0);
   await expect(sp.locator('.sensb')).toBeEnabled();
+
+  // The other way to ask about one corner: hold the nominal design there. It is sized at tt and
+  // held at ss — the same two rows several conditions give — and the badge says it is the nominal
+  // design, held, with its answer there.
+  await expect(sp.locator('[data-corner-hold]')).toHaveValue('size');
+  await sp.locator('[data-corner-hold]').selectOption('hold');
+  await expect(sp.locator('.feasb')).toHaveText(/^nominal design held at ss@-40: does not comply/);
+  await expect(sp.locator('.scorntab tr')).toHaveCount(2);
+  await expect(sp.locator('[data-corner-row="tt"] .cdes')).toHaveText('sized here');
+  await expect(sp.locator('[data-corner-row="ss@-40"] .cdes')).toHaveText('held');
+  await expect(sp.locator('[data-compliance]')).toHaveText('complies at 1 of 2 points · 1 fail');
+  await expect(sp.locator('.sstamp')).toContainText('sized at tt, held at ss@-40');
+  // A knob ranking is about a design free to choose its widths, which a held one is not.
+  await expect(sp.locator('.sensb')).toBeDisabled();
+  await sp.locator('[data-corner-hold]').selectOption('size');
+  await expect(sp.locator('.feasb')).toHaveText(/^infeasible · sized at ss@-40/);
 
   await page.screenshot({ path: `${SCREENS}/corner-breakdown.png`, fullPage: true });
   expect(errors).toEqual([]);
@@ -589,6 +612,137 @@ test('picker: the search names its condition and goes stale when the bench moves
   // moved at all. The rows on screen are answers about the old bench, and they say so.
   await condition(page, 'ss@-40').locator('.dnom').click();
   await expect(pk.locator('[data-stale]')).toContainText('the devices have changed');
+
+  expect(errors).toEqual([]);
+});
+
+test('sheet panel: the sweep chart is drawn at one condition — sized there, or the nominal design held there', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  await condition(page, 'tt').locator('.dname').click();
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  const caption = sp.locator('[data-sweep-caption]');
+
+  // At the nominal condition every sample re-sizes the design there.
+  await sp.locator('.swsel select').first().selectOption('gm_id');
+  await expect(caption).toHaveAttribute('data-sweep-design', 'sized');
+  await expect(caption).toContainText('at tt — sized there: each sample re-sizes the design at tt');
+  await expect(sp.locator('.feas')).toContainText('feasible gm_id');
+
+  // Several conditions: still one chart, at the condition picked beside the sweep — the one the
+  // design is sized at until another is picked. No curve per condition, no condition legend.
+  await sp.locator('[data-corner-mode]').selectOption('all');
+  await expect(sp.locator('[data-sweep-at]')).toHaveValue(/tt/);
+  await expect(caption).toHaveAttribute('data-sweep-design', 'sized');
+  await expect(sp.locator('.skey')).not.toContainText('ss@-40');
+  // Picked at the other condition, each sample sizes the design at tt and holds it at ss.
+  await sp.locator('[data-sweep-at]').selectOption({ label: 'ss@-40 (held)' });
+  await expect(caption).toHaveAttribute('data-sweep-design', 'held', { timeout: 30_000 });
+  await expect(caption).toContainText(
+    'at ss@-40 — the nominal design held there: each sample sizes the design at tt with gm_id at that value and holds it at ss@-40',
+  );
+  await expect(sp.locator('.feas')).toContainText('the held design complies at ss@-40');
+
+  // One corner asked about alone: sized where asked by default, so the chart re-sizes there too;
+  // holding the nominal design there makes it the held chart.
+  await sp.locator('[data-corner-mode]').selectOption('active');
+  await condition(page, 'ss@-40').locator('.dname').click();
+  await expect(sp.locator('.feasb')).toHaveText(/sized at ss@-40/);
+  await expect(caption).toHaveAttribute('data-sweep-design', 'sized', { timeout: 30_000 });
+  await expect(caption).toContainText('each sample re-sizes the design at ss@-40');
+  await sp.locator('[data-corner-hold]').selectOption('hold');
+  await expect(sp.locator('.feasb')).toHaveText(/^nominal design held at ss@-40/);
+  await expect(caption).toHaveAttribute('data-sweep-design', 'held', { timeout: 30_000 });
+  await expect(caption).toContainText('holds it at ss@-40');
+
+  // The hold mode is bench state: it survives a reload.
+  await page.reload();
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  await condition(page, 'ss@-40').locator('.dname').click();
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('[data-corner-hold]')).toHaveValue('hold');
+  await expect(sp2.locator('.feasb')).toHaveText(/^nominal design held at ss@-40/);
+
+  await expect(sp2.locator('[data-sweep-caption]')).toHaveAttribute('data-sweep-design', 'held', {
+    timeout: 30_000,
+  });
+  await sp2.locator('.pchart').scrollIntoViewIfNeeded();
+  await sp2.screenshot({ path: `${SCREENS}/sweep-held.png` });
+  expect(errors).toEqual([]);
+});
+
+test('solver settings: a changed setting is shown, marked on the panel, kept across a reload, and reset', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('[data-solver-nondefault]')).toHaveCount(0);
+
+  // The page lists every setting with its default; nothing is changed or stored yet.
+  const open = () => page.locator('details.solver > summary').click();
+  await open();
+  const pop = page.locator('[data-solver-settings]');
+  await expect(pop.locator('[data-setting]')).toHaveCount(7);
+  await expect(pop.locator('[data-setting="nearMiss"]')).toContainText('default 0.05');
+  await expect(pop.locator('[data-changed]')).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('gmid.solver'))).toBeNull();
+
+  // Widen the near-miss margin: the panel re-evaluates under it and says it is not the default.
+  const field = pop.locator('[data-setting="nearMiss"] input');
+  await field.fill('0.5');
+  await field.press('Enter');
+  await expect(pop.locator('[data-setting="nearMiss"] [data-changed]')).toBeVisible();
+  await expect(sp.locator('[data-solver-nondefault]')).toBeVisible();
+  await expect(sp.locator('[data-solver-nondefault]')).toHaveAttribute(
+    'title',
+    /near-miss margin: 0\.5 \(default 0\.05\)/,
+  );
+  // A value outside its limits is held to the nearest one it can take.
+  const sweeps = pop.locator('[data-setting="solveSweeps"] input');
+  await sweeps.fill('99');
+  await sweeps.press('Enter');
+  await expect(sweeps).toHaveValue('20');
+
+  // Kept across a reload, and still marked.
+  await page.reload();
+  await loadDemo(page);
+  const sp2 = page.locator('.grid .panel').last();
+  await expect(sp2.locator('[data-solver-nondefault]')).toBeVisible();
+  await open();
+  await expect(pop.locator('[data-setting="nearMiss"] input')).toHaveValue('0.5');
+  await expect(pop.locator('[data-changed]')).toHaveCount(2);
+  await page.screenshot({ path: `${SCREENS}/solver-settings.png`, fullPage: true });
+
+  // Reset one, then all: the marker goes, and nothing is retained.
+  await pop.locator('[data-setting="solveSweeps"] button.reset').click();
+  await expect(pop.locator('[data-changed]')).toHaveCount(1);
+  await expect(sp2.locator('[data-solver-nondefault]')).toBeVisible();
+  await pop.locator('[data-reset-all]').click();
+  await expect(pop.locator('[data-changed]')).toHaveCount(0);
+  await expect(sp2.locator('[data-solver-nondefault]')).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('gmid.solver'))).toBeNull();
+
+  // Clearing the bench clears them too.
+  await field.fill('0.2');
+  await field.press('Enter');
+  await expect(sp2.locator('[data-solver-nondefault]')).toBeVisible();
+  await page.locator('.dclear').click();
+  expect(await page.evaluate(() => localStorage.getItem('gmid.solver'))).toBeNull();
+  await expect(pop.locator('[data-changed]')).toHaveCount(0);
 
   expect(errors).toEqual([]);
 });

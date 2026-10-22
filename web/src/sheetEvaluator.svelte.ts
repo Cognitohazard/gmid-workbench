@@ -40,7 +40,7 @@ import {
 } from './sheetjobs';
 
 /** The order queued jobs run in: the verdict first, because everything on the panel reads it. */
-const PRIORITY: readonly JobKind[] = ['run', 'sens', 'sweeps', 'sweep2'];
+const PRIORITY: readonly JobKind[] = ['run', 'sens', 'sweep', 'sweep2'];
 
 /** How long a superseded job may keep running before it is cancelled, in ms, counted from when
  *  its worker had loaded. About what an ordinary sheet takes, and well under the seconds a large

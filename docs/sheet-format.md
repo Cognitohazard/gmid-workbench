@@ -503,7 +503,7 @@ Each check reports one of four statuses:
 | Status | Meaning |
 |-|-|
 | `pass` | Holds with margin. |
-| `amber` | Holds, but by less than 5% relative margin — a near-miss worth a second look. |
+| `amber` | Holds, but by less than 5% relative margin (the near-miss margin, see [Solver settings](#solver-settings)) — a near-miss worth a second look. |
 | `fail` | Does not hold (negative margin). |
 | `na` | A side could not be computed (an undeclared name, an eval error, or a non-finite value). |
 
@@ -955,8 +955,9 @@ propagates what they determine in one pass; it never solves for a value that wou
   fixed canonical order — the two wires, the kind, then the device and terminal pair — so the
   verdict never depends on the order anything was written in. Each relation the tree leaves out
   closes a loop, and its **residual** is that loop's misfit, in volts.
-- **Closes, or does not.** A block closes when every residual is within 10 mV (`NODE_TOL`) — the
-  resolution bias plans are written to. Its **closure error** is its largest residual. That is all the
+- **Closes, or does not.** A block closes when every residual is within 10 mV (the loop-closure
+  tolerance, see [Solver settings](#solver-settings)) — the resolution bias plans are written to.
+  Its **closure error** is its largest residual. That is all the
   closure error is: the largest misfit of a loop in this canonical basis. It is not an uncertainty
   on any level. A path through several loops can add their misfits, so inside a block that closes,
   a level read along another path can differ by more than 10 mV; each derived level is reported
@@ -969,8 +970,9 @@ propagates what they determine in one pass; it never solves for a value that wou
   flowing into the wire — an n device draws its current in at the drain and returns it at the
   source, a p device the other way, and an element as below — and reports the signed sum. One
   terminal alone on a wire is its whole current: a device whose current has nowhere to go. At a
-  wire nothing holds, a sum past 0.1 % of the largest current there (below what interpolation
-  between table nodes resolves) is raised: a current with nowhere to go, or one current given to two
+  wire nothing holds, a sum past 0.1 % of the largest current there (the current-balance
+  tolerance; below it is what interpolation between table nodes cannot resolve) is raised: a
+  current with nowhere to go, or one current given to two
   devices, as when one drawn input transistor carries half a tail current whose other half no device
   draws. At a held wire the sum is what the ideal source holding it supplies. Where currents arrive
   and leave — an output the application holds — a sum past 0.1 % is raised as "an ideal source
@@ -1207,11 +1209,37 @@ floor: the core is SI throughout, so a solved parameter is as likely to be a cap
 The architecture finds every unknown by a one-unknown search inside the range its author states,
 and never solves a node set. What keeps that boundary is the search rule itself, not a count of
 solved parameters: parameters that read each other are settled only by repeating their searches a
-fixed number of times (six sweeps, below), and a set still moving after them is reported, not
-iterated further. Nested solves also share one evaluation budget for the whole composed tree
-(10 000 evaluations of any document in it), since a parent's every probe re-solves each child and
-the cost would otherwise multiply with depth; a solve that runs out of it says so, and says that it
-was not shown to be unsolvable.
+fixed number of times (six sweeps by default, below), and a set still moving after them is
+reported, not iterated further. Nested solves also share one evaluation budget for the whole
+composed tree (10 000 evaluations of any document in it, by default), since a parent's every probe
+re-solves each child and the cost would otherwise multiply with depth; a solve that runs out of it
+says so, and says that it was not shown to be unsolvable.
+
+### Solver settings
+
+The tolerances and caps the engine evaluates under are one `Settings` value, and every public
+evaluation takes it as an option — `evaluateSheet(doc, table, resolver, { settings })`,
+`runSheet(…, refs, { settings })`, `sweepSheet`, `sweepSheet2`, `runCondition`, `runConditions`,
+`sweepAtCondition`, `sheetSensitivities` (`opts.settings`) and `pickTopology` (`opts.settings`).
+Nothing reads a global: an evaluation given no settings uses `DEFAULT_SETTINGS`, the values every
+golden is pinned at, and one given values outside their limits (`SETTINGS_LIMITS`) uses the nearest
+value inside them (`settingsFrom`). In the app they are set on the solver settings page reached from
+the header, kept in the browser's local storage, and reset there one at a time or all at once; a
+sheet panel marks its header whenever any differs from its default.
+
+| setting | default | limits | what it decides |
+|-|-|-|-|
+| `solveTolRel` | `1e-6` | `1e-12`–`1e-2` | How close a solved parameter must land to its root, as a fraction of the range it is searched in. |
+| `solveSweeps` | `6` | `1`–`20` | How many sweeps a set of solved parameters that read each other gets before the solve reports that they did not settle. |
+| `solveEvaluations` | `10000` | `100`–`1000000` | How many evaluations one composed tree may spend on its searches before it stops and says the budget ran out. |
+| `inwardSteps` | `8` | `0`–`30` | How many times a search halves its way in from an end of its range where the relation does not evaluate. |
+| `kclTolRel` | `1e-3` | `0`–`1` | How large a wire's current sum may be, as a fraction of the largest current there, before the wiring check raises it. |
+| `closureTol` | `0.01` V | `0`–`1` V | How far apart two statements of one voltage may be — around a loop, or between two placements of one sizing — before the wiring check says they disagree. |
+| `nearMiss` | `0.05` | `0`–`1` | The relative margin below which a passing check reads `amber`. |
+
+The sweep cap is a cap stated before the solve starts, never "until it converges", so raising it
+cannot turn the bounded repetition into iterating a coupled set until something gives; that is why
+its limit is small.
 
 ### Consequences for checks and sweeps
 
@@ -1349,8 +1377,10 @@ sits at the value it landed on — is within its tolerance: each member within 1
 its range of its root, by its slope, given where the others ended up. The library's pairs settle in
 one sweep at the design point and in two or three where the hardware is held; the 5T on a low-
 threshold table, held at 125 °C and asked at the top of its common-mode range, takes four. The
-number of sweeps is fixed at six, never tuned: a set still moving after six depends on itself too
-strongly for repeated one-unknown searches, and the solve says so — `did not settle in 6 sweeps`,
+number of sweeps is a cap stated before the solve starts — six by default (`solveSweeps`, see
+[Solver settings](#solver-settings)) — never "until it converges": a set still moving after six
+depends on itself too strongly for repeated one-unknown searches, and the solve says so — `did not
+settle in 6 sweeps`,
 naming the members and the largest move in the last sweep, in its own unit — rather than iterating
 further. Every member starts at the middle of its range, never at its stored value, so the answer
 does not depend on what the sheet was saved with.
@@ -1667,6 +1697,15 @@ Two views trace a sheet across parameter ranges (both need finitely-bounded slid
   is feasible. In a composed sweep, each descendant block's hard checks ride along with
   path-prefixed ids (`cs.headroom`), so the constraint that actually binds is on the chart wherever
   it lives.
+- **One-parameter sweep at one condition** — `sweepAtCondition(doc, param, device, key,
+  deviceOf, refs?, { base?, points?, settings? })` traces the same curves at one characterization
+  condition. Without a `base`, or with `base` the same condition, each sample sizes the design
+  there — the numbers `sweepSheet` gives on that condition's tables. With another `base`, each
+  sample sizes the design at `base` with the knob at its value and holds it at `key` — widths,
+  lengths, currents and gate biases fixed, the operating point re-settled, exactly as a condition
+  run holds it — so the curves are the held design's margins there and its `feasible` reads
+  whether that design complies at its own operating point. The result says which (`design:
+  "sized" | "held"`).
 - **Two-parameter sweep** — the design-plane map over two params' ranges (the `gm_id × L` plane
   is the classic), answering questions a 1-D cut cannot: "what is the minimum `L` that stays
   feasible across the whole `gm_id` range?" Each infeasible cell names the worst failing hard

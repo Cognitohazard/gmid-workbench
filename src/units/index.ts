@@ -148,6 +148,15 @@ export function formatSI(x: number, sig = 4): string {
   return formatLadder(x, sig, SI_SUFFIXES);
 }
 
+/** A value with its unit as a reader reads one: the SI prefix joined to the unit and set off from
+ *  the number — `900 mV`, `10 µA`. A dimensionless value (no unit, or `1`) is the number alone. */
+export function formatQuantity(x: number, unit?: string): string {
+  const s = formatSI(x);
+  if (!unit || unit === '1') return s;
+  const m = /^(-?[\d.]+(?:e[+-]?\d+)?)(\D*)$/.exec(s);
+  return m ? `${m[1]} ${m[2]}${unit}` : `${s} ${unit}`;
+}
+
 /** Round a positive value to `sig` significant figures. */
 function roundSig(v: number, sig: number): number {
   if (v === 0) return 0;

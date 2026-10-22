@@ -52,6 +52,7 @@ import { assumedLevelRefusal, heldGateWarnings, holdHardware, type HeldHardware 
 // on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004).
 import { shown } from './linear';
 import { dcInputs, solvePlan, solvedRelation } from './validate';
+import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
   amps,
   axisDirection,
@@ -88,8 +89,9 @@ import type {
  *  Absent ⇒ children inherit the parent's table. */
 export type DeviceResolver = (id: string) => DeviceTable | undefined;
 
-/** A check passing by a smaller relative margin than this reads as a near-miss (amber). */
-export const AMBER_BAND = 0.05; // 5% of the bound
+/** A check passing by a smaller relative margin than this reads as a near-miss (amber): the
+ *  default of Settings.nearMiss, 5% of the bound. */
+export const AMBER_BAND = DEFAULT_SETTINGS.nearMiss;
 
 /** Floor for the relative-margin denominator so a zero bound cannot divide by zero. */
 const TINY = 1e-300;
@@ -108,7 +110,7 @@ const NO_WARN = (): void => {};
  * check ON its own boundary by construction: a spec set by its own givens (given
  * gm = 2π·GBW·CL, then check GBW >= GBW_target) lands within floating-point rounding, and
  * a range end lands CM_in within the constraint's landing tolerance of the very range end
- * the check compares it against (SOLVE_TOL_REL x the stated range's span, stretched by the
+ * the check compares it against (Settings.solveTolRel x the stated range's span, stretched by the
  * relation's slope — microvolts on a volt-scale node, ~1e-6 relative). Without the snap
  * either verdict is a coin flip. 1e-5 covers the constraint case with margin while staying two
  * orders below the ~0.1% the sizer resolves between grid nodes — a check "failing" by
@@ -838,25 +840,35 @@ function runSizing(
   }
 }
 
-/** Evaluate one check's two sides and classify into a signed-margin CheckResult. */
+/** Evaluate one check's two sides and classify into a signed-margin CheckResult; `nearMiss` is
+ *  the margin below which a pass reads amber (Settings.nearMiss). */
 function evalCheck(
   check: SheetDoc['checks'][number],
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
+  nearMiss: number,
 ): CheckResult {
   const text = `${check.lhs} ${check.op} ${check.rhs}`;
   const lhs = evalScalar(check.lhs, values, scope, warn, `check "${check.id}" lhs`);
   const rhs = evalScalar(check.rhs, values, scope, warn, `check "${check.id}" rhs`);
-  return classify({ id: check.id, kind: check.kind, op: check.op, text }, lhs, rhs, check.tolPct);
+  return classify(
+    { id: check.id, kind: check.kind, op: check.op, text },
+    lhs,
+    rhs,
+    nearMiss,
+    check.tolPct,
+  );
 }
 
 /** A check's two sides, already evaluated, as a signed-margin CheckResult — the one reading of a
- *  comparison that authored checks and the engine's own region check share. */
+ *  comparison that authored checks and the engine's own region check share. A pass by a relative
+ *  margin under `nearMiss` reads amber. */
 function classify(
   check: Pick<CheckResult, 'id' | 'kind' | 'op' | 'text'>,
   lhs: number | undefined,
   rhs: number | undefined,
+  nearMiss: number,
   tolPct?: number,
 ): CheckResult {
   const lhsValue = lhs ?? NaN;
@@ -914,7 +926,7 @@ function classify(
     status = 'amber';
   else if (check.op === '==')
     status = 'pass'; // '==' is pass/fail only — no near-miss (amber) band
-  else status = marginPct < AMBER_BAND ? 'amber' : 'pass';
+  else status = marginPct < nearMiss ? 'amber' : 'pass';
   return { ...base, margin, marginPct, rawMargin, status };
 }
 
@@ -935,6 +947,7 @@ function regionCheck(
   b: SheetGivens,
   sizing: SizingReport | undefined,
   point: RegionPoint,
+  nearMiss: number,
 ): CheckResult {
   const op: CheckOp = b.region === 'triode' ? '<=' : '>=';
   const check = {
@@ -944,7 +957,7 @@ function regionCheck(
     text: `abs(vds) ${op} vdsat`,
   };
   const na = (detail: string): CheckResult => ({
-    ...classify(check, undefined, undefined),
+    ...classify(check, undefined, undefined, nearMiss),
     detail,
   });
   if (b.region !== 'saturation' && b.region !== 'triode')
@@ -961,7 +974,7 @@ function regionCheck(
     // that size below zero, whichever region was declared.
     const margin = -Math.abs(point.vds);
     return {
-      ...classify(check, Math.abs(point.vds), point.vdsat),
+      ...classify(check, Math.abs(point.vds), point.vdsat, nearMiss),
       lhsValue: point.vds * point.axis,
       margin,
       rawMargin: margin,
@@ -973,7 +986,7 @@ function regionCheck(
         `the table does not characterize`,
     };
   }
-  return classify(check, Math.abs(point.vds), point.vdsat);
+  return classify(check, Math.abs(point.vds), point.vdsat, nearMiss);
 }
 
 /**
@@ -1068,7 +1081,7 @@ function applyBlockParams(
  * the rolled-up error warning + the children-feasibility fold in evaluateSheet.
  */
 function evalBlocks(
-  { doc: parent, table, resolveDevice, depth, budget }: NodeRef,
+  { doc: parent, table, resolveDevice, depth, budget, settings }: NodeRef,
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
@@ -1142,7 +1155,15 @@ function evalBlocks(
       wired: blockWires(parent, block) !== undefined || readsParentSelector(parent, block),
       flattened: flattened(srcDoc),
     };
-    const res = evaluateChild(srcDoc, childDoc, childTable, resolveDevice, depth + 1, budget);
+    const res = evaluateChild(
+      srcDoc,
+      childDoc,
+      childTable,
+      resolveDevice,
+      depth + 1,
+      budget,
+      settings,
+    );
 
     // Roll up child warnings, attributed to the block (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
@@ -1216,10 +1237,11 @@ function evaluateChild(
   resolveDevice: DeviceResolver | undefined,
   depth: number,
   budget: SolveBudget,
+  settings: Settings,
 ): SheetResult {
   const values = doc.params.map((p) => p.value);
   if (!values.every((v) => typeof v === 'number'))
-    return evaluateNode(doc, table, resolveDevice, depth, { budget });
+    return evaluateNode(doc, table, resolveDevice, depth, { budget, settings });
   // String(v) tells every two numbers apart but the two zeros, which are kept apart here.
   const key =
     `${objectId(src)}|${table ? objectId(table) : 0}|${depth}|` +
@@ -1230,7 +1252,7 @@ function evaluateChild(
     return known.res;
   }
   const counted = budget.counted;
-  const res = evaluateNode(doc, table, resolveDevice, depth, { budget });
+  const res = evaluateNode(doc, table, resolveDevice, depth, { budget, settings });
   if (budget.left > 0) budget.children.set(key, { res, cost: budget.counted - counted });
   return res;
 }
@@ -1257,7 +1279,7 @@ const PENDING_WIRING = new WeakMap<SheetBlockReport, PendingWiring>();
  * (see unwalkedReport). A child's findings are attributed to its block path and follow the tree's
  * own warnings; an error among them fails the child, every block above it, and the tree closed.
  */
-function finishWiring(res: SheetResult, sized: boolean): SheetResult {
+function finishWiring(res: SheetResult, sized: boolean, settings: Settings): SheetResult {
   if (!res.blocks?.length) return res;
   const extra: QAWarning[] = [];
   const visit = (
@@ -1279,6 +1301,7 @@ function finishWiring(res: SheetResult, sized: boolean): SheetResult {
           { ...pending.res, ...(out.blocks ? { blocks: out.blocks } : {}), warnings: [] },
           pending.table,
           pending.mode,
+          settings,
         );
         const at = [...path, report.name];
         for (const w of walked.warnings) extra.push(prefixBlockPath(at, w));
@@ -1308,13 +1331,15 @@ function finishWiring(res: SheetResult, sized: boolean): SheetResult {
 }
 
 /** One node of a sheet tree as it is evaluated: its document, its table, how its children find
- *  theirs, how deep it sits, and the tree's shared evaluation budget. */
+ *  theirs, how deep it sits, the tree's shared evaluation budget, and the settings the whole tree
+ *  is evaluated under. */
 interface NodeRef {
   doc: SheetDoc;
   table: DeviceTable | undefined;
   resolveDevice: DeviceResolver | undefined;
   depth: number;
   budget: SolveBudget;
+  settings: Settings;
 }
 
 /**
@@ -1379,9 +1404,10 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
 
   // 5. Checks → signed margins, then the checks the engine adds (engineChecks): the region the
   //    givens declare, which is this device's own.
-  const checks = doc.checks.map((check) => evalCheck(check, values, scope, warn));
+  const { nearMiss } = node.settings;
+  const checks = doc.checks.map((check) => evalCheck(check, values, scope, warn, nearMiss));
   if (doc.givens && engineChecks(doc.givens).length)
-    checks.push(regionCheck(doc.givens, sizing, sized?.point ?? {}));
+    checks.push(regionCheck(doc.givens, sizing, sized?.point ?? {}, nearMiss));
 
   // 6. Overall feasibility, fail-closed: declared givens sized successfully, every HARD check
   //    (physical = physical floor, spec = application spec) holds (pass or near-miss),
@@ -1406,18 +1432,9 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
   };
 }
 
-/**
- * How close a solved param must be to its root, relative to the param's STATED range — not to its
- * value, which never closes a relative test when the root sits at 0. 1e-6 resolves a volt-scale
- * node to a microvolt. It is one tolerance, in the param's own terms, everywhere it is used: the
- * search's bracket closes to it, and "the relation reads within tolerance" means the relation
- * reads no more than its local slope times it — the param is within SOLVE_TOL_REL of the span of
- * its root. Measuring in the param's terms rather than the relation's is what keeps a steep
- * relation honest: an exponential reads a large number a hair off its root, and a small one on a
- * flat stretch far from it. The search's interpolation steps converge faster than halving near the
- * root, so these last digits cost a probe or two, not one probe each.
- */
-export const SOLVE_TOL_REL = 1e-6;
+/** How close a solved param must be to its root, as a fraction of its stated range: the default
+ *  of Settings.solveTolRel, which says why. */
+export const SOLVE_TOL_REL = DEFAULT_SETTINGS.solveTolRel;
 
 /** The least a held expression may move across its range, as a fraction of what its own param's
  *  term moves. For a node under a gate the rest of the expression is a gate-source voltage, which
@@ -1427,33 +1444,9 @@ export const SOLVE_TOL_REL = 1e-6;
  *  this. */
 const HOLD_SLOPE_MIN = 1e-6;
 
-/**
- * How many times a search halves its way in from an end of the stated range where the relation
- * does not evaluate — a device with no headroom there, a lookup out of range, a refused device —
- * toward a point where it does. Such an end says the circuit has no operating point there, not
- * that the search failed, so the search moves to the nearest point that evaluates and searches
- * what is left. Eight halvings place that point within 1/256 of the range of the edge — a few
- * millivolts on a volt-scale node, finer than any author states a range to — for at most eight
- * evaluations per end.
- */
-const INWARD_STEPS = 8;
-
-/**
- * How many sweeps a set of solved params that depend on each other gets. One sweep searches each
- * member in turn, with the others at their current values; the set has settled when every
- * member's relation, read from the sweep's last evaluation, is within its tolerance (see settle).
- * The library's dependent pairs — a tail node and the split of the pair standing on it, in the 5T
- * and the two-stage Miller OTA — settle in one sweep at the design point and in two or three where
- * the hardware is held: each relation reads the other unknown only through a weak second-order
- * effect, so every sweep shrinks what is left by orders of magnitude. The most any library case
- * needs is four: the 5T on sky130's low-threshold device, held at 125 C and asked at the top of
- * its common-mode range. Six leaves that case a margin without changing what the number means.
- * It is FIXED rather than tuned, because it is the line the scope rule draws: a set still moving
- * after this many sweeps depends on itself strongly enough that repeating searches until
- * something gives would be iterating a coupled system to convergence, and the engine reports it
- * instead.
- */
-export const SOLVE_SWEEPS = 6;
+/** How many sweeps a set of solved params that depend on each other gets: the default of
+ *  Settings.solveSweeps, which says why. */
+export const SOLVE_SWEEPS = DEFAULT_SETTINGS.solveSweeps;
 
 /** Probes one search may spend, approximately — a backstop far above what a search needs on a
  *  finite range (the interpolation steps fall back to halving whenever they stop gaining, so
@@ -1462,16 +1455,9 @@ export const SOLVE_SWEEPS = 6;
  *  a closed bracket, can carry one search a few tens of probes past it. */
 const SEARCH_MAX_PROBES = 200;
 
-/**
- * The evaluations one composed tree may spend, counted per evaluation of any document in it — a
- * probe of a three-child sheet costs four, less any child whose inputs the probe did not move,
- * which is read back from earlier in the tree and costs none (see evaluateChild). A search costs a
- * few tens of evaluations, a set that depends on each other a few searches per sweep, and a child
- * solves inside every evaluation of its parent, so nesting multiplies: the ceiling is there so a
- * deep tree of solved params stops with a reason instead of running for minutes. The library's
- * costliest tree (the folded-cascode OTA, at the sky130 process conditions) spends about 1,500.
- */
-export const SOLVE_EVALUATIONS = 10000;
+/** The evaluations one composed tree may spend: the default of Settings.solveEvaluations, which
+ *  says why. */
+export const SOLVE_EVALUATIONS = DEFAULT_SETTINGS.solveEvaluations;
 
 /** The evaluations left to one composed evaluation, shared by every node of the tree, and the
  *  children it has evaluated so far (see evaluateChild). */
@@ -1504,7 +1490,8 @@ function solveFailed(res: SheetResult, failure: SolveFailure): SheetResult {
  * below the top of a tree (composed children, solver probes, the range-end runs themselves),
  * goes through evaluateNode — which structurally has no range branch, so "range ends evaluate
  * only at the top" holds with no runtime guard to maintain. `opts.held` marks a held design asked
- * about at another condition (see EvaluateOptions).
+ * about at another condition, and `opts.settings` gives the tolerances and caps the whole
+ * evaluation runs under (see EvaluateOptions).
  */
 export function evaluateSheet(
   authored: SheetDoc,
@@ -1520,8 +1507,14 @@ export function evaluateSheet(
   // diode diagonal like one that says so (see structuralDiodes) — stated before anything sizes.
   const doc = structuralDiodes(authored);
   // One list of assumed inputs for the whole question: the caller's, or else the document's own,
-  // so the centre and the range ends of one evaluation never read two different lists.
-  const asked: EvaluateOptions = opts.assumed ? opts : { ...opts, assumed: dcInputs(doc).assumed };
+  // so the centre and the range ends of one evaluation never read two different lists. The
+  // settings are read once here, held to their limits, and every node, solve, range end and
+  // wiring walk of the evaluation reads that one value.
+  const asked: EvaluateOptions = {
+    ...opts,
+    assumed: opts.assumed ?? dcInputs(doc).assumed,
+    settings: settingsFrom(opts.settings ?? DEFAULT_SETTINGS),
+  };
   // Array.isArray, not truthiness: evaluate never throws, and a malformed doc (operatingRange as a
   // string or object — validation's problem) must degrade to a plain evaluation, not a
   // TypeError out of .map.
@@ -1539,6 +1532,8 @@ export interface EvaluateOptions {
    *  compliance answer, though its wiring is still checked (see pointOutcome), and no range end is
    *  run. Absent, the document's own list is read, so the centre and the range ends agree. */
   assumed?: readonly string[];
+  /** The tolerances and caps to evaluate under (see Settings). Absent: DEFAULT_SETTINGS. */
+  settings?: Settings;
 }
 
 /** How one node of a tree is evaluated (see evaluateNode): the tree's evaluation budget, and, at
@@ -1565,6 +1560,7 @@ function evaluateNode(
   depth: number,
   opts: NodeOptions = {},
 ): SheetResult {
+  const settings = opts.settings ?? DEFAULT_SETTINGS;
   const solved = withHeld(
     doc,
     solveNode({
@@ -1572,7 +1568,8 @@ function evaluateNode(
       table,
       resolveDevice,
       depth,
-      budget: opts.budget ?? { left: SOLVE_EVALUATIONS, counted: 0, children: new Map() },
+      budget: opts.budget ?? { left: settings.solveEvaluations, counted: 0, children: new Map() },
+      settings,
     }),
   );
   if (depth > 0) return solved;
@@ -1581,8 +1578,8 @@ function evaluateNode(
     ? { ...solved, warnings: [...solved.warnings, ...heldGates] }
     : solved;
   const point = pointOutcome(res, opts.held === true, opts.assumed);
-  if (!point.sized) return { ...withoutWalk(doc, finishWiring(res, false)), point };
-  const out = withNodes(doc, finishWiring(res, true), table, STANDALONE);
+  if (!point.sized) return { ...withoutWalk(doc, finishWiring(res, false, settings)), point };
+  const out = withNodes(doc, finishWiring(res, true, settings), table, STANDALONE, settings);
   // The point was classified before the wiring was read; a selector the table contradicts then
   // leaves the run infeasible, so a centre that complied does not.
   const raised = out.warnings.slice(res.warnings.length).find((w) => w.severity === 'error');
@@ -1744,11 +1741,11 @@ const outOfBudget = (f: SolveFailure): boolean => f.kind === 'not-settled' && f.
  * the first probe to the last and the answer is a function of the range and the relation alone.
  *
  * Every way it can end is one of the three outcomes a solve reports:
- *  - a root reached: the bracket closed to SOLVE_TOL_REL of the stated span, and the relation at
- *    the accepted point reads within its tolerance by the slope just outside the bracket (a jump
- *    fails this: beside a step the relation barely moves, so the slope there leaves no room for
- *    the step's height); or an end of the range reads within its tolerance of zero by the slope
- *    there, and is the root;
+ *  - a root reached: the bracket closed to Settings.solveTolRel of the stated span, and the
+ *    relation at the accepted point reads within its tolerance by the slope just outside the
+ *    bracket (a jump fails this: beside a step the relation barely moves, so the slope there
+ *    leaves no room for the step's height); or an end of the range reads within its tolerance of
+ *    zero by the slope there, and is the root;
  *  - no solution found in the range: the relation does not change sign across what was searched
  *    and neither end is within its tolerance of zero (none, or an even number, of roots), jumps
  *    across the target, does not appear to depend on the param at all, or (held) does not single
@@ -1756,8 +1753,8 @@ const outOfBudget = (f: SolveFailure): boolean => f.kind === 'not-settled' && f.
  *  - not settled: nothing of the range could be evaluated, the sign changes across a stretch
  *    inside the bracket that does not evaluate, the shared budget ran out (here or in a child a
  *    probe evaluated), or the probe backstop was hit.
- * An end where the relation does not evaluate is stepped inward (INWARD_STEPS) before any of that,
- * and a point inside the bracket that does not evaluate is stepped round the same way,
+ * An end where the relation does not evaluate is stepped inward (Settings.inwardSteps) before any
+ * of that, and a point inside the bracket that does not evaluate is stepped round the same way,
  * silently; a failure's message quotes the range actually searched. `also` are the other members
  * of a set searched together; a message says where they stood, because an answer about this
  * unknown is an answer at those values.
@@ -1946,7 +1943,8 @@ interface Searcher {
 
 function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Searcher {
   const name = u.p.name;
-  const tol = SOLVE_TOL_REL * (u.hi - u.lo);
+  const { solveTolRel, inwardSteps, solveEvaluations } = ctx.settings;
+  const tol = solveTolRel * (u.hi - u.lo);
   let probes = 0;
   let last: SheetResult | undefined;
   /** A failed search, carrying `at` — the evaluation that shows why — or else the last one. */
@@ -1982,7 +1980,7 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
     probes: () => probes,
     inward(bad, good) {
       // Each midpoint becomes the new `good` when it evaluates and the new `bad` when it does not.
-      for (let k = 0; k < INWARD_STEPS; k++) {
+      for (let k = 0; k < inwardSteps; k++) {
         const m = probe((bad.x + good.x) / 2);
         if (!m) return undefined;
         if (m.g === undefined) bad = m;
@@ -2004,7 +2002,7 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
       unsettled(
         'budget',
         `${u.what} in ${rangeOf(u, u.lo, u.hi)} stopped before it settled because the design's ` +
-          `shared evaluation budget (${SOLVE_EVALUATIONS} evaluations) ran out — spent by the ` +
+          `shared evaluation budget (${solveEvaluations} evaluations) ran out — spent by the ` +
           `solves each of its probes re-runs, or by an expensive sibling elsewhere in the tree. ` +
           `It was not shown to be unsolvable`,
       ),
@@ -2177,10 +2175,10 @@ function acceptClosed(
  *
  * A sign change across the bracket is evidence of a root, so a point inside it that does not
  * evaluate is a hole to step around, never a verdict. Halve from it toward each end of the bracket
- * to the nearest point that evaluates (INWARD_STEPS each way), and go on in a half that still
- * changes sign — b's first. When neither does, the sign changes somewhere between the two points
- * found, and halving may have stepped over a stretch that evaluates (one stretch that does not,
- * then another): search between them once more, narrower than before. Only when a later probe
+ * to the nearest point that evaluates (Settings.inwardSteps each way), and go on in a half that
+ * still changes sign — b's first. When neither does, the sign changes somewhere between the two
+ * points found, and halving may have stepped over a stretch that evaluates (one stretch that does
+ * not, then another): search between them once more, narrower than before. Only when a later probe
  * falls back inside a stretch already stepped round, with neither half changing sign again, is the
  * crossing taken to be out of reach — and that is not shown to be no solution.
  */
@@ -2215,29 +2213,34 @@ function stepAround(
   );
 }
 
-/** An unknown's tolerance in its relation's units: its slope at the root times SOLVE_TOL_REL of
- *  its range. A relation read within it puts the param within SOLVE_TOL_REL of the span of its
- *  root, by the slope its last search read. */
-const tolOf = (u: Unknown, slope: Record<string, number>): number =>
-  slope[u.p.name] * SOLVE_TOL_REL * (u.hi - u.lo);
+/** An unknown's tolerance in its relation's units: its slope at the root times `tolRel`
+ *  (Settings.solveTolRel) of its range. A relation read within it puts the param within that
+ *  fraction of the span of its root, by the slope its last search read. */
+const tolOf = (u: Unknown, slope: Record<string, number>, tolRel: number): number =>
+  slope[u.p.name] * tolRel * (u.hi - u.lo);
 
 /** Whether an unknown's relation, read from an evaluation, is within its tolerance (tolOf) — the
  *  test a settled set and a verified node both apply. */
-function holdsAt(u: Unknown, res: SheetResult, slope: Record<string, number>): boolean {
+function holdsAt(
+  u: Unknown,
+  res: SheetResult,
+  slope: Record<string, number>,
+  tolRel: number,
+): boolean {
   const g = relationAt(u, res);
-  return g !== undefined && Math.abs(g) <= tolOf(u, slope);
+  return g !== undefined && Math.abs(g) <= tolOf(u, slope, tolRel);
 }
 
 /**
  * Settle a set of solved params that depend on each other by repeating one-unknown searches: each
- * sweep searches every member in document order with the others at their current values. Never
- * more than SOLVE_SWEEPS sweeps: a set still moving after them is reported, naming its members and
- * the largest move of the last sweep, rather than iterated further. `slope` collects each member's
- * slope at its root from its last search, which the node's verification reads.
+ * sweep searches every member in document order with the others at their current values. Never more
+ * than Settings.solveSweeps sweeps: a set still moving after them is reported, naming its members
+ * and the largest move of the last sweep, rather than iterated further. `slope` collects each
+ * member's slope at its root from its last search, which the node's verification reads.
  *
  * The set has settled when every member's relation, read from the sweep's last evaluation — where
  * every member sits at the value it landed on — is within its tolerance: each member is within
- * SOLVE_TOL_REL of the span of its root, by its slope, given where the others ended up. That
+ * Settings.solveTolRel of the span of its root, by its slope, given where the others ended up. That
  * evaluation then IS a simultaneous answer, and a confirming sweep would only land every search
  * where it already is.
  *
@@ -2252,9 +2255,10 @@ function settle(
   set: readonly Unknown[],
   slope: Record<string, number>,
 ): Outcome {
+  const { solveSweeps, solveTolRel } = ctx.settings;
   let res: SheetResult | undefined;
   let moves: number[] = [];
-  for (let sweep = 0; sweep < SOLVE_SWEEPS; sweep++) {
+  for (let sweep = 0; sweep < solveSweeps; sweep++) {
     moves = set.map(() => 0);
     // On the first sweep a member that finds nothing — no root, or nothing that evaluates — was
     // searched with members it reads still at the middle of their ranges. It is put back at the
@@ -2305,7 +2309,7 @@ function settle(
     }
     // `res` is the last member's accepted probe, evaluated with every other member at the value
     // it landed on in this sweep.
-    if (set.every((u) => holdsAt(u, res as SheetResult, slope)))
+    if (set.every((u) => holdsAt(u, res as SheetResult, slope, solveTolRel)))
       return { ok: true, res: res as SheetResult };
   }
   // The largest move relative to the member's own range, quoted in its own unit.
@@ -2320,7 +2324,8 @@ function settle(
       unknowns: set.map((o) => o.p.name),
       why: 'sweeps',
       message:
-        `solved params ${nameList(set)} did not settle in ${SOLVE_SWEEPS} sweeps: in the last ` +
+        `solved params ${nameList(set)} did not settle in ${solveSweeps} ` +
+        `${solveSweeps === 1 ? 'sweep' : 'sweeps'}: in the last ` +
         `one ${set[worst].p.name} still moved by ${valueOf(set[worst], moves[worst])} — they ` +
         `depend on each other too strongly for repeated one-unknown searches to settle them in ` +
         `their stated ranges`,
@@ -2345,10 +2350,11 @@ function settle(
  * stored value is a display default and nothing more.
  *
  * Outcome 1 — settled — is reported only after VERIFICATION: every solved param's relation, read
- * from the evaluation that is returned, within its tolerance — each param within SOLVE_TOL_REL of
- * the span of its root, by the slope its search read. That evaluation is the last accepted probe of
- * the last set, which was evaluated with every solved param at its final value, so no extra
- * evaluation is needed to read it; a relation a missed dependency left behind would show here.
+ * from the evaluation that is returned, within its tolerance — each param within
+ * Settings.solveTolRel of the span of its root, by the slope its search read. That evaluation is
+ * the last accepted probe of the last set, which was evaluated with every solved param at its final
+ * value, so no extra evaluation is needed to read it; a relation a missed dependency left behind
+ * would show here.
  */
 function solveNode(node: NodeRef): SheetResult {
   const { doc } = node;
@@ -2389,9 +2395,10 @@ function solveNode(node: NodeRef): SheetResult {
   }
 
   const final = last as SheetResult;
+  const { solveTolRel } = node.settings;
   const off = unknowns
-    .filter((u) => !holdsAt(u, final, slope))
-    .map((u) => ({ u, g: relationAt(u, final), tol: tolOf(u, slope) }));
+    .filter((u) => !holdsAt(u, final, slope, solveTolRel))
+    .map((u) => ({ u, g: relationAt(u, final), tol: tolOf(u, slope, solveTolRel) }));
   if (off.length)
     return solveFailed(final, {
       kind: 'not-settled',
@@ -2405,7 +2412,7 @@ function solveNode(node: NodeRef): SheetResult {
             ({ u, g, tol }) =>
               `${u.lhs} - (${u.rhs}) ${g === undefined ? 'does not evaluate' : `reads ${g.toExponential(3)}`}` +
               ` against a tolerance of ${tol.toExponential(3)} (its slope there times ` +
-              `${SOLVE_TOL_REL} of its range)`,
+              `${solveTolRel} of its range)`,
           )
           .join('; ') +
         ` — the values it was solved with moved after it landed`,
@@ -2459,7 +2466,8 @@ function evaluateWithRange(
     return { ...base, rangeEnds: reports, complies: false };
   }
   const held = holdHardware(doc, base);
-  const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice));
+  const settings = opts.settings ?? DEFAULT_SETTINGS;
+  const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice, settings));
   return { ...base, rangeEnds: reports, complies: reports.every((r) => r.state === 'complies') };
 }
 
@@ -2589,6 +2597,7 @@ function runRangeEnd(
   base: SheetResult,
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
+  settings: Settings,
 ): RangeEndReport {
   // Copied per report rather than shared: the transformation allocates one list for the whole
   // document, and a consumer that sorted or de-duplicated one report's copy in place would be
@@ -2625,7 +2634,10 @@ function runRangeEnd(
       `range end "${rangeEnd.name}": no nominal value was recorded for the held expression of ` +
         held.unheld.join(', '),
     );
-  const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0, { held: true });
+  const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0, {
+    held: true,
+    settings,
+  });
   const { state, error: err } = res.point as PointOutcome;
   // The solved map is "where the range end LANDED" — a run with an `error` (a solve that never
   // landed, data read somewhere else) leaves values that must not be reported as a landing.

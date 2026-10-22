@@ -24,7 +24,7 @@
 import type { DeviceTable, QAWarning, Scope } from '../types';
 import { compileExpr } from '../derive';
 import { scalarScope } from '../expr';
-import { formatSI } from '../units';
+import { formatQuantity } from '../units';
 import { CONSTANTS } from '../constants';
 import {
   ANALYSIS_SHAPES,
@@ -79,24 +79,15 @@ import {
   selectorRoot,
   type Poly,
 } from './linear';
+import { DEFAULT_SETTINGS, type Settings } from './settings';
 
-/**
- * How far apart two statements of one voltage may be before they disagree: 10 mV, absolute and in
- * the voltage domain. It is the resolution bias plans are written to, and an order of magnitude
- * below the disagreements a wiring check exists to catch — two gates sized hundreds of millivolts
- * apart on one wire. One constant, read by the loop residuals and by the rule that decides whether
- * several placements share one operating point.
- */
-export const NODE_TOL = 0.01;
+/** How far apart two statements of one voltage may be before they disagree [V]: the default of
+ *  Settings.closureTol, 10 mV, which says why. */
+export const NODE_TOL = DEFAULT_SETTINGS.closureTol;
 
-/**
- * How large a wire's current residual may be, as a fraction of the largest current meeting there,
- * before it is raised as a warning. Below about 0.1 % the sizer cannot tell two currents apart
- * — it interpolates between table nodes to roughly that resolution — so a smaller residual says
- * nothing a table can resolve. Every residual is reported in the check's data whatever its size;
- * this decides only which ones are raised.
- */
-export const KCL_TOL_REL = 1e-3;
+/** How large a wire's current residual may be, as a fraction of the largest current meeting there,
+ *  before it is raised as a warning: the default of Settings.kclTolRel, which says why. */
+export const KCL_TOL_REL = DEFAULT_SETTINGS.kclTolRel;
 
 /** How a wire is spelt: an identifier, without the separator that joins a child's names to its
  *  block. */
@@ -1385,8 +1376,14 @@ function treePathRels(
 }
 
 /** One block's spanning tree, grown breadth-first from `root` taking relations in key order, with
- *  every chord's residual and fundamental cycle. */
-function spanBlock(g: WalkGraph, edges: number[], wires: string[], root: string): WalkBlock {
+ *  every chord's residual and fundamental cycle; it closes when every residual is within `tol`. */
+function spanBlock(
+  g: WalkGraph,
+  edges: number[],
+  wires: string[],
+  root: string,
+  tol: number,
+): WalkBlock {
   const phi = new Map<string, number>([[root, 0]]);
   const phiSym = new Map<string, Poly>([[root, new Map()]]);
   const parent = new Map<string, { wire: string; rel: WalkRelation }>();
@@ -1440,7 +1437,7 @@ function spanBlock(g: WalkGraph, edges: number[], wires: string[], root: string)
     phi,
     parent,
     chords,
-    consistent: closureError <= NODE_TOL,
+    consistent: closureError <= tol,
     closureError,
   };
 }
@@ -1455,7 +1452,8 @@ function spanBlock(g: WalkGraph, edges: number[], wires: string[], root: string)
  * with no seed grows from the wire through which it attaches toward a seed, and a block in a
  * component with no seed from its first wire. Every relation not in the tree is a chord, and its
  * residual r = V(a) - V(b) - value, read off the tree's local potentials, is that loop's misfit. A
- * block is consistent when every chord is within NODE_TOL; its closure error is its largest |r|.
+ * block is consistent when every chord is within `tol` (Settings.closureTol); its closure error is
+ * its largest |r|.
  *
  * Levels are then reported, never fitted: a seed at its authored level, whatever its block's tree
  * says; every other wire by walking the trees from the canonically first seed that reaches it
@@ -1466,6 +1464,7 @@ function spanBlock(g: WalkGraph, edges: number[], wires: string[], root: string)
 export function dcWalk(
   input: readonly WalkRelation[],
   seeds: ReadonlyMap<string, number>,
+  tol: number = NODE_TOL,
 ): WalkResult {
   const rels = [...input].sort(relCmp);
   const wires = [...new Set([...rels.flatMap((r) => [r.a, r.b]), ...seeds.keys()])].sort(cmp);
@@ -1517,7 +1516,7 @@ export function dcWalk(
 
   const blocks = edgeBlocks.map((b, k) => {
     const ws = blockWires[k];
-    return spanBlock(g, b, ws, ws.find((w) => seeds.has(w)) ?? entry.get(k) ?? ws[0]);
+    return spanBlock(g, b, ws, ws.find((w) => seeds.has(w)) ?? entry.get(k) ?? ws[0], tol);
   });
 
   // Reported levels.
@@ -1552,11 +1551,13 @@ export function dcWalk(
 
 /** The constraints a walk's loops state beyond the sizing, counted by rank (see NodesReport.dof).
  *  A row that reduces to zero is a symbolic identity and is dropped; a row that merely holds at
- *  this point is kept and reported as satisfied. An undecided term is named by `display` where it
- *  has a name for a reader, by its canonical spelling otherwise. */
+ *  this point is kept and reported as satisfied (within `tol`, Settings.closureTol). An undecided
+ *  term is named by `display` where it has a name for a reader, by its canonical spelling
+ *  otherwise. */
 export function dofOf(
   walk: WalkResult,
   display: (atom: string) => string | undefined = () => undefined,
+  tol: number = NODE_TOL,
 ): NodesReport['dof'] {
   const rows = walk.blocks.flatMap((b) =>
     b.chords.filter((c) => c.row.size > 0).map((c) => ({ ...c, opaque: hasOpaque(c.row) })),
@@ -1577,7 +1578,7 @@ export function dofOf(
     constraints: kept.map((r) => ({
       relations: r.cycle.map((c) => c.label),
       residual: r.residual,
-      satisfied: Math.abs(r.residual) <= NODE_TOL,
+      satisfied: Math.abs(r.residual) <= tol,
       proven: !r.opaque,
     })),
     undecided,
@@ -1596,9 +1597,7 @@ const volts = (v: number): string => `${Number(v.toPrecision(4))} V`;
 
 /** A current as a reader reads one: an SI prefix, `10 µA` rather than `0.00001 A`. */
 export function amps(i: number): string {
-  const s = formatSI(i);
-  const m = /^(-?[\d.]+(?:e[+-]?\d+)?)(\D*)$/.exec(s);
-  return m ? `${m[1]} ${m[2]}A` : `${s} A`;
+  return formatQuantity(i, 'A');
 }
 
 /** A device the walk reads, at any level of the walk. */
@@ -2133,13 +2132,14 @@ function levelAnchors(
 function closureWarnings(
   walk: WalkResult,
   seeds: ReadonlyMap<string, number>,
+  tol: number,
 ): { disputes: NodesReport['disputes']; messages: string[] } {
   const show = (w: string): string => (w === REF ? 'ref' : w);
   const disputes: NodesReport['disputes'] = [];
   const messages: string[] = [];
   for (const blk of walk.blocks) {
     if (blk.consistent) continue;
-    const failing = blk.chords.filter((c) => Math.abs(c.residual) > NODE_TOL);
+    const failing = blk.chords.filter((c) => Math.abs(c.residual) > tol);
     const seedsIn = blk.wires.filter((w) => seeds.has(w));
     disputes.push({
       relations: blk.relations.map((r) => r.label),
@@ -2172,7 +2172,7 @@ function closureWarnings(
       : '';
     messages.push(
       `the wiring does not close around ${blk.relations.map((r) => r.label).join(', ')}: closure error ` +
-        `${volts(blk.closureError)} against a tolerance of ${volts(NODE_TOL)}. ${claims.join(' ')}${held} ` +
+        `${volts(blk.closureError)} against a tolerance of ${volts(tol)}. ${claims.join(' ')}${held} ` +
         `The netlist and the sizing describe the same wires, so one of these statements is not the ` +
         `circuit: give a device on a shared gate wire the other's vgs, solve the node with a ` +
         `designConstraint or solveFor, or keep the relation as an explicit check`,
@@ -2182,11 +2182,13 @@ function closureWarnings(
 }
 
 /** The current balance at every wire a drain or source terminal sits on — the report's sums, the
- *  warnings for those raised, and the notes for wires left unbalanced. */
+ *  warnings for those raised (a residual past `tolRel` of the largest current there,
+ *  Settings.kclTolRel), and the notes for wires left unbalanced. */
 function currentBalance(
   devices: readonly WiredDevice[],
   held: Anchors,
   walk: WalkResult,
+  tolRel: number,
 ): { balance: NodesReport['balance']; messages: string[]; notes: string[] } {
   const branchesAt = new Map<string, { terminal: string; current?: number }[]>();
   const branch = (w: string, terminal: string, current: number | undefined): void => {
@@ -2248,9 +2250,9 @@ function currentBalance(
     const isHeld = held.heldWires.has(w) || held.sourced.has(w);
     balance.push({ wire: w, residual, held: isHeld, branches });
     const largest = Math.max(...branches.map((b) => Math.abs(b.current)));
-    if (!(Math.abs(residual) > KCL_TOL_REL * largest)) continue;
+    if (!(Math.abs(residual) > tolRel * largest)) continue;
     const listed = branches.map((b) => `${b.terminal} ${amps(b.current)}`).join(', ');
-    const share = `${Number(((100 * Math.abs(residual)) / largest).toPrecision(3))}% of the largest; reported past ${100 * KCL_TOL_REL}%`;
+    const share = `${Number(((100 * Math.abs(residual)) / largest).toPrecision(3))}% of the largest; reported past ${100 * tolRel}%`;
     if (!isHeld)
       messages.push(
         `the currents at wire "${w}" do not balance: ${listed} sum to ${amps(residual)} ` +
@@ -2275,11 +2277,13 @@ function currentBalance(
   return { balance, messages, notes };
 }
 
-/** Placements of one sizing share one operating point only where the walk shows it — the report's
- *  verdicts and the warnings for those that do not. */
+/** Placements of one sizing share one operating point only where the walk shows it, every voltage
+ *  within `tol` (Settings.closureTol) of placement 0's — the report's verdicts and the warnings for
+ *  those that do not. */
 function placementRule(
   devices: readonly WiredDevice[],
   walk: WalkResult,
+  tol: number,
 ): { placements: NodesReport['placements']; messages: string[] } {
   const placements: NodesReport['placements'] = [];
   const messages: string[] = [];
@@ -2303,7 +2307,7 @@ function placementRule(
     }
     const first = points[0] as number[];
     const off = points.findIndex((p) =>
-      (p as number[]).some((v, j) => Math.abs(v - first[j]) > NODE_TOL),
+      (p as number[]).some((v, j) => Math.abs(v - first[j]) > tol),
     );
     if (off < 0) {
       placements.push({ device: dev.name, shared: true });
@@ -2333,12 +2337,14 @@ export const childFindingsOf = (res: { blocks?: readonly SheetBlockReport[] }): 
  * held level and element value comes from the evaluation report of the sheet that has it. The
  * walk's own sheet is read the same way, through a report carrying its device point and its held
  * levels and element values (wiringValuesOf) — which reads an element only by its name, as
- * validation requires every element to have.
+ * validation requires every element to have. Its tolerances are `settings.closureTol` and
+ * `settings.kclTolRel`.
  */
 export function nodesCheck(
   doc: SheetDoc,
   res: SheetResult,
   ownPoint: DevicePoint | undefined,
+  settings: Settings = DEFAULT_SETTINGS,
 ): { report: NodesReport; warnings: QAWarning[] } {
   const warnings: QAWarning[] = [];
   const raise = (message: string, severity: 'warning' | 'error' = 'warning'): void => {
@@ -2380,8 +2386,9 @@ export function nodesCheck(
   if (grounded) seeds.set(GROUND, 0);
   for (const a of [...held.anchors].sort(relCmp)) if (!seeds.has(a.b)) seeds.set(a.b, -a.value);
 
-  const walk = dcWalk(rels, seeds);
-  const closure = closureWarnings(walk, seeds);
+  const { closureTol, kclTolRel } = settings;
+  const walk = dcWalk(rels, seeds, closureTol);
+  const closure = closureWarnings(walk, seeds, closureTol);
   for (const m of closure.messages) raise(m);
   // A group that reaches a port is not floating: its other end is outside the sheet.
   for (const group of walk.floating) {
@@ -2394,12 +2401,12 @@ export function nodesCheck(
     );
   }
   for (const u of unresolved) raise(`a relation is not formed — ${u}`);
-  const currents = currentBalance(devices, held, walk);
+  const currents = currentBalance(devices, held, walk, kclTolRel);
   for (const m of currents.messages) raise(m);
-  const shared = placementRule(devices, walk);
+  const shared = placementRule(devices, walk, closureTol);
   for (const m of shared.messages) raise(m);
 
-  const dof = dofOf(walk, (atom) => names.get(atom));
+  const dof = dofOf(walk, (atom) => names.get(atom), closureTol);
   const notes: string[] = [];
   if (walk.blocks.some((b) => b.chords.length)) notes.push(CLOSURE_NOTE);
   if (dof.proven > 0)
@@ -2538,13 +2545,15 @@ const parentReports = (doc: SheetDoc, mode: WiringMode): boolean =>
  * to the tables they are read on — every device of its own (the parent checks the one it reads)
  * and every child device it reads. A document in the earlier format reads no wiring key: one that
  * carries some is reported not evaluated. Warnings are appended; nothing else in the result moves,
- * except that a refusal — a selector the table contradicts — closes feasibility.
+ * except that a refusal — a selector the table contradicts — closes feasibility. The walk reads its
+ * tolerances from `settings`.
  */
 export function withNodes(
   doc: SheetDoc,
   res: SheetResult,
   table: DeviceTable | undefined,
   mode: WiringMode,
+  settings: Settings = DEFAULT_SETTINGS,
 ): SheetResult {
   const format = formatOf(doc);
   if (format === 'unknown') return res;
@@ -2560,7 +2569,7 @@ export function withNodes(
   if (format === 'earlier') return withoutWalk(doc, out, mode);
   let warnings: QAWarning[];
   if (statesWiring(doc) && doc.nodes !== 'none') {
-    const checked = nodesCheck(doc, res, point);
+    const checked = nodesCheck(doc, res, point, settings);
     out = { ...out, nodes: checked.report };
     warnings = checked.warnings;
   } else {

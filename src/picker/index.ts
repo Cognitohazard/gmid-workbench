@@ -42,6 +42,7 @@ import type {
   SheetResult,
   SheetSweep,
   SheetVar,
+  Settings,
 } from '../sheet';
 
 // ---------------------------------------------------------------------------------------
@@ -272,6 +273,8 @@ const AT_FLOOR_EPS = 1e-9;
 export interface PickerOptions {
   /** By-reference child index, exactly as `runSheet` takes it. */
   refs?: SheetRefIndex;
+  /** The tolerances and caps every evaluation of the search runs under (see Settings). */
+  settings?: Settings;
   /** Per-sheet wall-clock cap, honoured only when `now` is supplied. */
   msBudget?: number;
   /** Per-sheet evaluation cap. */
@@ -517,10 +520,12 @@ function rankKnobs(
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   refs: SheetRefIndex | undefined,
+  settings: Settings | undefined,
 ): { ranked?: Knob[]; evals: number } {
   if (target === undefined) return { evals: 0 };
   const sens = sheetSensitivities(doc, table, resolveDevice, {
     refs,
+    settings,
     params: knobs.map((k) => k.name),
     check: target,
   });
@@ -594,6 +599,7 @@ function repair(
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   refs: SheetRefIndex | undefined,
+  settings: Settings | undefined,
   meter: Meter,
 ): RepairOutcome {
   let doc = doc0;
@@ -651,7 +657,15 @@ function repair(
       // scan but not a ranking, and spending the remainder on an unranked scan beats spending
       // it on nothing. `fits`, not `afford`, so a plan that did not fit does not declare the
       // meter spent while plan B still can be paid for.
-      const rank = rankKnobs(doc, knobs, limitingCheck(res)?.id, table, resolveDevice, refs);
+      const rank = rankKnobs(
+        doc,
+        knobs,
+        limitingCheck(res)?.id,
+        table,
+        resolveDevice,
+        refs,
+        settings,
+      );
       meter.evals += rank.evals;
       ranked = rank.ranked;
       // With a ranking, one knob per round is enough and the rest of the budget goes into
@@ -662,7 +676,9 @@ function repair(
     let move: { name: string; x: number; feasible: boolean; score: number } | undefined;
     for (const k of candidates) {
       if (!afford(meter, PICKER_SCAN_POINTS)) break;
-      const sw = sweepSheet(doc, k.name, table, PICKER_SCAN_POINTS, resolveDevice, refs);
+      const sw = sweepSheet(doc, k.name, table, PICKER_SCAN_POINTS, resolveDevice, refs, {
+        settings,
+      });
       meter.evals += sw.x.length; // what the sweep actually evaluated, not what it was asked for
       scanned = scanned || sw.x.length > 0;
       tried.add(k.name);
@@ -683,7 +699,7 @@ function repair(
     }
     if (!afford(meter, 1)) return starved();
     doc = withParams(doc, { [move.name]: move.x });
-    res = runSheet(doc, table, resolveDevice, refs);
+    res = runSheet(doc, table, resolveDevice, refs, { settings });
     meter.evals += 1;
     score = scoreResult(res);
     tried.clear();
@@ -725,6 +741,7 @@ function backOff(
   table: DeviceTable | undefined,
   resolveDevice: DeviceResolver | undefined,
   refs: SheetRefIndex | undefined,
+  settings: Settings | undefined,
   meter: Meter,
 ): { doc: SheetDoc; res?: SheetResult } {
   const knobs = knobsOf(doc0).filter((k) => k.unit === CURRENT_UNIT && k.value > 0);
@@ -742,7 +759,7 @@ function backOff(
   // Try the floor first. Several sheets ride all the way down to it, and finding that in one
   // evaluation is worth more than the bisection it saves.
   if (!afford(meter, 1)) return { doc: doc0 };
-  const atFloor = runSheet(scaled(floor), table, resolveDevice, refs);
+  const atFloor = runSheet(scaled(floor), table, resolveDevice, refs, { settings });
   meter.evals += 1;
   if (atFloor.feasible) return { doc: scaled(floor), res: atFloor };
   if (bindingCheck(atFloor) === undefined) return { doc: doc0 };
@@ -750,7 +767,7 @@ function backOff(
   for (let i = 0; i < PICKER_BISECT_STEPS; i++) {
     if (!afford(meter, 1)) break;
     const mid = (lo + hi) / 2;
-    const res = runSheet(scaled(mid), table, resolveDevice, refs);
+    const res = runSheet(scaled(mid), table, resolveDevice, refs, { settings });
     meter.evals += 1;
     if (res.feasible) {
       hi = mid;
@@ -795,7 +812,7 @@ export function pickTopology(
     started: clock(),
     clock,
   };
-  const refs = opts.refs;
+  const { refs, settings } = opts;
 
   // Clone before overriding: a library doc is shared by every candidate in the run, and the
   // search must not leave a mark on it. The operating range is dropped: the picker answers
@@ -815,7 +832,7 @@ export function pickTopology(
   const start = withParams(base, over);
   const defaults = new Map(start.params.map((p) => [p.name, p.value]));
 
-  const res0 = runSheet(start, table, resolveDevice, refs);
+  const res0 = runSheet(start, table, resolveDevice, refs, { settings });
   meter.evals += 1;
 
   let doc = start;
@@ -844,7 +861,7 @@ export function pickTopology(
     verdict = 'could-not-be-searched';
     stopNote = 'this sheet has no adjustable design knobs with a finite range';
   } else {
-    const out = repair(start, res0, table, resolveDevice, refs, meter);
+    const out = repair(start, res0, table, resolveDevice, refs, settings, meter);
     doc = out.doc;
     res = out.res;
     stopNote = out.stopped;
@@ -852,7 +869,7 @@ export function pickTopology(
   }
 
   if (res.feasible && !meter.exhausted) {
-    const relaxed = backOff(doc, table, resolveDevice, refs, meter);
+    const relaxed = backOff(doc, table, resolveDevice, refs, settings, meter);
     if (relaxed.res) {
       doc = relaxed.doc;
       res = relaxed.res;

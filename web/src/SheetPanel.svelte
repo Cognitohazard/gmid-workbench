@@ -6,8 +6,6 @@
   import {
     cloneDoc,
     aggregateConditionRuns,
-    clampMargin,
-    measurable,
     projectingResolver,
     sameCondition,
     tableAt,
@@ -21,7 +19,11 @@
     bindingCheck,
     limitingCheck,
     rangeEndCheck,
-    withoutRange,
+    rangeEndNames,
+    namingRangeEnds,
+    worstPointByCheck,
+    RANGE_END_SEP,
+    DEFAULT_SETTINGS,
     SENSITIVITY_REL_STEP,
     resolveSheetRefs,
     flattenSheetDoc,
@@ -44,7 +46,6 @@
     type SheetVar,
     type SheetCheck,
     type SheetBlock,
-    type SheetSweep,
     type SheetSweep2,
     type SheetSensitivity,
     type SheetBlockReport,
@@ -58,13 +59,16 @@
     type ConditionAggregate,
     type ConditionKey,
     type ConditionRun,
+    type ConditionSweep,
+    type CompliancePoint,
   } from '@gmid/mostab-core';
   import { describeBinding, deviceLabel, type Bench } from './families';
   import { tableUid, type SheetCornerMode } from './dashboard';
   import { PALETTE, type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
-  import { CONTROL_HELP } from './help';
+  import { CONTROL_HELP, SOLVER_HELP } from './help';
+  import { changedSolverSettings, settingText, solverSettings } from './solver.svelte';
   import { commitEng, pct } from './eng';
   import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
   import { copyText, download } from './export';
@@ -78,6 +82,7 @@
     sweep2 = '',
     cornerMode = 'nominal',
     cornerKeys = [],
+    cornerHold = false,
     bench,
     styleVersion = 0,
     onChange,
@@ -85,6 +90,7 @@
     onSweep2,
     onCornerMode,
     onCornerKeys,
+    onCornerHold,
   }: {
     device: DeviceTable;
     cfg: SheetDoc;
@@ -94,6 +100,9 @@
     /** Which characterization conditions this panel evaluates at (bench state, never in `cfg`). */
     cornerMode?: SheetCornerMode;
     cornerKeys?: ConditionKey[];
+    /** With one condition asked about that is not the nominal one: hold the nominal design there
+     *  instead of sizing the design there (bench state, like the two above). */
+    cornerHold?: boolean;
     bench: Bench;
     styleVersion?: number;
     onChange: (s: SheetDoc) => void;
@@ -101,6 +110,7 @@
     onSweep2: (s: string) => void;
     onCornerMode: (m: SheetCornerMode) => void;
     onCornerKeys: (k: ConditionKey[]) => void;
+    onCornerHold: (hold: boolean) => void;
   } = $props();
 
   // A document in a format this app does not read is kept as it was stored and shown only as the
@@ -122,6 +132,20 @@
   // next one arrives.
   const evaluator = new SheetEvaluator();
   $effect(() => () => evaluator.dispose());
+  // The solver settings every job here runs under (the header's solver page). They are part of
+  // each job, so a changed setting is a new job and everything on the panel is evaluated again.
+  const solver = $derived(solverSettings());
+  /** The settings that differ from their defaults — the header marks the panel while any does. */
+  const solverChanged = $derived(changedSolverSettings());
+  const solverTitle = $derived(
+    [
+      CONTROL_HELP.solverNonDefault,
+      ...solverChanged.map(
+        (k) =>
+          `${SOLVER_HELP[k].label}: ${settingText(k, solver[k])} (default ${settingText(k, DEFAULT_SETTINGS[k])})`,
+      ),
+    ].join('\n'),
+  );
   /** The error from a job that could not run at all, shown with the warnings. */
   let evalError = $state<string | null>(null);
   const failed = (e: string): void => {
@@ -163,7 +187,10 @@
    *  informational range-end notes), so the concatenation is built once. */
   const allWarn = $derived.by(() => [...rr.warnings, ...(result?.warnings ?? [])]);
   const shownWarnings = $derived.by(() => {
-    const ws = allWarn.filter((w) => w.severity !== 'info');
+    // A warning that quotes a range end says where that end is (rangeEndNames).
+    const ws = allWarn
+      .filter((w) => w.severity !== 'info')
+      .map((w) => ({ ...w, message: namingRangeEnds(w.message, endNames) }));
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive grouping scratch, discarded on return
     const byChild = new Map<string, { count: number; first: string }>();
     const rest: string[] = [];
@@ -190,7 +217,9 @@
   // range end is the circuit behaving as drawn, not a fault — and an author claiming that range
   // should still see it. Their own quiet line, in the core's words.
   const rangeNotes = $derived(
-    allWarn.filter((w) => w.severity === 'info' && w.rule === 'sheet-range').map((w) => w.message),
+    allWarn
+      .filter((w) => w.severity === 'info' && w.rule === 'sheet-range')
+      .map((w) => namingRangeEnds(w.message, endNames)),
   );
 
   // Onboarding hints lead the same list the diagnostics land in — they are the likeliest cause of
@@ -252,6 +281,18 @@
     if (cornerMode === 'chosen') return cornerKeys;
     return nominalKey ? [nominalKey] : [];
   });
+  /** Several conditions asked about: one design, sized at the nominal condition, held at the rest. */
+  const multi = $derived(keys.length > 1);
+  /** The one condition asked about, when there is one. */
+  const single = $derived(keys.length === 1 ? keys[0] : undefined);
+  /** One condition asked about that is not the nominal one, while a nominal one exists: it can be
+   *  asked about two ways, and the control beside the mode offers both. */
+  const offNominal = $derived(
+    single !== undefined && nominalKey !== undefined && !sameCondition(single, nominalKey),
+  );
+  /** That condition is asked about with the nominal design held there, not with a design sized
+   *  there — the same two-condition question several conditions are, with one of them asked. */
+  const holding = $derived(cornerHold && offNominal);
   /** Why nothing can be evaluated, when nothing can be. `nominal` is the one that must never
    *  fall back to the active table: "the device's nominal" is a designation, and quietly
    *  substituting whatever is selected would report a verdict about a condition nobody chose. */
@@ -281,11 +322,11 @@
     answered: Answered<'run', number>;
   } | null>(null);
   $effect(() => {
-    const base = keys.length > 1 ? nominalKey : undefined;
+    const base = multi || holding ? nominalKey : undefined;
     ask(
       'run',
       keys.length
-        ? { kind: 'run', doc: cfg, keys: [...keys], ...(base ? { base } : {}) }
+        ? { kind: 'run', doc: cfg, keys: [...keys], ...(base ? { base } : {}), settings: solver }
         : undefined,
       (r) => {
         runsAnswer = r && { runs: r.result, answered: r.answered };
@@ -305,7 +346,7 @@
   /** Nothing to show yet: the first verdict for this sheet is still being evaluated. */
   const firstRun = $derived(runs.length === 0 && evaluator.busy('run'));
   /** A sweep or a design-plane map is being taken. */
-  const sweeping = $derived(evaluator.busy('sweeps') || evaluator.busy('sweep2'));
+  const sweeping = $derived(evaluator.busy('sweep') || evaluator.busy('sweep2'));
   /** What the worker is doing while the page shows its last answer. The first verdict needs no
    *  line of its own: the badge says it is being evaluated. */
   const busyText = $derived.by(() => {
@@ -313,7 +354,6 @@
     if (sweeping) return 'sweeping…';
     return evaluator.busy('sens') ? 'computing sensitivities…' : '';
   });
-  const multi = $derived(runs.length > 1);
   // Two questions, answered apart: is the design feasible where it is sized, and at how many of
   // the points it is promised to work at does that one design comply.
   const agg = $derived(aggregateConditionRuns(runs));
@@ -322,9 +362,12 @@
   // run feasibility is read from, evaluated or not, so its diagnostics are the ones on screen
   // when it did not complete. Only a set with nowhere to size (several conditions, none
   // nominal) has no such run, and then the first row stands in. In multi-condition mode the
-  // detail is explicitly stamped with it, so no number on screen is unattributed.
-  const refRun = $derived.by(
-    (): ConditionRun | undefined => runs.find((r) => r.design === 'sized') ?? runs[0],
+  // detail is explicitly stamped with it, so no number on screen is unattributed. Holding the
+  // nominal design at one condition asks about THAT condition, so its held run is the detail.
+  const refRun = $derived.by((): ConditionRun | undefined =>
+    holding && single
+      ? runs.find((r) => sameCondition(r.key, single))
+      : (runs.find((r) => r.design === 'sized') ?? runs[0]),
   );
   const refKey = $derived(refRun?.key);
   const evaluated = $derived(refRun?.state === 'evaluated');
@@ -377,6 +420,25 @@
   // COMPLIANCE is a count of points. Neither is inferred from the other, and a point that was
   // not run or could not be answered is counted as exactly that — never as a pass, never as a
   // failure.
+  /** A compliance point's state as a mark, in words, and as a colour class. */
+  const POINT_MARK: Record<PointState, string> = {
+    complies: '✓',
+    'does-not-comply': '✗',
+    'no-answer': '?',
+    'not-run': '–',
+  };
+  const POINT_TEXT: Record<PointState, string> = {
+    complies: 'complies',
+    'does-not-comply': 'does not comply',
+    'no-answer': 'no answer',
+    'not-run': 'not run',
+  };
+  const POINT_CLASS: Record<PointState, string> = {
+    complies: 'ok',
+    'does-not-comply': 'no',
+    'no-answer': 'skip',
+    'not-run': 'skip',
+  };
   const FEAS_TEXT: Record<ConditionAggregate['feasibility'], string> = {
     feasible: 'feasible',
     infeasible: 'infeasible',
@@ -389,12 +451,34 @@
     'no-answer': 'skip',
     'not-run': 'skip',
   };
+  /** The held design's own centre, while the nominal design is held at one condition. */
+  const heldCentre = $derived(holding ? refRun?.points[0] : undefined);
   /** The feasibility badge's words — stamped with the condition it was asked at whenever more
-   *  than one condition is on the page, so no verdict there is unattributed. */
-  const feasText = $derived(
-    firstRun
-      ? 'evaluating…'
-      : FEAS_TEXT[agg.feasibility] + (multi && agg.base ? ` at ${conditionLabel(agg.base)}` : ''),
+   *  than one condition is on the page, so no verdict there is unattributed; saying where the
+   *  design was sized whenever that is not the nominal condition, so a design sized at a corner
+   *  never reads as the nominal one; and, while the nominal design is held at one condition,
+   *  saying so with the compliance answer there in place of a feasibility it was not asked. */
+  const feasText = $derived.by((): string => {
+    if (firstRun) return 'evaluating…';
+    if (holding && single)
+      return (
+        `nominal design held at ${conditionLabel(single)}` +
+        (heldCentre ? `: ${POINT_TEXT[heldCentre.state]}` : '')
+      );
+    const verdict = FEAS_TEXT[agg.feasibility];
+    if (!agg.base) return verdict;
+    if (multi) return `${verdict} at ${conditionLabel(agg.base)}`;
+    return nominalKey && sameCondition(agg.base, nominalKey)
+      ? verdict
+      : `${verdict} · sized at ${conditionLabel(agg.base)}`;
+  });
+  const feasClass = $derived(
+    holding ? POINT_CLASS[heldCentre?.state ?? 'not-run'] : FEAS_CLASS[agg.feasibility],
+  );
+  /** Whether the badge names the check that binds: on a verdict that fails — the design
+   *  infeasible where it is sized, or the held design not complying where it is held. */
+  const namesBinding = $derived(
+    holding ? heldCentre?.state === 'does-not-comply' : agg.feasibility === 'infeasible',
   );
   /** The DC wiring check's verdict on the run shown, in a few words and the badge's class — none
    *  for a sheet that says it is not a circuit or names no wiring (see NodesReport.state). */
@@ -431,30 +515,45 @@
     return [`complies at ${complies} of ${total} points`, ...rest].join(' · ');
   });
 
+  // ── Range ends, in words. Every place a range end is shown names it the one way the core puts
+  // it (rangeEndNames): the quantity and value its `set` fixes and which end of the claimed range
+  // it is, read from the run on screen — never the end's bare name.
+  const endNames = $derived(rangeEndNames(rr.doc, result?.rangeEnds ?? []));
+  const endName = (name: string): string => endNames.get(name) ?? name;
+  /** A point as a reader is told it: its condition, then the range end or the design's own
+   *  operating point. */
+  const pointName = (key: ConditionKey, rangeEnd: string | undefined): string =>
+    `${conditionLabel(key)}, ${rangeEnd === undefined ? 'its own operating point' : endName(rangeEnd)}`;
+  /** A check id as shown: one qualified by a range end (`cm-lo@sr-spec`) names the end. */
+  const checkIdText = (id: string): string => {
+    const at = id.indexOf(RANGE_END_SEP);
+    return at < 0 ? id : `${id.slice(at + RANGE_END_SEP.length)} at ${endName(id.slice(0, at))}`;
+  };
+  /** One point's state in words, with why where it has no check outcomes to read. */
+  const pointText = (pt: CompliancePoint): string =>
+    POINT_TEXT[pt.state] + (pt.error ? ` — ${namingRangeEnds(pt.error, endNames)}` : '');
+  /** The compliance badge's tooltip: what compliance is, then every point that does not comply,
+   *  has no answer or was not run, each named where it is. */
+  const complianceTitle = $derived(
+    [
+      CONTROL_HELP.compliance,
+      ...runs.flatMap((r) =>
+        r.points
+          .filter((pt) => pt.state !== 'complies')
+          .map((pt) => `${pointName(r.key, pt.rangeEnd)}: ${pointText(pt)}`),
+      ),
+    ].join('\n\n'),
+  );
+  /** Where each check comes closest to failing, over every point measured — a column of the
+   *  check rows whenever there is more than one point to read. */
+  const worstByCheck = $derived(hasCompliance ? worstPointByCheck(runs) : null);
+
   /** One condition's own answers, for the breakdown. Each is the run's own verdict beside its
    *  own label — the header never stands in for one of these, and none of them ever stands in
    *  for the header. */
   /** Whose hardware the row measured: the run that sized the design, or that design held. */
   const designCell = (r: ConditionRun): string =>
     r.state !== 'evaluated' ? '' : r.design === 'sized' ? 'sized here' : 'held';
-  const POINT_MARK: Record<PointState, string> = {
-    complies: '✓',
-    'does-not-comply': '✗',
-    'no-answer': '?',
-    'not-run': '–',
-  };
-  const POINT_TEXT: Record<PointState, string> = {
-    complies: 'complies',
-    'does-not-comply': 'does not comply',
-    'no-answer': 'no answer',
-    'not-run': 'not run',
-  };
-  const POINT_CLASS: Record<PointState, string> = {
-    complies: 'ok',
-    'does-not-comply': 'no',
-    'no-answer': 'skip',
-    'not-run': 'skip',
-  };
   /** The centre: the sized run answers feasibility in its own words, a held one compliance. */
   const centreCell = (r: ConditionRun): string => {
     const at = r.points[0].state;
@@ -472,6 +571,12 @@
     const ok = ends.filter((e) => e.state === 'complies').length;
     return `${POINT_MARK[worst]} range ${ok}/${ends.length}`;
   };
+  /** The range cell's tooltip: each range end of the row, named, with its answer. */
+  const rangeTitle = (r: ConditionRun): string =>
+    r.points
+      .slice(1)
+      .map((pt) => `${endName(pt.rangeEnd ?? '')}: ${pointText(pt)}`)
+      .join('\n');
   const runClass = (r: ConditionRun): string => POINT_CLASS[r.points[0].state];
   /** A held row's notes that its figures rest on a gate held at its nominal value — the warning a
    *  range-end chip carries in its tooltip, here on the row of the condition it was held at. */
@@ -486,12 +591,12 @@
    *  not complying. */
   const runDetail = (r: ConditionRun): string => {
     if (r.state === 'not-evaluated' && r.points[0].state !== 'does-not-comply')
-      return r.issues.map((i) => i.message).join(' · ');
-    if (r.points[0].error) return r.points[0].error;
+      return r.issues.map((i) => namingRangeEnds(i.message, endNames)).join(' · ');
+    if (r.points[0].error) return namingRangeEnds(r.points[0].error, endNames);
     const b = r.result && (bindingCheck(r.result) ?? limitingCheck(r.result));
     const centre = b ? `${b.id} ${pct(b.marginPct)}` : '';
     const end = r.points.find((pt) => pt.rangeEnd !== undefined && pt.state !== 'complies');
-    return [centre, end ? `${end.rangeEnd}: ${end.error ?? POINT_TEXT[end.state]}` : '']
+    return [centre, end ? `${endName(end.rangeEnd ?? '')}: ${pointText(end)}` : '']
       .filter(Boolean)
       .join(' · ');
   };
@@ -546,9 +651,13 @@
     rows: SheetSensitivity[];
   };
   let snap = $state.raw<Snapshot | null>(null);
-  // Also retired when several conditions are selected: a sensitivity readout is a statement
-  // about one operating point, the same rule that disables taking a new one in multi mode.
-  const shot = $derived(!multi && snap && snap.doc === cfg && snap.dev === refTable ? snap : null);
+  // Also retired when several conditions are selected, or the design is held: a sensitivity
+  // readout is a statement about one operating point the design was sized at, the same rule that
+  // disables taking a new one there.
+  const oneSized = $derived(!multi && !holding);
+  const shot = $derived(
+    oneSized && snap && snap.doc === cfg && snap.dev === refTable ? snap : null,
+  );
   const sens = $derived(shot?.rows ?? null);
   // A retired snapshot stops RENDERING through `shot` immediately; this drops the reference so it
   // stops holding a device table nobody is looking at any more — a switched-away table is
@@ -567,7 +676,9 @@
   const focusCheck = $derived(shot?.focus);
   // One condition at a time: a ranking is a statement about the point it was taken at, and
   // there is no such point while several conditions are on screen.
-  const sensReady = $derived(!multi && evaluated && result !== undefined && refTable !== undefined);
+  const sensReady = $derived(
+    oneSized && evaluated && result !== undefined && refTable !== undefined,
+  );
   /** The design being probed. It is set only while the request is pending, so it is also the
    *  busy state. */
   let sensFor = $state.raw<{ doc: SheetDoc; dev: DeviceTable } | null>(null);
@@ -598,7 +709,7 @@
     evaluator.request(
       // Naming the check keeps the probes off the range-end runs unless the check in question
       // lives on one — the difference between 2 and 2*(1 + range ends) evaluations per knob.
-      { kind: 'sens', doc, at: refKey, ...(focus ? { check: focus.id } : {}) },
+      { kind: 'sens', doc, at: refKey, ...(focus ? { check: focus.id } : {}), settings: solver },
       // The design the readout is about: the snapshot is shown while it is the one on screen.
       { bench, primary, refs, about: { doc, dev, focus } },
       (rows, answered) => {
@@ -640,7 +751,10 @@
       else
         blocked.push({
           param: s.param,
-          why: s.error ?? `no response to "${id}" was recorded`,
+          why: namingRangeEnds(
+            s.error ?? `no response to "${checkIdText(id)}" was recorded`,
+            endNames,
+          ),
         });
     }
     knobs.sort((a, b) => b.mag - a.mag);
@@ -652,42 +766,80 @@
   const sweepable = $derived(cfg.params.filter((p) => isSweepable(p)));
   // The active sweep param, ignoring a stale selection that no longer names a sweepable var.
   const active = $derived(sweep && sweepable.some((p) => p.name === sweep) ? sweep : '');
-  // One sweep per EVALUATED condition, not merely per table: a condition refused for want of a
-  // child device has no design to sweep, and sweeping it anyway would print a feasibility window —
-  // a verdict — under a header that just said the condition was not evaluated. At one condition
-  // the sweep reads the sheet as it stands, range ends included; at several, each curve is that
-  // condition's own FEASIBILITY across the knob (the design re-sized there at every sample), so the
-  // operating range is left out. A refused condition contributes no curve and stays visible as its
-  // breakdown row instead. An answer is shown only while it is about the param now selected: a
-  // sweep of the previous one stays off the chart rather than being drawn under the new name.
-  const sweepDoc = $derived(multi ? withoutRange(rr.doc) : rr.doc);
-  let sweepsAnswer = $state.raw<{ param: string; sweeps: JobResults['sweeps'] } | null>(null);
+  // The chart is drawn at ONE condition: the one asked about, or — with several on the page —
+  // the one picked beside the sweep control, the condition the design is sized at until another
+  // is picked. Where the design is sized at that condition, each sample re-sizes it there with the
+  // knob at its value. Where the panel holds the nominal design at it (several conditions, or the
+  // hold mode of a single one), each sample sizes the design at the nominal condition with the
+  // knob at its value and holds it there, so the curves are that one design's margins at the
+  // condition — the same question the condition rows answer, asked along the knob. A condition
+  // that was not evaluated has no design to sweep and draws nothing; its row says why.
+  let sweepPick = $state<string | null>(null);
+  const sweepKey = $derived.by((): ConditionKey | undefined => {
+    if (!multi) return single;
+    const picked = runs.find((r) => conditionKeyId(r.key) === sweepPick)?.key;
+    return picked ?? agg.base ?? runs[0]?.key;
+  });
+  /** Where each sample's design is sized, when that is not the chart's own condition. */
+  const sweepBase = $derived(
+    sweepKey && nominalKey && (multi || holding) && !sameCondition(sweepKey, nominalKey)
+      ? nominalKey
+      : undefined,
+  );
+  const sweepRun = $derived(sweepKey && runs.find((r) => sameCondition(r.key, sweepKey)));
+  /** Whether there is a design to sweep: one sized at the chart's condition that was evaluated
+   *  there, or — when it is held — one sized at the nominal condition that was evaluated, and held
+   *  here far enough to have run. A held design that fails here still sweeps: along the knob it
+   *  may come back. */
+  const sweepReady = $derived.by((): boolean => {
+    if (!sweepRun) return false;
+    if (!sweepBase) return sweepRun.state === 'evaluated';
+    const base = sweepBase;
+    const sized = runs.find((r) => sameCondition(r.key, base));
+    return sized?.state === 'evaluated' && sweepRun.result !== undefined;
+  });
+  let sweptAnswer = $state.raw<{
+    answered: Answered<'sweep'>;
+    sweep: ConditionSweep | null;
+  } | null>(null);
   $effect(() => {
-    const at = runs.filter((r) => r.state === 'evaluated').map((r) => r.key);
     ask(
-      'sweeps',
-      active && at.length
-        ? { kind: 'sweeps', doc: sweepDoc, param: active, at, points: SWEEP_POINTS }
+      'sweep',
+      active && sweepKey && sweepReady
+        ? {
+            kind: 'sweep',
+            doc: rr.doc,
+            param: active,
+            at: sweepKey,
+            ...(sweepBase ? { base: sweepBase } : {}),
+            points: SWEEP_POINTS,
+            settings: solver,
+          }
         : undefined,
-      (r) => (sweepsAnswer = r && { param: r.answered.job.param, sweeps: r.result }),
+      (r) => (sweptAnswer = r && { answered: r.answered, sweep: r.result }),
     );
   });
-  const sweptHere = $derived(sweepsAnswer?.param === active ? sweepsAnswer.sweeps : []);
-  const swept = $derived(
-    !multi && refKey ? (sweptHere.find((e) => sameCondition(e.key, refKey))?.sweep ?? null) : null,
-  );
-  const sweptByKey = $derived(multi ? sweptHere : []);
+  // Shown only while it answers the chart now asked for: the same param, at the same condition,
+  // sized in the same place — a sweep of the previous one stays off the chart rather than being
+  // drawn under the new caption.
+  const swept = $derived.by((): ConditionSweep | null => {
+    const job = sweptAnswer?.answered.job;
+    if (!job || !sweepKey || job.param !== active || !sameCondition(job.at, sweepKey)) return null;
+    if ((job.base === undefined) !== (sweepBase === undefined)) return null;
+    return sweptAnswer?.sweep ?? null;
+  });
 
-  /** The swept parameter's unit, from whichever sweep ran — the caption's only use of it. */
-  const sweptUnit = $derived(swept?.unit ?? sweptByKey[0]?.sweep.unit ?? '');
+  /** The swept parameter's unit — the caption's only use of it. */
+  const sweptUnit = $derived(swept?.unit ?? '');
 
   // ── 2-D feasibility map: a second (×) param turns the 1-D margin chart into a design-plane
   // heatmap (feasible region vs the two params). Choices are the sweepable params minus the first.
-  // One design plane belongs to one condition: with several selected there is no single design
-  // to map, so the control is offered again as soon as the selection narrows to one.
+  // One design plane belongs to one condition the design is sized at: with several selected, or
+  // the nominal design held at one, there is no such plane, so the control is offered again as
+  // soon as the panel sizes the design at the one condition it asks about.
   const sweepable2 = $derived(sweepable.filter((p) => p.name !== active));
   const active2 = $derived(
-    !multi && active && sweep2 && sweepable2.some((p) => p.name === sweep2) ? sweep2 : '',
+    oneSized && active && sweep2 && sweepable2.some((p) => p.name === sweep2) ? sweep2 : '',
   );
   const twoD = $derived(active2 !== ''); // active2 is only ever set while `active` is
   let swept2Answer = $state.raw<{ answered: Answered<'sweep2'>; map: SheetSweep2 | null } | null>(
@@ -704,6 +856,7 @@
             param2: active2,
             at: refKey,
             points: SWEEP2_POINTS,
+            settings: solver,
           }
         : undefined,
       (r) => (swept2Answer = r && { answered: r.answered, map: r.result }),
@@ -734,41 +887,7 @@
   // fall outside the window, so every feasibility edge survives; the data stays true (the chart
   // clips the view, the numbers are not clamped) and the checks table carries exact values.
   const MARGIN_CLIP = 100;
-  /** The least room left among a sample's HARD checks — the same reading the badge's binding
-   *  check gives a point, and the one the core already takes for a range end's aggregate
-   *  curve. `measurable` is core's own predicate for a check outcome that carries headroom
-   *  (hardness included, so a future advisory kind cannot slip in here), and the clamp is the
-   *  one every margin comparison applies. A range-end curve is compliance, not feasibility, so
-   *  it stays out. `null` where no hard check produced a number. */
-  function worstHardMargin(s: SheetSweep, i: number): number | null {
-    let worst: number | null = null;
-    for (const r of s.checks) {
-      const m = r.marginPct[i];
-      if (r.rangeEnd !== undefined || m == null || !measurable(r.kind, m)) continue;
-      const clamped = clampMargin(m);
-      if (worst === null || clamped < worst) worst = clamped;
-    }
-    return worst;
-  }
   const chartData = $derived.by((): ChartData | null => {
-    // Several conditions: one curve each, of the worst hard-check margin, so the chart answers
-    // "where is this design type feasible, and which condition takes it out first" instead of
-    // stacking one check set per condition into an unreadable wall.
-    if (multi) {
-      const set = sweptByKey.filter((e) => e.sweep.x.length > 0);
-      if (!set.length) return null;
-      return {
-        x: set[0].sweep.x,
-        lines: set.map((e) =>
-          e.sweep.x.map((_, i) => {
-            const m = worstHardMargin(e.sweep, i);
-            return m == null ? null : m * 100;
-          }),
-        ),
-        lineLabels: set.map((e) => conditionLabel(e.key)),
-        yRange: [-MARGIN_CLIP, MARGIN_CLIP],
-      };
-    }
     if (!swept || swept.x.length === 0) return null;
     return {
       x: swept.x,
@@ -779,7 +898,8 @@
     };
   });
 
-  // The contiguous span of the swept param where the design is feasible (the feasibility window).
+  // The contiguous span of the swept param where the design is feasible (the feasibility window)
+  // — or, on a held sweep, where the held design complies at its own operating point.
   const feasWindow = $derived.by(() => {
     if (!swept || swept.feasible.length === 0) return null;
     const idx = swept.feasible.flatMap((f, i) => (f ? [i] : []));
@@ -1001,7 +1121,10 @@
   const rangeEndDetail = (e: RangeEndReport): string => {
     if (e.state === 'not-run') return 'not run — these settings produce no design';
     if (e.state === 'complies') return rangeEndSolved(e);
-    if (e.error) return e.state === 'no-answer' ? `no answer — ${e.error}` : e.error;
+    if (e.error) {
+      const error = namingRangeEnds(e.error, endNames);
+      return e.state === 'no-answer' ? `no answer — ${error}` : error;
+    }
     const b = bindingCheck(e);
     return b ? `${b.id} ${pct(b.marginPct)}` : POINT_TEXT[e.state];
   };
@@ -1015,12 +1138,11 @@
   // the chip clamps long solver messages with an ellipsis. The concept-level help lives on the
   // group label.
   const rangeEndTitle = (e: RangeEndReport, detail: string): string => {
-    const at = Object.entries(e.set)
-      .map(([k, v]) => `${k} = ${fmt(v)}`)
-      .join(' · ');
     const warns = rangeEndWarns(e)
-      .map((w) => `⚠ ${w.message}`)
+      .map((w) => `⚠ ${namingRangeEnds(w.message, endNames)}`)
       .join('\n');
+    // The name the sheet gives the end comes first: it is how a warning or an export refers to it.
+    const at = `range end "${e.name}": ${endName(e.name)}`;
     return [at, rangeEndNote.get(e.name), warns, e.state === 'complies' ? '' : detail]
       .filter(Boolean)
       .join('\n\n');
@@ -1029,7 +1151,7 @@
    *  series — consumers read the field, never parse the id's trailing separator. The words are
    *  the reading: above zero the held design complies at that range end, below zero it does not. */
   const checkLabel = (r: { id: string; rangeEnd?: string }): string =>
-    r.rangeEnd ? `complies at ${r.rangeEnd}` : r.id;
+    r.rangeEnd ? `complies at ${endName(r.rangeEnd)}` : r.id;
   const CHIP: Record<CheckStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author check notes by id (a CheckResult carries no note — the physical-meaning note lives on
@@ -1095,7 +1217,11 @@
   // Params group by role when ANY carries one (spec = the requirement, choice = the design knobs);
   // otherwise a single flat list, unchanged. Untagged params in a role-bearing doc trail ungrouped.
   const hasRoles = $derived(cfg.params.some((p) => p.role));
-  const specParams = $derived(cfg.params.filter((p) => p.role === 'spec'));
+  /** A spec param named `*_target` is a target of the example specification the sheet opens
+   *  with: a plausible number for its class, not a requirement — grouped and labelled as such. */
+  const isTarget = (p: SheetVar): boolean => p.role === 'spec' && p.name.endsWith('_target');
+  const targetParams = $derived(cfg.params.filter(isTarget));
+  const specParams = $derived(cfg.params.filter((p) => p.role === 'spec' && !isTarget(p)));
   const choiceParams = $derived(cfg.params.filter((p) => p.role === 'choice'));
   const otherParams = $derived(cfg.params.filter((p) => !p.role));
 
@@ -1387,14 +1513,23 @@
          condition whenever more than one is on the page. COMPLIANCE: how many of the points the
          design is promised to work at it was found to comply at, with the ones that failed, the
          ones that could not be answered and the ones never run each counted apart. -->
-      <span class="feasb {FEAS_CLASS[agg.feasibility]}" title={CONTROL_HELP.feasBadge}>
-        {feasText}{#if binding && agg.feasibility === 'infeasible'}<i
-            >{binding.id} {pct(binding.marginPct)}</i
-          >{/if}
+      <span
+        class="feasb {feasClass}"
+        title={holding ? CONTROL_HELP.cornerHold : CONTROL_HELP.feasBadge}
+        data-feasibility
+      >
+        {feasText}{#if binding && namesBinding}<i>{binding.id} {pct(binding.marginPct)}</i>{/if}
       </span>
       {#if hasCompliance}
-        <span class="compb {complianceClass}" title={CONTROL_HELP.compliance} data-compliance
+        <span class="compb {complianceClass}" title={complianceTitle} data-compliance
           >{complianceText}</span
+        >
+      {/if}
+      <!-- The solver ran under settings other than its defaults: these numbers are not the ones
+         the same sheet gives at the defaults, and the tooltip lists what differs. -->
+      {#if solverChanged.length}
+        <span class="ssolver" title={solverTitle} data-solver-nondefault
+          >solver settings: non-default</span
         >
       {/if}
       {#if wiring}
@@ -1449,7 +1584,7 @@
         class="sensb"
         class:on={sens !== null || sensBusy}
         disabled={!sensReady && !shot && !sensBusy}
-        title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sensitivity}
+        title={oneSized ? CONTROL_HELP.sensitivity : CONTROL_HELP.cornerOneAtATime}
         onclick={toggleSens}>{sensBusy ? 'sensitivities…' : 'sensitivities'}</button
       >
       {#if result?.sizing && !multi}
@@ -1478,15 +1613,32 @@
           </select>
         </label>
       {/if}
+      <!-- With several conditions on the page the chart still draws one: this one. -->
+      {#if active && multi && runs.length}
+        <label class="swsel" title={CONTROL_HELP.sweepAt}>
+          at
+          <select
+            data-sweep-at
+            value={sweepKey ? conditionKeyId(sweepKey) : ''}
+            onchange={(e) => (sweepPick = (e.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each runs as r (conditionKeyId(r.key))}
+              <option value={conditionKeyId(r.key)}
+                >{conditionLabel(r.key)}{r.design === 'sized' ? ' (sized)' : ' (held)'}</option
+              >
+            {/each}
+          </select>
+        </label>
+      {/if}
       {#if active && sweepable2.length}
         <label
           class="swsel2"
-          title={multi ? CONTROL_HELP.cornerOneAtATime : CONTROL_HELP.sheetSweep2}
+          title={oneSized ? CONTROL_HELP.sheetSweep2 : CONTROL_HELP.cornerOneAtATime}
         >
           ×
           <select
             value={active2}
-            disabled={multi}
+            disabled={!oneSized}
             onchange={(e) => onSweep2((e.currentTarget as HTMLSelectElement).value)}
           >
             <option value="">off</option>
@@ -1538,6 +1690,19 @@
             </label>
           {/each}
         {/if}
+        <!-- One condition that is not the nominal one is two questions: a design sized there, or
+           the nominal design held there. Sized where asked is the default. -->
+        {#if offNominal}
+          <select
+            data-corner-hold
+            title={CONTROL_HELP.cornerHold}
+            value={holding ? 'hold' : 'size'}
+            onchange={(e) => onCornerHold((e.currentTarget as HTMLSelectElement).value === 'hold')}
+          >
+            <option value="size">sized where asked</option>
+            <option value="hold">hold the nominal design here</option>
+          </select>
+        {/if}
       </div>
     {/if}
 
@@ -1570,16 +1735,16 @@
     {/if}
 
     <!-- Every selected condition, each with its own two answers and its own label. The aggregate
-       in the header is a fold of exactly these rows, and never replaces them. -->
-    {#if multi}
+       in the header is a fold of exactly these rows, and never replaces them. Holding the nominal
+       design at one condition is two of them: where it was sized, and where it is held. -->
+    {#if multi || holding}
       <!-- The tightest reading over the points that were MEASURED, labelled as such and naming
          where it was read: it is a display fold, and it must never be read as a margin over
          points that were not run or returned no answer. -->
       {#if agg.worst}
         <p class="scap" title={CONTROL_HELP.compliance} data-worst>
           tightest hard check over every point measured: {agg.worst.id}
-          {pct(agg.worst.marginPct)} at {conditionLabel(agg.worst.key)}{#if agg.worst.rangeEnd}
-            · {agg.worst.rangeEnd}{/if}
+          {pct(agg.worst.marginPct)} at {pointName(agg.worst.key, agg.worst.rangeEnd)}
         </p>
       {/if}
       <table class="scorntab">
@@ -1591,7 +1756,7 @@
               <td class="ccond">{conditionLabel(r.key)}</td>
               <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
               <td class="ccl">{centreCell(r)}</td>
-              {#if hasRange}<td class="ccv">{rangeCell(r)}</td>{/if}
+              {#if hasRange}<td class="ccv" title={rangeTitle(r)}>{rangeCell(r)}</td>{/if}
               <td class="ccd" title={[detail, ...notes].filter(Boolean).join('\n\n')}
                 >{#if notes.length}⚠&nbsp;{/if}{detail}</td
               >
@@ -1625,6 +1790,11 @@
       <p class="scap sstamp">
         detail below is <b>{conditionLabel(refKey)}</b> — one of {runs.length} conditions
       </p>
+    {:else if holding && result && refKey && agg.base}
+      <p class="scap sstamp">
+        detail below is the design sized at <b>{conditionLabel(agg.base)}</b>, held at
+        <b>{conditionLabel(refKey)}</b>
+      </p>
     {/if}
 
     {#if sensLines}
@@ -1632,8 +1802,8 @@
         <span class="glabel" title={CONTROL_HELP.sensitivity}>sensitivities</span>
         {#if focusCheck}
           <p class="scap">
-            how <b>{focusCheck.id}</b>’s margin moves per {SENSITIVITY_REL_STEP * 100}% step of each
-            knob, in that check’s own units — ↑ raises the knob, ↓ lowers it
+            how <b>{checkIdText(focusCheck.id)}</b>’s margin moves per {SENSITIVITY_REL_STEP * 100}%
+            step of each knob, in that check’s own units — ↑ raises the knob, ↓ lowers it
           </p>
           {#each sensLines.knobs as k}
             <div class="skline" title="step {fmt(k.step)} on {k.param}">
@@ -1664,6 +1834,16 @@
           <span class="glabel" title={CONTROL_HELP.paramRole}>spec</span>
           <div class="svars">
             {#each specParams as p}{@render paramRow(p)}{/each}
+          </div>
+        </div>
+      {/if}
+      {#if targetParams.length}
+        <div class="sgroup" data-example-spec>
+          <span class="glabel" title={CONTROL_HELP.exampleSpec}
+            >example spec — replace with your design’s</span
+          >
+          <div class="svars">
+            {#each targetParams as p}{@render paramRow(p)}{/each}
           </div>
         </div>
       {/if}
@@ -1715,7 +1895,7 @@
         </div>
       {/if}
 
-      <table class="srules">
+      <table class="srules" class:worsted={worstByCheck !== null}>
         <tbody>
           {#each res.checks as r}
             <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={checkTitle(r)}>
@@ -1727,7 +1907,9 @@
                     ? CONTROL_HELP.checkNa
                     : undefined}>{CHIP[r.status]}</td
               >
-              <td class="rid">{r.id}<i title={CONTROL_HELP.checkKind}>{KIND_LABEL[r.kind]}</i></td>
+              <td class="rid"
+                ><b>{r.id}</b><i title={CONTROL_HELP.checkKind}>{KIND_LABEL[r.kind]}</i></td
+              >
               <td class="rtext">
                 <span class="req">{@html qFormula(r.text)}</span>
                 {#if checkNote.get(r.id)}<span class="snote"
@@ -1737,6 +1919,17 @@
               </td>
               <td class="rnum">{fmt(r.lhsValue)} / {fmt(r.rhsValue)}</td>
               <td class="rmar">{r.status === 'na' ? '—' : pct(r.marginPct)}</td>
+              <!-- Where this check is tightest over every point measured: the condition, and the
+                 range end or the design's own operating point. -->
+              {#if worstByCheck}
+                {@const w = worstByCheck.get(r.id)}
+                <td class="rworst" title={CONTROL_HELP.worstAt} data-worst-at={r.id}
+                  >{#if w}worst {pct(w.marginPct)} at {pointName(
+                      w.key,
+                      w.rangeEnd,
+                    )}{:else}—{/if}</td
+                >
+              {/if}
             </tr>
           {/each}
         </tbody>
@@ -1747,9 +1940,13 @@
           <span class="glabel" title={CONTROL_HELP.operatingRange}>operating range</span>
           {#each res.rangeEnds as e (e.name)}
             {@const detail = rangeEndDetail(e)}
-            <span class="sedge {POINT_CLASS[e.state]}" title={rangeEndTitle(e, detail)}>
+            <span
+              class="sedge {POINT_CLASS[e.state]}"
+              title={rangeEndTitle(e, detail)}
+              data-range-end={e.name}
+            >
               {POINT_MARK[e.state]}
-              {e.name}{#if rangeEndWarns(e).length}&nbsp;⚠{/if}
+              {endName(e.name)}{#if rangeEndWarns(e).length}&nbsp;⚠{/if}
               {#if detail}<i>{detail}</i>{/if}
             </span>
           {/each}
@@ -1780,21 +1977,25 @@
           no hard check fails across this plane
         {/if}
       </p>
-    {:else if active && chartData && !twoD}
-      <div class="scap">
-        {#if multi}
-          worst hard-check margin (%) vs <b>{active}</b>{#if sweptUnit}
-            ({sweptUnit}){/if} — one curve per condition that was evaluated, each re-sizing the design
-          at that condition as the knob moves: where the design type is feasible there, not the held design.
-          The 0 line is where a check sits exactly on its limit, clipped at ±{MARGIN_CLIP}%. A
-          condition that could not be evaluated draws no curve and stays in the table above.
+    {:else if active && chartData && !twoD && swept}
+      {@const at = conditionLabel(swept.key)}
+      <!-- Which of the two curves this is: the design sized at the chart's condition at every
+         sample, or the nominal design held there. -->
+      <div class="scap" data-sweep-caption data-sweep-design={swept.design}>
+        margin (%) vs <b>{active}</b>{#if sweptUnit}
+          ({sweptUnit}){/if} at <b>{at}</b> —
+        {#if swept.design === 'held'}
+          the nominal design held there: each sample sizes the design at {conditionLabel(
+            swept.base,
+          )} with {active} at that value and holds it at {at} — widths, lengths, currents and gate biases
+          fixed — so the curves are that design’s margins at {at}{#if (cfg.operatingRange ?? []).length},
+            its own range ends included{/if}.
         {:else}
-          margin (%) vs <b>{active}</b>{#if sweptUnit}
-            ({sweptUnit}){/if} — the 0 line is where a check sits exactly on its limit; dashed = advisory;
-          clipped at ±{MARGIN_CLIP}%{#if (cfg.operatingRange ?? []).length}
+          sized there: each sample re-sizes the design at {at} with {active} at that value{#if (cfg.operatingRange ?? []).length}
             · each sample holds its OWN design at the range ends, so the range-end curves move with
-            the sweep and never change what is feasible{/if}
+            the sweep and never change what is feasible{/if}.
         {/if}
+        The 0 line is where a check sits exactly on its limit; dashed = advisory; clipped at ±{MARGIN_CLIP}%.
       </div>
       <div class="pchart" bind:this={el}></div>
       <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
@@ -1802,25 +2003,26 @@
          advisory check is dashed on the chart and tagged here, since an inline-styled swatch cannot
          carry the dash. -->
       <div class="skey">
-        {#if multi}
-          {#each chartData.lineLabels ?? [] as label, i}
-            <span class="kitem"
-              ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{label}</span
-            >
-          {/each}
-        {:else}
-          {#each swept?.checks ?? [] as r, i}
-            <span class="kitem"
-              ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{checkLabel(
-                r,
-              )}{#if r.kind === 'advisory'}&nbsp;·&nbsp;adv{/if}</span
-            >
-          {/each}
-        {/if}
+        {#each swept.checks as r, i}
+          <span class="kitem"
+            ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{checkLabel(
+              r,
+            )}{#if r.kind === 'advisory'}&nbsp;·&nbsp;adv{/if}</span
+          >
+        {/each}
       </div>
-      {#if feasWindow && !multi}
+      {#if feasWindow}
         <p class="feas">
-          {#if feasWindow.none}
+          {#if swept.design === 'held'}
+            {#if feasWindow.none}
+              the held design complies at {at} nowhere in this range of {active}
+            {:else}
+              the held design complies at {at} for {active} ≈ {fmt(feasWindow.lo)}…{fmt(
+                feasWindow.hi,
+              )}{sweptUnit}{#if feasWindow.gap}
+                (non-contiguous){/if}
+            {/if}
+          {:else if feasWindow.none}
             no feasible {active} in this range
           {:else}
             feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(
@@ -1833,12 +2035,12 @@
     {:else if active && sweeping}
       <!-- The sweep is running in the background; the chart appears here when it is done. -->
       <p class="feas sbusy" data-sweeping>sweeping {active}…</p>
-    {:else if active && refRun}
+    {:else if active && sweepKey && sweepRun && !sweepReady}
       <!-- The sweep is a statement about a design, and there is no design here yet. -->
       <p class="feas">
-        {multi
-          ? 'no condition in this set was evaluated, so there is nothing to sweep'
-          : `nothing to sweep at ${conditionLabel(refRun.key)} — this condition was not evaluated`}
+        nothing to sweep at {conditionLabel(sweepKey)} — {sweepBase
+          ? 'the nominal design could not be held there'
+          : 'this condition was not evaluated'}
       </p>
     {/if}
 
@@ -1965,6 +2167,15 @@
     .sbusy {
       animation: none;
     }
+  }
+  /* Evaluated under solver settings other than the defaults: quiet, like the condition stamp, but
+     marked, since every number on the panel rests on it. */
+  .ssolver {
+    font-size: calc(0.72rem * var(--text-scale));
+    padding: 0.02rem 0.35rem;
+    border-radius: 4px;
+    border: 1px dashed currentColor;
+    opacity: 0.85;
   }
   /* The condition a verdict was measured at. Quiet, and never optional. */
   .scond {
@@ -2280,6 +2491,27 @@
     padding: 0.12rem 0.4rem;
     border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
     white-space: nowrap;
+  }
+  /* Where the check is tightest: long words in a narrow column, so it wraps and stays quiet. */
+  .srules td.rworst {
+    white-space: normal;
+    font-size: calc(0.72rem * var(--text-scale));
+    opacity: 0.75;
+    min-width: 6rem;
+  }
+  /* Beside that column the check's text stops taking every spare pixel, so the two share it. */
+  .srules.worsted .rtext {
+    width: auto;
+  }
+  /* With the column above on a narrow panel, the check's kind may drop under its id rather than
+     push the row past the panel's edge; the id itself never breaks. */
+  .srules td.rid {
+    white-space: normal;
+  }
+  .rid b,
+  .rid i {
+    white-space: nowrap;
+    font-weight: inherit;
   }
   .chip {
     width: 1.2rem;

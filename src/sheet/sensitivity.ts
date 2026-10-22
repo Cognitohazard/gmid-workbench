@@ -29,6 +29,7 @@ import type {
   SheetVar,
 } from './types';
 import { evaluateSheet, type DeviceResolver } from './eval';
+import type { Settings } from './settings';
 import { validateSheet } from './validate';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 
@@ -62,6 +63,8 @@ export interface SensitivityOptions {
   params?: readonly string[];
   absStep?: number;
   check?: string;
+  /** The tolerances and caps every probe is evaluated under (see Settings). */
+  settings?: Settings;
 }
 
 /** One knob to probe, or the reason it cannot be one. */
@@ -171,7 +174,7 @@ export function sheetSensitivities(
   // see SensitivityOptions.check.
   const probeDoc = opts.check?.includes(RANGE_END_SEP) ? r.doc : withoutRange(r.doc);
   const at = (over: Record<string, number>): SheetResult =>
-    evaluateSheet(withParams(probeDoc, over), table, resolveDevice);
+    evaluateSheet(withParams(probeDoc, over), table, resolveDevice, { settings: opts.settings });
 
   // A probe has to have completed wherever it is read. The probe doc carries range ends only
   // when the check in question lives on one, and then THAT end leaving no outcomes is a probe

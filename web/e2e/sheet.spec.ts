@@ -502,6 +502,13 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await expect(sp.locator('.suse', { hasText: 'load' })).toBeVisible();
   await expect(sp.locator('.feasb')).toHaveText('feasible');
 
+  // The targets it opens with are an example specification, labelled as one: a plausible number
+  // for the class, to be replaced by the design's own.
+  const example = sp.locator('[data-example-spec]');
+  await expect(example.locator('.glabel')).toHaveText('example spec — replace with your design’s');
+  await expect(example.locator('.glabel')).toHaveAttribute('title', /not a requirement/);
+  await expect(example.locator('.svar[data-param="GBW_target"]')).toBeVisible();
+
   // Each block owns its operating point: a per-block bias control shows the vds axis, typeset
   // (V_DS). The curated sheet drives vds from a param, so the block links to it read-only rather
   // than borrowing the (now retired) shared dashboard slider.
@@ -1359,8 +1366,15 @@ test('operating range: chips report each range end; an end the solve cannot reac
   // demo's business — budgets are tuned for real tables — the report SHAPE is the contract.)
   const chips = sp.locator('.sedge');
   await expect(chips).toHaveCount(2);
-  await expect(chips.nth(0)).toContainText('cm-lo');
-  await expect(chips.nth(1)).toContainText('cm-hi');
+  // Each end is named by the quantity and value its `set` fixes and which end of the range it is,
+  // never by its bare name alone.
+  await expect(chips.nth(0)).toHaveAttribute('data-range-end', 'cm-lo');
+  await expect(chips.nth(0)).toContainText(
+    /CM_dc = [\d.]+ m?V, the low end of the claimed CM_dc range/,
+  );
+  await expect(chips.nth(1)).toContainText(
+    /CM_dc = [\d.]+ m?V, the high end of the claimed CM_dc range/,
+  );
 
   // The strip and the sweep legend both name the QUESTION a range end answers. A chip says
   // whether the held design complies at that end; the curve says by how much. Locked here
@@ -1380,8 +1394,14 @@ test('operating range: chips report each range end; an end the solve cannot reac
   await sp.locator('.swsel select').selectOption('CM_dc');
   // The sweep runs in the background and the chart lands when it is done.
   await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 60_000 });
-  await expect(sp.locator('.skey')).toContainText('complies at cm-lo', { timeout: 60_000 });
-  await expect(sp.locator('.scap')).toContainText('each sample holds its OWN design');
+  await expect(sp.locator('.skey')).toContainText('complies at CM_dc = ', { timeout: 60_000 });
+  await expect(sp.locator('.skey')).toContainText('the low end of the claimed CM_dc range');
+  await expect(sp.locator('[data-sweep-caption]')).toContainText(
+    'each sample holds its OWN design',
+  );
+  // With a range there is more than one point to read, so every check row says where it is
+  // tightest — at this one condition, its own operating point or a named range end.
+  await expect(sp.locator('[data-worst-at="offset-spec"]')).toContainText(/^worst .+ at tt, /);
 
   // Make the low end unreachable: no tail-node position produces CM_in = 0.3 (the demo
   // table's diode drop alone exceeds it). Nothing was measured there, so the chip is neither
