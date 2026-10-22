@@ -33,6 +33,8 @@ import {
   joinProvide,
   constraintIssue,
   constrained,
+  designFailure,
+  deviceName,
   drainProblem,
   engineChecks,
   prefixBlockPath,
@@ -44,8 +46,10 @@ import {
   stands,
   unfinishedBecause,
   withParams,
+  type NoSolutionWhy,
   type NotSettledWhy,
   type SolveFailure,
+  type SolveRange,
 } from './types';
 import { assumedLevelRefusal, heldGateWarnings, holdHardware, type HeldHardware } from './coverage';
 // A value as a message quotes it: what the author wrote, without the float tail arithmetic leaves
@@ -60,12 +64,15 @@ import {
   flattened,
   formatOf,
   formatProblems,
+  linearValue,
   readsParentSelector,
+  solvedWiring,
   STANDALONE,
   structuralDiodes,
   unwalkedReport,
   withNodes,
   withoutWalk,
+  type ChannelNeighbour,
   type WiringMode,
 } from './nodes';
 import type {
@@ -1636,7 +1643,7 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
 }
 
 /** One solved param as a search reads it: its relation (`lhs - rhs` reads zero at the answer), the
- *  range it is searched in, and how messages name it. */
+ *  range it is searched in and where that range came from, and how messages name it. */
 interface Unknown {
   p: SheetVar;
   lhs: string;
@@ -1646,19 +1653,272 @@ interface Unknown {
   what: string;
   lo: number;
   hi: number;
+  /** Where [lo, hi] came from (see searchRanges); the author's `min`/`max` until it is read. */
+  range: SolveRange;
 }
 
 function unknownOf(p: SheetVar): Unknown {
   const { lhs, rhs } = solvedRelation(p) as { lhs: string; rhs: string };
   const held = constrained(p) && p.designConstraint.held === true;
+  const author: [number, number] = [p.min as number, p.max as number];
   return {
     p,
     lhs,
     rhs,
     held,
     what: `${held ? 'held' : 'solved'} param "${p.name}"`,
-    lo: p.min as number,
-    hi: p.max as number,
+    lo: author[0],
+    hi: author[1],
+    range: {
+      param: p.name,
+      range: author,
+      from: 'author',
+      author,
+      note: `${held ? 'held' : 'solved'} param "${p.name}" is searched in the author's range`,
+    },
+  };
+}
+
+/** A wire's name as a message quotes it. */
+const wireName = (w: string): string => `"${w}"`;
+
+/** A wire's level the design point's walk placed, as a bound where the design is held: to the
+ *  millivolt, one millivolt outside the range it bounds. A held run re-solves what the design
+ *  point solved, so the walk it is read from places each wire a rounding error away from where the
+ *  same design sized here would; a bound read to the millivolt quotes the same number either way,
+ *  and the step outward keeps every level the wire can take inside it. */
+function placedBound(v: number, side: 'below' | 'above'): number {
+  const mv = Math.round(v * 1000) + (side === 'below' ? -1 : 1);
+  return mv / 1000;
+}
+
+/**
+ * The range each solved param of a node is searched in, and where it came from (see SolveRange):
+ * the author's `min`/`max`, narrowed to the range the wiring puts the param's wire in where the
+ * wiring can read one. Read only for the top of a tree, whose wiring walk reads every wire; a
+ * block's own solved params keep their author's range. Returns the records, with each unknown's
+ * [lo, hi] set to its own, and the unknowns whose author's range lies outside the wiring's, with
+ * the message that says so.
+ *
+ * The wiring's range of a param that is the level of a wire (solvedWiring) runs from the highest
+ * of the wires below that wire to the lowest of those above it, each placed by the first that
+ * applies:
+ *  1. a level the wiring states through params the node does not solve — gnd, a held wire, a wire
+ *     one relation from one whose relation reads only such params: that value here;
+ *  2. where the design is held, the level the design point's walk gave it (SheetDoc.designLevels),
+ *     to the millivolt and one millivolt outward (placedBound);
+ *  3. a wire whose level is another param the node solves: that param's author's range end — its
+ *     `min` for a wire below, its `max` for one above;
+ *  4. otherwise it cannot be placed here: its level is set by a device, which the walk reads only
+ *     once the design is solved.
+ * A side is bounded by the wires on it that can be placed; a side with none leaves no range to
+ * read, and so does a wire placed below another placed above it.
+ */
+function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message: string }[] {
+  if (node.depth > 0) return [];
+  const { doc } = node;
+  const solved = new Set(unknowns.map((u) => u.p.name));
+  const tableAt = (chain: readonly SheetBlock[]): DeviceTable | undefined => {
+    let t = node.table;
+    for (const b of chain) if (b.device !== undefined) t = node.resolveDevice?.(b.device);
+    return t;
+  };
+  const wiring = solvedWiring(doc, tableAt, [...solved]);
+  const values = new Map(doc.params.map((p) => [p.name, p.value]));
+  const valueOf = (atom: string): number | undefined =>
+    solved.has(atom) ? undefined : values.get(atom);
+  const outside: { u: Unknown; message: string }[] = [];
+  for (const u of unknowns) {
+    const sw = wiring?.wires.get(u.p.name);
+    const author = u.range.author;
+    const unit = unitOf(u);
+    const span = (lo: number, hi: number): string => rangeOf(u, lo, hi);
+    if (!sw) {
+      const why = wiring ? 'it is not the level of any wire' : 'the sheet names no wiring';
+      u.range = {
+        ...u.range,
+        why,
+        note: `${u.what} is searched in the author's range ${span(author[0], author[1])}: ${why}`,
+      };
+      continue;
+    }
+    const on = sw.wires.map(wireName).join(' and ');
+    /** A neighbour's level here, or undefined where it cannot be placed (see searchRanges). */
+    const place = (n: ChannelNeighbour, side: 'below' | 'above'): number | undefined => {
+      for (const f of wiring?.forms.get(n.wire) ?? []) {
+        const v = linearValue(f, valueOf);
+        if (v !== undefined) return v;
+      }
+      const at = doc.designLevels?.[n.wire];
+      if (at !== undefined && Number.isFinite(at)) return placedBound(at, side);
+      for (const [q, other] of wiring?.wires ?? [])
+        if (q !== u.p.name && other.wires.includes(n.wire)) {
+          const p = doc.params.find((x) => x.name === q);
+          const end = side === 'below' ? p?.min : p?.max;
+          if (end !== undefined && Number.isFinite(end)) return end;
+        }
+      return undefined;
+    };
+    /** One side's bound: its highest wire below, or its lowest above, among those placed. */
+    const bound = (side: 'below' | 'above'): { v: number; wire: string } | { why: string } => {
+      const ns = sw[side];
+      if (!ns.length) return { why: `no device's channel joins it to a wire ${side} it` };
+      let best: { v: number; wire: string } | undefined;
+      for (const n of ns) {
+        const v = place(n, side);
+        if (v !== undefined && (!best || (side === 'below' ? v > best.v : v < best.v)))
+          best = { v, wire: n.wire };
+      }
+      if (best) return best;
+      const many = ns.length > 1;
+      const list = ns.map((n) => `${wireName(n.wire)} (through ${deviceName(n.device)})`);
+      const named = `${list.length > 1 ? `${list.slice(0, -1).join(', ')} and ` : ''}${list[list.length - 1]}`;
+      return {
+        why:
+          `the ${many ? 'wires' : 'wire'} ${side} it, ${named}, ` +
+          (doc.designLevels
+            ? `${many ? 'were' : 'was'} not placed by the design point's walk`
+            : `${many ? 'are set by devices' : 'is set by a device'}, and the walk places ` +
+              `${many ? 'them' : 'it'} only once the design is solved`),
+      };
+    };
+    const lo = bound('below');
+    const hi = bound('above');
+    const authorRange = (why: string): void => {
+      u.range = {
+        ...u.range,
+        wires: sw.wires,
+        why,
+        note:
+          `${u.what} is searched in the author's range ${span(author[0], author[1])}: no range ` +
+          `is read from the wiring for its wire ${on} — ${why}`,
+      };
+    };
+    if ('why' in lo || 'why' in hi) {
+      authorRange([lo, hi].flatMap((b) => ('why' in b ? [b.why] : [])).join('; '));
+      continue;
+    }
+    const wlo = lo.v;
+    const whi = hi.v;
+    if (!(wlo < whi)) {
+      authorRange(
+        `the wire below it, ${wireName(lo.wire)}, is placed at ${shown(wlo)}${unit}, not below ` +
+          `the wire above it, ${wireName(hi.wire)}, at ${shown(whi)}${unit}`,
+      );
+      continue;
+    }
+    const wiringRange: SolveRange['wiring'] = {
+      range: [wlo, whi],
+      below: lo.wire,
+      above: hi.wire,
+    };
+    const between = `between ${wireName(lo.wire)} below and ${wireName(hi.wire)} above`;
+    const searchLo = Math.max(author[0], wlo);
+    const searchHi = Math.min(author[1], whi);
+    if (!(searchLo < searchHi)) {
+      outside.push({
+        u,
+        message:
+          `${u.what}: its range ${span(author[0], author[1])} lies outside the range the wiring ` +
+          `puts its wire ${on} in, ${span(wlo, whi)} ${between} — no level it allows is one the ` +
+          `circuit can put the wire at. Move min/max inside the wiring's range`,
+      });
+      // Not searched: the error says why, and the record carries the same words.
+      u.range = {
+        ...u.range,
+        wires: sw.wires,
+        wiring: wiringRange,
+        note: outside[outside.length - 1].message,
+      };
+      continue;
+    }
+    const clipped = author[0] < wlo || author[1] > whi;
+    const fromWiring = author[0] <= wlo && author[1] >= whi;
+    u.lo = searchLo;
+    u.hi = searchHi;
+    u.range = {
+      param: u.p.name,
+      range: [searchLo, searchHi],
+      from: fromWiring ? 'wiring' : 'narrowed',
+      author,
+      wires: sw.wires,
+      wiring: wiringRange,
+      note: fromWiring
+        ? `${u.what} is searched in ${span(wlo, whi)}, the range the wiring puts its wire ${on} ` +
+          `in, ${between}` +
+          (clipped ? ` — the author's range ${span(author[0], author[1])} reaches past it` : '')
+        : clipped
+          ? `${u.what} is searched in ${span(searchLo, searchHi)}: the author's range ` +
+            `${span(author[0], author[1])} clipped to the range the wiring puts its wire ${on} ` +
+            `in, ${span(wlo, whi)} ${between}`
+          : `${u.what} is searched in the author's range ${span(author[0], author[1])}, inside ` +
+            `the range the wiring puts its wire ${on} in, ${span(wlo, whi)} ${between}`,
+    };
+  }
+  return outside;
+}
+
+/** Where an unknown's searched range came from, as a failure's message says it — nothing for a
+ *  param that is no wire's level, whose range can only be its author's. */
+function rangeSource(u: Unknown): string | undefined {
+  const r = u.range;
+  if (r.from === 'author') return r.wires ? `the author's range — ${r.why}` : undefined;
+  const w = r.wiring as NonNullable<SolveRange['wiring']>;
+  const between = `between ${wireName(w.below)} and ${wireName(w.above)}`;
+  if (r.from === 'wiring') return `the range the wiring puts its wire in, ${between}`;
+  const clipped = r.author[0] < w.range[0] || r.author[1] > w.range[1];
+  return (
+    `the author's range ${clipped ? 'clipped to' : 'inside'} the wiring's ` +
+    `${rangeOf(u, w.range[0], w.range[1])} ${between}`
+  );
+}
+
+/** What a search that found no crossing in its range tells the author to do: a range of the
+ *  author's own may be in the wrong place; a range the wiring sets is where the circuit can put
+ *  the wire, so no crossing there is the design not reaching its target. */
+function noCrossingAdvice(u: Unknown): string {
+  switch (u.range.from) {
+    case 'wiring':
+      return (
+        `The circuit can put the wire nowhere else, so the design does not reach its target ` +
+        `here`
+      );
+    case 'narrowed':
+      return (
+        `Widen min/max toward the wiring's range to search the rest of where the circuit can ` +
+        `put the wire, or the design does not reach its target there`
+      );
+    case 'author':
+      return (
+        `Move or widen min/max to bracket one, or the relation does not reach its target on ` +
+        `this table`
+      );
+  }
+}
+
+/** A solved node's result with the range each of its solved params was searched in (SheetResult.
+ *  ranges), and a `sheet-range` note for each that is a wire's level, saying where its range came
+ *  from — none for one `refused`, whose range lies outside the wiring's and whose error says so.
+ *  Nothing for a block below the top, whose ranges are its author's (see searchRanges). */
+function withRanges(
+  res: SheetResult,
+  node: NodeRef,
+  unknowns: readonly Unknown[],
+  refused: readonly Unknown[] = [],
+): SheetResult {
+  if (node.depth > 0) return res;
+  const notes: QAWarning[] = unknowns
+    .filter((u) => u.range.wires && !refused.includes(u))
+    .map((u) => ({
+      rule: 'sheet-range',
+      severity: 'info',
+      message: u.range.note,
+      location: u.p.name,
+    }));
+  return {
+    ...res,
+    ranges: unknowns.map((u) => u.range),
+    ...(notes.length ? { warnings: [...res.warnings, ...notes] } : {}),
   };
 }
 
@@ -1747,9 +2007,11 @@ const outOfBudget = (f: SolveFailure): boolean => f.kind === 'not-settled' && f.
  *    leaves no room for the step's height); or an end of the range reads within its tolerance of
  *    zero by the slope there, and is the root;
  *  - no solution found in the range: the relation does not change sign across what was searched
- *    and neither end is within its tolerance of zero (none, or an even number, of roots), jumps
- *    across the target, does not appear to depend on the param at all, or (held) does not single
- *    the node out;
+ *    and neither end is within its tolerance of zero (none, or an even number, of roots:
+ *    `no-crossing`), jumps across the target (`step`), does not appear to depend on the param at
+ *    all, or (held) does not single the node out (`undetermined`) — the failure carries the
+ *    reason and where the range came from, which decide whether it is a finding about the design
+ *    (designFailure);
  *  - not settled: nothing of the range could be evaluated, the sign changes across a stretch
  *    inside the bracket that does not evaluate, the shared budget ran out (here or in a child a
  *    probe evaluated), or the probe backstop was hit.
@@ -1783,6 +2045,12 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
   const range = moved.length
     ? `the searched range ${rangeOf(u, lo.x, hi.x)} (${moved.join('; ')})`
     : rangeOf(u, lo.x, hi.x);
+  // The same, saying where the range came from, for the one failure that can be a finding about
+  // the design (see designFailure).
+  const source = rangeSource(u);
+  const sourced = source
+    ? `${moved.length ? 'the searched range ' : ''}${rangeOf(u, lo.x, hi.x)} (${[source, ...moved].join('; ')})`
+    : range;
   const unsingled = degenerate(s, lo, hi, range);
   if (unsingled) return unsingled;
   // An end that reads exactly zero, or within its tolerance of zero by the slope there, is the
@@ -1808,11 +2076,11 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
     return s.none(
       lo,
       hi,
-      `${u.what} found no solution in ${range}: ${rel} does not change sign across it ` +
-        `(${gLo.toExponential(3)} at ${shown(lo.x)}, ${gHi.toExponential(3)} at ${shown(hi.x)}) ` +
-        `— none, or an even number, of roots there. Move or widen min/max to bracket one, or ` +
-        `the relation does not reach its target on this table${given}`,
+      `${u.what} found no solution in ${sourced}: ${rel} does not change sign ` +
+        `across it (${gLo.toExponential(3)} at ${shown(lo.x)}, ${gHi.toExponential(3)} at ` +
+        `${shown(hi.x)}) — none, or an even number, of roots there. ${noCrossingAdvice(u)}${given}`,
       hi,
+      'no-crossing',
     );
   }
 
@@ -1935,8 +2203,9 @@ interface Searcher {
   slopeAt(p: Probe, toward: number): number | undefined | null;
   /** This unknown did not settle, for `why`, shown by `at` or else the last evaluation. */
   unsettled(why: NotSettledWhy, message: string, at?: Probe): Found;
-  /** This unknown has no solution in the stretch from `from` to `to`, shown by `at`. */
-  none(from: Probe, to: Probe, message: string, at: Probe): Found;
+  /** This unknown has no solution in the stretch from `from` to `to`, shown by `at`, for the reason
+   *  `because` names. */
+  none(from: Probe, to: Probe, message: string, at: Probe, because: NoSolutionWhy): Found;
   /** The shared budget ran out. */
   exhausted(): Found;
 }
@@ -1996,8 +2265,18 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
       return q.g === undefined ? undefined : Math.abs((q.g - (p.g as number)) / step);
     },
     unsettled,
-    none: (from, to, message, at) =>
-      failed({ kind: 'no-solution', unknown: name, range: [from.x, to.x], message }, at),
+    none: (from, to, message, at, because) =>
+      failed(
+        {
+          kind: 'no-solution',
+          unknown: name,
+          range: [from.x, to.x],
+          message,
+          from: u.range.from,
+          because,
+        },
+        at,
+      ),
     exhausted: () =>
       unsettled(
         'budget',
@@ -2075,6 +2354,7 @@ function degenerate(s: Searcher, lo: Probe, hi: Probe, range: string): Found | u
           `${own.toExponential(3)} — holding it does not determine ${name} here (numerically ` +
           `unresolved)${given}`,
         hi,
+        'undetermined',
       );
   } else if (gLo === gHi) {
     // The same number, to the last bit, at both ends — and at the middle too — is what a relation
@@ -2093,6 +2373,7 @@ function degenerate(s: Searcher, lo: Probe, hi: Probe, range: string): Found | u
           `both ends of ${range} and at its middle — it does not appear to depend on ${name}, so ` +
           `no value of it is singled out${given}`,
         hi,
+        'undetermined',
       );
   }
   return undefined;
@@ -2164,6 +2445,7 @@ function acceptClosed(
         `tolerance — the relation steps across the target without touching it (a table edge ` +
         `or a fold)${given}`,
       b,
+      'step',
     );
   return { ok: true, res: b.res, x: b.x, slope };
 }
@@ -2336,7 +2618,10 @@ function settle(
 /**
  * Resolve one node's solved params — every param carrying a `designConstraint` (a `hold` becomes
  * one where the hardware is held) or a `solveFor`. Each has a relation that must read zero and a
- * range the author states, and each is found by a one-unknown search in that range (search).
+ * range the author states, narrowed at the top of a tree to the range the wiring puts the param's
+ * wire in where it is a wire's level (searchRanges), and each is found by a one-unknown search in
+ * that range (search). An author's range outside the wiring's is refused before anything is
+ * searched. The result carries each param's range and where it came from (withRanges).
  *
  * The node's solved params are grouped by solvePlan into sets that depend on each other, in the
  * order their relations read each other. A set of one is one search, with every earlier set held
@@ -2371,6 +2656,24 @@ function solveNode(node: NodeRef): SheetResult {
     });
   const unknowns = doc.params.filter(engineSolved).map(unknownOf);
   if (unknowns.length === 0) return evaluateOnce(node);
+  // The range each is searched in: its author's, narrowed to the wiring's where that can be read.
+  const outside = searchRanges(node, unknowns);
+  const ranged = (res: SheetResult): SheetResult =>
+    withRanges(
+      res,
+      node,
+      unknowns,
+      outside.map((o) => o.u),
+    );
+  if (outside.length)
+    return ranged(
+      solveFailed(evaluateOnce(node), {
+        kind: 'not-settled',
+        unknowns: outside.map((o) => o.u.p.name),
+        why: 'malformed',
+        message: outside.map((o) => o.message).join('; '),
+      }),
+    );
 
   const at: Record<string, number> = {};
   for (const u of unknowns) at[u.p.name] = (u.lo + u.hi) / 2;
@@ -2390,7 +2693,7 @@ function solveNode(node: NodeRef): SheetResult {
       }
       outcome = found;
     } else outcome = settle(ctx, set, slope);
-    if (!outcome.ok) return solveFailed(outcome.res, outcome.failure);
+    if (!outcome.ok) return ranged(solveFailed(outcome.res, outcome.failure));
     last = outcome.res;
   }
 
@@ -2400,24 +2703,26 @@ function solveNode(node: NodeRef): SheetResult {
     .filter((u) => !holdsAt(u, final, slope, solveTolRel))
     .map((u) => ({ u, g: relationAt(u, final), tol: tolOf(u, slope, solveTolRel) }));
   if (off.length)
-    return solveFailed(final, {
-      kind: 'not-settled',
-      unknowns: off.map((o) => o.u.p.name),
-      why: 'verification',
-      message:
-        `${off.length > 1 ? 'solved params' : off[0].u.held ? 'held param' : 'solved param'} ` +
-        `${nameList(off.map((o) => o.u))} did not settle: read from the final evaluation, ` +
-        off
-          .map(
-            ({ u, g, tol }) =>
-              `${u.lhs} - (${u.rhs}) ${g === undefined ? 'does not evaluate' : `reads ${g.toExponential(3)}`}` +
-              ` against a tolerance of ${tol.toExponential(3)} (its slope there times ` +
-              `${solveTolRel} of its range)`,
-          )
-          .join('; ') +
-        ` — the values it was solved with moved after it landed`,
-    });
-  return { ...final, solve: { kind: 'settled' } };
+    return ranged(
+      solveFailed(final, {
+        kind: 'not-settled',
+        unknowns: off.map((o) => o.u.p.name),
+        why: 'verification',
+        message:
+          `${off.length > 1 ? 'solved params' : off[0].u.held ? 'held param' : 'solved param'} ` +
+          `${nameList(off.map((o) => o.u))} did not settle: read from the final evaluation, ` +
+          off
+            .map(
+              ({ u, g, tol }) =>
+                `${u.lhs} - (${u.rhs}) ${g === undefined ? 'does not evaluate' : `reads ${g.toExponential(3)}`}` +
+                ` against a tolerance of ${tol.toExponential(3)} (its slope there times ` +
+                `${solveTolRel} of its range)`,
+            )
+            .join('; ') +
+          ` — the values it was solved with moved after it landed`,
+      }),
+    );
+  return ranged({ ...final, solve: { kind: 'settled' } });
 }
 
 /**
@@ -2487,6 +2792,8 @@ const unrunEnd = (
  * - it completed, every device read where it was asked for: `complies` when every hard check
  *   holds, else `does-not-comply` (the failures are in the run's checks);
  * - a device held at its width cannot carry its current here: `does-not-comply`, with `error`;
+ * - a solved param found no crossing anywhere the wiring lets its wire go (designFailure):
+ *   `does-not-comply`, with the solver's message as `error`;
  * - it did not complete for any other reason, or completed on data read off the table's hull:
  *   `no-answer`, with `error` — the solver's message verbatim where there is one.
  *
@@ -2527,9 +2834,15 @@ export function heldOutcome(res: SheetResult): {
         `characterized point, which is not the point asked about` +
         (err === undefined ? '' : `; the run then stopped: ${err}`),
     };
-  // A solve that found no solution in its range, or did not settle, is no answer. Its message may
-  // quote the device failure that bounded the search (the relation not evaluating past some
-  // point), and that quote is the reason for the range searched, not this point's verdict.
+  // A held param that found no crossing anywhere the wiring lets its wire go — the range the
+  // wiring derived, or the author's inside it — is the design failing here (designFailure): the
+  // circuit has no operating point at this condition. Only the sheet's own solve can say so; a
+  // block's ranges are its author's.
+  if (designFailure(res.solve)) return { state: 'does-not-comply', error: res.solve.message };
+  // Any other solve that found no solution in its range, or did not settle, is no answer. Its
+  // message may quote the device failure that bounded the search (the relation not evaluating
+  // past some point), and that quote is the reason for the range searched, not this point's
+  // verdict.
   if (solveErr !== undefined) return { state: 'no-answer', error: solveErr };
   if (err !== undefined) {
     // A device held at a fixed width can run out of table: the bias here moves the density its
@@ -2558,7 +2871,10 @@ export function heldOutcome(res: SheetResult): {
  * walk's gate reads `sized`, and a range end and a process condition read the answer. A held
  * design (`held`) is read as heldOutcome reads it: sized where it raised no error and read no
  * device off its table. A design sized here is sized where it stands (see stands), and answers for
- * itself: it complies where it is feasible. A design resting on an assumed level (`assumed`) is
+ * itself: it complies where it is feasible. One whose sheet found no crossing anywhere the wiring
+ * lets a solved wire go (designFailure) is not sized and does not comply — infeasible, with the
+ * solver's message — unless a device was refused or read off its table, which leaves the search's
+ * verdict resting on data that is not there. A design resting on an assumed level (`assumed`) is
  * still sized, and gives no answer.
  */
 export function pointOutcome(
@@ -2575,7 +2891,9 @@ export function pointOutcome(
     sized = stands(res);
     answer = sized
       ? { state: res.feasible ? 'complies' : 'does-not-comply' }
-      : { state: 'no-answer', error: unfinishedBecause(res)[0] };
+      : designFailure(res.solve) && !refusedIn(res).length && !clampedIn(res).length
+        ? { state: 'does-not-comply', error: res.solve.message }
+        : { state: 'no-answer', error: unfinishedBecause(res)[0] };
   }
   if (assumed.length) answer = { state: 'no-answer', error: assumedLevelRefusal(assumed) };
   return { sized, ...answer };

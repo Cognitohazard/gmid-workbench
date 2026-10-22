@@ -852,7 +852,7 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
     expect(forwardHits(ota, 'CM_dc')).toContain('tail.vds:vds_t');
     // The programmed current enters the bias reference alone, and reaches the tail device as that
     // reference's gate voltage — a mirror's shared gate, followed like any other link.
-    expect(forwardHits(ota, 'I_tail')).toContain('bias.id:I_b');
+    expect(forwardHits(ota, 'I_tail')).toContain('bias.id:I_ref');
     expect(forwardHits(ota, 'I_tail')).toContain('tail.vgs:vgs_t');
     // The pair's two transistors hang from different nodes. The diode-side one has its drain on
     // the load's diode node, one load gate-source voltage below the supply, so the supply reaches
@@ -923,6 +923,51 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
     // child param from any override that reads a moved name, constrained or not, and so reports V_p
     // as reaching k's source — a known over-approximation in an advisory walk.
     expect(backward(overriding(constrainedSource(), 'V_s'), 'V_p')).toBe(false);
+  });
+});
+
+describe('a range end moves the current a block is given, and every partner reading it', () => {
+  // `src` is given its current as a share of a tail current the range end moves; `dst` is given
+  // its width, takes `src__id` as its current, and has its source on a node the range end moves.
+  // Its current follows src's there, so its width-first givens keep no stale operating-point spec.
+  const doc = (): SheetDoc => ({
+    title: 'a given current read by a partner',
+    polarity: 'n',
+    params: [
+      { name: 'I_tail', value: 20e-6, unit: 'A', class: 'independent' },
+      { name: 'share', value: 0.5, unit: '1', class: 'independent' },
+      { name: 'V_s', value: 0.3, unit: 'V', class: 'independent' },
+    ],
+    equations: [],
+    checks: [],
+    blocks: [
+      {
+        name: 'src',
+        doc: leaf({}, [{ name: 'I_side', value: 10e-6, unit: 'A' }]),
+        params: { I: 'I_tail*share' },
+      },
+      {
+        name: 'dst',
+        doc: leaf({ gm_id: undefined, W: 'Wd', vsb: 'vs' }, [
+          { name: 'Wd', value: 1e-6, unit: 'm' },
+          { name: 'vs', value: 0.3, unit: 'V' },
+        ]),
+        params: { I: 'src__id', vs: 'V_s' },
+      },
+    ],
+    operatingRange: [{ name: 'hi', set: { I_tail: '2*I_tail', V_s: '0.4' } }],
+  });
+
+  it("marks the block's id provide moved, so the partner's current is reached", () => {
+    expect(forwardHits(doc(), 'I_tail')).toEqual(['src.id:I', 'dst.id:I']);
+    expect(bothWays(doc(), 'I_tail')).toEqual([true, true]);
+  });
+
+  it('raises no width-first warning on the partner, whose current follows', () => {
+    const rangeWarnings = validateSheet(doc()).filter(
+      (w) => w.severity === 'warning' && /^range end "hi"/.test(w.message),
+    );
+    expect(rangeWarnings).toEqual([]);
   });
 });
 

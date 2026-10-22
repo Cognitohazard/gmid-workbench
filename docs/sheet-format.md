@@ -43,8 +43,8 @@ first answer; `complies` and the per-range-end `state` carry the second.
 | outcome | meaning |
 |---|---|
 | `complies` | the held design was measured at that point and every hard check holds |
-| `does-not-comply` | it was measured there and a hard check fails — or a device held at its width cannot carry its current there at all |
-| `no-answer` | the question was asked and could not be answered: a solve did not land, the table does not reach the bias the design sits at, or the design rests on a voltage classed `assumed` |
+| `does-not-comply` | it was measured there and a hard check fails — or a device held at its width cannot carry its current there at all, or a solved wire finds no crossing anywhere the wiring lets it go (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)) |
+| `no-answer` | the question was asked and could not be answered: a solve did not land in a range that is the author's alone, or did not settle, the table does not reach the bias the design sits at, or the design rests on a voltage classed `assumed` |
 | `not-run` | the question was never asked: there is no design to hold, or no table loaded at that condition |
 
 `no-answer` and `not-run` are never shown as a pass and never as a failure. A summary over many
@@ -1170,7 +1170,9 @@ A solved parameter is found the way a design constraint is (see
 `min` and `max` until `param − solveFor` reads zero. Both are required, and they are the range
 searched, not slider bounds. State the range the answer is physically bound to lie in — a share
 between 0 and 1, a node between its neighbours, a gate-source voltage between the threshold region
-and the supply — and say so in the note. `value` is what the panel shows before a run and nothing
+and the supply — and say so in the note. Where the parameter is the level of a wire, the wiring
+reads that range itself, and `min` and `max` may only narrow it (see
+[The range a wire is searched in](#the-range-a-wire-is-searched-in)). `value` is what the panel shows before a run and nothing
 more: the search starts from the range alone, so no stored value reaches the answer, and a sheet
 gives the same number whatever value it was saved with. Because the parameter is solved rather than
 set, the GUI shows it read-only, reporting where it landed — and there is no companion advisory
@@ -1206,8 +1208,9 @@ floor: the core is SI throughout, so a solved parameter is as likely to be a cap
 
 ### Scope: a few named loops, not a circuit solver
 
-The architecture finds every unknown by a one-unknown search inside the range its author states,
-and never solves a node set. What keeps that boundary is the search rule itself, not a count of
+The architecture finds every unknown by a one-unknown search inside a range the author states —
+narrowed, for the level of a wire, to the range the wiring puts that wire in (see
+[The range a wire is searched in](#the-range-a-wire-is-searched-in)) — and never solves a node set. What keeps that boundary is the search rule itself, not a count of
 solved parameters: parameters that read each other are settled only by repeating their searches a
 fixed number of times (six sweeps by default, below), and a set still moving after them is
 reported, not iterated further. Nested solves also share one evaluation budget for the whole
@@ -1274,7 +1277,9 @@ the designer still gets to type the external quantity the application hands them
 ```
 
 The engine chooses the parameter so that `lhs == rhs`, by a **one-unknown search between `min` and
-`max`** — for a solved parameter they are the range searched, not slider bounds. The search is
+`max`** — for a solved parameter they are the range searched, not slider bounds, narrowed to the
+range the wiring puts the parameter's wire in where it is a wire's level (see
+[The range a wire is searched in](#the-range-a-wire-is-searched-in)). The search is
 Brent's method: bisection, with secant and inverse-quadratic steps taken only while they stay
 inside the bracket and shrink it faster than halving would. The root stays enclosed from the first
 probe to the last, so the search needs no contraction, cannot overshoot, and owes nothing to a
@@ -1301,6 +1306,79 @@ stretch already stepped round, and neither half changes sign again, is the cross
 out of reach; that is reported as the solve not settling, naming the stretch where the points tried
 do not evaluate, never as no solution.
 
+### The range a wire is searched in
+
+A solved parameter that is the level of a wire — a tail node, a cascode's source, a diode's node —
+is searched in the range the wiring puts that wire in, where the wiring can read one; its `min` and
+`max` may only narrow it. The parameter is the level of a wire when the wiring states that wire's
+level, along some path of relations from `gnd` or a held wire, as exactly the parameter: the input
+pair's source whose body bias is `V_tail` on a grounded body, a diode's drain whose drain-source
+voltage from the supply is `VDD - V_nmir`. The relations are the wiring check's own (a device's
+gate, drain and body voltage above its source, a held wire's level, a voltage element), read from
+the netlist and the givens before anything is evaluated; a p device's voltages take their direction
+from the table it is sized on.
+
+**The wires around it.** Every device conducts in the direction its polarity declares — an n
+device's drain at or above its source, a p device's source at or above its drain — so the wire sits
+above the source of an n device whose drain is on it and the drain of a p device whose source is on
+it, and below the drain of an n device whose source is on it and the source of a p device whose
+drain is on it. Its range runs from the highest of the wires below it to the lowest of those above.
+A gate, a body and an element bound nothing. Each neighbour is placed by the first of:
+
+1. a level the wiring states through parameters the sheet does not solve — `gnd` at 0, a held wire
+   at its level, a wire one relation from those whose relation reads only such parameters (at the
+   design point, the drain of the pair under a cascode whose source node `V_a` is a plain input) —
+   at its value at the point asked about, a range end's settings included;
+2. where the design is held, the level the design point's wiring walk gave it — the run whose
+   hardware is held: the centre for a range end, the condition the design is sized at for another
+   process condition. It is read to the millivolt and one millivolt outward, so the same design
+   quotes the same range whichever run its held design was read from. A wire whose level is another
+   solved parameter is placed this way too, at the design point's placing, and so is a gate wire
+   held at a hold's expression (`"vbn": "V_a + casc_n__vgs"`), which is held at its design-point
+   value;
+3. a wire whose level is another parameter the sheet solves, where nothing above places it — at the
+   design point, between two solved wires: that parameter's own `min` for a wire below, its `max`
+   for one above;
+4. otherwise it cannot be placed: its level is set by a device, which the wiring walk reads only once
+   the design is solved.
+
+A side is bounded by the neighbours on it that can be placed — a looser bound than all of them would
+give, and still one the wire cannot cross. A side with none leaves no range to read, and so does a
+wire placed below another placed above it. Degenerate cases: a wire whose only neighbours are rails
+is searched between them at every point (the current-mirror OTA's `V_nmir`, between ground and the
+supply); a wire between two solved wires is searched, at the design point, between the outer ends
+of their `min`/`max`; a node under a held gate is solved only where the design is held, between the
+design point's placings of its neighbours. Only the top sheet's own solved parameters are read this
+way — its wiring walk covers every wire of the tree; a block's own solved parameters are searched in
+their authors' ranges.
+
+**The author's range narrows it.** The search runs over the intersection:
+
+| the author's `min`/`max` | searched | `from` |
+|-|-|-|
+| contain the wiring's range | the wiring's range — where they reach past it, a note says so | `wiring` |
+| inside it, on at least one side (or clipped to it on one side) | the intersection | `narrowed` |
+| outside it | nothing: an error names both ranges, the solve fails as declarations that cannot be solved as written (`malformed`), and the point has no answer | — |
+| no wiring range is read | the author's range | `author` |
+
+The check that the author's range lies outside the wiring's is made by the evaluation, not by
+validation, since the wiring's range needs the tables (a p device's direction) and, where the design
+is held, the design point's walk. The tolerance is a fraction of the range searched, so a clipped
+range moves a landing by no more than that fraction.
+
+**The note.** Every result carries `ranges` — each solved parameter's range searched, `from`, the
+author's range, the wires whose level it is, the wiring's range with the wire that sets each end,
+or why none was read — and, for each parameter that is the level of a wire, a `sheet-range` note in
+its warnings, which the panel shows with the range-end notes:
+
+    solved param "V_tail" is searched in the author's range [0.1, 0.55] V, inside the range the wiring puts its wire "tail" in, [0, 1.191] V between "gnd" below and "mirp" above
+    solved param "V_nmir" is searched in [0, 1.8] V, the range the wiring puts its wire "nmir" in, between "gnd" below and "vdd" above
+    solved param "V_tail" is searched in the author's range [0.1, 0.55] V: no range is read from the wiring for its wire "tail" — the wires above it, "mirn" (through "in_f") and "mirp" (through "in"), are set by devices, and the walk places them only once the design is solved
+
+A parameter that is no wire's level — a share, a current, a gate-source voltage — has its author's
+range by nature, and no note. A failure's message names its range's source the same way, in the
+parenthesis after the range.
+
 **The tolerance is in the parameter's terms.** A parameter is settled when it is within 10⁻⁶ of
 the span of its stated range of its root. Where the relation is read again — every member of a set
 at the end of a sweep, every solved parameter at the final check — it must read no more than its
@@ -1316,22 +1394,40 @@ error that names the parameter and the range:
 | outcome | when | the message |
 |-|-|-|
 | settled and verified | the bracket closed to 10⁻⁶ of the stated span; the relation at the accepted point — the end of the final bracket where it reads nearer zero — reads within its tolerance by the slope just outside the bracket: on that point's side, and on the other side too where that one is missing or too shallow, the steeper kept, so a kink beside the root is not taken for a step; where one side lies beyond an end of the range, the bracket is halved up to four more times first, which brings a kink's reading within tolerance and leaves a step's at its height; and every solved parameter's relation, read from the evaluation that is returned, is within its tolerance. An end of the range whose relation reads within its tolerance of zero, by the slope there, is the root, so a root on an end is not lost to a rounding error on the wrong side | none |
-| no solution found in its range | `lhs − rhs` does not change sign across the searched range, and neither end reads within its tolerance of zero — none, or an even number, of roots there; the bracket closes on a step — on both sides of it the relation barely moves, so the slope there leaves no room for the step's height (a table edge or a fold); the relation reads the same at both ends and the middle, so it does not appear to depend on the parameter | `solved param "V_tail" found no solution in [0.1, 0.55] V: …` |
+| no solution found in its range | `lhs − rhs` does not change sign across the searched range, and neither end reads within its tolerance of zero — none, or an even number, of roots there; the bracket closes on a step — on both sides of it the relation barely moves, so the slope there leaves no room for the step's height (a table edge or a fold); the relation reads the same at both ends and the middle, so it does not appear to depend on the parameter | `solved param "V_tail" found no solution in [0.1, 0.55] V (the author's range inside the wiring's [0, 1.191] V between "gnd" and "mirp"): …` |
 | did not settle | nothing of the range could be evaluated — both ends and the middle fail, which shows nothing about the stretch between them; the sign changes across a stretch inside the bracket where the points tried do not evaluate, even after stepping round it, so the crossing could not be followed; a member of a set still found nothing when searched again, or the set still moves after six sweeps (below); a relation read from the final evaluation is out of tolerance; the shared evaluation budget ran out first, here or in a child it reads (the parameter was not shown to be unsolvable); the probe backstop of 200 per search was hit | `solved params "V_tail" in [0.15, 0.8] V and "out_share" in [0.01, 0.99] did not settle in 6 sweeps: …` |
 
 The outcome is also on the result as data, beside the message: `solve` on the sheet's result and
 on each block's report, for that sheet's own solved parameters — `{ kind: "settled" }`,
-`{ kind: "no-solution", unknown, range }` with the stretch actually searched, or
+`{ kind: "no-solution", unknown, range, from, because }` with the stretch actually searched, where
+the range came from (`wiring`, `narrowed` or `author`, below) and what the search showed
+(`no-crossing` — no sign change and neither end within tolerance; `step`; `undetermined` — the
+relation does not single the parameter out), or
 `{ kind: "not-settled", unknowns, why }`, where `why` is `budget`, `probes`, `unevaluable`,
 `member` (one member of a set failed where the others stood), `sweeps`, `verification` or
 `malformed` (the declarations cannot be solved as written). A `hold` that does not hold where the
 design is sized — it does not evaluate, or a current balance does not read zero — is
 `{ kind: "declaration-false", param }`: no search failed, the declaration is false there. Each
 failure carries its `message`, the same words as the error. `solve` is absent on a run with nothing
-to solve.
+to solve. Beside it, `ranges` lists each of the sheet's own solved parameters with the range it was
+searched in and where that came from (below).
 
-Where the hardware is held — a range end, another process condition — either failure is
-`no-answer`: nothing was measured there. Validation adds:
+What a failure means for the point depends on where the range came from:
+
+| outcome | where the design is sized | where the design is held (a range end, another process condition) |
+|-|-|-|
+| settled and verified | the run stands; feasible where every hard check holds | complies where every hard check holds, else does not comply |
+| no crossing in a range the wiring read, or the author narrowed from it | infeasible, and the point does not comply, with the solver's message as its error | does not comply, with the solver's message as its error |
+| no crossing in a range that is the author's alone; a step; an undetermined relation | infeasible, and the point has no answer | no answer |
+| did not settle — including a member of a set that found nothing where the others stood | infeasible, and the point has no answer | no answer |
+
+A range the wiring reads is every level the circuit can put the wire at, so finding no crossing
+anywhere in it — or anywhere in the part of it the author kept — is the design not reaching its
+target there: a finding, said as one. A range of the author's own may simply be in the wrong place,
+and a set's member that found nothing did so where the other members happened to stand, so neither
+says anything about the design. A point whose search read a device off its table, or that has a
+device its table cannot answer for, has no answer whatever the range (see
+[The operating range](#the-operating-range-operatingrange)). Validation adds:
 
 | situation | result |
 |-|-|
@@ -1423,9 +1519,12 @@ At the design point nothing is solved. The parameter keeps its value, it can be 
 and the result reports what the held expression came to (`held`: here the cascode gate bias the
 design needs). Wherever the design is **held fixed and re-checked** — a range end's
 fixed-hardware run — the roles swap: the expression is held at that value and the node is
-re-solved between `min` and `max`, by the same search a `designConstraint` uses. That is what the circuit
-does: a bias line holds the gate, and the node under it moves with the condition. Without the
-`hold`, a range end would keep the node and let the gate voltage drift.
+re-solved between `min` and `max` — narrowed to the range the wiring puts the node in, between the
+design point's placings of its neighbours (see
+[The range a wire is searched in](#the-range-a-wire-is-searched-in)) — by the same search a
+`designConstraint` uses. That is what the circuit does: a bias line holds the gate, and the node
+under it moves with the condition. Without the `hold`, a range end would keep the node and let the
+gate voltage drift.
 
 The expression must be a sum of terms in which the parameter appears **exactly once**, on its own
 or multiplied by a number: `V_a + casc_n__vgs`, `V_b - abs(casc_p__vgs)`,
@@ -1442,7 +1541,8 @@ parameter's own term is there to read. Any other relation is a `designConstraint
 | the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at), and validation names the name |
 | the held expression does not evaluate at the design point | infeasible — there is nothing to hold it at |
 | at a range end, the expression barely moves across the range | that end is `no-answer`, "numerically unresolved" — the rest of the expression cancels the node's own term, so no node voltage is singled out |
-| at a range end, the node has no solution in its range or does not settle | that end is `no-answer`, with the search's own message |
+| at a range end, the node finds no crossing in the range the wiring puts it in (or the author's part of it) | that end does not comply, with the search's own message |
+| at a range end, the node has no solution in a range that is the author's alone, or does not settle | that end is `no-answer`, with the search's own message |
 
 A `hold` keeps the **design point's** gate voltage. A gate bias that itself moves with the
 condition — a replica that tracks the device — is a provided bias: write it as an expression and
@@ -1529,11 +1629,15 @@ result (validation refuses them).
   required current density runs past the top of the swept `vgs` range cannot carry its current
   there at all ("this device cannot carry its current here" — or, for a device bound by its
   transconductance, "cannot reach its transconductance here"), with the lookup's own message
-  and reach numbers kept behind it in `error`.
+  and reach numbers kept behind it in `error`. Another leaves none either: a solved wire whose
+  search finds no crossing anywhere in the range the wiring puts it in, or in the part of it the
+  author kept — no level the circuit can put the node at produces `CM_lo` — with the solver's
+  message in `error` (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)).
 - `no-answer` — the question was asked and could not be answered, and `error` says why:
-  - a solve found no solution there, or did not settle — no tail-node position inside its range
-    produces `CM_lo`. Nothing was measured, so this is not a failure of the design; widen the
-    range, or read it as the tool's limit rather than the circuit's;
+  - a solve found no solution in a range that is the author's alone, or did not settle — no
+    tail-node position inside the range its author typed produces `CM_lo`, or the solved params
+    that read each other did not settle. Nothing was measured, so this is not a failure of the
+    design; widen the range, or read it as the tool's limit rather than the circuit's;
   - a `set` expression did not resolve to a number;
   - the table does not reach the bias the held design sits at. A `vds`, `vsb`, length or
     supplied gate voltage off the table's hull is read at the nearest characterized value, and
@@ -1635,7 +1739,7 @@ exactly — an author reading a green chip should know what it is and is not a s
   wrote, so a range-end `gm` — and every quantity derived from it — sits an interpolation
   residual below the base's, about 0.1% on the demo model, even where nothing about the condition
   changed. Read a base-against-end comparison with that floor already under it.
-- **The authored current expression IS the hardware model.** `I_f = I_branch - in__id`
+- **The authored current expression IS the hardware model.** `I_f = pcs__id - in__id`
   re-evaluates at the range end, and that difference is the folding node's current law. The one
   exception is a device held on its gate voltage because a hold balances its current: its
   authored current is the design point's, and where the design is held its current is the table's

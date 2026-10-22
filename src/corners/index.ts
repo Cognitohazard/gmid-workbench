@@ -1007,8 +1007,10 @@ export interface ConditionAggregate {
   /**
    * FEASIBILITY — one answer, about the design where it was sized: can this design type meet
    * its spec at the base condition. Never a count and never moved by another condition or a
-   * range end. `no-answer`: the base run started and did not complete. `not-run`: nothing was
-   * sized — no base condition, or its tables are not there.
+   * range end. `no-answer`: the base run started and did not complete — except a run whose centre
+   * the engine reads as not complying (a solved wire with no crossing in the range the wiring
+   * gives it), which is `infeasible`. `not-run`: nothing was sized — no base condition, or its
+   * tables are not there.
    */
   readonly feasibility: 'feasible' | 'infeasible' | 'no-answer' | 'not-run';
   /** The condition feasibility was asked at. Absent when the design was sized nowhere. */
@@ -1048,6 +1050,10 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
   const unique = uniqueRuns(runs);
 
   const sized = unique.find((r) => r.design === 'sized');
+  // A base run that did not complete is no answer — unless the engine classified its centre as
+  // not complying: a solved wire with no crossing anywhere the wiring lets it go is the design
+  // failing where it is sized (see designFailure), which is infeasibility, said with the solver's
+  // message.
   const feasibility: ConditionAggregate['feasibility'] = !sized
     ? 'not-run'
     : sized.state === 'evaluated'
@@ -1055,7 +1061,9 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
         ? 'feasible'
         : 'infeasible'
       : sized.result
-        ? 'no-answer'
+        ? sized.points[0]?.state === 'does-not-comply'
+          ? 'infeasible'
+          : 'no-answer'
         : 'not-run';
 
   const compliance = { complies: 0, doesNotComply: 0, noAnswer: 0, notRun: 0, total: 0 };

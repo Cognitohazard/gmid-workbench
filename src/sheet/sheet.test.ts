@@ -43,7 +43,7 @@ import { EXAMPLES } from './examples';
 import { ueffAt, demoCsvWith, importOne, withUeff } from '../import/passthrough.fixtures';
 import type { DeviceTable } from '../types';
 import type { SheetDoc, SheetResult, SheetVar } from './types';
-import { notACircuit } from './library.fixtures';
+import { notACircuit, REFS } from './library.fixtures';
 
 // The demo device characterized over drain voltage. Every sized device states its drain voltage,
 // so every document here that sizes one does — 0.6 V, unless the test is about another — and
@@ -421,12 +421,17 @@ describe('evaluateSheet — closing a bias loop (solveFor)', () => {
       ),
       dev,
     );
+    // The param is no wire's level (the sheet names no wiring), so its range is its author's and
+    // the failure is no finding about the design.
     expect(none.solve).toEqual({
       kind: 'no-solution',
       unknown: 'run',
       range: [-10, 10],
       message: solveErrors(none)[0],
+      from: 'author',
+      because: 'no-crossing',
     });
+    expect(none.point).toEqual({ sized: false, state: 'no-answer', error: solveErrors(none)[0] });
     // Nothing of the range evaluates: not settled, which is not the same answer.
     const blind = evaluateSheet(
       solving({ name: 'vstar_est', value: 0.2, min: 0.05, max: 0.6, solveFor: 'no_such_value' }),
@@ -1150,7 +1155,8 @@ describe.skipIf(!existsSync(skyTable('nfet_01v8')) || !existsSync(skyTable('pfet
       const load_ = new Set(['ldr', 'ld']);
       doc.blocks = doc.blocks?.map((b) => (load_.has(b.name) ? { ...b, device: 'pfet' } : b));
       doc.params = doc.params.map((q) => (q.name === 'ld_sign' ? { ...q, value: -1 } : q));
-      const res = runSheet(doc, nfet, (id) => (id === 'pfet' ? pfet : undefined));
+      // The bias reference is a library sheet the 5T composes by reference.
+      const res = runSheet(doc, nfet, (id) => (id === 'pfet' ? pfet : undefined), REFS);
       expect(res.feasible).toBe(true);
       expect(new Set(noiseSourcesIn(res).map((d) => d.source))).toEqual(new Set(['measured']));
       const v = res.values;

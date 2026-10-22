@@ -912,6 +912,13 @@ export interface SheetDoc {
   ports?: string[];
   /** Small-signal analyses asked for by name (see SheetAnalysis). */
   analyses?: SheetAnalysis[];
+  /**
+   * Set by the engine on a held design, never authored: the level the wiring walk of the design
+   * point gave each wire it placed, by wire name — the run whose hardware is held (see
+   * holdHardware). A solved param that is a wire's level reads the neighbours it cannot place from
+   * here where the design is held (see SolveRange). Validation refuses a document that writes it.
+   */
+  designLevels?: Record<string, number>;
 }
 
 /**
@@ -1416,6 +1423,9 @@ export interface SheetResult {
   /** How this sheet's own solved params came out (see SolveOutcome); a child's own are on its
    *  report. */
   solve?: SolveOutcome;
+  /** The range each of this sheet's own solved params was searched in, in document order (see
+   *  SolveRange). Absent where the sheet solves nothing, or the solve did not start. */
+  ranges?: SolveRange[];
 }
 
 /**
@@ -1423,6 +1433,8 @@ export interface SheetResult {
  * `sheet-solve` error that says the same in words (`message`, verbatim).
  *  - `settled`: every solved param was found, and verified on the evaluation returned;
  *  - `no-solution`: the named unknown has no solution in `range`, the stretch actually searched;
+ *    `from` says where its range came from and `because` what the search showed, which together
+ *    decide whether the failure is a finding about the design (designFailure);
  *  - `not-settled`: the named unknowns did not settle, for the reason `why` gives;
  *  - `declaration-false`: a `hold` of the sheet does not hold where the design is sized — it does
  *    not evaluate, or it is a current balance that does not read zero — so the run has nothing to
@@ -1432,12 +1444,74 @@ export interface SheetResult {
  */
 export type SolveOutcome =
   | { kind: 'settled' }
-  | { kind: 'no-solution'; unknown: string; range: [number, number]; message: string }
+  | {
+      kind: 'no-solution';
+      unknown: string;
+      range: [number, number];
+      message: string;
+      /** Where the range searched came from (see SolveRange.from). */
+      from: RangeSource;
+      /** What the search showed (see NoSolutionWhy). */
+      because: NoSolutionWhy;
+    }
   | { kind: 'not-settled'; unknowns: string[]; why: NotSettledWhy; message: string }
   | { kind: 'declaration-false'; param: string; message: string };
 
 /** A solve outcome that is not `settled`. */
 export type SolveFailure = Exclude<SolveOutcome, { kind: 'settled' }>;
+
+/**
+ * Why a search found no solution in its range:
+ *  - `no-crossing`: the relation does not change sign across the range and neither end reads
+ *    within its tolerance of zero — no root, or an even number of them, there;
+ *  - `step`: the bracket closed on a step — the relation crosses its target without touching it
+ *    (a table edge or a fold);
+ *  - `undetermined`: the relation does not single the param out — it reads the same at both ends
+ *    and the middle, or, for a node under a held gate, the rest of the expression cancels the
+ *    node's own term.
+ */
+export type NoSolutionWhy = 'no-crossing' | 'step' | 'undetermined';
+
+/**
+ * Where the range a solved param is searched in came from:
+ *  - `wiring`: the range the wiring puts the param's wire in, between the wires its devices'
+ *    channels join it to (see SolveRange); the author's `min`/`max` contain it;
+ *  - `narrowed`: the author's `min`/`max` inside the wiring's range, on at least one side;
+ *  - `author`: the author's `min`/`max` alone — the param is not a wire's level, or no range could
+ *    be read from the wiring (`SolveRange.why` says which).
+ */
+export type RangeSource = 'wiring' | 'narrowed' | 'author';
+
+/** The range one solved param of a sheet was searched in, and where it came from. */
+export interface SolveRange {
+  param: string;
+  /** The range searched. */
+  range: [number, number];
+  from: RangeSource;
+  /** The author's `min` and `max`. */
+  author: [number, number];
+  /** The wires whose level the param is, where it is one (see solvedWiring); absent for a param
+   *  that is no wire's level, whose range can only be its author's. */
+  wires?: string[];
+  /** The wiring's range, where one was read: its ends, and the wire that sets each — the highest
+   *  of the wires below the param's wire and the lowest of those above it. */
+  wiring?: { range: [number, number]; below: string; above: string };
+  /** Why no wiring range was read, where none was. */
+  why?: string;
+  /** The same, as one sentence — the `sheet-range` note the result carries for a wire's level. */
+  note: string;
+}
+
+/**
+ * Whether a solve failure is a finding about the design rather than about the search: a single
+ * param found no root in a range the wiring derived, or the author narrowed from it — the
+ * relation does not cross its target anywhere the circuit can put the wire. A design point that
+ * ends so is infeasible and does not comply; a held point does not comply. Every other failure —
+ * a range that is the author's alone, a step, an undetermined relation, a set that did not settle
+ * — is no answer.
+ */
+export const designFailure = (o: SolveOutcome | undefined): o is SolveFailure =>
+  o?.kind === 'no-solution' && o.from !== 'author' && o.because === 'no-crossing';
 
 /**
  * Why solved params did not settle:

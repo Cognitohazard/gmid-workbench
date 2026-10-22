@@ -1512,9 +1512,41 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
       ...run(),
       feasible: false,
       warnings: [{ rule: 'sheet-solve', severity: 'error', message: quoted }],
-      solve: { kind: 'no-solution', unknown: 'V', range: [0.2, 0.8], message: quoted },
+      solve: {
+        kind: 'no-solution',
+        unknown: 'V',
+        range: [0.2, 0.8],
+        message: quoted,
+        from: 'author',
+        because: 'no-crossing',
+      },
     };
     expect(heldOutcome(solve)).toEqual({ state: 'no-answer', error: quoted });
+  });
+
+  it('reads no crossing in a range the wiring sets as the design failing here', () => {
+    // The same failure, in a range the wiring derived (or the author narrowed from it): the
+    // circuit can put the node nowhere the search did not look, so the point does not comply —
+    // with the solver's message. A step, an undetermined relation or a set that did not settle
+    // stays no answer whatever the range.
+    const message = 'solved param "V" found no solution in [0, 0.9] V (the range the wiring …)';
+    const failed = (
+      from: 'wiring' | 'narrowed' | 'author',
+      because: 'no-crossing' | 'step' | 'undetermined',
+    ): Parameters<typeof heldOutcome>[0] => ({
+      ...run(),
+      feasible: false,
+      warnings: [{ rule: 'sheet-solve', severity: 'error', message }],
+      solve: { kind: 'no-solution', unknown: 'V', range: [0, 0.9], message, from, because },
+    });
+    expect(heldOutcome(failed('wiring', 'no-crossing'))).toEqual({
+      state: 'does-not-comply',
+      error: message,
+    });
+    expect(heldOutcome(failed('narrowed', 'no-crossing')).state).toBe('does-not-comply');
+    expect(heldOutcome(failed('author', 'no-crossing')).state).toBe('no-answer');
+    expect(heldOutcome(failed('wiring', 'step')).state).toBe('no-answer');
+    expect(heldOutcome(failed('wiring', 'undetermined')).state).toBe('no-answer');
   });
 });
 

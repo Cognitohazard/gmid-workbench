@@ -15,6 +15,7 @@ import {
   nodesProblems,
   relation,
   sheetFormat,
+  solvedWiring,
   structuralDiodes,
   unwiredDevices,
   wiringRefusal,
@@ -1363,5 +1364,83 @@ describe('a region beside a diode connection stated by the wires', () => {
           ),
       ),
     ).toBe(true);
+  });
+});
+
+describe('which wire a solved param is the level of, and the wires it sits between', () => {
+  const demo = generateDemoDevice({ vds: { min: 0, max: 1.8, step: 0.1 } });
+  // A p device from the supply down to `x`, its drain-source voltage `VDD - V_x` (a magnitude on
+  // the N-style demo table), and an n device from `x` down to ground whose drain-source voltage is
+  // `V_x`. `V_y` names the gate wire's level through nothing at all.
+  const doc: SheetDoc = {
+    title: 'a node between a p and an n device',
+    polarity: 'n',
+    formatVersion: 2,
+    params: [
+      { name: 'VDD', value: 1.8, unit: 'V', class: 'independent' },
+      { name: 'VB', value: 0.9, unit: 'V', class: 'independent' },
+      { name: 'V_x', value: 0.9, unit: 'V', min: 0.1, max: 1.7, solveFor: 'n__vgs' },
+      { name: 'V_y', value: 0.5, unit: 'V', min: 0, max: 1, solveFor: 'p__vgs' },
+    ],
+    equations: [],
+    checks: [],
+    levels: { vdd: 'VDD', b: 'VB' },
+    blocks: [
+      {
+        name: 'p',
+        doc: {
+          title: 'p',
+          polarity: 'p',
+          params: [{ name: 'vd', value: 0.9 }],
+          givens: { L: '1e-6', id: '1e-5', gm_id: '10', vds: 'vd' },
+          equations: [],
+          checks: [],
+          provides: ['vgs'],
+        },
+        params: { vd: 'VDD - V_x' },
+        nodes: { d: 'x', g: 'b', s: 'vdd', b: 'vdd' },
+      },
+      {
+        name: 'n',
+        doc: {
+          title: 'n',
+          polarity: 'n',
+          params: [{ name: 'vd', value: 0.9 }],
+          givens: { L: '1e-6', id: '1e-5', gm_id: '10', vds: 'vd' },
+          equations: [],
+          checks: [],
+          provides: ['vgs'],
+        },
+        params: { vd: 'V_x' },
+        nodes: { d: 'x', g: 'b', s: 'gnd', b: 'gnd' },
+      },
+    ],
+  };
+
+  it("reads the param's wire through a p device's direction, and its neighbours by polarity", () => {
+    const read = solvedWiring(doc, () => demo, ['V_x', 'V_y'])!;
+    expect(read.wires.get('V_x')).toEqual({
+      wires: ['x'],
+      below: [{ wire: 'gnd', device: 'n' }],
+      above: [{ wire: 'vdd', device: 'p' }],
+    });
+    // V_y is no wire's level: its relation reads a gate-source voltage the wiring never states as
+    // a wire.
+    expect(read.wires.has('V_y')).toBe(false);
+  });
+
+  it('relates nothing through a device whose direction its table cannot give', () => {
+    // A p device on a table whose vgs axis holds both signs: its voltages have no direction, so
+    // nothing reached through it, and x is the level of V_x through the n device alone.
+    const both = generateDemoDevice({ vgs: { min: -0.5, max: 1.8, step: 0.1 } });
+    const read = solvedWiring(doc, (chain) => (chain[0]?.name === 'p' ? both : demo), ['V_x'])!;
+    expect(read.wires.get('V_x')?.wires).toEqual(['x']);
+    expect(read.forms.get('x')?.length).toBeGreaterThan(0);
+  });
+
+  it('reads nothing of a sheet that names no wiring', () => {
+    expect(solvedWiring({ ...doc, nodes: 'none', levels: undefined }, () => demo, ['V_x'])).toBe(
+      undefined,
+    );
   });
 });

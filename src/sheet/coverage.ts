@@ -28,7 +28,14 @@ import {
   PATH_SEP,
   prefixBlockPath,
 } from './types';
-import type { SizingReport, SheetGivens, SheetBlockReport, SheetDoc, SheetBlock } from './types';
+import type {
+  NodesReport,
+  SizingReport,
+  SheetGivens,
+  SheetBlockReport,
+  SheetDoc,
+  SheetBlock,
+} from './types';
 
 /** The three quantities a range end holds fixed: the geometry, and a current the author wrote. */
 export const HELD_AT_A_RANGE_END: ReadonlySet<string> = new Set(['W', 'L', 'id']);
@@ -65,6 +72,8 @@ interface SizingTree {
   sizing?: SizingReport;
   blocks?: readonly SheetBlockReport[];
   held?: Record<string, number>;
+  /** The base run's wiring check, read at the top only (see designLevelsOf). */
+  nodes?: NodesReport;
 }
 
 /** The transformed document plus the blocks whose current the transformation had to ASSUME (see
@@ -167,8 +176,23 @@ export const assumedLevelRefusal = (assumed: readonly string[]): string =>
  */
 export function holdHardware(doc: SheetDoc, base: SizingTree): HeldHardware {
   const out: HeldHardware = { doc, assumedSource: [], unheld: [] };
-  out.doc = holdNode(doc, base, '', out);
+  const { designLevels: _stale, ...held } = holdNode(doc, base, '', out);
+  const designLevels = designLevelsOf(base);
+  out.doc = designLevels ? { ...held, designLevels } : held;
   return out;
+}
+
+/**
+ * The level the base run's wiring walk gave each wire it placed — held or derived through blocks
+ * that close — by wire name: what a held run reads for a neighbour of a solved wire that it cannot
+ * place itself (see SheetDoc.designLevels). Undefined where the base run was not walked (its
+ * sizing did not stand, or the sheet names no wiring); the held document then carries none, so a
+ * placing from an earlier hold never survives into this one.
+ */
+function designLevelsOf(base: SizingTree): Record<string, number> | undefined {
+  const n = base.nodes;
+  if (!n || (n.state !== 'checked-clean' && n.state !== 'checked-with-findings')) return undefined;
+  return Object.fromEntries(Object.entries(n.levels).map(([w, l]) => [w, l.level]));
 }
 
 /**

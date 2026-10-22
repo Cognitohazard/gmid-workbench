@@ -21,7 +21,7 @@ import { EARLIER_FORMAT_NOTE } from './nodes';
 import { buildSheetRefIndex } from './resolve';
 import { holdHardware } from './coverage';
 import { REFS, sheet as librarySheet, table as libraryTable } from './library.fixtures';
-import { groupDevices, runConditions } from '../corners';
+import { aggregateConditionRuns, groupDevices, runConditions } from '../corners';
 import {
   EXAMPLES,
   NO_ANSWER_NOTE,
@@ -1862,5 +1862,234 @@ describe('compliance and the wiring check read one classification', () => {
     if (held.state !== 'not-evaluated') return;
     expect(held.points[0].state).toBe('no-answer');
     expect(held.nodes).toMatchObject({ state: 'not-evaluated', notes: [NO_ANSWER_NOTE] });
+  });
+});
+
+describe('the range a solved wire is searched in is the circuit’s own where the wiring reads one', () => {
+  // A follower on a sink: `m` sits between the supply and the node `x`, its gate on the held wire
+  // `g`; `sink` sits between `x` and ground. `V_x` is solved so that the gate sits at `VG`. The
+  // wiring puts `x` between ground (below, through the sink) and the supply (above, through `m`),
+  // both held, so its range reads [0, VDD] before anything is solved. With `load`, `m`'s drain is
+  // instead the node of a p diode from the supply — a wire a device sets, which the walk places only
+  // once the design is solved.
+  const follower = (
+    range: [number, number],
+    o: { VG?: number; load?: boolean; ends?: SheetDoc['operatingRange'] } = {},
+  ): SheetDoc => ({
+    title: 'a follower on a sink',
+    polarity: 'n',
+    formatVersion: 2,
+    params: [
+      vparam('VDD', 1.8),
+      vparam('VG', o.VG ?? 1.2),
+      param('I', 10e-6, { unit: 'A', class: 'independent' }),
+      param('V_x', 0.5, {
+        unit: 'V',
+        min: range[0],
+        max: range[1],
+        designConstraint: { lhs: 'V_x + m__vgs', rhs: 'VG' },
+      }),
+    ],
+    equations: [],
+    checks: [],
+    levels: { vdd: 'VDD', g: 'VG' },
+    ports: ['b'],
+    blocks: [
+      ...(o.load
+        ? [
+            block(
+              'ld',
+              leaf('p', { L: '0.5e-6', id: 'Id', gm_id: '10', diode: true }, [['Id', 1e-5]]),
+              { Id: 'I' },
+              { d: 'y', g: 'y', s: 'vdd', b: 'vdd' },
+            ),
+          ]
+        : []),
+      block(
+        'm',
+        leaf('n', { L: '0.5e-6', id: 'Id', gm_id: '10', vds: 'vd', vsb: 'vs' }, [
+          ['Id', 1e-5],
+          ['vd', 1],
+          ['vs', 0.5],
+        ]),
+        { Id: 'I', vd: o.load ? 'VDD - abs(ld__vgs) - V_x' : 'VDD - V_x', vs: 'V_x' },
+        { d: o.load ? 'y' : 'vdd', g: 'g', s: 'x', b: 'gnd' },
+      ),
+      block(
+        'sink',
+        leaf('n', { L: '0.5e-6', id: 'Id', gm_id: '10', vds: 'vd' }, [
+          ['Id', 1e-5],
+          ['vd', 0.5],
+        ]),
+        { Id: 'I', vd: 'V_x' },
+        { d: 'x', g: 'b', s: 'gnd', b: 'gnd' },
+      ),
+    ],
+    ...(o.ends ? { operatingRange: o.ends } : {}),
+  });
+  const notes = (r: { warnings: SheetResult['warnings'] }): string[] =>
+    r.warnings
+      .filter((w) => w.rule === 'sheet-range' && w.location === 'V_x')
+      .map((w) => w.message);
+  const errors = (r: SheetResult): string[] =>
+    r.warnings.filter((w) => w.severity === 'error').map((w) => w.message);
+  // The node lands where the gate sits at VG: V_x + vgs(gm/ID 10) + BODY_FACTOR·V_x = 1.2 on the
+  // demo model, near 0.49 V — the same whatever range the search ran over.
+  const landed = runSheet(follower([0.1, 0.8]), t).values.V_x;
+
+  it('searches the author’s range where it lies inside the wiring’s, and says both', () => {
+    const r = runSheet(follower([0.1, 0.8]), t);
+    expect(r.feasible).toBe(true);
+    expect(r.ranges).toEqual([
+      expect.objectContaining({
+        param: 'V_x',
+        range: [0.1, 0.8],
+        from: 'narrowed',
+        author: [0.1, 0.8],
+        wires: ['x'],
+        wiring: { range: [0, 1.8], below: 'gnd', above: 'vdd' },
+      }),
+    ]);
+    expect(notes(r)).toEqual([
+      'solved param "V_x" is searched in the author\'s range [0.1, 0.8] V, inside the range the ' +
+        'wiring puts its wire "x" in, [0, 1.8] V between "gnd" below and "vdd" above',
+    ]);
+  });
+
+  it('clips an author’s range wider than the wiring’s, and notes it', () => {
+    const r = runSheet(follower([-0.5, 2.5]), t);
+    expect(r.feasible).toBe(true);
+    expect(r.ranges?.[0]).toMatchObject({ range: [0, 1.8], from: 'wiring', author: [-0.5, 2.5] });
+    expect(notes(r)).toEqual([
+      'solved param "V_x" is searched in [0, 1.8] V, the range the wiring puts its wire "x" in, ' +
+        'between "gnd" below and "vdd" above — the author\'s range [-0.5, 2.5] V reaches past it',
+    ]);
+    // The tolerance is a fraction of the span searched, so the landing agrees to that fraction.
+    expect(Math.abs(r.values.V_x - landed)).toBeLessThan(1e-5);
+  });
+
+  it('refuses an author’s range outside the wiring’s, naming both, and searches nothing', () => {
+    const r = runSheet(follower([2, 2.5]), t);
+    const message =
+      'solved param "V_x": its range [2, 2.5] V lies outside the range the wiring puts its wire ' +
+      '"x" in, [0, 1.8] V between "gnd" below and "vdd" above — no level it allows is one the ' +
+      "circuit can put the wire at. Move min/max inside the wiring's range";
+    expect(r.feasible).toBe(false);
+    expect(r.solve).toEqual({ kind: 'not-settled', unknowns: ['V_x'], why: 'malformed', message });
+    expect(errors(r)).toEqual([message]);
+    expect(notes(r)).toEqual([]);
+    expect(r.point).toMatchObject({ sized: false, state: 'no-answer' });
+  });
+
+  it('keeps the author’s range, and no solution as no answer, where no range is read', () => {
+    const r = runSheet(follower([0.6, 0.8], { load: true }), t);
+    const why =
+      'the wire above it, "y" (through "m"), is set by a device, and the walk places it only ' +
+      'once the design is solved';
+    expect(r.ranges?.[0]).toMatchObject({ range: [0.6, 0.8], from: 'author', wires: ['x'], why });
+    expect(notes(r)).toEqual([
+      `solved param "V_x" is searched in the author's range [0.6, 0.8] V: no range is read from ` +
+        `the wiring for its wire "x" — ${why}`,
+    ]);
+    expect(r.solve).toMatchObject({ kind: 'no-solution', from: 'author', because: 'no-crossing' });
+    expect(errors(r)[0]).toContain(
+      `found no solution in [0.6, 0.8] V (the author's range — ${why})`,
+    );
+    expect(errors(r)[0]).toContain('Move or widen min/max to bracket one');
+    expect(r.point).toMatchObject({ sized: false, state: 'no-answer' });
+  });
+
+  it('reads no crossing in the wiring’s range as the design failing: infeasible where it is sized', () => {
+    // At VG = 0.4 V the gate would need the node below ground; the wiring puts it at or above.
+    const r = runSheet(follower([-0.5, 0.8], { VG: 0.4 }), t);
+    expect(r.feasible).toBe(false);
+    expect(r.solve).toMatchObject({
+      kind: 'no-solution',
+      from: 'narrowed',
+      because: 'no-crossing',
+    });
+    const [message] = errors(r);
+    expect(message).toContain(
+      "found no solution in [0, 0.8] V (the author's range clipped to the wiring's [0, 1.8] V " +
+        'between "gnd" and "vdd")',
+    );
+    expect(r.point).toEqual({ sized: false, state: 'does-not-comply', error: message });
+    // The condition runs read the same centre, and its feasibility is infeasibility, not a
+    // missing answer.
+    const tt = { corner: 'tt', temp: 27 };
+    const [device] = groupDevices([{ ...t, id: { ...t.id, ...tt } }]);
+    const runs = runConditions(follower([-0.5, 0.8], { VG: 0.4 }), device, [tt], () => undefined);
+    expect(runs[0].points[0]).toEqual({ state: 'does-not-comply', error: message });
+    expect(aggregateConditionRuns(runs).feasibility).toBe('infeasible');
+  });
+
+  it('reads no crossing in the wiring’s range at a held point as not complying', () => {
+    const r = runSheet(follower([0.1, 0.8], { ends: [{ name: 'low', set: { VG: '0.4' } }] }), t);
+    expect(r.feasible).toBe(true);
+    const [low] = r.rangeEnds!;
+    expect(low.state).toBe('does-not-comply');
+    expect(low.error).toContain(
+      "found no solution in [0.1, 0.8] V (the author's range inside the wiring's [0, 1.8] V " +
+        'between "gnd" and "vdd")',
+    );
+    expect(r.complies).toBe(false);
+  });
+
+  it('reads a wire a device sets from the design point’s walk where the design is held', () => {
+    const r = runSheet(
+      follower([0.1, 0.8], { load: true, ends: [{ name: 'hi', set: { VG: '1.3' } }] }),
+      t,
+    );
+    // At the design point "y" cannot be placed before the solve; at the range end it is read at the
+    // level the design point's walk gave it, to the millivolt and one millivolt above.
+    expect(r.ranges?.[0].from).toBe('author');
+    const y = r.nodes!.levels.y.level;
+    const above = (Math.round(y * 1000) + 1) / 1000;
+    const [hi] = r.rangeEnds!;
+    expect(hi.state).toBe('complies');
+    expect(notes(hi)).toEqual([
+      `solved param "V_x" is searched in the author's range [0.1, 0.8] V, inside the range the ` +
+        `wiring puts its wire "x" in, [0, ${above}] V between "gnd" below and "y" above`,
+    ]);
+    // The held document carries the design point's placings; an authored one is refused.
+    const held = holdHardware(structuralDiodes(follower([0.1, 0.8], { load: true })), r);
+    expect(held.doc.designLevels).toEqual(
+      Object.fromEntries(Object.entries(r.nodes!.levels).map(([w, l]) => [w, l.level])),
+    );
+    expect(
+      validateSheet({ ...follower([0.1, 0.8]), designLevels: { x: 0.5 } }).filter(
+        (w) => w.location === 'designLevels',
+      ),
+    ).toEqual([expect.objectContaining({ rule: 'sheet-param', severity: 'error' })]);
+  });
+
+  it('keeps a set that does not settle as no answer, whatever its members’ ranges', () => {
+    // `Q` reads the node and the node's relation reads `Q`: one set. At VG = 0.4 V the node finds
+    // no crossing in the wiring's range where `Q` stands, which says nothing about the set.
+    const coupled = (VG: number): SheetDoc => {
+      const d = follower([0.1, 0.8], { VG });
+      return {
+        ...d,
+        params: [
+          ...d.params.map((p) =>
+            p.name === 'V_x'
+              ? { ...p, designConstraint: { lhs: 'V_x + m__vgs - Q', rhs: 'VG - 0.3' } }
+              : p,
+          ),
+          param('Q', 0.3, { unit: '1', min: 0, max: 1, solveFor: 'qx' }),
+        ],
+        equations: [{ name: 'qx', expr: '0.5*V_x + 0.1' }],
+      };
+    };
+    const r = runSheet(coupled(0.4), t);
+    expect(r.solve).toMatchObject({ kind: 'not-settled', why: 'member' });
+    expect(errors(r)[0]).toContain("(the author's range inside the wiring's [0, 1.8] V");
+    expect(r.point).toMatchObject({ sized: false, state: 'no-answer' });
+    expect(r.ranges?.map((x) => [x.param, x.from])).toEqual([
+      ['V_x', 'narrowed'],
+      ['Q', 'author'],
+    ]);
+    // `Q` is no wire's level: its range is its author's, with no note.
+    expect(r.warnings.filter((w) => w.location === 'Q' && w.rule === 'sheet-range')).toEqual([]);
   });
 });

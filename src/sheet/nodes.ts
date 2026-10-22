@@ -68,6 +68,7 @@ import {
 import {
   add,
   atomPoly,
+  canon,
   constPoly,
   hasOpaque,
   linearForm,
@@ -1893,7 +1894,7 @@ class OpaqueNames {
 /** The physical sign of a device's vgs and vds values — a p device on a table in N-style convention
  *  stores magnitudes, so its physical terminal differences are the negatives — or why it cannot be
  *  read. */
-function physicalSign(pt: DevicePoint, who: string): 1 | -1 | string {
+function physicalSign(pt: Pick<DevicePoint, 'polarity' | 'axis'>, who: string): 1 | -1 | string {
   if (pt.polarity === 'p') {
     if (pt.axis === undefined)
       return (
@@ -1945,6 +1946,44 @@ function axisForm(
   return names.named(linearForm(sym.srcIn(src, chain)), src, where);
 }
 
+/** The signs that turn a device's gate, drain and body voltages, as its table states them, into
+ *  physical differences above its source — `m` for the gate and drain (physicalSign), `k` for the
+ *  body — or why they cannot be read. */
+function terminalSigns(
+  pt: Pick<DevicePoint, 'polarity' | 'axis' | 'bodyAxis'>,
+  who: string,
+): { m: 1 | -1; k: 1 | -1 } | string {
+  const m = physicalSign(pt, who);
+  if (typeof m === 'string') return m;
+  // The body's direction, from the table's own vsb axis: a magnitude puts a p device's body
+  // above its source and an n device's below it; a signed vsb axis follows the vgs one.
+  const k: 1 | -1 = pt.bodyAxis === -1 ? (-m as 1 | -1) : pt.polarity === 'p' ? 1 : -1;
+  return { m, k };
+}
+
+/** A device's gate, drain and body voltages as linear forms over params and device quantities, as
+ *  its givens state them on a table whose vgs axis runs `axis` (see axisForm): a gate voltage the
+ *  givens do not state is the device's own `vgs`, and a diode's drain voltage is its gate's. */
+function terminalForms(
+  dev: Pick<WiredDevice, 'name' | 'givens' | 'chain'>,
+  sym: ReturnType<typeof symbolsOf>,
+  names: OpaqueNames,
+  axis: 1 | -1 | undefined,
+): { gs: Poly; ds: Poly; bs: Poly } {
+  const at = (key: string): string => `${deviceName(dev.name)} ${key}`;
+  const form = (src: string | undefined, key: string): Poly =>
+    axisForm(sym, names, axis, src, dev.chain, at(key));
+  const gs =
+    dev.givens.vgs !== undefined
+      ? form(dev.givens.vgs, 'vgs')
+      : atomPoly(`${providePrefix(dev.chain)}vgs`);
+  return {
+    gs,
+    ds: dev.givens.diode === true ? gs : form(dev.givens.vds, 'vds'),
+    bs: form(dev.givens.vsb, 'vsb'),
+  };
+}
+
 /** A device's three relations per placement — its gate, drain and body voltage above its source —
  *  or, where they cannot be formed, why not. */
 function deviceRelations(
@@ -1954,20 +1993,10 @@ function deviceRelations(
 ): WalkRelation[] | string {
   const pt = dev.point;
   if (!pt) return `${deviceName(dev.name)}: ${dev.why}`;
-  const m = physicalSign(pt, deviceName(dev.name));
-  if (typeof m === 'string') return m;
-  // The body's direction, from the table's own vsb axis: a magnitude puts a p device's body
-  // above its source and an n device's below it; a signed vsb axis follows the vgs one.
-  const k: 1 | -1 = pt.bodyAxis === -1 ? (-m as 1 | -1) : pt.polarity === 'p' ? 1 : -1;
-  const at = (key: string): string => `${deviceName(dev.name)} ${key}`;
-  const form = (src: string | undefined, key: string): Poly =>
-    axisForm(sym, names, pt.axis, src, dev.chain, at(key));
-  const vgsForm =
-    dev.givens.vgs !== undefined
-      ? form(dev.givens.vgs, 'vgs')
-      : atomPoly(`${providePrefix(dev.chain)}vgs`);
-  const vdsForm = dev.givens.diode === true ? vgsForm : form(dev.givens.vds, 'vds');
-  const vsbForm = form(dev.givens.vsb, 'vsb');
+  const signs = terminalSigns(pt, deviceName(dev.name));
+  if (typeof signs === 'string') return signs;
+  const { m, k } = signs;
+  const { gs: vgsForm, ds: vdsForm, bs: vsbForm } = terminalForms(dev, sym, names, pt.axis);
   const sens = (q: number | undefined): number | undefined =>
     q !== undefined && pt.id > 0 ? q / pt.id : undefined;
   return dev.wires.flatMap((n, idx) => {
@@ -2445,6 +2474,240 @@ export function nodesCheck(
     notes,
   };
   return { report, warnings: unique };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The wires a solved param sits between
+// ---------------------------------------------------------------------------------------------
+
+/** How many levels one wire keeps, each read along a different path from gnd or a held wire (see
+ *  solvedWiring) — the shortest paths first. A loop that does not close by its forms alone (a
+ *  relation a solve makes hold) would otherwise give a wire a new form on every turn around it. */
+const FORMS_PER_WIRE = 8;
+
+/** A wire one wire is joined to through a device's channel (see SolvedWire). */
+export interface ChannelNeighbour {
+  wire: string;
+  /** The device whose channel joins the two, as findings name it. */
+  device: string;
+}
+
+/** One solved param that is the level of a wire (see solvedWiring). */
+export interface SolvedWire {
+  /** The wires whose level the param is, in name order. */
+  wires: string[];
+  /** The wires the channels of the devices on them join them to, from below and from above: the
+   *  source of an n device whose drain is on the wire and the drain of a p device whose source is
+   *  on it are below it; the drain of an n device whose source is on it and the source of a p
+   *  device whose drain is on it are above it. In name order. */
+  below: ChannelNeighbour[];
+  above: ChannelNeighbour[];
+}
+
+/** What a sheet's wiring says about the params it solves, read from the netlist and the givens
+ *  alone (see solvedWiring). */
+export interface SolvedWiring {
+  /** Each solved param that is the level of a wire, by name. */
+  wires: Map<string, SolvedWire>;
+  /** Each wire's level as the wiring states it: linear forms over the sheet's params and its
+   *  devices' quantities, each read along a path of relations from gnd or a held wire, the
+   *  shortest first and at most FORMS_PER_WIRE of them. */
+  forms: Map<string, Poly[]>;
+}
+
+/** The value of a linear form whose every atom `valueOf` can read, or undefined where it reads one
+ *  it cannot (or the form is not linear). */
+export function linearValue(
+  p: Poly,
+  valueOf: (atom: string) => number | undefined,
+): number | undefined {
+  let sum = 0;
+  for (const [m, c] of p) {
+    if (m === '') {
+      sum += c;
+      continue;
+    }
+    const v = m.startsWith('[') ? undefined : valueOf(m);
+    if (v === undefined || !Number.isFinite(v)) return undefined;
+    sum += c * v;
+  }
+  return sum;
+}
+
+/**
+ * What the wiring of `doc` says about the params named in `solved` — the params the sheet solves —
+ * read from the netlist and the givens alone, before anything is evaluated: which of them is the
+ * level of a wire, and which wires the devices on that wire put it between. A solved param is the
+ * level of a wire when the wiring states that wire's level, along some path of relations from gnd
+ * or a held wire, as exactly that param — the pair's source whose body bias is `V_tail` on a
+ * grounded body, a diode's drain whose drain-source voltage from the supply is `VDD - V_nmir`. The
+ * relations are the walk's own (a device's gate, drain and body voltage above its source, a held
+ * wire's level, a voltage element), as linear forms; a p device's voltages take their direction
+ * from the table it is sized on, which `tableAt` gives for the chain of blocks down to the sheet
+ * that sizes it. A device whose direction cannot be read relates nothing. Undefined where the
+ * sheet names no wiring.
+ */
+export function solvedWiring(
+  doc: SheetDoc,
+  tableAt: (chain: readonly SheetBlock[]) => DeviceTable | undefined,
+  solved: readonly string[],
+): SolvedWiring | undefined {
+  if (!statesWiring(doc) || doc.nodes === 'none') return undefined;
+  const key = wiringSignature(doc, tableAt, solved);
+  const known = WIRING_READS.get(key);
+  if (known) return known;
+  const read = readSolvedWiring(doc, tableAt, solved);
+  if (WIRING_READS.size >= WIRING_READS_KEPT)
+    WIRING_READS.delete(WIRING_READS.keys().next().value as string);
+  WIRING_READS.set(key, read);
+  return read;
+}
+
+/** The readings solvedWiring has made, by what each read (wiringSignature), the most recent last.
+ *  A sweep evaluates one structure at every sample, and a held design's runs share theirs, so a
+ *  reading is made once per structure rather than once per solve; the oldest goes past
+ *  WIRING_READS_KEPT. The readings are never modified once made. */
+const WIRING_READS = new Map<string, SolvedWiring>();
+const WIRING_READS_KEPT = 64;
+
+/** Everything solvedWiring reads of a document, as one string: the netlist, the givens that state
+ *  a device's terminal voltages, every override and provide the forms resolve through, the param
+ *  names (and an axis-sign selector's value, which a form reads), the direction of each table a
+ *  device is sized on, and the params solved. Param values, widths, currents, prose and checks are
+ *  left out — nothing the reading depends on. */
+function wiringSignature(
+  doc: SheetDoc,
+  tableAt: (chain: readonly SheetBlock[]) => DeviceTable | undefined,
+  solved: readonly string[],
+): string {
+  const tables: string[] = [];
+  const visit = (d: SheetDoc, chain: SheetBlock[]): void => {
+    const a = axesOf(tableAt(chain));
+    tables.push(`${chain.map((b) => b.name).join(PATH_SEP)}:${a.axis ?? 0}/${a.bodyAxis}`);
+    if (chain.length >= MAX_BLOCK_DEPTH) return;
+    for (const b of Array.isArray(d.blocks) ? d.blocks : [])
+      if (b?.doc) visit(b.doc, [...chain, b]);
+  };
+  visit(doc, []);
+  const AXES = ['vgs', 'vds', 'vsb', 'diode'];
+  const shape = JSON.stringify(doc, function (this: unknown, k: string, v: unknown) {
+    if (k === 'givens' && isObject(v))
+      return Object.fromEntries(AXES.filter((a) => a in v).map((a) => [a, v[a]]));
+    if (k === 'params' && Array.isArray(v))
+      return v.map((p: SheetVar) =>
+        isSelector(this as SheetDoc, p) ? [p.name, p.value] : (p?.name ?? null),
+      );
+    if (k === 'equations' && Array.isArray(v)) return v.map((e: { name?: unknown }) => e?.name);
+    if (
+      k === 'description' ||
+      k === 'note' ||
+      k === 'title' ||
+      k === 'checks' ||
+      k === 'operatingRange' ||
+      k === 'analyses' ||
+      k === 'designLevels'
+    )
+      return undefined;
+    return v;
+  });
+  return `${shape}|${tables.join(',')}|${solved.join(',')}`;
+}
+
+/** solvedWiring's reading itself, made once per structure. */
+function readSolvedWiring(
+  doc: SheetDoc,
+  tableAt: (chain: readonly SheetBlock[]) => DeviceTable | undefined,
+  solved: readonly string[],
+): SolvedWiring {
+  const levels = walkLevels(doc);
+  const sym = symbolsOf(doc, Object.fromEntries(doc.params.map((p) => [p.name, p.value])));
+  const names = new OpaqueNames();
+  const rels: { a: string; b: string; sym: Poly }[] = [];
+  const channels: { device: string; polarity: 'n' | 'p'; d: string; s: string }[] = [];
+  for (const dev of collectDevices(doc, levels).devices) {
+    const polarity = sym.docAt(dev.chain).polarity === 'p' ? 'p' : 'n';
+    for (const n of dev.wires) channels.push({ device: dev.name, polarity, d: n.d, s: n.s });
+    const axes = axesOf(tableAt(dev.chain));
+    const signs = terminalSigns({ polarity, ...axes }, deviceName(dev.name));
+    if (typeof signs === 'string') continue;
+    const f = terminalForms(dev, sym, names, axes.axis);
+    for (const n of dev.wires)
+      rels.push(
+        { a: n.g, b: n.s, sym: scale(f.gs, signs.m) },
+        { a: n.d, b: n.s, sym: scale(f.ds, signs.m) },
+        { a: n.b, b: n.s, sym: scale(f.bs, signs.k) },
+      );
+  }
+  // Each held wire's level, and each voltage element, as the walk reads them (see levelAnchors).
+  for (const lv of levels) {
+    const held: unknown = lv.doc.levels;
+    for (const [w, e] of Object.entries(isObject(held) ? held : {}))
+      if (w !== GROUND && wireOk(w) && typeof e === 'string')
+        rels.push({ a: lv.rename(w), b: REF, sym: linearForm(sym.srcIn(e, lv.chain)) });
+    for (const e of Array.isArray(lv.doc.elements) ? lv.doc.elements : []) {
+      if (!isObject(e) || e.kind !== 'V' || !Array.isArray(e.between)) continue;
+      const [a, b] = e.between as unknown[];
+      if (!wireOk(a) || !wireOk(b)) continue;
+      const v = e.value;
+      const form =
+        typeof v === 'string' ? linearForm(sym.srcIn(v, lv.chain)) : constPoly(Number(v));
+      rels.push({ a: lv.rename(a), b: lv.rename(b), sym: form });
+    }
+  }
+  rels.push({ a: GROUND, b: REF, sym: new Map() });
+
+  // Each wire's forms, breadth first from the reference: a relation V(a) - V(b) = f reads a's
+  // level as b's plus f, and b's as a's less f.
+  const adj = new Map<string, { to: string; f: Poly; k: 1 | -1 }[]>();
+  const edge = (from: string, to: string, f: Poly, k: 1 | -1): void => {
+    if (from === to || to === REF) return;
+    adj.set(from, [...(adj.get(from) ?? []), { to, f, k }]);
+  };
+  for (const r of rels) {
+    edge(r.b, r.a, r.sym, 1);
+    edge(r.a, r.b, r.sym, -1);
+  }
+  const found = new Map<string, Map<string, Poly>>();
+  let frontier: [string, Poly][] = [[REF, new Map()]];
+  while (frontier.length) {
+    const next: [string, Poly][] = [];
+    for (const [w, f] of frontier)
+      for (const e of adj.get(w) ?? []) {
+        const g = add(f, e.f, e.k);
+        const at = found.get(e.to) ?? new Map<string, Poly>();
+        const key = canon(g);
+        if (at.has(key) || at.size >= FORMS_PER_WIRE) continue;
+        at.set(key, g);
+        found.set(e.to, at);
+        next.push([e.to, g]);
+      }
+    frontier = next;
+  }
+  const forms = new Map([...found].map(([w, at]) => [w, [...at.values()]]));
+
+  const wires = new Map<string, SolvedWire>();
+  for (const q of solved) {
+    const on = [...forms]
+      .filter(([, fs]) => fs.some((f) => canon(f) === canon(atomPoly(q))))
+      .map(([w]) => w)
+      .sort(cmp);
+    if (!on.length) continue;
+    const below = new Map<string, ChannelNeighbour>();
+    const above = new Map<string, ChannelNeighbour>();
+    for (const c of channels) {
+      if (c.d === c.s) continue;
+      const high = c.polarity === 'n' ? c.d : c.s;
+      const low = c.polarity === 'n' ? c.s : c.d;
+      if (on.includes(high) && !on.includes(low))
+        below.set(`${low}|${c.device}`, { wire: low, device: c.device });
+      if (on.includes(low) && !on.includes(high))
+        above.set(`${high}|${c.device}`, { wire: high, device: c.device });
+    }
+    const sorted = (m: Map<string, ChannelNeighbour>): ChannelNeighbour[] =>
+      [...m.entries()].sort(([x], [y]) => cmp(x, y)).map(([, v]) => v);
+    wires.set(q, { wires: on, below: sorted(below), above: sorted(above) });
+  }
+  return { wires, forms };
 }
 
 // ---------------------------------------------------------------------------------------------

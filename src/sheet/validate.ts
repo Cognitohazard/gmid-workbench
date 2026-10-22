@@ -262,7 +262,10 @@ function looseBalances(doc: SheetDoc): QAWarning[] {
   const held = heldShape(doc);
   for (const { p, named } of balances) {
     if (!named.length) continue;
-    const entries = reachedGivens(held, [p.name]);
+    // What the param reaches past the balanced devices' own currents: a current that follows one
+    // of those (`n__id` handed to the partner) is that current again, not another one.
+    const own = new Set(named.filter((d) => d !== '').map((d) => joinProvide(d, 'id')));
+    const entries = reachedGivens(held, [p.name], own);
     const skip = new Set(named.map((d) => d || 'givens'));
     const reaches = entries.some(({ path, givens, reached }) => {
       if (skip.has(path)) return false;
@@ -1282,17 +1285,25 @@ export interface ReachedGivens {
  * Exported for the test that holds it and dcInputs to the same reach; not part of the public
  * API (the package index does not re-export it).
  */
-export function reachedGivens(doc: SheetDoc, moved: readonly string[]): ReachedGivens[] {
+export function reachedGivens(
+  doc: SheetDoc,
+  moved: readonly string[],
+  still: ReadonlySet<string> = new Set(),
+): ReachedGivens[] {
   const out: ReachedGivens[] = [];
-  movedBy({ doc, path: '', kids: new Map() }, moved, out, 0);
+  movedBy({ doc, path: '', kids: new Map() }, moved, out, 0, still);
   return out;
 }
 
+/** reachedGivens at one level. `still` names provides of the top sheet's blocks (`n__id`) that are
+ *  never taken to move, whatever their device read — for a question asked past them (see
+ *  looseBalances). */
 function movedBy(
   lv: Level,
   moved: readonly string[],
   out: ReachedGivens[],
   depth: number,
+  still: ReadonlySet<string> = new Set(),
 ): ReadonlySet<string> {
   const reached = new Set(moved);
   const reads = (e: Edge | undefined, from: ReadonlySet<string>): boolean =>
@@ -1342,15 +1353,21 @@ function movedBy(
       // those (`VDD - ref__vgs`) is how the library writes a stack, so stopping at the block
       // boundary would make the checks below silent on the sheets they exist for. The geometry
       // and an authored current are the exceptions (MOVEMENT's `held`): a range end holds W and L
-      // fixed by construction, and an authored `id` moves only when its own expression does,
-      // which the closure already covers. A current nobody authored is not an exception (see
-      // provideEdges).
-      const sizingMoved = givensEdges(kid).some((e) => reads(e, inner));
+      // fixed by construction, and an authored `id` moves only when its own expression does —
+      // `id: I_side` with `I_side` overridden from a tail current the range end moves. That
+      // expression is the device's given, not a name the closure above reaches, so it is read
+      // here (givenMoved). A current nobody authored is not an exception (see provideEdges).
+      const kidGivens = givensEdges(kid);
+      const sizingMoved = kidGivens.some((e) => reads(e, inner));
+      const givenMoved = (key: string): boolean =>
+        kidGivens.some((e) => e.key === key && reads(e, inner));
       for (const key of block.doc.provides ?? [])
         if (
-          provideEdges(kid, key, MOVEMENT).some((e) =>
-            e.kind === 'device' ? sizingMoved : reads(e, inner),
-          )
+          !(depth === 0 && still.has(joinProvide(block.name, key))) &&
+          (givenMoved(key) ||
+            provideEdges(kid, key, MOVEMENT).some((e) =>
+              e.kind === 'device' ? sizingMoved : reads(e, inner),
+            ))
         )
           reached.add(joinProvide(block.name, key));
       close();
@@ -1503,6 +1520,17 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   const wiredAsDiode = structuralDiode(doc, _wiredBy);
 
   out.push(...paramProblems(doc));
+  // `designLevels` carries the design point's wire levels into a held run (holdHardware). Written
+  // in a document it would stand in for a walk nobody ran.
+  if (Object.prototype.hasOwnProperty.call(doc, 'designLevels'))
+    out.push({
+      rule: 'sheet-param',
+      severity: 'error',
+      message:
+        '"designLevels" is set by the engine on a held design — the levels the design point\'s ' +
+        'wiring walk placed — and is never written: drop it',
+      location: 'designLevels',
+    });
   out.push(...givensProblems(doc, wiredAsDiode));
   out.push(...checkProblems(doc));
   out.push(...rangeProblems(doc));
