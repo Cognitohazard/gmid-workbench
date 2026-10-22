@@ -5,9 +5,27 @@
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
-    { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
-    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 20,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 20 (26 dB) is the range of a bare half-micron pair at moderate inversion, the class of a preamplifier or an open-loop transconductor. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "GBW_target",
+      "value": 8e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 2 pF load: a half-micron pair under a 20 uA tail at moderate inversion lands in the high single-digit megahertz. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "SR_target",
+      "value": 5e6,
+      "unit": "V/s",
+      "role": "spec",
+      "note": "slew-rate target: the tail current into the 2 pF load; 5 V/us moves a 0.5 V step in 100 ns and leaves a 20 uA tail some margin. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 25e-9,

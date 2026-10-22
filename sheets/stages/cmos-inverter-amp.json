@@ -15,8 +15,20 @@
       "class": "independent"
     },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
-    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
-    { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
+    {
+      "name": "GBW_target",
+      "value": 10e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target: the combined gm over the total output capacitance; ten megahertz is a modest figure for an inverter stage, whose current reuse buys roughly twice a single device's gm. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "Av_target",
+      "value": 20,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 20 (26 dB) is the range of a half-micron inverter stage, whose two output conductances in parallel set it, the class of an inverter-based integrator or a comparator preamplifier. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 15e-9,

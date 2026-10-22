@@ -25,7 +25,13 @@
       "hold": "V_x + vgs"
     },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
-    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "GBW_target",
+      "value": 10e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target: the input device's gm over the 2 pF load; ten megahertz is the range of a single gain stage biased at tens of microamps. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "Av_target",
       "value": 200,

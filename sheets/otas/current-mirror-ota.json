@@ -5,10 +5,34 @@
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
-    { "name": "Av_target", "value": 20, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 12e6, "unit": "Hz", "role": "spec" },
-    { "name": "SR_target", "value": 10e6, "unit": "V/s", "role": "spec" },
-    { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 20,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 20 (26 dB) is what a single-stage current-mirror OTA gives at half-micron lengths without cascodes, the class of an open-loop transconductor or a comparator preamplifier rather than a precision feedback amplifier. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "GBW_target",
+      "value": 12e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 2 pF load: the mirror ratio multiplies the output transconductance, so this topology reaches past ten megahertz at a 20 uA tail where a 5T stays in single digits. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "SR_target",
+      "value": 10e6,
+      "unit": "V/s",
+      "role": "spec",
+      "note": "slew-rate target: each output branch carries K_m times what its side of the pair does, which is why this topology is picked for a faster slew than the 5 V/us of the plain single-stage OTAs; 10 V/us moves a 1 V step in 100 ns. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "PM_target",
+      "value": 60,
+      "unit": "deg",
+      "role": "spec",
+      "note": "phase-margin target: 60 degrees is the usual figure for a well-damped unity-gain follower; the row is estimate-grade, and an open-loop use needs none of it. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 30e-9,

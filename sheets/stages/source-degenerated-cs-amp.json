@@ -21,7 +21,13 @@
       "role": "spec",
       "note": "load resistance presented to the stage output"
     },
-    { "name": "Av_target", "value": 8, "unit": "V/V", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 8,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 8 (18 dB), the modest gain a degenerated stage keeps once the resistor has bought its linearity, the class of a linear front end or a variable-gain cell. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 30e-9,

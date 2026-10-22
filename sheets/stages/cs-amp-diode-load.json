@@ -4,7 +4,13 @@
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
-    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "GBW_target",
+      "value": 10e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "the bandwidth the input device is sized for: its gm is set to 2*pi*GBW_target*CL times the over-design factor, so this number sets the current. Ten megahertz into 2 pF is the range of a single gain stage biased at tens of microamps. An example, to be replaced with the design's own spec"
+    },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
     {
       "name": "Av_target",

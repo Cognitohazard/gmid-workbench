@@ -5,9 +5,27 @@
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
-    { "name": "Av_target", "value": 15, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
-    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 15,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 15 (about 24 dB) is a modest floor for a single uncascoded stage at half-micron lengths, the class of a bias-loop or reference buffer, a comparator preamplifier or a low-precision follower. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "GBW_target",
+      "value": 8e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 2 pF load: a single-stage OTA with a 20 uA tail at moderate inversion lands in the high single-digit megahertz. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "SR_target",
+      "value": 5e6,
+      "unit": "V/s",
+      "role": "spec",
+      "note": "slew-rate target: the tail current into the 2 pF load; 5 V/us moves a 0.5 V step in 100 ns, the range of a low-power single-stage OTA at a 20 uA tail. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 30e-9,
@@ -56,7 +74,13 @@
       "note": "output DC level; sets the mirror output device's vds and the top of the output-side pair transistor's vds. That transistor's drain and the mirror output device's drain meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here. Wherever that is not one diode drop below the supply, the two sides of the load mirror carry different currents and so do the two transistors of the pair, and the systematic-offset row reports what that costs",
       "class": "independent"
     },
-    { "name": "PM_target", "value": 60, "unit": "deg", "role": "spec" },
+    {
+      "name": "PM_target",
+      "value": 60,
+      "unit": "deg",
+      "role": "spec",
+      "note": "phase-margin target: 60 degrees is the usual figure for a well-damped unity-gain follower; the row is estimate-grade, and an open-loop use needs none of it. An example, to be replaced with the design's own spec"
+    },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
     {

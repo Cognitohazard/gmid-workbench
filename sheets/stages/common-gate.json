@@ -31,9 +31,21 @@
       "role": "spec",
       "note": "input-resistance budget (e.g. a source-matching target)"
     },
-    { "name": "Av_target", "value": 10, "unit": "V/V", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 10,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 10 (20 dB) into the 50 kOhm load, the range of a common-gate input or current-buffer stage, where the low input resistance is the point and the gain comes second. An example, to be replaced with the design's own spec"
+    },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
-    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "GBW_target",
+      "value": 10e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 2 pF load plus the parasitic estimate: ten megahertz is the range of a single stage biased at tens of microamps. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "cdd_est",
       "value": 0.2e-12,

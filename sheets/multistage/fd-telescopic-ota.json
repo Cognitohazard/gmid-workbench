@@ -4,7 +4,13 @@
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
-    { "name": "Av_target", "value": 300, "unit": "V/V", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 300,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "differential DC gain target: 300 (about 50 dB) is what one cascoded stage reaches at these lengths without gain boosting, about 8-bit static accuracy in unity feedback, the class of a switched-capacitor integrator or sample-and-hold of moderate precision. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "swing_target",
       "value": 0.5,

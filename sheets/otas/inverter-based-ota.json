@@ -5,9 +5,27 @@
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
-    { "name": "Av_target", "value": 30, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 20e6, "unit": "Hz", "role": "spec" },
-    { "name": "SR_target", "value": 8e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 30,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 30 (about 30 dB) for a complementary single stage, whose two output conductances in parallel set it, the class of a low-power switched-capacitor integrator or a transconductor. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "GBW_target",
+      "value": 20e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 2 pF load: current reuse roughly doubles the transconductance a given current buys, so an inverter-based OTA reaches about twice what a single-device stage does on the same supply current. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "SR_target",
+      "value": 8e6,
+      "unit": "V/s",
+      "role": "spec",
+      "note": "slew-rate target: 8 V/us moves a 0.5 V step in about 60 ns, in keeping with the bandwidth current reuse buys. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 12e-9,

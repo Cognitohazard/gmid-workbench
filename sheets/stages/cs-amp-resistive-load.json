@@ -4,9 +4,21 @@
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
-    { "name": "GBW_target", "value": 10e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "GBW_target",
+      "value": 10e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "the bandwidth the input device is sized for: its gm is set to 2*pi*GBW_target*CL times the over-design factor, so this number sets the current, and with it the drop across the load resistor. Ten megahertz into 2 pF is the range of a single gain stage biased at tens of microamps. An example, to be replaced with the design's own spec"
+    },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
-    { "name": "Av_target", "value": 15, "unit": "V/V", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 15,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 15 (about 24 dB) is the range a 50 kOhm load gives a common-source stage before its drop eats the output headroom. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 20e-9,

@@ -1,6 +1,6 @@
 {
   "title": "Two-stage Miller OTA",
-  "description": "The classic two-stage Miller operational transconductance amplifier: a differential input stage (input pair + current-mirror load) driving a common-source second stage, with a compensation capacitor $C_c$ bridging the second stage (Miller pole-splitting). $C_c$ is the compensation knob: it sets the dominant pole and hence the unity-gain bandwidth GBW = $g_{m1}/(2*\\pi*C_c)$. The feedforward path through $C_c$ creates a right-half-plane zero $z = g_{m2}/C_c$ that erodes phase; the $R_z = 1/g_{m2}$ nulling resistor removes it. The phase-margin and second-pole rows are ESTIMATE-grade small-signal approximations for sizing intuition — the simulator owns stability sign-off. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply. On the output side the mirror's output device and the pair's output-side device share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. The stage is drawn at rest, as the feedback around the amplifier holds it: the output, and with it the second stage's gate, sits where the loop puts it, and the two inputs sit apart by whatever offset that takes. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices are one width and carry what the tail delivers between them, each its own share, and the second stage carries its own programmed $I_2$. The mirror's output device is tied to its diode-side partner — the same width at the same gate-source voltage — and its current is read from the table at its own drain voltage. The share is solved so that the currents at the stage-1 output balance: the pair's output-side device takes exactly what the mirror's output device returns. Wherever the two levels differ, the two input devices then need different gate-source voltages for their currents, and the systematic-offset row reports that difference directly. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved so the produced $CM_{in}$, the tail node plus the mean of the two gate-source voltages, equals $CM_{dc}$, fixing the pair's body bias and both drain-source voltages outright. On the demo NMOS table every device sizes against the same data, so the sign params stay at +1.",
+  "description": "The classic two-stage Miller operational transconductance amplifier: a differential input stage (input pair + current-mirror load) driving a common-source second stage, with a compensation capacitor $C_c$ bridging the second stage (Miller pole-splitting). $C_c$ is the compensation knob: it sets the dominant pole and hence the unity-gain bandwidth GBW = $g_{m1}/(2*\\pi*C_c)$. The feedforward path through $C_c$ creates a right-half-plane zero $z = g_{m2}/C_c$ that erodes phase; the $R_z = 1/g_{m2}$ nulling resistor removes it. The phase-margin and second-pole rows are ESTIMATE-grade small-signal approximations for sizing intuition — the simulator owns stability sign-off. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply. On the output side the mirror's output device and the pair's output-side device share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. The stage is drawn at rest, as the feedback around the amplifier holds it: the output, and with it the second stage's gate, sits where the loop puts it, and the two inputs sit apart by whatever offset that takes. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices are one width and carry what the tail delivers between them, each its own share, and the second stage carries what its load delivers: the load is a second mirror output of the same reference, on its gate at $K_2$ times its width, so the stage-2 current is $K_2 I_1$ less that mirror's drain-voltage error, and the second-stage device is handed it. The mirror's output device is tied to its diode-side partner — the same width at the same gate-source voltage — and its current is read from the table at its own drain voltage. The share is solved so that the currents at the stage-1 output balance: the pair's output-side device takes exactly what the mirror's output device returns. Wherever the two levels differ, the two input devices then need different gate-source voltages for their currents, and the systematic-offset row reports that difference directly. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved so the produced $CM_{in}$, the tail node plus the mean of the two gate-source voltages, equals $CM_{dc}$, fixing the pair's body bias and both drain-source voltages outright. On the demo NMOS table every device sizes against the same data, so the sign params stay at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -11,8 +11,20 @@
       "role": "spec",
       "note": "output load capacitance"
     },
-    { "name": "Av_target", "value": 100, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 5e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 100,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "two-stage DC gain target: 100 (40 dB), a 1 % static error in unity feedback, is a loose floor for a general-purpose two-stage amplifier, which commonly reaches 60 to 80 dB. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "GBW_target",
+      "value": 5e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 5 pF load: a few megahertz is the range of a general-purpose two-stage amplifier biased at tens of microamps. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "PM_target",
       "value": 45,
@@ -20,7 +32,13 @@
       "role": "spec",
       "note": "phase-margin target; the PM row is estimate-grade"
     },
-    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "SR_target",
+      "value": 5e6,
+      "unit": "V/s",
+      "role": "spec",
+      "note": "slew-rate target: 5 V/us moves a 1 V step in 200 ns, in keeping with a few-megahertz general-purpose amplifier driving 5 pF. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "C1_est",
       "value": 0.5e-12,
@@ -64,17 +82,17 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the tail bias reference is programmed to — the one first-stage current that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the stage-1 slew limit, the bandwidth and the supply current are computed from what is delivered, not from this number",
+      "note": "the current the bias reference is programmed to — the one current on the sheet that is typed. The tail device mirrors it 1:1 and the second-stage load K2:1 through the shared gate, and each delivers it less its own drain-voltage error (the tail node normally sits below the reference's diode drop, the output above it); the slew limits, the bandwidth and the supply current are computed from what is delivered, not from this number",
       "class": "independent"
     },
     {
-      "name": "I2",
-      "value": 60e-6,
-      "min": 4e-6,
-      "max": 400e-6,
-      "unit": "A",
+      "name": "K2",
+      "value": 3,
+      "min": 1,
+      "max": 16,
+      "unit": "1",
       "role": "choice",
-      "note": "stage-2 branch current"
+      "note": "mirror ratio of the second-stage load, as a width ratio: the load sits on the bias reference's gate at K2 times its width and at its length, so it is a mirror output of that reference and the device that sets the stage-2 current. It delivers K2 times I1 less its drain-voltage error — its drain is the output, above the reference's diode drop — and the second-stage device carries what it delivers. Raising it buys stage-2 slew and a higher second pole for supply current"
     },
     {
       "name": "out_share",
@@ -111,7 +129,7 @@
       "max": 16,
       "unit": "1/V",
       "role": "choice",
-      "note": "inversion level of the tail bias reference, which the tail device inherits through the shared gate: a higher V* costs headroom at the tail node"
+      "note": "inversion level of the bias reference, which the tail device and the second-stage load inherit through the shared gate: a higher V* costs headroom at the tail node and output swing at the load"
     },
     {
       "name": "gm_id_s2",
@@ -121,15 +139,6 @@
       "unit": "1/V",
       "role": "choice",
       "note": "stage-2 device inversion"
-    },
-    {
-      "name": "gm_id_ld2",
-      "value": 8,
-      "min": 4,
-      "max": 14,
-      "unit": "1/V",
-      "role": "choice",
-      "note": "stage-2 load inversion"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     {
@@ -147,17 +156,9 @@
       "max": 2e-6,
       "unit": "m",
       "role": "choice",
-      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
+      "note": "length of the bias reference, the tail device and the second-stage load, which mirror at one length: longer shrinks each mirror's drain-voltage error and the load's output conductance"
     },
     { "name": "L_s2", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
-    {
-      "name": "L_ld2",
-      "value": 0.5e-6,
-      "min": 0.18e-6,
-      "max": 2e-6,
-      "unit": "m",
-      "role": "choice"
-    },
     {
       "name": "V_out2",
       "value": 0.9,
@@ -197,7 +198,7 @@
       "name": "bias",
       "doc": {
         "title": "Tail bias reference",
-        "description": "The diode-connected reference the programmed current $I_1$ flows into — the one first-stage device whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
+        "description": "The diode-connected reference the programmed current $I_1$ flows into — the one device on the sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device and the second-stage load need to copy it.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -253,6 +254,12 @@
       "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
+      "name": "ld2",
+      "ref": "multistage/stage2-current-source-load",
+      "params": { "Wx": "K2*bias__W", "vgsx": "bias__vgs", "Lx": "L_tail", "vx": "V_out2" },
+      "ports": { "out": "out", "vb": "vbn" }
+    },
+    {
       "name": "ld1",
       "doc": {
         "title": "Stage-1 mirror-load device, diode side",
@@ -283,7 +290,7 @@
       "name": "s2",
       "doc": {
         "title": "Stage-2 common-source device",
-        "description": "The second-stage gain device carrying the full stage-2 current at the output DC level. Its gm sets the RHP zero, the second pole, and the nulling resistor; its gate capacitance dominates the stage-1 output node cap.",
+        "description": "The second-stage gain device carrying the full stage-2 current — what its load delivers — at the output DC level. Its gm sets the RHP zero, the second pole, and the nulling resistor; its gate capacitance dominates the stage-1 output node cap.",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
@@ -310,7 +317,12 @@
         ],
         "provides": ["gm", "gds", "cgg", "vgs", "vdsat", "id"]
       },
-      "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" },
+      "params": {
+        "Ix": "ld2__id",
+        "Lx": "L_s2",
+        "gx": "gm_id_s2",
+        "vx": "out_sign*(VDD - V_out2)"
+      },
       "nodes": { "d": "out", "g": "o1", "s": "vdd", "b": "vdd" }
     },
     {
@@ -466,12 +478,6 @@
         "vsbx": "V_tail"
       },
       "nodes": { "d": "mir", "g": "vinn", "s": "tail", "b": "gnd" }
-    },
-    {
-      "name": "ld2",
-      "ref": "multistage/stage2-current-source-load",
-      "params": { "Ix": "s2__id", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" },
-      "ports": { "out": "out", "vb": "vbo" }
     }
   ],
   "equations": [
@@ -543,9 +549,9 @@
     },
     {
       "name": "SR",
-      "expr": "min(tail__id/Cc, I2/CL)",
+      "expr": "min(tail__id/Cc, ld2__id/CL)",
       "unit": "V/s",
-      "note": "the smaller slew limit: the current the tail device delivers charging Cc, or the stage-2 current charging CL"
+      "note": "the smaller slew limit: the current the tail device delivers charging Cc, or the current the second-stage load delivers charging CL"
     },
     {
       "name": "Av1",
@@ -597,9 +603,9 @@
     },
     {
       "name": "I_q",
-      "expr": "tail__id + I2",
+      "expr": "tail__id + ld2__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the current the tail device delivers plus the output branch. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
+      "note": "estimate: quiescent supply current — the current the tail device delivers plus the current the second-stage load delivers. The reference branch that programs the tail and the load is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -657,12 +663,12 @@
       "lhs": "vos_sys",
       "op": "<=",
       "rhs": "vos_sys_target",
-      "note": "the systematic input offset stays inside its budget. The stage-1 output sits at the second stage's gate, V1 = VDD - |vgs_s2|, while the mirror node sits at VDD - |vgs_ld1|, and the offset grows with the distance between the two — the classic W/L-ratio condition. Retune gm_id_s2, gm_id_ld1 or I2 until the two gate-source voltages agree and the offset falls to zero"
+      "note": "the systematic input offset stays inside its budget. The stage-1 output sits at the second stage's gate, V1 = VDD - |vgs_s2|, while the mirror node sits at VDD - |vgs_ld1|, and the offset grows with the distance between the two — the classic W/L-ratio condition. Retune gm_id_s2 or gm_id_ld1 until the two gate-source voltages agree and the offset falls to zero"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
   "levels": { "vdd": "VDD", "out": "V_out2" },
-  "ports": ["vinp", "vinn", "vbo"],
+  "ports": ["vinp", "vinn"],
   "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I1" }]
 }

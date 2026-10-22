@@ -405,6 +405,27 @@ describe('sheet library: vetting lints', () => {
     expect(assumed).toEqual([]);
   });
 
+  it('every example target says what it is an example of', () => {
+    // A parameter named `*_target` is a spec the sheet ships with so that it evaluates: a value
+    // plausible for the circuit's application class, which the designer replaces with their own.
+    // Its note says what the number is plausible for, so a shipped default is not mistaken for a
+    // requirement the library imposes. The walk reads each file as authored, inline children
+    // included.
+    let seen = 0;
+    const bare: string[] = [];
+    for (const { file, doc } of LIBRARY) {
+      walkDocs(doc, file, (d, path) => {
+        for (const p of d.params) {
+          if (!p.name.endsWith('_target')) continue;
+          seen++;
+          if (!p.note?.trim()) bare.push(`${path}: ${p.name}`);
+        }
+      });
+    }
+    expect(seen).toBeGreaterThan(0);
+    expect(bare).toEqual([]);
+  });
+
   it('a current parameter programs at most one device', () => {
     // A programmed current sets ONE device. Every other device that carries it gets it from the
     // circuit — it sits in the same branch, takes its share at a node, or mirrors it through a
@@ -532,7 +553,7 @@ const NAMED_INTERFACE: Readonly<Record<string, readonly string[]>> = {
   'applications/sc-settling-to-ota-spec.json': ['GBW_req', 'A_req', 'SR_req', 'CL_eff'],
   'mirrors-bias/beta-multiplier-bias.json': ['gm_target'],
   'multistage/rail-to-rail-input-stage.json': ['gm_min', 'gm_mid', 'gm_max'],
-  'multistage/stage2-current-source-load.json': ['gds', 'vdsat'],
+  'multistage/stage2-current-source-load.json': ['id', 'gds', 'vdsat'],
 };
 
 describe('sheet library: the published interface', () => {

@@ -11,8 +11,20 @@
       "role": "spec",
       "note": "output load capacitance (per side)"
     },
-    { "name": "Av_target", "value": 100, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 5e6, "unit": "Hz", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 100,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "differential DC gain target: 100 (40 dB), a 1 % static error in unity feedback, is a loose floor for a general-purpose two-stage amplifier, which commonly reaches 60 to 80 dB. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "GBW_target",
+      "value": 5e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 5 pF load on each side: a few megahertz is the range of a general-purpose two-stage amplifier biased at tens of microamps. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "PM_target",
       "value": 45,
@@ -20,7 +32,13 @@
       "role": "spec",
       "note": "phase-margin target; the PM row is estimate-grade"
     },
-    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "SR_target",
+      "value": 5e6,
+      "unit": "V/s",
+      "role": "spec",
+      "note": "slew-rate target: 5 V/us moves a 1 V step in 200 ns, in keeping with a few-megahertz general-purpose amplifier driving 5 pF. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "swing_target",
       "value": 0.6,

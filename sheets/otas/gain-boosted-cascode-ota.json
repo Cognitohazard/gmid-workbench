@@ -5,9 +5,27 @@
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec" },
-    { "name": "Av_target", "value": 10000, "unit": "V/V", "role": "spec" },
-    { "name": "GBW_target", "value": 8e6, "unit": "Hz", "role": "spec" },
-    { "name": "SR_target", "value": 5e6, "unit": "V/s", "role": "spec" },
+    {
+      "name": "Av_target",
+      "value": 10000,
+      "unit": "V/V",
+      "role": "spec",
+      "note": "DC gain target: 10000 (80 dB), about 13-bit static accuracy in unity feedback, is the reason to boost a cascode, the class of a high-resolution switched-capacitor or pipeline stage. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "GBW_target",
+      "value": 8e6,
+      "unit": "Hz",
+      "role": "spec",
+      "note": "unity-gain bandwidth target into the 2 pF load; the boosters must be faster than this, which the booster-bandwidth row reads against the same number. An example, to be replaced with the design's own spec"
+    },
+    {
+      "name": "SR_target",
+      "value": 5e6,
+      "unit": "V/s",
+      "role": "spec",
+      "note": "slew-rate target: the tail current into the 2 pF load; 5 V/us moves a 0.5 V step in 100 ns, the range of a low-power single-stage OTA at a 20 uA tail. An example, to be replaced with the design's own spec"
+    },
     {
       "name": "vn_target",
       "value": 25e-9,

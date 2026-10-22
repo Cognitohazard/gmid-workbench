@@ -642,7 +642,9 @@ describe('the search', () => {
 
 describe('the current back-off', () => {
   // One scale factor across every current knob, so the topology's authored branch ratios
-  // survive: the Miller OTA's two stages sit at 1:3 before and after.
+  // survive. On the Miller OTA that factor moves I1 alone: the second stage's load is a mirror
+  // output of the same bias reference at K2 = 3 times its width, so the stage-2 current follows
+  // I1 down by construction, and the 1:3 between the stages is the circuit's, not the search's.
   it('scales all current knobs by a single factor', () => {
     const c = pick('multistage/two-stage-miller-ota.json', {});
     expect(c.verdict).toBe('closed');
@@ -664,9 +666,15 @@ describe('the current back-off', () => {
     expect(0.75 / delivered).toBeGreaterThan(0.8125);
     expect(0.75 / delivered).toBeLessThanOrEqual(0.825);
     expect(c.knobs.I1).toBeCloseTo(0.825 * 2e-5, 12);
-    expect(c.knobs.I2).toBeCloseTo(0.825 * 6e-5, 12);
-    expect(c.knobs.I2 / c.knobs.I1).toBeCloseTo(3, 9); // the shipped 6e-5 : 2e-5
-    expect(c.I_q).toBeCloseTo(at.values.tail__id + c.knobs.I2, 12); // what the tail delivers, plus I2
+    // I1 is the one current knob the sheet has; the mirror ratio is a width ratio, not a current.
+    expect(Object.keys(c.knobs)).toEqual(['I1']);
+    // The 1:3 survives the back-off as the circuit delivers it. Each mirror output misses its
+    // share of the reference by its own drain voltage against the reference's diode drop — the
+    // tail at the tail node, the load at the 0.9 V output — so what the load delivers over what
+    // the tail delivers is K2·(VA + 0.9)/(VA + V_tail), the reference's own drop cancelling.
+    const stages = at.values.ld2__id / at.values.tail__id;
+    expect(Math.abs(stages / ((3 * (VA + 0.9)) / (VA + at.values.V_tail)) - 1)).toBeLessThan(1e-6);
+    expect(c.I_q).toBeCloseTo(at.values.tail__id + at.values.ld2__id, 12); // both delivered
     expect(c.atRangeFloor).toEqual([]);
   });
 

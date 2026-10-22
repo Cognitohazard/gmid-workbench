@@ -1,11 +1,30 @@
 {
   "title": "Stage-2 current-source load",
-  "description": "The second-stage current-source load carrying the stage-2 current at the output DC level; its output conductance loads the second-stage gain.",
+  "description": "The second-stage current-source load, drawn as a mirror output: one device on a bias reference's gate wire at a multiple of that reference's width, its drain at the output DC level. It is the device that sets the stage-2 current, and that current is read off the table at its own drain voltage rather than typed: the reference's current times the width ratio, scaled by what the difference between the two drain voltages does through its $g_{ds}$. Its output conductance loads the second-stage gain. A composing amplifier passes in the reference's width times its ratio, the reference's gate-source voltage and its length, maps the gate port onto the reference's gate wire, and hands the current this device delivers to the second-stage device. Used alone, the sheet sizes the device at the width and gate-source voltage typed here.",
   "polarity": "n",
   "params": [
-    { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
-    { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-    { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
+    {
+      "name": "Wx",
+      "value": 3e-6,
+      "unit": "m",
+      "role": "spec",
+      "note": "the device's width. A composing amplifier passes the bias reference's width times the mirror ratio, which is what makes this device a mirror output of that reference; the value here is only what the sheet sizes at alone, and as a width it means a different current on every table"
+    },
+    {
+      "name": "vgsx",
+      "value": 0.61,
+      "unit": "V",
+      "role": "spec",
+      "note": "the gate-source voltage the device sits at: the level of its gate wire. A composing amplifier passes the bias reference's own gate-source voltage, the gate wire the two share; used alone, nothing on this sheet sets the gate, so it is a bias the designer applies",
+      "class": "independent"
+    },
+    {
+      "name": "Lx",
+      "value": 0.5e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "the device's length; a composing amplifier passes the reference's, because a mirror copies a current density at one length"
+    },
     {
       "name": "vx",
       "value": 0.9,
@@ -15,18 +34,10 @@
       "class": "independent"
     }
   ],
-  "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
+  "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "region": "saturation" },
   "equations": [],
-  "checks": [
-    {
-      "id": "feasible-inversion",
-      "kind": "physical",
-      "lhs": "gx",
-      "op": "<=",
-      "rhs": "ceiling"
-    }
-  ],
-  "provides": ["gds", "vdsat"],
+  "checks": [],
+  "provides": ["id", "gds", "vdsat"],
   "formatVersion": 2,
   "nodes": { "d": "out", "g": "vb", "s": "gnd", "b": "gnd" },
   "levels": { "out": "vx" },

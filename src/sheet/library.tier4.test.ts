@@ -69,11 +69,15 @@ const statusOf = (r: SheetResult, id: string): string | undefined =>
 
 // --- Closed forms shared by the two-stage goldens ---
 // Every default length is 0.5 µm, so VA = 2.5 V throughout, and all three sheets default to
-// I1 20 µA, I2 60 µA, Cc 3 pF, CL 5 pF, C1_est 0.5 pF, CM_dc 1.0 V, VDD 1.8 V, V_out2 0.9 V.
+// I1 20 µA, Cc 3 pF, CL 5 pF, C1_est 0.5 pF, CM_dc 1.0 V, VDD 1.8 V, V_out2 0.9 V. The fully
+// differential sheet programs its second stage with I2 = 60 µA; the Miller and the
+// cascode-compensated sheets set theirs with a mirror output of the bias reference at K2 = 3
+// times its width (stage2Current).
 const L05 = 0.5e-6;
 const VA05 = VA_PER_L * L05;
 const I1 = 20e-6;
 const I2 = 60e-6;
+const K2 = 3;
 const CC = 3e-12;
 const C_LOAD = 5e-12;
 /** The tail node. It is the pair's source and its body bias, so the pair's gate needs
@@ -93,10 +97,17 @@ const V_1 = 1.8 - VGS_GMID12_L05;
  *  output, so it sits vgs(12) below the supply where the diode device sits at its own vgs(8):
  *  (2.5 + 0.567023)/(2.5 + 0.668042) = 0.968113. */
 const R_LD = (VA05 + VGS_GMID12_L05) / (VA05 + VGS_GMID8_L05);
+/** The current a second-stage load delivers as a mirror output of the bias reference: K2 times
+ *  the reference's width on the reference's gate, with its drain at the 0.9 V output. The
+ *  reference is diode-connected at `vgsRef`, so it carries I1 at vds = vgsRef, and the load copies
+ *  that saturation current density K2 times over at vds = 0.9 V:
+ *  K2·I1·(VA + 0.9)/(VA + vgsRef). The second-stage device is handed exactly this current. */
+const stage2Current = (vgsRef: number): number => (K2 * I1 * (VA05 + 0.9)) / (VA05 + vgsRef);
 /** The phase-margin estimate every two-stage sheet shares: the second pole alone, read at the
- *  crossover the stage-1 transconductance sets. */
-const pmOf = (gm1: number): number =>
-  90 - (Math.atan(gm1 / CC / ((12 * I2) / (C_LOAD + 0.5e-12))) * 180) / Math.PI;
+ *  crossover the stage-1 transconductance sets. The second stage runs at gm/ID 12 on every sheet,
+ *  so its transconductance is 12 times its current — the typed I2 where the sheet types one. */
+const pmOf = (gm1: number, gm2 = 12 * I2): number =>
+  90 - (Math.atan(gm1 / CC / (gm2 / (C_LOAD + 0.5e-12))) * 180) / Math.PI;
 
 /** The sheet sized on the shared table and then held on a second characterization of the same
  *  device with half the current and half the transconductance at every gate voltage. */
@@ -135,8 +146,8 @@ describe('tier4: which devices each multistage sheet needs saturated', () => {
     'flipped-voltage-follower': ['fb', 'in'],
     'rail-to-rail-input-stage': ['n', 'p'],
     'super-source-follower': ['fb', 'in'],
-    'two-stage-cascode-comp-ota': ['tail', 's2', 'ld1o', 'ino', 'in', 'casc', 'casco', 'ld2'],
-    'two-stage-miller-ota': ['tail', 's2', 'ld1o', 'ino', 'in', 'ld2'],
+    'two-stage-cascode-comp-ota': ['tail', 'ld2', 's2', 'ld1o', 'ino', 'in', 'casc', 'casco'],
+    'two-stage-miller-ota': ['tail', 'ld2', 's2', 'ld1o', 'ino', 'in'],
   };
   it('every sheet declares exactly the devices its design needs saturated', () => {
     for (const [file, devices] of Object.entries(SATURATED)) {
@@ -182,8 +193,11 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
   const doc = sheet('two-stage-miller-ota');
   const res = runSheet(doc, table, undefined, REFS);
   const v = res.values;
-  // Defaults: the bias reference programmed to I1 at gm/ID 10; gm/ID in 12, mirror 8, s2 12,
-  // ld2 8. Only the reference and the stage-2 device have a current typed into them.
+  // Defaults: the bias reference programmed to I1 at gm/ID 10; gm/ID in 12, mirror 8, s2 12.
+  // Only the reference has a current typed into it. The second-stage load is a mirror output of
+  // that reference at K2 = 3 times its width, with its drain at the 0.9 V output, so it delivers
+  //   3 × 20 µA × (2.5 + 0.9)/(2.5 + 0.610063) = 65.593 µA
+  // and the second-stage device is handed what it delivers.
   //
   // The first stage is drawn at rest: the feedback around the amplifier holds the stage-1 output
   // at the second stage's gate, one vgs(12) below the supply, and the inputs sit apart by what
@@ -212,7 +226,9 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
   const iTail = (I1 * (VA05 + vTail)) / (VA05 + VGS_GMID10_L05);
   const iOut = iTail * share;
   const iIn = iTail - iOut;
-  const gm2 = 12 * I2;
+  /** What the second-stage load delivers, and the second stage carries. */
+  const i2 = stage2Current(VGS_GMID10_L05);
+  const gm2 = 12 * i2;
   // Half the differential input reaches the stage-1 output through the mirror and half directly,
   // and gm scales with (VA + vds) exactly as id does, so the mirror passes the diode-side device's
   // gm on at R_LD: gm1 = (gm_in·R_LD + gm_ino)/2. The diode-side device sits at the slightly
@@ -220,16 +236,15 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
   // R_LD is the output side's, so gm1 = I_o·(11.73 + 12)/2.
   const gm1 = (iOut * (gmIdDemo(VGS_GMID12_L05 + delta) + 12)) / 2;
 
-  it('one first-stage current is typed, the pair is one width, and each mirror is one gate wire', () => {
+  it('one current is typed, the pair is one width, and each mirror is one gate wire', () => {
     // The programmed current goes into the bias reference and nowhere else: both sides of the
-    // first stage are handed a share of what the tail delivers. The second stage keeps its own
-    // programmed current, which its load reads.
+    // first stage are handed a share of what the tail delivers, and the second stage is handed what
+    // its load delivers.
     expect(block(res, 'bias').id).toBe(I1);
     expect(relErr(block(res, 'ino').id, v.tail__id * v.out_share)).toBeLessThan(1e-12);
     expect(relErr(block(res, 'in').id, v.tail__id * (1 - v.out_share))).toBeLessThan(1e-12);
     expect(relErr(block(res, 'ld1').id, v.in__id)).toBeLessThan(1e-12);
-    expect(block(res, 's2').id).toBe(I2);
-    expect(block(res, 'ld2').id).toBe(I2);
+    expect(block(res, 's2').id).toBe(v.ld2__id);
     // A mirror tie is the partner's width on the partner's gate-source voltage. The width is passed
     // through untouched; the gate voltage is reported as the table's own vgs coordinate at the
     // point it was read, so two devices on one wire agree to rounding. The pair shares the width
@@ -244,6 +259,9 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
         true,
       ]);
     }
+    // The second-stage load is the third device on the reference's gate, at K2 times its width.
+    expect(block(res, 'ld2').W).toBe(K2 * block(res, 'bias').W);
+    expect(relErr(block(res, 'ld2').vgs, block(res, 'bias').vgs)).toBeLessThan(1e-12);
     expect(block(res, 'in').W).toBe(block(res, 'ino').W);
     expect(doc.blocks!.find((u) => u.name === 'in')!.doc!.givens).toMatchObject({
       W: 'Wx',
@@ -255,6 +273,13 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     // The tail node (0.359 V) sits below the reference's diode drop (0.610 V), so the tail
     // under-delivers by 8.05 %. 1e-2 of that error is 2 mV of drain voltage.
     expect(relErr(1 - v.tail__id / I1, 1 - iTail / I1)).toBeLessThan(1e-2);
+  });
+
+  it('the second-stage load overshoots K2 times its reference by the same ratio, the other way', () => {
+    // Its drain is the 0.9 V output, above the reference's 0.610 V diode drop, so it delivers
+    // 9.32 % more than K2·I1: 65.59 µA. 1e-2 of that error is 3 mV of drain voltage.
+    expect(relErr(v.ld2__id / (K2 * I1) - 1, i2 / (K2 * I1) - 1)).toBeLessThan(1e-2);
+    expect(v.ld2__id).toBeGreaterThan(K2 * I1);
   });
 
   it('the split is solved so the currents at the stage-1 output balance', () => {
@@ -330,9 +355,11 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     // I_o·(gm/ID_in + 12)/2 = 9.043 µA × 11.86 = 107.28 µS.
     expect(relErr(v.gm1, gm1)).toBeLessThan(1e-3);
     expect(relErr(v.GBW, gm1 / (2 * Math.PI * CC))).toBeLessThan(1e-3);
-    // The stage-1 limit binds: 18.38 µA into 3 pF is slower than 60 µA into 5 pF.
-    expect(relErr(v.SR, Math.min(iTail / CC, I2 / C_LOAD))).toBeLessThan(1e-3);
-    expect(relErr(v.z_rhp, gm2 / CC)).toBeLessThan(1e-9);
+    // The stage-1 limit binds: 18.38 µA into 3 pF is slower than 65.59 µA into 5 pF.
+    expect(relErr(v.SR, Math.min(iTail / CC, i2 / C_LOAD))).toBeLessThan(1e-3);
+    expect(relErr(v.z_rhp, gm2 / CC)).toBeLessThan(1e-3);
+    // The second stage is sized at gm/ID 12 on the current its load hands it, so its gm is exact.
+    expect(relErr(v.z_rhp, (12 * v.ld2__id) / CC)).toBeLessThan(1e-9);
     // Which quantities each equation reads, exactly.
     expect(relErr(v.gm1, ((v.in__gm * v.ld1o__gm) / v.ld1__gm + v.ino__gm) / 2)).toBeLessThan(
       1e-12,
@@ -353,28 +380,29 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
   });
 
   it('stage-2 gain is exact from gm and the two gds = I/(VA+vds)', () => {
-    // s2 and ld2 both carry 60 µA at |vds| = 0.9 V, L 0.5 µm ⇒ gds = 60µ/(VA+0.9) each.
-    const av2 = gm2 / (2 * (I2 / (VA05 + 0.9)));
+    // s2 and ld2 carry one current at |vds| = 0.9 V, L 0.5 µm ⇒ gds = I/(VA+0.9) each, and the
+    // current cancels against gm = 12·I: Av2 = 12·(VA + 0.9)/2 = 20.4, whatever the load delivers.
+    const av2 = gm2 / (2 * gdsOf(i2, L05, 0.9));
     expect(relErr(v.Av2, av2)).toBeLessThan(1e-9);
   });
 
   it('phase-margin estimate is the second pole alone, the nulling resistor having removed the zero', () => {
     // The sheet supplies Rz = 1/gm2, which moves the RHP zero to infinity — so the estimate
     // carries no zero term. Keeping one double-charged the design for a zero it had cancelled.
-    expect(relErr(v.PM, pmOf(gm1))).toBeLessThan(1e-3);
-    expect(relErr(v.PM, pmOf(v.gm1))).toBeLessThan(1e-9);
+    expect(relErr(v.PM, pmOf(gm1, gm2))).toBeLessThan(1e-3);
+    expect(relErr(v.PM, pmOf(v.gm1, v.gm2))).toBeLessThan(1e-9);
   });
 
   it('every device the design needs saturated says so, and a common mode that starves the tail is refused', () => {
-    // The tail, the pair, the mirror's output device, the second stage and its load; the two
-    // diode-connected devices cannot declare one.
+    // The tail, the second stage's load, the second stage, the mirror's output device and the
+    // pair; the two diode-connected devices cannot declare one.
     expect(declaredSaturated(resolveSheetRefs(doc, REFS).doc)).toEqual([
       'tail',
+      'ld2',
       's2',
       'ld1o',
       'ino',
       'in',
-      'ld2',
     ]);
     // The tail device shares its reference's gate, so its saturation voltage is the reference's:
     // 0.358608 − vdsat(vgs(10)) = 0.123 V of headroom at the default common mode.
@@ -390,31 +418,34 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
   });
 
   it('the output interface is that same node, named, plus the input gate', () => {
-    expect(relErr(v.Rout, stage2Rout(I2, L05, 0.9))).toBeLessThan(1e-9);
-    expect(relErr(v.Av2, gm2 * v.Rout)).toBeLessThan(1e-12);
+    expect(relErr(v.Rout, stage2Rout(i2, L05, 0.9))).toBeLessThan(1e-3);
+    expect(relErr(v.Rout, stage2Rout(v.ld2__id, L05, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(v.Av2, v.gm2 * v.Rout)).toBeLessThan(1e-12);
     // Composition golden on cgg_in: one input device, per input terminal, at the width the
     // sizing landed on. The two input devices share that width, so they present the same gate.
     expect(v.cgg_in).toBe(v.in__cgg);
     expect(relErr(v.cgg_in, cggOf(block(res, 'ino').W, L05))).toBeLessThan(1e-9);
-    // Supply current is what the tail delivers plus the single-ended output branch:
-    // 18.38 µA + 60 µA. The reference branch is shared bias and is not counted.
-    expect(relErr(v.I_q, iTail + I2)).toBeLessThan(1e-3);
-    expect(relErr(v.I_q, v.tail__id + I2)).toBeLessThan(1e-12);
+    // Supply current is what the tail delivers plus what the second-stage load delivers:
+    // 18.38 µA + 65.59 µA. The reference branch is shared bias and is not counted.
+    expect(relErr(v.I_q, iTail + i2)).toBeLessThan(1e-3);
+    expect(relErr(v.I_q, v.tail__id + v.ld2__id)).toBeLessThan(1e-12);
   });
 
   it('held at another condition, the first stage follows its tail and the stage-1 output still balances', () => {
     // Every width is the sized one. The reference keeps the current it is programmed to, so at
-    // half the current density it needs a higher gate voltage, and the tail device follows it
-    // there instead of being handed 20 µA. The second stage keeps its own programmed current, so
-    // its gate — the stage-1 output — moves with its own device.
+    // half the current density it needs a higher gate voltage, and the tail device and the
+    // second-stage load follow it there instead of being handed a current. The second stage
+    // carries what its load delivers here, and its gate — the stage-1 output — moves with its own
+    // device.
     const [s, h] = sizedAndHeld(doc);
-    for (const name of ['bias', 'tail', 'ld1', 's2', 'ld1o', 'ino', 'in', 'ld2'])
+    for (const name of ['bias', 'tail', 'ld2', 'ld1', 's2', 'ld1o', 'ino', 'in'])
       expect([name, block(h, name).W]).toEqual([name, block(s, name).W]);
     expect(block(h, 'bias').id).toBe(I1);
-    expect(block(h, 's2').id).toBe(I2);
+    expect(block(h, 's2').id).toBe(h.values.ld2__id);
     expect(block(h, 'bias').vgs).toBeGreaterThan(block(s, 'bias').vgs);
     for (const [tied, partner] of [
       ['tail', 'bias'],
+      ['ld2', 'bias'],
       ['ld1o', 'ld1'],
     ])
       expect([tied, relErr(block(h, tied).vgs, block(h, partner).vgs) < 1e-12]).toEqual([
@@ -431,8 +462,10 @@ describe('tier4 goldens: Two-stage Miller OTA', () => {
     // Every tie is the same closed form, read at this condition's voltages: scaling the current
     // column by a constant leaves its (VA + vds) dependence alone.
     const tail = (VA05 + hv.V_tail) / (VA05 + block(h, 'bias').vgs);
+    const load = (VA05 + 0.9) / (VA05 + block(h, 'bias').vgs);
     const mirror = (VA05 + block(h, 's2').vgs) / (VA05 + block(h, 'ld1').vgs);
     expect(relErr(1 - hv.tail__id / I1, 1 - tail)).toBeLessThan(1e-2);
+    expect(relErr(hv.ld2__id / (K2 * I1) - 1, load - 1)).toBeLessThan(1e-2);
     expect(relErr(hv.ld1o__id / block(h, 'ld1').id - 1, mirror - 1)).toBeLessThan(1e-2);
     expect(relErr(hv.out_share - 0.5, mirror / (1 + mirror) - 0.5)).toBeLessThan(1e-2);
     expect(hv.vos_sys).toBe(Math.abs(hv.in__vgs - hv.ino__vgs));
@@ -475,7 +508,12 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
   // With the drains that close, the offset is almost all the current ratio: 2.87 mV.
   //   tail node    (CM_dc − vgs(12) − Δ/2)/1.2 = 0.359619 V
   //   tail         20 µA × (2.5 + 0.359619)/(2.5 + 0.532095) = 18.862 µA
-  const gm2 = 12 * I2;
+  // The second-stage load is a mirror output of the same gm/ID-14 reference at K2 = 3 times its
+  // width, its drain at the 0.9 V output:
+  //   load         3 × 20 µA × (2.5 + 0.9)/(2.5 + 0.532095) = 67.280 µA
+  /** What the second-stage load delivers, and the second stage carries. */
+  const i2 = stage2Current(VGS_GMID14_L05);
+  const gm2 = 12 * i2;
   const V_A = V_MIR - 0.25;
   const share = R_LD / (1 + R_LD);
   let vX = V_A;
@@ -493,16 +531,17 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
   const iIn = iTail - iOut;
   const gm1 = (iOut * (gmIdDemo(VGS_GMID12_L05 + delta) + 12)) / 2;
 
-  it('one first-stage current is typed, into the bias reference, and every tie is one gate wire', () => {
+  it('one current is typed, into the bias reference, and every tie is one gate wire', () => {
     // The programmed current goes into the bias reference and nowhere else; the mirror's diode
     // device and the cascode and input device under it carry the diode side's share of what the
-    // tail delivers, and the output-side input device the rest.
+    // tail delivers, the output-side input device the rest, and the second stage what its load
+    // delivers.
     expect(block(res, 'bias').id).toBe(I1);
     expect(relErr(block(res, 'ino').id, v.tail__id * v.out_share)).toBeLessThan(1e-12);
     expect(relErr(block(res, 'in').id, v.tail__id * (1 - v.out_share))).toBeLessThan(1e-12);
     expect(relErr(block(res, 'ld1').id, v.in__id)).toBeLessThan(1e-12);
     expect(block(res, 'casc').id).toBe(v.in__id);
-    expect(block(res, 's2').id).toBe(I2);
+    expect(block(res, 's2').id).toBe(v.ld2__id);
     // The output-side cascode is in one branch with the input device under it and is handed
     // that device's current, to the last bit.
     expect(block(res, 'casco').id).toBe(v.ino__id);
@@ -515,16 +554,26 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
       expect([tied, block(res, tied).W]).toEqual([tied, block(res, partner).W]);
     for (const [tied, partner] of [
       ['tail', 'bias'],
+      ['ld2', 'bias'],
       ['ld1o', 'ld1'],
     ])
       expect([tied, relErr(block(res, tied).vgs, block(res, partner).vgs) < 1e-12]).toEqual([
         tied,
         true,
       ]);
+    expect(block(res, 'ld2').W).toBe(K2 * block(res, 'bias').W);
     expect(doc.blocks!.find((u) => u.name === 'in')!.doc!.givens).toMatchObject({
       W: 'Wx',
       id: 'Ix',
     });
+  });
+
+  it('the second-stage load overshoots K2 times its reference by the drain-voltage ratio', () => {
+    // Its drain is the 0.9 V output, above the reference's 0.532 V diode drop, so it delivers
+    // 12.1 % more than K2·I1: 67.28 µA. The reference sits in weaker inversion than the Miller
+    // sheet's, where the diagonal it is read along bends more between grid points; 1e-2 of the
+    // error is still 4 mV of drain voltage.
+    expect(relErr(v.ld2__id / (K2 * I1) - 1, i2 / (K2 * I1) - 1)).toBeLessThan(1e-2);
   });
 
   it('the tail misses its reference, and the split is solved so the stage-1 output balances', () => {
@@ -594,10 +643,11 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     expect(relErr(v.gm1, ((v.in__gm * v.ld1o__gm) / v.ld1__gm + v.ino__gm) / 2)).toBeLessThan(
       1e-12,
     );
-    expect(relErr(v.Av2, gm2 / (2 * (I2 / (VA05 + 0.9))))).toBeLessThan(1e-9);
+    // The second stage and its load carry one current at one |vds|, which cancels against gm.
+    expect(relErr(v.Av2, gm2 / (2 * gdsOf(i2, L05, 0.9)))).toBeLessThan(1e-9);
     // The stage-1 slew limit is what the tail delivers into Cc: 18.86 µA into 3 pF is slower than
-    // 60 µA into 5 pF.
-    expect(relErr(v.SR, Math.min(iTail / CC, I2 / C_LOAD))).toBeLessThan(1e-3);
+    // 67.28 µA into 5 pF.
+    expect(relErr(v.SR, Math.min(iTail / CC, i2 / C_LOAD))).toBeLessThan(1e-3);
     expect(relErr(v.SR, v.tail__id / CC)).toBeLessThan(1e-12);
   });
 
@@ -618,23 +668,24 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
   });
 
   it('phase margin has no RHP-zero term (cascode compensation removes it)', () => {
-    expect(relErr(v.PM, pmOf(gm1))).toBeLessThan(1e-3);
-    expect(relErr(v.PM, pmOf(v.gm1))).toBeLessThan(1e-9);
+    expect(relErr(v.PM, pmOf(gm1, gm2))).toBeLessThan(1e-3);
+    expect(relErr(v.PM, pmOf(v.gm1, v.gm2))).toBeLessThan(1e-9);
   });
 
   it('every device the design needs saturated says so', () => {
-    // The tail, both input devices, both cascodes, the mirror's output device, the second stage
-    // and its load. The diode-side cascode is held at the 0.25 V the sheet states, 15 mV above its
-    // saturation voltage on this table; 0.2 V takes it out, and its declaration says so.
+    // The tail, the second stage's load, the second stage, the mirror's output device, both input
+    // devices and both cascodes. The diode-side cascode is held at the 0.25 V the sheet states,
+    // 15 mV above its saturation voltage on this table; 0.2 V takes it out, and its declaration
+    // says so.
     expect(declaredSaturated(resolveSheetRefs(doc, REFS).doc)).toEqual([
       'tail',
+      'ld2',
       's2',
       'ld1o',
       'ino',
       'in',
       'casc',
       'casco',
-      'ld2',
     ]);
     expect(relErr(regionOf(res, 'casc').lhsValue!, 0.25)).toBeLessThan(1e-12);
     expect(regionOf(res, 'casco').lhsValue).toBe(v.V_casco);
@@ -645,17 +696,18 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
   });
 
   it('the output interface is that same node, named, plus the input gate', () => {
-    expect(relErr(v.Rout, stage2Rout(I2, L05, 0.9))).toBeLessThan(1e-9);
-    expect(relErr(v.Av2, gm2 * v.Rout)).toBeLessThan(1e-12);
+    expect(relErr(v.Rout, stage2Rout(i2, L05, 0.9))).toBeLessThan(1e-3);
+    expect(relErr(v.Rout, stage2Rout(v.ld2__id, L05, 0.9))).toBeLessThan(1e-9);
+    expect(relErr(v.Av2, v.gm2 * v.Rout)).toBeLessThan(1e-12);
     // Composition golden on cgg_in: one input device, per input terminal, at the width the
     // sizing landed on. The two input devices share that width, so they present the same gate.
     expect(v.cgg_in).toBe(v.in__cgg);
     expect(relErr(v.cgg_in, cggOf(block(res, 'ino').W, L05))).toBeLessThan(1e-9);
     // Cascode compensation changes where the compensation current flows, not what the two
-    // branches draw: what the tail delivers plus the 60 µA output branch. The reference branch is
-    // shared bias and is not counted.
-    expect(relErr(v.I_q, iTail + I2)).toBeLessThan(1e-3);
-    expect(relErr(v.I_q, v.tail__id + I2)).toBeLessThan(1e-12);
+    // branches draw: what the tail delivers plus the 67.28 µA the second-stage load delivers. The
+    // reference branch is shared bias and is not counted.
+    expect(relErr(v.I_q, iTail + i2)).toBeLessThan(1e-3);
+    expect(relErr(v.I_q, v.tail__id + v.ld2__id)).toBeLessThan(1e-12);
   });
 
   it('held at another condition, the tail node, the split and both cascode nodes are solved again', () => {
@@ -664,8 +716,14 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     // one another, and are settled together; the stage-1 output still balances, and the two
     // cascodes still share that gate.
     const [s, h] = sizedAndHeld(doc);
-    for (const name of ['bias', 'tail', 'ld1', 's2', 'ld1o', 'ino', 'in', 'casc', 'casco', 'ld2'])
+    for (const name of ['bias', 'tail', 'ld2', 'ld1', 's2', 'ld1o', 'ino', 'in', 'casc', 'casco'])
       expect([name, block(h, name).W]).toEqual([name, block(s, name).W]);
+    // The second stage carries what its load delivers at this condition, and the load follows its
+    // reference's gate there.
+    expect(block(h, 's2').id).toBe(h.values.ld2__id);
+    expect(relErr(block(h, 'ld2').vgs, block(h, 'bias').vgs)).toBeLessThan(1e-12);
+    const load = (VA05 + 0.9) / (VA05 + block(h, 'bias').vgs);
+    expect(relErr(h.values.ld2__id / (K2 * I1) - 1, load - 1)).toBeLessThan(1e-2);
     const gate = s.held!.V_casc;
     expect(block(h, 'casc').bias!.vsb! + block(h, 'casc').vgs).toBeCloseTo(gate, 5);
     expect(block(h, 'casco').bias!.vsb! + block(h, 'casco').vgs).toBeCloseTo(gate, 5);
