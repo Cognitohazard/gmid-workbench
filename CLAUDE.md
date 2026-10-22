@@ -84,8 +84,11 @@ The maintainer reads this project through a guided tour of its *decisions* — s
 Republish with the Artifact tool passing that address as `url` so the page keeps it; a
 publish without it mints a new URL and orphans the one the maintainer has open.
 
-Its layout is expected to change — it is a live document, not a template. What must not
-change:
+Its layout is expected to change — it is a live document, not a template. As of 2026-10-22 it
+has three tabs: the tour (the entries, in sequence), the calls, and the changelog (the state of
+the bench, the batch log, the rulings). Batch lines, gate chips and measured-state notes go on
+the changelog tab, never at the top of the tour; an anchor into any tab opens that tab. What
+must not change:
 
 - **Decisions, not code.** Each entry is a question a returning reader would not know to
   ask ("why is the dependency's kill-all function deliberately never called?"), answered
