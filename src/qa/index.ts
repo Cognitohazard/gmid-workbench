@@ -15,9 +15,16 @@ import {
   conditionKeyOf,
   conditionLabel,
 } from '../corners';
-import { PHYS, UT, kelvin } from '../constants';
+import { DEFAULT_TEMP_C, PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
-import { derivedForm, metaScalars, pointScope } from '../derive';
+import {
+  derivedFallbacks,
+  derivedForm,
+  metaScalars,
+  noiseLabel,
+  noiseSource,
+  pointScope,
+} from '../derive';
 import {
   AXIS_DEFAULT_BIAS,
   BASE_KEYS,
@@ -301,7 +308,12 @@ export function validate(table: DeviceTable): QAWarning[] {
   if (gm && id) {
     // Scale both 27 °C anchors by this table's temperature (1/U_T ∝ 1/T): rises
     // when colder, falls when hotter, and their ratio is preserved automatically.
-    const tempC = table.meta.temp ?? 27;
+    const tempC = table.meta.temp ?? DEFAULT_TEMP_C;
+    // A temperature the table did not declare is the default, and the finding says so: a cold
+    // characterization read at 27 °C can sit past these limits and be valid data.
+    const at = table.meta.filled?.includes('temp')
+      ? `${tempC} °C (assumed: the table declares no # temp:)`
+      : `${tempC} °C`;
     const scale = PHYS.T / kelvin(tempC); // 1 @27 °C, >1 colder, <1 hotter
     const ceiling = GM_ID_CEILING * scale; // ~38.7@27, ~49.8@−40, ~29.2@125
     const unitError = GM_ID_UNIT_ERROR * scale; // ~45@27, temp-scaled
@@ -317,14 +329,14 @@ export function validate(table: DeviceTable): QAWarning[] {
       out.push({
         rule: 'gm-id-ceiling',
         severity: 'error',
-        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds ${unitError.toFixed(1)} at ${tempC} °C — likely a unit error`,
+        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds ${unitError.toFixed(1)} at ${at} — likely a unit error`,
         location: 'gm/id',
       });
     } else if (maxGmId > ceiling) {
       out.push({
         rule: 'gm-id-ceiling',
         severity: 'warning',
-        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds the physical ceiling ~${ceiling.toFixed(1)} (1/U_T at ${tempC} °C)`,
+        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds the physical ceiling ~${ceiling.toFixed(1)} (1/U_T at ${at})`,
         location: 'gm/id',
       });
     }
@@ -708,7 +720,109 @@ export function validate(table: DeviceTable): QAWarning[] {
     });
   }
 
+  out.push(...filledFindings(table), ...unreadableHeaders(table));
   return out;
+}
+
+/**
+ * The identity fields the importer filled in (TableMeta.filled), one information finding each.
+ * A filled-in field reads like a declared one wherever the table's identity is read, so this is
+ * where the import says it was assumed, and what rests on it.
+ */
+function filledFindings(table: DeviceTable): QAWarning[] {
+  return (table.meta.filled ?? []).map((field): QAWarning => {
+    if (field === 'temp')
+      return {
+        rule: 'no-temp',
+        severity: 'info',
+        message:
+          `the table declares no temperature (# temp:), so it is read at ${table.id.temp} °C: ` +
+          `kT (the thermal noise, the γ read back from sth, kT/C), the gm/ID ceiling checked ` +
+          `here and the condition it is grouped and labelled under all assume it, and every ` +
+          `sizing on it says so`,
+        location: 'temp',
+      };
+    if (field === 'corner')
+      return {
+        rule: 'no-corner',
+        severity: 'info',
+        message:
+          `the table declares no corner (# corner:), so it is taken as "${table.id.corner}": it ` +
+          `is grouped and labelled as that condition of its device, and it is the automatic ` +
+          `nominal only when no condition of its device is declared`,
+        location: 'corner',
+      };
+    return {
+      rule: 'no-device',
+      severity: 'info',
+      message:
+        `the table declares no device name (# device:), so it is named "${table.id.device}", ` +
+        `from its file name (or "dev0" without one): tables are grouped into one device by that ` +
+        `name, so a renamed file groups differently`,
+      location: 'device',
+    };
+  });
+}
+
+/** What a recognized numeric or polarity header must hold to be read, and what goes unread when
+ *  it does not — keyed by the lower-cased header name the parser recognizes. */
+const HEADER_READING: Readonly<Record<string, { expected: string; unread: string }>> = (() => {
+  const temp = {
+    expected: 'a number in °C (27, not 27C or 300K)',
+    unread: `the table is read at ${DEFAULT_TEMP_C} °C as if it declared none`,
+  };
+  const width = {
+    expected: 'a number in metres (1e-6, not 1u)',
+    unread: 'the characterization width is unknown, so no device can be sized from the table',
+  };
+  const polarity = {
+    expected: 'one of n, p, nmos, pmos, nch, pch, nfet, pfet, nmosfet, pmosfet',
+    unread:
+      'the table declares no polarity: a signed PMOS export is not folded to magnitudes, and ' +
+      'its channel type is unknown when it is grouped',
+  };
+  return {
+    temp,
+    temperature: temp,
+    w: width,
+    width,
+    avt: {
+      expected: 'a number in V·m (3.5e-9 for 3.5 mV·µm)',
+      unread: 'the sizer’s matching budget uses its generic A_Vth instead',
+    },
+    abeta: {
+      expected: 'a number in metres (2e-8 for 2 %·µm)',
+      unread: 'the sizer’s matching budget uses its generic A_β instead',
+    },
+    fco: {
+      expected: 'a number in Hz (2e6, not 2meg)',
+      unread: 'the sizer does not read it as the 1/f corner',
+    },
+    polarity,
+    type: polarity,
+  };
+})();
+
+/**
+ * Recognized headers whose value the importer could not read. The parser keeps each in `extra`
+ * as written (a recognized header is only there when its value was unreadable), so nothing is
+ * lost; this names the header, what it holds, what it should hold and what goes unread.
+ */
+function unreadableHeaders(table: DeviceTable): QAWarning[] {
+  return Object.entries(table.meta.extra ?? {}).flatMap(([key, value]): QAWarning[] => {
+    const reading = Object.prototype.hasOwnProperty.call(HEADER_READING, key.toLowerCase())
+      ? HEADER_READING[key.toLowerCase()]
+      : undefined;
+    if (!reading) return [];
+    return [
+      {
+        rule: 'unreadable-header',
+        severity: 'info',
+        message: `the # ${key}: header reads "${value}", which is not ${reading.expected} — it is kept as written but not read, so ${reading.unread}`,
+        location: key,
+      },
+    ];
+  });
 }
 
 // --- device QA ---------------------------------------------------------------
@@ -723,9 +837,10 @@ function byFact(
   const out = new Map<string, string[]>();
   for (const t of conditions) {
     const key = fact(t);
+    const label = conditionLabel(t);
     const labels = out.get(key);
-    if (labels) labels.push(conditionLabel(t.id));
-    else out.set(key, [conditionLabel(t.id)]);
+    if (labels) labels.push(label);
+    else out.set(key, [label]);
   }
   return out;
 }
@@ -817,10 +932,22 @@ export function validateDeviceConditions(f: CharacterizedDevice): QAWarning[] {
       .join(', ');
   });
   if (columns.size > 1) {
+    // A missing column is not always a gap: a quantity with a lesser form (the γ-model noise
+    // without sth or gmb) is read by it at that condition instead, and says so on its noise line.
+    // Which conditions read which is spelled out when they differ.
+    const noise = byFact(conditions, (t) =>
+      noiseLabel(noiseSource(t.grid), derivedFallbacks(t.grid, metaScalars(t.meta))),
+    );
     out.push({
       rule: 'device-quantities',
       severity: 'warning',
-      message: `conditions of "${f.device}" carry different quantity columns — ${describe(columns)} — author math that reads a column one of them lacks goes na at that condition`,
+      message:
+        `conditions of "${f.device}" carry different quantity columns — ${describe(columns)} — ` +
+        `author math that reads a column one of them lacks goes na at that condition` +
+        (noise.size > 1
+          ? `, and the thermal-noise figures fall back where a column they read is missing ` +
+            `(noise: ${describe(noise)})`
+          : ''),
       location: f.device,
     });
   }

@@ -44,6 +44,12 @@ _POLARITY_ALIASES = {
 # device_parameters keys that may carry a declared channel type. A small, deliberately
 # inclusive set — an unrecognized value is ignored, so over-listing is harmless.
 _POLARITY_FIELDS = ("polarity", "type", "device_type", "channel_type", "mos_type")
+# device_parameters keys that may state the process corner and the temperature [°C] the table
+# was taken at. When none does (and no flag is given), neither line is written: the importer
+# fills in `tt` and 27 °C and records that it did, where a written `# corner: tt` would read as
+# a declaration nobody made.
+_CORNER_FIELDS = ("corner", "process_corner")
+_TEMP_FIELDS = ("temp", "temperature")
 
 
 def _normalize_polarity(value) -> str | None:
@@ -100,6 +106,36 @@ def device_entries(table: dict):
             yield name, entry
 
 
+def _find_field(table: dict, entry: dict, fields):
+    """The first of ``fields`` present in the model's, then the table's, ``device_parameters``."""
+    for src in (entry.get("device_parameters"), table.get("device_parameters")):
+        if isinstance(src, dict):
+            for k in fields:
+                if k in src:
+                    return src[k]
+    return None
+
+
+def _find_corner(table: dict, entry: dict, override=None) -> str | None:
+    """The process corner from an explicit override (wins) or a device_parameters field, or
+    None when the source states none — never a default."""
+    value = override if override is not None else _find_field(table, entry, _CORNER_FIELDS)
+    text = _oneline(value)
+    return text or None
+
+
+def _find_temp(table: dict, entry: dict, override=None) -> str | None:
+    """The temperature [°C] from an explicit override (wins) or a device_parameters field, or
+    None when the source states none or states something that is not a finite number."""
+    value = override if override is not None else _find_field(table, entry, _TEMP_FIELDS)
+    if value is None:
+        return None
+    try:
+        return fmt_num(float(np.asarray(value).ravel()[0]), 10)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 def _find_width(table: dict, entry: dict):
     """Characterisation width [m] from the model or table metadata, if present."""
     for src in (entry.get("device_parameters"), table.get("device_parameters")):
@@ -116,7 +152,7 @@ def _num(x) -> str:
     return fmt_num(x, 10)
 
 
-def convert_entry(table: dict, name: str, entry: dict, *, polarity=None):
+def convert_entry(table: dict, name: str, entry: dict, *, polarity=None, corner=None, temp=None):
     """Return ``(header, rows, meta)`` for one model entry."""
     length = np.asarray(entry["length"], float).ravel()
     vbs = np.asarray(entry["vbs"], float).ravel()
@@ -153,7 +189,9 @@ def convert_entry(table: dict, name: str, entry: dict, *, polarity=None):
     meta = {
         "mostab": "0.1",
         "device": name,
-        "corner": "tt",
+        # Written only when the source (or a flag) states it; see _CORNER_FIELDS.
+        "corner": _find_corner(table, entry, corner),
+        "temp": _find_temp(table, entry, temp),
         "simulator": _oneline(table.get("simulator")),
         "description": _oneline(table.get("description")),
         "W": _opt(_find_width(table, entry)),
@@ -179,20 +217,25 @@ def convert(
     trust: bool = False,
     overwrite: bool = False,
     polarity=None,
+    corner=None,
+    temp=None,
 ):
     """Convert every model in ``npz_path`` to a mostab CSV under ``out_dir``.
 
     Model keys are reduced to a safe basename and the resolved output path is
     verified to stay under ``out_dir`` (a crafted model name cannot escape it).
     Existing files are not overwritten unless ``overwrite`` is set. An explicit
-    ``polarity`` ('n'|'p') overrides any per-model device-type field.
+    ``polarity`` ('n'|'p'), ``corner`` or ``temp`` [°C] overrides the matching
+    device_parameters field; a corner or temperature stated by neither is left out.
     """
     table = load_table(npz_path, trust=trust)
     out_root = Path(out_dir).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     written = []
     for name, entry in device_entries(table):
-        header, rows, meta = convert_entry(table, name, entry, polarity=polarity)
+        header, rows, meta = convert_entry(
+            table, name, entry, polarity=polarity, corner=corner, temp=temp
+        )
         out = out_root / f"{_safe_name(name)}.mostab.csv"
         # _safe_name already strips separators; re-check the resolved path stays under
         # out_dir so a crafted model name can never escape it.
@@ -225,6 +268,17 @@ def main(argv=None) -> None:
         help="declare the device channel type (overrides any device_parameters field); "
         "emits a `# polarity:` line so the importer can fold a signed PMOS dump to magnitude",
     )
+    ap.add_argument(
+        "--corner",
+        help="declare the process corner the table was taken at (overrides any device_parameters "
+        "field); without it, and without such a field, no `# corner:` line is written",
+    )
+    ap.add_argument(
+        "--temp",
+        type=float,
+        help="declare the temperature in °C the table was taken at (overrides any "
+        "device_parameters field); without it, and without such a field, no `# temp:` line is written",
+    )
     args = ap.parse_args(argv)
     if args.trust_pickle:
         print(
@@ -232,7 +286,13 @@ def main(argv=None) -> None:
             file=sys.stderr,
         )
     for out, n in convert(
-        args.npz, args.out_dir, trust=args.trust_pickle, overwrite=args.force, polarity=args.polarity
+        args.npz,
+        args.out_dir,
+        trust=args.trust_pickle,
+        overwrite=args.force,
+        polarity=args.polarity,
+        corner=args.corner,
+        temp=args.temp,
     ):
         print(f"wrote {out} ({n} rows)")
 

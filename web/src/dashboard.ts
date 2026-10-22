@@ -6,7 +6,6 @@ import {
   plottableQuantities,
   metaScalars,
   fixTable,
-  EXAMPLES,
   MAX_BLOCK_DEPTH,
   GIVENS_KEYS,
   GIVENS_FLAGS,
@@ -134,10 +133,18 @@ export function reduceForSizing(
   return Object.keys(fixed).length ? fixTable(device, fixed) : device;
 }
 
-/** A loaded device's display identity — `device · corner · temp°C`. Human-readable but NOT
- *  unique (two metadata-less or same-corner imports can collide), so it is for DISPLAY only. */
+/** A loaded device's display identity — `device · corner · temp°C`, each field its file did not
+ *  declare marked `(assumed)` (TableMeta.filled). Human-readable but NOT unique (two
+ *  metadata-less or same-corner imports can collide), so it is for DISPLAY only. */
 export function deviceKey(t: DeviceTable): string {
-  return `${t.id.device} · ${t.id.corner} · ${t.id.temp}°C`;
+  const filled = t.meta.filled ?? [];
+  const mark = (field: 'device' | 'corner' | 'temp', text: string): string =>
+    filled.includes(field) ? `${text} (assumed)` : text;
+  return [
+    mark('device', t.id.device),
+    mark('corner', t.id.corner),
+    mark('temp', `${t.id.temp}°C`),
+  ].join(' · ');
 }
 
 /**
@@ -173,7 +180,12 @@ export function tableUid(t: DeviceTable): string {
   // metadata (W, AVT, ABETA, fco, polarity, …) size and budget differently, so they
   // must not dedupe into one uid. Property order is stable for parsed and
   // structured-clone-restored tables, so the JSON text is deterministic here.
-  mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${JSON.stringify(t.meta)}`);
+  // Except the record of which identity fields were filled in: two copies of one file, one that
+  // declares the `tt` it is read as and one that leaves it to the default, hold the same table,
+  // so a re-import of the declared one replaces the other in place; and a table stored before
+  // the record existed keeps the uid it was stored under.
+  const { filled: _filled, ...meta } = t.meta;
+  mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${JSON.stringify(meta)}`);
   for (const a of t.grid.axes) {
     mix(`${a.name}:${a.values.length}`);
     mixData(a.values);
@@ -182,7 +194,8 @@ export function tableUid(t: DeviceTable): string {
     mix(`${k}:${col.length}`);
     mixData(col);
   }
-  const uid = `${deviceKey(t)}#${(h >>> 0).toString(36)}`;
+  // The label part is the bare identity, never deviceKey's marked one: a uid is a stored key.
+  const uid = `${t.id.device} · ${t.id.corner} · ${t.id.temp}°C#${(h >>> 0).toString(36)}`;
   uidMemo.set(t, uid);
   return uid;
 }
@@ -248,6 +261,13 @@ export interface Panel {
   // How a single condition other than the nominal one is asked about: absent ⇒ the design is
   // sized there; true ⇒ the nominal design is held there. Bench state, like the two above.
   sheetCornerHold?: boolean;
+  // render === 'sheet', restored from storage with a loss: the document exactly as it was stored,
+  // and what the restore could not carry into `sheet` (sanitizeSheet's `lost` paths, or the
+  // reason nothing could be read). Until the user edits the sheet, the stored copy is what is
+  // persisted (persistedDashboard), so a restore never writes its loss over the user's document.
+  // Absent when the restore lost nothing. Bench state, never written into `sheet`.
+  sheetStored?: unknown;
+  sheetLost?: string[];
   auto?: boolean; // an auto-generated canonical panel — regenerated per device on a swap, not
   // user-authored; absent on every panel the user adds, so user work survives a device swap.
 }
@@ -354,10 +374,11 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
     return undefined;
   }
   const str = (x: unknown, fallback: string) => (typeof x === 'string' && x ? x : fallback);
-  // `lost` records the path of every authored piece this pass DROPS. Restore paths
-  // tolerate drops (our own persisted data, best rescued); the import path passes a
-  // collector and fails closed — a sheet whose mistyped check was dropped would
-  // otherwise validate cleanly and read feasible without that check.
+  // `lost` records the path of every authored piece this pass DROPS. The import path fails
+  // closed on any — a sheet whose mistyped check was dropped would otherwise validate cleanly
+  // and read feasible without that check. The restore paths keep what they can read, say what
+  // they dropped where the sheet is shown, and keep the stored copy until the user edits it
+  // (see restoredSheet, and the library's own restore).
   const drop = (path: string): [] => {
     lost?.push(path);
     return [];
@@ -676,6 +697,58 @@ export function reseatDashboard(dash: Dashboard, dev: DeviceTable): Dashboard {
 }
 
 /**
+ * A sheet panel's document restored from what was stored, with what the restore lost. The stored
+ * copy is the panel's own while it carries one (a live panel re-validated on a device swap), so
+ * the loss is always measured against what the user saved, not against a copy already restored.
+ * A document that cannot be read at all is NOT replaced by another: the panel keeps the stored
+ * copy, opens refused with the reason and evaluates nothing, as it does for a document in a
+ * format this app does not read — which is kept whole by sanitizeSheet and refused by its own
+ * reason, so it records no loss here.
+ */
+function restoredSheet(pp: Record<string, unknown>): {
+  sheet?: SheetDoc;
+  sheetStored?: unknown;
+  sheetLost?: string[];
+} {
+  const stored = 'sheetStored' in pp ? pp.sheetStored : pp.sheet;
+  const lost: string[] = [];
+  const sheet = sanitizeSheet(stored, 0, lost);
+  if (sheet && sheetFormat(sheet).format === 'unknown') return { sheet };
+  if (sheet && !lost.length) return { sheet };
+  return {
+    ...(sheet ? { sheet } : {}),
+    sheetStored: stored,
+    sheetLost: lost.length ? lost : ['the stored sheet is not a sheet document'],
+  };
+}
+
+/** What a sheet panel whose stored document could not be restored holds in its place: nothing to
+ *  read or evaluate. The panel opens refused with the reason (Panel.sheetLost). */
+export const UNRESTORED_SHEET: SheetDoc = {
+  title: '',
+  polarity: 'n',
+  params: [],
+  equations: [],
+  checks: [],
+};
+
+/** The dashboard as it is written to storage: a sheet panel restored with a loss writes back the
+ *  document as it was stored (Panel.sheetStored), not the restored copy, until the user edits it. */
+export function persistedDashboard(d: Dashboard): Dashboard {
+  return {
+    ...d,
+    tabs: d.tabs.map((t) => ({
+      ...t,
+      panels: t.panels.map((p) => {
+        if (!p.sheetLost) return p;
+        const { sheetStored, sheetLost: _lost, ...rest } = p;
+        return { ...rest, sheet: sheetStored as SheetDoc };
+      }),
+    })),
+  };
+}
+
+/**
  * Coerce an untrusted parsed object (e.g. a saved layout from localStorage) into a
  * valid Dashboard for `dev`, or null if it isn't salvageable (caller falls back to
  * the preset). Families absent on the device drop to '' (single curve); cols clamp to
@@ -700,9 +773,9 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
       if (typeof pp.xExpr !== 'string' || typeof pp.yExpr !== 'string') continue;
       const legend = sanitizeLegend(pp.legend);
       const render = pp.render === 'table' ? 'table' : pp.render === 'sheet' ? 'sheet' : 'chart';
-      // A sheet panel always carries a valid doc so it can render; a corrupt one falls
-      // back to the first vetted example rather than dropping the panel.
-      const sheet = render === 'sheet' ? (sanitizeSheet(pp.sheet) ?? EXAMPLES[0]) : undefined;
+      const restored: ReturnType<typeof restoredSheet> =
+        render === 'sheet' ? restoredSheet(pp) : {};
+      const { sheet, sheetStored, sheetLost } = restored;
       const sheetSweep =
         render === 'sheet' && typeof pp.sheetSweep === 'string' ? pp.sheetSweep : undefined;
       const sheetSweep2 =
@@ -726,6 +799,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | nul
         ...(pp.yScale === 'log' || pp.yScale === 'lin' ? { yScale: pp.yScale } : {}),
         ...(legend ? { legend } : {}),
         ...(sheet ? { sheet } : {}),
+        ...(sheetLost ? { sheetStored, sheetLost } : {}),
         ...(sheetSweep ? { sheetSweep } : {}),
         ...(sheetSweep2 ? { sheetSweep2 } : {}),
         ...(sheetCornerMode ? { sheetCornerMode } : {}),

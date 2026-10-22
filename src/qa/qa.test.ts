@@ -156,6 +156,83 @@ describe('validate: gm/ID ceiling', () => {
     const t = makeTable([axis('vgs', [0.2, 0.4])], { gm: [1e-3, 1e-3] });
     expect(validate(t).some((x) => x.rule === 'gm-id-ceiling')).toBe(false);
   });
+
+  it('says the temperature it checked at was assumed when the table declares none', () => {
+    // 48 at the assumed 27 °C: the same flag as a declared 27 °C table, but the finding says the
+    // temperature was the default — a colder characterization would be valid data.
+    const vgs = [0.2, 0.4];
+    const gm = [4.8e-3, 4.8e-3];
+    const id = [1e-4, 4.8e-3];
+    const filled = makeTable([axis('vgs', vgs)], { gm, id }, { filled: ['temp'] });
+    const c = validate(filled).find((x) => x.rule === 'gm-id-ceiling');
+    expect(c?.severity).toBe('error');
+    expect(c?.message).toContain('27 °C (assumed: the table declares no # temp:)');
+    const declared = makeTable([axis('vgs', vgs)], { gm, id }, { temp: 27 });
+    expect(validate(declared).find((x) => x.rule === 'gm-id-ceiling')?.message).not.toContain(
+      'assumed',
+    );
+  });
+});
+
+describe('validate: identity the importer filled in', () => {
+  const findings = (meta: TableMeta) =>
+    validate(makeTable([axis('vgs', [0.2, 0.4])], { gm: [1e-3, 1e-3], id: [1e-4, 1e-4] }, meta))
+      .filter((w) => ['no-temp', 'no-corner', 'no-device'].includes(w.rule))
+      .map((w) => [w.rule, w.severity]);
+
+  it('says nothing on a table that declares its identity', () => {
+    expect(findings({})).toEqual([]);
+  });
+
+  it('reports each filled-in field as information, in the order the record lists them', () => {
+    expect(findings({ filled: ['device', 'corner', 'temp'] })).toEqual([
+      ['no-device', 'info'],
+      ['no-corner', 'info'],
+      ['no-temp', 'info'],
+    ]);
+  });
+
+  it('names what rests on an assumed temperature', () => {
+    const t = makeTable([axis('vgs', [0.2, 0.4])], { gm: [1e-3, 1e-3] }, { filled: ['temp'] });
+    const w = validate(t).find((x) => x.rule === 'no-temp');
+    expect(w?.message).toContain('read at 27 °C');
+    expect(w?.message).toContain('kT');
+    expect(w?.message).toContain('gm/ID ceiling');
+  });
+});
+
+describe('validate: recognized headers it could not read', () => {
+  const unread = (extra: Record<string, string>) =>
+    validate(makeTable([axis('vgs', [0.2, 0.4])], { gm: [1e-3, 1e-3] }, { extra }))
+      .filter((w) => w.rule === 'unreadable-header')
+      .map((w) => ({ severity: w.severity, location: w.location, message: w.message }));
+
+  it('names the header, what it holds, what it should hold and what goes unread', () => {
+    const [w] = unread({ W: '1u' });
+    expect(w.severity).toBe('info');
+    expect(w.location).toBe('W');
+    expect(w.message).toContain('# W: header reads "1u"');
+    expect(w.message).toContain('a number in metres');
+    expect(w.message).toContain('no device can be sized');
+  });
+
+  it('covers every recognized numeric header and the polarity, in any case', () => {
+    const got = unread({
+      Temp: '300K',
+      AVT: '5m',
+      abeta: '1%um',
+      FCO: '2meg',
+      polarity: 'pmos4',
+      type: 'core',
+    });
+    expect(got.map((w) => w.location)).toEqual(['Temp', 'AVT', 'abeta', 'FCO', 'polarity', 'type']);
+    expect(got[0].message).toContain('read at 27 °C');
+    expect(got[4].message).toContain('declares no polarity');
+  });
+
+  it('leaves every other carried header alone', () => {
+    expect(unread({ mostab: '0.1', source: 'lab', license: 'CC-BY' })).toEqual([]);
+  });
 });
 
 // --- unit-vgs ----------------------------------------------------------------

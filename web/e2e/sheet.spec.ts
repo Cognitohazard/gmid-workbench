@@ -1801,3 +1801,118 @@ test('design sheet: a format this app does not read is refused at import, and a 
 
   expect(errors).toEqual([]);
 });
+
+test('design sheet: a stored panel restored without a piece says what it lost, and the stored copy is kept until an edit', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  type StoredDash = {
+    tabs: { panels: { render: string; sheet?: { checks: { id: string; kind: string }[] } }[] }[];
+  };
+  /** The stored sheet panel's checks, as localStorage holds them. */
+  const storedChecks = () =>
+    page.evaluate(() => {
+      const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{"tabs":[]}') as StoredDash;
+      const p = dash.tabs.flatMap((t) => t.panels).find((x) => x.render === 'sheet');
+      return (p?.sheet?.checks ?? []).map((c) => `${c.id}:${c.kind}`);
+    });
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.shead strong')).toHaveText('Single NMOS gm/ID sizing');
+  // At its defaults the headroom check fails, so the design reads infeasible.
+  await expect(sp.locator('.srules tr', { hasText: 'headroom' })).toHaveClass(/st-fail/);
+  await expect(sp.locator('[data-restore-lost]')).toHaveCount(0);
+
+  // The stored copy as a later build might write it: the headroom check under a kind this build
+  // does not read. The loader cannot carry that check, and without it the design would read
+  // feasible — so the panel must say the check is missing, and must not save the loss back.
+  await page.evaluate(() => {
+    const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{}') as StoredDash;
+    for (const tab of dash.tabs)
+      for (const p of tab.panels)
+        if (p.render === 'sheet' && p.sheet)
+          for (const c of p.sheet.checks) if (c.id === 'headroom') c.kind = 'contract';
+    localStorage.setItem('gmid.dash.v3', JSON.stringify(dash));
+  });
+  await page.reload();
+  await loadDemo(page);
+  const sp2 = page.locator('.grid .panel').last();
+  const lost = sp2.locator('[data-restore-lost]');
+  await expect(lost).toContainText('restored without 1 piece');
+  await expect(lost).toContainText('checks[1]');
+  await expect(lost).toContainText('kept unchanged until you edit');
+  await expect(sp2.locator('.srules tr', { hasText: 'headroom' })).toHaveCount(0);
+  // Nothing was written over the stored document: it still holds the check as stored.
+  await expect.poll(storedChecks).toContain('headroom:contract');
+
+  // A reload restores from the same stored copy, so the loss is said again rather than having
+  // become the document.
+  await page.reload();
+  await loadDemo(page);
+  await expect(page.locator('.grid .panel').last().locator('[data-restore-lost]')).toContainText(
+    'checks[1]',
+  );
+  await expect.poll(storedChecks).toContain('headroom:contract');
+
+  // An edit makes the restored sheet the user's document: the note goes, and that is what is
+  // saved from then on.
+  const sp3 = page.locator('.grid .panel').last();
+  const gmId = sp3.locator('.svar[data-param="gm_id"]').locator('.num');
+  await gmId.fill('8');
+  await gmId.blur();
+  await expect(sp3.locator('[data-restore-lost]')).toHaveCount(0);
+  await expect.poll(storedChecks).not.toContain('headroom:contract');
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a stored panel whose sheet cannot be read at all opens refused, keeps it, and is not replaced', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  type StoredDash = { tabs: { panels: { render: string; sheet?: unknown }[] }[] };
+  const storedSheet = () =>
+    page.evaluate(() => {
+      const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{"tabs":[]}') as StoredDash;
+      return dash.tabs.flatMap((t) => t.panels).find((x) => x.render === 'sheet')?.sheet;
+    });
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(page.locator('.grid .panel').last().locator('.shead strong')).toHaveText(
+    'Single NMOS gm/ID sizing',
+  );
+  await page.evaluate(() => {
+    const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{}') as StoredDash;
+    for (const tab of dash.tabs)
+      for (const p of tab.panels) if (p.render === 'sheet') p.sheet = 'not a sheet';
+    localStorage.setItem('gmid.dash.v3', JSON.stringify(dash));
+  });
+  await page.reload();
+  await loadDemo(page);
+  const sp = page.locator('.grid .panel').last();
+  // Refused with the reason, evaluating nothing — never another sheet in its place.
+  await expect(sp.locator('[data-refused]')).toContainText('could not be restored');
+  await expect(sp.locator('.feasb')).toHaveCount(0);
+  await expect(sp.locator('.shead strong')).toHaveCount(0);
+  await expect.poll(storedSheet).toBe('not a sheet');
+
+  // Picking a sheet replaces it, and that is what is stored.
+  await pickSheet(sp, 'NMOS noise & matching');
+  await expect(sp.locator('.shead strong')).toHaveText('NMOS noise & matching');
+  await expect
+    .poll(async () => ((await storedSheet()) as { title?: string } | undefined)?.title)
+    .toBe('NMOS noise & matching');
+
+  expect(errors).toEqual([]);
+});

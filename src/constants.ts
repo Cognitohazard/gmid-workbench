@@ -1,5 +1,9 @@
 // Physical constants and the default expression-engine constant scope.
 
+/** The temperature [°C] a table that declares none is read at — the methodology default, which
+ *  PHYS.T holds in kelvin. A table read at it without declaring it says so (TableMeta.filled). */
+export const DEFAULT_TEMP_C = 27;
+
 export const PHYS = {
   pi: Math.PI,
   k: 1.380649e-23, // Boltzmann constant [J/K]

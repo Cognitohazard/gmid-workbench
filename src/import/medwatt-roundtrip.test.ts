@@ -20,6 +20,14 @@ describe('medwatt2mostab → importMostab round-trip', () => {
 
     const t = r.dataset.tables[0];
     expect(t.id.device).toBe('medwatt_demo');
+    // The converter writes no corner or temperature the source does not state, so the importer
+    // fills both in and records that it did — and QA says so at import.
+    expect(t.meta.filled).toEqual(['corner', 'temp']);
+    const said = r.dataset.warnings.filter((w) => w.rule === 'no-corner' || w.rule === 'no-temp');
+    expect(said.map((w) => [w.rule, w.severity])).toEqual([
+      ['no-corner', 'info'],
+      ['no-temp', 'info'],
+    ]);
     expect(t.grid.axes.map((a) => a.name).sort()).toEqual(['l', 'vds', 'vgs', 'vsb']);
     expect(t.grid.shape.reduce((a, b) => a * b, 1)).toBe(24); // 2×2×3×2
 

@@ -1,6 +1,5 @@
 # mostab: 0.1
 # device: medwatt_demo
-# corner: tt
 # simulator: NgspiceSimulator
 # description: synthetic test table
 # W: 1e-06

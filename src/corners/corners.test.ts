@@ -6,7 +6,7 @@
 // forms — gm/gds = (gm/ID)·VA with VA = VA_PER_L·L — never read back off the engine.
 
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice, scaleQuantities, VA_PER_L } from '../demo';
+import { generateDemoDevice, scaleQuantities, VA_PER_L, withoutColumns } from '../demo';
 import { makeGrid } from '../grid';
 import { validateDevices, validateDeviceConditions } from '../qa';
 import { loadLibrary, REFS, table as libTable, notACircuit } from '../sheet/library.fixtures';
@@ -38,6 +38,7 @@ import {
   conditionKeyId,
   conditionKeyOf,
   conditionLabel,
+  conditionLabelIn,
   type CharacterizedDevice,
   type ConditionKey,
   type ConditionRun,
@@ -2058,5 +2059,91 @@ describe('sweepAtCondition — one condition, sized there or held there', () => 
     expect(swept.stands).toEqual([false, false]);
     expect(swept.feasible).toEqual([false, false]);
     expect(swept.checks.every((c) => c.marginPct.every((m) => m === null))).toBe(true);
+  });
+});
+
+// --- identity the importer filled in -------------------------------------------
+
+describe('a condition its file did not declare', () => {
+  const filled = (f: TableMeta['filled'], spec: TableSpec = {}): DeviceTable =>
+    table({ ...spec, meta: { ...spec.meta, filled: f } });
+
+  it('is labelled as assumed, never with the default elided as if declared', () => {
+    expect(conditionLabel(table())).toBe('tt');
+    expect(conditionLabel(filled(['temp']))).toBe('tt@27 °C (assumed)');
+    expect(conditionLabel(filled(['corner']))).toBe('tt (assumed)');
+    expect(conditionLabel(filled(['corner'], { temp: 85 }))).toBe('tt (assumed)@85');
+    expect(conditionLabel(filled(['corner', 'temp']))).toBe(
+      'tt@27 °C (corner and temperature assumed)',
+    );
+    // A device name taken from the file is no part of the condition.
+    expect(conditionLabel(filled(['device']))).toBe('tt');
+    // A bare key carries no record and labels as written.
+    expect(conditionLabel({ corner: 'tt', temp: 27 })).toBe('tt');
+  });
+
+  it('labels a key by the member of the device that holds it', () => {
+    const f = soleDevice([filled(['temp']), table({ corner: 'ss', temp: -40 })]);
+    expect(conditionLabelIn(f, { corner: 'tt', temp: 27 })).toBe('tt@27 °C (assumed)');
+    expect(conditionLabelIn(f, { corner: 'ss', temp: -40 })).toBe('ss@-40');
+    expect(conditionLabelIn(f, { corner: 'ff', temp: 27 })).toBe('ff');
+    expect(conditionLabelIn(undefined, { corner: 'tt', temp: 27 })).toBe('tt');
+  });
+
+  it('never wins the automatic nominal over a declared condition', () => {
+    // A headerless file reads as tt@27, but a declared tt@85 beside it is the nominal ...
+    const hot = table({ temp: 85 });
+    const f = soleDevice([filled(['corner', 'temp']), hot]);
+    expect(f.nominal).toBe(hot);
+    expect(f.nominalSource).toBe('auto');
+    expect(f.nominalAssumed).toBeUndefined();
+    // ... and with only a declared ss beside it, the device has no automatic nominal at all.
+    const g = soleDevice([filled(['corner', 'temp']), table({ corner: 'ss', temp: 27 })]);
+    expect(g.nominal).toBeUndefined();
+    expect(g.nominalSource).toBe('none');
+  });
+
+  it('is the nominal only where no member declares its condition, and the device says so', () => {
+    const a = filled(['temp']);
+    const f = soleDevice([a, filled(['temp'], { corner: 'ss' })]);
+    expect(f.nominal).toBe(a);
+    expect(f.nominalAssumed).toEqual(['temp']);
+    // A sole member speaks for itself, assumed fields and all.
+    const only = soleDevice([filled(['device', 'corner', 'temp'])]);
+    expect(only.nominalSource).toBe('auto');
+    expect(only.nominalAssumed).toEqual(['corner', 'temp']);
+    // A bench designation is the bench's statement, whatever the file declared.
+    const designated = groupDevices([a, table({ corner: 'ss' })], {
+      nominalByDevice: new Map([[deviceUidOf(a), 'A']]),
+      uidOf: (t) => (t === a ? 'A' : 'B'),
+    })[0];
+    expect(designated.nominalSource).toBe('designated');
+    expect(designated.nominalAssumed).toBeUndefined();
+  });
+
+  it('names the assumed field in device QA labels', () => {
+    const w = validateDeviceConditions(
+      soleDevice([
+        filled(['temp'], { meta: { W: 1e-5 } }),
+        table({ corner: 'ss', meta: { W: 2e-5 } }),
+      ]),
+    );
+    expect(w.find((x) => x.rule === 'device-width')?.message).toContain('tt@27 °C (assumed)');
+  });
+});
+
+describe('device QA: conditions that carry different columns', () => {
+  it('says the noise figures fall back where a column is missing, not that they go na', () => {
+    const dev = generateDemoDevice();
+    // The same device at another corner, exported without its gamma and gmb columns: γ is then
+    // read back from sth against gm alone, and the γ-model figures drop the body-effect term.
+    const bare = withoutColumns(dev, ['gamma', 'gmb']);
+    const lacking: DeviceTable = { ...bare, id: { ...bare.id, corner: 'ss', temp: -40 } };
+    const w = validateDeviceConditions(soleDevice([dev, lacking])).find(
+      (x) => x.rule === 'device-quantities',
+    );
+    expect(w?.message).toContain('the thermal-noise figures fall back');
+    expect(w?.message).toContain('tt: γ from the table');
+    expect(w?.message).toContain('ss@-40: measured · no gmb column: gamma, svth_m, vnth_m');
   });
 });

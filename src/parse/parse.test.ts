@@ -115,8 +115,57 @@ L,VGS,ID,GM
     expect(ds.tables[0].id.device).toBe('dev0');
     expect(ds.tables[0].id.corner).toBe('tt');
     expect(ds.tables[0].id.temp).toBe(27);
+    // ...and records that all three were filled in, not declared.
+    expect(ds.tables[0].meta.filled).toEqual(['device', 'corner', 'temp']);
+    expect(ds.tables[0].meta.temp).toBeUndefined();
     // no passthrough columns -> undefined
     expect(ds.tables[0].passthrough).toBeUndefined();
+  });
+
+  it('records no filled-in identity on a file that declares device, corner and temperature', () => {
+    expect(expectOk(parseMostabCsv(CSV)).tables[0].meta.filled).toBeUndefined();
+  });
+
+  it('records each identity field it fills in, and only those', () => {
+    const body = 'L,VGS,ID,GM\n1e-8,0.3,1e-6,1e-5\n1e-8,0.5,2e-6,2e-5\n';
+    const filledOf = (head: string, hints?: Parameters<typeof parseMostabCsv>[1]) =>
+      expectOk(parseMostabCsv(head + body, hints)).tables[0].meta.filled;
+    // A name taken from the file is filled in; one the caller passes is declared.
+    expect(filledOf('# corner: ss\n# temp: 85\n', { filename: 'nch.csv' })).toEqual(['device']);
+    expect(filledOf('# corner: ss\n# temp: 85\n', { device: 'nch' })).toBeUndefined();
+    // A corner hint declares the corner as surely as the header does.
+    expect(filledOf('# device: nch\n# temp: 85\n', { corner: 'ff' })).toBeUndefined();
+    expect(filledOf('# device: nch\n# temp: 85\n')).toEqual(['corner']);
+    expect(filledOf('# device: nch\n# corner: ss\n')).toEqual(['temp']);
+  });
+
+  it('keeps a recognized header whose value it cannot read, as written, and applies none of it', () => {
+    const csv = `# device: nch
+# corner: tt
+# temp: 27C
+# W: 1u
+# AVT: 5m
+# ABETA: 1%um
+# FCO: 2meg
+# polarity: pmos4
+L,VGS,ID,GM
+1e-8,0.3,1e-6,1e-5
+1e-8,0.5,2e-6,2e-5
+`;
+    const t = expectOk(parseMostabCsv(csv)).tables[0];
+    expect(t.meta.extra).toEqual({
+      temp: '27C',
+      W: '1u',
+      AVT: '5m',
+      ABETA: '1%um',
+      FCO: '2meg',
+      polarity: 'pmos4',
+    });
+    for (const k of ['temp', 'W', 'AVT', 'ABETA', 'FCO', 'polarity'] as const)
+      expect(t.meta[k]).toBeUndefined();
+    // The temperature it could not read is the default, filled in like a missing one.
+    expect(t.id.temp).toBe(27);
+    expect(t.meta.filled).toEqual(['temp']);
   });
 
   it('derives device from filename hint when metadata absent', () => {
@@ -277,13 +326,15 @@ L,VGS,ID,GM
     // No polarity line (the device NAME is never sniffed for type).
     const absent = expectOk(parseMostabCsv(CSV)).tables[0];
     expect(absent.meta.polarity).toBeUndefined();
-    // An unrecognized value is ignored, same as a missing line.
+    // An unrecognized value declares no polarity; the header is kept as written.
     const bad = `# polarity: depletion
 L,VGS,ID,GM
 1e-8,0.3,1e-6,1e-5
 1e-8,0.5,2e-6,2e-5
 `;
-    expect(expectOk(parseMostabCsv(bad)).tables[0].meta.polarity).toBeUndefined();
+    const t = expectOk(parseMostabCsv(bad)).tables[0];
+    expect(t.meta.polarity).toBeUndefined();
+    expect(t.meta.extra).toEqual({ polarity: 'depletion' });
   });
 
   it('rejects a blank or non-numeric quantity cell', () => {

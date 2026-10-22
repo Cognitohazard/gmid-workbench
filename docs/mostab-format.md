@@ -58,8 +58,25 @@ Keys the importer interprets:
 | `FCO` | 1/f (flicker) noise corner frequency | number, Hz | — |
 
 Polarity is honored **only** from this explicit declaration — it is never inferred
-from the device name or sniffed from data signs. An unrecognized polarity value is
-ignored, exactly as a missing line would be.
+from the device name or sniffed from data signs. An unrecognized polarity value
+declares no polarity.
+
+**Filled-in identity is recorded.** A file that leaves out `device`, `corner` or `temp`
+is read with the default in the table above, and the importer records which of the
+three it filled in. Everything downstream says so: QA reports each as information
+(rules `no-device`, `no-corner`, `no-temp`); a condition label marks the field
+(`tt@27 °C (assumed)`); a table whose corner or temperature was filled in is never
+picked as a device's nominal condition while a declared condition of that device is
+loaded; and every sizing on a table with no `temp` carries a note that kT — the thermal
+noise, the γ read back from `sth`, kT/C — was taken at 27 °C. A device name passed by
+the caller (or a corner) counts as declared; one taken from the file name does not.
+
+**Unreadable values are kept.** A recognized key whose value cannot be read — a number
+written with a unit or a suffix (`# temp: 27C`, `# W: 1u`, `# AVT: 5m`), a polarity word
+not in the list above — is not applied, but it is not dropped either: it is kept
+verbatim like an unrecognized key, and QA reports it as information (rule
+`unreadable-header`) with the header, its value, what it should hold and what goes
+unread. Numbers are plain SI values: `1e-6`, not `1u`.
 
 **Strict-superset rule:** any other `# key: value` line (for example `# mostab: 0.1`,
 `# license: …`, `# source: …`) is preserved verbatim through import, under its
@@ -277,7 +294,9 @@ importer's QA pass warns (it never edits data) when:
 - the `vgs` step exceeds **10 mV** anywhere — keep the vgs step at or below 10 mV
   (the bundled open-PDK tables use 8 mV);
 - gm/ID exceeds the physical weak-inversion ceiling ≈ 1/U_T (temperature-scaled from
-  ~38.7 S/A at 27 °C) — usually a unit error;
+  ~38.7 S/A at 27 °C) — usually a unit error. On a file with no `temp` the ceiling is the
+  27 °C one and the finding says the temperature was assumed: a colder characterization
+  legitimately reaches past it, so declare `temp`;
 - |vgs| exceeds 100 V — the axis is probably in mV, not V;
 - the stored `gm` disagrees grossly with a finite difference of `id` along `vgs`;
 - `id` is non-monotonic in `vgs`, or `gamma` is outside a plausible range;

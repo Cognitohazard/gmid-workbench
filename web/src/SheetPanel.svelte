@@ -11,7 +11,7 @@
     tableAt,
     conditionKeyId,
     conditionKeyOf,
-    conditionLabel,
+    conditionLabelIn,
     sweepable as isSweepable,
     torn,
     constrained as isConstrained,
@@ -35,6 +35,7 @@
     noiseLabel,
     noiseSourcesIn,
     devicesIn,
+    deviceName,
     joinProvide,
     PROVIDE_SEP,
     BIAS_AXES,
@@ -83,6 +84,8 @@
     cornerMode = 'nominal',
     cornerKeys = [],
     cornerHold = false,
+    restoreLost = undefined,
+    unrestored = false,
     bench,
     styleVersion = 0,
     onChange,
@@ -103,6 +106,12 @@
     /** With one condition asked about that is not the nominal one: hold the nominal design there
      *  instead of sizing the design there (bench state, like the two above). */
     cornerHold?: boolean;
+    /** What restoring this panel's stored document lost (the loader's `lost` paths), when the
+     *  restore lost anything. The stored copy is kept until the sheet is edited. */
+    restoreLost?: readonly string[];
+    /** The stored document could not be restored at all: `cfg` is a placeholder, and the panel
+     *  opens refused with the reason in `restoreLost`. */
+    unrestored?: boolean;
     bench: Bench;
     styleVersion?: number;
     onChange: (s: SheetDoc) => void;
@@ -117,8 +126,21 @@
   // reason it is refused. Nothing else is read from it — its keys may mean what this build does
   // not know — so the panel works on an empty sheet in its place, evaluates nothing, and offers
   // the picker; picking a sheet replaces it.
+  // A stored document that could not be restored at all is refused the same way, with the reason
+  // the loader gave, and kept as stored until a picked sheet replaces it.
   const REFUSED: SheetDoc = { title: '', polarity: 'n', params: [], equations: [], checks: [] };
-  const refusal = $derived(sheetFormat(stored).reason);
+  const refusal = $derived(
+    unrestored
+      ? `the stored sheet could not be restored (${(restoreLost ?? []).join('; ')}) — it is kept as stored and not evaluated; pick a sheet to replace it`
+      : sheetFormat(stored).reason,
+  );
+  /** What a restore dropped from a document it could read, said where the verdict is read: the
+   *  checks or givens it names are missing from what is evaluated here. */
+  const restoreNote = $derived(
+    !unrestored && restoreLost?.length
+      ? `restored without ${restoreLost.length} ${restoreLost.length === 1 ? 'piece' : 'pieces'} of the stored sheet, which this build could not read: ${restoreLost.join(', ')} — the result below is evaluated without ${restoreLost.length === 1 ? 'it' : 'them'}; the stored sheet is kept unchanged until you edit this one`
+      : undefined,
+  );
   const cfg = $derived<SheetDoc>(refusal ? REFUSED : stored);
 
   // The live sheet library (curated ∪ user-imported) and its by-reference index.
@@ -267,6 +289,10 @@
   // (corner, temperature) key and projects the primary and every named child to it, because a
   // verdict assembled from a tt input pair and an ss tail describes a chip that does not exist.
   const primary = $derived(bench.primary);
+  /** A condition as the panel names it: the primary device's table there says which of its
+   *  corner and temperature its file declared, and a filled-in one is marked (conditionLabel). */
+  const condLabel = (key: ConditionKey | { corner: string; temp: number }): string =>
+    conditionLabelIn(primary, key);
   /** Every condition the primary device holds, in load order. */
   const conditions = $derived<readonly ConditionKey[]>(primary?.keys ?? []);
   const activeKey = $derived(conditionKeyOf(device.id));
@@ -382,8 +408,8 @@
   /** Where the sized devices' thermal-noise figures come from, in one line — each device's source
    *  and the figures its table made fall back (noiseLabel): the label alone when every device
    *  agrees, else each label with the devices that carry it. Empty with nothing sized. */
-  const noiseText = $derived.by((): string => {
-    const devices = noiseDevices.map((d) => ({
+  const noiseLine = (sized: ReturnType<typeof noiseSourcesIn>): string => {
+    const devices = sized.map((d) => ({
       device: d.device,
       label: noiseLabel(d.source, d.fallbacks),
     }));
@@ -395,7 +421,21 @@
         .map((d) => d.device)
         .join(', ');
     return labels.map((label) => `${label} (${carrying(label)})`).join(' · ');
-  });
+  };
+  const noiseText = $derived(noiseLine(noiseDevices));
+  /** A condition row's own noise line where it differs from the detail's: a corner table without
+   *  `sth` or `gmb` reads its noise figures — and the noise checks — by the estimate or the
+   *  no-gmb form there, which the line above the detail does not say. The fallbacks in full are
+   *  in the row's tooltip. */
+  const rowNoiseNotes = (r: ConditionRun): string[] => {
+    const sized = r.result ? noiseSourcesIn(r.result) : [];
+    const line = noiseLine(sized);
+    if (!line || line === noiseText) return [];
+    return [
+      `⚠ noise at ${condLabel(r.key)}: ${line}`,
+      ...fallbackSentences(sized.flatMap((d) => d.fallbacks)),
+    ];
+  };
   /** The pass-through columns the sized devices read, each once: numbers at the characterization
    *  width rather than the sized one, which the line beside the noise line names. */
   const unscaled = $derived(
@@ -462,15 +502,15 @@
     if (firstRun) return 'evaluating…';
     if (holding && single)
       return (
-        `nominal design held at ${conditionLabel(single)}` +
+        `nominal design held at ${condLabel(single)}` +
         (heldCentre ? `: ${POINT_TEXT[heldCentre.state]}` : '')
       );
     const verdict = FEAS_TEXT[agg.feasibility];
     if (!agg.base) return verdict;
-    if (multi) return `${verdict} at ${conditionLabel(agg.base)}`;
+    if (multi) return `${verdict} at ${condLabel(agg.base)}`;
     return nominalKey && sameCondition(agg.base, nominalKey)
       ? verdict
-      : `${verdict} · sized at ${conditionLabel(agg.base)}`;
+      : `${verdict} · sized at ${condLabel(agg.base)}`;
   });
   const feasClass = $derived(
     holding ? POINT_CLASS[heldCentre?.state ?? 'not-run'] : FEAS_CLASS[agg.feasibility],
@@ -523,7 +563,7 @@
   /** A point as a reader is told it: its condition, then the range end or the design's own
    *  operating point. */
   const pointName = (key: ConditionKey, rangeEnd: string | undefined): string =>
-    `${conditionLabel(key)}, ${rangeEnd === undefined ? 'its own operating point' : endName(rangeEnd)}`;
+    `${condLabel(key)}, ${rangeEnd === undefined ? 'its own operating point' : endName(rangeEnd)}`;
   /** A check id as shown: one qualified by a range end (`cm-lo@sr-spec`) names the end. */
   const checkIdText = (id: string): string => {
     const at = id.indexOf(RANGE_END_SEP);
@@ -578,14 +618,33 @@
       .map((pt) => `${endName(pt.rangeEnd ?? '')}: ${pointText(pt)}`)
       .join('\n');
   const runClass = (r: ConditionRun): string => POINT_CLASS[r.points[0].state];
-  /** A held row's notes that its figures rest on a gate held at its nominal value — the warning a
-   *  range-end chip carries in its tooltip, here on the row of the condition it was held at. */
-  const heldGateNotes = (r: ConditionRun): string[] =>
-    r.design === 'held'
-      ? (r.result?.warnings ?? [])
-          .filter((w) => w.rule === 'sheet-held-gate')
-          .map((w) => `⚠ ${w.message}`)
+  /** The note a run that held the design carries for each device whose current it held as an
+   *  ideal source (RangeEndReport / ConditionRun `assumedSource`): that device's givens name
+   *  neither a width nor a current, so the current is held by assumption, not by anything the
+   *  sheet authors. */
+  const assumedSourceNotes = (paths: readonly string[] | undefined): string[] =>
+    paths?.length
+      ? [
+          `⚠ the current of ${paths.map(deviceName).join(', ')} is held as an ideal source: ` +
+            `${paths.length === 1 ? 'its givens name' : 'their givens name'} neither a width nor ` +
+            `a current, so nothing on the sheet says where the current comes from — state one ` +
+            `to hold the real source`,
+        ]
       : [];
+  /** A row's notes. On a held row: that its figures rest on a gate held at its nominal value — the
+   *  warning a range-end chip carries in its tooltip, here on the row of the condition it was held
+   *  at — and on a current held as an ideal source. On any row: where its noise figures come from,
+   *  when that is not what the noise line above the detail says (rowNoiseNotes). */
+  const rowNotes = (r: ConditionRun): string[] =>
+    r.design === 'held'
+      ? [
+          ...(r.result?.warnings ?? [])
+            .filter((w) => w.rule === 'sheet-held-gate')
+            .map((w) => `⚠ ${w.message}`),
+          ...assumedSourceNotes(r.state === 'evaluated' ? r.assumedSource : undefined),
+          ...rowNoiseNotes(r),
+        ]
+      : rowNoiseNotes(r);
   /** The one-line reason: what stopped a refused condition, else why its centre has no check to
    *  read, else what binds (or is closest to binding) there, else the first range end that is
    *  not complying. */
@@ -1143,7 +1202,13 @@
       .join('\n');
     // The name the sheet gives the end comes first: it is how a warning or an export refers to it.
     const at = `range end "${e.name}": ${endName(e.name)}`;
-    return [at, rangeEndNote.get(e.name), warns, e.state === 'complies' ? '' : detail]
+    return [
+      at,
+      rangeEndNote.get(e.name),
+      warns,
+      ...assumedSourceNotes(e.assumedSource),
+      e.state === 'complies' ? '' : detail,
+    ]
       .filter(Boolean)
       .join('\n\n');
   };
@@ -1506,6 +1571,9 @@
     <div class="shead">{@render picker()}</div>
     <p class="perr prefused" data-refused>{refusal}</p>
   {:else}
+    {#if restoreNote}
+      <p class="perr srestore" data-restore-lost>{restoreNote}</p>
+    {/if}
     <div class="shead">
       {@render picker()}
       <strong>{cfg.title}</strong>
@@ -1542,8 +1610,8 @@
         >
       {/if}
       {#if refKey && !multi}
-        <span class="scond" data-condition={conditionLabel(refKey)} title={CONTROL_HELP.cornerMode}
-          >at {conditionLabel(refKey)}</span
+        <span class="scond" data-condition={condLabel(refKey)} title={CONTROL_HELP.cornerMode}
+          >at {condLabel(refKey)}</span
         >
       {/if}
       <!-- What the verdict rests on: a doc-level fact carried on the result, so it costs nothing
@@ -1624,7 +1692,7 @@
           >
             {#each runs as r (conditionKeyId(r.key))}
               <option value={conditionKeyId(r.key)}
-                >{conditionLabel(r.key)}{r.design === 'sized' ? ' (sized)' : ' (held)'}</option
+                >{condLabel(r.key)}{r.design === 'sized' ? ' (sized)' : ' (held)'}</option
               >
             {/each}
           </select>
@@ -1682,11 +1750,9 @@
         {#if cornerMode === 'chosen'}
           {#each chosenOptions as c (conditionKeyId(c.key))}
             <label class="ckey" class:absent={c.absent}>
-              <input
-                type="checkbox"
-                checked={c.on}
-                onchange={() => toggleKey(c.key)}
-              />{conditionLabel(c.key)}{#if c.absent}<i>not loaded</i>{/if}
+              <input type="checkbox" checked={c.on} onchange={() => toggleKey(c.key)} />{condLabel(
+                c.key,
+              )}{#if c.absent}<i>not loaded</i>{/if}
             </label>
           {/each}
         {/if}
@@ -1719,7 +1785,7 @@
         <div class="snomctl">
           {#each primary.conditions as t (tableUid(t))}
             <button onclick={() => bench.designate(primary.deviceUid, tableUid(t))}
-              >designate {conditionLabel(t.id)}</button
+              >designate {condLabel(t.id)}</button
             >
           {/each}
         </div>
@@ -1751,9 +1817,9 @@
         <tbody>
           {#each runs as r (conditionKeyId(r.key))}
             {@const detail = runDetail(r)}
-            {@const notes = heldGateNotes(r)}
-            <tr class="st-{runClass(r)}" data-corner-row={conditionLabel(r.key)}>
-              <td class="ccond">{conditionLabel(r.key)}</td>
+            {@const notes = rowNotes(r)}
+            <tr class="st-{runClass(r)}" data-corner-row={condLabel(r.key)}>
+              <td class="ccond">{condLabel(r.key)}</td>
               <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
               <td class="ccl">{centreCell(r)}</td>
               {#if hasRange}<td class="ccv" title={rangeTitle(r)}>{rangeCell(r)}</td>{/if}
@@ -1770,9 +1836,9 @@
        only the named reason, which is a different thing from a design that is infeasible. The
        words match the badge: "no answer" when a run started, "not evaluated" when none did. -->
     {#if refRun && refRun.state === 'not-evaluated'}
-      <div class="snotev" data-not-evaluated={conditionLabel(refRun.key)}>
+      <div class="snotev" data-not-evaluated={condLabel(refRun.key)}>
         <p>
-          <b>{refRun.result ? 'no answer' : 'not evaluated'} at {conditionLabel(refRun.key)}</b>
+          <b>{refRun.result ? 'no answer' : 'not evaluated'} at {condLabel(refRun.key)}</b>
         </p>
         {#each refRun.issues as issue}
           <p class="sissue">{issue.message}</p>
@@ -1788,12 +1854,12 @@
 
     {#if multi && result && refKey}
       <p class="scap sstamp">
-        detail below is <b>{conditionLabel(refKey)}</b> — one of {runs.length} conditions
+        detail below is <b>{condLabel(refKey)}</b> — one of {runs.length} conditions
       </p>
     {:else if holding && result && refKey && agg.base}
       <p class="scap sstamp">
-        detail below is the design sized at <b>{conditionLabel(agg.base)}</b>, held at
-        <b>{conditionLabel(refKey)}</b>
+        detail below is the design sized at <b>{condLabel(agg.base)}</b>, held at
+        <b>{condLabel(refKey)}</b>
       </p>
     {/if}
 
@@ -1946,7 +2012,7 @@
               data-range-end={e.name}
             >
               {POINT_MARK[e.state]}
-              {endName(e.name)}{#if rangeEndWarns(e).length}&nbsp;⚠{/if}
+              {endName(e.name)}{#if rangeEndWarns(e).length || e.assumedSource?.length}&nbsp;⚠{/if}
               {#if detail}<i>{detail}</i>{/if}
             </span>
           {/each}
@@ -1978,17 +2044,16 @@
         {/if}
       </p>
     {:else if active && chartData && !twoD && swept}
-      {@const at = conditionLabel(swept.key)}
+      {@const at = condLabel(swept.key)}
       <!-- Which of the two curves this is: the design sized at the chart's condition at every
          sample, or the nominal design held there. -->
       <div class="scap" data-sweep-caption data-sweep-design={swept.design}>
         margin (%) vs <b>{active}</b>{#if sweptUnit}
           ({sweptUnit}){/if} at <b>{at}</b> —
         {#if swept.design === 'held'}
-          the nominal design held there: each sample sizes the design at {conditionLabel(
-            swept.base,
-          )} with {active} at that value and holds it at {at} — widths, lengths, currents and gate biases
-          fixed — so the curves are that design’s margins at {at}{#if (cfg.operatingRange ?? []).length},
+          the nominal design held there: each sample sizes the design at {condLabel(swept.base)} with
+          {active} at that value and holds it at {at} — widths, lengths, currents and gate biases fixed
+          — so the curves are that design’s margins at {at}{#if (cfg.operatingRange ?? []).length},
             its own range ends included{/if}.
         {:else}
           sized there: each sample re-sizes the design at {at} with {active} at that value{#if (cfg.operatingRange ?? []).length}
@@ -2038,7 +2103,7 @@
     {:else if active && sweepKey && sweepRun && !sweepReady}
       <!-- The sweep is a statement about a design, and there is no design here yet. -->
       <p class="feas">
-        nothing to sweep at {conditionLabel(sweepKey)} — {sweepBase
+        nothing to sweep at {condLabel(sweepKey)} — {sweepBase
           ? 'the nominal design could not be held there'
           : 'this condition was not evaluated'}
       </p>

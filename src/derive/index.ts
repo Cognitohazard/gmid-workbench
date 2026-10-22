@@ -18,7 +18,7 @@ import {
   isPassthroughKey,
   passthroughName,
 } from '../namespace';
-import { GAMMA_DEFAULT_LABEL, thermalScalars } from '../constants';
+import { DEFAULT_TEMP_C, GAMMA_DEFAULT_LABEL, thermalScalars } from '../constants';
 import { createEngine } from '../expr';
 
 // Compile each standard derived definition once, shared across all calls.
@@ -132,12 +132,20 @@ export function pointScope(values: Record<string, number>): Scope {
  * A derived quantity a table computes by a fallback rather than its definition: the quantity, the
  * column(s) it lacks, the form used instead, and what that costs. A result evaluated on the table
  * carries these, so a lesser form is never chosen without saying so.
+ *
+ * The same record carries a value a table's figures are read under in place of a header it did
+ * not declare (`header` set): the temperature, which kT reads, taken as the 27 °C default on a
+ * table with no `# temp:` (see tableFallbacks). `missing` then names the identity field, and the
+ * note rides every sizing on the table exactly as a column fallback does.
  */
 export interface FallbackNote {
   readonly quantity: string;
   readonly missing: readonly string[];
   readonly form: string;
   readonly says: string;
+  /** The metadata header whose absence this note stands for (`# temp:`); absent on a column
+   *  fallback. */
+  readonly header?: string;
 }
 
 /**
@@ -157,10 +165,41 @@ export function derivedFallbacks(grid: Grid, scalars: Record<string, number> = {
   return out;
 }
 
-/** A fallback note as one sentence: the quantity, the form it was read by, the column that forced
- *  it, and what that costs. The words a sizing's warnings and a panel's tooltip carry. */
+/**
+ * The note a table with no `# temp:` header owes every figure read on it (TableMeta.filled): its
+ * temperature is the 27 °C default, which T, U_T and so kT take. Undefined on a table that
+ * declares its temperature.
+ */
+export function temperatureNote(meta: TableMeta): FallbackNote | undefined {
+  if (!meta.filled?.includes('temp')) return undefined;
+  return {
+    quantity: 'T',
+    missing: ['temp'],
+    header: '# temp:',
+    form: `${DEFAULT_TEMP_C} °C`,
+    says:
+      'kT is taken at that temperature, so the thermal noise, the γ read back from sth, ' +
+      'kT/C and the gm/ID ceiling assume it',
+  };
+}
+
+/**
+ * Everything a figure read on `table` falls back on: the derived quantities it computes by a
+ * lesser form (derivedFallbacks, against its metadata scalars) and, when it declares no
+ * temperature, the 27 °C its kT is taken at (temperatureNote). What a sizing carries and what a
+ * device's noise line states.
+ */
+export function tableFallbacks(table: DeviceTable): FallbackNote[] {
+  const notes = derivedFallbacks(table.grid, metaScalars(table.meta));
+  const t = temperatureNote(table.meta);
+  return t ? [...notes, t] : notes;
+}
+
+/** A fallback note as one sentence: the quantity, the form it was read by, the column (or header)
+ *  that forced it, and what that costs. The words a sizing's warnings and a panel's tooltip carry. */
 export function fallbackMessage(n: FallbackNote): string {
-  return `${n.quantity} is read as ${n.form} because the table has no ${n.missing.join(' or ')} column — ${n.says}`;
+  const absent = n.header ? `${n.header} header` : `${n.missing.join(' or ')} column`;
+  return `${n.quantity} is read as ${n.form} because the table has no ${absent} — ${n.says}`;
 }
 
 /**
@@ -202,7 +241,13 @@ export function noiseSourceLabel(source: NoiseSource): string {
  */
 export function noiseLabel(source: NoiseSource, fallbacks: readonly FallbackNote[] = []): string {
   const byColumn = new Map<string, string[]>();
+  const assumed = new Set<string>();
   for (const f of fallbacks) {
+    if (f.header) {
+      // A value taken in place of a header (the temperature): stated as the value assumed.
+      assumed.add(`at ${f.form} (assumed)`);
+      continue;
+    }
     if (source === 'estimated' && f.quantity === 'gamma') continue;
     const column = f.missing.join(' or ');
     const qs = byColumn.get(column) ?? [];
@@ -212,7 +257,42 @@ export function noiseLabel(source: NoiseSource, fallbacks: readonly FallbackNote
   return [
     noiseSourceLabel(source),
     ...[...byColumn].map(([column, qs]) => `no ${column} column: ${qs.join(', ')}`),
+    ...assumed,
   ].join(' · ');
+}
+
+/** The same grammar with no name taken as a constant: its `names` are every identifier an
+ *  expression reads — `gamma` among them, which the shared engine counts as the constant. */
+const EVERY_NAME = createEngine({});
+
+/** Whether a name is `gamma` or a derived quantity some form of which reads it — a fact about
+ *  the static namespace, so decided once per name. */
+const THROUGH_GAMMA = new Map<string, boolean>();
+function throughGamma(name: string): boolean {
+  if (name === 'gamma') return true;
+  let hit = THROUGH_GAMMA.get(name);
+  if (hit === undefined) {
+    hit =
+      DERIVED_FORMS.get(name)?.some((f) =>
+        EVERY_NAME.compile(f.compiled.src).names.some(throughGamma),
+      ) ?? false;
+    THROUGH_GAMMA.set(name, hit);
+  }
+  return hit;
+}
+
+/**
+ * Whether an expression reads the thermal-noise factor γ: `gamma` itself, or a derived quantity
+ * defined through it (the γ-model keys svth_m and vnth_m). What such an expression gives is the
+ * table's own noise or the estimate depending on the table (noiseSource), so wherever it is shown
+ * it has to say which. An expression that does not compile reads nothing.
+ */
+export function readsGamma(src: string): boolean {
+  try {
+    return EVERY_NAME.compile(src).names.some(throughGamma);
+  } catch {
+    return false;
+  }
 }
 
 const FORM_ORDER: readonly string[] = [...DERIVED_FORMS.keys()];

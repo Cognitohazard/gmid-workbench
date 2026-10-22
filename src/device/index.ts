@@ -20,10 +20,10 @@ import { registerExprFunction } from '../expr';
 import { CONSTANTS, thermalScalars } from '../constants';
 import {
   DERIVED_FORMS,
-  derivedFallbacks,
   fallbackMessage,
   metaScalars,
   pointScope,
+  tableFallbacks,
   type FallbackNote,
 } from '../derive';
 import { AXIS_KEYS, BASE_KEYS, PER_WIDTH_KEYS, isPassthroughKey } from '../namespace';
@@ -94,9 +94,10 @@ export interface SizeResult {
   /**
    * The derived quantities this table computes by a fallback rather than their definition (a
    * γ-model noise figure without a `gmb` column, γ without `sth`): the quantity, the missing
-   * column, the form used and what it costs. A fact about the table, decided once for it, so it
-   * applies to every sized point; its sentences are also in `warnings`. Empty when every
-   * quantity is read by its definition.
+   * column, the form used and what it costs — and, on a table with no `# temp:` header, the
+   * 27 °C its kT was taken at (see tableFallbacks). A fact about the table, decided once for it,
+   * so it applies to every sized point; its sentences are also in `warnings`. Empty when every
+   * quantity is read by its definition and the temperature was declared.
    */
   fallbacks: FallbackNote[];
   /**
@@ -280,7 +281,16 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // The characterization width — every binding path sizes width against it.
   const Wchar = q.table.meta.W;
   if (Wchar === undefined || !(Wchar > 0)) {
-    throw new Error('sizeDevice: table.meta.W (characterization width) is required to size W');
+    // A `# W:` header that is present but unreadable is kept in `extra` as written (see parse):
+    // the refusal says that, rather than that the width was never given.
+    const written = Object.entries(q.table.meta.extra ?? {}).find(([k]) =>
+      ['w', 'width'].includes(k.toLowerCase()),
+    );
+    throw new Error(
+      written
+        ? `sizeDevice: the table's # ${written[0]}: header reads "${written[1]}", which is not a number in metres (write 1e-6, not 1u), so the characterization width it sizes W against is unknown`
+        : 'sizeDevice: table.meta.W (characterization width) is required to size W',
+    );
   }
 
   // Surface — never silently substitute — a length the table cannot represent: the
@@ -416,8 +426,9 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     if (stored(key)) continue; // kept as read, above
     quantities[key] = scaledScope.resolve(key) as number;
   }
-  // Which of those forms are not the definition is one fact about the table, said on every sizing.
-  const fallbacks = derivedFallbacks(q.table.grid, metaScalars(q.table.meta));
+  // Which of those forms are not the definition is one fact about the table, said on every sizing
+  // — and so is a temperature the table did not declare, which kT was taken at.
+  const fallbacks = tableFallbacks(q.table);
   warnings.push(...fallbacks.map(fallbackMessage));
   // Bound targets and sizing outputs win over anything reconstructed above; id_w is the
   // (width-invariant) current density; `w0` records the characterization width so a consumer
@@ -496,7 +507,8 @@ export function sizeableLengths(q: SizeQuery): number[] {
  * table's characterization temperature `tempC` (meta.temp, °C) so kT tracks the
  * data; omitted, T falls through to the engine's 27 °C default. Omit `gmb` only where the
  * table has none: the density is then vnth_m's declared fallback without the body-effect term,
- * and the sizing's `fallbacks` (or derivedFallbacks of the table) is what says so.
+ * and the sizing's `fallbacks` (or tableFallbacks of the table) is what says so — as it says
+ * when the table declared no temperature and `tempC` is the 27 °C default.
  *
  * The formula itself lives only in namespace.ts (vnth_m, and its fallback); here we just bind
  * gm, gmb, γ and the temperature and evaluate it by name, so the form follows what was bound.

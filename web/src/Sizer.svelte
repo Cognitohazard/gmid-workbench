@@ -7,8 +7,7 @@
     mismatch,
     thermalNoise,
     integratedNoise,
-    derivedFallbacks,
-    metaScalars,
+    tableFallbacks,
     noiseLabel,
     noiseSource,
     formatEng,
@@ -134,8 +133,9 @@
   const ABETA_UI_PER_SI = 1e8; // ·m → %·µm (1% = 0.01)
   let inAvth = $state('5'); // mV·µm — generic placeholder, matches the library sheets' default
   let inAbeta = $state('1'); // %·µm
-  // Noise band + 1/f corner (Hz, engineering notation). Corner seeds from meta.FCO.
-  let inFco = $state('1meg'); // flicker 1/f corner
+  // Noise band (Hz, engineering notation). The 1/f corner is the table's own where it has one
+  // (see fco below); a value typed into its field replaces that until the device changes.
+  let fcoTyped = $state<string | null>(null);
   let inFlo = $state(sv('flo', '1')); // integration band low
   let inFhi = $state(sv('fhi', '1g')); // integration band high
 
@@ -147,17 +147,54 @@
   });
 
   // Seed the coefficients from the imported device's metadata when it carries them
-  // (meta.AVT [V·m], meta.ABETA [·m], meta.FCO [Hz]) instead of silently using generic
-  // defaults; fall back to typical values (shown as such) otherwise. Re-seeds on swap.
+  // (meta.AVT [V·m], meta.ABETA [·m]) instead of silently using generic defaults; fall back to
+  // typical values (shown as such) otherwise. Re-seeds on swap, which also drops a typed 1/f
+  // corner: it was typed for the device it replaced.
   const matchFromMeta = $derived(device.meta.AVT !== undefined || device.meta.ABETA !== undefined);
-  const noiseFromMeta = $derived(device.meta.FCO !== undefined);
   const toUi = (si: number, k: number) => String(+(si * k).toPrecision(6));
   $effect(() => {
     const m = device.meta;
     inAvth = m.AVT !== undefined ? toUi(m.AVT, AVT_UI_PER_SI) : '5';
     inAbeta = m.ABETA !== undefined ? toUi(m.ABETA, ABETA_UI_PER_SI) : '1';
-    inFco = m.FCO !== undefined ? formatEng(m.FCO) : '1meg';
+    fcoTyped = null;
   });
+
+  // The 1/f corner the band integral reads, and where it came from. The table's own comes first:
+  // where it stores both flicker and thermal drain noise (sfl, sth), the corner is sfl/sth at the
+  // sized point, the `fco` every sizing reports — it moves with the operating point, so it is read
+  // there rather than seeded once. Next the device's `# FCO:` header, one number for the table;
+  // last a generic 1 MHz, said to be one. A typed value replaces all three.
+  const FCO_GENERIC = 1e6;
+  const tableFlicker = $derived(
+    sizingTable.grid.quantities.has('sfl') && sizingTable.grid.quantities.has('sth'),
+  );
+  const fcoAuto = $derived.by((): { value?: number; from: 'point' | 'header' | 'generic' } => {
+    if (tableFlicker) {
+      const v = sizing.result?.quantities.fco;
+      return {
+        value: v !== undefined && Number.isFinite(v) && v >= 0 ? v : undefined,
+        from: 'point',
+      };
+    }
+    if (device.meta.FCO !== undefined) return { value: device.meta.FCO, from: 'header' };
+    return { value: FCO_GENERIC, from: 'generic' };
+  });
+  const inFco = $derived(fcoTyped ?? (fcoAuto.value !== undefined ? formatEng(fcoAuto.value) : ''));
+  /** Where the corner in the field comes from, in the words the noise lines and the copied report
+   *  state it in. */
+  const fcoSource = $derived(
+    fcoTyped !== null
+      ? 'entered'
+      : fcoAuto.from === 'point'
+        ? 'from the table at the sized point'
+        : fcoAuto.from === 'header'
+          ? 'from device (# FCO:)'
+          : 'generic 1 MHz, not from the device',
+  );
+  const fcoFrom = $derived(`corner ${fcoSource}`);
+  /** The note a band RMS read on the generic corner carries: it is not this device's. */
+  const fcoGenericNote =
+    'f_co is the generic 1 MHz — the table stores no flicker noise (sfl and sth) and declares no # FCO: header, so the 1/f part of v_n,rms is not this device’s; type its corner to replace it';
 
   const mism = $derived.by(() => {
     const r = sizing.result;
@@ -180,12 +217,10 @@
   });
 
   // Where the thermal density's γ comes from on this table: its own noise, or the estimate — and
-  // whether a missing column (gmb) made the noise figures fall back to a lesser form.
+  // whether a missing column (gmb) made the noise figures fall back to a lesser form, or a missing
+  // # temp: header left kT at the 27 °C default.
   const noiseFrom = $derived(
-    noiseLabel(
-      noiseSource(sizingTable.grid),
-      derivedFallbacks(sizingTable.grid, metaScalars(sizingTable.meta)),
-    ),
+    noiseLabel(noiseSource(sizingTable.grid), tableFallbacks(sizingTable)),
   );
   // Input-referred thermal-noise density (at the sized gm) and the total integrated
   // RMS over the band share the thermal floor, so compute it once. rms is null on an
@@ -204,7 +239,8 @@
     // last is violable via a bad table gamma column, which QA warns about but never
     // blocks) and throws on violation. Catch → density-only readout, same style as
     // the sizing derived above; empty inputs skip the call without an exception.
-    const fc = parseNum(inFco);
+    // The table's corner at full precision; the field shows it in engineering notation.
+    const fc = fcoTyped !== null ? parseNum(fcoTyped) : fcoAuto.value;
     const fLo = parseNum(inFlo);
     const fHi = parseNum(inFhi);
     if (fc === undefined || fLo === undefined || fHi === undefined) {
@@ -269,7 +305,11 @@
     if (!r) return;
     const line = (k: string, v: string) => `${k}\t${v}`;
     const rows = [
-      line('device', `${device.id.device} ${device.id.corner} ${device.id.temp}C`),
+      line(
+        'device',
+        `${device.id.device} ${device.id.corner} ${device.id.temp}C` +
+          (device.meta.filled?.length ? ` (assumed: ${device.meta.filled.join(', ')})` : ''),
+      ),
       line('L', `${formatEng(sizeL)}m`),
       ...Object.entries(sizingFixed).map(([k, v]) => line(k, `${formatEng(v)}${axisUnit(k)}`)),
       line('W', `${formatEng(r.W)}m`),
@@ -290,7 +330,9 @@
       ...(noise?.density != null
         ? [line('vn_th', `${formatEng(noise.density)}V/rtHz (noise: ${noiseFrom})`)]
         : []),
-      ...(noise?.rms != null ? [line('vn_rms', `${formatEng(noise.rms)}V`)] : []),
+      ...(noise?.rms != null
+        ? [line('vn_rms', `${formatEng(noise.rms)}V (f_co ${inFco}Hz, ${fcoSource})`)]
+        : []),
       ...(mism ? [line('sigma_Vth', `${formatEng(mism.sigmaVth)}V`)] : []),
       ...(mism ? [line('sigma_Vos', `${formatEng(mism.sigmaVos)}V`)] : []),
     ];
@@ -389,12 +431,18 @@
        they show whenever the sizer is open; the budgets fill in once a geometry is
        sized. The 1/f corner is width-independent; the band sets the integration. -->
   <h3>noise <Help text={CONTROL_HELP.noise} /></h3>
-  <p class="match-note">1/f corner · band, Hz{noiseFromMeta ? ' · corner from device' : ''}</p>
+  <p class="match-note" data-fco-from>1/f corner · band, Hz · {fcoFrom}</p>
   <!-- Help renders a <button> (a labelable element), so each label needs an explicit
        `for` — otherwise the button, being first, would steal the label's control. -->
   <label for="sz-fco"
     ><span>f<sub>co</sub> <Help text={CONTROL_HELP.fco} /></span>
-    <input id="sz-fco" bind:value={inFco} placeholder="Hz · e.g. 1meg" spellcheck="false" /></label
+    <input
+      id="sz-fco"
+      value={inFco}
+      oninput={(e) => (fcoTyped = e.currentTarget.value)}
+      placeholder="Hz · e.g. 1meg"
+      spellcheck="false"
+    /></label
   >
   <label for="sz-flo"
     ><span>band <Help text={CONTROL_HELP.band} /></span>
@@ -414,10 +462,13 @@
       <dt>v<sub>n,th</sub> <small title={CONTROL_HELP.noiseSource}>{noiseFrom}</small></dt>
       <dd>{formatSI(noise.density)}V/√Hz</dd>
       {#if noise.rms !== null}
-        <dt>v<sub>n,rms</sub> <small>band</small></dt>
+        <dt>v<sub>n,rms</sub> <small data-rms-from>band · {fcoFrom}</small></dt>
         <dd>{formatSI(noise.rms)}V</dd>
       {/if}
     </dl>
+    {#if noise.rms !== null && fcoTyped === null && fcoAuto.from === 'generic'}
+      <ul class="warns" data-fco-generic><li>{fcoGenericNote}</li></ul>
+    {/if}
   {/if}
 
   <h3>matching <Help text={CONTROL_HELP.matching} /></h3>

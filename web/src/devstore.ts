@@ -1,3 +1,4 @@
+import { DEFAULT_TEMP_C } from '@gmid/mostab-core';
 // Local persistence for loaded device tables — IndexedDB, because a characterization
 // grid (megabytes of Float64Array) is far past localStorage budgets and structured
 // clone stores Maps and typed arrays natively. Client-only like everything else: the
@@ -92,6 +93,22 @@ export async function loadTables(): Promise<{ key: string; table: DeviceTable }[
   } catch {
     return [];
   }
+}
+
+/**
+ * A stored table restored with the one part of the importer's record of filled-in identity
+ * (TableMeta.filled) that can be read back from a table stored before the record existed: the
+ * importer sets `meta.temp` from a `# temp:` header and from nothing else, so a stored table
+ * without one was read at the default temperature, which is said like any other default. Its
+ * corner and device name cannot be told apart from declared ones and are left as stored. A
+ * table that carries the record, or a temperature, is returned as it is.
+ */
+export function withRecordedFill(dt: DeviceTable): DeviceTable {
+  if (dt.meta.filled !== undefined || dt.meta.temp !== undefined) return dt;
+  // A stored identity at any temperature other than the default was declared: the default is
+  // the only value the importer ever fills in.
+  if (dt.id.temp !== DEFAULT_TEMP_C) return dt;
+  return { ...dt, meta: { ...dt.meta, filled: ['temp'] } };
 }
 
 /**

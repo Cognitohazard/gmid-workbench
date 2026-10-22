@@ -43,11 +43,25 @@ export interface TableMeta {
   readonly AVT?: number; // Pelgrom threshold-mismatch constant [V·m]
   readonly ABETA?: number; // Pelgrom current-factor constant [m]
   readonly FCO?: number; // 1/f (flicker) noise corner frequency [Hz]
-  /** Extra scalar metadata carried through verbatim (the strict-superset pass-through rule). */
+  /**
+   * The identity fields the importer filled in because the file did not declare them, in the
+   * order device, corner, temp: a device named after the file (or `dev0`), the corner `tt`, the
+   * temperature 27 °C. TableId holds the filled-in value like a declared one, so this is the only
+   * record that it was assumed — what QA, the condition labels, the nominal pick and every sizing
+   * read to say so. Absent when the file declared all three.
+   */
+  readonly filled?: readonly FilledField[];
+  /** Extra scalar metadata carried through verbatim (the strict-superset pass-through rule). A
+   *  recognized header whose value could not be read (`# temp: 27C`) is kept here as written,
+   *  under its own key, and QA names it. */
   readonly extra?: Readonly<Record<string, string | number>>;
 }
 
-/** Identity of a device table. */
+/** An identity field the importer can fill in (see TableMeta.filled). */
+export type FilledField = 'device' | 'corner' | 'temp';
+
+/** Identity of a device table. A field the file did not declare holds the importer's default
+ *  and is listed in TableMeta.filled. */
 export interface TableId {
   readonly device: string;
   readonly corner: string;

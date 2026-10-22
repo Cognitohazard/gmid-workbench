@@ -35,6 +35,7 @@
 // merges tables across corners.
 
 import type { DeviceTable, QAWarning, TableId } from '../types';
+import { DEFAULT_TEMP_C } from '../constants';
 import type {
   CheckKind,
   CheckResult,
@@ -113,12 +114,38 @@ export function conditionKeyId(k: ConditionKey): string {
   return JSON.stringify([k.corner, String(k.temp)]);
 }
 
-/** The condition as a designer writes it: source spelling preserved, and the temperature
- *  elided at the 27 °C default so the common case reads `tt`, not `tt@27`. Accepts a table's
- *  own identity or a bare key, so a selected condition with no table loaded still labels. */
-export function conditionLabel(id: { readonly corner: string; readonly temp: number }): string {
+/**
+ * The condition as a designer writes it: source spelling preserved, and the temperature elided at
+ * the 27 °C default so the common case reads `tt`, not `tt@27`. Accepts a table, a table's own
+ * identity or a bare key, so a selected condition with no table loaded still labels.
+ *
+ * A table also brings its record of what its file did not declare (TableMeta.filled). A field
+ * filled in is marked, never elided: a temperature taken as the default reads `tt@27 °C
+ * (assumed)` and a corner taken as `tt` reads `tt (assumed)`, so a label never presents a
+ * default as a declaration. Label a table by the table, not by its `id`, wherever one is at hand.
+ */
+export function conditionLabel(
+  of: { readonly corner: string; readonly temp: number } | DeviceTable,
+): string {
+  const id = 'grid' in of ? of.id : of;
+  const filled = 'grid' in of ? (of.meta.filled ?? []) : [];
   const corner = id.corner.trim();
-  return id.temp === 27 ? corner : `${corner}@${id.temp}`;
+  const noCorner = filled.includes('corner');
+  if (filled.includes('temp'))
+    return `${corner}@${id.temp} °C (${noCorner ? 'corner and temperature assumed' : 'assumed'})`;
+  const shown = noCorner ? `${corner} (assumed)` : corner;
+  return id.temp === DEFAULT_TEMP_C ? shown : `${shown}@${id.temp}`;
+}
+
+/** A condition of `device` labelled with what its table's file did not declare (conditionLabel):
+ *  the member at `key` supplies the record. A key no member answers to labels bare. */
+export function conditionLabelIn(
+  device: CharacterizedDevice | undefined,
+  key: { readonly corner: string; readonly temp: number },
+): string {
+  const at = conditionKeyOf(key);
+  const member = device?.conditions.find((t) => sameCondition(conditionKeyOf(t.id), at));
+  return member ? conditionLabel(member) : conditionLabel(key);
 }
 
 // --- device identity ---------------------------------------------------------
@@ -232,6 +259,11 @@ export interface CharacterizedDevice {
    *  member is loaded but two tables claim its condition (`ambiguous` — remove one). Absent
    *  unless `nominalSource` is `unresolved`. */
   readonly unresolvedNominal?: 'absent' | 'ambiguous';
+  /** On an automatic nominal, the fields of its condition that its file did not declare
+   *  (TableMeta.filled): its corner taken as `tt`, its temperature as 27 °C. Set only when no
+   *  member of the device declares its condition, because a filled-in condition never wins the
+   *  automatic rule over a declared one — so a nominal that rests on a default says so. */
+  readonly nominalAssumed?: readonly ('corner' | 'temp')[];
 }
 
 export interface GroupDevicesOptions {
@@ -334,6 +366,20 @@ function buildDevice(
   };
 }
 
+/** The condition fields of a table its file did not declare (TableMeta.filled). */
+const assumedCondition = (t: DeviceTable): ('corner' | 'temp')[] =>
+  (t.meta.filled ?? []).filter((f): f is 'corner' | 'temp' => f === 'corner' || f === 'temp');
+
+/** An automatic nominal, with the fields of its condition that were filled in when there are any. */
+function autoNominal(
+  t: DeviceTable,
+): Pick<CharacterizedDevice, 'nominal' | 'nominalSource' | 'nominalAssumed'> {
+  const assumed = assumedCondition(t);
+  return assumed.length
+    ? { nominal: t, nominalSource: 'auto', nominalAssumed: assumed }
+    : { nominal: t, nominalSource: 'auto' };
+}
+
 /** The nominal rule: a bench designation if there is one, else a sole member speaking for
  *  itself, else the tt member closest to 27 °C. Every ambiguity — two tt temperatures
  *  equidistant from 27, or two tables claiming the winning condition — yields no designation
@@ -341,13 +387,19 @@ function buildDevice(
  *  about the bench, not about which file arrived first. A designation that lands on a
  *  duplicated condition is unusable the same way a vanished one is: every projection at that
  *  condition refuses, so it reads as unresolved rather than advertising a nominal no run can
- *  use. */
+ *  use.
+ *
+ *  The automatic rule reads DECLARED conditions only while the device has any: a file that
+ *  declares no corner is `tt`, and one that declares no temperature is at 27 °C, by default
+ *  rather than by statement, so such a member never wins over a declared one — with a declared
+ *  `ss` beside it, the device has no automatic nominal at all. Only a device whose every member
+ *  fills its condition in reads them, and its nominal then says which fields were assumed. */
 function designate(
   conditions: readonly DeviceTable[],
   duplicates: readonly ConditionKey[],
   deviceUid: string,
   opts: GroupDevicesOptions | undefined,
-): Pick<CharacterizedDevice, 'nominal' | 'nominalSource' | 'unresolvedNominal'> {
+): Pick<CharacterizedDevice, 'nominal' | 'nominalSource' | 'unresolvedNominal' | 'nominalAssumed'> {
   const wanted = opts?.nominalByDevice?.get(deviceUid);
   if (wanted !== undefined) {
     const uidOf = opts?.uidOf;
@@ -358,13 +410,13 @@ function designate(
       return { nominal: undefined, nominalSource: 'unresolved', unresolvedNominal: 'ambiguous' };
     return { nominal: hit, nominalSource: 'designated' };
   }
-  if (conditions.length === 1) return { nominal: conditions[0], nominalSource: 'auto' };
-  const tt = conditions.filter((t) => conditionKeyOf(t.id).corner === 'tt');
+  if (conditions.length === 1) return autoNominal(conditions[0]);
+  const declared = conditions.filter((t) => assumedCondition(t).length === 0);
+  const pool = declared.length ? declared : conditions;
+  const tt = pool.filter((t) => conditionKeyOf(t.id).corner === 'tt');
   if (tt.length) {
     const near = nearestTo27(tt);
-    return near
-      ? { nominal: near, nominalSource: 'auto' }
-      : { nominal: undefined, nominalSource: 'none' };
+    return near ? autoNominal(near) : { nominal: undefined, nominalSource: 'none' };
   }
   return { nominal: undefined, nominalSource: 'none' };
 }

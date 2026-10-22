@@ -112,7 +112,10 @@ uv run --with numpy python3 tools/medwatt2mostab.py --trust-pickle table.npz -o 
 
 The conversion happens out-of-browser only: the `.npz` is a pickled dict, and
 unpickling can execute arbitrary code, so the converter refuses to run without
-`--trust-pickle` — pass it only for a file you produced or trust. A self-test is
+`--trust-pickle` — pass it only for a file you produced or trust. A process corner or
+temperature is written only when the table's `device_parameters` state one or you do
+(`--corner ss --temp -40`); left out, the app reads the table as `tt` at 27 °C and says,
+wherever the table is used, that both were assumed. A self-test is
 included:
 
 ```sh

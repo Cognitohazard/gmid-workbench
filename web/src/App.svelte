@@ -4,9 +4,10 @@
     plottableQuantities,
     importMostab,
     metaScalars,
-    derivedFallbacks,
+    tableFallbacks,
     noiseLabel,
     noiseSource,
+    readsGamma,
     formatEng,
     formatSI,
     validate,
@@ -43,6 +44,7 @@
   import { importSheetJSON, removeUserSheet, userSheets } from './sheetlib.svelte';
   import {
     presetDashboard,
+    persistedDashboard,
     sanitizeDashboard,
     reseatDashboard,
     canPlot,
@@ -55,7 +57,14 @@
     type Dashboard,
     type PanelTemplate,
   } from './dashboard';
-  import { clearTables, deleteTable, loadTables, putTable, saneTable } from './devstore';
+  import {
+    clearTables,
+    deleteTable,
+    loadTables,
+    putTable,
+    saneTable,
+    withRecordedFill,
+  } from './devstore';
   import {
     benchDevices,
     deviceLabel,
@@ -193,10 +202,12 @@
     // registry recorded; without a registry every rank ties and order is kept).
     const have = new Set(tables.map((d) => tableUid(d.table)));
     const restored: { item: Loaded; rank: number }[] = [];
-    for (const { key, table: dt } of stored) {
+    for (const { key, table: raw } of stored) {
       try {
         // Trust nothing: a corrupt/stale record is skipped, not rendered.
-        if (!saneTable(dt)) continue;
+        if (!saneTable(raw)) continue;
+        // A table stored before the importer recorded what it filled in says what it can.
+        const dt = withRecordedFill(raw);
         const uid = tableUid(dt);
         if (have.has(uid)) {
           // A fresh import superseded this record; drop a stale-keyed copy. Both spellings are
@@ -282,8 +293,9 @@
   );
   // Persist the layout (not the device — that re-seeds on load) so a customized dashboard
   // survives a reload. Best-effort. Never clobber the saved layout with the empty-boot null.
+  // A sheet restored with a loss writes back the document as it was stored until it is edited.
   $effect(() => {
-    if (dashboard) saveJSON(DASH_KEY, dashboard);
+    if (dashboard) saveJSON(DASH_KEY, persistedDashboard(dashboard));
   });
 
   // Appearance settings (theme + font sizes). Applied to the document root and persisted on
@@ -346,11 +358,11 @@
   );
 
   // The derived quantities this device computes by a fallback form rather than their definition
-  // (a noise figure without a gmb column): the picker shows the form it plots, and the device
-  // panel's noise line names them.
-  const deviceFallbacks = $derived(
-    device ? derivedFallbacks(device.grid, metaScalars(device.meta)) : [],
-  );
+  // (a noise figure without a gmb column), and the 27 °C it is read at when it declares no
+  // temperature: the picker shows the form it plots, and the device panel's noise line names them.
+  const deviceFallbacks = $derived(device ? tableFallbacks(device) : []);
+  /** Where this device's thermal-noise figures come from, after "noise: " (noiseLabel). */
+  const deviceNoise = $derived(device ? noiseLabel(noiseSource(device.grid), deviceFallbacks) : '');
 
   // Picker for panel X/Y: every quantity THIS device resolves along the sweep,
   // including derived ones the width scalar unlocks (id/w).
@@ -376,7 +388,10 @@
           const f = deviceFallbacks.find((n) => n.quantity === k);
           const formula = f?.form ?? derivedExpr.get(k);
           const lacks = f ? ` (no ${f.missing.join(' or ')} column)` : '';
-          return { value: k, label: `${k} = ${formula}${lacks}`, formula };
+          // A γ-model figure is the table's own noise or the estimate, by the table: said here,
+          // where it is picked, as on the chart it opens.
+          const noise = k !== 'gamma' && readsGamma(k) ? ` (noise: ${deviceNoise})` : '';
+          return { value: k, label: `${k} = ${formula}${lacks}${noise}`, formula };
         }),
     ];
   });
@@ -623,6 +638,10 @@
     (d.querySelector('summary') as HTMLElement | null)?.focus();
   }
 
+  /** The mark a provenance field carries when its file did not declare it (TableMeta.filled). */
+  const assumedMark = (t: DeviceTable, field: 'device' | 'corner' | 'temp', why: string): string =>
+    t.meta.filled?.includes(field) ? ` (assumed: ${why})` : '';
+
   /** Designate (or, on the condition that already holds it, un-designate) a device's nominal.
    *  A designation names a TABLE, so it survives a reload and goes visibly unresolved if that
    *  table leaves — the one thing it must never do is slide to another corner unannounced. */
@@ -740,12 +759,15 @@
     <details class="device" onkeydown={closeOnEscape}>
       <summary title="active device — open for the table's provenance">{deviceKey(device)}</summary>
       <dl class="prov">
+        <!-- A field the file did not declare is the importer's default, and says so. -->
         <dt>device</dt>
-        <dd>{device.id.device}</dd>
+        <dd>
+          {device.id.device}{assumedMark(device, 'device', 'no # device:, named after the file')}
+        </dd>
         <dt>corner</dt>
-        <dd>{device.id.corner}</dd>
+        <dd>{device.id.corner}{assumedMark(device, 'corner', 'no # corner:')}</dd>
         <dt>temp</dt>
-        <dd>{device.id.temp}°C</dd>
+        <dd data-temp>{device.id.temp}°C{assumedMark(device, 'temp', 'no # temp:')}</dd>
         {#if device.meta.W !== undefined}<dt>char. W</dt>
           <dd>{formatSI(device.meta.W)}m</dd>{/if}
         {#if device.meta.simulator}<dt>simulator</dt>
@@ -756,7 +778,7 @@
           <dd>{device.meta.polarity}</dd>{/if}
         <dt>noise</dt>
         <dd data-noise title={CONTROL_HELP.noiseSource}>
-          {noiseLabel(noiseSource(device.grid), deviceFallbacks)}
+          {deviceNoise}
         </dd>
         {#each Object.entries(device.meta.extra ?? {}) as [k, v]}
           <dt>{k}</dt>
@@ -907,7 +929,7 @@
               class="dname"
               class:active={i === activeIdx}
               onclick={() => select(i)}
-              title={CONTROL_HELP.active}>{multi ? conditionLabel(t.id) : deviceKey(t)}</button
+              title={CONTROL_HELP.active}>{multi ? conditionLabel(t) : deviceKey(t)}</button
             >
             {#if multi || stale}
               <!-- Which condition the bench means by "nominal". Marked here and changed here,
@@ -956,6 +978,13 @@
           <span class="fw warning" data-nominal-state="none"
             >no nominal condition — designate one</span
           >
+        {:else if multi && f.nominalAssumed}
+          <!-- The automatic nominal rests on a condition no file of this device declared. -->
+          <span class="fw info" data-nominal-state="assumed"
+            >the automatic nominal's {f.nominalAssumed.join(' and ')}
+            {f.nominalAssumed.length > 1 ? 'are' : 'is'} assumed — no file of this device declares its
+            condition; declare it, or designate one</span
+          >
         {/if}
         {#each qa as w}
           <span class="fw {w.severity}" title={w.location ?? ''}>{w.rule}: {w.message}</span>
@@ -980,6 +1009,11 @@
     {#each userSheets() as s (s.name)}
       <span class="dev">
         <span class="dname" title={s.doc.title}>{s.name}</span>
+        <!-- Restored from storage with pieces this build could not read: not offered or resolved
+             by reference, and kept as stored, so the loss never replaces the saved document. -->
+        {#if s.lost}<i class="fw error" data-sheet-lost
+            >not offered — the stored copy could not be read whole: {s.lost.join(', ')}</i
+          >{/if}
         <button
           class="drm"
           onclick={() => removeUserSheet(s.name)}
@@ -1074,6 +1108,12 @@
             // swap instead of being regenerated away (reseatDashboard preserves non-auto panels).
             Object.assign(cfg, patch);
             if (cfg.auto) cfg.auto = false;
+            // An edited sheet is the user's document from now on: the stored copy a lossy restore
+            // kept in its place (and the record of the loss) give way to it.
+            if (patch.sheet !== undefined && cfg.sheetLost) {
+              delete cfg.sheetStored;
+              delete cfg.sheetLost;
+            }
           }}
           onRemove={() => removePanel(cfg.id)}
         />

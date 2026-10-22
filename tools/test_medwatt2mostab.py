@@ -26,7 +26,7 @@ FIXTURE_DIR = os.path.join(HERE, "__fixtures__")
 MODEL = "medwatt_demo"
 
 
-def build_npz(path: str, model: str = MODEL) -> None:
+def build_npz(path: str, model: str = MODEL, device_parameters=None) -> None:
     length = np.array([45e-9, 100e-9])  # nL = 2
     vbs = np.array([0.0, -0.3])         # nVbs = 2  ->  vsb = [0.0, 0.3]
     vgs = np.array([0.3, 0.5, 0.7])     # nVgs = 3
@@ -44,7 +44,7 @@ def build_npz(path: str, model: str = MODEL) -> None:
         "vgs": vgs, "vds": vds, "vbs": vbs, "length": length,
         "model_name": model,
         "parameter_names": ["id", "gm", "gds", "vth"],
-        "device_parameters": {"width": 1e-6},
+        "device_parameters": device_parameters or {"width": 1e-6},
         "id": ida, "gm": gm, "gds": gds, "vth": vth,
     }
     table = {
@@ -171,6 +171,42 @@ def polarity_checks() -> None:
     print("OK — polarity emitted from field and --polarity, omitted when unknown")
 
 
+def identity_checks() -> None:
+    """A table that states no corner or temperature gets neither line — the importer fills them
+    in and records that it did; a device_parameters field or a flag writes them, the flag
+    winning; an unreadable temperature field writes nothing rather than a guess."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = os.path.join(tmp, "out")
+        npz = os.path.join(tmp, "lut.npz")
+        build_npz(npz)
+        out = os.path.join(out_dir, f"{MODEL}.mostab.csv")
+
+        m2m.convert(npz, out_dir, trust=True, overwrite=True)
+        meta, _, _ = read_mostab(out)
+        assert "corner" not in meta and "temp" not in meta, meta
+
+        m2m.convert(npz, out_dir, trust=True, overwrite=True, corner="ss", temp=-40)
+        meta, _, _ = read_mostab(out)
+        assert meta["corner"] == "ss" and meta["temp"] == "-40", meta
+
+        stated = os.path.join(tmp, "stated.npz")
+        build_npz(stated, device_parameters={"width": 1e-6, "corner": "ff", "temp": 125.0})
+        m2m.convert(stated, out_dir, trust=True, overwrite=True)
+        meta, _, _ = read_mostab(out)
+        assert meta["corner"] == "ff" and meta["temp"] == "125", meta
+        m2m.convert(stated, out_dir, trust=True, overwrite=True, corner="tt", temp=27)
+        meta, _, _ = read_mostab(out)
+        assert meta["corner"] == "tt" and meta["temp"] == "27", meta
+
+        garbled = os.path.join(tmp, "garbled.npz")
+        build_npz(garbled, device_parameters={"width": 1e-6, "temp": "hot"})
+        m2m.convert(garbled, out_dir, trust=True, overwrite=True)
+        meta, _, _ = read_mostab(out)
+        assert "temp" not in meta, meta
+
+    print("OK — corner and temperature written only when stated")
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="self-test for medwatt2mostab")
     ap.add_argument("--write-fixture", action="store_true",
@@ -179,6 +215,7 @@ def main(argv=None) -> None:
 
     safety_checks()
     polarity_checks()
+    identity_checks()
 
     fixture = os.path.join(os.path.realpath(FIXTURE_DIR), f"{MODEL}.mostab.csv")
     with tempfile.TemporaryDirectory() as tmp:
@@ -194,6 +231,8 @@ def main(argv=None) -> None:
         meta, header, rows = read_mostab(out)
 
         assert meta["device"] == MODEL, meta
+        # The synthetic table states no corner or temperature, so neither is written.
+        assert "corner" not in meta and "temp" not in meta, meta
         assert meta["W"] == "1e-06", meta
         assert meta["simulator"] == "NgspiceSimulator", meta
         assert header == ["L", "VDS", "VSB", "VGS", "ID", "GM", "GDS", "VTH"], header

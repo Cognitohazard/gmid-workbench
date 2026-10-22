@@ -7,6 +7,7 @@
 
 import {
   buildSheetRefIndex,
+  sheetFormat,
   unreadFormatIn,
   validateSheet,
   type SheetDoc,
@@ -19,7 +20,21 @@ import { loadJSON, saveJSON } from './storage';
 export interface UserSheet {
   name: string; // bare id (filename sans .json); addressable as `user/<name>` or bare
   doc: SheetDoc;
+  /** Restored from storage with a loss: the document exactly as it was stored, and what the
+   *  restore could not read (the loader's `lost` paths, or why nothing could be read). Such an
+   *  entry is listed with that reason but neither offered nor resolved by reference — the import
+   *  door refuses a document that loses pieces, and the library does not serve one either — and
+   *  the stored copy is what is written back, so the loss never replaces it. */
+  stored?: unknown;
+  lost?: string[];
 }
+
+/** A user sheet the library offers and resolves: one restored whole. */
+const served = (s: UserSheet): boolean => !s.lost;
+
+/** The list as it is written to storage: a sheet restored with a loss writes back what was stored. */
+const persisted = (sheets: readonly UserSheet[]): unknown[] =>
+  sheets.map((s) => (s.lost ? { name: s.name, doc: s.stored } : { name: s.name, doc: s.doc }));
 
 // `.v2` since the document's keys were renamed: a build from before the rename reads a sheet
 // in the new keys as an empty one, so it must not find them in its own slot. The earlier slot
@@ -49,10 +64,20 @@ function parseUserSheets(raw: unknown): UserSheet[] {
     if (!e || typeof e !== 'object') continue;
     const o = e as Record<string, unknown>;
     if (typeof o.name !== 'string' || !validSheetName(o.name)) continue;
-    const doc = sanitizeSheet(o.doc);
+    const lost: string[] = [];
+    const doc = sanitizeSheet(o.doc, 0, lost);
     // Keep whatever is structurally a sheet, valid or not: validity is reported where the sheet
-    // is opened, and evaluation refuses an invalid one.
-    if (doc) byName.set(o.name, { name: o.name, doc });
+    // is opened, and evaluation refuses an invalid one. A document in a format this app does not
+    // read is kept whole and refused by its own reason wherever it is opened, so it is no loss.
+    if (doc && (!lost.length || sheetFormat(doc).format === 'unknown'))
+      byName.set(o.name, { name: o.name, doc });
+    else
+      byName.set(o.name, {
+        name: o.name,
+        doc: doc ?? { title: o.name, polarity: 'n', params: [], equations: [], checks: [] },
+        stored: o.doc,
+        lost: lost.length ? lost : ['the stored sheet is not a sheet document'],
+      });
   }
   return [...byName.values()];
 }
@@ -119,13 +144,13 @@ export function importSheetJSON(filename: string, text: string): string | null {
   const i = store.sheets.findIndex((s) => s.name === name);
   if (i >= 0) store.sheets[i] = { name, doc };
   else store.sheets.push({ name, doc });
-  saveJSON(KEY, store.sheets);
+  saveJSON(KEY, persisted(store.sheets));
   return null;
 }
 
 export function removeUserSheet(name: string): void {
   store.sheets = store.sheets.filter((s) => s.name !== name);
-  saveJSON(KEY, store.sheets);
+  saveJSON(KEY, persisted(store.sheets));
 }
 
 // One index over both halves. Rebuilt when the user list changes; the curated half is
@@ -134,7 +159,7 @@ export function removeUserSheet(name: string): void {
 const refIndex = $derived(
   buildSheetRefIndex([
     ...CURATED_ENTRIES,
-    ...store.sheets.map((s) => ({ path: `user/${s.name}`, doc: s.doc })),
+    ...store.sheets.filter(served).map((s) => ({ path: `user/${s.name}`, doc: s.doc })),
   ]),
 );
 
@@ -142,11 +167,12 @@ export function sheetRefIndex(): SheetRefIndex {
   return refIndex;
 }
 
-const menu = $derived.by((): readonly SheetLibraryGroup[] =>
-  store.sheets.length
-    ? [...SHEET_MENU, { label: 'Your sheets', sheets: store.sheets.map((s) => s.doc) }]
-    : SHEET_MENU,
-);
+const menu = $derived.by((): readonly SheetLibraryGroup[] => {
+  const offered = store.sheets.filter(served);
+  return offered.length
+    ? [...SHEET_MENU, { label: 'Your sheets', sheets: offered.map((s) => s.doc) }]
+    : SHEET_MENU;
+});
 
 /** The picker menu: curated groups plus a "Your sheets" group when any are loaded. */
 export function sheetMenu(): readonly SheetLibraryGroup[] {

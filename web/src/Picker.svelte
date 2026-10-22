@@ -362,6 +362,18 @@
     <td class="verdict">
       <span class="chip">{VERDICT[c.verdict]}</span>
       <span class="sub">{c.evals} evals</span>
+      <!-- What the reported point rests on that the spec did not state (the γ estimate, a
+           lesser noise form, an assumed temperature or bias, a DC input, a clamped coordinate):
+           a closed row can rest on any of them, so it is marked beside the verdict. -->
+      {#if c.caveats?.length}
+        <span
+          class="caveat"
+          title={[CONTROL_HELP.pickerCaveats, ...c.caveats].join('\n\n')}
+          data-caveats
+          >⚠ rests on {c.caveats.length}
+          {c.caveats.length === 1 ? 'assumption' : 'assumptions'}</span
+        >
+      {/if}
     </td>
     <td class="mar" title={marginTitle(c)}>{margin(c)}</td>
     <td class="why" title={w}>{w}</td>
@@ -410,7 +422,7 @@
       <button class="pbtn" onclick={cancel}>stop</button>
     {:else}
       <button class="pbtn" disabled={!nominalTable} onclick={run}
-        >search {total} sheets{#if nominalKey}{` at ${conditionLabel(nominalKey)}`}{/if}</button
+        >search {total} sheets{#if nominalTable}{` at ${conditionLabel(nominalTable)}`}{/if}</button
       >
     {/if}
     <label class="budget" title="wall clock allowed per sheet before the search stops and says so"
@@ -540,6 +552,12 @@ one that stops the search first on a small table"
     margin: 0.6rem 0 0;
     padding-top: 0.5rem;
     border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  }
+  .caveat {
+    display: block;
+    font-size: 0.8em;
+    color: var(--warn);
+    cursor: help;
   }
   .lede,
   .hint {

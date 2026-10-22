@@ -14,15 +14,20 @@
 // and get the same answer on every machine.
 
 import type { DeviceTable } from '../types';
+import { noiseLabel } from '../derive';
 import {
   bindingCheck,
   choiceKnobs,
   clampMargin,
+  clampedIn,
   cloneDoc,
+  deviceName,
+  devicesIn,
   engineSolved,
   limitingCheck,
   MARGIN_PCT_CAP,
   measurable,
+  noiseSourcesIn,
   refusedIn,
   resolvedSheet,
   runSheet,
@@ -225,6 +230,12 @@ export interface PickerCandidate {
   /** Whether a budget ran out during the search (as opposed to closing, stalling, or reaching
    *  the round cap). `cause` states it in words; this is the flag to branch on. */
   budgetExhausted: boolean;
+  /** What the reported point rests on that the spec did not state, one sentence each, from the
+   *  run that produced it (see runCaveats): noise figures read by the γ estimate or a lesser
+   *  form or at an assumed temperature, a bias left at its default, a DC input the design was
+   *  sized under, a coordinate read at a table's edge. A `closed` row can rest on any of them,
+   *  so a consumer shows them beside the verdict. Absent when there are none. */
+  caveats?: string[];
 }
 
 // ---------------------------------------------------------------------------------------
@@ -782,6 +793,34 @@ function backOff(
   return best ?? { doc: doc0 };
 }
 
+/**
+ * What one run's answer rests on that its document did not state, each a sentence: the devices
+ * whose noise figures are the γ estimate, or read by a lesser form, or at a temperature their
+ * table did not declare (SizingReport.noise and fallbacks, in the noise line's words, grouped
+ * by what they say); bias axes left at their defaults (SizingReport.assumed); the DC inputs the
+ * design was sized under (SheetResult.assumptions); coordinates a device was read at the edge of
+ * its table instead of where it was asked (SizingReport.clamped). Empty when the run rests on
+ * none of them. A device whose noise is its table's own, by its definition, owes no sentence.
+ */
+export function runCaveats(res: SheetResult): string[] {
+  const out: string[] = [];
+  const byLabel = new Map<string, string[]>();
+  for (const d of noiseSourcesIn(res)) {
+    if (d.source !== 'estimated' && d.fallbacks.length === 0) continue;
+    const label = noiseLabel(d.source, d.fallbacks);
+    byLabel.set(label, [...(byLabel.get(label) ?? []), deviceName(d.device)]);
+  }
+  for (const [label, devices] of byLabel) out.push(`noise: ${label} — ${devices.join(', ')}`);
+  const defaulted = devicesIn(res, (s, at) => (s.assumed ?? []).map((axis) => `${at} ${axis}`));
+  if (defaulted.length) out.push(`a bias left at its default: ${defaulted.join(', ')}`);
+  if (res.assumptions?.length)
+    out.push(`sized under assumed DC inputs: ${res.assumptions.join(', ')}`);
+  const clamped = clampedIn(res);
+  if (clamped.length)
+    out.push(`read at the edge of the table instead of where asked: ${clamped.join(', ')}`);
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------
 // Entry points
 // ---------------------------------------------------------------------------------------
@@ -914,6 +953,8 @@ export function pickTopology(
   const worst = refused.length ? undefined : limitingCheck(res);
   const binding = refused.length ? undefined : bindingCheck(res);
   const iq = res.values['I_q'];
+  // A refused candidate reports no point, so nothing rests on one.
+  const caveats = refused.length ? [] : runCaveats(res);
   return {
     path: sheet.path,
     title: doc.title,
@@ -933,6 +974,7 @@ export function pickTopology(
     elapsedMs: clock() - meter.started,
     budget: { evalBudget: meter.evalBudget, msBudget: meter.msBudget },
     budgetExhausted: meter.exhausted,
+    ...(caveats.length ? { caveats } : {}),
   };
 }
 

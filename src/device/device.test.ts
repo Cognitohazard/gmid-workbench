@@ -387,6 +387,43 @@ describe('argument validation', () => {
   });
 });
 
+describe('a table that declares no temperature, or an unreadable width', () => {
+  const dev = generateDemoDevice();
+  const L = dev.grid.axes[0].values[1];
+  // The importer's reading of a file with no # temp: header: the default, recorded as filled in.
+  const noTemp: DeviceTable = {
+    ...dev,
+    meta: { ...dev.meta, temp: undefined, filled: ['temp'] },
+  };
+
+  it('says on every sizing that kT was taken at the 27 °C default, and changes no number', () => {
+    const declared = sizeDevice({ table: dev, L, gm_id: 12, id: 20e-6 });
+    const r = sizeDevice({ table: noTemp, L, gm_id: 12, id: 20e-6 });
+    expect(declared.fallbacks).toEqual([]);
+    expect(r.fallbacks.map((f) => [f.quantity, f.missing, f.header, f.form])).toEqual([
+      ['T', ['temp'], '# temp:', '27 °C'],
+    ]);
+    expect(r.warnings).toEqual(r.fallbacks.map(fallbackMessage));
+    // The demo is characterized at 27 °C, so the default is its own temperature: only the note
+    // is new. (A declared temperature also reports T and U_T beside the quantities; the default
+    // is the engine's own constant and is not repeated there.)
+    const { T: _T, UT: _UT, ...rest } = declared.quantities;
+    expect(r.quantities).toEqual(rest);
+    expect(r.W).toBe(declared.W);
+  });
+
+  it('refuses a width header it could not read by saying so, not that the width is missing', () => {
+    const unread: DeviceTable = { ...dev, meta: { ...dev.meta, W: undefined, extra: { W: '1u' } } };
+    expect(() => sizeDevice({ table: unread, L, gm_id: 12, id: 20e-6 })).toThrow(
+      /# W: header reads "1u", which is not a number in metres/,
+    );
+    const absent: DeviceTable = { ...dev, meta: { ...dev.meta, W: undefined } };
+    expect(() => sizeDevice({ table: absent, L, gm_id: 12, id: 20e-6 })).toThrow(
+      /characterization width\) is required/,
+    );
+  });
+});
+
 describe('thermalNoise temperature', () => {
   it('scales kT with the table temperature instead of pinning 27 °C', () => {
     const gm = 1e-3;

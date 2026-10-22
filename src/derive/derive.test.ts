@@ -13,6 +13,9 @@ import {
   derivedFallbacks,
   derivedForm,
   fallbackMessage,
+  readsGamma,
+  tableFallbacks,
+  temperatureNote,
 } from './index';
 import type { Axis, Grid } from '../types';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
@@ -376,5 +379,54 @@ describe('γ from the table where it carries thermal noise, the default where it
       'svth_m',
       'vnth_m',
     ]);
+  });
+});
+
+describe('a temperature the table did not declare', () => {
+  const dev = generateDemoDevice();
+  const filled = { ...dev, meta: { ...dev.meta, temp: undefined, filled: ['temp' as const] } };
+
+  it('owes no note where the table declares its temperature', () => {
+    expect(temperatureNote(dev.meta)).toBeUndefined();
+    expect(tableFallbacks(dev)).toEqual(derivedFallbacks(dev.grid, metaScalars(dev.meta)));
+  });
+
+  it('is said beside the column fallbacks, as the header it stands for and the value taken', () => {
+    const note = temperatureNote(filled.meta)!;
+    expect(note).toMatchObject({
+      quantity: 'T',
+      missing: ['temp'],
+      header: '# temp:',
+      form: '27 °C',
+    });
+    expect(tableFallbacks(filled)).toEqual([
+      ...derivedFallbacks(filled.grid, metaScalars(filled.meta)),
+      note,
+    ]);
+    expect(fallbackMessage(note)).toMatch(
+      /^T is read as 27 °C because the table has no # temp: header — kT is taken at that temperature/,
+    );
+  });
+
+  it('reads on the noise line as the temperature assumed, after the column fallbacks', () => {
+    const noGmb = withoutColumns(filled, ['gmb']);
+    expect(noiseLabel(noiseSource(filled.grid), tableFallbacks(filled))).toBe(
+      'γ from the table · at 27 °C (assumed)',
+    );
+    expect(noiseLabel(noiseSource(noGmb.grid), tableFallbacks(noGmb))).toBe(
+      'γ from the table · no gmb column: svth_m, vnth_m · at 27 °C (assumed)',
+    );
+  });
+});
+
+describe('readsGamma', () => {
+  it('is true of γ and of every quantity defined through it, in any expression', () => {
+    for (const src of ['gamma', 'vnth_m', 'svth_m', '1e9*vnth_m', 'sqrt(svth_m)*gm'])
+      expect(readsGamma(src), src).toBe(true);
+  });
+
+  it('is false of the measured noise, of everything else, and of what does not compile', () => {
+    for (const src of ['vnth', 'svth', 'fco', 'gm/id', 'ft', 'k*T', '((('])
+      expect(readsGamma(src), src).toBe(false);
   });
 });

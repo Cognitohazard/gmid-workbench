@@ -112,6 +112,7 @@
             role="option"
             aria-selected={o.value === value}
             data-value={o.value}
+            title={o.label}
             class:sel={o.value === value}
             onclick={() => pick(o.value)}
           >

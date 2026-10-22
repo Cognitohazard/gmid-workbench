@@ -6,6 +6,7 @@ import type {
   Axis,
   Dataset,
   DeviceTable,
+  FilledField,
   ImportError,
   ImportHints,
   ImportResult,
@@ -14,6 +15,7 @@ import type {
 } from '../types';
 import { ALIASES, passthroughKeys } from '../namespace';
 import { makeGrid, strides } from '../grid';
+import { DEFAULT_TEMP_C } from '../constants';
 
 // The canonical sweep-axis keys, in their conventional grid order
 // (first axis varies slowest in row-major storage).
@@ -76,8 +78,8 @@ interface ParsedMeta {
   extra?: Record<string, string>;
 }
 
-/** Map a declared polarity/type value to 'n'|'p', or undefined if unrecognized
- *  (an unknown value is ignored, exactly as a missing line is). */
+/** Map a declared polarity/type value to 'n'|'p', or undefined if unrecognized (an unknown
+ *  value declares no polarity; the header is kept in `extra` and QA names it). */
 function normalizePolarity(value: string): 'n' | 'p' | undefined {
   switch (value.trim().toLowerCase()) {
     case 'p':
@@ -97,7 +99,13 @@ function normalizePolarity(value: string): 'n' | 'p' | undefined {
   }
 }
 
-/** Parse a `# key: value` metadata comment line into the accumulator. */
+/**
+ * Parse a `# key: value` metadata comment line into the accumulator. A recognized header whose
+ * value cannot be read — a number written with a unit or an engineering suffix (`# temp: 27C`,
+ * `# W: 1u`), a polarity word off the list — is not dropped: it is kept in `extra` as written,
+ * under its own key, where QA finds it and names it (see qa/validate). Dropped, it would read
+ * exactly like a header the file never had.
+ */
 function applyMetaLine(line: string, meta: ParsedMeta): void {
   const body = line.replace(/^#+/, '').trim();
   const idx = body.indexOf(':');
@@ -106,6 +114,16 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
   const key = rawKey.toLowerCase();
   const value = body.slice(idx + 1).trim();
   if (value === '') return;
+  const unread = (): void => {
+    (meta.extra ??= {})[rawKey] = value;
+  };
+  /** A numeric header's value, or undefined after keeping the unreadable text. */
+  const num = (): number | undefined => {
+    const v = Number(value);
+    if (Number.isFinite(v)) return v;
+    unread();
+    return undefined;
+  };
   switch (key) {
     case 'device':
       meta.device = value;
@@ -115,14 +133,14 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
       break;
     case 'temp':
     case 'temperature': {
-      const t = Number(value);
-      if (Number.isFinite(t)) meta.temp = t;
+      const t = num();
+      if (t !== undefined) meta.temp = t;
       break;
     }
     case 'w':
     case 'width': {
-      const w = Number(value);
-      if (Number.isFinite(w)) meta.W = w;
+      const w = num();
+      if (w !== undefined) meta.W = w;
       break;
     }
     case 'pdk':
@@ -135,26 +153,27 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
       meta.date = value;
       break;
     case 'avt': {
-      const v = Number(value);
-      if (Number.isFinite(v)) meta.AVT = v;
+      const v = num();
+      if (v !== undefined) meta.AVT = v;
       break;
     }
     case 'abeta': {
-      const v = Number(value);
-      if (Number.isFinite(v)) meta.ABETA = v;
+      const v = num();
+      if (v !== undefined) meta.ABETA = v;
       break;
     }
     case 'fco': {
-      const v = Number(value);
-      if (Number.isFinite(v)) meta.FCO = v;
+      const v = num();
+      if (v !== undefined) meta.FCO = v;
       break;
     }
     case 'polarity':
     case 'type': {
       // Authoritative declared device type only — never inferred from the device
-      // NAME field. An unrecognized value is ignored (no polarity set).
+      // NAME field. An unrecognized value declares no polarity, and is kept as written.
       const p = normalizePolarity(value);
       if (p !== undefined) meta.polarity = p;
+      else unread();
       break;
     }
     // Any other key (e.g. mostab, license, source) is preserved verbatim under the
@@ -394,10 +413,18 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
 
   const grid = makeGrid(axes, quantities);
 
-  // Resolve identity (hints > metadata > filename > default).
-  const device = hints?.device ?? meta.device ?? deviceFromFilename(hints?.filename) ?? 'dev0';
-  const corner = hints?.corner ?? meta.corner ?? 'tt';
-  const temp = meta.temp ?? 27;
+  // Resolve identity (hints > metadata > filename > default). A caller's hint declares a field
+  // as surely as a header does; a name taken from the file name, or a default, is filled in, and
+  // recorded as such (TableMeta.filled) so every reader can say it was assumed.
+  const declaredDevice = hints?.device ?? meta.device;
+  const device = declaredDevice ?? deviceFromFilename(hints?.filename) ?? 'dev0';
+  const declaredCorner = hints?.corner ?? meta.corner;
+  const corner = declaredCorner ?? 'tt';
+  const temp = meta.temp ?? DEFAULT_TEMP_C;
+  const filledIn: FilledField[] = [];
+  if (declaredDevice === undefined) filledIn.push('device');
+  if (declaredCorner === undefined) filledIn.push('corner');
+  if (meta.temp === undefined) filledIn.push('temp');
 
   const id: TableId = { device, corner, temp };
 
@@ -416,6 +443,7 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
   if (meta.polarity !== undefined) {
     mutMeta.polarity = { device: meta.polarity, signedInput: meta.polarity === 'p' };
   }
+  if (filledIn.length) mutMeta.filled = filledIn;
   if (meta.extra !== undefined) mutMeta.extra = meta.extra;
 
   // The pass-through set is the namespace's own reading of the grid, so the field and every reader

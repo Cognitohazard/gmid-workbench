@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test, expect, type Locator } from '@playwright/test';
 import { loadDemo } from './helpers';
 
@@ -177,4 +177,41 @@ test('topology picker: with no spec typed, every sheet is screened at its own va
   await vdd.fill('1.8');
   await vdd.blur();
   await expect(pk.locator('[data-stale]')).toContainText('search again');
+});
+
+test('topology picker: a result that rests on an assumption is marked, and its tooltip names it', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // The demo device with its temperature header taken out: every device sized on it reads kT at
+  // an assumed 27 °C, which each candidate that sized one has to say.
+  const csv = readFileSync('e2e/fixtures/demo.mostab.csv', 'utf8').replace(/^# temp:.*\r?\n/m, '');
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'demo-no-temp.mostab.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(csv),
+  });
+  await expect(page.locator('header .device')).toContainText('27°C (assumed)');
+
+  await page.locator('header .btn.pick').click();
+  const pk = page.locator('aside.picker');
+  const budget = pk.locator('input[data-budget="ms"]');
+  await budget.fill('30');
+  await budget.blur();
+  await pk.getByRole('button', { name: /^search \d+ sheets/ }).click();
+  await expect(pk.getByRole('button', { name: /^search \d+ sheets/ })).toBeVisible({
+    timeout: 120_000,
+  });
+  await expect(pk.locator('tr.row')).toHaveCount(SEARCHABLE);
+
+  const marked = pk.locator('tr.row [data-caveats]');
+  await expect(marked.first()).toBeVisible();
+  await expect(marked.first()).toContainText('rests on');
+  await expect(marked.first()).toHaveAttribute('title', /at 27 °C \(assumed\)/);
+
+  expect(errors).toEqual([]);
 });

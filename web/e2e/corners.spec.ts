@@ -746,3 +746,49 @@ test('solver settings: a changed setting is shown, marked on the panel, kept acr
 
   expect(errors).toEqual([]);
 });
+
+test('a table with no # temp: header reads as an assumed 27 °C wherever it is shown', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  // The demo device exactly as the suite loads it, with its temperature header taken out.
+  const csv = readFileSync(`${FIX}/demo.mostab.csv`, 'utf8').replace(/^# temp:.*\r?\n/m, '');
+  expect(csv).not.toContain('# temp:');
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'demo-no-temp.mostab.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(csv),
+  });
+
+  // The header's identity, its provenance and its noise line say the temperature was assumed,
+  // and QA says so at import.
+  const header = page.locator('header details.device');
+  await expect(header.locator('summary')).toHaveText('nmos_demo · tt · 27°C (assumed)');
+  await expect(header.locator('[data-temp]')).toContainText('27°C (assumed: no # temp:)');
+  await expect(header.locator('[data-noise]')).toContainText('at 27 °C (assumed)');
+  await expect(page.locator('.qa')).toContainText('no-temp');
+
+  // So does a sizing on it.
+  await page.locator('header button.size').click();
+  const sizer = page.locator('aside.sizer');
+  await sizer.getByPlaceholder('S/A').fill('15');
+  await sizer.getByPlaceholder('A · e.g. 100u').fill('100u');
+  await expect(sizer.locator('.noise small').first()).toContainText('at 27 °C (assumed)');
+  await expect(sizer.locator('.warns li', { hasText: 'no # temp: header' })).toBeVisible();
+  await page.locator('header button.size').click();
+
+  // Beside a declared condition of the same device, its condition label carries the mark, and it
+  // does not become the nominal condition by default: the device asks for one to be designated.
+  await load(page, 'demo-ss.mostab.csv');
+  // The variant attribute stays the bare condition key; the shown name carries the mark.
+  await expect(condition(page, 'tt')).toBeVisible();
+  await expect(condition(page, 'tt').locator('.dname')).toHaveText('tt@27 °C (assumed)');
+  await expect(condition(page, 'ss@-40')).toBeVisible();
+  await expect(strip(page).locator('[data-nominal-state="none"]')).toBeVisible();
+
+  expect(errors).toEqual([]);
+});

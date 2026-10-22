@@ -9,6 +9,10 @@
     formatEng,
     formatSI,
     parseEng,
+    noiseLabel,
+    noiseSource,
+    readsGamma,
+    tableFallbacks,
     type DeviceTable,
     type OverlayCurvesXY,
     type OverlayLine,
@@ -23,7 +27,15 @@
   import Help from './Help.svelte';
   import SheetPanel from './SheetPanel.svelte';
   import QuantityPicker from './QuantityPicker.svelte';
-  import { clampLegendCount, defaultScale, GM_ID, type Panel, type Scale } from './dashboard';
+  import {
+    clampLegendCount,
+    defaultScale,
+    deviceKey,
+    GM_ID,
+    UNRESTORED_SHEET,
+    type Panel,
+    type Scale,
+  } from './dashboard';
   import { sizeMark } from './sizemark.svelte';
 
   let {
@@ -112,6 +124,19 @@
 
   // Primary first, then overlays — `meta.tableIndex` indexes this list.
   const tablesAll = $derived([device, ...overlays]);
+  // A chart of the γ-model noise (svth_m, vnth_m, gamma, or any expression reading them) plots each
+  // table's own noise or the γ estimate, by the table (noiseSource), and the figures a missing
+  // column made fall back: said on the chart, per table drawn, in the words of the noise line.
+  const noiseNote = $derived.by((): string => {
+    if (cfg.render === 'sheet' || !(readsGamma(cfg.yExpr) || readsGamma(cfg.xExpr))) return '';
+    const per = tablesAll.map((t) => ({
+      device: deviceKey(t),
+      label: noiseLabel(noiseSource(t.grid), tableFallbacks(t)),
+    }));
+    return per.every((p) => p.label === per[0].label)
+      ? `noise: ${per[0].label}`
+      : `noise: ${per.map((p) => `${p.device}: ${p.label}`).join('; ')}`;
+  });
   const overlaid = $derived(overlays.length > 0);
   // Dash by device: the primary (table 0) is always solid; overlays cycle dash-only patterns so
   // no overlay can ever render solid and be mistaken for the active device (even at table 4, 8…).
@@ -492,6 +517,9 @@
     </p>{/if}
   <!-- Per-table failures (e.g. one overlay degenerate) — only while others still draw; a fully
        undrawable panel reports through .perr above. -->
+  {#if noiseNote}<p class="pnote" title={CONTROL_HELP.noiseSource} data-noise-note>
+      {noiseNote}
+    </p>{/if}
   {#if display}
     {#each built.ov?.notes ?? [] as note, t}
       {#if note}<p class="pwarn" title={note}>
@@ -501,10 +529,14 @@
   {/if}
 
   {#if cfg.render === 'sheet'}
-    {#if cfg.sheet}
+    {#if cfg.sheet || cfg.sheetLost}
+      <!-- A sheet restored with a loss shows what it lost; one that could not be restored at all
+           (no `sheet`) opens refused with the reason, its stored copy kept until a pick replaces it. -->
       <SheetPanel
         {device}
-        cfg={cfg.sheet}
+        cfg={cfg.sheet ?? UNRESTORED_SHEET}
+        restoreLost={cfg.sheetLost}
+        unrestored={!cfg.sheet}
         sweep={cfg.sheetSweep ?? ''}
         sweep2={cfg.sheetSweep2 ?? ''}
         cornerMode={cfg.sheetCornerMode ?? 'nominal'}
@@ -631,6 +663,15 @@
   }
   .pwarn {
     opacity: 0.8;
+  }
+  .pnote {
+    margin: 0.15rem 0 0;
+    font-family: ui-monospace, monospace;
+    font-size: calc(0.78rem * var(--text-scale));
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .plegend {
     display: inline-flex;
