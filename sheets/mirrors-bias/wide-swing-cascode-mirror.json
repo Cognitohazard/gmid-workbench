@@ -1,6 +1,6 @@
 {
   "title": "Wide-swing cascode mirror",
-  "description": "The low-voltage cascode mirror. It keeps the matched-$V_{DS}$ accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full $V_{GS}$ above ground), an explicit bias $V_{bias}$ places the reference node one saturation voltage and a small margin above ground. The output then only has to clear two stacked saturation voltages and that margin, with no threshold overhead, so the output can swing far lower than a standard cascode's $V_{GS} + V_{dsat}$ floor. Four devices are drawn. In the reference branch the reference mirror device carries the input current with its drain on the reference node, and the reference cascode stands on that node with its gate on $V_{bias}$ and its drain on the gate the two mirror devices share, where the input current enters. The reference node is solved to the reference device's own saturation voltage plus node_margin, which is what a wide-swing bias generator is designed to produce, and $V_{bias}$ is the reference cascode's gate-source voltage above it; a rule checks the supply can produce it. The output branch is drawn as the cascode current mirror draws it: the output mirror device is K times the reference device's width on the reference device's gate, with its current read off the table at its own drain voltage; the output cascode is K times the reference cascode's width on $V_{bias}$, in series with it and carrying that current; and the node between them is solved so that the gate-source voltage the cascode needs for that current hangs the node under $V_{bias}$. That node equals the reference node only where the output sits level with the reference cascode's drain; elsewhere it settles a few millivolts away, and the systematic-error row reports what that costs. The sheet's own device is the output cascode; the other three are blocks. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
+  "description": "The low-voltage cascode mirror. It keeps the matched-$V_{DS}$ accuracy of a cascode mirror but recovers the output swing a standard cascode wastes. The trick is the cascode gate bias: instead of the two-diode stack (which parks the mirror node a full $V_{GS}$ above ground), a single diode-connected NMOS at a low inversion level, carrying its own programmed current, sets a bias $V_{bias}$ that places the reference node about one saturation voltage and a small margin above ground. The output then only has to clear two stacked saturation voltages and that margin, with no threshold overhead, so the output can swing far lower than a standard cascode's $V_{GS} + V_{dsat}$ floor. Four devices are drawn. In the reference branch the reference mirror device carries the input current with its drain on the reference node, and the reference cascode stands on that node with its gate on $V_{bias}$ and its drain on the gate the two mirror devices share, where the input current enters. The bias diode is drawn, and $V_{bias}$ is its gate-source voltage. The reference node is solved under it: it sits where the reference cascode's gate-source voltage hangs it under $V_{bias}$, so wherever the design is held it moves with the devices, as silicon's does. The bias diode's inversion level is the knob that places it, and an advisory check reports how far above the reference device's saturation voltage the node lands, against the node_margin the generator is designed to leave. The output branch is drawn as the cascode current mirror draws it: the output mirror device is K times the reference device's width on the reference device's gate, with its current read off the table at its own drain voltage; the output cascode is K times the reference cascode's width on $V_{bias}$, in series with it and carrying that current; and the node between them is solved so that the gate-source voltage the cascode needs for that current hangs the node under $V_{bias}$. That node equals the reference node only where the output sits level with the reference cascode's drain; elsewhere it settles a few millivolts away, and the systematic-error row reports what that costs. The sheet's own device is the output cascode; the other three are blocks. Random matching is the Pelgrom spread of the bottom mirror pair; the cascodes only pass the current and so do not set the ratio.",
   "polarity": "n",
   "params": [
     {
@@ -78,28 +78,45 @@
       "name": "vds_lo",
       "value": 0.3,
       "min": 0,
-      "max": 1.8,
+      "max": 0.6,
       "unit": "V",
       "role": "choice",
-      "solveFor": "wideswing_node",
-      "note": "the reference node: the reference mirror device's drain and the reference cascode's source. Solved, not retuned — the engine searches for the node equal to the reference device's own reported vdsat plus node_margin (the bias a real wide-swing generator is designed to produce); the stored value is never read. It is searched between its neighbours at their widest, ground and the 1.8 V supply"
+      "designConstraint": { "lhs": "vds_lo + ref_casc__vgs", "rhs": "cb__vgs" },
+      "note": "the reference node: the reference mirror device's drain and the reference cascode's source. Solved, not set: the reference cascode's gate is the bias diode's, so this is the node that hangs the cascode's own gate-source voltage under it; gm_id_cb is the knob that moves it. The stored value is never read. It is searched between ground and 0.6 V: the node sits below the gate the mirror devices share, one reference gate-source voltage above ground, which the wiring cannot place before the design is sized, and above 0.6 V the reference cascode would have no drain-source voltage left on either table"
+    },
+    {
+      "name": "gm_id_cb",
+      "value": 3.8,
+      "min": 2.5,
+      "max": 12,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the cascode bias diode. Its gate-source voltage is V_bias, so a lower gm/ID raises the cascode gates and the reference node under them: the default parks the node about node_margin above the reference device's knee"
+    },
+    {
+      "name": "I_cb",
+      "value": 5e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "the current the cascode bias diode is programmed to. A diode at a given inversion level sits at one gate-source voltage whatever its current, so this sets only its width",
+      "class": "independent"
     },
     {
       "name": "k_x",
       "value": 0.3,
       "min": 0,
-      "max": 1,
+      "max": 0.8,
       "unit": "1",
       "role": "choice",
       "solveFor": "k_casc",
-      "note": "where the node between the two output devices — the output mirror device's drain and the output cascode's source — sits, as a fraction of the cascode gate bias V_bias. Solved, not set: the current the output mirror device delivers at that node is the current the output cascode carries, and the gate-source voltage the cascode needs for that current hangs the node under V_bias. The engine searches for the node at which the two agree; the stored value is never read. It is stated as a fraction of V_bias so that its range means the same thing whatever the table: the node lies between ground, 0, and the cascode gate itself, 1. Where the output sits level with the reference cascode's drain the node is the reference node vds_lo; it settles a little below or above that where the output sits lower or higher. The V_x row gives the node in volts"
+      "note": "where the node between the two output devices — the output mirror device's drain and the output cascode's source — sits, as a fraction of the cascode gate bias V_bias. Solved, not set: the current the output mirror device delivers at that node is the current the output cascode carries, and the gate-source voltage the cascode needs for that current hangs the node under V_bias. The engine searches for the node at which the two agree; the stored value is never read. It is stated as a fraction of V_bias so that its range means the same thing whatever the table: the node lies above ground, 0, and below the cascode gate by at least the cascode's threshold, so the range stops at 0.8 rather than at the gate itself, 1 — which also keeps the middle of the range, where the search first looks, inside the stretch where the output cascode has a drain-source voltage when the drawn bias sits high, at a slow, hot condition. Where the output sits level with the reference cascode's drain the node is the reference node vds_lo; it settles a little below or above that where the output sits lower or higher. The V_x row gives the node in volts"
     },
     {
       "name": "node_margin",
       "value": 0.05,
       "unit": "V",
       "role": "spec",
-      "note": "how far above the mirror devices' saturation knee the wide-swing bias parks the node — the customary 50-100 mV that keeps the mirror out of triode across corners",
+      "note": "how far above the mirror devices' saturation knee the wide-swing bias is designed to park the node — the customary 50-100 mV that keeps the mirror out of triode across corners. The node-margin check compares the node the drawn bias produces against it",
       "class": "independent"
     },
     {
@@ -132,6 +149,12 @@
     }
   ],
   "blocks": [
+    {
+      "name": "cb",
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_cb", "L_ref": "L_c", "gm_id_ref": "gm_id_cb" },
+      "ports": { "vdd": "vdd", "vb": "vbias" }
+    },
     {
       "name": "ref",
       "doc": {
@@ -276,7 +299,7 @@
         "W_o": "K*ref__W",
         "vgs_o": "ref__vgs",
         "L_o": "L",
-        "vds_o": "k_x*(ref_casc__vgs + vds_lo)"
+        "vds_o": "k_x*cb__vgs"
       },
       "nodes": { "d": "x", "g": "ngate", "s": "gnd", "b": "gnd" }
     }
@@ -285,22 +308,22 @@
     "L": "L_c",
     "W": "K*ref_casc__W",
     "id": "out__id",
-    "vds": "V_out - k_x*(ref_casc__vgs + vds_lo)",
-    "vsb": "k_x*(ref_casc__vgs + vds_lo)",
+    "vds": "V_out - k_x*cb__vgs",
+    "vsb": "k_x*cb__vgs",
     "region": "saturation"
   },
   "equations": [
     {
-      "name": "wideswing_node",
-      "expr": "ref__vdsat + node_margin",
+      "name": "node_headroom",
+      "expr": "vds_lo - ref__vdsat",
       "unit": "V",
-      "note": "where the wide-swing bias parks the reference node: the saturation knee plus the design margin. vds_lo is solved to this"
+      "note": "how far above the reference device's saturation knee the drawn bias parks the reference node"
     },
     {
       "name": "V_bias",
-      "expr": "ref_casc__vgs + vds_lo",
+      "expr": "cb__vgs",
       "unit": "V",
-      "note": "the cascode gate bias both cascodes share: one reference-cascode gate-source voltage above the reference node where the design parks it. That node is vds_lo — the saturation knee plus node_margin, which is what the solve produces — so biasing to the bare knee instead would sit the node a full node_margin low"
+      "note": "the cascode gate bias both cascodes share: the bias diode's gate-source voltage, the level of the wire its gate and drain sit on. The reference node hangs one reference-cascode gate-source voltage under it"
     },
     {
       "name": "V_x",
@@ -363,12 +386,12 @@
       "note": "the cascode inversion level against the ceiling of the data the output cascode is read from. The output cascode is given a width and a current, so its own level is an outcome; the reference device and the reference cascode, which are sized for an inversion level, carry the same check on their own data"
     },
     {
-      "id": "vbias-realizable",
-      "kind": "spec",
-      "lhs": "V_bias",
-      "op": "<=",
-      "rhs": "VDD",
-      "note": "the cascode gate bias must be a voltage the supply can produce"
+      "id": "node-margin",
+      "kind": "advisory",
+      "lhs": "node_headroom",
+      "op": ">=",
+      "rhs": "node_margin",
+      "note": "the margin the bias is designed to leave above the reference device's knee. Advisory: the reference device's own saturation check is the hard one, and a node a few millivolts short of the design margin is a retune of the bias diode, not a broken mirror"
     },
     {
       "id": "systematic-error",
@@ -389,6 +412,5 @@
   "formatVersion": 2,
   "nodes": { "d": "out", "g": "vbias", "s": "x", "b": "gnd" },
   "levels": { "out": "V_out", "vdd": "VDD" },
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "ngate"], "value": "I_in" }],
-  "ports": ["vbias"]
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "ngate"], "value": "I_in" }]
 }

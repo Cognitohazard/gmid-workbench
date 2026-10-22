@@ -369,19 +369,22 @@ describe('the search', () => {
   });
 
   // The margin at a cut is an artifact OF the cut. Two budgets on one sheet and one spec give
-  // two different "fails by X%" numbers, ~3.5x apart, because the search stopped in two
-  // different places. Neither may be read as the design's property — which is why both causes
+  // two different "fails by X%" numbers, on two different checks, because the search stopped in
+  // two different places: one knob moved, the offset still short by 9.2%; two knobs moved, the
+  // swing short by 5.8%. Neither may be read as the design's property — which is why both causes
   // lead with the stop rather than the number.
   it('never lets a margin quoted at a search cut stand as the design property', () => {
-    const tight = pick('otas/telescopic-cascode-ota.json', {}, 46);
-    const looser = pick('otas/telescopic-cascode-ota.json', {}, 100);
+    const tight = pick('otas/telescopic-cascode-ota.json', {}, 36);
+    const looser = pick('otas/telescopic-cascode-ota.json', {}, 46);
     expect(tight.verdict).toBe('did-not-close');
     expect(looser.verdict).toBe('did-not-close');
     // Where each search stopped is a SEARCH OUTCOME, recorded rather than derived by hand. What
     // each number is the margin OF is checked beside it: the sheet evaluated by itself at the
     // knobs that cut left standing binds on the same check by the same amount.
-    expect(tight.worstMargin?.marginPct).toBeCloseTo(-0.2347, 3);
-    expect(looser.worstMargin?.marginPct).toBeCloseTo(-0.0674, 3);
+    expect(tight.worstMargin?.id).toBe('offset-spec');
+    expect(tight.worstMargin?.marginPct).toBeCloseTo(-0.0921, 3);
+    expect(looser.worstMargin?.id).toBe('swing');
+    expect(looser.worstMargin?.marginPct).toBeCloseTo(-0.0575, 3);
     for (const c of [tight, looser]) {
       expect(c.cause?.startsWith('the search stopped when its budget ran out')).toBe(true);
       expect(c.cause).toContain('at the last point searched');

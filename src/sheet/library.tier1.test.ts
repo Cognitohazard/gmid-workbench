@@ -30,6 +30,9 @@ import {
   vgsAtBody,
   vdsatDemo,
   vthDemo,
+  vgsAtGmId,
+  sourceNodeUnder,
+  REFS,
 } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`stages/${file}`);
@@ -189,11 +192,16 @@ describe('tier1 goldens: Source-degenerated CS amp', () => {
 });
 
 describe('tier1 goldens: Cascode CS amp', () => {
-  const res = runSheet(sheet('cascode-cs-amp.json'), table);
-  // Defaults: I_bias 20 uA shared, gm/ID in 12 / casc 10 / load 8, all L 0.5 um,
-  // V_out 0.9, V_x 0.4. VA = 2.5. vds: in 0.4, casc 0.5, load 0.9.
+  const res = runSheet(sheet('cascode-cs-amp.json'), table, undefined, REFS);
+  // Defaults: I_bias 20 uA shared, gm/ID in 12 / casc 10 / load 8, all L 0.5 um, V_out 0.9.
+  // VA = 2.5. The cascode's gate is a bias diode at gm/ID 3 on the same length, so it sits at
+  // vgs(3), and the node under the cascode is solved under it: the cascode, at gm/ID 10 with its
+  // source at the node, needs vgs(10) plus BODY_FACTOR times the node, so the node is
+  // (vgs(3) - vgs(10))/1.2 = 0.4026 V. vds: in V_x, casc 0.9 - V_x, load 0.9.
   const I = 20e-6;
   const VA = VA_PER_L * 0.5e-6;
+  const gate = vgsAtGmId(3);
+  const vx = sourceNodeUnder(gate, VGS_GMID10_L05);
 
   it('the cascode device carries the input branch current', () => {
     expect(res.sizing?.ok).toBe(true);
@@ -201,15 +209,27 @@ describe('tier1 goldens: Cascode CS amp', () => {
     expect(relErr(res.values.id, res.values.in__id)).toBeLessThan(1e-12);
   });
 
+  it('the node under the cascode hangs from the bias diode, its gate', () => {
+    // The diode is read along the table's diagonal, to about 1e-3; the node follows it.
+    expect(relErr(res.values.cb__vgs, gate)).toBeLessThan(1e-3);
+    expect(relErr(res.values.V_x, vx)).toBeLessThan(2e-3);
+    // Solved, to the search's tolerance: the node plus the cascode's own gate-source voltage is
+    // the diode's, and nothing holds the gate.
+    expect(Math.abs(res.values.V_x + res.values.vgs - res.values.cb__vgs)).toBeLessThan(1e-6);
+    expect(res.held).toBeUndefined();
+    expect(res.nodes?.state).toBe('checked-clean');
+  });
+
   it('cascode intrinsic gain is gm/ID_casc * (VA + vds_casc)', () => {
-    expect(relErr(res.values.av0, 10 * (VA + 0.5))).toBeLessThan(2e-3);
+    expect(relErr(res.values.av0, 10 * (VA + 0.9 - res.values.V_x))).toBeLessThan(2e-3);
   });
 
   it('gain is the input gm into the full cascoded output resistance', () => {
+    const V_X = res.values.V_x;
     const inGm = 12 * I;
-    const inGds = I / (VA + 0.4);
-    const gdsCasc = I / (VA + 0.5);
-    const av0Casc = 10 * (VA + 0.5);
+    const inGds = I / (VA + V_X);
+    const gdsCasc = I / (VA + 0.9 - V_X);
+    const av0Casc = 10 * (VA + 0.9 - V_X);
     const RoutCasc = (1 / inGds) * (1 + av0Casc) + 1 / gdsCasc;
     const loadGds = I / (VA + 0.9);
     const Rout = 1 / (1 / RoutCasc + loadGds);
@@ -612,7 +632,7 @@ describe('tier1: the regions the stage devices declare', () => {
       Object.fromEntries(Object.entries(devices).map(([d, [region]]) => [d, region])),
     );
     for (const id of replaced) expect(doc.checks.map((c) => c.id)).not.toContain(id);
-    const res = runSheet(doc, table);
+    const res = runSheet(doc, table, undefined, REFS);
     for (const [device, [region, vds]] of Object.entries(devices)) {
       const { check, vdsat } = regionOf(res, device);
       expect([device, check.kind, check.op, check.status]).toEqual([

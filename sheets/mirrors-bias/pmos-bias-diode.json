@@ -1,0 +1,51 @@
+{
+  "title": "PMOS bias diode",
+  "description": "A diode-connected PMOS hanging from the supply port, carrying a current its parent hands it rather than one it programs: the PMOS end of a bias line derived from an NMOS reference. In that circuit an NMOS mirror output on the NMOS reference's gate wire sinks its current from this diode's drain, so the PMOS gate wire carries a copy of the NMOS reference's current without a second programmed source. The composing sheet passes in the current that mirror output delivers, and solves the gate wire's level, which is the mirror output's drain voltage, so that the two agree. The device's drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. A PMOS on the gate wire at K times this width and at this length carries K times this current less its drain-voltage error. The sheet draws no current source: its drain current is drawn by whatever the parent connects to the gate port. It publishes the gate wire's level above ground, $V_b$, and its width, gate-source voltage and current. Used alone, the sheet sizes the diode at the current typed here.",
+  "polarity": "p",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
+    {
+      "name": "I_d",
+      "value": 20e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "the current the diode carries: a composing sheet passes the current the device that sinks it delivers"
+    },
+    {
+      "name": "L_ref",
+      "value": 0.5e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "the diode's length. A mirror copies a current density at one length, so a composing sheet gives its mirror outputs the same one"
+    },
+    {
+      "name": "gm_id_ref",
+      "value": 10,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the diode, which every mirror output on its gate wire inherits"
+    }
+  ],
+  "givens": { "L": "L_ref", "id": "I_d", "gm_id": "gm_id_ref" },
+  "equations": [
+    {
+      "name": "V_b",
+      "expr": "VDD - abs(vgs)",
+      "unit": "V",
+      "note": "the level of the gate wire above ground: the supply less the diode's drop"
+    }
+  ],
+  "checks": [
+    {
+      "id": "feasible-inversion",
+      "kind": "physical",
+      "lhs": "gm_id_ref",
+      "op": "<=",
+      "rhs": "ceiling"
+    }
+  ],
+  "provides": ["V_b", "W", "vgs", "id"],
+  "formatVersion": 2,
+  "nodes": { "d": "vb", "g": "vb", "s": "vdd", "b": "vdd" },
+  "ports": ["vdd", "vb"]
+}

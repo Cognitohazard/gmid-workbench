@@ -1,6 +1,6 @@
 {
   "title": "Folded cascode OTA",
-  "description": "A single-ended folded cascode, drawn at rest: the input pair steers current into two folding nodes, and a cascoded branch on each side carries what is left of each folding source's current down to a cascoded NMOS current mirror, whose output side is the high-impedance output. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — where the diode side's PMOS and NMOS cascodes meet — so that node sits one mirror $V_{GS}$ above ground while the output sits at $V_{out,dc}$. The two sides therefore do not sit at the same voltages, and every device below the tail is drawn on its own side. It is the branch-current bookkeeping showcase. The tail is drawn the way the circuit sets it: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and the pair's two transistors are one width, each carrying its own share of what the tail delivers. The output side's folding current source is biased at $I_{branch}$, and its partner on the diode side shares its gate and width, so its current is read from the table at its own drain voltage. On each side the cascoded branch carries the fold current, the folding source's current less the pair transistor's: on the output side that is $I_{fold}$; on the diode side it is what the mirror's diode side carries, and the mirror's output side shares its gate and width, so what it pulls from the output is read from the table at its own drain voltage. The share is solved so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. The fold current is a real design knob: it must be at least the input device's current, so that when slewing steers the whole tail current into one folding node the branch there never starves, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is the pair's transconductance times the folded-cascode output resistance, read on the output side; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$; the output side's folding node $V_{fold}$ and mirror-drain node $V_c$ are choice params, and the gates of their cascodes are the bias lines both sides share; the diode side's two nodes are solved under those same gates. Every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction.",
+  "description": "A single-ended folded cascode, drawn at rest: the input pair steers current into two folding nodes, and a cascoded branch on each side carries what is left of each folding source's current down to a cascoded NMOS current mirror, whose output side is the high-impedance output. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — where the diode side's PMOS and NMOS cascodes meet — so that node sits one mirror $V_{GS}$ above ground while the output sits at $V_{out,dc}$. The two sides therefore do not sit at the same voltages, and every device below the tail is drawn on its own side. It is the branch-current bookkeeping showcase. The tail is drawn the way the circuit sets it: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and the pair's two transistors are one width, each carrying its own share of what the tail delivers. The folding current sources are mirror outputs of a PMOS bias line derived from the same reference, as one reference programs a whole chip's bias: an NMOS mirror output on the reference's gate wire, $K_p$ times its width, sinks its current from a diode-connected PMOS, and the output side's folding source sits on that diode's gate at $K_b$ times its width. The PMOS gate wire's level is solved so that the NMOS device's drain voltage is the diode's, the one current both carry. The folding source's current, about $K_b K_p I_{tail}$, is read from the table at its own drain voltage, and its partner on the diode side shares its gate and width, so its current is read the same way at its own. On each side the cascoded branch carries the fold current, the folding source's current less the pair transistor's: on the output side that is $I_{fold}$; on the diode side it is what the mirror's diode side carries, and the mirror's output side shares its gate and width, so what it pulls from the output is read from the table at its own drain voltage. The share is solved so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. The fold current is a real design knob, set by the two ratios: it must be at least the input device's current, so that when slewing steers the whole tail current into one folding node the branch there never starves, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is the pair's transconductance times the folded-cascode output resistance, read on the output side; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$; the gates of the cascodes are bias lines both sides share, each a diode-connected device at a low inversion level carrying its own programmed current — an NMOS one strong-inversion $V_{GS}$ above ground for the NMOS cascodes, a PMOS one the same below the supply for the PMOS cascodes. The output side's folding node $V_{fold}$ and mirror-drain node $V_c$ are solved under those gates, and so are the diode side's two nodes, so wherever the design is held the nodes move with the devices; the knobs that place them are the bias diodes' inversion levels. Every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -91,8 +91,8 @@
       "max": 1.7,
       "unit": "V",
       "role": "choice",
-      "note": "the output side's folding node: the output-side pair transistor's drain, its folding source's drain and its PMOS cascode's source in one. That pair transistor's vds is V_fold - V_tail, the folding source's is VDD - V_fold, and the PMOS cascode's is V_fold - V_out_dc — by construction. The gate below it, V_fold less that cascode's vgs, is the bias line both PMOS cascodes share. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
-      "hold": "V_fold - abs(pcasc__vgs)"
+      "designConstraint": { "lhs": "V_fold - abs(pcasc__vgs)", "rhs": "cbp__V_b" },
+      "note": "the output side's folding node: the output-side pair transistor's drain, its folding source's drain and its PMOS cascode's source in one. Solved, not set: the cascode's gate is the PMOS cascode bias line, so this is the node that sits the cascode's own gate-source voltage above it; gm_id_cbp is the knob that moves it. That pair transistor's vds is V_fold - V_tail, the folding source's is VDD - V_fold, and the PMOS cascode's is V_fold - V_out_dc — by construction. Searched between min and max, inside the range the wiring puts the node in; the stored value is never read"
     },
     {
       "name": "V_c",
@@ -101,8 +101,8 @@
       "max": 0.6,
       "unit": "V",
       "role": "choice",
-      "note": "the output side's NMOS internal node: the mirror output device's drain and the output-side NMOS cascode's source. That mirror device's vds is V_c and its cascode's is V_out_dc - V_c, by construction. The gate above it, V_c plus that cascode's vgs, is the bias line both NMOS cascodes share; the diode side's node under it sits a few millivolts lower, because that cascode's drain is the mirror node, so at 0.30 V the mirror's diode side sits at its knee and the default is 0.31 V. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
-      "hold": "V_c + ncasc__vgs"
+      "designConstraint": { "lhs": "V_c + ncasc__vgs", "rhs": "cbn__vgs" },
+      "note": "the output side's NMOS internal node: the mirror output device's drain and the output-side NMOS cascode's source. Solved, not set: the cascode's gate is the NMOS cascode bias line, so this is the node that hangs the cascode's own gate-source voltage under it; gm_id_cbn is the knob that moves it. That mirror device's vds is V_c and its cascode's is V_out_dc - V_c, by construction. The diode side's node under the same gate sits a few millivolts lower, because that cascode's drain is the mirror node, so the mirror's diode side needs this node a little above its knee. Searched between min and max, inside the range the wiring puts the node in; the stored value is never read"
     },
     {
       "name": "V_fold_r",
@@ -113,9 +113,9 @@
       "role": "choice",
       "designConstraint": {
         "lhs": "V_fold_r - abs(pcasc_r__vgs)",
-        "rhs": "V_fold - abs(pcasc__vgs)"
+        "rhs": "cbp__V_b"
       },
-      "note": "the diode side's folding node: the diode-side pair transistor's drain, its folding source's drain and the diode-side PMOS cascode's source. Solved, not set: the two PMOS cascodes share one gate, so this is the node that sits the diode-side cascode's own gate-source voltage above that gate. Searched between min and max; the stored value is never read"
+      "note": "the diode side's folding node: the diode-side pair transistor's drain, its folding source's drain and the diode-side PMOS cascode's source. Solved, not set: the two PMOS cascodes share one gate, the PMOS cascode bias line, so this is the node that sits the diode-side cascode's own gate-source voltage above it. Searched between min and max; the stored value is never read"
     },
     {
       "name": "V_c_r",
@@ -124,8 +124,8 @@
       "max": 0.6,
       "unit": "V",
       "role": "choice",
-      "designConstraint": { "lhs": "V_c_r + ncasc_r__vgs", "rhs": "V_c + ncasc__vgs" },
-      "note": "the diode side's NMOS internal node: the mirror diode side's drain and the diode-side NMOS cascode's source. Solved, not set: the two NMOS cascodes share one gate, so this is the node that hangs the diode-side cascode's own gate-source voltage under that gate. Searched between min and max; the stored value is never read"
+      "designConstraint": { "lhs": "V_c_r + ncasc_r__vgs", "rhs": "cbn__vgs" },
+      "note": "the diode side's NMOS internal node: the mirror diode side's drain and the diode-side NMOS cascode's source. Solved, not set: the two NMOS cascodes share one gate, the NMOS cascode bias line, so this is the node that hangs the diode-side cascode's own gate-source voltage under it. Searched between min and max; the stored value is never read"
     },
     {
       "name": "out_share",
@@ -136,6 +136,16 @@
       "role": "choice",
       "designConstraint": { "lhs": "pcs__id - in__id", "rhs": "nmir__id" },
       "note": "the share of the tail current the pair's output-side transistor carries at rest — solved, not set. The output is a high-impedance node that the feedback around the amplifier holds at V_out_dc, so in the resting circuit the fold current the output-side PMOS cascode brings down is exactly the current the mirror's output side pulls: the engine searches for the share at which the two are equal, the current law at the output node. The diode-side transistor carries the rest, so the two add up to what the tail delivers by construction. It is searched between 0.01 and 0.99; the stored value is never read"
+    },
+    {
+      "name": "V_bp",
+      "value": 1.1,
+      "min": 0,
+      "max": 1.8,
+      "unit": "V",
+      "role": "choice",
+      "solveFor": "pbias__V_b",
+      "note": "the PMOS bias line: the gate wire the folding sources share, which is the PMOS bias diode's drain and the drain of the NMOS mirror output that sinks its current. Solved, not set: that NMOS device's current depends on its drain voltage, the diode's gate-source voltage depends on that current, and the wire sits one diode drop below the supply, so the engine searches for the level at which the two agree. It is searched between ground and the supply, the range the wiring puts the wire in; the stored value is never read"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -158,13 +168,56 @@
       "class": "independent"
     },
     {
-      "name": "I_branch",
-      "value": 30e-6,
-      "min": 4e-6,
-      "max": 400e-6,
+      "name": "K_p",
+      "value": 0.5,
+      "min": 0.1,
+      "max": 4,
+      "unit": "1",
+      "role": "choice",
+      "note": "width ratio of the NMOS mirror output that feeds the PMOS bias diode to the bias reference: the PMOS bias line carries about K_p times the programmed current, which it costs in supply current"
+    },
+    {
+      "name": "K_b",
+      "value": 2.8,
+      "min": 0.5,
+      "max": 16,
+      "unit": "1",
+      "role": "choice",
+      "note": "width ratio of the output side's folding source to the PMOS bias diode: the folding sources carry about K_b times the bias line's current, so the folding current is about K_b K_p I_tail. The fold current I_fold, that less the output-side pair transistor's current, must stay at least that current (slew headroom vs current-source noise)"
+    },
+    {
+      "name": "gm_id_cbn",
+      "value": 3.6,
+      "min": 2.5,
+      "max": 12,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the NMOS cascode bias diode. Its gate-source voltage is the NMOS cascodes' gate, so a lower gm/ID raises the gate and V_c under it, which gives the mirror more drain voltage and the output less swing"
+    },
+    {
+      "name": "I_cbn",
+      "value": 5e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the output side's folding source is biased at — its partner on the diode side shares its gate and width; the fold current I_fold, this less the output-side pair transistor's current, must stay at least that current (slew headroom vs current-source noise)"
+      "note": "the current the NMOS cascode bias diode is programmed to. A diode at a given inversion level sits at one gate-source voltage whatever its current, so this sets only its width",
+      "class": "independent"
+    },
+    {
+      "name": "gm_id_cbp",
+      "value": 3,
+      "min": 2.5,
+      "max": 12,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the PMOS cascode bias diode. Its drop below the supply is the PMOS cascodes' gate, so a lower gm/ID lowers the gate and raises V_fold above it, which gives the pair more drain voltage and the folding sources less"
+    },
+    {
+      "name": "I_cbp",
+      "value": 5e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "the current the PMOS cascode bias diode is programmed to; like I_cbn it sets only the diode's width",
+      "class": "independent"
     },
     {
       "name": "gm_id_in",
@@ -244,6 +297,36 @@
       "ref": "mirrors-bias/nmos-bias-reference",
       "params": { "I_ref": "I_tail", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
       "ports": { "vdd": "vdd", "vb": "vbn" }
+    },
+    {
+      "name": "cbn",
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_cbn", "L_ref": "L_casc", "gm_id_ref": "gm_id_cbn" },
+      "ports": { "vdd": "vdd", "vb": "vcn" }
+    },
+    {
+      "name": "cbp",
+      "ref": "mirrors-bias/pmos-bias-reference",
+      "params": { "VDD": "VDD", "I_ref": "I_cbp", "L_ref": "L_casc", "gm_id_ref": "gm_id_cbp" },
+      "ports": { "vdd": "vdd", "vb": "vcp" }
+    },
+    {
+      "name": "pbn",
+      "ref": "mirrors-bias/nmos-mirror-output",
+      "params": {
+        "K": "K_p",
+        "W_ref": "bias__W",
+        "vgs_ref": "bias__vgs",
+        "L_ref": "L_tail",
+        "vds": "V_bp"
+      },
+      "ports": { "out": "vbp", "vb": "vbn" }
+    },
+    {
+      "name": "pbias",
+      "ref": "mirrors-bias/pmos-bias-diode",
+      "params": { "VDD": "VDD", "I_d": "pbn__id", "L_ref": "L_cs", "gm_id_ref": "gm_id_cs" },
+      "ports": { "vdd": "vdd", "vb": "vbp" }
     },
     {
       "name": "tail",
@@ -345,37 +428,41 @@
       "name": "pcs",
       "doc": {
         "title": "Folding current source (PMOS), output side",
-        "description": "The output side's top current source, biased at I_branch; feeds the output side's folding node. Its ro (cascoded) sets the PMOS-side output resistance, and it adds input-referred noise. It publishes its width and its gate voltage, the bias line its partner on the diode side shares.",
+        "description": "The output side's top current source, a mirror output of the PMOS bias diode: on the diode's gate wire at K_b times its width and at its length, so it copies the diode's current density and its current is read off the table at its own drain voltage rather than typed. It feeds the output side's folding node. Its ro (cascoded) sets the PMOS-side output resistance, and it adds input-referred noise. It publishes its width and its gate voltage, which its partner on the diode side copies.",
         "polarity": "p",
         "params": [
-          { "name": "I_b", "value": 30e-6, "unit": "A", "role": "spec" },
+          {
+            "name": "W_p",
+            "value": 2e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "K_b times the PMOS bias diode's width"
+          },
+          {
+            "name": "vgs_p",
+            "value": 0.7,
+            "unit": "V",
+            "role": "spec",
+            "note": "the PMOS bias diode's gate voltage — the bias line the two share, in the sign convention of the diode's table"
+          },
           { "name": "L_p", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_p", "value": 8, "unit": "1/V", "role": "choice" },
           { "name": "vds_p", "value": 0.4, "unit": "V", "role": "spec" }
         ],
         "givens": {
           "L": "L_p",
-          "id": "I_b",
-          "gm_id": "gm_id_p",
+          "W": "W_p",
+          "vgs": "vgs_p",
           "vds": "vds_p",
           "region": "saturation"
         },
         "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_p",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
+        "checks": [],
         "provides": ["gm", "gds", "vdsat", "vnth_m", "W", "vgs", "id"]
       },
       "params": {
-        "I_b": "I_branch",
+        "W_p": "K_b*pbias__W",
+        "vgs_p": "pbias__vgs",
         "L_p": "L_cs",
-        "gm_id_p": "gm_id_cs",
         "vds_p": "sign_p*(VDD - V_fold)"
       },
       "nodes": { "d": "fold", "g": "vbp", "s": "vdd", "b": "vdd" }
@@ -426,7 +513,7 @@
       "name": "pcs_r",
       "doc": {
         "title": "Folding current source (PMOS), diode side",
-        "description": "The diode side's top current source, on the output-side source's gate at its width; feeds the diode side's folding node. Its current is read off the table at its own drain voltage rather than typed: wherever the diode side's folding node does not sit where the output side's does, it differs from I_branch.",
+        "description": "The diode side's top current source, on the output-side source's gate at its width; feeds the diode side's folding node. Its current is read off the table at its own drain voltage rather than typed: wherever the diode side's folding node does not sit where the output side's does, it differs from the output side's.",
         "polarity": "p",
         "params": [
           {
@@ -806,7 +893,7 @@
       "name": "I_q",
       "expr": "pcs__id + pcs_r__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — both folding current sources, which are the only devices sitting on the supply rail, each at the current it delivers. The tail current is not a third branch: it is drawn down THROUGH those sources and returned to ground by the tail device, so their sum already contains it and equals the other way of writing the same number, what the tail delivers plus the two fold currents. The reference branch that programs the tail is shared bias infrastructure and is not counted here. The datasheet line for comparing designs; no check reads it"
+      "note": "estimate: quiescent supply current — both folding current sources, which are the only devices of the amplifier itself sitting on the supply rail, each at the current it delivers. The tail current is not a third branch: it is drawn down THROUGH those sources and returned to ground by the tail device, so their sum already contains it and equals the other way of writing the same number, what the tail delivers plus the two fold currents. The bias branches — the reference that programs the tail, the PMOS bias line derived from it and the two cascode bias diodes — are shared bias infrastructure and are not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -863,9 +950,7 @@
   "formatVersion": 2,
   "levels": {
     "vdd": "VDD",
-    "out": "V_out_dc",
-    "vcp": "V_fold - abs(pcasc__vgs)",
-    "vcn": "V_c + ncasc__vgs"
+    "out": "V_out_dc"
   },
-  "ports": ["vinp", "vinn", "vbp"]
+  "ports": ["vinp", "vinn"]
 }

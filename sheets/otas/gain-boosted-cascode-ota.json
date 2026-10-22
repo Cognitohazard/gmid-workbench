@@ -1,6 +1,6 @@
 {
   "title": "Gain-boosted cascode OTA",
-  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$, and the internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. The tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and the pair carries half of what the tail delivers there — so the low end of the common-mode range is where the tail device runs out of drain-source voltage, and a check says so. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes. The output is single-ended, through a current-mirror load whose two devices share a gate on the diode side's output node — where the diode side's two cascodes meet — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$, held there by the feedback the application closes around the amplifier. The diode side's cascodes sit on the same node levels as the output side's, their sources held at $V_a$ and $V_b$ like their partners' (the diode side's output node is low-impedance, so those cascodes are biased there rather than boosted for gain), and they are drawn as blocks of their own because their drains sit at that node rather than at the output. Everything under and over them is the same on both sides: the two pair transistors share a drain level, a source and a current, and so do the two mirror devices, so each pair is one sizing placed twice, the tail current splits evenly, and there is no systematic offset to report.",
+  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$, and the internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. The tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and the pair carries half of what the tail delivers there — so the low end of the common-mode range is where the tail device runs out of drain-source voltage, and a check says so. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes. The output is single-ended, through a current-mirror load whose two devices share a gate on the diode side's output node — where the diode side's two cascodes meet — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$, held there by the feedback the application closes around the amplifier. The diode side's output node is low-impedance, so its cascodes are biased rather than boosted: their gates are bias lines drawn with the branches that set them, each carrying its own programmed current — a stacked NMOS replica bias for the NMOS cascode, a diode on ground whose drop places the node under the cascode with a device at the cascode's inversion level stacked on it, and a diode-connected PMOS at a low inversion level for the PMOS cascode. The diode side's internal nodes, $V_{ar}$ and $V_{br}$, are solved under those gates, so wherever the design is held they move with the devices, as silicon's do, while the boosters hold the output side's at their references. The cascodes are drawn as blocks of their own because their drains sit at the diode side's output node rather than at the output. Everything under and over them is drawn the same on both sides: the two pair transistors share a source and a current, and so do the two mirror devices, so each pair is one sizing placed twice, the tail current splits evenly, and there is no systematic offset to report. That holds while the diode side's nodes sit where the boosters hold the output side's: the bias branches' inversion levels are the knobs that put them there, and the wiring check reports a pair placed twice whose two drains sit apart.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -96,6 +96,26 @@
       "role": "choice",
       "note": "the PMOS-side internal node: mirror drain and PMOS-cascode source, on both sides. The mirror vds is VDD - V_b and the output-side cascode's is V_b - V_out_dc, by construction; the diode-side cascode's is what is left above the mirror's gate, one mirror V_GS below the supply, which has to cover its saturation voltage — the default sits high for that. The PMOS-side booster holds this node: it is an amplifier with its own reference voltage, applied from outside this sheet, and this value is that reference",
       "class": "independent"
+    },
+    {
+      "name": "V_ar",
+      "value": 0.55,
+      "min": 0.2,
+      "max": 0.9,
+      "unit": "V",
+      "role": "choice",
+      "designConstraint": { "lhs": "V_ar + casc_nr__vgs", "rhs": "cbn__V_c" },
+      "note": "the diode side's NMOS internal node: the diode-side pair transistor's drain and its cascode's source. Solved, not set: that cascode's gate is the NMOS cascode bias line, so this is the node that hangs its own gate-source voltage under it, near the bias branch's bottom-diode drop. Searched between min and max; the stored value is never read"
+    },
+    {
+      "name": "V_br",
+      "value": 1.52,
+      "min": 0.9,
+      "max": 1.7,
+      "unit": "V",
+      "role": "choice",
+      "designConstraint": { "lhs": "V_br - abs(casc_pr__vgs)", "rhs": "cbp__V_b" },
+      "note": "the diode side's PMOS internal node: the mirror diode side's drain and the diode-side PMOS cascode's source. Solved, not set: that cascode's gate is the PMOS cascode bias line, so this is the node that sits its own gate-source voltage above it. The diode-side cascode's drain is the mirror's gate, one mirror V_GS below the supply, so the bias line sits low and this node high. Searched between min and max; the stored value is never read"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -199,6 +219,49 @@
       "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
     },
     {
+      "name": "gm_id_cbn",
+      "value": 16.4,
+      "min": 6,
+      "max": 24,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the NMOS cascode bias branch's bottom diode, whose drop the diode side's NMOS internal node V_ar sits near: a lower gm/ID raises it. The pair is one sizing placed twice, so V_ar has to sit where the booster holds V_a: the default puts it within 2 mV of V_a on the demo model and about 40 mV above it on a sky130 tt realization"
+    },
+    {
+      "name": "L_cbn",
+      "value": 2e-6,
+      "min": 0.18e-6,
+      "max": 2e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of both devices of the NMOS cascode bias branch. A long branch sits at a lower gate-source voltage than a half-micron one on a sky130 table, where the threshold falls with length, and a little higher on the demo model, where it rises, so at 2 um the two tables place the node closer together"
+    },
+    {
+      "name": "I_cbn",
+      "value": 5e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "the current the NMOS cascode bias branch is programmed to. A diode at a given inversion level sits at one gate-source voltage whatever its current, so this sets only the branch's widths and its share of the bias power",
+      "class": "independent"
+    },
+    {
+      "name": "gm_id_cbp",
+      "value": 3.8,
+      "min": 2.5,
+      "max": 10,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the PMOS cascode bias diode: a strong-inversion level puts the diode-side PMOS cascode's gate one large |V_GS| below the supply, and its source V_br that cascode's gate-source voltage above it. A lower gm/ID lowers the gate and raises V_br"
+    },
+    {
+      "name": "I_cbp",
+      "value": 5e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "the current the PMOS cascode bias diode is programmed to; like I_cbn it sets only the diode's width",
+      "class": "independent"
+    },
+    {
       "name": "vds_bo",
       "value": 0.6,
       "min": 0.1,
@@ -215,6 +278,25 @@
       "ref": "mirrors-bias/nmos-bias-reference",
       "params": { "I_ref": "I_tail", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
       "ports": { "vdd": "vdd", "vb": "vbn" }
+    },
+    {
+      "name": "cbn",
+      "ref": "mirrors-bias/nmos-cascode-bias",
+      "params": {
+        "VDD": "VDD",
+        "I_cb": "I_cbn",
+        "gm_id_base": "gm_id_cbn",
+        "L_base": "L_cbn",
+        "gm_id_casc": "gm_id_casc",
+        "L_casc": "L_cbn"
+      },
+      "ports": { "vdd": "vdd", "vc": "vgnr" }
+    },
+    {
+      "name": "cbp",
+      "ref": "mirrors-bias/pmos-bias-reference",
+      "params": { "VDD": "VDD", "I_ref": "I_cbp", "L_ref": "L_casc", "gm_id_ref": "gm_id_cbp" },
+      "ports": { "vdd": "vdd", "vb": "vgpr" }
     },
     {
       "name": "tail",
@@ -434,7 +516,7 @@
       "name": "casc_nr",
       "doc": {
         "title": "NMOS cascode, diode side",
-        "description": "The diode side's NMOS cascode: the output-side cascode's width, carrying the diode-side pair transistor's current, its source held at V_a like its partner's. Its drain is the diode side's output node — the mirror's gate, one mirror $V_{GS}$ below the supply — rather than the output, so its gate-source voltage is read off the table at that drain voltage, and its saturation is checked there.",
+        "description": "The diode side's NMOS cascode: the output-side cascode's width, carrying the diode-side pair transistor's current, its gate on the NMOS cascode bias line and its source on V_ar, solved under it. Its drain is the diode side's output node — the mirror's gate, one mirror $V_{GS}$ below the supply — rather than the output, so its gate-source voltage is read off the table at that drain voltage, and its saturation is checked there.",
         "polarity": "n",
         "params": [
           {
@@ -465,8 +547,8 @@
         "W_c": "casc_n__W",
         "I_side": "in__id",
         "L_c": "L_casc",
-        "vds_c": "VDD - abs(mir__vgs) - V_a",
-        "vsb_c": "V_a"
+        "vds_c": "VDD - abs(mir__vgs) - V_ar",
+        "vsb_c": "V_ar"
       },
       "nodes": { "d": "x", "g": "vgnr", "s": "ar", "b": "gnd" }
     },
@@ -474,7 +556,7 @@
       "name": "casc_pr",
       "doc": {
         "title": "PMOS cascode, diode side",
-        "description": "The diode side's PMOS cascode: the output-side cascode's width, carrying the diode side's current, its source held at V_b like its partner's. Its drain is the diode side's output node, which is the mirror's gate, so its drain-source voltage is what is left between V_b and one mirror $V_{GS}$ below the supply, and its saturation is checked there. Its body bias is VDD - V_b (the PMOS tables' vsb axis carries that magnitude).",
+        "description": "The diode side's PMOS cascode: the output-side cascode's width, carrying the diode side's current, its gate on the PMOS cascode bias line and its source on V_br, solved under it. Its drain is the diode side's output node, which is the mirror's gate, so its drain-source voltage is what is left between V_br and one mirror $V_{GS}$ below the supply, and its saturation is checked there. Its body bias is VDD - V_br (the PMOS tables' vsb axis carries that magnitude).",
         "polarity": "p",
         "params": [
           {
@@ -505,8 +587,8 @@
         "W_c": "casc_p__W",
         "I_side": "in__id",
         "L_c": "L_casc",
-        "vds_c": "sign_p*(V_b - (VDD - abs(mir__vgs)))",
-        "vsb_c": "VDD - V_b"
+        "vds_c": "sign_p*(V_br - (VDD - abs(mir__vgs)))",
+        "vsb_c": "VDD - V_br"
       },
       "nodes": { "d": "x", "g": "vgpr", "s": "br", "b": "vdd" }
     },
@@ -622,7 +704,7 @@
       "name": "I_q",
       "expr": "tail__id + 2*I_boost",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the main branch at the current the tail device delivers plus one booster per cascode polarity, as these equations model them. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
+      "note": "estimate: quiescent supply current — the main branch at the current the tail device delivers plus one booster per cascode polarity, as these equations model them. The reference branch that programs the tail and the two cascode bias branches are shared bias infrastructure, typically one reference feeding several stages, and are not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -682,10 +764,8 @@
     "vinp": "CM_dc",
     "vinn": "CM_dc",
     "a": "V_a",
-    "ar": "V_a",
     "b": "V_b",
-    "br": "V_b",
     "bo": "vds_bo"
   },
-  "ports": ["vgn", "vgp", "vgnr", "vgpr", "bi"]
+  "ports": ["vgn", "vgp", "bi"]
 }

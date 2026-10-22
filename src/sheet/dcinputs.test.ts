@@ -724,10 +724,13 @@ describe('sheet-dc-inputs — curated reference sheets', () => {
     });
   });
 
-  it('wide-swing cascode mirror: the mirror drain and the output-branch node are solved, the margin that places them is stated', () => {
+  it('wide-swing cascode mirror: the mirror drain and the output-branch node are solved under the drawn cascode bias; the margin is only checked', () => {
     const r = classes('mirrors-bias/wide-swing-cascode-mirror.json');
     expect(r.solved).toEqual(['k_x', 'vds_lo']);
-    expect(r.independent).toContain('node_margin');
+    expect(r.independent).toContain('I_cb');
+    // The margin no longer places the node: a bias branch does, and the margin is what the
+    // node that results is checked against.
+    expect(r.independent).not.toContain('node_margin');
   });
 
   it('source follower: the gate drop is solved, the supply, the input level and the bias current are stated', () => {
@@ -880,12 +883,14 @@ describe('dcInputs and reachedGivens agree on which top-level params reach a dev
     const mirror = lib('mirrors-bias/simple-mirror.json');
     expect(bothWays(mirror, 'V_out')).toEqual([true, true]);
     expect(forwardHits(mirror, 'V_out')).toEqual(['givens.vds:V_out']);
-    // The wide-swing margin places vds_lo (solved for ref's vdsat plus the margin), which is the
-    // reference's drain — so it reaches the output device's gate through the reference's gate
-    // voltage that device copies.
+    // The wide-swing cascode bias branch's inversion level places vds_lo (solved so that the
+    // cascode's gate sits where the branch puts it), which is the reference's drain — so it
+    // reaches the output device's gate through the reference's gate voltage that device copies.
+    // The margin itself is only checked against the node that results, and reaches no device.
     const wide = lib('mirrors-bias/wide-swing-cascode-mirror.json');
-    expect(bothWays(wide, 'node_margin')).toEqual([true, true]);
-    expect(forwardHits(wide, 'node_margin')).toContain('out.vgs:vgs_o');
+    expect(bothWays(wide, 'I_cb')).toEqual([true, true]);
+    expect(forwardHits(wide, 'gm_id_cb')).toContain('out.vgs:vgs_o');
+    expect(bothWays(wide, 'node_margin')).toEqual([false, false]);
     // The inverter's input level is not a param at all: it is the NMOS's own gate-source
     // voltage, which the PMOS reads. So the NMOS's inversion level reaches the PMOS's gate, and
     // the output level both drains.

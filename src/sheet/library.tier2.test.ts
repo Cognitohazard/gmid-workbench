@@ -240,13 +240,13 @@ describe('tier-2 goldens: cascode current mirror', () => {
 
 describe('tier-2 goldens: wide-swing cascode mirror', () => {
   const doc = sheet('wide-swing-cascode-mirror.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
   // Defaults: I_in 20 µA, K = 4, gm/ID 10 on the reference device and the reference cascode,
-  // L = L_c = 1 µm, output at 0.6 V, node_margin 50 mV. The reference node is solved to the
-  // reference device's own saturation voltage plus the margin, and the cascode gate bias is the
-  // reference cascode's gate-source voltage above that node. The sheet's own device is the output
-  // cascode; the block `out` is the output mirror device under it, and the node between the two is
-  // solved, as a fraction of the cascode gate bias.
+  // L = L_c = 1 µm, output at 0.6 V, node_margin 50 mV. The cascode gate bias is drawn: a diode
+  // at gm/ID 3.8 on the cascodes' length, carrying 5 µA of its own, and the reference node is
+  // solved under it, one reference-cascode gate-source voltage below. The sheet's own device is
+  // the output cascode; the block `out` is the output mirror device under it, and the node between
+  // the two is solved, as a fraction of the cascode gate bias.
   const K = 4;
   const I_IN = 20e-6;
   const V_OUT = 0.6;
@@ -266,24 +266,41 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
   });
   const { mirror, refCasc, casc, node, lo, vRef, bias } = branch(res);
 
-  it('solves the reference node to the saturation knee plus the stated margin', () => {
-    // The solve closes when the node equals what it names, to the search's own tolerance:
-    // SOLVE_TOL_REL of the 1.8 V range it is searched in. The authored 0.3 is never read.
-    expect(Math.abs(lo - res.values.wideswing_node)).toBeLessThanOrEqual(SOLVE_TOL_REL * 1.8);
-    expect(Math.abs(lo - (res.values.ref__vdsat + 0.05))).toBeLessThanOrEqual(SOLVE_TOL_REL * 1.8);
-    // In the demo model the saturation voltage is 2·UT plus the overdrive, and gm/ID 10 is an
-    // overdrive of 0.183481 V at any length, so the node is 0.285211 V; the table reads the
-    // overdrive on a 10 mV gate grid, about 3e-5 V off.
-    expect(Math.abs(lo - (2 * UT + 0.183481 + 0.05))).toBeLessThan(1e-4);
-    // So the reference device's own saturation margin is exactly the margin the bias is designed
-    // for, and the region it declares reads that.
+  it('solves the reference node under the gate the drawn bias diode sets', () => {
+    // The bias diode at gm/ID 3.8 and 1 µm sits at vgs(3.8) on that length, read along the
+    // table's diagonal to about 1e-3; that is the cascode gate bias. The reference cascode at
+    // gm/ID 10, its source on the reference node, needs vgs(10) at 1 µm plus BODY_FACTOR times
+    // the node, so the node is (V_bias - vgs(10))/1.2, 0.2855 V. The solve closes the relation to
+    // its own tolerance, SOLVE_TOL_REL of the 0.6 V range the node is searched in; the authored 0.3
+    // is never read.
+    const gate = vgsAtGmId(3.8, 1e-6);
+    expect(relErr(bias, gate)).toBeLessThan(1e-3);
+    expect(bias).toBe(res.values.cb__vgs);
+    expect(Math.abs(lo + refCasc.vgs - bias)).toBeLessThanOrEqual(SOLVE_TOL_REL * 0.6 * 2);
+    const vgs10 = vgsAtGmId(10, 1e-6);
+    expect(Math.abs(lo - (bias - vgs10) / (1 + BODY_FACTOR))).toBeLessThan(2e-4);
+    // The node lands about 50 mV above the reference device's knee, 2·UT plus the 0.183481 V
+    // overdrive of gm/ID 10: the margin the bias diode's inversion level was chosen to leave, which
+    // the advisory node-margin check compares against node_margin and the region check holds hard.
+    const knee = 2 * UT + 0.183481;
+    expect(Math.abs(res.values.node_headroom - (lo - res.values.ref__vdsat))).toBeLessThan(1e-12);
+    expect(Math.abs(lo - knee - 0.05)).toBeLessThan(2e-3);
+    const margin = res.checks.find((c) => c.id === 'node-margin')!;
+    expect([margin.kind, margin.lhsValue, margin.rhsValue]).toEqual([
+      'advisory',
+      res.values.node_headroom,
+      0.05,
+    ]);
     const refRegion = res
       .blocks!.find((b) => b.name === 'ref')!
       .checks.find((c) => c.id === 'region')!;
     expect(refRegion.status).toBe('pass');
-    expect(Math.abs(refRegion.lhsValue - refRegion.rhsValue - 0.05)).toBeLessThanOrEqual(
-      SOLVE_TOL_REL * 1.8,
-    );
+    expect(
+      Math.abs(refRegion.lhsValue - refRegion.rhsValue - res.values.node_headroom),
+    ).toBeLessThan(1e-12);
+    // Nothing holds the gate: the bias wire is the diode's, and the wiring walk reaches it there.
+    expect(doc.ports).toBeUndefined();
+    expect(res.nodes!.state).toBe('checked-clean');
   });
 
   it('the reference cascode stands on the reference node with its drain on the shared gate', () => {
@@ -297,11 +314,10 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
     // than the reference device does; the body bias falls between two slices of the table, which
     // interpolates it to about 0.2 mV (see the fixture table's note).
     expect(Math.abs(refCasc.vgs - vgsAtBody(vRef, lo))).toBeLessThan(2e-4);
-    // The cascode gate bias is that gate-source voltage above the reference node, and the supply
-    // has to produce it.
-    expect(bias).toBeCloseTo(refCasc.vgs + lo, 12);
-    const realizable = res.checks.find((c) => c.id === 'vbias-realizable')!;
-    expect([realizable.lhsValue, realizable.status]).toEqual([bias, 'pass']);
+    // The cascode gate bias is that gate-source voltage above the reference node, to the solve's
+    // tolerance: the bias diode produces it, so no check asks whether the supply can.
+    expect(Math.abs(bias - (refCasc.vgs + lo))).toBeLessThanOrEqual(SOLVE_TOL_REL * 0.6 * 2);
+    expect(res.checks.map((c) => c.id)).not.toContain('vbias-realizable');
   });
 
   it('solves the node between the output devices to where the cascode gate puts it', () => {
@@ -339,7 +355,7 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
     // each output device is K reference devices side by side, so the node is the reference node,
     // the cascode sits at the reference cascode's gate-source voltage and the current is K times
     // the reference current — the one point where the solve has an exact answer for any device.
-    const level = runSheet(withParams(doc, { V_out: vRef }), table);
+    const level = runSheet(withParams(doc, { V_out: vRef }), table, undefined, REFS);
     const b = branch(level);
     expect(Math.abs(b.node - b.lo)).toBeLessThan(1e-6);
     expect(Math.abs(b.casc.vgs - b.refCasc.vgs)).toBeLessThan(1e-6);
@@ -364,7 +380,7 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
     // between K*I_in over the most drain-source voltage it has and a*K*I_in over none; the mirror
     // device's gds does not move. K*I_in cancels throughout.
     const vOut = 1.2;
-    const up = runSheet(withParams(doc, { V_out: vOut }), table);
+    const up = runSheet(withParams(doc, { V_out: vOut }), table, undefined, REFS);
     const b = branch(up);
     const a = (VA + vOut - b.lo) / (VA + b.vRef - b.lo);
     const least = (1 + BODY_FACTOR) * 10 + 1 / (VA + vOut - b.lo) + 1 / (VA + b.lo);
@@ -434,7 +450,7 @@ describe('tier-2 goldens: wide-swing cascode mirror', () => {
     expect(region.rhsValue).toBe(res.values.vdsat);
     expect(res.checks.map((c) => c.id)).not.toContain('compliance');
     // An output under the floor puts the cascode out of saturation, and the design fails there.
-    const low = runSheet(withParams(doc, { V_out: 0.45 }), table);
+    const low = runSheet(withParams(doc, { V_out: 0.45 }), table, undefined, REFS);
     expect(low.warnings.filter((w) => w.rule === 'sheet-solve')).toEqual([]);
     expect(low.checks.find((c) => c.id === 'region')!.status).toBe('fail');
     expect(low.feasible).toBe(false);

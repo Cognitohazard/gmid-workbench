@@ -1,0 +1,57 @@
+{
+  "title": "NMOS mirror output",
+  "description": "One NMOS on a bias reference's gate wire at a multiple of that reference's width and at its length, its source on ground. It copies the reference's current density, so it carries the reference's current times the width ratio, scaled by what the difference between its own drain voltage and the reference's does through its $g_{DS}$: its current is read off the table at its own drain voltage rather than typed. It declares that it must stay saturated. A composing sheet passes in the reference's width, its gate-source voltage and its length, the width ratio, and the drain voltage, maps the gate port onto the reference's gate wire and the drain port onto the wire the current is delivered from, and reads the current it delivers. The drain wire is a port and nothing here holds it, so the composing sheet states or solves its level: a tail node, an output held by feedback, or the gate wire of a PMOS diode whose current this device sinks. Used alone, the sheet sizes the device at the width, gate-source voltage and drain voltage typed here.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "K",
+      "value": 1,
+      "unit": "1",
+      "role": "choice",
+      "note": "the width ratio to the reference: the current ratio, less the drain-voltage error"
+    },
+    {
+      "name": "W_ref",
+      "value": 1e-6,
+      "unit": "m",
+      "role": "spec",
+      "note": "the reference's width. A composing sheet passes its reference's own; the value here is only what the sheet sizes at alone, and as a width it means a different current on every table"
+    },
+    {
+      "name": "vgs_ref",
+      "value": 0.61,
+      "unit": "V",
+      "role": "spec",
+      "note": "the reference's gate-source voltage: the level of the gate wire the two share. Used alone, nothing on this sheet sets the gate, so it is a bias the designer applies",
+      "class": "independent"
+    },
+    {
+      "name": "L_ref",
+      "value": 0.5e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "the reference's length, which this device shares: a mirror copies a current density at one length"
+    },
+    {
+      "name": "vds",
+      "value": 0.9,
+      "unit": "V",
+      "role": "spec",
+      "note": "the drain voltage. A composing sheet passes the level of the wire the drain sits on, which it states or solves",
+      "class": "independent"
+    }
+  ],
+  "givens": {
+    "L": "L_ref",
+    "W": "K*W_ref",
+    "vgs": "vgs_ref",
+    "vds": "vds",
+    "region": "saturation"
+  },
+  "equations": [],
+  "checks": [],
+  "provides": ["id", "gds", "W"],
+  "formatVersion": 2,
+  "nodes": { "d": "out", "g": "vb", "s": "gnd", "b": "gnd" },
+  "ports": ["out", "vb"]
+}

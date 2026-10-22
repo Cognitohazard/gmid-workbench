@@ -1,0 +1,104 @@
+{
+  "title": "PMOS cascode bias",
+  "description": "The gate bias for a PMOS cascode, drawn as a circuit: the mirror image of the NMOS cascode bias. Two diode-connected PMOS hang in a stack from the supply port, and an ideal current source sinks one programmed current from the bottom of the stack to ground. The bottom of the stack is the cascode gate wire. The top diode sets the node between the two, one of its own $|V_{GS}|$ below the supply, and the bottom device is a replica of the cascode it biases: it stands on that node, so its body bias is the top diode's drop, and it is sized at the cascode's inversion level and length. A cascode on this gate wire, carrying its own current at that inversion level, therefore sits its source where the replica's source sits, one top-diode drop below the supply, and that node follows the top diode wherever the design is held. The top diode's inversion level is the knob that places the node; the programmed current sets only the two devices' widths. The two devices' drains are their gates, so each is read along the table's diagonal with nothing estimated, and the body bias is passed as a magnitude, the convention of a PMOS table's body-bias axis. The sheet publishes the gate wire's level above ground, $V_c$, and the bottom device's width, gate-source voltage and current. A check says whether the stack fits above ground. A composing sheet maps the supply port to its supply and the gate port to its cascode gate wire, and passes in its supply, its own bias current, the top diode's inversion level and length, and its cascode's inversion level and length. The ideal source stands for whatever generates the bias current, which this sheet does not draw. Used alone, the sheet sizes the stack at the values typed here.",
+  "polarity": "p",
+  "params": [
+    { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
+    {
+      "name": "I_cb",
+      "value": 5e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "the bias current, sunk by the ideal source from the bottom of the stack and carried by both diodes. It sets their widths and nothing else",
+      "class": "independent"
+    },
+    {
+      "name": "gm_id_base",
+      "value": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the top diode. Its gate-source voltage at this level is how far below the supply the cascode's source sits: a lower gm/ID lowers the node, which gives the device above the cascode more drain voltage and the output less swing"
+    },
+    {
+      "name": "L_base",
+      "value": 0.5e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the top diode"
+    },
+    {
+      "name": "gm_id_casc",
+      "value": 18,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the bottom device, the cascode's replica: a composing sheet passes its cascode's own"
+    },
+    {
+      "name": "L_casc",
+      "value": 0.5e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "length of the bottom device; a composing sheet passes its cascode's own"
+    }
+  ],
+  "givens": { "L": "L_casc", "id": "base__id", "gm_id": "gm_id_casc", "vsb": "abs(base__vgs)" },
+  "blocks": [
+    {
+      "name": "base",
+      "doc": {
+        "title": "Top diode",
+        "description": "The top of the stack: a diode-connected PMOS on the supply carrying the bias current. Its drain is its gate, so it sits at its own gate-source voltage, read along the table's diagonal. That voltage below the supply is the node the bottom device stands on, and the level a cascode's source settles at above the gate wire this stack sets.",
+        "polarity": "p",
+        "params": [
+          { "name": "I_b", "value": 5e-6, "unit": "A", "role": "spec" },
+          { "name": "L_b", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_b", "value": 18, "unit": "1/V", "role": "choice" }
+        ],
+        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b" },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_b",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["vgs", "id"]
+      },
+      "params": { "I_b": "I_cb", "L_b": "L_base", "gm_id_b": "gm_id_base" },
+      "nodes": { "d": "m", "g": "m", "s": "vdd", "b": "vdd" }
+    }
+  ],
+  "equations": [
+    {
+      "name": "V_c",
+      "expr": "VDD - abs(base__vgs) - abs(vgs)",
+      "unit": "V",
+      "note": "the level of the cascode gate wire above ground: the supply less the top diode's drop and less the bottom device's gate-source voltage at its body bias"
+    }
+  ],
+  "checks": [
+    {
+      "id": "feasible-inversion",
+      "kind": "physical",
+      "lhs": "gm_id_casc",
+      "op": "<=",
+      "rhs": "ceiling"
+    },
+    {
+      "id": "stack-fits",
+      "kind": "physical",
+      "lhs": "V_c",
+      "op": ">=",
+      "rhs": "0",
+      "note": "the two diode drops have to fit above ground: the current source sinks the bottom of the stack to ground, and a gate wire below it is no bias that source can hold. A PMOS table with a large threshold, as a sky130 one is, fills a 1.8 V supply with two diodes unless both sit near weak inversion"
+    }
+  ],
+  "provides": ["V_c", "W", "vgs", "id"],
+  "formatVersion": 2,
+  "nodes": { "d": "vc", "g": "vc", "s": "m", "b": "vdd" },
+  "elements": [{ "name": "icb", "kind": "I", "between": ["vc", "gnd"], "value": "I_cb" }],
+  "ports": ["vdd", "vc"]
+}

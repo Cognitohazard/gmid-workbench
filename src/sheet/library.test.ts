@@ -19,7 +19,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { createEngine } from '../expr';
-import { generateDemoDevice, scaleQuantities } from '../demo';
+import { BODY_FACTOR, generateDemoDevice, scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
 import { runSheet, validateSheet, withParams } from './index';
 import { NODE_TOL, placementsOf, wiringRefusal } from './nodes';
@@ -44,6 +44,7 @@ import {
   VGS_GMID8_L05,
   VGS_GMID10_L05,
   VGS_GMID12_L05,
+  vgsAtGmId,
   sourceNodeUnder,
   vgsForCurrentRatio,
   gmIdDemo,
@@ -237,44 +238,55 @@ describe('sheet library: vetting lints', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('a range end holds each cascode gate where the design put it', () => {
+  it('a range end hangs each cascode node under the gate its bias branch sets there', () => {
     // The two cascoded OTAs claim an input common-mode range. At a range end every device keeps
-    // its size and the tail node is re-solved for the new common mode; the cascode nodes are
-    // re-solved too, each under its own gate. The check is the definition: node plus (for an
-    // N cascode) or minus (for a P one) the cascode's gate-source voltage at the range end
-    // equals what that expression came to at the design point. The diode side's cascodes share
-    // those two gates, so the nodes under them land on the same gate voltages; the split of the
-    // tail current is solved again with them.
-    const cases: [string, Record<string, [string, 1 | -1, string]>][] = [
+    // its size, the bias branches included, and the tail node is re-solved for the new common
+    // mode; the cascode nodes are re-solved too, each under its own gate. The gates are drawn: each
+    // is the level a bias branch puts its gate wire at, and that branch is re-evaluated at the
+    // range end like every other device. The check is the definition: node plus (for an N cascode)
+    // or minus (for a P one) the cascode's gate-source voltage at the range end equals the level
+    // the bias branch publishes there. The diode side's cascodes share those two gates, so the
+    // nodes under them land on the same gate voltages; the split of the tail current is solved
+    // again with them. On one table the bias branches carry their programmed currents at their
+    // own widths, so they sit at the range end where they sat at the design point. Nothing is
+    // held: the result carries no held gate, and no warning that one stood in for a bias line.
+    const cases: [string, Record<string, [string, 1 | -1, string, string]>, string[]][] = [
       [
         'otas/telescopic-cascode-ota.json',
         {
-          V_a: ['casc_n', 1, 'V_a'],
-          V_b: ['casc_p', -1, 'V_b'],
-          V_ar: ['casc_nr', 1, 'V_a'],
-          V_br: ['casc_pr', -1, 'V_b'],
+          V_a: ['casc_n', 1, 'cbn', 'V_c'],
+          V_b: ['casc_p', -1, 'cbp', 'V_b'],
+          V_ar: ['casc_nr', 1, 'cbn', 'V_c'],
+          V_br: ['casc_pr', -1, 'cbp', 'V_b'],
         },
+        [],
       ],
       [
         'otas/folded-cascode-ota.json',
         {
-          V_c: ['ncasc', 1, 'V_c'],
-          V_fold: ['pcasc', -1, 'V_fold'],
-          V_c_r: ['ncasc_r', 1, 'V_c'],
-          V_fold_r: ['pcasc_r', -1, 'V_fold'],
+          V_c: ['ncasc', 1, 'cbn', 'vgs'],
+          V_fold: ['pcasc', -1, 'cbp', 'V_b'],
+          V_c_r: ['ncasc_r', 1, 'cbn', 'vgs'],
+          V_fold_r: ['pcasc_r', -1, 'cbp', 'V_b'],
         },
+        // The PMOS bias line the folding sources share is derived from the reference, and solved.
+        ['V_bp'],
       ],
     ];
-    for (const [file, gates] of cases) {
+    for (const [file, gates, more] of cases) {
       const res = runSheet(sheet(file), table, undefined, REFS);
+      expect([file, res.held]).toEqual([file, undefined]);
       const end = res.rangeEnds?.find((e) => e.name === 'cm-lo');
       expect(Object.keys(end?.solved ?? {}).sort()).toEqual(
-        [...Object.keys(gates), 'V_tail', 'out_share'].sort(),
+        [...Object.keys(gates), ...more, 'V_tail', 'out_share'].sort(),
       );
-      for (const [node, [device, sign, gate]] of Object.entries(gates)) {
+      for (const [node, [device, sign, branch, level]] of Object.entries(gates)) {
         const vgs = Math.abs(end!.blocks!.find((c) => c.name === device)!.sizing!.vgs);
-        expect(end!.solved[node] + sign * vgs).toBeCloseTo(res.held![gate], 5);
+        const gate = end!.blocks!.find((c) => c.name === branch)!.provides[level];
+        expect(end!.solved[node] + sign * vgs).toBeCloseTo(gate, 5);
+        expect(gate).toBeCloseTo(res.values[`${branch}__${level}`], 9);
       }
+      expect(end!.warnings.filter((w) => w.rule === 'sheet-held-gate')).toEqual([]);
     }
   });
 
@@ -286,11 +298,12 @@ describe('sheet library: vetting lints', () => {
     // with its body at the supply has it at VDD - vsb. The gate is one gate-source voltage above
     // an N source and one below a P source. A hold on the wrong device, or with the wrong sign,
     // misses that number.
+    // The cascode gates of the telescopic, folded, fully differential telescopic and cascode
+    // common-source sheets are drawn bias branches now, so the nodes under them are solved under
+    // the level the branch publishes and no hold stands in for one. The cascode-compensated
+    // two-stage keeps its hold: the node under its cascodes hangs from the PMOS mirror's diode drop,
+    // which no single-polarity branch drawn from a rail tracks across tables.
     const HELD_UNDER: Record<string, Record<string, string>> = {
-      'otas/telescopic-cascode-ota.json': { V_a: 'casc_n', V_b: 'casc_p' },
-      'otas/folded-cascode-ota.json': { V_c: 'ncasc', V_fold: 'pcasc' },
-      'stages/cascode-cs-amp.json': { V_x: '' },
-      'multistage/fd-telescopic-ota.json': { V_a: 'cascn', V_b: 'cascp' },
       'multistage/flipped-voltage-follower.json': { V_out: 'in' },
       'multistage/super-source-follower.json': { vds_fb: 'in' },
       'multistage/two-stage-cascode-comp-ota.json': { V_casc: 'casc' },
@@ -553,6 +566,11 @@ const NAMED_INTERFACE: Readonly<Record<string, readonly string[]>> = {
   'applications/sc-settling-to-ota-spec.json': ['GBW_req', 'A_req', 'SR_req', 'CL_eff'],
   'mirrors-bias/beta-multiplier-bias.json': ['gm_target'],
   'mirrors-bias/nmos-bias-reference.json': ['W', 'vgs', 'id'],
+  'mirrors-bias/nmos-cascode-bias.json': ['V_c', 'W', 'vgs', 'id'],
+  'mirrors-bias/nmos-mirror-output.json': ['id', 'gds', 'W'],
+  'mirrors-bias/pmos-bias-diode.json': ['V_b', 'W', 'vgs', 'id'],
+  'mirrors-bias/pmos-bias-reference.json': ['V_b', 'W', 'vgs', 'id'],
+  'mirrors-bias/pmos-cascode-bias.json': ['V_c', 'W', 'vgs', 'id'],
   'multistage/rail-to-rail-input-stage.json': ['gm_min', 'gm_mid', 'gm_max'],
   'multistage/stage2-current-source-load.json': ['id', 'gds', 'vdsat'],
 };
@@ -638,12 +656,27 @@ describe('sheet library: the NMOS bias reference is drawn once', () => {
     'otas/telescopic-cascode-ota.json': ['bias', 'vdd', 'vbn'],
   };
 
+  // The same diode at a low inversion level is the simplest cascode gate bias, one strong-inversion
+  // gate-source voltage above ground; these sheets also compose it for that, each with a current of
+  // its own: the block, its supply wire and the cascode gate wire.
+  const CASCODE_BIAS: Record<string, [string, string, string]> = {
+    'mirrors-bias/wide-swing-cascode-mirror.json': ['cb', 'vdd', 'vbias'],
+    'otas/folded-cascode-ota.json': ['cbn', 'vdd', 'vcn'],
+    'stages/cascode-cs-amp.json': ['cb', 'vdd', 'vcasc'],
+  };
+
   it('every OTA bias and every NMOS mirror reference is a reference to the one child', () => {
-    const found: Record<string, [string, string, string]> = {};
+    const found: Record<string, [string, string, string][]> = {};
     for (const { file, doc } of LIBRARY)
       for (const b of doc.blocks ?? [])
-        if (b.ref === CHILD) found[file] = [b.name, b.ports?.vdd ?? '', b.ports?.vb ?? ''];
-    expect(found).toEqual(USERS);
+        if (b.ref === CHILD)
+          (found[file] ??= []).push([b.name, b.ports?.vdd ?? '', b.ports?.vb ?? '']);
+    const expected: Record<string, [string, string, string][]> = {};
+    for (const [file, use] of [...Object.entries(USERS), ...Object.entries(CASCODE_BIAS)])
+      (expected[file] ??= []).push(use);
+    for (const uses of Object.values(expected)) uses.sort();
+    for (const uses of Object.values(found)) uses.sort();
+    expect(found).toEqual(expected);
     // Every amplifier with a bias block is among them: the eleven OTAs.
     const amps = LIBRARY.filter(
       ({ file, doc }) =>
@@ -651,9 +684,9 @@ describe('sheet library: the NMOS bias reference is drawn once', () => {
     ).map(({ file }) => file);
     expect(amps).toHaveLength(11);
     expect(amps.every((f) => f in USERS)).toBe(true);
-    for (const file of Object.keys(USERS)) {
+    for (const [file, [name]] of [...Object.entries(USERS), ...Object.entries(CASCODE_BIAS)]) {
       const doc = LIBRARY.find((s) => s.file === file)!.doc;
-      const b = doc.blocks!.find((u) => u.name === USERS[file][0])!;
+      const b = doc.blocks!.find((u) => u.name === name)!;
       // A reference, not a copy: no embedded document, the parent's current, length and inversion
       // passed in, both ports wired. The source of the programmed current lives in the child, so
       // the parent draws no current source of its own.
@@ -662,7 +695,8 @@ describe('sheet library: the NMOS bias reference is drawn once', () => {
         undefined,
         ['I_ref', 'L_ref', 'gm_id_ref'],
       ]);
-      expect([file, (doc.elements ?? []).filter((e) => e.kind === 'I')]).toEqual([file, []]);
+      if (file in USERS)
+        expect([file, (doc.elements ?? []).filter((e) => e.kind === 'I')]).toEqual([file, []]);
     }
   });
 
@@ -740,6 +774,213 @@ describe('sheet library: the NMOS bias reference is drawn once', () => {
         mismatched.push(`${file}: outcome`);
     }
     expect(mismatched).toEqual([]);
+  });
+});
+
+// A cascode's gate is a bias line, and the sheets that use one draw the branch that sets it: a
+// diode at a low inversion level carrying a programmed current, or a stacked replica — a diode on
+// the rail whose drop places the node under the cascode, with a device at the cascode's inversion
+// level stacked on it. Each is a library sheet of its own, composed by reference with its supply
+// and its gate wire mapped, and the node under the cascode is solved under the level the branch
+// publishes. Where the design is held — a range end, another process condition — the branch is held
+// at its widths and carries its programmed current, so the gate moves with the devices, as a real
+// bias line does, and no hold stands in for one.
+describe('sheet library: the cascode bias lines are drawn', () => {
+  const CHILDREN = 'mirrors-bias';
+  const alone = (name: string) => {
+    const doc = sheet(`${CHILDREN}/${name}.json`);
+    return { doc, res: runSheet(doc, table) };
+  };
+
+  it('the NMOS cascode bias alone is a diode with a device at the cascode level stacked on it', () => {
+    // Defaults: 5 µA, the bottom diode at gm/ID 16 and the top device at 12, both 0.5 µm. The
+    // bottom diode sits at vgs(16) along the diagonal; the top device stands on it, so it needs
+    // vgs(12) plus BODY_FACTOR times that drop; the gate wire is the sum.
+    const { doc, res } = alone('nmos-cascode-bias');
+    const base = vgsAtGmId(16);
+    const top = vgsAtGmId(12) + BODY_FACTOR * base;
+    expect(res.feasible).toBe(true);
+    expect(relErr(res.values.base__vgs, base)).toBeLessThan(1e-3);
+    expect(res.sizing!.bias!.vsb).toBe(res.values.base__vgs);
+    expect(relErr(res.values.vgs, top)).toBeLessThan(1e-3);
+    expect(res.values.V_c).toBe(res.values.base__vgs + res.values.vgs);
+    expect(relErr(res.values.V_c, base + top)).toBeLessThan(1e-3);
+    // One programmed current, carried by both: the top device reads the bottom diode's.
+    expect(res.values.base__id).toBe(5e-6);
+    expect(res.values.id).toBe(res.values.base__id);
+    expect(relErr(res.values.gm, 12 * 5e-6)).toBeLessThan(1e-9);
+    expect(res.checks.find((c) => c.id === 'stack-fits')!.status).toBe('pass');
+    expect(doc.nodes).toEqual({ d: 'vc', g: 'vc', s: 'm', b: 'gnd' });
+    expect(doc.elements).toEqual([
+      { name: 'icb', kind: 'I', between: ['vdd', 'vc'], value: 'I_cb' },
+    ]);
+    expect(doc.ports).toEqual(['vdd', 'vc']);
+    expect(res.nodes!.state).toBe('checked-clean');
+  });
+
+  it('the PMOS cascode bias alone is its mirror image, hanging from the supply', () => {
+    // Defaults: 5 µA, both devices at gm/ID 18 and 0.5 µm. The gate wire sits the top diode's drop
+    // and the bottom device's gate-source voltage, body effect included, below the supply. The
+    // demo table serves both polarities, so the drops are the NMOS closed forms.
+    const { doc, res } = alone('pmos-cascode-bias');
+    const base = vgsAtGmId(18);
+    const bottom = base + BODY_FACTOR * base;
+    expect(res.feasible).toBe(true);
+    expect(res.sizing!.bias!.vsb).toBe(Math.abs(res.values.base__vgs));
+    expect(relErr(res.values.V_c, 1.8 - base - bottom)).toBeLessThan(1e-3);
+    expect(res.values.id).toBe(5e-6);
+    expect(res.checks.find((c) => c.id === 'stack-fits')!.status).toBe('pass');
+    expect(doc.nodes).toEqual({ d: 'vc', g: 'vc', s: 'm', b: 'vdd' });
+    expect(doc.elements).toEqual([
+      { name: 'icb', kind: 'I', between: ['vc', 'gnd'], value: 'I_cb' },
+    ]);
+    expect(res.nodes!.state).toBe('checked-clean');
+    // Two diode drops that do not fit between the rails are refused by the check, not reported as
+    // a gate wire below ground: under a 0.9 V supply the two drops come to over a volt.
+    const deep = runSheet(withParams(doc, { VDD: 0.9 }), table);
+    expect(deep.values.V_c).toBeLessThan(0);
+    expect(deep.checks.find((c) => c.id === 'stack-fits')!.status).toBe('fail');
+    expect(deep.feasible).toBe(false);
+  });
+
+  it('the PMOS bias reference alone is a diode at its programmed current, one drop below the supply', () => {
+    const { doc, res } = alone('pmos-bias-reference');
+    expect(res.feasible).toBe(true);
+    expect(res.values.id).toBe(20e-6);
+    expect(relErr(res.values.gm, 10 * 20e-6)).toBeLessThan(1e-9);
+    expect(relErr(res.values.V_b, 1.8 - VGS_GMID10_L05)).toBeLessThan(1e-3);
+    expect(res.values.V_b).toBe(1.8 - Math.abs(res.values.vgs));
+    expect(doc.nodes).toEqual({ d: 'vb', g: 'vb', s: 'vdd', b: 'vdd' });
+    expect(doc.elements).toEqual([
+      { name: 'iref', kind: 'I', between: ['vb', 'gnd'], value: 'I_ref' },
+    ]);
+    expect(doc.ports).toEqual(['vdd', 'vb']);
+    expect(res.nodes!.state).toBe('checked-clean');
+  });
+
+  it('the PMOS bias diode alone carries the current it is handed, and draws no source of its own', () => {
+    const { doc, res } = alone('pmos-bias-diode');
+    expect(res.feasible).toBe(true);
+    expect(res.values.id).toBe(20e-6);
+    expect(relErr(res.values.V_b, 1.8 - VGS_GMID10_L05)).toBeLessThan(1e-3);
+    expect(doc.elements).toBeUndefined();
+    expect(doc.ports).toEqual(['vdd', 'vb']);
+    expect(res.nodes!.state).toBe('checked-clean');
+  });
+
+  it('the NMOS mirror output alone copies its reference at its own drain voltage', () => {
+    // Handed the NMOS bias reference's width and gate-source voltage at twice the width, with its
+    // drain at 0.9 V: it carries twice the reference's 20 µA, scaled by (VA + 0.9)/(VA + vgs), the
+    // reference's drain being its own gate. Its gm/ID is the reference's, which the demo model
+    // does not move with the drain voltage, and its gds is its current over VA plus that voltage.
+    const ref = runSheet(sheet('mirrors-bias/nmos-bias-reference.json'), table);
+    const { doc } = alone('nmos-mirror-output');
+    const res = runSheet(
+      withParams(doc, { K: 2, W_ref: ref.values.W, vgs_ref: ref.values.vgs, vds: 0.9 }),
+      table,
+    );
+    const VA = VA_PER_L * 0.5e-6;
+    expect(res.feasible).toBe(true);
+    expect(res.values.W).toBe(2 * ref.values.W);
+    expect(relErr(res.values.id, (2 * 20e-6 * (VA + 0.9)) / (VA + ref.values.vgs))).toBeLessThan(
+      1e-4,
+    );
+    expect(relErr(res.values.gds, gdsOf(res.values.id, 0.5e-6, 0.9))).toBeLessThan(1e-9);
+    const region = res.checks.find((c) => c.id === 'region')!;
+    expect([region.status, region.lhsValue]).toEqual(['pass', 0.9]);
+    expect(doc.ports).toEqual(['out', 'vb']);
+    expect(doc.levels).toBeUndefined();
+  });
+
+  // Written down from the schematics: per sheet, each bias branch, the child port that is its gate
+  // wire, the parent wire that port is mapped to, the level the branch publishes for it, and the
+  // nodes the sheet solves under that gate (or, for the derived PMOS bias line, solves to it).
+  const DRIVEN: Record<string, [string, string, string, string, string[]][]> = {
+    'mirrors-bias/wide-swing-cascode-mirror.json': [['cb', 'vb', 'vbias', 'cb__vgs', ['vds_lo']]],
+    'multistage/fd-telescopic-ota.json': [
+      ['cbn', 'vc', 'vcn', 'cbn__V_c', ['V_a']],
+      ['cbp', 'vc', 'vcp', 'cbp__V_c', ['V_b']],
+    ],
+    'otas/folded-cascode-ota.json': [
+      ['cbn', 'vb', 'vcn', 'cbn__vgs', ['V_c', 'V_c_r']],
+      ['cbp', 'vb', 'vcp', 'cbp__V_b', ['V_fold', 'V_fold_r']],
+      ['pbias', 'vb', 'vbp', 'pbias__V_b', ['V_bp']],
+    ],
+    'otas/gain-boosted-cascode-ota.json': [
+      ['cbn', 'vc', 'vgnr', 'cbn__V_c', ['V_ar']],
+      ['cbp', 'vb', 'vgpr', 'cbp__V_b', ['V_br']],
+    ],
+    'otas/telescopic-cascode-ota.json': [
+      ['cbn', 'vc', 'vcn', 'cbn__V_c', ['V_a', 'V_ar']],
+      ['cbp', 'vb', 'vcp', 'cbp__V_b', ['V_b', 'V_br']],
+    ],
+    'stages/cascode-cs-amp.json': [['cb', 'vb', 'vcasc', 'cb__vgs', ['V_x']]],
+  };
+
+  it('each gate a bias branch drives sits at the level the branch publishes, and nothing holds it', () => {
+    for (const [file, branches] of Object.entries(DRIVEN)) {
+      const { doc, res } = EVALUATED.find((s) => s.file === file)!;
+      // No hold is left on the sheet, and no gate wire a branch drives is held or left a port.
+      expect([file, doc.params.filter((p) => p.hold !== undefined).map((p) => p.name)]).toEqual([
+        file,
+        [],
+      ]);
+      expect([file, res!.held]).toEqual([file, undefined]);
+      for (const [name, port, wire, level, nodes] of branches) {
+        const b = doc.blocks!.find((u) => u.name === name)!;
+        expect([file, name, b.ports?.[port]]).toEqual([file, name, wire]);
+        expect([file, wire, wire in (doc.levels ?? {}), (doc.ports ?? []).includes(wire)]).toEqual([
+          file,
+          wire,
+          false,
+          false,
+        ]);
+        // The wiring walk derives the wire along its own tree — through the branch's devices, or
+        // through a cascode on the gate and the solved node under it — and lands on the level the
+        // branch publishes, to the solve's tolerance (a part in a million of the node's range).
+        const walked = res!.nodes!.levels[wire]?.level;
+        expect([file, wire, Math.abs(walked - res!.values[level]) < 1e-6]).toEqual([
+          file,
+          wire,
+          true,
+        ]);
+        // Each node under the gate is solved under exactly that level.
+        for (const node of nodes) {
+          const p = doc.params.find((q) => q.name === node)!;
+          expect([file, node, p.designConstraint?.rhs ?? p.solveFor]).toEqual([file, node, level]);
+        }
+      }
+    }
+  });
+
+  it('held at another condition, no gate is held and no warning says one stood in for a bias line', () => {
+    // A second characterization, 0.8 of the current and of the transconductance at every gate
+    // voltage, with the design held at its widths: the bias branches carry their programmed
+    // currents there too, so their gates move, and the nodes under them are solved again.
+    const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
+      ...t,
+      id: { ...t.id, corner, temp },
+    });
+    const weak = scaleQuantities(table, { id: 0.8, gm: 0.8 });
+    const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
+    const tt = { corner: 'tt', temp: 27 };
+    for (const file of Object.keys(DRIVEN)) {
+      const [sized, held] = runConditions(
+        sheet(file),
+        device,
+        [tt, { corner: 'ss', temp: -40 }],
+        () => undefined,
+        REFS,
+        tt,
+      );
+      expect([file, sized.state, held.state]).toEqual([file, 'evaluated', 'evaluated']);
+      if (held.state !== 'evaluated') continue;
+      const warned = [held.result.warnings, ...(held.result.rangeEnds ?? []).map((e) => e.warnings)]
+        .flat()
+        .filter((w) => w.rule === 'sheet-held-gate');
+      expect([file, warned]).toEqual([file, []]);
+      expect([file, held.result.solve?.kind]).toEqual([file, 'settled']);
+    }
   });
 });
 
@@ -1453,8 +1694,10 @@ describe('sheet library: the netlist', () => {
       shared: false,
       reason: expect.stringMatching(/cannot be shown to share one operating point/),
     });
+    // The diode side's PMOS internal node is solved under its bias line, so the moved drain sits
+    // at V_br, where the diode-side PMOS cascode's source puts it.
     const vds = split.values.V_a - split.values.V_tail;
-    const drop = split.values.V_b - split.values.V_tail;
+    const drop = split.values.V_br - split.values.V_tail;
     expect(relErr(split.nodes!.closureError, drop - vds)).toBeLessThan(1e-6);
     expect(nodesWarnings(split).some((m) => m.startsWith('the wiring does not close'))).toBe(true);
   });

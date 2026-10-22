@@ -25,7 +25,7 @@
 //     (the ratio minus one) and hold to about 1e-2 of it.
 
 import { describe, it, expect } from 'vitest';
-import { scaleQuantities } from '../demo';
+import { BODY_FACTOR, scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
 import { runSheet } from './index';
 import { resolveSheetRefs } from './resolve';
@@ -55,6 +55,7 @@ import {
   hardFailsIn,
   declaredSaturated,
   vdsatDemo,
+  vgsAtGmId,
 } from './library.fixtures';
 // Test-only reach across to the condition runs: holding one sized design at a second
 // characterization is that module's transition, and the two-stage goldens below ask it of a sheet.
@@ -992,17 +993,47 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
   const doc = sheet('fd-telescopic-ota');
   const res = runSheet(doc, table, undefined, REFS);
   // Defaults: the bias reference programmed to I_tail = 40 µA at gm/ID 8, the tail device on its
-  // gate with its drain on the tail node V_s; gm/ID in 12, casc/load 8, all L 0.5 µm. Node levels
-  // V_a 0.55, V_out 0.95, V_b 1.30, VDD 1.8, and the input common mode CM_dc 0.95 V. The tail node
-  // is solved so the pair's gate sits at CM_dc; the node is the pair's source and its body bias, so
+  // gate with its drain on the tail node V_s; gm/ID in 12, casc/load 8, all L 0.5 µm; V_out 0.95,
+  // VDD 1.8, and the input common mode CM_dc 0.95 V. The tail node is solved so the pair's gate
+  // sits at CM_dc; the node is the pair's source and its body bias, so
   //   V_s = (0.95 − vgs(12))/1.2 = (0.95 − 0.567023)/1.2 = 0.319148 V.
   // Each side carries half of what the tail delivers:
   //   tail device  (2.5 + 0.319148)/(2.5 + 0.668042) = 0.889871, so each side carries 17.797 µA
+  // The cascode gates are drawn bias branches, each a stacked replica with 5 µA of its own: the
+  // NMOS one a 2 µm diode at gm/ID 17.5 with a 2 µm device at the cascodes' gm/ID 8 on it, the PMOS
+  // one a 0.5 µm diode at gm/ID 24 hanging from the supply with a device at gm/ID 8 under it. The
+  // nodes under the cascodes are solved under those gates and read from the result:
+  //   V_a  the NMOS cascode at gm/ID 8 hangs under the stack's top: (gate − vgs(8))/1.2
+  //   V_b  the PMOS cascode is the PMOS stack's lower device exactly — the same inversion level,
+  //        length and current density — so its source sits where that device's does, one
+  //        top-diode drop below the supply: 1.8 − vgs(24)
   const va = VA_PER_L * 0.5e-6;
   const I_TAIL = 40e-6;
   const V_S = sourceNodeUnder(0.95, VGS_GMID12_L05);
   const iSide = (I_TAIL / 2) * ((va + V_S) / (va + VGS_GMID8_L05));
   const gmIn = 12 * iSide;
+  const baseN = vgsAtGmId(17.5, 2e-6);
+  const GATE_N = baseN + vgsAtGmId(8, 2e-6) + BODY_FACTOR * baseN;
+  const V_A_CF = sourceNodeUnder(GATE_N, VGS_GMID8_L05);
+  const V_B_CF = 1.8 - vgsAtGmId(24);
+  const V_A = res.values.V_a;
+  const V_B = res.values.V_b;
+
+  it('the cascode gates are drawn bias branches, and the nodes under them follow the branches', () => {
+    expect(relErr(res.values.cbn__V_c, GATE_N)).toBeLessThan(1e-3);
+    expect(relErr(V_A, V_A_CF)).toBeLessThan(2e-3);
+    expect(relErr(V_B, V_B_CF)).toBeLessThan(1e-3);
+    expect(V_A + res.values.cascn__vgs).toBeCloseTo(res.values.cbn__V_c, 6);
+    expect(V_B - res.values.cascp__vgs).toBeCloseTo(res.values.cbp__V_c, 6);
+    // Nothing holds either gate; the loads' gate is the common-mode loop's, which the sheet does
+    // not draw, so it alone stays a port.
+    expect(res.held).toBeUndefined();
+    expect(doc.ports).toEqual(['vbp']);
+    for (const wire of ['vcn', 'vcp']) expect([wire, wire in doc.levels!]).toEqual([wire, false]);
+    expect(
+      res.blocks!.find((b) => b.name === 'cbp')!.checks.find((c) => c.id === 'stack-fits')!.status,
+    ).toBe('pass');
+  });
 
   it('one current is typed, into the bias reference, and the tail is on its gate', () => {
     expect(block(res, 'bias').id).toBe(I_TAIL);
@@ -1038,10 +1069,10 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
 
   it('the cascoded gain matches gm_in·(Rdown ∥ Rup) from the branch closed forms', () => {
     // Every device in a side carries the same current, so it cancels out of the gain.
-    const gdsIn = gdsOf(iSide, 0.5e-6, 0.55 - V_S);
-    const av0cascn = 8 * (va + (0.95 - 0.55));
-    const gdsLoad = gdsOf(iSide, 0.5e-6, 1.8 - 1.3);
-    const av0cascp = 8 * (va + (1.3 - 0.95));
+    const gdsIn = gdsOf(iSide, 0.5e-6, V_A - V_S);
+    const av0cascn = 8 * (va + (0.95 - V_A));
+    const gdsLoad = gdsOf(iSide, 0.5e-6, 1.8 - V_B);
+    const av0cascp = 8 * (va + (V_B - 0.95));
     const av = gmIn * par(av0cascn / gdsIn, av0cascp / gdsLoad);
     expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
     // …and Rout is that same parallel combination, which the gain equation already reads through.
@@ -1092,10 +1123,10 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
     expect(declaredSaturated(doc)).toEqual(['tail', 'in', 'cascn', 'cascp', 'load']);
     const across = {
       tail: res.values.V_s,
-      in: 0.55 - res.values.V_s,
-      cascn: 0.95 - 0.55,
-      cascp: 1.3 - 0.95,
-      load: 0.5,
+      in: V_A - res.values.V_s,
+      cascn: 0.95 - V_A,
+      cascp: V_B - 0.95,
+      load: 1.8 - V_B,
     };
     for (const [name, vds] of Object.entries(across)) {
       const c = regionOf(res, name);

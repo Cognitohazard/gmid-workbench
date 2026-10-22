@@ -1,6 +1,6 @@
 {
   "title": "Cascode CS amp",
-  "description": "A telescopic (non-boosted) cascode common-source stage: a common-source input device with a cascode device stacked in series on top, driving a current-source load. The cascode raises the stage output resistance to about $A_{v0,casc}/g_{ds,in}$, so the gain is no longer limited by the input device's own output resistance but by whatever the load presents - here a plain current source, so the load's $g_{ds}$ sets the ceiling. All three devices carry the same branch current, stacked in series between the rails: the input device and the current-source load are composed children, and the cascode between them is the sheet's own device, sized at the input device's drain current. The load is in series with the stack at DC; it is only in the small-signal output resistance that its $g_{ds}$ appears in parallel with the cascoded branch. Set load_sign to -1 for a signed-PMOS load table.",
+  "description": "A telescopic (non-boosted) cascode common-source stage: a common-source input device with a cascode device stacked in series on top, driving a current-source load. The cascode raises the stage output resistance to about $A_{v0,casc}/g_{ds,in}$, so the gain is no longer limited by the input device's own output resistance but by whatever the load presents - here a plain current source, so the load's $g_{ds}$ sets the ceiling. All three devices carry the same branch current, stacked in series between the rails: the input device and the current-source load are composed children, and the cascode between them is the sheet's own device, sized at the input device's drain current. The load is in series with the stack at DC; it is only in the small-signal output resistance that its $g_{ds}$ appears in parallel with the cascoded branch. The cascode's gate is drawn with the branch that sets it: a diode-connected NMOS at a low inversion level, carrying its own programmed current, one strong-inversion $V_{GS}$ above ground. The node under the cascode is solved under that gate, so wherever the design is held it moves with the devices; the bias diode's inversion level is the knob that places it. The load's gate stays a port: the stage is sized from its bandwidth specification, which fixes the branch current, and a mirror bias drawn there would make that current follow the data and turn the specification into a check. Set load_sign to -1 for a signed-PMOS load table.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -21,8 +21,8 @@
       "max": 0.85,
       "unit": "V",
       "role": "choice",
-      "note": "cascode source (input drain) DC level: raise it for input-device headroom, lower it for cascode headroom. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
-      "hold": "V_x + vgs"
+      "designConstraint": { "lhs": "V_x + vgs", "rhs": "cb__vgs" },
+      "note": "cascode source (input drain) DC level. Solved, not set: the cascode's gate is the bias diode's, so this is the node that hangs the cascode's own gate-source voltage under it. A higher node gives the input device headroom and the cascode less; gm_id_cb is the knob that moves it. Searched between min and max, inside the range the wiring puts the node in; the stored value is never read"
     },
     { "name": "CL", "value": 2e-12, "unit": "F", "role": "spec", "note": "load capacitance" },
     {
@@ -92,6 +92,23 @@
       "note": "shared by the input and cascode devices"
     },
     {
+      "name": "gm_id_cb",
+      "value": 3,
+      "min": 2.5,
+      "max": 12,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the cascode bias diode. Its gate-source voltage is the cascode's gate, so a lower gm/ID raises the gate and the node under the cascode with it"
+    },
+    {
+      "name": "I_cb",
+      "value": 5e-6,
+      "unit": "A",
+      "role": "choice",
+      "note": "the current the cascode bias diode is programmed to. A diode at a given inversion level sits at one gate-source voltage whatever its current, so this sets only its width",
+      "class": "independent"
+    },
+    {
       "name": "L_load",
       "value": 0.5e-6,
       "min": 0.18e-6,
@@ -109,6 +126,12 @@
     }
   ],
   "blocks": [
+    {
+      "name": "cb",
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_cb", "L_ref": "L", "gm_id_ref": "gm_id_cb" },
+      "ports": { "vdd": "vdd", "vb": "vcasc" }
+    },
     {
       "name": "in",
       "doc": {
@@ -238,7 +261,7 @@
       "name": "I_q",
       "expr": "I_bias",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the one branch these equations model; the cascode and the load sit in it and carry the same current. The datasheet line for comparing designs; no check reads it"
+      "note": "estimate: quiescent supply current — the one branch these equations model; the cascode and the load sit in it and carry the same current. The cascode bias branch is bias infrastructure and is not counted. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -271,6 +294,6 @@
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
   "nodes": { "d": "out", "g": "vcasc", "s": "x", "b": "gnd" },
-  "levels": { "vdd": "VDD", "out": "V_out", "vcasc": "V_x + vgs" },
+  "levels": { "vdd": "VDD", "out": "V_out" },
   "ports": ["in", "vbp"]
 }
