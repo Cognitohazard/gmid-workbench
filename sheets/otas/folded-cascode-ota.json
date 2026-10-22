@@ -471,7 +471,7 @@
       "name": "pcasc",
       "doc": {
         "title": "PMOS cascode (folded branch), output side",
-        "description": "Cascodes the output side's folding current source; carries the fold current I_fold, the output side's folding-source current less the output-side pair transistor's. Its av0 sets the PMOS-side cascode boost. It publishes its width, which the diode-side cascode copies.",
+        "description": "Cascodes the output side's folding current source; carries the fold current I_fold, the output side's folding-source current less the output-side pair transistor's. Its gm + gmb against the folding node's resistance sets the PMOS-side cascode boost. It publishes its width, which the diode-side cascode copies.",
         "polarity": "p",
         "params": [
           { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -498,7 +498,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vgs", "W"]
+        "provides": ["ro", "gm", "gmb", "vgs", "W"]
       },
       "params": {
         "I_f": "pcs__id - in__id",
@@ -676,7 +676,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "W", "vnth_m", "id"]
+        "provides": ["gm", "ro", "W", "vnth_m", "id"]
       },
       "params": {
         "W_m": "nmir_r__W",
@@ -690,7 +690,7 @@
       "name": "ncasc",
       "doc": {
         "title": "NMOS cascode (output branch), output side",
-        "description": "Cascodes the mirror's output side and carries its current. Its av0 sets the NMOS-side cascode boost. It publishes its width, which the diode-side cascode copies.",
+        "description": "Cascodes the mirror's output side and carries its current. Its gm + gmb against the mirror output device's ro sets the NMOS-side cascode boost. It publishes its width, which the diode-side cascode copies.",
         "polarity": "n",
         "params": [
           { "name": "I_f", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -717,7 +717,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vgs", "W"]
+        "provides": ["ro", "gm", "gmb", "vgs", "W"]
       },
       "params": {
         "I_f": "nmir__id",
@@ -835,16 +835,22 @@
       "note": "the pair's transconductance into the output node. Each pair transistor turns half the differential input into current, which its folding branch carries on unchanged: the diode-side half reaches the output through the bottom mirror, whose current gain is its output device's $g_m$ over its diode device's, and the output-side half arrives directly. It is either transistor's own $g_m$ where the two sides sit at the same levels"
     },
     {
-      "name": "Rout_p",
-      "expr": "pcasc__av0/pcs__gds",
+      "name": "R_fold",
+      "expr": "1/(pcs__gds + in__gds)",
       "unit": "ohm",
-      "note": "PMOS side: the output side's folding current source ro boosted by its PMOS cascode's gain"
+      "note": "the resistance under the output side's PMOS cascode: the folding current source's ro in parallel with the output-side pair transistor's, whose drain is on the same folding node"
+    },
+    {
+      "name": "Rout_p",
+      "expr": "pcasc__ro*(1 + (pcasc__gm + pcasc__gmb)*R_fold) + R_fold",
+      "unit": "ohm",
+      "note": "PMOS side: the cascode's own ro times one plus its gm + gmb times the folding node's resistance, plus that resistance in series. The cascode's source is the folding node, which moves with the current while its bulk stays at VDD, so it answers through gm + gmb. Worked from the simulated devices this form, with the pair's gds at the fold, gives the simulated output resistance to 0.1 %; with av0_pcasc/gds_pcs on this side, which leaves out gmb, the series ro and the pair's gds, the output resistance read a fifth below the simulated one"
     },
     {
       "name": "Rout_n",
-      "expr": "ncasc__av0/nmir__gds",
+      "expr": "ncasc__ro*(1 + (ncasc__gm + ncasc__gmb)*nmir__ro) + nmir__ro",
       "unit": "ohm",
-      "note": "NMOS side: the mirror output device's ro boosted by the output-side NMOS cascode's gain"
+      "note": "NMOS side, in the same form: the output-side NMOS cascode's ro times one plus its gm + gmb times the mirror output device's ro, plus that ro. The cascode's source is the mirror's drain, above its grounded bulk"
     },
     {
       "name": "Rout",

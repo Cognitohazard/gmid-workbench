@@ -373,7 +373,7 @@
       "name": "Rout",
       "expr": "(1/gds)*(1 + (gm + gmb)*out__ro) + out__ro",
       "unit": "ohm",
-      "note": "output resistance of the output branch, with the output cascode read at the current it carries and with its source on the solved node. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series; both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. This is the number a stage loading the mirror sees"
+      "note": "output resistance of the output branch, with the output cascode read at the current it carries and with its source on the solved node. The mirror device's own r_o sits in the cascode's source, so local series feedback multiplies the cascode's r_o by (1 + (g_m + g_mb)*r_o) and that degenerating resistance adds back in series; both source-referred generators feed back through it, so gmb belongs inside the factor — the same form the source-degenerated mirror uses with a resistor in that role. This is the number a stage loading the mirror sees. On the sky130 tables, characterized at 0.3 and 0.4 V of drain voltage and not between, the cascode sits at 0.35 V, where the table's gds reads 12 % above the simulated device's, and the simulated output resistance is 11 % above this figure. That is the table's resolution, not the form"
     }
   ],
   "checks": [

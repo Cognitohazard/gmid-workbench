@@ -120,6 +120,12 @@ describe('tier1 goldens: CS amp, resistive load', () => {
     expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
     expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
   });
+
+  it('bandwidth is gm into the load plus the typed drain estimate', () => {
+    // 1 fF beside the 2 pF load: 157.08 uS/(2*pi*2.001 pF) = 12.494 MHz.
+    expect(relErr(res.values.Cout, 2e-12 + 1e-15)).toBeLessThan(1e-12);
+    expect(relErr(res.values.GBW, gm / (2 * Math.PI * (2e-12 + 1e-15)))).toBeLessThan(1e-9);
+  });
 });
 
 describe('tier1 goldens: CS amp, diode-connected load', () => {
@@ -167,6 +173,14 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
     expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
     expect(relErr(res.values.cgg_in, cggOf(block(res, 'in').W, 0.5e-6))).toBeLessThan(1e-9);
   });
+
+  it("the output carries the diode load's own gate capacitance from the table", () => {
+    // The load's gate is the output node, so its W*L*Cox sits there beside the 2 pF load and the
+    // 1 fF typed for the two drains.
+    const cout = 2e-12 + cggOf(block(res, 'load').W, 0.5e-6) + 1e-15;
+    expect(relErr(res.values.Cout, cout)).toBeLessThan(1e-9);
+    expect(relErr(res.values.GBW, gm / (2 * Math.PI * cout))).toBeLessThan(1e-9);
+  });
 });
 
 describe('tier1 goldens: Source-degenerated CS amp', () => {
@@ -187,8 +201,10 @@ describe('tier1 goldens: Source-degenerated CS amp', () => {
     expect(relErr(res.values.Gm, gm / (1 + (gm + gmb) * Rs))).toBeLessThan(1e-3);
   });
 
-  it('input noise adds the 4kT*R_s resistor term to the channel density', () => {
-    const vn = Math.sqrt(vnthM(gm) ** 2 + 4 * PHYS.k * PHYS.T * Rs);
+  it('input noise adds the 4kT*R_s resistor term, referred through (gm + gmb)/gm', () => {
+    // R_s's noise is a voltage in series with the source, and the source drives the channel
+    // through gm + gmb, so it reaches the gate scaled by (gm + gmb)/gm = 1 + BODY_FACTOR = 1.2.
+    const vn = Math.sqrt(vnthM(gm) ** 2 + 4 * PHYS.k * PHYS.T * Rs * ((gm + gmb) / gm) ** 2);
     expect(relErr(res.values.vn_in, vn)).toBeLessThan(3e-3);
   });
 
@@ -396,6 +412,20 @@ describe('tier1 goldens: Common gate', () => {
     expect(relErr(res.values.Av, (gm + gmb + gds) * res.values.Rout)).toBeLessThan(1e-3);
     // Rin, not Rout, is this stage's headline: the input is the low-impedance side.
     expect(res.values.Rin).toBeLessThan(res.values.Rout);
+  });
+
+  it('input noise refers the drain-side noise currents back through the source drive', () => {
+    // The input is the source, which reaches the drain through gm + gmb + gds, so the channel's
+    // noise current sqrt(4kTγ·(gm + gmb)) = 1.995 pA/√Hz and the load resistor's sqrt(4kT/R_load)
+    // = 0.576 pA/√Hz refer back through 246.67 µS: 8.416 nV/√Hz. Through gm alone the channel
+    // term would read vnth_m = 9.973 nV/√Hz, 18.5 % high, without the resistor.
+    const iCh = vnthM(gm) * gm;
+    const iR = Math.sqrt((4 * PHYS.k * PHYS.T) / 50e3);
+    expect(relErr(res.values.vn_in, Math.hypot(iCh, iR) / (gm + gmb + gds))).toBeLessThan(2e-3);
+    const { vnth_m, gm: gmV, gmb: gmbV, gds: gdsV } = res.values;
+    expect(
+      relErr(res.values.vn_in, Math.hypot(vnth_m * gmV, iR) / (gmV + gmbV + gdsV)),
+    ).toBeLessThan(1e-12);
   });
 });
 

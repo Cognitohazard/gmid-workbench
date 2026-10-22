@@ -28,10 +28,10 @@
     },
     {
       "name": "cdd_est",
-      "value": 0.2e-12,
+      "value": 1e-15,
       "unit": "F",
       "role": "spec",
-      "note": "output-node parasitic estimate (drain + wiring); refine from extraction"
+      "note": "estimate: the capacitance the device adds at the output, its drain junction and gate-drain overlap. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. The 2.5 µm device the defaults size adds 0.9 fF, simulated; wiring comes on top, so refine from extraction"
     },
     {
       "name": "gbw_margin",
@@ -102,7 +102,12 @@
       "unit": "V",
       "note": "the output DC level, which is also the device's drain-source voltage. The givens write the same level with the current expanded as gm/gm_id, because the givens are evaluated before any equation"
     },
-    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    {
+      "name": "Cout",
+      "expr": "CL + cdd_est",
+      "unit": "F",
+      "note": "the load plus what the device adds at the output"
+    },
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
     {
       "name": "vn_in",

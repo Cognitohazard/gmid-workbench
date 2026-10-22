@@ -28,10 +28,10 @@
     },
     {
       "name": "cdd_est",
-      "value": 0.2e-12,
+      "value": 1e-15,
       "unit": "F",
       "role": "spec",
-      "note": "output-node parasitic estimate (both drains + wiring); refine from extraction"
+      "note": "estimate: the capacitance the two drains add at the output, their junctions and the input device's gate-drain overlap, beside the diode load's gate capacitance, which Cout reads from the table. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. At the defaults the table puts 10 fF on the load's gate, and the devices add 8.7 fF at the output in all, simulated: the part of the gate's capacitance that is to its own drain sits across the one node and adds nothing. Wiring comes on top, so refine from extraction"
     },
     {
       "name": "gbw_margin",
@@ -150,7 +150,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "id", "vnth_m"]
+        "provides": ["gm", "gds", "vgs", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_load": "in__id",
@@ -173,7 +173,12 @@
       "unit": "V/V",
       "note": "input gm into the diode load conductance (~load gm) plus both output conductances"
     },
-    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    {
+      "name": "Cout",
+      "expr": "CL + load__cgg + cdd_est",
+      "unit": "F",
+      "note": "the load, the diode load's own gate capacitance, since its gate is the output node, and what the two drains add"
+    },
     {
       "name": "GBW",
       "expr": "in__gm/(2*pi*Cout)",

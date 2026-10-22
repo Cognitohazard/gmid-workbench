@@ -28,6 +28,8 @@ import {
   relErr,
   va,
   gdsOf,
+  par,
+  cascodeRout,
   stage2Rout,
   vnthM,
   gmbOf,
@@ -457,14 +459,19 @@ describe('tier-3 goldens: degenerated differential pair', () => {
     ).toBeLessThan(1e-3);
   });
 
-  it('degeneration lowers the transconductance but not the output node it drives', () => {
-    // Rout is the input device gds against the estimated load conductance — the equation
-    // deliberately does NOT claim the degeneration boost the source resistor also gives the device
-    // r_o, which is the same conservatism the gain note already records. The device carries the
-    // half current at vds = V_out_dc − V_s and L 2 µm, so gds = I/(VA + vds) with VA = 10 V:
-    // 10.414 µA/10.404 V = 1.001 µS against the 3 µS the sheet is told, 249.9 kΩ.
-    const rout = 1 / (gdsOf(iHalf, L_IN, 0.9 - vS) + 3e-6);
+  it('degeneration lowers the transconductance and raises the device resistance it drives', () => {
+    // The source resistor that divides gm also multiplies the device's r_o: a drain current change
+    // moves the source by R_s times it, and the device answers through gm + gmb, so the device
+    // presents ro·(1 + (gm + gmb)·R_s) + R_s = ro·n_deg + R_s. It carries the half current at
+    // vds = V_out_dc − V_s and L 2 µm, so gds = I/(VA + vds) with VA = 10 V: 10.414 µA/10.404 V =
+    // 1.001 µS, ro = 999.1 kΩ, and ro·3.0994 + 12 kΩ = 3.109 MΩ, against the 3 µS (333.3 kΩ) the
+    // sheet is told the load is: 301.1 kΩ, where the bare ro would have given 249.9 kΩ.
+    const ro = 1 / gdsOf(iHalf, L_IN, 0.9 - vS);
+    const rout = par(ro * nDeg + R_S, 1 / 3e-6);
     expect(relErr(res.values.Rout, rout)).toBeLessThan(1e-3);
+    expect(
+      relErr(res.values.Rout, par(res.values.in__ro * res.values.n_deg + R_S, 1 / 3e-6)),
+    ).toBeLessThan(1e-12);
     expect(relErr(res.values.Av, res.values.Gm_eff * res.values.Rout)).toBeLessThan(1e-12);
     expect(relErr(res.values.cgg_in, cggOf(res.values.in__W, L_IN))).toBeLessThan(1e-9);
   });
@@ -693,11 +700,28 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
   it('gain is the pair transconductance times the parallel cascoded output resistance', () => {
     // Node subtractions, with the solved tail node read from the result: the output-side pair
     // transistor sits at vds = V_a − V_tail, its cascode at V_out − V_a; the PMOS side at the V_b
-    // splits. Both output-side branches carry the output-side current.
-    const Rn = av0Of(10, L, 0.9 - V_A) / gdsOf(iOut, L, V_A - res.values.V_tail);
-    const Rp = av0Of(10, L, V_B - 0.9) / gdsOf(iOut, L, 1.8 - V_B);
-    const Rout = 1 / (1 / Rn + 1 / Rp);
-    expect(relErr(res.values.Av, gmPair * Rout)).toBeLessThan(1e-2);
+    // splits. Both output-side branches carry the output-side current. Each side is the cascode's
+    // ro times 1 + (gm + gmb)·ro of the device under it, plus that ro: the cascodes run at gm/ID 10
+    // with gmb = 0.2·gm, so the body effect adds a fifth to the boost and the series ro a little
+    // more, against the av0·ro shorthand.
+    const roIn = 1 / gdsOf(iOut, L, V_A - res.values.V_tail);
+    const roMir = 1 / gdsOf(iOut, L, 1.8 - V_B);
+    const Rn = cascodeRout(1 / gdsOf(iOut, L, 0.9 - V_A), 10 * iOut, roIn);
+    const Rp = cascodeRout(1 / gdsOf(iOut, L, V_B - 0.9), 10 * iOut, roMir);
+    expect(relErr(res.values.Rout_n, Rn)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Rout_p, Rp)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Av, gmPair * par(Rn, Rp))).toBeLessThan(1e-2);
+    // Which devices each side reads, exactly.
+    const v = res.values;
+    expect(
+      relErr(v.Rout_n, v.casc_n__ro * (1 + (v.casc_n__gm + v.casc_n__gmb) * v.in__ro) + v.in__ro),
+    ).toBeLessThan(1e-12);
+    expect(
+      relErr(v.Rout_p, v.casc_p__ro * (1 + (v.casc_p__gm + v.casc_p__gmb) * v.mir__ro) + v.mir__ro),
+    ).toBeLessThan(1e-12);
+    // The shorthand without gmb and the series ro reads the output resistance about a fifth low.
+    const short = par(av0Of(10, L, 0.9 - V_A) * roIn, av0Of(10, L, V_B - 0.9) * roMir);
+    expect(short / par(Rn, Rp)).toBeLessThan(0.85);
   });
 
   it('every device in the stack declares that it must stay saturated', () => {
@@ -1051,10 +1075,26 @@ describe('tier-3 goldens: folded cascode OTA', () => {
 
   it('gain is the pair transconductance times the parallel folded-cascode output resistance', () => {
     // The cascodes sit at 0.5 µm, the current sources they stand on at 1 µm, where VA is 5 V.
-    const Rp = av0Of(10, L, V_FOLD - 0.9) / gdsOf(I_PCS, L_CS, 1.8 - V_FOLD); // pcasc av0 / pcs gds
-    const Rn = av0Of(10, L, 0.9 - V_C) / gdsOf(rest.iNmir, L_CS, V_C); // ncasc av0 / nmir gds
-    const Rout = 1 / (1 / Rp + 1 / Rn);
-    expect(relErr(res.values.Av, gmPair * Rout)).toBeLessThan(1e-2);
+    // Under the PMOS cascode, which carries the fold current, is the folding node: the folding
+    // source's ro in parallel with the output-side pair transistor's, whose drain is there too.
+    // The NMOS cascode carries the mirror output's current and stands on that device's ro.
+    const rFold = 1 / (gdsOf(I_PCS, L_CS, 1.8 - V_FOLD) + gdsOf(rest.iOut, L_IN, V_FOLD - vTail));
+    const Rp = cascodeRout(1 / gdsOf(iFold, L, V_FOLD - 0.9), 10 * iFold, rFold);
+    const roNmir = 1 / gdsOf(rest.iNmir, L_CS, V_C);
+    const Rn = cascodeRout(1 / gdsOf(rest.iNmir, L, 0.9 - V_C), 10 * rest.iNmir, roNmir);
+    expect(relErr(res.values.R_fold, rFold)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Rout_p, Rp)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Rout_n, Rn)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Av, gmPair * par(Rp, Rn))).toBeLessThan(1e-2);
+    // Which devices each side reads, exactly.
+    const v = res.values;
+    expect(relErr(v.R_fold, 1 / (v.pcs__gds + v.in__gds))).toBeLessThan(1e-12);
+    expect(
+      relErr(v.Rout_p, v.pcasc__ro * (1 + (v.pcasc__gm + v.pcasc__gmb) * v.R_fold) + v.R_fold),
+    ).toBeLessThan(1e-12);
+    expect(
+      relErr(v.Rout_n, v.ncasc__ro * (1 + (v.ncasc__gm + v.ncasc__gmb) * v.nmir__ro) + v.nmir__ro),
+    ).toBeLessThan(1e-12);
   });
 
   it('every device declares that it must stay saturated', () => {
@@ -1702,12 +1742,26 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
 
   it('gain is the cascode gain multiplied again by the booster gain on each side', () => {
     // Every device in the stack carries the input device's current, so it cancels out of the
-    // gain: what is left is node voltages and inversion levels.
+    // gain: what is left is node voltages and inversion levels. The booster drives each
+    // cascode's gate against its source, so the cascode answers a move of its source through
+    // (1 + A)·gm + gmb, with A the booster's own intrinsic gain at gm/ID 12 and 0.6 V.
     const boost = av0Of(12, L, 0.6);
-    const Rn = (boost * av0Of(10, L, 0.9 - 0.55)) / gdsOf(iHalf, L, 0.55 - vTail);
-    const Rp = (boost * av0Of(10, L, 1.52 - 0.9)) / gdsOf(iHalf, L, 1.8 - 1.52);
-    const Rout = 1 / (1 / Rn + 1 / Rp);
-    expect(relErr(res.values.Av, gmIn * Rout)).toBeLessThan(1e-2);
+    const ro = (vds: number): number => 1 / gdsOf(iHalf, L, vds);
+    const Rn = cascodeRout(ro(0.9 - 0.55), 10 * iHalf, ro(0.55 - vTail), boost);
+    const Rp = cascodeRout(ro(1.52 - 0.9), 10 * iHalf, ro(1.8 - 1.52), boost);
+    expect(relErr(res.values.Av, gmIn * par(Rn, Rp))).toBeLessThan(1e-2);
+    // About A·av0·ro on each side, a few per cent above it: the 1 in 1 + A, gmb and the series ro.
+    const shorthand = boost * av0Of(10, L, 0.9 - 0.55) * ro(0.55 - vTail);
+    expect(Rn / shorthand - 1).toBeGreaterThan(0);
+    expect(Rn / shorthand - 1).toBeLessThan(0.05);
+    const v = res.values;
+    expect(
+      relErr(
+        v.Rout_n,
+        v.casc_n__ro * (1 + ((1 + v.boost__av0) * v.casc_n__gm + v.casc_n__gmb) * v.in__ro) +
+          v.in__ro,
+      ),
+    ).toBeLessThan(1e-12);
     for (const name of ['casc_n', 'casc_p', 'mir'])
       expect([name, block(res, name).id]).toEqual([name, block(res, 'in').id]);
   });

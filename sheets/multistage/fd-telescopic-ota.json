@@ -1,6 +1,6 @@
 {
   "title": "Fully differential telescopic OTA",
-  "description": "A fully differential telescopic-cascode OTA. Each side stacks an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails, above a tail device shared by the two sides; the cascodes boost the output resistance so a single stage reaches high gain. $A_v = g_{m,in} * R_{out}$, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's $r_o$ by its intrinsic gain ($A_{v0,cascn}/g_{ds,in}$); looking up, the PMOS cascode multiplies the load's $r_o$ ($A_{v0,cascp}/g_{ds,load}$). Those branch expressions are the standard cascode approximation (they drop second-order $g_{mb}$ and finite-cascode-gain terms). Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item $I_{cmfb}$ added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Only the tail's bias reference is programmed, with $I_{tail}$: the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and each side carries half of what it delivers, so a design held fixed at another process condition follows its reference instead of carrying a typed current. Entered from the COMMON MODE like its siblings: the tail node is solved by a design constraint so the input common mode it produces, the tail node plus the input devices' gate-source voltage, equals $CM_{dc}$. The cascode gates are bias lines drawn with the branches that set them, each a stacked replica bias with its own programmed current: a diode on the rail whose drop places the node under the cascode, and a device at the cascode's inversion level stacked on it, whose gate is the cascode gate. The nodes under the two cascodes, $V_a$ and $V_b$, are solved under those gates by design constraints, so wherever the design is held they move with the devices, as silicon's do; the knobs that place them are the bias branches' inversion levels. The loads' gate is the common-mode feedback loop's, which this sheet does not draw, so it stays a port. The two inputs are held at $CM_{dc}$ and the two outputs at $V_{out}$, the level the output common-mode loop keeps them at. Every device in the stack declares that it must stay saturated. On the demo NMOS table every device sizes against the same data.",
+  "description": "A fully differential telescopic-cascode OTA. Each side stacks an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails, above a tail device shared by the two sides; the cascodes boost the output resistance so a single stage reaches high gain. $A_v = g_{m,in} * R_{out}$, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's $r_o$ by about its own gain, $r_{o,cascn}(1 + (g_m + g_{mb})_{cascn} r_{o,in}) + r_{o,in}$; looking up, the PMOS cascode does the same to the load's, $r_{o,cascp}(1 + (g_m + g_{mb})_{cascp} r_{o,load}) + r_{o,load}$. Each cascode's source moves with the current while its body stays on its rail, so it answers through $g_m + g_{mb}$, and its own $r_o$ adds in series. Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item $I_{cmfb}$ added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Only the tail's bias reference is programmed, with $I_{tail}$: the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and each side carries half of what it delivers, so a design held fixed at another process condition follows its reference instead of carrying a typed current. Entered from the COMMON MODE like its siblings: the tail node is solved by a design constraint so the input common mode it produces, the tail node plus the input devices' gate-source voltage, equals $CM_{dc}$. The cascode gates are bias lines drawn with the branches that set them, each a stacked replica bias with its own programmed current: a diode on the rail whose drop places the node under the cascode, and a device at the cascode's inversion level stacked on it, whose gate is the cascode gate. The nodes under the two cascodes, $V_a$ and $V_b$, are solved under those gates by design constraints, so wherever the design is held they move with the devices, as silicon's do; the knobs that place them are the bias branches' inversion levels. The loads' gate is the common-mode feedback loop's, which this sheet does not draw, so it stays a port. The two inputs are held at $CM_{dc}$ and the two outputs at $V_{out}$, the level the output common-mode loop keeps them at. Every device in the stack declares that it must stay saturated. On the demo NMOS table every device sizes against the same data.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -349,7 +349,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vth", "vdsat", "vnth_m", "cgg", "id"]
+        "provides": ["gm", "ro", "vgs", "vth", "vdsat", "vnth_m", "cgg", "id"]
       },
       "params": {
         "Ix": "tail__id/2",
@@ -367,7 +367,7 @@
       "name": "cascn",
       "doc": {
         "title": "NMOS cascode device",
-        "description": "The NMOS cascode over the input device; its intrinsic gain multiplies the input device's output resistance (the down-looking branch of Rout).",
+        "description": "The NMOS cascode over the input device; its gm + gmb against the input device's ro multiplies its own ro (the down-looking branch of Rout).",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -394,7 +394,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat", "vgs"]
+        "provides": ["ro", "gm", "gmb", "vdsat", "vgs"]
       },
       "params": {
         "Ix": "in__id",
@@ -412,7 +412,7 @@
       "name": "cascp",
       "doc": {
         "title": "PMOS cascode device",
-        "description": "The PMOS cascode under the load; its intrinsic gain multiplies the load's output resistance (the up-looking branch of Rout).",
+        "description": "The PMOS cascode under the load; its gm + gmb against the load's ro multiplies its own ro (the up-looking branch of Rout).",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -445,7 +445,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat", "vgs"]
+        "provides": ["ro", "gm", "gmb", "vdsat", "vgs"]
       },
       "params": {
         "Ix": "in__id",
@@ -488,7 +488,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gds", "vdsat", "gm", "vnth_m"]
+        "provides": ["ro", "vdsat", "gm", "vnth_m"]
       },
       "params": { "Ix": "in__id", "Lx": "L_load", "gx": "gm_id_load", "vx": "p_sign*(VDD - V_b)" },
       "nodes": [
@@ -507,15 +507,15 @@
     { "name": "gm_in", "expr": "in__gm", "unit": "S", "note": "input-pair transconductance" },
     {
       "name": "Rdown",
-      "expr": "cascn__av0/in__gds",
+      "expr": "cascn__ro*(1 + (cascn__gm + cascn__gmb)*in__ro) + in__ro",
       "unit": "ohm",
-      "note": "down-looking branch resistance: the input device ro boosted by the NMOS cascode intrinsic gain (cascode approximation)"
+      "note": "down-looking branch resistance: the NMOS cascode's ro times one plus its gm + gmb times the input device's ro, plus that ro in series. A current change moves the cascode's source by ro_in, and the cascode answers through gm + gmb because its body stays at ground. Worked from the simulated devices this form gives the simulated output resistance to 0.1 %; av0_cascn*ro_in, without gmb and the series ro, read it a fifth low"
     },
     {
       "name": "Rup",
-      "expr": "cascp__av0/load__gds",
+      "expr": "cascp__ro*(1 + (cascp__gm + cascp__gmb)*load__ro) + load__ro",
       "unit": "ohm",
-      "note": "up-looking branch resistance: the load ro boosted by the PMOS cascode intrinsic gain (cascode approximation)"
+      "note": "up-looking branch resistance, in the same form: the PMOS cascode's ro times one plus its gm + gmb times the load's ro, plus that ro. Its source sits below its bulk at VDD and moves with the current, so its body effect counts as the NMOS cascode's does"
     },
     {
       "name": "Rout",

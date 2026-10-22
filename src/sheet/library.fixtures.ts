@@ -98,6 +98,14 @@ export const vnthM = (gm: number): number =>
 /** Body transconductance of the demo model — exact at every point (see src/demo/index.ts). */
 export const gmbOf = (gm: number): number => BODY_FACTOR * gm;
 
+/** Output resistance looking into a cascode's drain, in the form the cascoded sheets write it:
+ *  roCasc·(1 + gmEff·roBelow) + roBelow, where roBelow is the resistance under the cascode's
+ *  source. The source moves with the current while the body does not, so the cascode answers
+ *  through gm + gmb (gmbOf). A gain booster of gain `boost` driving the gate against the source
+ *  multiplies the gate's share: gmEff = (1 + boost)·gm + gmb. */
+export const cascodeRout = (roCasc: number, gmCasc: number, roBelow: number, boost = 0): number =>
+  roCasc * (1 + ((1 + boost) * gmCasc + gmbOf(gmCasc)) * roBelow) + roBelow;
+
 /** Gate capacitance of the demo model at a sized width: cgg = W·L·Cox, exact at every
  *  operating point (the model gives cgg no bias dependence at all). The sized W is what the
  *  sizing lands on, so an input-capacitance golden pins the model relation and which device the

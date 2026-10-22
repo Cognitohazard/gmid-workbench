@@ -1,6 +1,6 @@
 {
   "title": "Degenerated differential pair",
-  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The two resistors meet at the tail node, and the tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and each side of the pair carries half of what the tail delivers there. Entered from the COMMON MODE: the tail node $V_{tail}$ is the one free bias variable, solved by a design constraint so that the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. No gate is a port: the two inputs are held at $CM_{dc}$, and the two drains at $V_{out,dc}$, the level the undrawn load sets. The device's source node sits one resistor drop above the tail node, $V_s = V_{tail} + I_D*R_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — and both bias coordinates follow from it ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), so the body effect is charged in full rather than only the resistor's few tens of millivolts. The resistor drop comes out of the tail device's drain-source voltage, so the low end of the common-mode range is where that device leaves saturation, and a check says so. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
+  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The two resistors meet at the tail node, and the tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and each side of the pair carries half of what the tail delivers there. Entered from the COMMON MODE: the tail node $V_{tail}$ is the one free bias variable, solved by a design constraint so that the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. No gate is a port: the two inputs are held at $CM_{dc}$, and the two drains at $V_{out,dc}$, the level the undrawn load sets. The device's source node sits one resistor drop above the tail node, $V_s = V_{tail} + I_D*R_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — and both bias coordinates follow from it ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), so the body effect is charged in full rather than only the resistor's few tens of millivolts. The resistor drop comes out of the tail device's drain-source voltage, so the low end of the common-mode range is where that device leaves saturation, and a check says so. Degeneration also raises each device's output resistance, to $r_o (1 + (g_m + g_{mb}) R_s) + R_s$, and the output resistance and the gain into the estimated load conductance count it.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -244,7 +244,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gmb", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gmb", "ro", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_half": "tail__id/2",
@@ -286,15 +286,15 @@
     },
     {
       "name": "Rout",
-      "expr": "1/(in__gds + gds_load_est)",
+      "expr": "par(in__ro*n_deg + R_s, 1/gds_load_est)",
       "unit": "ohm",
-      "note": "the resistance this stage presents at its output: the input device's own output conductance in parallel with the estimated load conductance. Like the gain built on it, this neglects the degeneration boost the source resistor also gives the device r_o — so the equation reads LOW, which is conservative for gain but not for loading: a parent checking a ratio against it will clear the check more easily than the real node would allow. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
+      "note": "the resistance this stage presents at its output: the input device's output resistance as its source resistor raises it, ro*(1 + (gm + gmb)*R_s) + R_s, which is ro*n_deg + R_s, in parallel with the estimated load conductance. A current change at the drain moves the source by R_s times it, and the device answers through gm + gmb because its body stays at ground. Worked from the simulated devices this gives the simulated output resistance exactly; the device's bare ro read it 18 % low. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
       "expr": "Gm_eff*Rout",
       "unit": "V/V",
-      "note": "conservative: neglects the degeneration boost of the device output resistance"
+      "note": "the degenerated transconductance into the degeneration-boosted device resistance in parallel with the estimated load"
     },
     { "name": "GBW", "expr": "Gm_eff/(2*pi*CL)", "unit": "Hz" },
     {

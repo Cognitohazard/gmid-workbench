@@ -49,6 +49,7 @@ import {
   gmIdDemo,
   cggOf,
   par,
+  cascodeRout,
   stage2Rout,
   block,
   regionOf,
@@ -107,6 +108,40 @@ const stage2Current = (vgsRef: number): number => (K2 * I1 * (VA05 + 0.9)) / (VA
  *  so its transconductance is 12 times the current its load delivers. */
 const pmOf = (gm1: number, gm2: number): number =>
   90 - (Math.atan(gm1 / CC / (gm2 / (C_LOAD + 0.5e-12))) * 180) / Math.PI;
+
+/** The cascode-compensated OTA's margins from its closed forms, at C1_est 0.5 pF and the shared Cc
+ *  and CL: the left-half-plane zero wz = 2·gm_c/Cc, the non-dominant pair wn =
+ *  sqrt(gm2·gm_c/(C1·CL)) with Q = Cc·gm2/(wn·C1·(CL + Cc)), the right-half-plane zero wzr =
+ *  gm2/C1, the unity crossing wu = wc/sqrt(1 − (wc/wz)²) with wc = gm1/Cc, and the phase margin
+ *  there. The -180° crossing is found here by bisecting that transfer function's own phase (the
+ *  dominant pole's 90° spent) between wn and 10·wn, not from the sheet's quadratic, and the loop
+ *  gain there is returned as a gain margin in dB. */
+const ahujaMargins = (gm1: number, gm2: number, gmc: number) => {
+  const C1 = 0.5e-12;
+  const deg = 180 / Math.PI;
+  const wc = gm1 / CC;
+  const wz = (2 * gmc) / CC;
+  const wzr = gm2 / C1;
+  const wn = Math.sqrt((gm2 * gmc) / (C1 * C_LOAD));
+  const Q = (CC * gm2) / (wn * C1 * (C_LOAD + CC));
+  const wu = wc / Math.sqrt(1 - (wc / wz) ** 2);
+  const pair = Math.atan2(wu / (Q * wn), 1 - (wu / wn) ** 2);
+  const pm = 90 + (Math.atan(wu / wz) - Math.atan(wu / wzr) - pair) * deg;
+  const phase = (w: number): number =>
+    Math.atan(w / wz) - Math.atan(w / wzr) - Math.atan2(w / (Q * wn), 1 - (w / wn) ** 2);
+  let [lo, hi] = [wn, 10 * wn]; // phase + 90° falls through -90° in between
+  for (let i = 0; i < 200; i++) {
+    const mid = Math.sqrt(lo * hi);
+    if (phase(mid) > -Math.PI / 2) lo = mid;
+    else hi = mid;
+  }
+  const w180 = Math.sqrt(lo * hi);
+  const x = w180 / wn;
+  const loop =
+    ((wc / w180) * Math.hypot(1, w180 / wz) * Math.hypot(1, w180 / wzr)) /
+    Math.hypot(1 - x * x, x / Q);
+  return { wz, wn, Q, pm, x180: x, gmDb: -20 * Math.log10(loop) };
+};
 
 /** The sheet sized on the shared table and then held on a second characterization of the same
  *  device with half the current and half the transconductance at every gate voltage. */
@@ -533,6 +568,10 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
   const iOut = iTail * share;
   const iIn = iTail - iOut;
   const gm1 = (iOut * (gmIdDemo(VGS_GMID12_L05 + delta) + 12)) / 2;
+  // The output-side cascode carries the output side's current on its partner's width and gate, so
+  // its inversion is its partner's gm/ID 10 moved by that current ratio.
+  const gmCasco =
+    gmIdDemo(vgsForCurrentRatio(VGS_GMID10_L05, (R_LD * (VA05 + 0.25)) / (VA05 + V_1 - vX))) * iOut;
 
   it('one current is typed, into the bias reference, and every tie is one gate wire', () => {
     // The programmed current goes into the bias reference and nowhere else; the mirror's diode
@@ -658,25 +697,61 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     expect(relErr(v.SR, v.tail__id / CC)).toBeLessThan(1e-12);
   });
 
-  it('stage-1 gain reads the two conductances on the output side', () => {
-    // The output-side input device carries I_o at vds = V_X − V_tail; the mirror's output device
-    // copies its diode side's saturation current, so its gds is I_r over (VA + vgs(8)).
-    const gdsOut = gdsOf(iOut, L05, vX - vTail) + gdsOf(iIn, L05, VGS_GMID8_L05);
-    expect(relErr(v.Av1, gm1 / gdsOut)).toBeLessThan(1e-3);
-    expect(relErr(v.Av1, v.gm1 / (v.ino__gds + v.ld1o__gds))).toBeLessThan(1e-12);
+  it('stage-1 gain reads the cascoded input device against the mirror output device', () => {
+    // Looking down from the stage-1 output: the output-side input device, I_o at vds = V_X − V_tail,
+    // under its cascode, I_o at vds = V1 − V_X, which raises it to ro_c·(1 + 1.2·gm_c·ro_in) +
+    // ro_in. Looking up: the mirror's output device, which copies its diode side's saturation
+    // current, so its gds is I_r over (VA + vgs(8)). The cascoded side is tens of times the
+    // mirror's, so the mirror sets nearly all of it.
+    const roIn = 1 / gdsOf(iOut, L05, vX - vTail);
+    const down = cascodeRout(1 / gdsOf(iOut, L05, V_1 - vX), gmCasco, roIn);
+    const up = 1 / gdsOf(iIn, L05, VGS_GMID8_L05);
+    expect(relErr(v.Rout1, par(down, up))).toBeLessThan(1e-3);
+    expect(relErr(v.Av1, gm1 * par(down, up))).toBeLessThan(1e-3);
+    expect(down / up).toBeGreaterThan(10);
+    expect(
+      relErr(v.Rout1, par(v.casco__ro * (1 + v.gm_casc * v.ino__ro) + v.ino__ro, v.ld1o__ro)),
+    ).toBeLessThan(1e-12);
+    expect(relErr(v.Av1, v.gm1 * v.Rout1)).toBeLessThan(1e-12);
   });
 
   it('the compensation returns through the output-side cascode', () => {
     // That cascode carries the output side's current, R_LD = 0.968 times its partner's, at a little
-    // less overdrive, so its gm sits between R_LD times its partner's and its partner's.
+    // less overdrive, so its gm sits between R_LD times its partner's and its partner's. Seen from
+    // its source, where Cc returns, it is gm + gmb, since the source moves and the body does not.
     expect(relErr(v.casc__gm, 10 * v.in__id)).toBeLessThan(1e-9);
-    expect(v.gm_casc).toBeGreaterThan(R_LD * v.casc__gm);
-    expect(v.gm_casc).toBeLessThan(v.casc__gm);
+    expect(v.casco__gm).toBeGreaterThan(R_LD * v.casc__gm);
+    expect(v.casco__gm).toBeLessThan(v.casc__gm);
+    expect(relErr(v.casco__gm, gmCasco)).toBeLessThan(1e-3);
+    expect(v.gm_casc).toBe(v.casco__gm + v.casco__gmb);
+    expect(relErr(v.gm_casc, (1 + BODY_FACTOR) * gmCasco)).toBeLessThan(1e-3);
   });
 
-  it('phase margin has no RHP-zero term (cascode compensation removes it)', () => {
-    expect(relErr(v.PM, pmOf(gm1, gm2))).toBeLessThan(1e-3);
-    expect(relErr(v.PM, pmOf(v.gm1, v.gm2))).toBeLessThan(1e-9);
+  it('the margins carry the zero the compensation makes and the pair of poles above it', () => {
+    // From the closed forms (ahujaMargins), with C1_est 0.5 pF: the zero at 2·gm_c/Cc, the pair
+    // at sqrt(gm2·gm_c/(C1·CL)) with Q = Cc·gm2/(wn·C1·(CL + Cc)), the right-half-plane zero at
+    // gm2/C1, the crossing where (wc/w)·sqrt(1 + (w/wz)²) is 1, and -180° just under sqrt(2)·wn,
+    // where the pair's lag past 90° meets the zero's lead less the right-half-plane zero's lag.
+    const m = ahujaMargins(gm1, gm2, (1 + BODY_FACTOR) * gmCasco);
+    expect(relErr(v.wz, m.wz)).toBeLessThan(1e-3);
+    expect(relErr(v.wn, m.wn)).toBeLessThan(1e-3);
+    expect(relErr(v.Q2, m.Q)).toBeLessThan(1e-3);
+    expect(relErr(v.PM, m.pm)).toBeLessThan(1e-3);
+    expect(relErr(v.gain_margin, m.gmDb)).toBeLessThan(1e-3);
+    const exact = ahujaMargins(v.gm1, v.gm2, v.gm_casc);
+    expect(relErr(v.PM, exact.pm)).toBeLessThan(1e-9);
+    expect(relErr(v.x180, exact.x180)).toBeLessThan(1e-9);
+    expect(relErr(v.gain_margin, exact.gmDb)).toBeLessThan(1e-9);
+    expect(v.x180).toBeLessThan(Math.SQRT2);
+    expect(v.w180).toBe(v.x180 * v.wn);
+    // The zero gives back most of what the pair takes, so the margin reads far above the two-pole
+    // figure; at the -180° crossing the loop gain sits near its level above the zero,
+    // gm1/(2·gm_c), which sets the gain margin.
+    expect(v.PM - pmOf(v.gm1, v.gm2)).toBeGreaterThan(30);
+    expect(Math.abs(v.gain_margin + 20 * Math.log10(v.gm1 / (2 * v.gm_casc)))).toBeLessThan(1);
+    // 6.12 dB against the 6 dB target: inside the near-miss band, which reads amber and feasible.
+    expect(statusOf(res, 'gain-margin')).toBe('amber');
+    expect(res.feasible).toBe(true);
   });
 
   it('every device the design needs saturated says so', () => {
@@ -1068,16 +1143,25 @@ describe('tier4 goldens: Fully differential telescopic OTA', () => {
   });
 
   it('the cascoded gain matches gm_in·(Rdown ∥ Rup) from the branch closed forms', () => {
-    // Every device in a side carries the same current, so it cancels out of the gain.
-    const gdsIn = gdsOf(iSide, 0.5e-6, V_A - V_S);
-    const av0cascn = 8 * (va + (0.95 - V_A));
-    const gdsLoad = gdsOf(iSide, 0.5e-6, 1.8 - V_B);
-    const av0cascp = 8 * (va + (V_B - 0.95));
-    const av = gmIn * par(av0cascn / gdsIn, av0cascp / gdsLoad);
-    expect(relErr(res.values.Av, av)).toBeLessThan(1e-2);
+    // Every device in a side carries the same current, so it cancels out of the gain. Each branch
+    // is the cascode's ro times 1 + (gm + gmb)·ro of the device under it, plus that ro, with the
+    // cascodes at gm/ID 8 and gmb = 0.2·gm.
+    const ro = (vds: number): number => 1 / gdsOf(iSide, 0.5e-6, vds);
+    const rDown = cascodeRout(ro(0.95 - V_A), 8 * iSide, ro(V_A - V_S));
+    const rUp = cascodeRout(ro(V_B - 0.95), 8 * iSide, ro(1.8 - V_B));
+    expect(relErr(res.values.Rdown, rDown)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Rup, rUp)).toBeLessThan(1e-2);
+    expect(relErr(res.values.Av, gmIn * par(rDown, rUp))).toBeLessThan(1e-2);
     // …and Rout is that same parallel combination, which the gain equation already reads through.
-    expect(relErr(res.values.Rout, par(av0cascn / gdsIn, av0cascp / gdsLoad))).toBeLessThan(1e-2);
+    expect(relErr(res.values.Rout, par(rDown, rUp))).toBeLessThan(1e-2);
     expect(relErr(res.values.Av, gmIn * res.values.Rout)).toBeLessThan(1e-3);
+    const v = res.values;
+    expect(
+      relErr(v.Rdown, v.cascn__ro * (1 + (v.cascn__gm + v.cascn__gmb) * v.in__ro) + v.in__ro),
+    ).toBeLessThan(1e-12);
+    expect(
+      relErr(v.Rup, v.cascp__ro * (1 + (v.cascp__gm + v.cascp__gmb) * v.load__ro) + v.load__ro),
+    ).toBeLessThan(1e-12);
   });
 
   it('input capacitance is the gate of one input device', () => {

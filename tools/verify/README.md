@@ -140,8 +140,9 @@ Why these bands:
 
 ngspice-42; sky130A as built by open_pdks `c6d73a35`; tt corner, 27 °C; every sheet at its
 defaults (no range end, no other corner). All 37 library sheets that are circuits produced a deck
-and converged; the 8 that declare `"nodes": "none"` are not circuits and are not simulated. 384 of
-the 408 figures compared are within their band, and 28 sheets have every figure within band. The
+and converged; the 8 that declare `"nodes": "none"` are not circuits and are not simulated. 396 of
+the 408 figures compared are within their band, and 34 sheets have every figure within band
+(the run before the formula corrections it found read 384 and 28). The
 deck generated for the five-transistor OTA agrees with the hand-written reference decks below to
 0.05 % (tail current 18.095 µA, offset 4.744 mV against their 4.743, gain 53.90, unity-gain
 frequency 8.42 MHz, thermal noise 28.24 nV/√Hz; those decks round the widths to five figures),
@@ -160,30 +161,27 @@ which is the check that the generator writes the circuit those decks were writte
 | `mirrors-bias/pmos-bias-reference` | 2/2 | — | — | — |
 | `mirrors-bias/pmos-cascode-bias` | 4/4 | — | — | — |
 | `mirrors-bias/simple-mirror` | 5/5 | — | — | — |
-| `mirrors-bias/wide-swing-cascode-mirror` | 11/12 | — | — | Rout |
+| `mirrors-bias/wide-swing-cascode-mirror` | 11/12 | — | — | — |
 | `mirrors-bias/widlar-current-source` | 6/6 | — | — | — |
 | `multistage/class-ab-output-monticelli` | 5/5 | gn, gp | — | — |
-| `multistage/fd-telescopic-ota` | 28/30 | vbp | — | Av, Rout |
-| `multistage/fd-telescopic-ota` [cmfb] | 29/31 | — | — | Av, Rout |
-| `multistage/fd-two-stage-ota` | 12/21 | vbp | — | I(s2#0), I(s2#1), V(o1n), V(o1p), I(hold outn), I(hold outp), I(supply vdd), Rout, PM |
-| `multistage/fd-two-stage-ota` [cmfb] | 22/22 | — | — | — |
+| `multistage/fd-telescopic-ota` | 30/30 | vbp | — | — |
+| `multistage/fd-two-stage-ota` | 12/21 | vbp | — | — |
 | `multistage/flipped-voltage-follower` | 6/6 | — | — | — |
 | `multistage/stage2-current-source-load` | 2/2 | vb | — | — |
 | `multistage/super-source-follower` | 6/6 | — | — | — |
-| `multistage/two-stage-cascode-comp-ota` | 22/24 | vcas | — | Av, PM |
+| `multistage/two-stage-cascode-comp-ota` | 24/24 | vcas | — | — |
 | `multistage/two-stage-miller-ota` | 20/20 | — | — | — |
 | `otas/current-mirror-ota` | 24/24 | — | — | — |
-| `otas/degenerated-differential-pair` | 13/15 | — | — | Av, Rout |
+| `otas/degenerated-differential-pair` | 15/15 | — | — | — |
 | `otas/differential-pair-tail` | 13/13 | — | — | — |
 | `otas/five-transistor-ota` | 18/18 | — | — | — |
-| `otas/folded-cascode-ota` | 32/34 | — | — | Av, Rout |
-| `otas/gain-boosted-cascode-ota` | 22/24 | bi, vgn, vgp | a, b, bo | Av, Rout |
-| `otas/gain-boosted-cascode-ota` [boosters] | 24/26 | bi | bo | Av, Rout |
+| `otas/folded-cascode-ota` | 34/34 | — | — | — |
+| `otas/gain-boosted-cascode-ota` | 22/24 | bi, vgn, vgp | a, b, bo | — |
 | `otas/inverter-based-ota` | 8/8 | — | — | — |
-| `otas/telescopic-cascode-ota` | 29/31 | — | — | Av, Rout |
+| `otas/telescopic-cascode-ota` | 31/31 | — | — | — |
 | `stages/cascode-cs-amp` | 12/12 | vbp | — | — |
 | `stages/cmos-inverter-amp` | 8/8 | — | — | — |
-| `stages/common-gate` | 5/7 | vg | — | GBW, vn_in |
+| `stages/common-gate` | 7/7 | vg | — | — |
 | `stages/cs-amp-current-source-load` | 8/8 | vbp | — | — |
 | `stages/cs-amp-diode-load` | 8/8 | — | — | — |
 | `stages/cs-amp-resistive-load` | 7/7 | — | — | — |

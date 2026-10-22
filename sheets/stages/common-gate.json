@@ -48,10 +48,10 @@
     },
     {
       "name": "cdd_est",
-      "value": 0.2e-12,
+      "value": 1e-15,
       "unit": "F",
       "role": "spec",
-      "note": "output-node parasitic estimate; refine from extraction"
+      "note": "estimate: the capacitance the device adds at the output, its drain junction and gate-drain overlap. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. The 2.5 µm device the defaults size adds 1.0 fF, simulated; wiring comes on top, so refine from extraction"
     },
     {
       "name": "I_bias",
@@ -113,13 +113,18 @@
       "unit": "V/V",
       "note": "non-inverting gain: the source drive acts through gm, the source-body generator gmb, and the device's own gds in parallel, into the load paralleled with ro"
     },
-    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    {
+      "name": "Cout",
+      "expr": "CL + cdd_est",
+      "unit": "F",
+      "note": "the load plus what the device adds at the output"
+    },
     { "name": "GBW", "expr": "(gm + gmb + gds)/(2*pi*Cout)", "unit": "Hz" },
     {
       "name": "vn_in",
-      "expr": "vnth_m",
+      "expr": "sqrt((vnth_m*gm)^2 + 4*k*T/R_load)/(gm + gmb + gds)",
       "unit": "V/sqrt(Hz)",
-      "note": "device channel thermal density; a common-gate input also passes the source's own noise, which is set outside this stage"
+      "note": "thermal density referred to the input, the source: the channel's noise current (vnth_m*gm) and the load resistor's 4kT/R_load both land at the drain, and the source reaches the drain through gm + gmb + gds, the transconductance of the gain, so both refer back through that rather than through gm. Referred by gm alone, and without the resistor, the row read 18 % above the simulated density. A common-gate input also passes the source's own noise, which is set outside this stage"
     },
     {
       "name": "I_q",

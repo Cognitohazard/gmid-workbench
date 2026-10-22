@@ -38,10 +38,10 @@
     },
     {
       "name": "cdd_est",
-      "value": 0.2e-12,
+      "value": 20e-15,
       "unit": "F",
       "role": "spec",
-      "note": "output-node parasitic estimate (both drains + wiring); refine from extraction"
+      "note": "estimate: the capacitance the two devices add at the output, their drain junctions and gate-drain overlaps. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. The 1.2 µm NMOS and the 94 µm PMOS the defaults size add 21.5 fF, simulated, nearly all of it the PMOS; wiring comes on top, so refine from extraction"
     },
     {
       "name": "I_bias",
@@ -208,7 +208,12 @@
       "unit": "V/V",
       "note": "combined transconductance into the combined output conductance"
     },
-    { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
+    {
+      "name": "Cout",
+      "expr": "CL + cdd_est",
+      "unit": "F",
+      "note": "the load plus what the two devices add at the output"
+    },
     { "name": "GBW", "expr": "gm_tot/(2*pi*Cout)", "unit": "Hz" },
     {
       "name": "vn_in",

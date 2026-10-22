@@ -1,6 +1,6 @@
 {
   "title": "Telescopic cascode OTA",
-  "description": "A single-ended telescopic cascode, drawn at rest: an input pair, an input (NMOS) cascode, a load (PMOS) cascode and a cascoded current-mirror load stacked between the rails, plus the tail and the bias reference it copies. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — the drain of the diode side's PMOS cascode, where its NMOS cascode's drain meets it — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$. The two sides of the stack therefore do not sit at the same voltages, and every device is drawn on its own side. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error; the pair's two transistors are one width, each carrying its own share of what the tail delivers; each cascode carries the current of the pair transistor under it; the mirror's diode side carries the diode-side current, and its output side shares its gate and width, so what it returns to the output is read from the table at its own drain voltage. The share is solved so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. Cascoding multiplies each side's output resistance by the cascode intrinsic gain, so $A_v = g_{m,pair} * R_{out}$ with $R_{out}$ = par(NMOS side, PMOS side) and each side's $R_{out} \\approx A_{v0,casc} / g_{ds}$ of the device it cascodes, all read on the output side. That is the topology's headline: the highest single-stage gain per unit current, bought with output-swing headroom — the four stacked $V_{dsat}$ plus the tail eat the rail. The stack is parameterized by its NODES, not by per-device drops: the tail node is solved by a design constraint so the produced $CM_{in}$ equals $CM_{dc}$; the cascode gates are bias lines both sides share, each drawn with the branch that sets it. The NMOS cascode gate is the top of a stacked replica bias: a diode on ground whose drop places the node under the cascode, with a device at the cascode's inversion level stacked on it; the PMOS cascode gate is a diode-connected PMOS at a low inversion level, one strong-inversion $|V_{GS}|$ below the supply. Both carry their own programmed currents. All four nodes under the cascodes are solved under those gates by design constraints: the output side's $V_a$ (pair drain / NMOS-cascode source) and $V_b$ (mirror drain / PMOS-cascode source), and the diode side's two. The knobs that place them are the bias branches' inversion levels, and wherever the design is held the gates move with the devices, as silicon's do. Every device $V_{DS}$ is then a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias. Every bias gate is drawn, so the only ports are the two input gates, which the application drives. The cascode-pole and settling behaviour is estimate-grade; sim owns sign-off.",
+  "description": "A single-ended telescopic cascode, drawn at rest: an input pair, an input (NMOS) cascode, a load (PMOS) cascode and a cascoded current-mirror load stacked between the rails, plus the tail and the bias reference it copies. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — the drain of the diode side's PMOS cascode, where its NMOS cascode's drain meets it — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$. The two sides of the stack therefore do not sit at the same voltages, and every device is drawn on its own side. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error; the pair's two transistors are one width, each carrying its own share of what the tail delivers; each cascode carries the current of the pair transistor under it; the mirror's diode side carries the diode-side current, and its output side shares its gate and width, so what it returns to the output is read from the table at its own drain voltage. The share is solved so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. Cascoding multiplies each side's output resistance by about the cascode's own gain, so $A_v = g_{m,pair} * R_{out}$ with $R_{out}$ = par(NMOS side, PMOS side) and each side's $R_{out} = r_{o,casc}(1 + (g_m + g_{mb})_{casc} r_o) + r_o$, $r_o$ that of the device it cascodes, all read on the output side. That is the topology's headline: the highest single-stage gain per unit current, bought with output-swing headroom — the four stacked $V_{dsat}$ plus the tail eat the rail. The stack is parameterized by its NODES, not by per-device drops: the tail node is solved by a design constraint so the produced $CM_{in}$ equals $CM_{dc}$; the cascode gates are bias lines both sides share, each drawn with the branch that sets it. The NMOS cascode gate is the top of a stacked replica bias: a diode on ground whose drop places the node under the cascode, with a device at the cascode's inversion level stacked on it; the PMOS cascode gate is a diode-connected PMOS at a low inversion level, one strong-inversion $|V_{GS}|$ below the supply. Both carry their own programmed currents. All four nodes under the cascodes are solved under those gates by design constraints: the output side's $V_a$ (pair drain / NMOS-cascode source) and $V_b$ (mirror drain / PMOS-cascode source), and the diode side's two. The knobs that place them are the bias branches' inversion levels, and wherever the design is held the gates move with the devices, as silicon's do. Every device $V_{DS}$ is then a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias. Every bias gate is drawn, so the only ports are the two input gates, which the application drives. The cascode-pole and settling behaviour is estimate-grade; sim owns sign-off.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -177,7 +177,7 @@
       "max": 16,
       "unit": "1/V",
       "role": "choice",
-      "note": "cascode-device inversion, set on the two output-side cascodes; the diode-side cascodes copy their widths. Higher gm/ID lifts the cascode gain av0_casc but costs vdsat headroom"
+      "note": "cascode-device inversion, set on the two output-side cascodes; the diode-side cascodes copy their widths. Higher gm/ID lifts the cascode's gain but costs vdsat headroom"
     },
     {
       "name": "gm_id_mir",
@@ -378,7 +378,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "ro", "vgs", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_side": "tail__id*out_share",
@@ -393,7 +393,7 @@
       "name": "casc_n",
       "doc": {
         "title": "Input (NMOS) cascode",
-        "description": "The output side's NMOS cascode; its intrinsic gain av0 multiplies the output-side pair transistor's ro to set the NMOS-side Rout. It is in that transistor's branch and carries its current. Its source stands on the internal node V_a, so that is its body bias. It publishes its width, which the diode-side cascode copies.",
+        "description": "The output side's NMOS cascode; its gm + gmb against the output-side pair transistor's ro multiplies its own ro to set the NMOS-side Rout. It is in that transistor's branch and carries its current. Its source stands on the internal node V_a, so that is its body bias. It publishes its width, which the diode-side cascode copies.",
         "polarity": "n",
         "params": [
           { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -420,7 +420,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat", "gm", "vgs", "W"]
+        "provides": ["ro", "vdsat", "gm", "gmb", "vgs", "W"]
       },
       "params": {
         "I_side": "in__id",
@@ -435,7 +435,7 @@
       "name": "casc_p",
       "doc": {
         "title": "Load (PMOS) cascode",
-        "description": "The output side's PMOS cascode; its intrinsic gain av0 multiplies the mirror output device's ro to set the PMOS-side Rout. It is in the output-side pair transistor's branch and carries its current. Its source stands on the internal node V_b, below the bulk at VDD, so its body bias is VDD - V_b (the PMOS tables' vsb axis carries that magnitude). It publishes its width, which the diode-side cascode copies.",
+        "description": "The output side's PMOS cascode; its gm + gmb against the mirror output device's ro multiplies its own ro to set the PMOS-side Rout. It is in the output-side pair transistor's branch and carries its current. Its source stands on the internal node V_b, below the bulk at VDD, so its body bias is VDD - V_b (the PMOS tables' vsb axis carries that magnitude). It publishes its width, which the diode-side cascode copies.",
         "polarity": "p",
         "params": [
           { "name": "I_side", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -462,7 +462,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat", "vgs", "W"]
+        "provides": ["ro", "vdsat", "gm", "gmb", "vgs", "W"]
       },
       "params": {
         "I_side": "in__id",
@@ -545,7 +545,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vnth_m", "id"]
+        "provides": ["gm", "ro", "vnth_m", "id"]
       },
       "params": {
         "W_m": "mirr__W",
@@ -709,15 +709,15 @@
     },
     {
       "name": "Rout_n",
-      "expr": "casc_n__av0/in__gds",
+      "expr": "casc_n__ro*(1 + (casc_n__gm + casc_n__gmb)*in__ro) + in__ro",
       "unit": "ohm",
-      "note": "NMOS-side output resistance: the output-side pair transistor's ro boosted by its cascode's intrinsic gain"
+      "note": "NMOS-side output resistance: the cascode's own ro times one plus its gm + gmb times the output-side pair transistor's ro, plus that ro in series. A current change at the output moves the cascode's source by ro_in, and the cascode answers through gm + gmb, because its body stays at ground while its source moves. Worked from the simulated devices this form gives the simulated output resistance to 0.1 %; av0_casc*ro_in, which leaves out gmb and the series ro, read it about a fifth low"
     },
     {
       "name": "Rout_p",
-      "expr": "casc_p__av0/mir__gds",
+      "expr": "casc_p__ro*(1 + (casc_p__gm + casc_p__gmb)*mir__ro) + mir__ro",
       "unit": "ohm",
-      "note": "PMOS-side output resistance: the mirror output device's ro boosted by the output-side load cascode's intrinsic gain"
+      "note": "PMOS-side output resistance, in the same form: the output-side load cascode's ro times one plus its gm + gmb times the mirror output device's ro, plus that ro. The cascode's source sits below its bulk at VDD and moves with the current, so its body effect counts here as on the NMOS side"
     },
     {
       "name": "Rout",
