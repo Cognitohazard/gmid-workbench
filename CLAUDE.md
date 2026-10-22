@@ -48,6 +48,12 @@ Before declaring web work done, the bar is: core tests pass, typecheck, `npm run
 ## Architecture rules (load-bearing — do not violate)
 
 - **Scope rule.** In scope: anything that is a pointwise or family-wise function of the device lookup tables plus a few PDK constants, and the algebraic consequences of declared connectivity — a shared node, Kirchhoff's current law at a node, Kirchhoff's voltage law around a loop. Stating those laws and propagating what they determine is physics, not solving. Out of scope: solving the node set simultaneously. **Every unknown is found by a one-unknown search inside a range the author states. Unknowns that depend on each other are settled only by repeating those searches a fixed number of times. Every outcome is one of: settled and verified; a named unknown has no solution in its range; the named unknowns did not settle. The engine never solves several unknowns at once from a starting guess, and never reports an unverified result.** The lookup-table substrate is the guardrail.
+- **The designer's intuition guides the solver's mechanics.** Where the engine must simplify,
+  order or prove, it uses the moves an analog designer makes by hand, declared and reported:
+  prove on the circuit with a stated simplification (ideal mirrors, no channel-length
+  modulation) before settling the full one from there; decide a node and derive what follows
+  rather than solve both; search first where the designer expects the root. A move the designer
+  would not recognise is not a mechanism to add.
 - **Core is pure and DOM-free.** All numerics live in `src/`, reusable outside the UI. Bulk data is `Float64Array`. Functions are deterministic. The chart system is imperative and lives *outside* Svelte, behind the owned `ChartAdapter`.
 - **Store raw, derive everything.** Tables hold raw simulator outputs only; every figure of merit is derived through the expression engine. Each derived quantity has exactly one definition in `namespace.ts` — add there, don't hand-roll the formula elsewhere.
 - **Fall back, never silently.** When a table lacks a column a definition needs, the next-best
