@@ -323,18 +323,15 @@ const statesWiring = (doc: SheetDoc): boolean => formatOf(doc) === 2 && carriesW
 
 /**
  * Whether a child's wiring joins its parent's walk — one statement of the rule, read by the
- * evaluation and by the walk (which reads the child's wires as its own). It does where both state
- * wiring and the block does not wire the child with `nodes`: the child's declared ports are the
- * parent wires its port map names, and every other wire of the child is its own, spelt
- * `block__wire`. A document in any format but version 2 is never joined.
+ * evaluation and by the walk (which reads the child's wires as its own). It does wherever the
+ * child states wiring: the child's declared ports are the parent wires its block's port map names,
+ * and every other wire of the child is its own, spelt `block__wire`. A child never runs a walk of
+ * its own — only the top of a tree does — so a parent that composes one states wiring itself and
+ * connects it through ports, or validation refuses it (composedWiringProblems); in a refused tree
+ * the child's wiring joins a walk that does not run. A document in any format but version 2 states
+ * no wiring and is never joined.
  */
-export function flattened(
-  parent: SheetDoc,
-  child: SheetDoc | undefined,
-  block: SheetBlock,
-): boolean {
-  return !!child && block.nodes === undefined && statesWiring(parent) && statesWiring(child);
-}
+export const flattened = (child: SheetDoc | undefined): boolean => !!child && statesWiring(child);
 
 // ---------------------------------------------------------------------------------------------
 // Carrying the netlist through a loader
@@ -615,12 +612,15 @@ function blockWiringProblems(ctx: LintContext): void {
           `connect one that does; keep the one that fits the child`,
         b.name,
       );
+    // (A sheet that states no wiring of its own, or declares "none", is refused for composing such
+    // a child by composedWiringProblems, which names the ports itself.)
     const theirs: unknown = b.doc?.ports;
     if (
       b.nodes === undefined &&
       b.ports === undefined &&
-      b.doc &&
-      flattened(doc, b.doc, b) &&
+      statesWiring(doc) &&
+      doc.nodes !== 'none' &&
+      flattened(b.doc) &&
       Array.isArray(theirs) &&
       theirs.length
     )
@@ -979,7 +979,7 @@ function treeDevices(doc: SheetDoc): TreeDevice[] {
     const byBlock = parent && block ? placementsOf(blockWires(parent, block)) : undefined;
     if (d.givens && !(none && !byBlock)) {
       const own = formatOf(d) === 2 ? placementsOf(d.nodes) : undefined;
-      const ownWalk = !parent || !block || flattened(parent, d, block);
+      const ownWalk = !parent || flattened(d);
       out.push({
         name: path || 'givens',
         givens: d.givens,
@@ -1031,6 +1031,62 @@ export function wiringRefusal(doc: SheetDoc): QAWarning[] {
       location: 'nodes',
     },
   ];
+}
+
+/** The ports a child declares, as written (strings only). */
+const declaredPorts = (child: SheetDoc): string[] =>
+  Array.isArray(child.ports) ? child.ports.filter((w): w is string => typeof w === 'string') : [];
+
+/**
+ * The refusal of a sheet that composes a child stating wiring without stating its own. A child's
+ * wiring is checked only as part of its parent's walk, through the port map that says which wire
+ * of the parent each of its ports is; a parent that states no wiring, or declares
+ * `nodes: "none"` — though it contains the child's circuit — leaves that check with nothing to
+ * read. So a document that composes such a child states wiring itself, in format version 2, and
+ * connects the child through the block's `ports`, each port mapped (portProblems holds a written
+ * map to exactly that). One error per such block, naming the child and the ports left unmapped.
+ *
+ * A block that references a library sheet and has not been resolved carries no child to judge:
+ * the rule is applied where the reference is resolved — runSheet and the condition runs validate
+ * the resolved document.
+ */
+export function composedWiringProblems(doc: SheetDoc): QAWarning[] {
+  const format = formatOf(doc);
+  if (format === 'unknown') return [];
+  const none = format === 2 && doc.nodes === 'none';
+  const own = statesWiring(doc);
+  if (own && !none) return [];
+  const out: QAWarning[] = [];
+  for (const b of Array.isArray(doc.blocks) ? doc.blocks : []) {
+    if (!b?.doc || !statesWiring(b.doc)) continue;
+    const map = isObject(b.ports) ? b.ports : {};
+    const unmapped = declaredPorts(b.doc).filter(
+      (w) => !Object.prototype.hasOwnProperty.call(map, w),
+    );
+    // How to connect the child, where its block does not yet: every port it declares mapped, or
+    // an empty map for a child that declares none. Nothing to add where its ports are all mapped.
+    const many = unmapped.length > 1;
+    const connect = unmapped.length
+      ? `: connect it through the block's ports, mapping its ${many ? 'ports' : 'port'} ` +
+        `${unmapped.map((w) => `"${w}"`).join(', ')} to ${many ? 'wires' : 'a wire'} here ` +
+        `(or to null for one left open)`
+      : b.ports === undefined
+        ? `: connect it through the block's ports (an empty map, {}, where it declares none)`
+        : '';
+    out.push({
+      rule: 'sheet-nodes',
+      severity: 'error',
+      message: none
+        ? `block "${b.name}": the child states wiring, so this sheet contains a circuit and ` +
+          `cannot declare nodes: "none" — state this sheet's wiring instead${connect}`
+        : `block "${b.name}": the child states wiring and this sheet states none, so the child's ` +
+          `wiring would be checked against nothing — a child's wiring is checked as part of its ` +
+          `parent's${connect}` +
+          (format === 'earlier' ? `; wiring needs "formatVersion": ${FORMAT_VERSION}` : ''),
+      location: b.name,
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1727,7 +1783,7 @@ function walkLevels(doc: SheetDoc, res?: WalkLevel['report']): WalkLevel[] {
     out.push(lv);
     if (depth >= MAX_BLOCK_DEPTH) return;
     (Array.isArray(lv.doc.blocks) ? lv.doc.blocks : []).forEach((b, i) => {
-      if (!b?.doc || !flattened(lv.doc, b.doc, b)) return;
+      if (!b?.doc || !flattened(b.doc)) return;
       const chain = [...lv.chain, b];
       const prefix = providePrefix(chain);
       const declared: unknown = b.doc.ports;
@@ -1782,7 +1838,9 @@ function collectDevices(
   const unwired: string[] = [];
   for (const td of treeDevices(doc)) {
     const rename = renameOf.get(td.placedIn);
-    if (!rename) continue; // placed in a sheet that walks itself
+    // Placed in a sheet this walk does not read: one that states no wiring under a parent that
+    // does, which composedWiringProblems or wiringRefusal refuses.
+    if (!rename) continue;
     if (!td.placements) {
       unwired.push(td.name);
       continue;
@@ -2461,7 +2519,7 @@ export interface WiringMode {
   flattened: boolean;
 }
 
-/** How a sheet no parent reads asks for its wiring: it runs its own walk. */
+/** How the top of a tree asks for its wiring: it runs its own walk, the only one in the tree. */
 export const STANDALONE: WiringMode = { wired: false, flattened: false };
 
 /** Whether a node's own wiring report is its parent's to give: its wiring joins the parent's walk,
@@ -2474,12 +2532,13 @@ const parentReports = (doc: SheetDoc, mode: WiringMode): boolean =>
  * The wiring part of one node's evaluation, run on its finished result. Where its parent reads it,
  * the result carries this sheet's device point; where its wiring joins the parent's walk, its held
  * levels and element values too, and it runs no walk of its own. Otherwise, a sheet that states
- * wiring is walked here, with every descendant whose wiring joins it; one that declares
- * `nodes: "none"`, states none, or is read by its parent has its declared selectors held to the
- * tables they are read on — every device of its own (the parent checks the one it reads) and every
- * child device it reads. A document in the earlier format reads no wiring key: one that carries
- * some is reported not evaluated. Warnings are appended; nothing else in the result moves, except
- * that a refusal — a selector the table contradicts — closes feasibility.
+ * wiring is walked here, with every descendant whose wiring joins it — only ever the top of a
+ * tree, since a child that states wiring always joins its parent's walk (see flattened); one that
+ * declares `nodes: "none"`, states none, or is read by its parent has its declared selectors held
+ * to the tables they are read on — every device of its own (the parent checks the one it reads)
+ * and every child device it reads. A document in the earlier format reads no wiring key: one that
+ * carries some is reported not evaluated. Warnings are appended; nothing else in the result moves,
+ * except that a refusal — a selector the table contradicts — closes feasibility.
  */
 export function withNodes(
   doc: SheetDoc,

@@ -7,8 +7,8 @@
 
 import type { QAWarning } from '../types';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
-import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
-import { BINDABLE, SIZING_SCALARS } from '../device';
+import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
+import { BINDABLE } from '../device';
 import { additiveCoefficient } from '../expr';
 
 /** How a name is spelt: a param, an equation, a wire, an element. */
@@ -1269,9 +1269,10 @@ export interface SizingReport {
    *  rows rest on a lesser form. Present on a sizing that succeeded and fell back somewhere. */
   fallbacks?: FallbackNote[];
   /** The table's pass-through columns (see passthroughKeys) this sizing put in the sheet's scope,
-   *  under their own names. Each is read as characterized, at the characterization width `w0`,
-   *  not rescaled to `W`: nothing says how it scales. Present on a sizing that succeeded and
-   *  read any. */
+   *  under the names the sheet reads them by: their own, or `table__<column>` where the sheet or
+   *  the engine already means something by their own (a `sheet-passthrough` warning names each).
+   *  Each is read as characterized, at the characterization width `w0`, not rescaled to `W`:
+   *  nothing says how it scales. Present on a sizing that succeeded and read any. */
   passthrough?: string[];
   error?: string;
 }

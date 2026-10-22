@@ -62,6 +62,7 @@ export {
   carriedBlockWiring,
   carriedConvention,
   carriedDocWiring,
+  composedWiringProblems,
   earlierKeyFix,
   formatOf,
   placementsOf,

@@ -62,12 +62,6 @@ export interface SizeQuery {
   vgs?: number;
 }
 
-/** The names a sheet reads a sizing by beyond the namespace quantities and the selectors: `w0`,
- *  the characterization width (in SizeResult.quantities), and `ceiling` and `feasible`, the
- *  slice's gm/ID ceiling and the verdict against it — SizeResult's own fields, which the sheet
- *  engine puts in scope under these names. */
-export const SIZING_SCALARS = ['w0', 'ceiling', 'feasible'] as const;
-
 /** A solved operating point with the sized width and feasibility against the slice ceiling. */
 export interface SizeResult {
   gm: number;
@@ -88,7 +82,8 @@ export interface SizeResult {
    * unknowable) and remain at w0.
    */
   quantities: Record<string, number>;
-  /** The keys of `quantities` read from pass-through columns (see isPassthroughKey). */
+  /** The keys of `quantities` read from pass-through columns (see isPassthroughKey), each under the
+   *  name it is read by (passthroughName: `table__k` for a column called `k`). */
   passthrough: string[];
   /**
    * Human-readable engineering notes for this sizing (e.g. a requested L that fell

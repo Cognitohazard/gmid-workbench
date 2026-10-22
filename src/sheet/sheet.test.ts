@@ -1440,11 +1440,11 @@ describe('pass-through columns reach the sheet scope', () => {
     );
   });
 
-  it('a column never displaces a name the sheet already means something by', () => {
+  it('a column never displaces a name the sheet already means something by: it is read as table__<name>', () => {
     // A column called `k` would otherwise replace Boltzmann's constant for every equation after
     // the sizing, and one called like a param would silently replace the param — on this table
-    // and no other. Both are left out of scope, and the sheet is told.
-    const table = importOne(demoCsvWith({ k: () => 1, ueff: ueffAt }));
+    // and no other. Each stays readable under its affixed name, and the sheet is told which.
+    const table = importOne(demoCsvWith({ k: () => 1, ueff: ueffAt, mob: () => 2 }));
     const res = runSheet(
       sizedDoc({
         params: [
@@ -1455,6 +1455,9 @@ describe('pass-through columns reach the sheet scope', () => {
         equations: [
           { name: 'kT', expr: 'k*T' },
           { name: 'U', expr: 'ueff' },
+          { name: 'K_col', expr: 'table__k' },
+          { name: 'U_col', expr: 'table__ueff' },
+          { name: 'M', expr: 'mob' },
         ],
       }),
       table,
@@ -1462,14 +1465,92 @@ describe('pass-through columns reach the sheet scope', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(res.values.kT).toBeCloseTo(PHYS.k * PHYS.T, 30);
     expect(res.values.U).toBe(3e-15);
-    const notes = noted(res, 'sheet-passthrough');
-    expect(notes).toHaveLength(2);
-    expect(notes.find((m) => m.includes('"k"'))).toMatch(/expression constant/);
-    expect(notes.find((m) => m.includes('"ueff"'))).toMatch(/already defines/);
-    // Neither reached the scope, so the sizing lists neither as read.
-    expect(res.sizing?.passthrough).toBeUndefined();
+    expect(res.values.K_col).toBe(1);
+    expect(res.values.U_col).toBeCloseTo(atSizing(res), 12);
+    // A column whose name collides with nothing keeps it, and draws no note.
+    expect(res.values.M).toBe(2);
+    expect(noted(res, 'sheet-undeclared')).toEqual([]);
+    // Validation does not take table__k for a block called `table` that is missing.
+    expect(noted(res, 'sheet-provide-coverage')).toEqual([]);
+    expect(noted(res, 'sheet-passthrough')).toEqual([
+      `the table's "k" column is read as "table__k": "k" is an expression constant, which keeps its meaning`,
+      `the table's "ueff" column is read as "table__ueff": the sheet already defines "ueff", which keeps its meaning`,
+    ]);
+    // The sizing lists each column under the name the sheet reads it by — the panel's
+    // "at w0, not scaled" line shows these.
+    expect([...(res.sizing?.passthrough ?? [])].sort()).toEqual(['mob', 'table__k', 'table__ueff']);
     // An advisory note, not a failure: the sheet still means what it says.
     expect(res.feasible).toBe(true);
+  });
+
+  it("an equation's name is the sheet's too, and a column is left out only where its affixed name is taken as well", () => {
+    // An equation is written after the sizing, so a column of its name would be read by the
+    // expressions before it and replaced for the ones after: it is affixed like a param's.
+    const table = importOne(demoCsvWith({ ueff: ueffAt, kappa: () => 5 }));
+    const res = runSheet(
+      sizedDoc({
+        params: [
+          { name: 'L', value: 0.5e-6 },
+          { name: 'Ib', value: 20e-6 },
+          { name: 'kappa', value: 1 },
+          { name: 'table__kappa', value: 2 },
+        ],
+        equations: [
+          { name: 'ueff', expr: '7' },
+          { name: 'U_col', expr: 'table__ueff' },
+        ],
+      }),
+      table,
+    );
+    expect(res.values.ueff).toBe(7);
+    expect(res.values.U_col).toBeCloseTo(atSizing(res), 12);
+    expect(res.values.kappa).toBe(1);
+    expect(res.values.table__kappa).toBe(2);
+    expect(noted(res, 'sheet-passthrough')).toEqual([
+      `the table's "ueff" column is read as "table__ueff": the sheet already defines "ueff", which keeps its meaning`,
+      `the table's "kappa" column is not read: the sheet already defines both "kappa" and ` +
+        `"table__kappa" — rename the column in the export to read it`,
+    ]);
+    expect(res.sizing?.passthrough).toEqual(['table__ueff']);
+  });
+
+  it('a child provides its affixed column to its parent, which reads child__table__k', () => {
+    const table = importOne(demoCsvWith({ k: () => 1 }));
+    const parent: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [],
+      equations: [{ name: 'K', expr: 'cs__table__k' }],
+      checks: [],
+      blocks: [{ name: 'cs', doc: sizedDoc({ provides: ['table__k'] }) }],
+    };
+    const res = runSheet(parent, table);
+    expect(res.values.K).toBe(1);
+    expect(res.warnings.filter((w) => /table__k/.test(w.message)).map((w) => w.rule)).toEqual([
+      'sheet-passthrough',
+    ]);
+  });
+
+  it('refuses a block named table, whose provides would read like an affixed column', () => {
+    const parent: SheetDoc = notACircuit({
+      title: 'p',
+      polarity: 'n',
+      params: [],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'table', doc: sizedDoc({ provides: ['gm'] }) }],
+    });
+    expect(validateSheet(parent).filter((w) => w.severity === 'error')).toEqual([
+      expect.objectContaining({
+        rule: 'sheet-block',
+        location: 'table',
+        message:
+          'block name "table" is reserved: a table column whose own name the sheet already uses ' +
+          'is read as "table__<column>", and a block of this name would provide names of the same form',
+      }),
+    ]);
+    const renamed = { ...parent, blocks: [{ ...parent.blocks![0], name: 'tbl' }] };
+    expect(validateSheet(renamed).filter((w) => w.severity === 'error')).toEqual([]);
   });
 });
 

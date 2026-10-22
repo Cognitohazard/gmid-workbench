@@ -473,6 +473,14 @@
     return `${POINT_MARK[worst]} range ${ok}/${ends.length}`;
   };
   const runClass = (r: ConditionRun): string => POINT_CLASS[r.points[0].state];
+  /** A held row's notes that its figures rest on a gate held at its nominal value — the warning a
+   *  range-end chip carries in its tooltip, here on the row of the condition it was held at. */
+  const heldGateNotes = (r: ConditionRun): string[] =>
+    r.design === 'held'
+      ? (r.result?.warnings ?? [])
+          .filter((w) => w.rule === 'sheet-held-gate')
+          .map((w) => `⚠ ${w.message}`)
+      : [];
   /** The one-line reason: what stopped a refused condition, else why its centre has no check to
    *  read, else what binds (or is closest to binding) there, else the first range end that is
    *  not complying. */
@@ -1578,12 +1586,15 @@
         <tbody>
           {#each runs as r (conditionKeyId(r.key))}
             {@const detail = runDetail(r)}
+            {@const notes = heldGateNotes(r)}
             <tr class="st-{runClass(r)}" data-corner-row={conditionLabel(r.key)}>
               <td class="ccond">{conditionLabel(r.key)}</td>
               <td class="cdes" title={CONTROL_HELP.cornerDesign}>{designCell(r)}</td>
               <td class="ccl">{centreCell(r)}</td>
               {#if hasRange}<td class="ccv">{rangeCell(r)}</td>{/if}
-              <td class="ccd" title={detail}>{detail}</td>
+              <td class="ccd" title={[detail, ...notes].filter(Boolean).join('\n\n')}
+                >{#if notes.length}⚠&nbsp;{/if}{detail}</td
+              >
             </tr>
           {/each}
         </tbody>

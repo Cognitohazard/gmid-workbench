@@ -391,14 +391,15 @@ describe('lookup pass-through columns', () => {
   it('leaves the derived layer as the base columns define it', () => {
     // Every derived quantity reads base columns and constants only, so a pass-through column —
     // even one named like a constant — cannot change one. A column called `k` must not replace
-    // Boltzmann's constant in the γ-model noise.
+    // Boltzmann's constant in the γ-model noise. It is reported as `table__k`, the name it is read
+    // by everywhere (passthroughName).
     const plain = generateDemoDevice();
     const withK = withColumns(plain, { k: 1 });
     const p = { l: plain.grid.axes[0].values[1], vgs: 0.55 };
     const a = lookup(plain, p);
     const b = lookup(withK, p);
-    expect(b.k).toBe(1);
-    const { k: _k, ...rest } = b;
+    expect(b.table__k).toBe(1);
+    const { table__k: _k, ...rest } = b;
     expect(rest).toEqual(a);
   });
 

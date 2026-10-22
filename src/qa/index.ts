@@ -24,7 +24,9 @@ import {
   BASE_QUANTITIES,
   DERIVED_QUANTITIES,
   MAGNITUDE_KEYS,
+  engineNameReason,
   passthroughKeys,
+  passthroughName,
 } from '../namespace';
 
 // --- physical thresholds -----------------------------------------------------
@@ -686,14 +688,19 @@ export function validate(table: DeviceTable): QAWarning[] {
   // own name, so nothing in the file is lost, but nothing here knows how it scales or what sign
   // it takes. It is reported once, as information, so that a standard quantity this exporter
   // names differently is noticed instead of going unscaled. A column named like a derived
-  // quantity is reported above instead.
+  // quantity is reported above instead. One whose name the engine already means something by is
+  // read under its affixed name everywhere (passthroughName), and the finding names it.
   const unnamed = passthroughKeys(table.grid);
   if (unnamed.length) {
+    const listed = unnamed.map((c) => {
+      const why = engineNameReason(c);
+      return why ? `${c} (read as ${passthroughName(c)}: ${why})` : c;
+    });
     out.push({
       rule: 'passthrough-columns',
       severity: 'info',
       message:
-        `carried as-is, not recognized: ${unnamed.join(', ')} — kept under ` +
+        `carried as-is, not recognized: ${listed.join(', ')} — kept under ` +
         `${unnamed.length > 1 ? 'their own names' : 'its own name'}, and can be charted, looked ` +
         `up and read by a design sheet, but ${unnamed.length > 1 ? 'they are' : 'it is'} not ` +
         `rescaled when a device is sized, not folded for a signed PMOS export, and not checked`,

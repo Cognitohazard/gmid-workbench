@@ -1,5 +1,5 @@
 import type { BaseQuantity, DerivedQuantity, Grid } from './types';
-import { GAMMA_DEFAULT_LABEL } from './constants';
+import { CONSTANTS, GAMMA_DEFAULT_LABEL } from './constants';
 
 /**
  * The canonical base quantities — the stored vocabulary. This is the *namespace*
@@ -197,6 +197,54 @@ export const isPassthroughKey = (key: string): boolean =>
 /** The pass-through columns a grid stores, in column order (see isPassthroughKey). */
 export const passthroughKeys = (grid: Grid): string[] =>
   [...grid.quantities.keys()].filter(isPassthroughKey);
+
+/** The names a sheet reads a sizing by beyond the namespace quantities and the selectors: `w0`,
+ *  the characterization width (in SizeResult.quantities), and `ceiling` and `feasible`, the
+ *  slice's gm/ID ceiling and the verdict against it — SizeResult's own fields, which the sheet
+ *  engine puts in scope under these names. */
+export const SIZING_SCALARS = ['w0', 'ceiling', 'feasible'] as const;
+
+/** The block name a pass-through column's affixed name is joined to (see affixedColumn). A sheet
+ *  may not name a block this, so the affixed name never reads a child's quantity. */
+export const TABLE_AFFIX = 'table';
+
+/** A pass-through column under its affixed name, `table__<column>`: the double-underscore join a
+ *  sheet already reads a child's quantity by (`child__gm`), with the table in the child's place.
+ *  The name a column is read under where its own name is taken. */
+export const affixedColumn = (column: string): string => `${TABLE_AFFIX}__${column}`;
+
+/** The names the engine itself means something by wherever a table is read: the expression
+ *  constants (`pi`, `k`, `q`, `eps`, …) and the scalars a sizing writes beside its quantities
+ *  (SIZING_SCALARS). */
+const ENGINE_NAMES: ReadonlySet<string> = new Set([...Object.keys(CONSTANTS), ...SIZING_SCALARS]);
+
+/**
+ * The name a pass-through column is read under wherever a table is read — a lookup's result, a
+ * sizing's quantities, a chart expression, a sheet: its own lower-cased name, or its affixed name
+ * (affixedColumn) where that is one the engine means something by (ENGINE_NAMES). A column called
+ * `k` would otherwise replace Boltzmann's constant in every expression that reads `k`, and one
+ * called `w0` would be overwritten by the characterization width. A sheet affixes more: a column
+ * whose name the sheet itself uses (see the sheet's sizing).
+ */
+export const passthroughName = (column: string): string =>
+  ENGINE_NAMES.has(column) ? affixedColumn(column) : column;
+
+/** The column a name passthroughName affixed reads (`k` for `table__k`), or undefined where `name`
+ *  is not such a name. */
+export function columnAffixedAs(name: string): string | undefined {
+  const prefix = affixedColumn('');
+  const column = name.startsWith(prefix) ? name.slice(prefix.length) : undefined;
+  return column !== undefined && ENGINE_NAMES.has(column) ? column : undefined;
+}
+
+/** Why a pass-through column is not read under its own name (see passthroughName), as a clause
+ *  completing "... is read as table__k: ..."; undefined for a column read under its own. */
+export const engineNameReason = (column: string): string | undefined =>
+  Object.prototype.hasOwnProperty.call(CONSTANTS, column)
+    ? `"${column}" is an expression constant`
+    : ENGINE_NAMES.has(column)
+      ? `"${column}" is a scalar a sizing writes`
+      : undefined;
 
 /**
  * Header alias map: lower-cased source header -> canonical key, for the headers that are not

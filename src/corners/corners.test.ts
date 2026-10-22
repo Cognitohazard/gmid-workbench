@@ -11,6 +11,7 @@ import { makeGrid } from '../grid';
 import { validateDevices, validateDeviceConditions } from '../qa';
 import { loadLibrary, REFS, table as libTable, notACircuit } from '../sheet/library.fixtures';
 import { clampedIn, evaluateSheet, namedBindings, buildSheetRefIndex } from '../sheet';
+import { EXAMPLES } from '../sheet/examples';
 import type { CheckResult, SheetDoc, RangeEndReport, SheetResult } from '../sheet';
 import type { Axis, DeviceTable, TableMeta } from '../types';
 import {
@@ -983,6 +984,41 @@ describe('runCondition', () => {
     const b = run(gainDoc(0));
     expect(a.state === 'evaluated' && a.assumedSource).toEqual(['givens']);
     expect(b.state === 'evaluated' && b.assumedSource).toBeUndefined();
+  });
+
+  it('says, once per held gate, that a held condition keeps that gate at its nominal value', () => {
+    // The cascode example holds its cascode's gate (the node under it plus its gate-source
+    // voltage). At the condition it is sized at nothing is held, so nothing is said; at the other
+    // condition the gate stays at the base run's value where a real bias branch would move it,
+    // and the run says so, once.
+    const quad = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.05 },
+      vsb: { min: 0, max: 0.4, step: 0.05 },
+    });
+    const device = soleDevice([
+      retag(quad, 'tt', 27),
+      retag(scaleQuantities(quad, { id: 0.8, gm: 0.8 }), 'ss', -40),
+    ]);
+    const cascode = EXAMPLES.find((d) => d.title === 'NMOS cascode (gain-boosted output)')!;
+    const [tt, ss] = runConditions(
+      cascode,
+      device,
+      [key('tt'), key('ss', -40)],
+      noDevices,
+      undefined,
+      key('tt'),
+    );
+    const notes = (r: ConditionRun): string[] =>
+      (r.result?.warnings ?? []).filter((w) => w.rule === 'sheet-held-gate').map((w) => w.message);
+    expect(tt.state === 'evaluated' && tt.design).toBe('sized');
+    expect(notes(tt)).toEqual([]);
+    expect(ss.state === 'evaluated' && ss.design).toBe('held');
+    const gate = tt.result!.held!.V_x;
+    expect(notes(ss)).toEqual([
+      `the gate of this sheet's own device is held at its nominal value, ` +
+        `${Number(gate.toPrecision(4))} V (the hold of "V_x", V_x + vgs) — a real bias branch ` +
+        `would move it with the corner or condition, so the figures at this point are approximate`,
+    ]);
   });
 
   it('declines to hold a design that rests on an assumed voltage', () => {

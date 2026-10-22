@@ -11,10 +11,11 @@ import type { QAWarning } from '../types';
 import { compileExpr } from '../derive';
 import { createEngine } from '../expr';
 import { BINDABLE, bindProblem } from '../device';
-import { PER_WIDTH_KEYS } from '../namespace';
+import { PER_WIDTH_KEYS, TABLE_AFFIX, affixedColumn } from '../namespace';
 import { HELD_AT_A_RANGE_END, heldShape } from './coverage';
 import {
   blockWires,
+  composedWiringProblems,
   deviceGateWires,
   formatOf,
   formatProblems,
@@ -329,6 +330,8 @@ function provideCoverage(doc: SheetDoc): QAWarning[] {
     for (const name of namesOf(expr)) {
       const split = splitProvide(name);
       if (!split || injected.has(name) || reported.has(name)) continue;
+      // A table column read under its affixed name, which no static list can enumerate.
+      if (readsAffixedColumn(doc, name)) continue;
       const [blockName] = split;
       const block = blocks.get(blockName);
       if (block && !block.doc) continue; // ref-only: its provides are unknown until resolution
@@ -1481,6 +1484,12 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
   return out;
 }
 
+/** Whether `name` is how a sheet reads one of its table's columns under the affixed name
+ *  (`table__k`, see passthroughName and the sheet's sizing): it sizes a device, and the name joins
+ *  to the reserved block name. Such a column is not enumerable, like any pass-through column. */
+const readsAffixedColumn = (doc: SheetDoc, name: string): boolean =>
+  !!doc.givens && splitProvide(name)?.[0] === TABLE_AFFIX;
+
 /** Surface authoring problems as warnings; never throws, never mutates the doc. Structural
  *  and device-independent — identifier resolution against the live values is eval's job.
  *  Recurses into composed children, attributing each child's findings to its block. */
@@ -1523,9 +1532,12 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
 
   // The format contract, and the netlist's own structure where the document is in the format
   // that has one. The questions about the whole tree — what a held level rests on, whether every
-  // device is wired — are asked once, at the top.
+  // device is wired — are asked once, at the top. Whether a child that states wiring is composed
+  // by a sheet that states its own is asked of every document, in either format; a child that is
+  // only referenced is judged once resolved (runSheet validates the resolved document).
   out.push(...formatProblems(doc));
   if (formatOf(doc) === 2) out.push(...nodesProblems(doc));
+  out.push(...composedWiringProblems(doc));
   if (_depth === 0)
     out.push(...treeNodesProblems(doc), ...wiringRefusal(doc), ...dcInputProblems(doc));
   out.push(...unsettledGates(doc, _depth === 0));
@@ -2048,6 +2060,17 @@ function blockProblems(doc: SheetDoc, depth: number): QAWarning[] {
             location: name,
           });
         }
+        if (name === TABLE_AFFIX) {
+          out.push({
+            rule: 'sheet-block',
+            severity: 'error',
+            message:
+              `block name "${TABLE_AFFIX}" is reserved: a table column whose own name the sheet ` +
+              `already uses is read as "${affixedColumn('<column>')}", and a block of this name ` +
+              `would provide names of the same form`,
+            location: name,
+          });
+        }
         const blockSep = idSepProblem(name);
         if (blockSep) {
           out.push({
@@ -2064,7 +2087,11 @@ function blockProblems(doc: SheetDoc, depth: number): QAWarning[] {
       // so only a separator-bearing key that matches nothing injectable is flagged.
       const childInjected = new Set((block.doc?.blocks ?? []).flatMap(providedNames));
       for (const key of block.doc?.provides ?? []) {
-        if (key.includes(PROVIDE_SEP) && !childInjected.has(key)) {
+        if (
+          key.includes(PROVIDE_SEP) &&
+          !childInjected.has(key) &&
+          !(block.doc && readsAffixedColumn(block.doc, key))
+        ) {
           out.push({
             rule: 'sheet-provide',
             severity: 'warning',

@@ -417,6 +417,20 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
     expect(v.I_bias).toBeLessThan(0.95 * 2e-5);
   });
 
+  it('names no held gate for a current balance: it holds a current, not a gate', () => {
+    // The balance keeps the PMOS on the supply less the NMOS's gate voltage — a wire, which moves
+    // with the corner as the circuit does — so a held run of it carries no held-gate note.
+    const base = evaluateSheet(inverter('I_bias - p__id'), dev, (id) =>
+      id === 'pmos' ? dev : undefined,
+    );
+    const held = holdHardware(inverter('I_bias - p__id'), base);
+    const asked = evaluateSheet(held.doc, nHeld, (id) => (id === 'pmos' ? pHeld : undefined), {
+      held: true,
+    });
+    expect(stands(asked)).toBe(true);
+    expect(asked.warnings.filter((w) => w.rule === 'sheet-held-gate')).toEqual([]);
+  });
+
   it('holds the NMOS the old way, and the PMOS at its width and gate voltage', () => {
     const { held } = heldRun(inverter('I_bias - p__id'));
     const [n, p] = held.doc.blocks?.map((b) => b.doc?.givens) ?? [];
@@ -864,6 +878,70 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
     expect(landed + end.vgs).toBeCloseTo(res.held!.X, 5);
     // And the node moved by the law above; the slack is interpolation between vsb nodes.
     expect(relErr(landed - X0, d / (1 + BODY_FACTOR))).toBeLessThan(5e-3);
+  });
+
+  /** The held-gate notes of one run, as `location: message`. */
+  const heldGates = (warnings: readonly { rule: string; location?: string; message: string }[]) =>
+    warnings.filter((w) => w.rule === 'sheet-held-gate').map((w) => `${w.location}: ${w.message}`);
+  const approx = (v: number): string => `${Number(v.toPrecision(4))} V`;
+
+  it('names each gate a hold keeps at its nominal value wherever the design is held, once per gate', () => {
+    // Two devices, each on its own held node: two gates the held runs keep where the design point
+    // put them, where a real bias branch would move them with the corner. Each held run says so
+    // once per gate — the range end and a held condition alike — and the design point never does.
+    const twoGates = mk({
+      params: [
+        ...mk({}).params,
+        held,
+        { name: 'Y', value: X0, min: 0, max: 0.4, hold: 'Y + n__vgs' },
+      ],
+      blocks: [
+        { name: 'm', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'X' } },
+        { name: 'n', doc: device('V_d', 'V_s'), params: { V_d: 'V_o', V_s: 'Y' } },
+      ],
+      operatingRange: drainHi,
+    });
+    expect(validateSheet(twoGates).filter((w) => w.severity === 'error')).toEqual([]);
+    const res = runSheet(twoGates, dev);
+    expect(res.feasible).toBe(true);
+    expect(heldGates(res.warnings)).toEqual([]);
+    const note = (p: string, dev: string, hold: string): string =>
+      `${p}: the gate of "${dev}" is held at its nominal value, ${approx(res.held![p])} (the hold ` +
+      `of "${p}", ${hold}) — a real bias branch would move it with the corner or condition, so ` +
+      `the figures at this point are approximate`;
+    const end = res.rangeEnds![0];
+    expect(end.state).toBe('complies');
+    expect(heldGates(end.warnings)).toEqual([
+      note('X', 'm', 'X + m__vgs'),
+      note('Y', 'n', 'Y + n__vgs'),
+    ]);
+    // A held condition is the same held document asked about on another table (corners/): the
+    // same two notes, at its centre.
+    const asked = evaluateSheet(holdHardware(twoGates, res).doc, dev, undefined, { held: true });
+    expect(heldGates(asked.warnings)).toEqual([
+      note('X', 'm', 'X + m__vgs'),
+      note('Y', 'n', 'Y + n__vgs'),
+    ]);
+  });
+
+  it('attributes a held gate in a composed child to its block', () => {
+    const parent = notACircuit({
+      title: 'parent',
+      polarity: 'n',
+      params: [
+        { name: 'V_o', value: 0.6 },
+        { name: 'V_o_hi', value: 1.0 },
+      ],
+      equations: [],
+      checks: [],
+      blocks: [{ name: 'k', doc: underGate(held), params: { V_o: 'V_o' } }],
+      operatingRange: [{ name: 'vds-hi', set: { V_o: 'V_o_hi' } }],
+    });
+    const res = runSheet(parent, dev);
+    expect(heldGates(res.warnings)).toEqual([]);
+    expect(heldGates(res.rangeEnds![0].warnings)).toEqual([
+      expect.stringMatching(/^k\.X: block "k": the gate of "m" is held at its nominal value, /),
+    ]);
   });
 
   it('refuses a held expression that its own param does not move', () => {

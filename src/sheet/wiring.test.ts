@@ -271,49 +271,52 @@ describe("a child that wires itself joins its parent's walk through its ports", 
   });
 
   it('composes the stage-2 current-source load by reference, through its ports, end to end', () => {
-    // The load wires its own device and holds its drain at vx; the parent maps its ports onto out2
-    // and vb2, holds out2 at V_out2, and overrides vx with V_out2. Two statements hold out2 at one
-    // level — one loop, an identity once the override is read — and out2's currents balance: the
-    // p stage returns I2 and the load, carrying s2__id, draws it.
+    // The load is the library's shape: a mirror output, given its width and its gate-source
+    // voltage (a composing amplifier passes a bias reference's width times the ratio, and that
+    // reference's vgs), its current read off the table and provided. It wires its own device and
+    // holds its drain at vx; the parent maps its ports onto out2 and vb2, holds out2 at V_out2,
+    // overrides vx with V_out2, and gives the p stage the load's current. Two statements hold out2
+    // at one level — one loop, an identity once the override is read — and out2's currents
+    // balance: the load sets the current, and the p stage, carrying ld2__id, returns it.
     const load: SheetDoc = {
       title: 'Stage-2 current-source load',
       polarity: 'n',
       formatVersion: 2,
       params: [
-        param('Ix', 60e-6),
+        param('Wx', 3e-6),
+        param('vgsx', 0.61, { unit: 'V', class: 'independent' }),
         param('Lx', 0.5e-6),
-        param('gx', 8),
         param('vx', 0.9, { unit: 'V', class: 'independent' }),
       ],
-      givens: { L: 'Lx', id: 'Ix', gm_id: 'gx', vds: 'vx' },
+      givens: { L: 'Lx', W: 'Wx', vgs: 'vgsx', vds: 'vx' },
       nodes: { d: 'out', g: 'vb', s: 'gnd', b: 'gnd' },
       levels: { out: 'vx' },
       ports: ['out', 'vb'],
       equations: [],
       checks: [],
-      provides: ['gds', 'vdsat'],
+      provides: ['id', 'gds', 'vdsat'],
     };
     const amp: SheetDoc = {
       title: 'two-stage output',
       polarity: 'n',
       formatVersion: 2,
-      params: [vparam('VDD', 1.8), vparam('V_out2', 0.9), param('I2', 60e-6)],
+      params: [vparam('VDD', 1.8), vparam('V_out2', 0.9), param('W_ld', 6e-6), vparam('V_bn', 0.6)],
       blocks: [
+        {
+          name: 'ld2',
+          ref: 'multistage/stage2-current-source-load',
+          params: { Wx: 'W_ld', vgsx: 'V_bn', vx: 'V_out2' },
+          ports: { out: 'out2', vb: 'vb2' },
+        },
         block(
           's2',
           leaf('p', { L: '0.5e-6', id: 'I', gm_id: '10', vds: 'vd' }, [
             ['I', 60e-6],
             ['vd', 0.9],
           ]),
-          { I: 'I2', vd: 'VDD - V_out2' },
+          { I: 'ld2__id', vd: 'VDD - V_out2' },
           { d: 'out2', g: 'g2', s: 'vdd', b: 'vdd' },
         ),
-        {
-          name: 'ld2',
-          ref: 'multistage/stage2-current-source-load',
-          params: { Ix: 's2__id', vx: 'V_out2' },
-          ports: { out: 'out2', vb: 'vb2' },
-        },
       ],
       levels: { vdd: 'VDD', out2: 'V_out2' },
       ports: ['g2', 'vb2'],
@@ -330,7 +333,7 @@ describe("a child that wires itself joins its parent's walk through its ports", 
     expect(out2.residual).toBeCloseTo(0, 18);
     expect(r.nodes!.dof).toMatchObject({ proven: 0 });
     // The load's gate wire, a port of the parent, is derived from the load's own vgs.
-    expect(r.nodes!.levels.vb2.level).toBeCloseTo(r.blocks![1].sizing!.vgs, 12);
+    expect(r.nodes!.levels.vb2.level).toBeCloseTo(r.blocks![0].sizing!.vgs, 12);
   });
 
   it('keeps three child levels mapped onto one wire as three relations, one verdict in every order', () => {
@@ -1138,8 +1141,8 @@ describe('edges the tests above leave open', () => {
   });
 
   it("reads a selector's value as the walk's own sheet was evaluated, through a parent's override", () => {
-    // An unwired parent sets its wired child's selector to -1 on an N-style table; the child walks
-    // itself, and its p_sign is -1 there, whatever the child's document says.
+    // A parent sets its wired child's selector to -1 on an N-style table; the child's wiring joins
+    // the parent's walk, and its p_sign is -1 there, whatever the child's document says.
     const child: SheetDoc = {
       title: 'child',
       polarity: 'n',
@@ -1164,10 +1167,11 @@ describe('edges the tests above leave open', () => {
     const parent = (sel: string): SheetDoc => ({
       title: 'parent',
       polarity: 'n',
+      formatVersion: 2,
       params: [],
       equations: [],
       checks: [],
-      blocks: [{ name: 'c', doc: child, params: { p_sign: sel } }],
+      blocks: [{ name: 'c', doc: child, params: { p_sign: sel }, ports: { o: null, g: null } }],
     });
     const refused = (d: SheetDoc): boolean =>
       evaluateSheet(d, t).warnings.some((w) =>
@@ -1276,7 +1280,8 @@ describe('a key of format version 2 is read only in a document of format version
 });
 
 describe('one wiring pass, on the tree once it has settled', () => {
-  // A parent that states no wiring, composing a child that wires itself and so walks itself.
+  // A child that wires itself, connected through its block's port map (empty: it declares no
+  // ports), so its wiring joins its parent's walk — the one walk of the tree.
   const child = (gm_id: string): SheetDoc => ({
     title: 'cs',
     polarity: 'n',
@@ -1290,24 +1295,28 @@ describe('one wiring pass, on the tree once it has settled', () => {
     provides: ['vgs', 'id', 'gm', 'W'],
   });
 
-  it('walks a child that walks itself at the settled point, and not at a range end with no answer', () => {
+  it("walks a child's wiring in its parent's walk at the settled point, and not at a range end with no answer", () => {
     const parent: SheetDoc = {
       title: 'parent',
       polarity: 'n',
       formatVersion: 2,
       params: [vparam('VD', 0.9)],
-      blocks: [{ name: 'a', doc: child('10'), params: { V_d: 'VD' } }],
+      blocks: [{ name: 'a', doc: child('10'), params: { V_d: 'VD' }, ports: {} }],
       equations: [],
       checks: [],
       operatingRange: [{ name: 'hi', set: { VD: '2.5' } }],
     };
     expect(validateSheet(parent).filter((w) => w.severity === 'error')).toEqual([]);
     const r = evaluateSheet(parent, t);
-    expect(r.blocks![0].nodes?.state).toMatch(/^checked-/);
+    expect(r.nodes?.state).toMatch(/^checked-/);
+    expect(r.nodes!.levels.a__out.level).toBeCloseTo(0.9, 12);
+    // The child runs no walk of its own; its levels reach the parent's.
+    expect(r.blocks![0].nodes).toBeUndefined();
+    expect(r.blocks![0].wiringValues).toBeDefined();
     // Past the 1.8 V drain axis the end has no answer: the child's drain was read at the axis end.
     const [hi] = r.rangeEnds!;
     expect(hi.state).toBe('no-answer');
-    expect(hi.blocks![0].nodes).toMatchObject({ state: 'not-evaluated', notes: [NO_ANSWER_NOTE] });
+    expect(hi.nodes).toMatchObject({ state: 'not-evaluated', notes: [NO_ANSWER_NOTE] });
     expect(wiring(hi)).toEqual([]);
   });
 
@@ -1326,17 +1335,17 @@ describe('one wiring pass, on the tree once it has settled', () => {
         },
         param('Spec', spec),
       ],
-      blocks: [{ name: 'a', doc: child('g'), params: { g: 'gx' } }],
+      blocks: [{ name: 'a', doc: child('g'), params: { g: 'gx' }, ports: {} }],
       equations: [],
       checks: [],
     });
     const landed = runSheet(parent(0.6), t);
     expect(landed.warnings.some((w) => w.severity === 'error')).toBe(false);
-    expect(landed.blocks![0].nodes?.state).toBe('checked-clean');
+    expect(landed.nodes?.state).toBe('checked-clean');
     // No gate-source voltage in the search range reaches 5 V: the solve finds no solution.
     const failed = runSheet(parent(5), t);
     expect(failed.warnings.some((w) => /found no solution/.test(w.message))).toBe(true);
-    expect(failed.blocks![0].nodes?.state).toBe('not-evaluated');
+    expect(failed.nodes?.state).toBe('not-evaluated');
     expect(wiring(failed)).toEqual([]);
   });
 
@@ -1355,15 +1364,144 @@ describe('one wiring pass, on the tree once it has settled', () => {
         },
         param('Spec', 1e12),
       ],
-      blocks: [{ name: 'ota', ref: 'otas/five-transistor-ota', params: { gm_id_in: 'gi' } }],
+      blocks: [
+        {
+          name: 'ota',
+          ref: 'otas/five-transistor-ota',
+          params: { gm_id_in: 'gi' },
+          ports: { vinp: null, vinn: null },
+        },
+      ],
       equations: [],
       checks: [],
     };
     expect(validateSheet(parent).filter((w) => w.severity === 'error')).toEqual([]);
     const r = runSheet(parent, libraryTable, undefined, REFS);
+    expect(r.warnings.filter((w) => w.rule === 'sheet-nodes' && w.severity === 'error')).toEqual(
+      [],
+    );
     expect(r.warnings.some((w) => /found no solution/.test(w.message))).toBe(true);
-    expect(r.blocks![0].nodes?.state).toBe('not-evaluated');
+    expect(r.nodes?.state).toBe('not-evaluated');
     expect(wiring(r)).toEqual([]);
+  });
+});
+
+describe('a parent that composes a child stating wiring states its own and maps the child’s ports', () => {
+  // A child's wiring is checked only as part of its parent's walk: a parent with no wiring of its
+  // own, or one declaring nodes: "none", would leave the child's ports connected to nothing.
+  const child: SheetDoc = {
+    title: 'cs',
+    polarity: 'n',
+    formatVersion: 2,
+    params: [param('I', 1e-5), vparam('V_d', 0.9)],
+    givens: { L: '1e-6', id: 'I', gm_id: '10', vds: 'V_d' },
+    nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+    levels: { out: 'V_d' },
+    ports: ['in'],
+    equations: [],
+    checks: [],
+    provides: ['vgs'],
+  };
+  const parent = (over: Partial<SheetDoc> = {}, b: Partial<SheetBlock> = {}): SheetDoc => ({
+    title: 'parent',
+    polarity: 'n',
+    formatVersion: 2,
+    params: [],
+    blocks: [{ name: 'a', doc: child, ...b }],
+    equations: [],
+    checks: [],
+    ...over,
+  });
+  /** The refusals of this rule (a child's own lints, such as a wire one terminal names, aside). */
+  const refusals = (d: SheetDoc): string[] =>
+    validateSheet(d)
+      .filter((w) => w.rule === 'sheet-nodes' && w.message.includes('the child states wiring'))
+      .map((w) => w.message);
+
+  it('refuses a parent that states no wiring, naming the child and its unmapped ports', () => {
+    expect(refusals(parent())).toEqual([
+      'block "a": the child states wiring and this sheet states none, so the child\'s wiring ' +
+        "would be checked against nothing — a child's wiring is checked as part of its parent's: " +
+        'connect it through the block\'s ports, mapping its port "in" to a wire here (or to null ' +
+        'for one left open)',
+    ]);
+    // In the earlier format, which has no wiring, the message says what the fix needs.
+    const { formatVersion: _v, ...earlier } = parent();
+    expect(refusals(earlier)).toContainEqual(
+      expect.stringMatching(
+        /^block "a": the child states wiring and this sheet states none, .*; wiring needs "formatVersion": 2$/,
+      ),
+    );
+  });
+
+  it('refuses a parent that declares nodes: "none" though it contains the child’s circuit', () => {
+    expect(refusals(parent({ nodes: 'none' }))).toEqual([
+      'block "a": the child states wiring, so this sheet contains a circuit and cannot declare ' +
+        'nodes: "none" — state this sheet\'s wiring instead: connect it through the block\'s ports, ' +
+        'mapping its port "in" to a wire here (or to null for one left open)',
+    ]);
+    // A port map does not make "none" true: the child's circuit is still this sheet's.
+    expect(refusals(parent({ nodes: 'none' }, { ports: { in: 'x' } }))).toEqual([
+      'block "a": the child states wiring, so this sheet contains a circuit and cannot declare ' +
+        'nodes: "none" — state this sheet\'s wiring instead',
+    ]);
+  });
+
+  it('admits the parent once it maps the ports, and a child that declares none through an empty map', () => {
+    expect(refusals(parent({}, { ports: { in: null } }))).toEqual([]);
+    const { ports: _p, ...portless } = child;
+    const refused = refusals({ ...parent(), blocks: [{ name: 'a', doc: portless }] });
+    expect(refused).toEqual([
+      expect.stringContaining(
+        "connect it through the block's ports (an empty map, {}, where it declares none)",
+      ),
+    ]);
+    expect(refusals({ ...parent(), blocks: [{ name: 'a', doc: portless, ports: {} }] })).toEqual(
+      [],
+    );
+  });
+
+  it('judges a child composed by reference once it is resolved: runSheet validates the resolved document', () => {
+    const refs = buildSheetRefIndex([{ path: 'lib/cs', doc: child }]);
+    const byRef = parent({}, {});
+    byRef.blocks = [{ name: 'a', ref: 'lib/cs' }];
+    // Unresolved, the block carries no child to judge.
+    expect(refusals(byRef)).toEqual([]);
+    // Resolved, the same rule refuses it, and the run is not feasible.
+    const r = runSheet(byRef, t, undefined, refs);
+    expect(
+      r.warnings
+        .filter((w) => w.rule === 'sheet-nodes' && w.severity === 'error')
+        .map((w) => w.message),
+    ).toEqual([
+      expect.stringMatching(/^block "a": the child states wiring and this sheet states none/),
+    ]);
+    expect(r.feasible).toBe(false);
+    const mapped = { ...byRef, blocks: [{ name: 'a', ref: 'lib/cs', ports: { in: null } }] };
+    expect(
+      runSheet(mapped, t, undefined, refs).warnings.filter((w) => w.severity === 'error'),
+    ).toEqual([]);
+  });
+
+  it('walks a child under a refused parent in no walk at all: the refusal is the report', () => {
+    // The child joins its parent's walk, which a parent with no wiring does not run.
+    const r = runSheet(parent(), t);
+    expect(r.feasible).toBe(false);
+    expect(r.nodes).toBeUndefined();
+    expect(r.blocks![0].nodes).toBeUndefined();
+  });
+
+  it('keeps a child wired by its block’s nodes a device of the parent’s walk', () => {
+    const { nodes: _n, levels: _l, ports: _p, ...bare } = child;
+    const d = parent(
+      { levels: { out: 'V_o' }, params: [vparam('V_o', 0.9)], ports: ['in'] },
+      { doc: bare, params: { V_d: 'V_o' }, nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' } },
+    );
+    expect(validateSheet(d).filter((w) => w.severity === 'error')).toEqual([]);
+    const r = runSheet(d, t);
+    expect(r.nodes?.state).toMatch(/^checked-/);
+    expect(r.blocks![0].terminals).toBeDefined();
+    expect(r.nodes!.levels.out.level).toBeCloseTo(0.9, 12);
   });
 });
 
@@ -1435,8 +1573,8 @@ describe('a child result read back from its tree is walked as the settled tree h
         param('Spec', 0.6),
       ],
       blocks: [
-        { name: 'a', doc: cs('g'), params: { g: 'gx' } },
-        { name: 'b', doc: cs('12'), device: 'still' },
+        { name: 'a', doc: cs('g'), params: { g: 'gx' }, ports: {} },
+        { name: 'b', doc: cs('12'), device: 'still', ports: {} },
       ],
       equations: [],
       checks: [],
@@ -1450,16 +1588,17 @@ describe('a child result read back from its tree is walked as the settled tree h
     // more is the cut of its table to its length, taken once).
     expect(top.reads()).toBeGreaterThan(5);
     expect(still.reads()).toBeLessThanOrEqual(2);
-    // `b` is biased off its own gate level, so its walk has a finding: said once, on the settled
-    // tree, however many probes read the result back.
-    expect(r.blocks![1].nodes?.state).toBe('checked-with-findings');
-    expect(saidOf(r, 'b')).toHaveLength(1);
-    expect(saidOf(r, 'b')[0]).toMatch(/the wiring does not close/);
+    // `b` is biased off its own gate level, so the walk its wiring joins — the parent's — has a
+    // finding against it: said once, on the settled tree, however many probes read the result back.
+    expect(r.nodes?.state).toBe('checked-with-findings');
+    expect(wiring(r)).toHaveLength(1);
+    expect(wiring(r)[0].message).toMatch(/^the wiring does not close .* disputed by b\.gs\./);
     const ref = evaluateSheet(fixedAt(parent, r), t, (id) => (id === 'still' ? t : undefined));
     for (const name of ['a', 'b']) {
       expect(reportOf(r, name)).toBe(reportOf(ref, name));
       expect(saidOf(r, name)).toEqual(saidOf(ref, name));
     }
+    expect(JSON.stringify(r.nodes)).toBe(JSON.stringify(ref.nodes));
   });
 
   it('the flattened two-stage sheets: every block, the referenced load included, as fresh', () => {
@@ -1468,8 +1607,9 @@ describe('a child result read back from its tree is walked as the settled tree h
       'multistage/two-stage-cascode-comp-ota.json',
     ]) {
       const doc = resolvedSheet(librarySheet(path), REFS).doc;
-      // The output load is composed by reference with no port map of its own: its wiring joins
-      // the parent's walk (it is flattened), and its inputs do not move with the solved tail.
+      // The output load is composed by reference through its port map, with no nodes of its
+      // block: its wiring joins the parent's walk (it is flattened), and its inputs do not move
+      // with the solved tail.
       const ld2 = doc.blocks!.find((b) => b.name === 'ld2')!;
       expect(ld2.nodes).toBeUndefined();
       // The bias leg reads nothing the search moves; it is bound to a counted copy of the table.

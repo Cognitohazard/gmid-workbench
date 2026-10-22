@@ -11,7 +11,13 @@ import { LOOKUP_RANGE_MESSAGE } from '../types';
 import type { DeviceTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, fallbackMessage, metaScalars, noiseSource } from '../derive';
-import { AXIS_DEFAULT_BIAS } from '../namespace';
+import {
+  AXIS_DEFAULT_BIAS,
+  affixedColumn,
+  engineNameReason,
+  passthroughKeys,
+  passthroughName,
+} from '../namespace';
 import { additiveCoefficient, scalarScope } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
 import { fixTable } from '../series';
@@ -41,7 +47,7 @@ import {
   type NotSettledWhy,
   type SolveFailure,
 } from './types';
-import { assumedLevelRefusal, holdHardware, type HeldHardware } from './coverage';
+import { assumedLevelRefusal, heldGateWarnings, holdHardware, type HeldHardware } from './coverage';
 // A value as a message quotes it: what the author wrote, without the float tail arithmetic leaves
 // on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004).
 import { shown } from './linear';
@@ -616,59 +622,97 @@ interface RegionPoint {
 /**
  * Put a sizing's operating point in scope: gm/gm_id/id/W/vgs/vstar/cgg/vnth_m/… and every
  * pass-through column the table carries (`passthrough`, as the sizing reports them), which is how
- * a sheet reads a quantity the format has no name for. Returns the pass-through columns it put in
- * scope.
+ * a sheet reads a quantity the format has no name for. Returns the names the pass-through columns
+ * were put in scope under.
  *
- * A pass-through column never replaces a name the sheet already uses: a param, a child's provide,
- * or an expression constant. Otherwise a column called `k` would replace Boltzmann's constant in
- * every equation after the sizing, on this table and no other. Such a column is left out of scope
- * and a warning says so, so neither side silently wins. Namespace quantities are always put in
- * scope: they are how the sheet reads its device.
+ * A pass-through column never replaces a name the sheet already means something by, and is never
+ * replaced by one: an expression constant or a scalar the sizing writes (the sizing already reports
+ * such a column under its affixed name, see passthroughName), a param, a child's provide, or an
+ * equation (`equations`, which are written after the sizing). Otherwise a column called `k` would
+ * replace Boltzmann's constant in every equation after the sizing, on this table and no other.
+ * Such a column is read under its affixed name, `table__<column>`, and a warning names it, so the
+ * sheet's meaning of the name stands and the column stays readable. Only where the affixed name is
+ * taken as well is the column left out of scope, with a warning saying so. Namespace quantities are
+ * always put in scope: they are how the sheet reads its device.
  */
 function mergeSized(
   values: Record<string, number>,
   quantities: Record<string, number>,
   passthrough: readonly string[],
+  table: DeviceTable,
+  equations: ReadonlySet<string>,
   warn: (w: QAWarning) => void,
 ): string[] {
+  if (!passthrough.length) {
+    Object.assign(values, quantities);
+    return [];
+  }
   // The names are judged before anything is written: a quantity's key is unique, so none written
   // here could take one of them.
-  const kept: string[] = [];
-  let left: string[] | undefined;
-  for (const key of passthrough) {
-    const taken = Object.prototype.hasOwnProperty.call(values, key)
-      ? 'the sheet already defines that name'
-      : Object.prototype.hasOwnProperty.call(CONSTANTS, key)
-        ? 'that name is an expression constant'
-        : undefined;
-    if (!taken) {
-      kept.push(key);
-      continue;
-    }
+  const used = (n: string): boolean =>
+    Object.prototype.hasOwnProperty.call(values, n) || equations.has(n);
+  const columnOf = new Map(passthroughKeys(table.grid).map((c) => [passthroughName(c), c]));
+  /** Each pass-through name the sizing reports, and the name it is put in scope under (undefined:
+   *  left out). */
+  const target = new Map<string, string | undefined>();
+  const note = (column: string, message: string): void =>
     warn({
       rule: 'sheet-passthrough',
       severity: 'warning',
-      message: `the table's "${key}" column is not read: ${taken}, which keeps its meaning — rename the column in the export to read it`,
+      message,
       location: 'givens',
-      symbol: key,
+      symbol: column,
     });
-    (left ??= []).push(key);
+  for (const name of passthrough) {
+    const column = columnOf.get(name) ?? name;
+    const why =
+      name === column
+        ? used(name)
+          ? `the sheet already defines "${column}"`
+          : undefined
+        : engineNameReason(column);
+    const to = name === column && why !== undefined ? affixedColumn(column) : name;
+    if (why === undefined) target.set(name, name);
+    else if (!used(to)) {
+      target.set(name, to);
+      note(
+        column,
+        `the table's "${column}" column is read as "${to}": ${why}, which keeps its meaning`,
+      );
+    } else {
+      target.set(name, undefined);
+      const both =
+        name === column
+          ? `the sheet already defines both "${column}" and "${to}"`
+          : `${why}, and the sheet already defines "${to}"`;
+      note(
+        column,
+        `the table's "${column}" column is not read: ${both} — rename the column in the export ` +
+          `to read it`,
+      );
+    }
   }
-  if (!left) Object.assign(values, quantities);
-  else for (const [key, v] of Object.entries(quantities)) if (!left.includes(key)) values[key] = v;
-  return kept;
+  for (const [key, v] of Object.entries(quantities)) {
+    if (!target.has(key)) values[key] = v;
+    else {
+      const to = target.get(key);
+      if (to !== undefined) values[to] = v;
+    }
+  }
+  return [...target.values()].filter((n): n is string => n !== undefined);
 }
 
 /** Resolve the givens, call sizeDevice, and merge its operating point into `values` (through
- *  mergeSized, so a pass-through column never shadows a name the sheet uses). Returns the report
- *  and the point the region check reads, taken from the givens and the sizing rather than from
- *  `values`, where a param or equation of the same name could stand in for them — empty where the
- *  device did not size. */
+ *  mergeSized, so a pass-through column never shadows a name the sheet uses, `equations` among
+ *  them). Returns the report and the point the region check reads, taken from the givens and the
+ *  sizing rather than from `values`, where a param or equation of the same name could stand in for
+ *  them — empty where the device did not size. */
 function runSizing(
   b: SheetGivens,
   table: DeviceTable | undefined,
   values: Record<string, number>,
   scope: Scope,
+  equations: ReadonlySet<string>,
   warn: (w: QAWarning) => void,
 ): { report: SizingReport; point: RegionPoint } {
   // Every sizing failure surfaces an error warning AND an ok:false report, so the feasibility
@@ -726,7 +770,7 @@ function runSizing(
 
   try {
     const res = sizeDevice(q);
-    const read = mergeSized(values, res.quantities, res.passthrough, warn);
+    const read = mergeSized(values, res.quantities, res.passthrough, table, equations, warn);
     // Not in the quantities bag; named in SIZING_SCALARS, which tells validation they are written.
     values.ceiling = res.ceiling;
     values.feasible = res.feasible ? 1 : 0;
@@ -1091,11 +1135,12 @@ function evalBlocks(
     // the parent owns range claims (validation says so at the block). Its wiring is read once the
     // whole tree has settled (see finishWiring), in the mode its parent asks for: a block that
     // names the wires its child's device sits on, or whose device reads a selector the parent
-    // declares, asks for that device's operating point; a child whose wiring joins the parent's
-    // walk reports its held levels and element values instead of walking itself (see withNodes).
+    // declares, asks for that device's operating point; a child that states wiring joins the
+    // parent's walk and reports its held levels and element values — no child walks itself (see
+    // flattened, withNodes).
     const mode: WiringMode = {
       wired: blockWires(parent, block) !== undefined || readsParentSelector(parent, block),
-      flattened: flattened(parent, srcDoc, block),
+      flattened: flattened(srcDoc),
     };
     const res = evaluateChild(srcDoc, childDoc, childTable, resolveDevice, depth + 1, budget);
 
@@ -1205,8 +1250,8 @@ const PENDING_WIRING = new WeakMap<SheetBlockReport, PendingWiring>();
 
 /**
  * The wiring of every child in a settled tree, read once: the child's device point and held
- * levels where its parent's walk reads them, and the walk or selector check of a child that runs
- * its own — innermost first, so each check counts what its own children found. Every solver probe
+ * levels where its parent's walk reads them, and the selector check of a child that states no
+ * wiring — innermost first, so each check counts what its own children found. Every solver probe
  * of the tree before this one is thrown away unread. Where the tree's point is not `sized`, nothing
  * is walked or checked, and each child that would have run its own check reports not-evaluated
  * (see unwalkedReport). A child's findings are attributed to its block path and follow the tree's
@@ -1305,7 +1350,9 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
     doc.blocks && doc.blocks.length > 0 ? evalBlocks(node, values, scope, warn) : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when givens are declared.
-  const sized = doc.givens ? runSizing(doc.givens, table, values, scope, warn) : undefined;
+  const sized = doc.givens
+    ? runSizing(doc.givens, table, values, scope, new Set(doc.equations.map((e) => e.name)), warn)
+    : undefined;
   const sizing = sized?.report;
 
   // 4. Author equations, in document order. An equation that cannot RESOLVE (missing quantity,
@@ -1508,6 +1555,8 @@ interface NodeOptions extends EvaluateOptions {
  * top's own walk (withNodes) — so a solver probe's intermediate value is never a wiring
  * disagreement, and a point with no sized design reports not-evaluated rather than findings (see
  * withoutWalk). A call at the top of a tree (no budget passed) starts the tree's evaluation budget.
+ * A held design (`opts.held`) also says, once per gate a hold keeps at its nominal value, that the
+ * figures rest on that gate not moving (heldGateWarnings).
  */
 function evaluateNode(
   doc: SheetDoc,
@@ -1516,7 +1565,7 @@ function evaluateNode(
   depth: number,
   opts: NodeOptions = {},
 ): SheetResult {
-  const res = withHeld(
+  const solved = withHeld(
     doc,
     solveNode({
       doc,
@@ -1526,7 +1575,11 @@ function evaluateNode(
       budget: opts.budget ?? { left: SOLVE_EVALUATIONS, counted: 0, children: new Map() },
     }),
   );
-  if (depth > 0) return res;
+  if (depth > 0) return solved;
+  const heldGates = opts.held ? heldGateWarnings(doc) : [];
+  const res = heldGates.length
+    ? { ...solved, warnings: [...solved.warnings, ...heldGates] }
+    : solved;
   const point = pointOutcome(res, opts.held === true, opts.assumed);
   if (!point.sized) return { ...withoutWalk(doc, finishWiring(res, false)), point };
   const out = withNodes(doc, finishWiring(res, true), table, STANDALONE);

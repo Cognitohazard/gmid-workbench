@@ -21,7 +21,8 @@ import {
   BODY_FACTOR,
 } from '../demo';
 import { PHYS, GAMMA_DEFAULT } from '../constants';
-import { compileExpr, fallbackMessage } from '../derive';
+import { compileExpr, evalColumn, fallbackMessage } from '../derive';
+import { validate } from '../qa';
 import { ExprError } from '../types';
 import { demoCsvWith, importOne, ueffAt, withUeff } from '../import/passthrough.fixtures';
 
@@ -492,9 +493,60 @@ describe('sizeDevice — pass-through columns', () => {
     const Lp = plain.grid.axes[0].values[1];
     const a = sizeDevice({ table: plain, L: Lp, gm_id: 12, id: 20e-6 });
     const b = sizeDevice({ table: withK, L: Lp, gm_id: 12, id: 20e-6 });
-    expect(b.quantities.k).toBe(1);
+    expect(b.quantities.table__k).toBe(1);
     expect(b.quantities.svth_m).toBe(a.quantities.svth_m);
     expect(b.quantities.vnth_m).toBe(a.quantities.vnth_m);
+  });
+});
+
+describe('a pass-through column named like something the engine means is read as table__<name>', () => {
+  // One name per column everywhere a table is read: a lookup's result, a sizing's report and a
+  // chart expression all read a column called `k` as `table__k`, so `k` keeps meaning Boltzmann's
+  // constant and the column stays readable. A column whose name collides with nothing keeps it.
+  const plain = generateDemoDevice();
+  const table = withColumns(plain, { k: 1, w0: 7, ueff: 3 });
+  const L = plain.grid.axes[0].values[1];
+  const vgs = 0.7;
+
+  it('in a lookup: table__k and table__w0, while ueff keeps its own name', () => {
+    const out = lookup(table, { l: L, vgs });
+    expect(out.table__k).toBe(1);
+    expect(out.table__w0).toBe(7);
+    expect(out.ueff).toBe(3);
+    expect(out).not.toHaveProperty('k');
+    expect(out).not.toHaveProperty('w0');
+    // Asking for the column by its own name says which name it is read by.
+    expect(() => lookup(table, { l: L, vgs }, ['k'])).toThrow(
+      /"k" column is read as "table__k" — "k" is an expression constant/,
+    );
+    expect(lookup(table, { l: L, vgs }, ['table__k'])).toEqual({ table__k: 1 });
+  });
+
+  it("in a sizing's report: the column beside the sizer's own w0, neither overwriting the other", () => {
+    const res = sizeDevice({ table, L, gm_id: 12, id: 20e-6 });
+    expect(res.quantities.table__k).toBe(1);
+    expect(res.quantities.table__w0).toBe(7);
+    expect(res.quantities.w0).toBe(plain.meta.W);
+    expect(res.quantities.ueff).toBe(3);
+    expect(res.passthrough.sort()).toEqual(['table__k', 'table__w0', 'ueff']);
+  });
+
+  it('in a chart expression: k is the constant, table__k the column', () => {
+    const k = evalColumn(table.grid, compileExpr('k'));
+    const col = evalColumn(table.grid, compileExpr('table__k'));
+    expect(k.every((v) => v === PHYS.k)).toBe(true);
+    expect(col.every((v) => v === 1)).toBe(true);
+    // A definition that reads k reads the constant too: the noise is the plain table's.
+    const noise = (t: DeviceTable) => evalColumn(t.grid, compileExpr('svth_m'));
+    expect(noise(table)).toEqual(noise(plain));
+    expect(evalColumn(table.grid, compileExpr('ueff')).every((v) => v === 3)).toBe(true);
+  });
+
+  it('in the import finding: each affixed column with the name it got', () => {
+    const found = validate(table).find((w) => w.rule === 'passthrough-columns');
+    expect(found?.message).toMatch(
+      /^carried as-is, not recognized: k \(read as table__k: "k" is an expression constant\), w0 \(read as table__w0: "w0" is a scalar a sizing writes\), ueff — /,
+    );
   });
 });
 

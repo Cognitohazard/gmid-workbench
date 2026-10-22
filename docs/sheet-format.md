@@ -587,9 +587,23 @@ the pass-through columns it read (`passthrough`), so a result says which of its 
 
 A pass-through column is read under its lower-cased header, in the sheet's own equations and
 checks and in its `provides`, like any quantity of the sized device. It never takes a name the
-sheet already uses: a column named like a param, a child's provide, or an expression constant
-(`k`, `q`, `pi`, …) is left out of scope with a `sheet-passthrough` warning, and the sheet's
-meaning of the name stands. Rename the column in the export to read it.
+sheet already uses, and is never overwritten by one: a column named like a param, an equation, a
+child's provide, an expression constant (`k`, `q`, `pi`, `eps`) or a scalar the sizing writes
+(`w0`, `ceiling`, `feasible`) is read under its **affixed name**, `table__<name>` — the same
+double-underscore join a sheet reads a child's quantity by, with the table in the child's place
+— and a `sheet-passthrough` warning names it:
+
+    the table's "k" column is read as "table__k": "k" is an expression constant, which keeps its meaning
+
+The sheet's meaning of the name stands, and the column stays readable as `table__k`. A column
+whose name collides with nothing keeps its plain name. Constants and the sizing's own scalars
+are the engine's names wherever a table is read, so a column named like one of them is
+`table__<name>` in a lookup, a sizing report and a chart expression as well; a column named like
+a param or an equation is affixed only in the sheet that uses the name. Only where the affixed
+name is taken too (a param called `table__k`) is the column left out of scope, and the warning
+says so. Each sizing's `passthrough` list, and the panel's "at w0, not scaled" line, give the
+names the sheet reads the columns by. A block may not be named `table` (validation refuses it):
+its provides would read `table__<name>` too.
 
 ## Composition
 
@@ -599,13 +613,13 @@ exposes named scalars to the parent through its `provides`.
 
 | Field | Type | Meaning |
 |-|-|-|
-| `name` | string | The child's handle in the parent (used in the join, below). Must not contain `__`. |
+| `name` | string | The child's handle in the parent (used in the join, below). Must not contain `__`, and may not be `table`: a table column the sheet cannot read under its own name is read as `table__<name>` (see [The width contract](#the-width-contract)). |
 | `doc` | object | The embedded child sheet. |
 | `ref` | string | A library-sheet id to include by reference (resolved before evaluation). A block needs `doc` or `ref`; carrying **both** is an already-resolved snapshot — the embedded copy wins and the ref remains as provenance. |
 | `device` | string, optional | The device the child sizes against; absent ⇒ the child inherits its parent's. What the string must look like depends on who evaluates the sheet — see [Naming a block's device](#naming-a-blocks-device). |
 | `params` | object, optional | Overrides of the child's param values, each an expression evaluated in the **parent** scope. |
 | `nodes` | object or list, optional | The wires, in this sheet's namespace, that the child's device sits on (see [Naming the wires](#naming-the-wires-nodes)). Format version 2. |
-| `ports` | object, optional | How the child's declared ports connect to this sheet's wires (see [Elements, ports and analyses](#elements-ports-and-analyses)). Format version 2. |
+| `ports` | object, optional | How the child's declared ports connect to this sheet's wires (see [Elements, ports and analyses](#elements-ports-and-analyses)). Every port a child that wires itself declares is mapped here, and the sheet composing such a child states wiring (see [Naming the wires](#naming-the-wires-nodes)). Format version 2. |
 
 A child's provided scalars surface in the parent namespace as flat names `name__key` (the
 engine has no member access, so `child.key` cannot parse — the join is a `__` separator).
@@ -613,7 +627,9 @@ Neither the block `name` nor a provided key may contain `__`, with one exception
 re-export one of *its* children's provides (a name like `s1__Cin`) up the tree, so a deep
 quantity can surface at the top. The parent references these joined scalars and writes its own
 author math over them. The values that cross a block boundary are scalars; which wires a child's
-device sits on is a separate, checked statement (see [Wiring](#wiring-nodes-levels)).
+device sits on is a separate, checked statement (see [Wiring](#wiring-nodes-levels)). A child
+that wires itself is connected through its block's `ports` by a sheet that states wiring of its
+own; a sheet that states none, or declares `"nodes": "none"`, is refused for composing one.
 
 **Document-order evaluation.** Children evaluate in the order they are listed, and each is
 evaluated *before* the parent's own givens. Two consequences:
@@ -682,8 +698,14 @@ under *Your sheets*):
 
 ```json
 { "name": "ld2", "ref": "multistage/stage2-current-source-load",
-  "params": { "Ix": "I2", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" } }
+  "params": { "Wx": "K2*bias__W", "vgsx": "bias__vgs", "Lx": "L_tail", "vx": "V_out2" },
+  "ports": { "out": "out", "vb": "vbn" } }
 ```
+
+Here the two-stage Miller OTA composes its second-stage load as a mirror output of its bias
+diode: the load takes the reference's width times the ratio `K2` and the reference's
+gate-source voltage, its gate port sits on the reference's gate wire `vbn`, and the current it
+delivers at the output level sets the second stage's current.
 
 A sheet's id is its bare filename (no `.json`). That is unambiguous exactly as long as the
 name is unique across the library — on a collision, qualify it with its folder
@@ -830,18 +852,34 @@ map, every declared port to one of its own wires or to `null` for one left open:
 
 ```json
 { "name": "ld2", "ref": "multistage/stage2-current-source-load",
-  "params": { "Ix": "s2__id", "vx": "V_out2" },
-  "ports": { "out": "out2", "vb": "vb2" } }
+  "params": { "Wx": "K2*bias__W", "vgsx": "bias__vgs", "vx": "V_out2" },
+  "ports": { "out": "out", "vb": "vbn" } }
 ```
 
+The load takes the bias reference's width times the ratio and its gate-source voltage, so it is
+a mirror output of that reference, and the current it delivers sets the second stage's current.
 The child's wiring then joins the parent's check as one netlist: a mapped port **is** the parent
-wire it is mapped to, so the child's devices meet the parent's there, and every other wire of the
-child is its own, spelt `ld2__w` (a port mapped to `null` is `ld2__vb`, connected to nothing in the
-parent). `gnd` is the same wire everywhere. A child's levels hold the wires they name — through the
-map, a parent's — and a parent's override of a child param is read where the parent writes it. The
-child runs no check of its own; the parent's covers it. A block carries `nodes` or `ports`, never
-both; a child that wires itself and declares ports, composed by a sheet that names wiring, must be
-given the map.
+wire it is mapped to, so the child's devices meet the parent's there — the load's gate on the
+reference's gate wire `vbn` — and every other wire of the child is its own, spelt `ld2__w` (a
+port mapped to `null` is `ld2__vb`, connected to nothing in the parent). `gnd` is the same wire
+everywhere. A child's levels hold the wires they name — through the map, a parent's — and a
+parent's override of a child param is read where the parent writes it. The child runs no check
+of its own; only the top of a tree runs one, and it covers every child that wires itself. A block
+carries `nodes` or `ports`, never both.
+
+**A sheet that composes a child that wires itself states wiring itself** and maps every port the
+child declares. For a sheet whose only wiring is that connection, an empty map, `{}`, connects a
+child that declares no ports. A sheet that states no
+wiring — one made only of blocks, with no device, levels or block wiring of its own — or that
+declares `"nodes": "none"` is refused when it composes such a child: the child's ports would be
+connected to nothing, and `"none"` would be false of a sheet that contains a circuit. The refusal
+names the block and the ports left unmapped:
+
+    block "ld2": the child states wiring and this sheet states none, so the child's wiring would be checked against nothing — a child's wiring is checked as part of its parent's: connect it through the block's ports, mapping its ports "out", "vb" to wires here (or to null for one left open)
+
+A child composed by reference is judged once the reference is resolved: `runSheet` and the
+condition runs validate the resolved document, so the refusal reaches every run, while
+validating the unresolved document alone cannot see the child and says nothing about it.
 
 - A wire is an identifier — letters, digits and `_`, without the `__` that joins a child's names to
   its block. `gnd` is the reference at 0 V; every other wire is an ordinary name.
@@ -1065,6 +1103,11 @@ that wires itself is connected through its ports, which the draft leaves to the 
 A sheet either names the wires every sized device sits on, or declares `"nodes": "none"`. There is
 no third state in which wiring is simply not checked: a sheet that does neither is refused — a
 validation error, so it is never evaluated as a design — with the devices it leaves unwired named.
+The same holds a level up: a sheet that composes a child that wires itself states wiring itself
+and maps the child's ports, and one that states none, or declares `"nodes": "none"`, is refused
+with the block and its unmapped ports named (see [Naming the wires](#naming-the-wires-nodes)). A
+child's wiring is checked only inside its parent's, so without that the child's ports would be
+checked against nothing.
 
 **What the earlier format now means.** A document with no format version is still read, but it
 cannot name a wire, so a sized device in one is refused by this rule until the document is
@@ -1374,6 +1417,16 @@ parameter's own term is there to read. Any other relation is a `designConstraint
 A `hold` keeps the **design point's** gate voltage. A gate bias that itself moves with the
 condition — a replica that tracks the device — is a provided bias: write it as an expression and
 constrain the node to it with a `designConstraint`.
+
+Because a held gate stands in for a bias line that never moves, every run of the held design —
+each range end, and each process condition other than the one the design is sized at — carries
+one `sheet-held-gate` warning per gate a `hold` keeps, naming the device, the value and the hold:
+
+    the gate of "casc_n" is held at its nominal value, 0.987 V (the hold of "V_a", V_a + casc_n__vgs) — a real bias branch would move it with the corner or condition, so the figures at this point are approximate
+
+The design point carries none, nor does a hold that balances two currents (below), which holds
+no gate. A child's held gate is reported at its block path. The panel shows the warning on the
+range-end chip (⚠, and in its tooltip) and on a held condition's row.
 
 ### A current the design point chooses
 

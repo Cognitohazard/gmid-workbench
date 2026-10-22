@@ -647,10 +647,13 @@ test('design sheet: a nested block inherits its parent block’s device, and is 
   await page.locator('.load input[type=file]').setInputFiles(
     sheetFile('nested-outer.json', {
       title: 'Nested outer',
+      // The stage wires itself, so this sheet states wiring too: it connects the stage through
+      // the block's port map, its one port left open.
+      formatVersion: 2,
       params: [],
       equations: [],
       checks: [],
-      blocks: [{ name: 'st', ref: 'user/nested-stage' }],
+      blocks: [{ name: 'st', ref: 'user/nested-stage', ports: { in: null } }],
     }),
   );
 

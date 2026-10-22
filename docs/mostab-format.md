@@ -111,7 +111,11 @@ a signed PMOS export, and not checked, because nothing says how it scales or wha
 takes. The importer
 lists such columns as an information finding (`passthrough-columns`), so a quantity this
 exporter spells differently shows up instead of going unscaled. Its cells must still be
-numeric. A column named like a derived quantity (`ft`, `gm_id`, …) is kept too, but it is not a
+numeric. A column named like an expression constant (`k`, `q`, `pi`, `eps`) or like a scalar
+the sizing writes beside its quantities (`w0`, `ceiling`, `feasible`) is read as
+`table__<name>` everywhere — charts, lookup, sizing and design sheets — so it never replaces
+the engine's meaning of the name (a column called `k` would otherwise stand in for Boltzmann's
+constant in the noise figures); the finding names each such column with the name it got. A column named like a derived quantity (`ft`, `gm_id`, …) is kept too, but it is not a
 pass-through column: lookup and sizing compute that name from its definition, and QA flags the
 stored copy (`derived-shadow`).
 

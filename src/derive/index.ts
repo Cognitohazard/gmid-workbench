@@ -11,7 +11,13 @@ import type {
   TableMeta,
   Value,
 } from '../types';
-import { BASE_KEYS, DERIVED_QUANTITIES } from '../namespace';
+import {
+  BASE_KEYS,
+  DERIVED_QUANTITIES,
+  columnAffixedAs,
+  isPassthroughKey,
+  passthroughName,
+} from '../namespace';
 import { GAMMA_DEFAULT_LABEL, thermalScalars } from '../constants';
 import { createEngine } from '../expr';
 
@@ -79,19 +85,25 @@ const holds =
  * real data shadows a same-named derived or scalar. A derived quantity the grid cannot compute
  * by any form is evaluated by its definition, whose error names the missing column. Unknown
  * names return undefined (the engine then tries its constant map, else errors).
+ *
+ * A pass-through column is read under the name it is read by everywhere (passthroughName): one
+ * called like an expression constant only as `table__<column>`, so `k` keeps meaning Boltzmann's
+ * constant here too — in an author's expression and in every definition that reads it.
  */
 export function tableScope(grid: Grid, scalars: Record<string, number> = {}): Scope {
   const has = holds(grid, scalars);
   const scope: Scope = {
     resolve(name: string): Value | undefined {
       const stored = grid.quantities.get(name);
-      if (stored) return stored;
+      if (stored && (!isPassthroughKey(name) || passthroughName(name) === name)) return stored;
       const forms = DERIVED_FORMS.get(name);
       if (forms) {
         const form = derivedForm(name, has) ?? forms[0];
         return asColumn(form.compiled.eval(scope), gridSize(grid));
       }
-      return name in scalars ? scalars[name] : undefined;
+      if (name in scalars) return scalars[name];
+      const column = columnAffixedAs(name);
+      return column === undefined ? undefined : grid.quantities.get(column);
     },
   };
   return scope;

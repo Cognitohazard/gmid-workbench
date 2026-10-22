@@ -5,7 +5,7 @@
 // intrinsic gain, …) along a fixed-L slice. Pure, deterministic, zero DOM imports.
 
 import { type Axis, type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
-import { BASE_KEYS, passthroughKeys } from '../namespace';
+import { BASE_KEYS, engineNameReason, passthroughKeys, passthroughName } from '../namespace';
 import { interpolate, sliceGrid, orient, interp1, type Oriented } from '../grid';
 import { DERIVED_FORMS, derivedForm, metaScalars, evalColumn, pointScope } from '../derive';
 
@@ -45,9 +45,9 @@ export const reportsDerived = (key: string, has: (name: string) => boolean): boo
 
 /**
  * The keys a forward lookup reports without evaluating anything: every present base column, each
- * axis coordinate the grid does not store as a column, and every pass-through column — its default
- * keys less the derived quantities. For a caller that re-derives at another width (the sizer),
- * which would discard every derived value lookup computed.
+ * axis coordinate the grid does not store as a column, and every pass-through column under the name
+ * it is read by (passthroughName) — its default keys less the derived quantities. For a caller that
+ * re-derives at another width (the sizer), which would discard every derived value lookup computed.
  */
 export function storedKeys(table: DeviceTable): string[] {
   const base = baseKeysPresent(table.grid);
@@ -55,7 +55,7 @@ export function storedKeys(table: DeviceTable): string[] {
   const axes = table.grid.axes
     .map((a) => a.name)
     .filter((n) => !base.includes(n) && !Object.prototype.hasOwnProperty.call(meta, n));
-  return [...base, ...axes, ...passthroughKeys(table.grid)];
+  return [...base, ...axes, ...passthroughKeys(table.grid).map(passthroughName)];
 }
 
 /**
@@ -63,7 +63,8 @@ export function storedKeys(table: DeviceTable): string[] {
  * then evaluate any requested derived quantity from the interpolated base scalars.
  *
  * When `keys` is omitted the result holds every present base column, every pass-through
- * column (see passthroughKeys), and every standard derived quantity computable from those bases
+ * column under the name it is read by (see passthroughName: `table__k` for a column called `k`),
+ * and every standard derived quantity computable from those bases
  * by a form that reads them — a stand-in that reads nothing (γ on a table without `sth`) is not a
  * reading of the table, and is answered only when asked for by name. Requested derived keys are
  * evaluated from the interpolated scalars (NOT re-interpolated), so vstar = 2/(gm/id) etc. stay
@@ -81,15 +82,18 @@ export function lookup(
   // columns back out: they are reported, but they stay out of the scope the derived layer reads.
   // A derived definition names only base quantities and constants, so the one thing a
   // pass-through could do there is shadow a constant — a column called `k` would silently
-  // replace Boltzmann's constant in the γ-model noise.
+  // replace Boltzmann's constant in the γ-model noise. Each is reported under the name it is
+  // read by everywhere (passthroughName), so the same column has one name in a lookup, a sizing
+  // and a sheet.
   const basePresent = baseKeysPresent(grid);
-  const extraPresent = passthroughKeys(grid);
-  const baseScalars = interpolate(grid, point, [...basePresent, ...extraPresent]);
+  const columns = passthroughKeys(grid);
+  const baseScalars = interpolate(grid, point, [...basePresent, ...columns]);
   const extraScalars: Record<string, number> = {};
-  for (const key of extraPresent) {
-    extraScalars[key] = baseScalars[key];
+  for (const key of columns) {
+    extraScalars[passthroughName(key)] = baseScalars[key];
     delete baseScalars[key];
   }
+  const extraPresent = Object.keys(extraScalars);
 
   // Device-metadata scalars — the same scope derive/tableScope uses: T/UT overrides
   // (so the γ-model noise evaluates at this table's characterization temperature; the
@@ -141,8 +145,12 @@ export function lookup(
     }
     const forms = DERIVED_FORMS.get(key);
     if (!forms) {
+      const renamed = grid.quantities.has(key) ? engineNameReason(key) : undefined;
       throw new Error(
-        `lookup: "${key}" is neither a present column of this table nor a known derived quantity`,
+        renamed
+          ? `lookup: this table's "${key}" column is read as "${passthroughName(key)}" — ${renamed}`
+          : `lookup: "${key}" is neither a present column of this table nor a known derived ` +
+              `quantity`,
       );
     }
     // By name, so it is the value every expression reading the name gets at this point: the form

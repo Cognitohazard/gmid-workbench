@@ -13,8 +13,21 @@
 // the public barrel, because a caller outside them has no doc to hand it that the engine has not
 // already produced a base result for.
 
+import type { QAWarning } from '../types';
 import { BINDABLE } from '../device';
-import { balancesOf, blockPath, heldOnGate, holdAsConstraint, holds, PATH_SEP } from './types';
+import {
+  balancesOf,
+  blockPath,
+  constrained,
+  deviceName,
+  heldGateOf,
+  heldOnGate,
+  holdAsConstraint,
+  holds,
+  MAX_BLOCK_DEPTH,
+  PATH_SEP,
+  prefixBlockPath,
+} from './types';
 import type { SizingReport, SheetGivens, SheetBlockReport, SheetDoc, SheetBlock } from './types';
 
 /** The three quantities a range end holds fixed: the geometry, and a current the author wrote. */
@@ -177,6 +190,46 @@ export function heldShape(doc: SheetDoc): SheetDoc {
     blocks: (d?.blocks ?? []).map((u) => shape(u.doc, u.name)),
   });
   return holdHardware(doc, shape(doc)).doc;
+}
+
+/**
+ * What a held run says about each gate a `hold` keeps where the design is held (see heldGateOf —
+ * not a current balance, which holds no gate): the gate stays at the value its hold expression
+ * took at the design point, standing in for a bias line that does not move, while the bias branch
+ * of a real circuit would move it with the corner. One warning per held gate anywhere in the tree,
+ * attributed to the block path of the sheet that declares the hold. Read off the held document
+ * (holdHardware), where each hold is the design constraint `held` marks and its `rhs` is the
+ * nominal value; a document no hold was rewritten in yields none, so the design point never
+ * carries one.
+ */
+export function heldGateWarnings(doc: SheetDoc): QAWarning[] {
+  const out: QAWarning[] = [];
+  const visit = (d: SheetDoc, path: string[]): void => {
+    for (const p of Array.isArray(d.params) ? d.params : []) {
+      if (!constrained(p) || p.designConstraint.held !== true) continue;
+      const { lhs, rhs } = p.designConstraint;
+      const device = heldGateOf(d, { ...p, hold: lhs });
+      if (!device) continue;
+      const v = Number(rhs);
+      out.push(
+        prefixBlockPath(path, {
+          rule: 'sheet-held-gate',
+          severity: 'warning',
+          message:
+            `the gate of ${deviceName(device)} is held at its nominal value, ` +
+            `${Number.isFinite(v) ? `${Number(v.toPrecision(4))} V` : rhs} (the hold of ` +
+            `"${p.name}", ${lhs}) — a real bias branch would move it with the corner or ` +
+            `condition, so the figures at this point are approximate`,
+          location: p.name,
+        }),
+      );
+    }
+    if (path.length >= MAX_BLOCK_DEPTH) return;
+    for (const b of Array.isArray(d.blocks) ? d.blocks : [])
+      if (b?.doc) visit(b.doc, [...path, b.name]);
+  };
+  visit(doc, []);
+  return out;
 }
 
 function holdNode(
