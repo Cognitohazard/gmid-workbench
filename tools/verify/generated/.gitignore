@@ -1,0 +1,4 @@
+# Derived from the sheets by export_netlists.ts, gen_decks.py and reverify.py: regenerate,
+# do not commit.
+*
+!.gitignore

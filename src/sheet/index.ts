@@ -80,6 +80,7 @@ export * from './resolve';
 export * from './sensitivity';
 export * from './examples';
 export * from './propose';
+export * from './spice';
 
 /** What a public evaluation takes besides its document and its devices. */
 export interface RunOptions {

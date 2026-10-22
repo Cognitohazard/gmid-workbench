@@ -1125,6 +1125,20 @@ confirm (see [The wiring proposal](#the-wiring-proposal)). A block's earlier `wi
 any format. An earlier-format child composed into a
 format-version-2 sheet is not refused: the block that composes it names its device's wires.
 
+### Simulating the wiring
+
+A sheet's wiring is a netlist a simulator can run. `sizedNetlist(doc, result)` (in `src/sheet/spice.ts`,
+imported from there by a script) reads an evaluated sheet back as a sized netlist: every sized
+device with its width, length and channel type on the wires its placements name, through every
+port map, every element at its value, every held level, the top sheet's ports at the levels its
+wiring derives, and the sheet's figures by name. It reads the result and nothing else. The tools
+in `tools/verify` turn the netlist of every library sheet into an ngspice deck that drives nothing
+but the supplies, the inputs and the wires the sheet leaves to the application, run it, and
+compare the sheet's figures with the simulation. The load and compensation capacitors a sheet's
+bandwidth figures read are params rather than drawn `C` elements, so the deck writer adds them from
+the params. "Re-verifying the library from its wiring" in [tools/verify](../tools/verify/README.md)
+states the deck conventions, the bands and the last results.
+
 ## Closing a bias loop (`solveFor`)
 
 Children evaluate in document order and may only read *earlier* siblings, so the composition is

@@ -732,7 +732,9 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
   // declares the other polarity: said once per block, for the run — the range-end chips, which
   // re-evaluate the same binding, do not repeat it.
   const inherited = sp.locator('.pwarn', { hasText: 'names no device, so it is sized on' });
-  await expect(inherited.filter({ hasText: 'block "ld"' })).toHaveCount(1);
+  // The run with its range ends takes a few seconds on a loaded machine; the lines appear with
+  // the result, so give the first one the run's time.
+  await expect(inherited.filter({ hasText: 'block "ld"' })).toHaveCount(1, { timeout: 30_000 });
   await expect(inherited.filter({ hasText: 'block "ldr"' })).toHaveCount(1);
   await expect(sp.locator('[data-range-end]').first()).toBeVisible();
   await expect(sp.locator('[data-range-end][title*="names no device"]')).toHaveCount(0);

@@ -836,6 +836,33 @@ test('bench: a stored table that cannot be restored is named, kept, and deletabl
   await expect(line).toBeVisible();
   await line.locator('[data-store-delete]').click();
   await expect(line).toHaveCount(0);
+  // The delete is a store transaction that completes after the line disappears; a reload that
+  // races it would find the record still there, so wait for the store itself.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            new Promise<boolean>((resolve) => {
+              const req = indexedDB.open('gmid');
+              req.onsuccess = () => {
+                const db = req.result;
+                const get = db.transaction('tables').objectStore('tables').get('broken-key');
+                get.onsuccess = () => {
+                  db.close();
+                  resolve(get.result === undefined);
+                };
+                get.onerror = () => {
+                  db.close();
+                  resolve(false);
+                };
+              };
+              req.onerror = () => resolve(false);
+            }),
+        ),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
   await page.reload();
   await expect(page.locator('[data-store-skipped]')).toHaveCount(0);
 });
