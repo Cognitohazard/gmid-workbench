@@ -4,7 +4,7 @@
 // (a residual is V_in less the device's own vgs, say), never values pasted from a run.
 
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice } from '../demo';
+import { generateDemoDevice, signedMirrorDemo } from '../demo';
 import {
   NO_ANSWER_NOTE,
   REF,
@@ -1427,6 +1427,35 @@ describe('which wire a solved param is the level of, and the wires it sits betwe
     // V_y is no wire's level: its relation reads a gate-source voltage the wiring never states as
     // a wire.
     expect(read.wires.has('V_y')).toBe(false);
+  });
+
+  it('reads a p device on a signed table through its axis-sign selector', () => {
+    // The same p device sized on a signed PMOS export: its drain-source voltage is written through
+    // a declared selector at -1, the table's axis direction, so the wiring reads the same wire.
+    // Without the n device's relation, x is the level of V_x through the p device alone.
+    const signed = signedMirrorDemo(demo);
+    const viaP: SheetDoc = {
+      ...doc,
+      params: [
+        ...doc.params,
+        { name: 'p_sign', value: -1, unit: '1', convention: 'axis-sign', class: 'independent' },
+      ],
+      blocks: doc.blocks!.map((b) =>
+        b.name === 'p'
+          ? { ...b, params: { vd: 'p_sign*(VDD - V_x)' } }
+          : { ...b, params: { vd: 'VDD - V_x' } },
+      ),
+    };
+    const read = solvedWiring(viaP, (chain) => (chain[0]?.name === 'p' ? signed : demo), ['V_x'])!;
+    expect(read.wires.get('V_x')).toEqual({
+      wires: ['x'],
+      below: [{ wire: 'gnd', device: 'n' }],
+      above: [{ wire: 'vdd', device: 'p' }],
+    });
+    // Read on an N-style table instead, the selector at -1 contradicts the axis: the p device's
+    // drain sits at VDD + (VDD - V_x), so x is not V_x's level through it, and the n device's
+    // relation now names x as VDD - V_x — no wire is V_x's level.
+    expect(solvedWiring(viaP, () => demo, ['V_x'])!.wires.has('V_x')).toBe(false);
   });
 
   it('relates nothing through a device whose direction its table cannot give', () => {

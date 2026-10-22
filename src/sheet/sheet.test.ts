@@ -430,6 +430,7 @@ describe('evaluateSheet — closing a bias loop (solveFor)', () => {
       message: solveErrors(none)[0],
       from: 'author',
       because: 'no-crossing',
+      endsRead: true,
     });
     expect(none.point).toEqual({ sized: false, state: 'no-answer', error: solveErrors(none)[0] });
     // Nothing of the range evaluates: not settled, which is not the same answer.
@@ -5263,5 +5264,57 @@ describe('a given gate-source voltage in a sheet', () => {
         /both a diode connection and a vds/.test(w.message),
       ),
     ).toBe(true);
+  });
+});
+
+describe('a sheet that reads the table’s temperature with no device sized on it says what it assumed', () => {
+  // A table whose file declared no temperature reads at 27 °C (TableMeta.filled). A device sized
+  // on it carries that note on its sizing; a sheet whose own math reads T with no device of its
+  // own sized there would read the default silently, so it says so itself.
+  const filled: DeviceTable = { ...dev, meta: { ...dev.meta, temp: 27, filled: ['temp'] } };
+  const budget = (extra: Partial<SheetDoc> = {}): SheetDoc =>
+    notACircuit({
+      title: 'a kT/C budget',
+      polarity: 'n',
+      params: [{ name: 'C', value: 1e-12, unit: 'F', class: 'independent' }],
+      equations: [{ name: 'vn_kTC', expr: 'sqrt(k*T/C)', unit: 'V' }],
+      checks: [],
+      ...extra,
+    });
+  const notes = (r: SheetResult): string[] =>
+    r.warnings.filter((w) => w.rule === 'sheet-table-temperature').map((w) => w.message);
+
+  it('notes the 27 °C a sheet’s own equation reads, naming what reads it', () => {
+    const r = evaluateSheet(budget(), filled);
+    expect(notes(r)).toEqual([
+      expect.stringMatching(
+        /^equation "vn_kTC" reads the table's temperature \(T or U_T\), and no device here is sized on that table to say so: T is read as 27 °C because the table has no # temp: header/,
+      ),
+    ]);
+    expect(r.warnings.find((w) => w.rule === 'sheet-table-temperature')?.severity).toBe('warning');
+  });
+
+  it('says nothing on a table that states its temperature, or a sheet that shadows T', () => {
+    expect(notes(evaluateSheet(budget(), dev))).toEqual([]);
+    const shadowed = budget({
+      params: [
+        { name: 'C', value: 1e-12, unit: 'F', class: 'independent' },
+        { name: 'T', value: 350, unit: 'K', class: 'independent' },
+      ],
+    });
+    expect(notes(evaluateSheet(shadowed, filled))).toEqual([]);
+  });
+
+  it('leaves the note to the sizing where the sheet sizes a device on that table', () => {
+    const sized = budget({
+      params: [
+        { name: 'C', value: 1e-12, unit: 'F', class: 'independent' },
+        { name: 'I', value: 1e-5, unit: 'A', class: 'independent' },
+      ],
+      givens: { L: '1e-6', id: 'I', gm_id: '10', vds: '0.6' },
+    });
+    const r = evaluateSheet(sized, filled);
+    expect(notes(r)).toEqual([]);
+    expect(r.sizing?.fallbacks?.some((f) => f.quantity === 'T')).toBe(true);
   });
 });

@@ -912,13 +912,6 @@ export interface SheetDoc {
   ports?: string[];
   /** Small-signal analyses asked for by name (see SheetAnalysis). */
   analyses?: SheetAnalysis[];
-  /**
-   * Set by the engine on a held design, never authored: the level the wiring walk of the design
-   * point gave each wire it placed, by wire name — the run whose hardware is held (see
-   * holdHardware). A solved param that is a wire's level reads the neighbours it cannot place from
-   * here where the design is held (see SolveRange). Validation refuses a document that writes it.
-   */
-  designLevels?: Record<string, number>;
 }
 
 /**
@@ -1163,15 +1156,19 @@ export interface RangeEndReport {
    *   off the table's hull. `error` says which; the check outcomes it may carry were taken at a
    *   point that is not the one asked about, so nothing reads them as findings.
    *
-   * `does-not-comply` carries an `error` in one case: a device held at its width cannot carry
-   * its current at this end at all. That is a measured failure of the design, not a gap in the
-   * tool, though it leaves no check outcomes either.
+   * `does-not-comply` carries an `error` in two cases: a device held at its width cannot carry
+   * its current at this end at all, or a solved wire finds no crossing anywhere the wiring lets it
+   * go (designFailure). Each is a measured failure of the design, not a gap in the tool, though it
+   * leaves no check outcomes either.
    */
   state: PointState;
   set: Record<string, number>;
   checks: CheckResult[];
   blocks?: SheetBlockReport[];
   solved: Record<string, number>;
+  /** The range each of the sheet's own solved params may be searched in at this end (see
+   *  SolveRange). Absent where the end was not run. */
+  ranges?: SolveRange[];
   warnings: QAWarning[];
   error?: string;
   /** The DC wiring check of this run, on a sheet that states wiring: `not-evaluated` wherever the
@@ -1453,6 +1450,12 @@ export type SolveOutcome =
       from: RangeSource;
       /** What the search showed (see NoSolutionWhy). */
       because: NoSolutionWhy;
+      /** Whether both ends of the stretch searched read the design: each is an end of the range,
+       *  or was stepped in from one past a stretch where a device cannot carry its current — the
+       *  design failing there itself — and neither read a device off its table or had one refused.
+       *  An end stepped in for any other reason (a gap in the data, a block's own solve finding
+       *  nothing) leaves the stretch beyond it unread. */
+      endsRead: boolean;
     }
   | { kind: 'not-settled'; unknowns: string[]; why: NotSettledWhy; message: string }
   | { kind: 'declaration-false'; param: string; message: string };
@@ -1473,22 +1476,22 @@ export type SolveFailure = Exclude<SolveOutcome, { kind: 'settled' }>;
 export type NoSolutionWhy = 'no-crossing' | 'step' | 'undetermined';
 
 /**
- * Where the range a solved param is searched in came from:
+ * Where the range a solved param may be searched in came from:
  *  - `wiring`: the range the wiring puts the param's wire in, between the wires its devices'
- *    channels join it to (see SolveRange); the author's `min`/`max` contain it;
- *  - `narrowed`: the author's `min`/`max` inside the wiring's range, on at least one side;
+ *    channels join it to (see SolveRange). The author's `min`/`max` are searched first, where they
+ *    lie inside it; with no crossing there the search goes on over the rest of it;
  *  - `author`: the author's `min`/`max` alone — the param is not a wire's level, or no range could
  *    be read from the wiring (`SolveRange.why` says which).
  */
-export type RangeSource = 'wiring' | 'narrowed' | 'author';
+export type RangeSource = 'wiring' | 'author';
 
-/** The range one solved param of a sheet was searched in, and where it came from. */
+/** The range one solved param of a sheet may be searched in, and where it came from. */
 export interface SolveRange {
   param: string;
-  /** The range searched. */
+  /** The range it may be searched in: the wiring's where one is read, else the author's. */
   range: [number, number];
   from: RangeSource;
-  /** The author's `min` and `max`. */
+  /** The author's `min` and `max`, searched first. */
   author: [number, number];
   /** The wires whose level the param is, where it is one (see solvedWiring); absent for a param
    *  that is no wire's level, whose range can only be its author's. */
@@ -1498,20 +1501,24 @@ export interface SolveRange {
   wiring?: { range: [number, number]; below: string; above: string };
   /** Why no wiring range was read, where none was. */
   why?: string;
+  /** Where the param landed, where that is outside the author's range: a root the wiring's range
+   *  holds and the author's does not. */
+  outside?: number;
   /** The same, as one sentence — the `sheet-range` note the result carries for a wire's level. */
   note: string;
 }
 
 /**
  * Whether a solve failure is a finding about the design rather than about the search: a single
- * param found no root in a range the wiring derived, or the author narrowed from it — the
- * relation does not cross its target anywhere the circuit can put the wire. A design point that
- * ends so is infeasible and does not comply; a held point does not comply. Every other failure —
- * a range that is the author's alone, a step, an undetermined relation, a set that did not settle
- * — is no answer.
+ * param found no crossing anywhere in the range the wiring puts its wire in, and both ends of that
+ * search read the design (`endsRead`) — the relation does not reach its target anywhere the circuit
+ * can put the wire. A design point that ends so is infeasible and does not comply; a held point
+ * does not comply. Every other failure — a range that is the author's alone, a step, an
+ * undetermined relation, an end read off the table or stepped in past a stretch that does not
+ * evaluate for a reason of its own, a set that did not settle — is no answer.
  */
 export const designFailure = (o: SolveOutcome | undefined): o is SolveFailure =>
-  o?.kind === 'no-solution' && o.from !== 'author' && o.because === 'no-crossing';
+  o?.kind === 'no-solution' && o.from === 'wiring' && o.because === 'no-crossing' && o.endsRead;
 
 /**
  * Why solved params did not settle:

@@ -2513,6 +2513,10 @@ export interface SolvedWiring {
    *  devices' quantities, each read along a path of relations from gnd or a held wire, the
    *  shortest first and at most FORMS_PER_WIRE of them. */
   forms: Map<string, Poly[]>;
+  /** Each held wire (`levels`), by its name in the walk: the expression it is held at and the
+   *  block path of the sheet that holds it, so a caller can read that expression against the
+   *  document it evaluates — a gate held at a hold's value where the design is held. */
+  held: Map<string, { expr: string; path: string[] }>;
 }
 
 /** The value of a linear form whose every atom `valueOf` can read, or undefined where it reads one
@@ -2604,8 +2608,7 @@ function wiringSignature(
       k === 'title' ||
       k === 'checks' ||
       k === 'operatingRange' ||
-      k === 'analyses' ||
-      k === 'designLevels'
+      k === 'analyses'
     )
       return undefined;
     return v;
@@ -2639,11 +2642,15 @@ function readSolvedWiring(
       );
   }
   // Each held wire's level, and each voltage element, as the walk reads them (see levelAnchors).
+  const heldWires = new Map<string, { expr: string; path: string[] }>();
   for (const lv of levels) {
     const held: unknown = lv.doc.levels;
     for (const [w, e] of Object.entries(isObject(held) ? held : {}))
-      if (w !== GROUND && wireOk(w) && typeof e === 'string')
+      if (w !== GROUND && wireOk(w) && typeof e === 'string') {
         rels.push({ a: lv.rename(w), b: REF, sym: linearForm(sym.srcIn(e, lv.chain)) });
+        if (!heldWires.has(lv.rename(w)))
+          heldWires.set(lv.rename(w), { expr: e, path: lv.chain.map((b) => b.name) });
+      }
     for (const e of Array.isArray(lv.doc.elements) ? lv.doc.elements : []) {
       if (!isObject(e) || e.kind !== 'V' || !Array.isArray(e.between)) continue;
       const [a, b] = e.between as unknown[];
@@ -2707,7 +2714,7 @@ function readSolvedWiring(
       [...m.entries()].sort(([x], [y]) => cmp(x, y)).map(([, v]) => v);
     wires.set(q, { wires: on, below: sorted(below), above: sorted(above) });
   }
-  return { wires, forms };
+  return { wires, forms, held: heldWires };
 }
 
 // ---------------------------------------------------------------------------------------------

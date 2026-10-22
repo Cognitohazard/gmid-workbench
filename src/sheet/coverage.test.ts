@@ -1519,31 +1519,41 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
         message: quoted,
         from: 'author',
         because: 'no-crossing',
+        endsRead: false,
       },
     };
     expect(heldOutcome(solve)).toEqual({ state: 'no-answer', error: quoted });
   });
 
   it('reads no crossing in a range the wiring sets as the design failing here', () => {
-    // The same failure, in a range the wiring derived (or the author narrowed from it): the
+    // The same failure, over the whole range the wiring puts the node in, with both ends read: the
     // circuit can put the node nowhere the search did not look, so the point does not comply —
-    // with the solver's message. A step, an undetermined relation or a set that did not settle
-    // stays no answer whatever the range.
+    // with the solver's message. A range that is the author's alone, a step, an undetermined
+    // relation, or an end the search could not read stays no answer.
     const message = 'solved param "V" found no solution in [0, 0.9] V (the range the wiring …)';
     const failed = (
-      from: 'wiring' | 'narrowed' | 'author',
+      from: 'wiring' | 'author',
       because: 'no-crossing' | 'step' | 'undetermined',
+      endsRead = true,
     ): Parameters<typeof heldOutcome>[0] => ({
       ...run(),
       feasible: false,
       warnings: [{ rule: 'sheet-solve', severity: 'error', message }],
-      solve: { kind: 'no-solution', unknown: 'V', range: [0, 0.9], message, from, because },
+      solve: {
+        kind: 'no-solution',
+        unknown: 'V',
+        range: [0, 0.9],
+        message,
+        from,
+        because,
+        endsRead,
+      },
     });
     expect(heldOutcome(failed('wiring', 'no-crossing'))).toEqual({
       state: 'does-not-comply',
       error: message,
     });
-    expect(heldOutcome(failed('narrowed', 'no-crossing')).state).toBe('does-not-comply');
+    expect(heldOutcome(failed('wiring', 'no-crossing', false)).state).toBe('no-answer');
     expect(heldOutcome(failed('author', 'no-crossing')).state).toBe('no-answer');
     expect(heldOutcome(failed('wiring', 'step')).state).toBe('no-answer');
     expect(heldOutcome(failed('wiring', 'undetermined')).state).toBe('no-answer');

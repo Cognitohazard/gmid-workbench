@@ -1520,17 +1520,6 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   const wiredAsDiode = structuralDiode(doc, _wiredBy);
 
   out.push(...paramProblems(doc));
-  // `designLevels` carries the design point's wire levels into a held run (holdHardware). Written
-  // in a document it would stand in for a walk nobody ran.
-  if (Object.prototype.hasOwnProperty.call(doc, 'designLevels'))
-    out.push({
-      rule: 'sheet-param',
-      severity: 'error',
-      message:
-        '"designLevels" is set by the engine on a held design — the levels the design point\'s ' +
-        'wiring walk placed — and is never written: drop it',
-      location: 'designLevels',
-    });
   out.push(...givensProblems(doc, wiredAsDiode));
   out.push(...checkProblems(doc));
   out.push(...rangeProblems(doc));

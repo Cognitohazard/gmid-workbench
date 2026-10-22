@@ -1551,15 +1551,15 @@ test('operating range: a range end that was not run reads as a question nobody a
   // Push the CENTRE past what the tail node can produce (still inside the sliders, so this is
   // a point the sweep and the picker both visit). The pair's source is the tail node, so the
   // node carries the pair's body effect and the common mode it produces rises 1.2 V per volt of
-  // node: at the shipped inversion level the 0.8 V top of the node's bracket reaches past the
-  // top of CM_dc's slider. With the input pair at the top of ITS slider (gm/ID 18, the least
-  // gate drive) it does not: the most the bracket produces is 0.8 V plus that pair's
-  // gate-source voltage there, 1.43 V on the demo model and a little less on this table's
-  // coarse body-bias grid, against a CM_dc of 1.45 V. There is now no design at all here, so
-  // neither range end has a design to hold — and the whole reason the engine reports that as
-  // its own outcome is that showing it as a failure would answer a question it never asked. A
-  // red "cm-lo" beside an empty design is a statement about the claimed range that nothing
-  // measured.
+  // node. The tail is searched over the whole range its wiring allows, up to the output wire
+  // at 0.9 V, once the author's range finds no root; with the input pair at the top of ITS
+  // slider (gm/ID 18, the least gate drive) the most that range produces is 0.9 V plus that
+  // pair's gate-source voltage there, under 1.6 V on this table, against a CM_dc of 1.6 V.
+  // The tail is one member of a solved set, and a set member that finds no root is "no
+  // answer", never a verdict. There is now no design at all here, so neither range end has a
+  // design to hold — and the whole reason the engine reports that as its own outcome is that
+  // showing it as a failure would answer a question it never asked. A red "cm-lo" beside an
+  // empty design is a statement about the claimed range that nothing measured.
   // At the default centre the low end IS run and reads red, so the strip starting from a state
   // this test would fail on is what makes the transition below mean something. It is still run
   // once the pair has moved, which is the state the centre is pushed out of.
@@ -1570,7 +1570,7 @@ test('operating range: a range end that was not run reads as a question nobody a
   await expect(chips.nth(0)).not.toHaveClass(/skip/);
 
   const cm = sp.locator('.svar[data-param="CM_dc"] .num');
-  await cm.fill('1.45');
+  await cm.fill('1.6');
   await cm.blur();
 
   for (const i of [0, 1]) {
@@ -1802,7 +1802,7 @@ test('design sheet: a format this app does not read is refused at import, and a 
   expect(errors).toEqual([]);
 });
 
-test('design sheet: a stored panel restored without a piece says what it lost, and the stored copy is kept until an edit', async ({
+test('design sheet: a stored panel restored without a check gives no verdict until the user evaluates without it', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -1810,7 +1810,12 @@ test('design sheet: a stored panel restored without a piece says what it lost, a
   page.on('pageerror', (e) => errors.push(String(e)));
 
   type StoredDash = {
-    tabs: { panels: { render: string; sheet?: { checks: { id: string; kind: string }[] } }[] }[];
+    tabs: {
+      panels: {
+        render: string;
+        sheet?: { checks: { id: string; kind: string; note?: unknown }[] };
+      }[];
+    }[];
   };
   /** The stored sheet panel's checks, as localStorage holds them. */
   const storedChecks = () =>
@@ -1827,11 +1832,12 @@ test('design sheet: a stored panel restored without a piece says what it lost, a
   await expect(sp.locator('.shead strong')).toHaveText('Single NMOS gm/ID sizing');
   // At its defaults the headroom check fails, so the design reads infeasible.
   await expect(sp.locator('.srules tr', { hasText: 'headroom' })).toHaveClass(/st-fail/);
-  await expect(sp.locator('[data-restore-lost]')).toHaveCount(0);
+  await expect(sp.locator('.feasb')).toHaveText(/infeasible/);
+  await expect(sp.locator('[data-refused]')).toHaveCount(0);
 
   // The stored copy as a later build might write it: the headroom check under a kind this build
-  // does not read. The loader cannot carry that check, and without it the design would read
-  // feasible — so the panel must say the check is missing, and must not save the loss back.
+  // does not read. Restored without that check the design would read feasible, so the panel gives
+  // no verdict at all — no badge, no rows — names the check, and saves nothing over the stored copy.
   await page.evaluate(() => {
     const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{}') as StoredDash;
     for (const tab of dash.tabs)
@@ -1843,31 +1849,121 @@ test('design sheet: a stored panel restored without a piece says what it lost, a
   await page.reload();
   await loadDemo(page);
   const sp2 = page.locator('.grid .panel').last();
-  const lost = sp2.locator('[data-restore-lost]');
-  await expect(lost).toContainText('restored without 1 piece');
-  await expect(lost).toContainText('checks[1]');
-  await expect(lost).toContainText('kept unchanged until you edit');
-  await expect(sp2.locator('.srules tr', { hasText: 'headroom' })).toHaveCount(0);
-  // Nothing was written over the stored document: it still holds the check as stored.
+  const refused = sp2.locator('[data-refused]');
+  await expect(refused).toContainText('could not be read whole');
+  await expect(refused).toContainText('checks[1]');
+  await expect(sp2.locator('.feasb')).toHaveCount(0);
+  await expect(sp2.locator('.srules')).toHaveCount(0);
+  await expect(sp2.locator('.shead strong')).toHaveCount(0);
   await expect.poll(storedChecks).toContain('headroom:contract');
 
-  // A reload restores from the same stored copy, so the loss is said again rather than having
+  // A reload restores from the same stored copy, so it is refused again rather than having
   // become the document.
   await page.reload();
   await loadDemo(page);
-  await expect(page.locator('.grid .panel').last().locator('[data-restore-lost]')).toContainText(
-    'checks[1]',
-  );
+  const sp3 = page.locator('.grid .panel').last();
+  await expect(sp3.locator('[data-refused]')).toContainText('checks[1]');
+  await expect(sp3.locator('.feasb')).toHaveCount(0);
   await expect.poll(storedChecks).toContain('headroom:contract');
 
-  // An edit makes the restored sheet the user's document: the note goes, and that is what is
+  // Evaluating without the check is the user's choice, and it makes the restored sheet their
+  // document: it is evaluated — without headroom, so it now reads feasible — and that is what is
   // saved from then on.
-  const sp3 = page.locator('.grid .panel').last();
-  const gmId = sp3.locator('.svar[data-param="gm_id"]').locator('.num');
-  await gmId.fill('8');
-  await gmId.blur();
-  await expect(sp3.locator('[data-restore-lost]')).toHaveCount(0);
+  await sp3.locator('[data-restore-accept]').click();
+  await expect(sp3.locator('[data-refused]')).toHaveCount(0);
+  await expect(sp3.locator('.shead strong')).toHaveText('Single NMOS gm/ID sizing');
+  await expect(sp3.locator('.feasb')).toBeVisible();
+  await expect(sp3.locator('.srules tr', { hasText: 'headroom' })).toHaveCount(0);
   await expect.poll(storedChecks).not.toContain('headroom:contract');
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a stored panel restored without prose only is evaluated, says so, and keeps the stored copy', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  type StoredDash = {
+    tabs: { panels: { render: string; sheet?: { checks: { note?: unknown }[] } }[] }[];
+  };
+  const storedNote = () =>
+    page.evaluate(() => {
+      const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{"tabs":[]}') as StoredDash;
+      const p = dash.tabs.flatMap((t) => t.panels).find((x) => x.render === 'sheet');
+      return p?.sheet?.checks[0]?.note;
+    });
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(page.locator('.grid .panel').last().locator('.shead strong')).toHaveText(
+    'Single NMOS gm/ID sizing',
+  );
+  // A note this build cannot read (a number where it reads text): prose, which no verdict reads.
+  await page.evaluate(() => {
+    const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{}') as StoredDash;
+    for (const tab of dash.tabs)
+      for (const p of tab.panels) if (p.render === 'sheet' && p.sheet) p.sheet.checks[0].note = 42;
+    localStorage.setItem('gmid.dash.v3', JSON.stringify(dash));
+  });
+  await page.reload();
+  await loadDemo(page);
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('[data-refused]')).toHaveCount(0);
+  await expect(sp.locator('[data-restore-lost]')).toContainText('checks[0].note');
+  await expect(sp.locator('.feasb')).toBeVisible();
+  // The restored numbers are not offered for copying while the stored copy is kept.
+  await expect(sp.locator('.sexp button', { hasText: 'copy results' })).toBeDisabled();
+  await expect.poll(storedNote).toBe(42);
+
+  expect(errors).toEqual([]);
+});
+
+test('dashboard: a saved layout the loader cannot read whole is kept, not saved over, until the user keeps it', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  type StoredDash = { tabs: { panels: { xExpr: unknown }[] }[] };
+  /** The stored first tab's panel count and its sixth panel's X axis. */
+  const stored = () =>
+    page.evaluate(() => {
+      const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{"tabs":[]}') as StoredDash;
+      const panels = dash.tabs[0]?.panels ?? [];
+      return { count: panels.length, x5: panels[5]?.xExpr };
+    });
+
+  await page.goto('/');
+  await loadDemo(page);
+  // A panel of the user's own (the canonical ones are regenerated for every device anyway).
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(page.locator('.grid .panel')).toHaveCount(6);
+  await expect.poll(async () => (await stored()).count).toBe(6);
+  // Its axis written in a shape this build does not read.
+  await page.evaluate(() => {
+    const dash = JSON.parse(localStorage.getItem('gmid.dash.v3') ?? '{}') as StoredDash;
+    dash.tabs[0].panels[5].xExpr = { expr: '' };
+    localStorage.setItem('gmid.dash.v3', JSON.stringify(dash));
+  });
+  await page.reload();
+  await loadDemo(page);
+  const line = page.locator('[data-layout-lost]');
+  await expect(line).toContainText('tabs[0].panels[5]');
+  await expect(page.locator('.grid .panel')).toHaveCount(5);
+  // A change on the dashboard is not saved while the stored layout is held.
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  await expect(page.locator('.grid .panel')).toHaveCount(6);
+  await expect.poll(stored).toEqual({ count: 6, x5: { expr: '' } });
+
+  // Keeping the layout saves it as it is now.
+  await line.locator('[data-layout-keep]').click();
+  await expect(line).toHaveCount(0);
+  await expect.poll(stored).toEqual({ count: 6, x5: '' });
 
   expect(errors).toEqual([]);
 });
