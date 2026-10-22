@@ -37,11 +37,12 @@
       "note": "input-referred thermal density budget"
     },
     {
-      "name": "cdd_est",
-      "value": 2e-15,
-      "unit": "F",
+      "name": "cdd_per_um",
+      "value": 0.35e-15,
+      "unit": "F/um",
       "role": "spec",
-      "note": "estimate: the capacitance the two devices add at the output, their drain junctions and gate-drain overlaps. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. The 2.5 µm input device and 3.7 µm load the defaults size add 1.8 fF, simulated; wiring comes on top, so refine from extraction"
+      "note": "an estimate from simulation on sky130, 0.3 to 0.4 fF per micron of drain width; no table carries a drain capacitance column",
+      "class": "independent"
     },
     {
       "name": "gbw_margin",
@@ -101,7 +102,7 @@
       "name": "in",
       "doc": {
         "title": "Common-source input device",
-        "description": "The input device. Its transconductance is set from the bandwidth spec and its inversion level by the efficiency knob, so the branch current follows from the two, and the current-source device in series reads that current. It exposes its transconductance, output conductance, drain current, gate capacitance and channel-noise density.",
+        "description": "The input device. Its transconductance is set from the bandwidth spec and its inversion level by the efficiency knob, so the branch current follows from the two, and the current-source device in series reads that current. It exposes its transconductance, output conductance, drain current, gate capacitance, channel-noise density and width.",
         "polarity": "n",
         "params": [
           { "name": "gm_i", "value": 1.5708e-4, "unit": "S", "role": "spec" },
@@ -127,7 +128,7 @@
             "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
           }
         ],
-        "provides": ["gm", "gds", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "id", "vnth_m", "cgg", "W"]
       },
       "params": {
         "gm_i": "2*pi*GBW_target*CL*(1 + gbw_margin)",
@@ -141,7 +142,7 @@
       "name": "load",
       "doc": {
         "title": "Current-source load device",
-        "description": "One device biased as a current source: carries the stage current at a declared vds, exposing its output conductance, transconductance (its drain-noise scale), and saturation headroom.",
+        "description": "One device biased as a current source: carries the stage current at a declared vds, exposing its output conductance, transconductance (its drain-noise scale), saturation headroom and width.",
         "polarity": "p",
         "params": [
           { "name": "I_load", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -172,7 +173,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vdsat", "id", "vnth_m"]
+        "provides": ["gm", "gds", "vdsat", "vnth_m", "W"]
       },
       "params": {
         "I_load": "in__id",
@@ -198,9 +199,9 @@
     },
     {
       "name": "Cout",
-      "expr": "CL + cdd_est",
+      "expr": "CL + cdd_per_um*(in__W + load__W)/1e-6",
       "unit": "F",
-      "note": "the load plus what the two devices add at the output"
+      "note": "the load plus what the two devices add at the output, their drain junctions and gate-drain overlaps, at cdd_per_um per micron of their widths, so a resized device carries a proportionate estimate. The 2.5 µm input device and 3.7 µm load the defaults size on the sky130 tables add 1.8 fF, simulated, and 2.2 fF by this estimate; wiring comes on top, so refine from extraction"
     },
     { "name": "GBW", "expr": "in__gm/(2*pi*Cout)", "unit": "Hz" },
     {

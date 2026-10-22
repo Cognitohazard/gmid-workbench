@@ -1,6 +1,6 @@
 {
   "title": "Two-stage OTA, cascode compensation",
-  "description": "The Ahuja (cascode) variant of the two-stage Miller OTA: the compensation cap $C_c$ returns to a low-impedance cascode node instead of directly across the second stage. Routing the compensation current through the common-gate cascode blocks the feedforward path, so the right-half-plane zero that plagues plain Miller compensation is removed. In its place the half of the signal current that enters at the cascode's source makes a left-half-plane zero at $2(g_m + g_{mb})_{casc}/C_c$, which gives back most of the second pole's lag at the crossover, and above it the cascode and the second stage form a lightly damped pair of poles near $\\sqrt{g_{m2}(g_m + g_{mb})_{casc}/(C_1 C_L)}$, where the loop gain can peak again. The phase margin therefore reads high, and the gain margin is the figure that says how close the peak comes. The stage structure mirrors the plain Miller OTA (stage-1 input pair + mirror load, stage-2 common source + load); the added cascode devices carry the stage-1 branch currents, and the one on the output side provides the node $C_c$ returns through. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply, and the cascode and the input device stack under that node. On the output side the mirror's output device and the cascode share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. The stage is drawn at rest, as the feedback around the amplifier holds it: the stage-1 output sits at the second stage's gate, and the two inputs sit apart by whatever offset that takes. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices are one width and carry what the tail delivers between them, each its own share, and the second stage carries what its load delivers: the load is a second mirror output of the same reference, on its gate at $K_2$ times its width, so the stage-2 current is $K_2 I_1$ less that mirror's drain-voltage error, and the second-stage device is handed it. The mirror's output device takes its diode-side partner's width and gate and carries what the table gives at its own drain voltage. The pair is sized on its output side, and the share is solved, by a design constraint, so that the currents at the stage-1 output balance: the output-side cascode passes up exactly what the mirror's output device returns. The output-side cascode takes the diode-side cascode's width and carries the current of the input device below it, and the node under it is solved by a second design constraint: it sits where that cascode needs the gate voltage the two cascodes share. That gate's bias is not drawn. The diode-side cascode's drain-source voltage, V_casc, is stated at the design point and carries a hold, and the gate wire the two cascodes share is held at the level that hold keeps, the mirror node less V_casc plus that cascode's $V_{GS}$; where the design is held at another condition the gate stays there and V_casc is solved again under it. The tail node, the share and that node read each other, so the engine settles the three together by repeated one-unknown searches. Wherever the two levels differ, the two input devices need different gate-source voltages for their currents, and the systematic-offset equation reports that difference directly. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved by a third design constraint so the produced $CM_{in}$, the tail node plus the mean of the two gate-source voltages, equals $CM_{dc}$. The two input gates are the sheet's ports, driven by the application. The pole and phase-margin equations are ESTIMATE-grade small-signal approximations; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
+  "description": "The Ahuja (cascode) variant of the two-stage Miller OTA: the compensation cap $C_c$ returns to a low-impedance cascode node instead of directly across the second stage. Routing the compensation current through the common-gate cascode blocks the feedforward path, so the right-half-plane zero that plagues plain Miller compensation is removed. In its place the half of the signal current that enters at the cascode's source makes a left-half-plane zero at $2(g_m + g_{mb})_{casc}/C_c$, which gives back most of the second pole's lag at the crossover, and above it the cascode and the second stage form a lightly damped pair of poles near $\\sqrt{g_{m2}(g_m + g_{mb})_{casc}/(C_1 C_L)}$, where the loop gain can peak again. The phase margin therefore reads high: the peak loop gain is the figure that says whether the loop gain comes back above 1 after its first crossing, and the gain margin how much it has to spare where the phase reaches -180°. The stage structure mirrors the plain Miller OTA (stage-1 input pair + mirror load, stage-2 common source + load); the added cascode devices carry the stage-1 branch currents, and the one on the output side provides the node $C_c$ returns through. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply, and the cascode and the input device stack under that node. On the output side the mirror's output device and the cascode share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. The stage is drawn at rest, as the feedback around the amplifier holds it: the stage-1 output sits at the second stage's gate, and the two inputs sit apart by whatever offset that takes. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices are one width and carry what the tail delivers between them, each its own share, and the second stage carries what its load delivers: the load is a second mirror output of the same reference, on its gate at $K_2$ times its width, so the stage-2 current is $K_2 I_1$ less that mirror's drain-voltage error, and the second-stage device is handed it. The mirror's output device takes its diode-side partner's width and gate and carries what the table gives at its own drain voltage. The pair is sized on its output side, and the share is solved, by a design constraint, so that the currents at the stage-1 output balance: the output-side cascode passes up exactly what the mirror's output device returns. The output-side cascode takes the diode-side cascode's width and carries the current of the input device below it, and the node under it is solved by a second design constraint: it sits where that cascode needs the gate voltage the two cascodes share. That gate's bias is not drawn. The diode-side cascode's drain-source voltage, V_casc, is stated at the design point and carries a hold, and the gate wire the two cascodes share is held at the level that hold keeps, the mirror node less V_casc plus that cascode's $V_{GS}$; where the design is held at another condition the gate stays there and V_casc is solved again under it. The tail node, the share and that node read each other, so the engine settles the three together by repeated one-unknown searches. Wherever the two levels differ, the two input devices need different gate-source voltages for their currents, and the systematic-offset equation reports that difference directly. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved by a third design constraint so the produced $CM_{in}$, the tail node plus the mean of the two gate-source voltages, equals $CM_{dc}$. The two input gates are the sheet's ports, driven by the application. The pole and phase-margin equations are ESTIMATE-grade small-signal approximations; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -291,7 +291,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "id"]
+        "provides": ["id"]
       },
       "params": {
         "W_t": "bias__W",
@@ -363,7 +363,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "cgg", "vgs", "id"]
+        "provides": ["gm", "gds", "cgg", "vgs"]
       },
       "params": {
         "Ix": "ld2__id",
@@ -537,7 +537,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "vgs", "vth", "vdsat", "vnth_m", "cgg", "id"]
+        "provides": ["gm", "vgs", "vdsat", "cgg", "id"]
       },
       "params": {
         "Wx": "ino__W",
@@ -753,7 +753,7 @@
       "name": "PM",
       "expr": "90 + (atan(wu/wz) - atan(wu/wzr))*180/pi - (wu < wn ? atan(wu*wn/(Q2*(wn^2 - wu^2))) : pi - atan(wu*wn/(Q2*(wu^2 - wn^2))))*180/pi",
       "unit": "deg",
-      "note": "ESTIMATE: the phase margin at that crossing: 90° plus the left-half-plane zero's lead, less the pair's lag and the right-half-plane zero's. The zero gives back most of what the pair takes, so this compensation reads high (116.6° simulated at the defaults). It sees the first crossing only: where the pair's peak lifts the loop gain back above 1, the circuit is less stable than this says, and gain_margin is the figure that shows it. Simulated at the defaults the loop gain comes back up to 2.1 near 53 MHz and falls through 1 again with 11° to spare. Small-signal approximation — the simulator owns stability sign-off"
+      "note": "ESTIMATE: the phase margin at that crossing: 90° plus the left-half-plane zero's lead, less the pair's lag and the right-half-plane zero's. The zero gives back most of what the pair takes, so this compensation reads high (116.6° simulated at the defaults). It sees the first crossing only: where the pair's peak lifts the loop gain back above 1, the circuit is less stable than this says, and loop_peak is the figure that shows it. Simulated at the defaults the loop gain comes back up to 2.1 near 53 MHz and falls through 1 again with 11° to spare. Small-signal approximation — the simulator owns stability sign-off"
     },
     {
       "name": "x180",
@@ -772,6 +772,18 @@
       "expr": "-20*log10((wc/w180)*sqrt(1 + (w180/wz)^2)*sqrt(1 + (w180/wzr)^2)/sqrt((1 - x180^2)^2 + (x180/Q2)^2))",
       "unit": "dB",
       "note": "ESTIMATE: the gain margin, the loop gain at w180 as a loss, from the same poles and zeros. It comes to about the loop gain's level above the zero, wc/wz = gm1/(2*gm_casc), so the input pair's gm against the cascode's gm + gmb sets it, and Cc hardly moves it. Terms this leaves out, the mirror's pole and the second stage's gate-to-drain coupling, less the damping the stage-1 output conductance gives the pair, take about 2 dB more in simulation: 4.3 dB at the defaults"
+    },
+    {
+      "name": "wpk",
+      "expr": "wn*sqrt(1 - 1/(2*Q2^2))",
+      "unit": "rad/s",
+      "note": "where the pair's own factor in the loop gain, 1/sqrt((1 - x^2)^2 + (x/Q2)^2) with x = w/wn, peaks: setting its derivative in x^2 to zero gives x^2 = 1 - 1/(2*Q2^2), just under wn when Q2 is large. Where Q2 is 1/sqrt(2) or less the pair does not peak, and this does not evaluate"
+    },
+    {
+      "name": "loop_peak",
+      "expr": "Q2*gm1/(2*gm_casc)*sqrt(1 + (wz/wpk)^2)*sqrt(1 + (wpk/wzr)^2)/sqrt(1 - 1/(4*Q2^2))",
+      "unit": "1",
+      "note": "ESTIMATE: how high the loop gain rises again at the pair, after its first crossing, from the same poles and zeros. Above the zero the dominant pole and the zero, (wc/w)*sqrt(1 + (w/wz)^2) = gm1/(2*gm_casc)*sqrt(1 + (wz/w)^2), level off at gm1/(2*gm_casc), and the pair multiplies that by about Q2 near wn, so the peak is about Q2*gm1/(2*gm_casc). This row is the transfer function's own magnitude at wpk: there the pair's factor is Q2/sqrt(1 - 1/(4*Q2^2)), and the right-half-plane zero adds sqrt(1 + (w/wzr)^2). The other factors are nearly flat across the pair, so the true maximum is within 0.1 % of this at the defaults. Above 1, the loop gain falls back through 1 above the pair with far less phase to spare than PM, which reads the first crossing only. At the defaults on the sky130 tables this reads 1.68, near 28 MHz; simulated 2.09 near 53 MHz, falling through 1 again at 64.6 MHz with 11° of margin. The estimate runs about 2 dB under the simulation here, as gain_margin runs about 2 dB over it: the terms that row's note names are left out of both. Where Q2 is 1/sqrt(2) or less the pair does not peak, and this does not evaluate"
     },
     {
       "name": "SR",
@@ -874,6 +886,14 @@
       "op": ">=",
       "rhs": "GM_target",
       "note": "the gain margin meets its target. Advisory, like the phase margin: it is an estimate from the same poles and zero, and the simulator signs off on stability. At the defaults on the sky130 tables this estimate reads just under 6 dB, and the simulation found 4.3 dB; since the estimate runs about 2 dB above the simulation, a pass by less than that may still fall short. Cc hardly moves the margin, here or in simulation: it follows the input pair's gm against the output-side cascode's gm + gmb, and in simulation the input pair's side moves it most (gm_id_in 8 with Cc 2 pF, which holds the bandwidth, gave 8.4 dB)"
+    },
+    {
+      "id": "loop-gain-peak",
+      "kind": "advisory",
+      "lhs": "loop_peak",
+      "op": "<=",
+      "rhs": "1",
+      "note": "the loop gain does not come back up to 1 after its first crossing, so the phase margin at that crossing is the whole story. Stated as the peak rather than as the margin at the last crossing because the peak follows from the pair the sheet already states, its wn and Q2, and the level above the zero, in closed form, while the last crossing is the largest root of a cubic in (w/wn)^2 and falls on the steep side of the pair, where the phase swings fastest and the margin is least certain (the estimate puts it at 19° near 33 MHz on sky130, the simulation 11° at 64.6 MHz). Advisory, like the two margins: an estimate that reads about 2 dB under the simulation (1.68 against 2.09 at the defaults), and the simulator signs off on stability. By the same closed forms Q2 = Cc/(CL + Cc)*sqrt(gm2*CL/(gm_casc*C1_est)): the input pair's gm against the cascode's gm + gmb sets the level the pair lifts, as it sets the gain margin, and unlike the gain margin Cc moves the peak too, through Q2"
     },
     {
       "id": "input-sat-margin",

@@ -37,11 +37,12 @@
       "note": "input-referred thermal density budget"
     },
     {
-      "name": "cdd_est",
-      "value": 20e-15,
-      "unit": "F",
+      "name": "cdd_per_um",
+      "value": 0.35e-15,
+      "unit": "F/um",
       "role": "spec",
-      "note": "estimate: the capacitance the two devices add at the output, their drain junctions and gate-drain overlaps. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. The 1.2 µm NMOS and the 94 µm PMOS the defaults size add 21.5 fF, simulated, nearly all of it the PMOS; wiring comes on top, so refine from extraction"
+      "note": "an estimate from simulation on sky130, 0.3 to 0.4 fF per micron of drain width; no table carries a drain capacitance column",
+      "class": "independent"
     },
     {
       "name": "I_bias",
@@ -92,7 +93,7 @@
       "name": "n",
       "doc": {
         "title": "NMOS device",
-        "description": "The pull-down device at the shared current, drain at the output. Its current is the one this sheet types, and its inversion level is the one it chooses; its source is at ground, so its gate-source voltage is the input level. Exposes its transconductance, output conductance, saturation voltage, current, gate-source voltage, and channel-noise density.",
+        "description": "The pull-down device at the shared current, drain at the output. Its current is the one this sheet types, and its inversion level is the one it chooses; its source is at ground, so its gate-source voltage is the input level. Exposes its transconductance, output conductance, saturation voltage, current, gate-source voltage, channel-noise density and width.",
         "polarity": "n",
         "params": [
           { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -117,7 +118,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m", "cgg", "W"]
       },
       "params": {
         "I_d": "I_bias",
@@ -131,7 +132,7 @@
       "name": "p",
       "doc": {
         "title": "PMOS device",
-        "description": "The pull-up device at the shared current, source at VDD, drain at the output. It carries the NMOS's current (current reuse) and its gate is the NMOS's gate, so its gate-source voltage is what the supply leaves above the input level and its width is what carries that current there. Its inversion level is read off the table, not chosen. Exposes its transconductance, output conductance, saturation voltage, current, gate-source voltage and inversion level.",
+        "description": "The pull-up device at the shared current, source at VDD, drain at the output. It carries the NMOS's current (current reuse) and its gate is the NMOS's gate, so its gate-source voltage is what the supply leaves above the input level and its width is what carries that current there. Its inversion level is read off the table, not chosen. Exposes its transconductance, output conductance, saturation voltage, current, gate-source voltage, inversion level and width.",
         "polarity": "p",
         "params": [
           { "name": "I_d", "value": 20e-6, "unit": "A", "role": "spec" },
@@ -160,7 +161,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m", "cgg", "gm_id"]
+        "provides": ["gm", "gds", "vdsat", "id", "vgs", "vnth_m", "cgg", "gm_id", "W"]
       },
       "params": {
         "I_d": "n__id",
@@ -210,9 +211,9 @@
     },
     {
       "name": "Cout",
-      "expr": "CL + cdd_est",
+      "expr": "CL + cdd_per_um*(n__W + p__W)/1e-6",
       "unit": "F",
-      "note": "the load plus what the two devices add at the output"
+      "note": "the load plus what the two devices add at the output, their drain junctions and gate-drain overlaps, at cdd_per_um per micron of their widths, so a resized device carries a proportionate estimate. The 1.2 µm NMOS and the 94 µm PMOS the defaults size on the sky130 tables add 21.5 fF, simulated, nearly all of it the PMOS, and 33 fF by this estimate: the wide PMOS adds about 0.23 fF per micron, under the narrower devices' 0.3 to 0.4. Wiring comes on top, so refine from extraction"
     },
     { "name": "GBW", "expr": "gm_tot/(2*pi*Cout)", "unit": "Hz" },
     {

@@ -27,11 +27,12 @@
       "note": "input-referred thermal density budget"
     },
     {
-      "name": "cdd_est",
-      "value": 1e-15,
-      "unit": "F",
+      "name": "cdd_per_um",
+      "value": 0.35e-15,
+      "unit": "F/um",
       "role": "spec",
-      "note": "estimate: the capacitance the device adds at the output, its drain junction and gate-drain overlap. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. The 2.5 µm device the defaults size adds 0.9 fF, simulated; wiring comes on top, so refine from extraction"
+      "note": "an estimate from simulation on sky130, 0.3 to 0.4 fF per micron of drain width; no table carries a drain capacitance column",
+      "class": "independent"
     },
     {
       "name": "gbw_margin",
@@ -104,9 +105,9 @@
     },
     {
       "name": "Cout",
-      "expr": "CL + cdd_est",
+      "expr": "CL + cdd_per_um*W/1e-6",
       "unit": "F",
-      "note": "the load plus what the device adds at the output"
+      "note": "the load plus what the device adds at the output, its drain junction and gate-drain overlap, at cdd_per_um per micron of its width, so a resized device carries a proportionate estimate. The 2.5 µm device the defaults size on the sky130 tables adds 0.9 fF, simulated, and 0.88 fF by this estimate; wiring comes on top, so refine from extraction"
     },
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
     {

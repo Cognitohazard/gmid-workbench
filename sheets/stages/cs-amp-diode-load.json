@@ -27,11 +27,12 @@
       "note": "input-referred thermal density budget"
     },
     {
-      "name": "cdd_est",
-      "value": 1e-15,
-      "unit": "F",
+      "name": "cdd_per_um",
+      "value": 0.35e-15,
+      "unit": "F/um",
       "role": "spec",
-      "note": "estimate: the capacitance the two drains add at the output, their junctions and the input device's gate-drain overlap, beside the diode load's gate capacitance, which Cout reads from the table. Typed, because the tables this library ships carry no drain-capacitance (cdd) column, and a sheet row cannot fall back from one column to another. At the defaults the table puts 10 fF on the load's gate, and the devices add 8.7 fF at the output in all, simulated: the part of the gate's capacitance that is to its own drain sits across the one node and adds nothing. Wiring comes on top, so refine from extraction"
+      "note": "an estimate from simulation on sky130, 0.3 to 0.4 fF per micron of drain width; no table carries a drain capacitance column",
+      "class": "independent"
     },
     {
       "name": "gbw_margin",
@@ -92,7 +93,7 @@
       "name": "in",
       "doc": {
         "title": "Common-source input device",
-        "description": "The input device. Its transconductance is set from the bandwidth spec and its inversion level by the efficiency knob, so the branch current follows from the two, and the diode-connected device in series reads that current. Its drain is the output, one gate-source drop of that device below the supply. It exposes its transconductance, output conductance, drain current, gate capacitance and channel-noise density.",
+        "description": "The input device. Its transconductance is set from the bandwidth spec and its inversion level by the efficiency knob, so the branch current follows from the two, and the diode-connected device in series reads that current. Its drain is the output, one gate-source drop of that device below the supply. It exposes its transconductance, output conductance, drain current, gate capacitance, channel-noise density and width.",
         "polarity": "n",
         "params": [
           { "name": "gm_i", "value": 1.5708e-4, "unit": "S", "role": "spec" },
@@ -118,7 +119,7 @@
             "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
           }
         ],
-        "provides": ["gm", "gds", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "id", "vnth_m", "cgg", "W"]
       },
       "params": {
         "gm_i": "2*pi*GBW_target*CL*(1 + gbw_margin)",
@@ -132,7 +133,7 @@
       "name": "load",
       "doc": {
         "title": "Diode-connected load device",
-        "description": "One device diode-connected (gate tied to drain), so its vds equals its vgs. Carries the stage current, exposing its transconductance (which sets the gain and the output level), its output conductance, and its gate-source drop.",
+        "description": "One device diode-connected (gate tied to drain), so its vds equals its vgs. Carries the stage current, exposing its transconductance (which sets the gain and the output level), its output conductance, its gate-source drop and its width.",
         "polarity": "p",
         "params": [
           { "name": "I_load", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -150,7 +151,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "vnth_m", "cgg", "W"]
       },
       "params": {
         "I_load": "in__id",
@@ -175,9 +176,9 @@
     },
     {
       "name": "Cout",
-      "expr": "CL + load__cgg + cdd_est",
+      "expr": "CL + load__cgg + cdd_per_um*(in__W + load__W)/1e-6",
       "unit": "F",
-      "note": "the load, the diode load's own gate capacitance, since its gate is the output node, and what the two drains add"
+      "note": "the load, the diode load's own gate capacitance, since its gate is the output node, and what the two drains add, their junctions and the input device's gate-drain overlap, at cdd_per_um per micron of their widths, so a resized device carries a proportionate estimate. At the defaults on the sky130 tables the table puts 10 fF on the load's gate and the drains add 2.2 fF by this estimate, while the devices add 8.7 fF at the output in all, simulated: the part of the gate's capacitance that is to its own drain sits across the one node and adds nothing. Wiring comes on top, so refine from extraction"
     },
     {
       "name": "GBW",

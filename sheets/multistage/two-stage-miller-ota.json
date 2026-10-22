@@ -227,7 +227,7 @@
         "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "region": "saturation" },
         "equations": [],
         "checks": [],
-        "provides": ["gds", "vdsat", "id"]
+        "provides": ["vdsat", "id"]
       },
       "params": { "Wx": "bias__W", "vgsx": "bias__vgs", "Lx": "L_tail", "vx": "V_tail" },
       "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
@@ -294,7 +294,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "cgg", "vgs", "id"]
+        "provides": ["gm", "gds", "cgg", "vgs"]
       },
       "params": {
         "Ix": "ld2__id",
@@ -447,7 +447,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "vgs", "vdsat", "vnth_m", "cgg", "id"]
+        "provides": ["gm", "vgs", "vdsat", "cgg", "id"]
       },
       "params": {
         "Wx": "ino__W",

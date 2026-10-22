@@ -115,7 +115,10 @@ const pmOf = (gm1: number, gm2: number): number =>
  *  gm2/C1, the unity crossing wu = wc/sqrt(1 − (wc/wz)²) with wc = gm1/Cc, and the phase margin
  *  there. The -180° crossing is found here by bisecting that transfer function's own phase (the
  *  dominant pole's 90° spent) between wn and 10·wn, not from the sheet's quadratic, and the loop
- *  gain there is returned as a gain margin in dB. */
+ *  gain there is returned as a gain margin in dB. The peak the pair lifts the loop gain to is found
+ *  the same way, by bisecting the slope of the transfer function's own magnitude between wn/2 and
+ *  2·wn, not from the sheet's closed form; where it is above 1, the loop gain falls through 1 once
+ *  more above it, found by bisecting the magnitude itself, and the margin there is returned too. */
 const ahujaMargins = (gm1: number, gm2: number, gmc: number) => {
   const C1 = 0.5e-12;
   const deg = 180 / Math.PI;
@@ -129,6 +132,9 @@ const ahujaMargins = (gm1: number, gm2: number, gmc: number) => {
   const pm = 90 + (Math.atan(wu / wz) - Math.atan(wu / wzr) - pair) * deg;
   const phase = (w: number): number =>
     Math.atan(w / wz) - Math.atan(w / wzr) - Math.atan2(w / (Q * wn), 1 - (w / wn) ** 2);
+  const magnitude = (w: number): number =>
+    ((wc / w) * Math.hypot(1, w / wz) * Math.hypot(1, w / wzr)) /
+    Math.hypot(1 - (w / wn) ** 2, w / (Q * wn));
   let [lo, hi] = [wn, 10 * wn]; // phase + 90° falls through -90° in between
   for (let i = 0; i < 200; i++) {
     const mid = Math.sqrt(lo * hi);
@@ -137,10 +143,40 @@ const ahujaMargins = (gm1: number, gm2: number, gmc: number) => {
   }
   const w180 = Math.sqrt(lo * hi);
   const x = w180 / wn;
-  const loop =
-    ((wc / w180) * Math.hypot(1, w180 / wz) * Math.hypot(1, w180 / wzr)) /
-    Math.hypot(1 - x * x, x / Q);
-  return { wz, wn, Q, pm, x180: x, gmDb: -20 * Math.log10(loop) };
+  const loop = magnitude(w180);
+  // The magnitude rises into the pair and falls past it.
+  const rising = (w: number): boolean => magnitude(w * (1 + 1e-6)) > magnitude(w * (1 - 1e-6));
+  let [up, down] = [wn / 2, 2 * wn];
+  if (!rising(up) || rising(down)) throw new Error('the pair does not peak between wn/2 and 2·wn');
+  for (let i = 0; i < 200; i++) {
+    const mid = Math.sqrt(up * down);
+    if (rising(mid)) up = mid;
+    else down = mid;
+  }
+  const wPeak = Math.sqrt(up * down);
+  const peak = magnitude(wPeak);
+  // Past the peak the magnitude falls through 1 once more, when the peak is above 1.
+  let [above, below] = [wPeak, 10 * wn];
+  for (let i = 0; i < 200; i++) {
+    const mid = Math.sqrt(above * below);
+    if (magnitude(mid) > 1) above = mid;
+    else below = mid;
+  }
+  const wLast = Math.sqrt(above * below);
+  const lastPm = peak > 1 ? 90 + phase(wLast) * deg : undefined;
+  return {
+    wz,
+    wn,
+    Q,
+    pm,
+    x180: x,
+    gmDb: -20 * Math.log10(loop),
+    magnitude,
+    wPeak,
+    peak,
+    wLast,
+    lastPm,
+  };
 };
 
 /** The sheet sized on the shared table and then held on a second characterization of the same
@@ -751,6 +787,39 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     expect(Math.abs(v.gain_margin + 20 * Math.log10(v.gm1 / (2 * v.gm_casc)))).toBeLessThan(1);
     // 6.12 dB against the 6 dB target: inside the near-miss band, which reads amber and feasible.
     expect(statusOf(res, 'gain-margin')).toBe('amber');
+    expect(res.feasible).toBe(true);
+  });
+
+  it('the loop gain peaks again at the pair, which the first-crossing margin cannot see', () => {
+    // Above the zero the loop gain levels off at gm1/(2·gm_c) = 0.48, and the pair lifts that by
+    // about Q2 = 3.15 near wn: the transfer function comes back up to 1.678 there, and falls
+    // through 1 again just above with 19° of phase to spare, where PM, which reads the first
+    // crossing, says 113°. From the closed forms (ahujaMargins), with the peak found by bisecting
+    // the slope of the transfer function's own magnitude, not from the sheet's row.
+    const m = ahujaMargins(gm1, gm2, (1 + BODY_FACTOR) * gmCasco);
+    expect(relErr(v.loop_peak, m.peak)).toBeLessThan(1e-3);
+    // The row is that magnitude at the frequency where the pair's own factor peaks,
+    // wn·sqrt(1 − 1/(2·Q2²)). The dominant pole and the two zeros are nearly flat across the pair,
+    // so they move the true maximum 0.4 % down in frequency and 0.02 % up in height.
+    const exact = ahujaMargins(v.gm1, v.gm2, v.gm_casc);
+    expect(relErr(v.wpk, v.wn * Math.sqrt(1 - 1 / (2 * v.Q2 ** 2)))).toBeLessThan(1e-12);
+    expect(relErr(v.loop_peak, exact.magnitude(v.wpk))).toBeLessThan(1e-12);
+    expect(v.loop_peak).toBeLessThan(exact.peak);
+    expect(relErr(v.loop_peak, exact.peak)).toBeLessThan(1e-3);
+    expect(relErr(exact.wPeak, v.wpk)).toBeLessThan(1e-2);
+    // About Q2 times the level above the zero: the zero's own lift, the right-half-plane zero's and
+    // the resonance's sharpening add 10 % between them.
+    const lift = v.loop_peak / ((v.Q2 * v.gm1) / (2 * v.gm_casc));
+    expect(lift).toBeGreaterThan(1);
+    expect(lift).toBeLessThan(1.15);
+    // Above 1, so there is a last crossing past the pair, and its margin is a fraction of the
+    // target the first-crossing estimate passes.
+    expect(v.loop_peak).toBeGreaterThan(1);
+    expect(exact.wLast).toBeGreaterThan(exact.wPeak);
+    expect(exact.lastPm!).toBeLessThan(v.PM_target / 2);
+    expect(v.PM).toBeGreaterThan(v.PM_target);
+    // Advisory, like the margins: the check fails and the design stays feasible.
+    expect(statusOf(res, 'loop-gain-peak')).toBe('fail');
     expect(res.feasible).toBe(true);
   });
 

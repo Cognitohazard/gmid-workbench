@@ -372,7 +372,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "id"]
+        "provides": ["vdsat", "id"]
       },
       "params": {
         "W_t": "bias__W",
@@ -676,7 +676,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "ro", "W", "vnth_m", "id"]
+        "provides": ["gm", "ro", "vnth_m", "id"]
       },
       "params": {
         "W_m": "nmir_r__W",

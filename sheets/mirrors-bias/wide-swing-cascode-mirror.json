@@ -190,7 +190,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["W", "vgs", "vdsat", "gm", "id"]
+        "provides": ["W", "vgs", "vdsat", "id"]
       },
       "params": {
         "I_ref": "I_in",

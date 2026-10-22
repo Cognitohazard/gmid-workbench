@@ -143,7 +143,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["W", "vgs", "gm", "id"]
+        "provides": ["W", "vgs", "id"]
       },
       "params": {
         "I_ref": "I_in",

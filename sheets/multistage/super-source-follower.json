@@ -94,7 +94,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "av0", "vgs"]
+        "provides": ["gm", "av0", "vgs"]
       },
       "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" },
       "nodes": { "d": "out", "g": "x", "s": "gnd", "b": "gnd" }

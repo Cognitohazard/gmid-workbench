@@ -308,7 +308,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "id"]
+        "provides": ["id"]
       },
       "params": {
         "W_t": "bias__W",
@@ -349,7 +349,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "ro", "vgs", "vth", "vdsat", "vnth_m", "cgg", "id"]
+        "provides": ["gm", "ro", "vgs", "vdsat", "vnth_m", "cgg", "id"]
       },
       "params": {
         "Ix": "tail__id/2",

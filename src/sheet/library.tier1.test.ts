@@ -121,10 +121,23 @@ describe('tier1 goldens: CS amp, resistive load', () => {
     expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
   });
 
-  it('bandwidth is gm into the load plus the typed drain estimate', () => {
-    // 1 fF beside the 2 pF load: 157.08 uS/(2*pi*2.001 pF) = 12.494 MHz.
-    expect(relErr(res.values.Cout, 2e-12 + 1e-15)).toBeLessThan(1e-12);
-    expect(relErr(res.values.GBW, gm / (2 * Math.PI * (2e-12 + 1e-15)))).toBeLessThan(1e-9);
+  it('bandwidth is gm into the load plus a drain estimate per micron of the sized width', () => {
+    // 0.35 fF per micron of the width the sizing landed on, beside the 2 pF load. The width is the
+    // sizer's answer, like a solved vgs; what this pins is that the estimate follows it.
+    const cout = 2e-12 + 0.35e-15 * (res.values.W / 1e-6);
+    expect(relErr(res.values.Cout, cout)).toBeLessThan(1e-12);
+    expect(relErr(res.values.GBW, gm / (2 * Math.PI * cout))).toBeLessThan(1e-9);
+    // A resized device carries a proportionate estimate: at gm/ID 8 the same gm takes half again
+    // the current at a lower inversion level, and a different width, and the drain term scales
+    // with it.
+    const resized = runSheet(withParams(sheet('cs-amp-resistive-load.json'), { gm_id: 8 }), table);
+    expect(Math.abs(resized.values.W / res.values.W - 1)).toBeGreaterThan(0.1);
+    expect(
+      relErr(
+        (resized.values.Cout - 2e-12) / (res.values.Cout - 2e-12),
+        resized.values.W / res.values.W,
+      ),
+    ).toBeLessThan(1e-9);
   });
 });
 
@@ -176,8 +189,11 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
 
   it("the output carries the diode load's own gate capacitance from the table", () => {
     // The load's gate is the output node, so its W*L*Cox sits there beside the 2 pF load and the
-    // 1 fF typed for the two drains.
-    const cout = 2e-12 + cggOf(block(res, 'load').W, 0.5e-6) + 1e-15;
+    // 0.35 fF per micron estimated for the two drains.
+    const cout =
+      2e-12 +
+      cggOf(block(res, 'load').W, 0.5e-6) +
+      0.35e-15 * ((block(res, 'in').W + block(res, 'load').W) / 1e-6);
     expect(relErr(res.values.Cout, cout)).toBeLessThan(1e-9);
     expect(relErr(res.values.GBW, gm / (2 * Math.PI * cout))).toBeLessThan(1e-9);
   });
@@ -602,6 +618,30 @@ describe('tier1 goldens: Sampling switch', () => {
 // `region`, which compares the drain-source voltage the givens state against the device's
 // saturation voltage. A sheet therefore writes no check of its own comparing the same two voltages
 // with no margin: the declaration says it once, at every point.
+describe('tier1: the drain capacitance is estimated per micron of the widths on the output', () => {
+  // No table carries a drain-capacitance column, so each stage that puts its bandwidth into a
+  // capacitive output adds cdd_per_um, 0.35 fF, per micron of the width of every device whose
+  // drain is that node, and the diode load its own gate besides. Written down from the
+  // schematics, not read off the sheets: the devices whose drains are the output ('' for the
+  // sheet's own device).
+  const CASES: Record<string, string[]> = {
+    'cs-amp-resistive-load.json': [''],
+    'common-gate.json': [''],
+    'cs-amp-current-source-load.json': ['in', 'load'],
+    'cs-amp-diode-load.json': ['in', 'load'],
+    'cmos-inverter-amp.json': ['n', 'p'],
+  };
+  it.each(Object.keys(CASES))('%s', (file) => {
+    const doc = sheet(file);
+    expect(doc.params.find((p) => p.name === 'cdd_per_um')?.value).toBe(0.35e-15);
+    const res = runSheet(doc, table, undefined, REFS);
+    const width = (d: string): number => (d ? block(res, d).W : (res.sizing?.W ?? NaN));
+    const drains = CASES[file].reduce((sum, d) => sum + width(d), 0);
+    const gate = file === 'cs-amp-diode-load.json' ? res.values.load__cgg : 0;
+    expect(relErr(res.values.Cout, 2e-12 + gate + 0.35e-15 * (drains / 1e-6))).toBeLessThan(1e-12);
+  });
+});
+
 describe('tier1: the regions the stage devices declare', () => {
   /** The region each device of a sheet declares, keyed by block name ('' for the sheet's own). */
   const declared = (doc: SheetDoc): Record<string, string> => {

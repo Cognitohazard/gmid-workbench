@@ -218,7 +218,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "id"]
+        "provides": ["vdsat", "id"]
       },
       "params": {
         "W_t": "bias__W",
@@ -250,7 +250,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "cgg", "W", "vnth_m", "id"]
+        "provides": ["gm", "vgs", "cgg", "W", "vnth_m", "id"]
       },
       "params": {
         "I_side": "tail__id*out_share",
@@ -290,7 +290,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "svth_m", "cgg"]
+        "provides": ["gm", "vgs", "vdsat", "W", "id", "vnth_m", "svth_m", "cgg"]
       },
       "params": {
         "I_side": "tail__id*out_share",
@@ -321,7 +321,7 @@
         "givens": { "L": "L_m", "W": "W_m", "id": "I_side", "diode": true },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "vgs", "cgg", "W", "vnth_m"]
+        "provides": ["gm", "vgs", "W", "vnth_m"]
       },
       "params": {
         "W_m": "mload__W",
@@ -458,7 +458,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "cgg", "id", "vnth_m"]
+        "provides": ["gm", "vdsat", "id", "vnth_m"]
       },
       "params": {
         "W_o": "K_m*mload_f__W",
