@@ -15,19 +15,22 @@
 
 import type { DeviceTable } from '../types';
 import { noiseLabel } from '../derive';
+import { blockWires } from '../sheet/nodes';
 import {
   bindingCheck,
   choiceKnobs,
   clampMargin,
-  clampedIn,
+  childPath,
   cloneDoc,
   deviceName,
   devicesIn,
   engineSolved,
   limitingCheck,
   MARGIN_PCT_CAP,
+  formatOf,
   measurable,
   noiseSourcesIn,
+  placementsOf,
   refusedIn,
   resolvedSheet,
   runSheet,
@@ -236,6 +239,10 @@ export interface PickerCandidate {
    *  sized under, a coordinate read at a table's edge. A `closed` row can rest on any of them,
    *  so a consumer shows them beside the verdict. Absent when there are none. */
   caveats?: string[];
+  /** How many separate things `caveats` names (a device, an axis of a device, an input, a
+   *  coordinate) — the count a consumer shows, since one sentence can name several. Absent with
+   *  `caveats`. */
+  caveatItems?: number;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -793,32 +800,82 @@ function backOff(
   return best ?? { doc: doc0 };
 }
 
+/** What one run rests on that its document did not state: the sentences a consumer shows, and
+ *  how many separate things they name — a device, an axis of a device, an input, a coordinate. */
+export interface RunCaveats {
+  sentences: string[];
+  items: number;
+}
+
+/**
+ * The devices of `doc`, named as devicesIn names them, whose every placement ties the source to
+ * the body. Their body bias is zero by the wiring, so a sizing that read it at its default
+ * assumed nothing. The wires a device sits on are its own document's `nodes`, else its
+ * composing block's, in the netlist format (as the wiring walk reads them).
+ */
+function bodyTied(doc: SheetDoc): Set<string> {
+  const out = new Set<string>();
+  const walk = (d: SheetDoc, byBlock: unknown, path: string): void => {
+    const ps = (formatOf(d) === 2 ? placementsOf(d.nodes) : undefined) ?? placementsOf(byBlock);
+    if (ps?.every((p) => typeof p.s === 'string' && p.s === p.b)) out.add(path || 'givens');
+    for (const b of d.blocks ?? [])
+      if (b?.doc) walk(b.doc, blockWires(d, b), childPath(path, b.name));
+  };
+  walk(doc, undefined, '');
+  return out;
+}
+
+/** `axis → devices` as one sentence per axis, the devices named as findings name them. */
+function byAxis(
+  pairs: readonly (readonly [string, string])[],
+  say: (axis: string) => string,
+): string[] {
+  const groups = new Map<string, string[]>();
+  for (const [device, axis] of pairs)
+    groups.set(axis, [...(groups.get(axis) ?? []), deviceName(device)]);
+  return [...groups].map(([axis, devices]) => `${say(axis)}: ${devices.join(', ')}`);
+}
+
 /**
  * What one run's answer rests on that its document did not state, each a sentence: the devices
- * whose noise figures are the γ estimate, or read by a lesser form, or at a temperature their
- * table did not declare (SizingReport.noise and fallbacks, in the noise line's words, grouped
- * by what they say); bias axes left at their defaults (SizingReport.assumed); the DC inputs the
- * design was sized under (SheetResult.assumptions); coordinates a device was read at the edge of
- * its table instead of where it was asked (SizingReport.clamped). Empty when the run rests on
- * none of them. A device whose noise is its table's own, by its definition, owes no sentence.
+ * whose noise figures are the γ estimate, or read by a lesser form, or under a corner or a
+ * temperature their table did not declare (SizingReport.noise and fallbacks, in the noise line's
+ * words, grouped by what they say); bias axes left at their defaults (SizingReport.assumed) —
+ * except a body bias the wiring of `doc`, the document the run evaluated, ties to zero; the DC
+ * inputs the design was sized under (SheetResult.assumptions); coordinates a device was read at
+ * the edge of its table instead of where it was asked (SizingReport.clamped). Empty when the run
+ * rests on none of them. A device whose noise is its table's own, by its definition, owes no
+ * sentence.
  */
-export function runCaveats(res: SheetResult): string[] {
-  const out: string[] = [];
+export function runCaveats(res: SheetResult, doc?: SheetDoc): RunCaveats {
+  const sentences: string[] = [];
+  let items = 0;
   const byLabel = new Map<string, string[]>();
   for (const d of noiseSourcesIn(res)) {
     if (d.source !== 'estimated' && d.fallbacks.length === 0) continue;
     const label = noiseLabel(d.source, d.fallbacks);
     byLabel.set(label, [...(byLabel.get(label) ?? []), deviceName(d.device)]);
+    items++;
   }
-  for (const [label, devices] of byLabel) out.push(`noise: ${label} — ${devices.join(', ')}`);
-  const defaulted = devicesIn(res, (s, at) => (s.assumed ?? []).map((axis) => `${at} ${axis}`));
-  if (defaulted.length) out.push(`a bias left at its default: ${defaulted.join(', ')}`);
-  if (res.assumptions?.length)
-    out.push(`sized under assumed DC inputs: ${res.assumptions.join(', ')}`);
-  const clamped = clampedIn(res);
-  if (clamped.length)
-    out.push(`read at the edge of the table instead of where asked: ${clamped.join(', ')}`);
-  return out;
+  for (const [label, devices] of byLabel) sentences.push(`noise: ${label} — ${devices.join(', ')}`);
+  const tied = doc ? bodyTied(doc) : new Set<string>();
+  const defaulted = devicesIn(res, (s, at) =>
+    (s.assumed ?? [])
+      .filter((axis) => !(axis === 'vsb' && tied.has(at)))
+      .map((axis) => [at, axis] as const),
+  );
+  sentences.push(...byAxis(defaulted, (axis) => `${axis} left at its default`));
+  items += defaulted.length;
+  if (res.assumptions?.length) {
+    sentences.push(`sized under assumed DC inputs: ${res.assumptions.join(', ')}`);
+    items += res.assumptions.length;
+  }
+  const clamped = devicesIn(res, (s, at) => (s.clamped ?? []).map((axis) => [at, axis] as const));
+  sentences.push(
+    ...byAxis(clamped, (axis) => `${axis} read at the edge of the table instead of where asked`),
+  );
+  items += clamped.length;
+  return { sentences, items };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -954,7 +1011,9 @@ export function pickTopology(
   const binding = refused.length ? undefined : bindingCheck(res);
   const iq = res.values['I_q'];
   // A refused candidate reports no point, so nothing rests on one.
-  const caveats = refused.length ? [] : runCaveats(res);
+  const caveats = refused.length
+    ? { sentences: [], items: 0 }
+    : runCaveats(res, resolvedSheet(doc, refs).doc);
   return {
     path: sheet.path,
     title: doc.title,
@@ -974,7 +1033,7 @@ export function pickTopology(
     elapsedMs: clock() - meter.started,
     budget: { evalBudget: meter.evalBudget, msBudget: meter.msBudget },
     budgetExhausted: meter.exhausted,
-    ...(caveats.length ? { caveats } : {}),
+    ...(caveats.items ? { caveats: caveats.sentences, caveatItems: caveats.items } : {}),
   };
 }
 

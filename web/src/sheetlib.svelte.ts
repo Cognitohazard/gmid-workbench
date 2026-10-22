@@ -32,9 +32,20 @@ export interface UserSheet {
 /** A user sheet the library offers and resolves: one restored whole. */
 const served = (s: UserSheet): boolean => !s.lost;
 
-/** The list as it is written to storage: a sheet restored with a loss writes back what was stored. */
-const persisted = (sheets: readonly UserSheet[]): unknown[] =>
-  sheets.map((s) => (s.lost ? { name: s.name, doc: s.stored } : { name: s.name, doc: s.doc }));
+/** A stored entry the loader could not take into the library — one with no usable name, or an
+ *  earlier entry of a name a later one replaces — kept exactly as it was stored, with why. */
+export interface DroppedEntry {
+  raw: unknown;
+  why: string;
+}
+
+/** The list as it is written to storage: a sheet restored with a loss writes back what was
+ *  stored, and every entry the loader dropped is written back too, ahead of the kept ones, so a
+ *  later entry of the same name still wins on the next load and nothing stored is lost. */
+const persisted = (sheets: readonly UserSheet[]): unknown[] => [
+  ...store.dropped.map((d) => d.raw),
+  ...sheets.map((s) => (s.lost ? { name: s.name, doc: s.stored } : { name: s.name, doc: s.doc })),
+];
 
 // `.v2` since the document's keys were renamed: a build from before the rename reads a sheet
 // in the new keys as an empty one, so it must not find them in its own slot. The earlier slot
@@ -55,15 +66,34 @@ const validSheetName = (name: string): boolean => !!name.trim() && !name.include
 
 /** Coerce the persisted list — each entry re-sanitized like any untrusted sheet, and
  *  held to the SAME id contract as a fresh import (last one wins on duplicates) so
- *  hand-edited localStorage cannot mint ids the import path would refuse. */
-function parseUserSheets(raw: unknown): UserSheet[] {
-  if (!Array.isArray(raw)) return [];
+ *  hand-edited localStorage cannot mint ids the import path would refuse. What is not taken in
+ *  — an entry with no usable name, an earlier entry of a repeated name, a stored list that is
+ *  not a list — goes to `dropped`, kept as stored, to be listed and written back. */
+function parseUserSheets(raw: unknown, dropped: DroppedEntry[]): UserSheet[] {
+  if (!Array.isArray(raw)) {
+    dropped.push({ raw, why: 'the stored library is not a list of sheets' });
+    return [];
+  }
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, discarded on return
   const byName = new Map<string, UserSheet>();
-  for (const e of raw) {
-    if (!e || typeof e !== 'object') continue;
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, discarded on return
+  const rawByName = new Map<string, unknown>();
+  for (const [i, e] of raw.entries()) {
+    if (!e || typeof e !== 'object') {
+      dropped.push({ raw: e, why: `stored entry ${i + 1} is not a sheet entry` });
+      continue;
+    }
     const o = e as Record<string, unknown>;
-    if (typeof o.name !== 'string' || !validSheetName(o.name)) continue;
+    if (typeof o.name !== 'string' || !validSheetName(o.name)) {
+      dropped.push({ raw: e, why: `stored entry ${i + 1} has no usable name` });
+      continue;
+    }
+    if (rawByName.has(o.name))
+      dropped.push({
+        raw: rawByName.get(o.name),
+        why: `an earlier stored "${o.name}", replaced by a later one of the same name`,
+      });
+    rawByName.set(o.name, e);
     const lost: string[] = [];
     const doc = sanitizeSheet(o.doc, 0, lost);
     // Keep whatever is structurally a sheet, valid or not: validity is reported where the sheet
@@ -82,19 +112,43 @@ function parseUserSheets(raw: unknown): UserSheet[] {
   return [...byName.values()];
 }
 
+const droppedAtLoad: DroppedEntry[] = [];
 const store = $state({
   // 4× the per-sheet cap bounds the whole persisted blob BEFORE parse (loadJSON maxLen)
   // — past it the store is treated as corrupt and reset, never re-parsed on every boot.
   sheets: loadJSON(
     KEY,
-    parseUserSheets,
-    () => loadJSON(KEY_BEFORE, parseUserSheets, (): UserSheet[] => [], 4 * MAX_SHEET_JSON_BYTES),
+    (raw) => parseUserSheets(raw, droppedAtLoad),
+    () =>
+      loadJSON(
+        KEY_BEFORE,
+        (raw) => parseUserSheets(raw, droppedAtLoad),
+        (): UserSheet[] => [],
+        4 * MAX_SHEET_JSON_BYTES,
+      ),
     4 * MAX_SHEET_JSON_BYTES,
   ),
+  dropped: droppedAtLoad,
 });
 
 export function userSheets(): readonly UserSheet[] {
   return store.sheets;
+}
+
+/** The stored entries the loader could not take into the library, with why — listed beside it
+ *  and written back with it. */
+export function droppedUserSheets(): readonly DroppedEntry[] {
+  return store.dropped;
+}
+
+/**
+ * A user sheet a reference names that is withheld from the library — restored with a loss, so
+ * neither offered nor resolved (see UserSheet.lost) — or undefined. For the panel that reports a
+ * reference to it as unresolved, so it can say why.
+ */
+export function withheldSheet(ref: string): UserSheet | undefined {
+  const name = ref.startsWith('user/') ? ref.slice('user/'.length) : ref;
+  return store.sheets.find((s) => s.lost && s.name === name);
 }
 
 /**
@@ -150,6 +204,10 @@ export function importSheetJSON(filename: string, text: string): string | null {
 
 export function removeUserSheet(name: string): void {
   store.sheets = store.sheets.filter((s) => s.name !== name);
+  // An earlier stored entry of the same name goes with it: written back, it would win next time.
+  store.dropped = store.dropped.filter(
+    (d) => !(d.raw && typeof d.raw === 'object' && (d.raw as { name?: unknown }).name === name),
+  );
   saveJSON(KEY, persisted(store.sheets));
 }
 

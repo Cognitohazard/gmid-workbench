@@ -120,6 +120,16 @@ export function withRecordedFill(dt: DeviceTable): DeviceTable {
  */
 export function saneTable(dt: DeviceTable | undefined): dt is DeviceTable {
   if (!dt?.id?.device || !(dt.grid?.quantities instanceof Map)) return false;
+  // The record of filled-in identity is read with `includes` everywhere a label or a nominal is
+  // decided, so a stored one has to be the list the importer writes.
+  const filled: unknown = dt.meta?.filled;
+  if (
+    filled !== undefined &&
+    !(
+      Array.isArray(filled) && filled.every((f) => f === 'device' || f === 'corner' || f === 'temp')
+    )
+  )
+    return false;
   const { axes, shape } = dt.grid;
   if (!Array.isArray(axes) || axes.length === 0) return false;
   if (!Array.isArray(shape) || shape.length !== axes.length) return false;

@@ -358,7 +358,13 @@ export class SheetEvaluator {
     // The worker keeps only the tables of the devices this sheet reads, so a panel holds a copy
     // of what it evaluates rather than of the whole bench.
     const outlines = [...devices.values()].map((d): DeviceOutline => ({
-      ...$state.snapshot({ ...d, conditions: [], nominal: undefined }),
+      // The members the nominal rule set aside are for the bench's own strip, not for a run.
+      ...$state.snapshot({
+        ...d,
+        conditions: [],
+        nominal: undefined,
+        nominalPassedOver: undefined,
+      }),
       conditions: d.conditions.map(tableUid),
       nominal: d.nominal === undefined ? undefined : tableUid(d.nominal),
     }));

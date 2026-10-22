@@ -264,6 +264,11 @@ export interface CharacterizedDevice {
    *  member of the device declares its condition, because a filled-in condition never wins the
    *  automatic rule over a declared one — so a nominal that rests on a default says so. */
   readonly nominalAssumed?: readonly ('corner' | 'temp')[];
+  /** Members the automatic rule passed over because their condition was filled in while another
+   *  member declares its own: a headerless file reads as tt at 27 °C, which would otherwise be
+   *  the rule's first pick, so a bench that has no nominal — or a different one — says which
+   *  table was set aside and why. Set only when the automatic rule ran and one was set aside. */
+  readonly nominalPassedOver?: readonly DeviceTable[];
 }
 
 export interface GroupDevicesOptions {
@@ -399,7 +404,10 @@ function designate(
   duplicates: readonly ConditionKey[],
   deviceUid: string,
   opts: GroupDevicesOptions | undefined,
-): Pick<CharacterizedDevice, 'nominal' | 'nominalSource' | 'unresolvedNominal' | 'nominalAssumed'> {
+): Pick<
+  CharacterizedDevice,
+  'nominal' | 'nominalSource' | 'unresolvedNominal' | 'nominalAssumed' | 'nominalPassedOver'
+> {
   const wanted = opts?.nominalByDevice?.get(deviceUid);
   if (wanted !== undefined) {
     const uidOf = opts?.uidOf;
@@ -413,12 +421,16 @@ function designate(
   if (conditions.length === 1) return autoNominal(conditions[0]);
   const declared = conditions.filter((t) => assumedCondition(t).length === 0);
   const pool = declared.length ? declared : conditions;
+  // Set aside: the filled-in members the rule would have read, had it read them.
+  const setAside = declared.length
+    ? conditions.filter((t) => !declared.includes(t) && conditionKeyOf(t.id).corner === 'tt')
+    : [];
+  const passed = setAside.length ? { nominalPassedOver: setAside } : {};
   const tt = pool.filter((t) => conditionKeyOf(t.id).corner === 'tt');
-  if (tt.length) {
-    const near = nearestTo27(tt);
-    return near ? autoNominal(near) : { nominal: undefined, nominalSource: 'none' };
-  }
-  return { nominal: undefined, nominalSource: 'none' };
+  const near = tt.length ? nearestTo27(tt) : undefined;
+  return near
+    ? { ...autoNominal(near), ...passed }
+    : { nominal: undefined, nominalSource: 'none', ...passed };
 }
 
 /** The single closest member to 27 °C, or `undefined` when the closest distance is shared —
@@ -428,7 +440,7 @@ function nearestTo27(tt: readonly DeviceTable[]): DeviceTable | undefined {
   let bestDist = Infinity;
   let atBest = 0;
   for (const t of tt) {
-    const dist = Math.abs(conditionKeyOf(t.id).temp - 27);
+    const dist = Math.abs(conditionKeyOf(t.id).temp - DEFAULT_TEMP_C);
     if (!Number.isFinite(dist)) continue;
     if (dist < bestDist) {
       best = t;

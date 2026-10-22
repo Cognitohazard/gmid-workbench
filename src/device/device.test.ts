@@ -412,12 +412,21 @@ describe('a table that declares no temperature, or an unreadable width', () => {
     expect(r.W).toBe(declared.W);
   });
 
-  it('refuses a width header it could not read by saying so, not that the width is missing', () => {
+  it('refuses a width or polarity header it could not read by saying so, not that it is missing', () => {
     const unread: DeviceTable = { ...dev, meta: { ...dev.meta, W: undefined, extra: { W: '1u' } } };
     expect(() => sizeDevice({ table: unread, L, gm_id: 12, id: 20e-6 })).toThrow(
-      /# W: header reads "1u", which is not a number in metres/,
+      /# W: header reads "1u", which could not be read as a number in metres/,
     );
     const absent: DeviceTable = { ...dev, meta: { ...dev.meta, W: undefined } };
+    // A polarity header that could not be read leaves the sign convention of the value columns
+    // unknown: no device is sized from the table until it says n or p.
+    const unreadPolarity: DeviceTable = {
+      ...dev,
+      meta: { ...dev.meta, polarity: undefined, extra: { polarity: 'pmos4' } },
+    };
+    expect(() => sizeDevice({ table: unreadPolarity, L, gm_id: 12, id: 20e-6 })).toThrow(
+      /# polarity: header reads "pmos4", which could not be read as a channel type/,
+    );
     expect(() => sizeDevice({ table: absent, L, gm_id: 12, id: 20e-6 })).toThrow(
       /characterization width\) is required/,
     );

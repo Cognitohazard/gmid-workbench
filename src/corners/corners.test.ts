@@ -2098,9 +2098,13 @@ describe('a condition its file did not declare', () => {
     expect(f.nominalSource).toBe('auto');
     expect(f.nominalAssumed).toBeUndefined();
     // ... and with only a declared ss beside it, the device has no automatic nominal at all.
-    const g = soleDevice([filled(['corner', 'temp']), table({ corner: 'ss', temp: 27 })]);
+    const blank = filled(['corner', 'temp']);
+    const g = soleDevice([blank, table({ corner: 'ss', temp: 27 })]);
     expect(g.nominal).toBeUndefined();
     expect(g.nominalSource).toBe('none');
+    // Either way the device names the member it set aside, so the bench can say why.
+    expect(f.nominalPassedOver?.map((t) => t.meta.filled)).toEqual([['corner', 'temp']]);
+    expect(g.nominalPassedOver).toEqual([blank]);
   });
 
   it('is the nominal only where no member declares its condition, and the device says so', () => {
@@ -2108,6 +2112,7 @@ describe('a condition its file did not declare', () => {
     const f = soleDevice([a, filled(['temp'], { corner: 'ss' })]);
     expect(f.nominal).toBe(a);
     expect(f.nominalAssumed).toEqual(['temp']);
+    expect(f.nominalPassedOver).toBeUndefined();
     // A sole member speaks for itself, assumed fields and all.
     const only = soleDevice([filled(['device', 'corner', 'temp'])]);
     expect(only.nominalSource).toBe('auto');

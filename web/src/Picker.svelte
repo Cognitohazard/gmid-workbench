@@ -370,8 +370,7 @@
           class="caveat"
           title={[CONTROL_HELP.pickerCaveats, ...c.caveats].join('\n\n')}
           data-caveats
-          >⚠ rests on {c.caveats.length}
-          {c.caveats.length === 1 ? 'assumption' : 'assumptions'}</span
+          >{`⚠ ${c.caveatItems ?? c.caveats.length} ${(c.caveatItems ?? c.caveats.length) === 1 ? 'caveat' : 'caveats'}`}</span
         >
       {/if}
     </td>

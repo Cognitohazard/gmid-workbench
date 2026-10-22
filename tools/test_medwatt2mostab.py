@@ -174,7 +174,8 @@ def polarity_checks() -> None:
 def identity_checks() -> None:
     """A table that states no corner or temperature gets neither line — the importer fills them
     in and records that it did; a device_parameters field or a flag writes them, the flag
-    winning; an unreadable temperature field writes nothing rather than a guess."""
+    winning; a stated temperature that is not a number is written as stated, for the importer
+    to report, and one above 200 is read as kelvin."""
     with tempfile.TemporaryDirectory() as tmp:
         out_dir = os.path.join(tmp, "out")
         npz = os.path.join(tmp, "lut.npz")
@@ -198,11 +199,20 @@ def identity_checks() -> None:
         meta, _, _ = read_mostab(out)
         assert meta["corner"] == "tt" and meta["temp"] == "27", meta
 
+        # A stated temperature that is not a number is written as stated, so the importer keeps
+        # it and says it could not be read, instead of the table reading as one that states none.
         garbled = os.path.join(tmp, "garbled.npz")
         build_npz(garbled, device_parameters={"width": 1e-6, "temp": "hot"})
         m2m.convert(garbled, out_dir, trust=True, overwrite=True)
         meta, _, _ = read_mostab(out)
-        assert "temp" not in meta, meta
+        assert meta["temp"] == "hot", meta
+
+        # One above 200 is kelvin, converted.
+        kelvin = os.path.join(tmp, "kelvin.npz")
+        build_npz(kelvin, device_parameters={"width": 1e-6, "temp": 300.15})
+        m2m.convert(kelvin, out_dir, trust=True, overwrite=True)
+        meta, _, _ = read_mostab(out)
+        assert meta["temp"] == "27", meta
 
     print("OK — corner and temperature written only when stated")
 

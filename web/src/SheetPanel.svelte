@@ -64,14 +64,14 @@
     type CompliancePoint,
   } from '@gmid/mostab-core';
   import { describeBinding, deviceLabel, type Bench } from './families';
-  import { tableUid, type SheetCornerMode } from './dashboard';
+  import { tableUid, verdictLoss, type SheetCornerMode } from './dashboard';
   import { PALETTE, type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
   import { CONTROL_HELP, SOLVER_HELP } from './help';
   import { changedSolverSettings, settingText, solverSettings } from './solver.svelte';
   import { commitEng, pct } from './eng';
-  import { sheetMenu, sheetRefIndex } from './sheetlib.svelte';
+  import { sheetMenu, sheetRefIndex, withheldSheet } from './sheetlib.svelte';
   import { copyText, download } from './export';
   import { SheetEvaluator, type Answered, type JobOf } from './sheetEvaluator.svelte';
   import type { JobKind, JobResults } from './sheetjobs';
@@ -86,6 +86,7 @@
     cornerHold = false,
     restoreLost = undefined,
     unrestored = false,
+    restoreStored = undefined,
     bench,
     styleVersion = 0,
     onChange,
@@ -112,6 +113,9 @@
     /** The stored document could not be restored at all: `cfg` is a placeholder, and the panel
      *  opens refused with the reason in `restoreLost`. */
     unrestored?: boolean;
+    /** The document exactly as it was stored, while a restore loss is recorded: what the panel
+     *  exports in place of the restored copy, so an export never writes the loss either. */
+    restoreStored?: unknown;
     bench: Bench;
     styleVersion?: number;
     onChange: (s: SheetDoc) => void;
@@ -127,20 +131,31 @@
   // not know — so the panel works on an empty sheet in its place, evaluates nothing, and offers
   // the picker; picking a sheet replaces it.
   // A stored document that could not be restored at all is refused the same way, with the reason
-  // the loader gave, and kept as stored until a picked sheet replaces it.
+  // the loader gave, and kept as stored until a picked sheet replaces it. So is one restored
+  // without a piece that can change the verdict (verdictLoss): a dropped check or given would let
+  // the rest read feasible without it, so nothing is evaluated — no verdict, no rows, no run —
+  // until the user chooses to evaluate without those pieces, which makes the restored copy their
+  // document (the stored one is then replaced, as by any edit).
   const REFUSED: SheetDoc = { title: '', polarity: 'n', params: [], equations: [], checks: [] };
+  /** The lost pieces that can change the verdict; empty when nothing was lost or only prose. */
+  const verdictLost = $derived(unrestored ? [] : verdictLoss(restoreLost ?? []));
   const refusal = $derived(
     unrestored
       ? `the stored sheet could not be restored (${(restoreLost ?? []).join('; ')}) — it is kept as stored and not evaluated; pick a sheet to replace it`
-      : sheetFormat(stored).reason,
+      : verdictLost.length
+        ? `the stored sheet could not be read whole: this build does not read ${verdictLost.join(', ')}, and without ${verdictLost.length === 1 ? 'it' : 'them'} the verdict can change — nothing is evaluated until you choose, and the stored sheet is kept as it is`
+        : sheetFormat(stored).reason,
   );
-  /** What a restore dropped from a document it could read, said where the verdict is read: the
-   *  checks or givens it names are missing from what is evaluated here. */
+  /** What a restore dropped that only describes the sheet, said where the verdict is read: the
+   *  verdict does not depend on it, and the stored copy is kept until the sheet is edited. */
   const restoreNote = $derived(
-    !unrestored && restoreLost?.length
-      ? `restored without ${restoreLost.length} ${restoreLost.length === 1 ? 'piece' : 'pieces'} of the stored sheet, which this build could not read: ${restoreLost.join(', ')} — the result below is evaluated without ${restoreLost.length === 1 ? 'it' : 'them'}; the stored sheet is kept unchanged until you edit this one`
+    !refusal && restoreLost?.length
+      ? `restored without ${restoreLost.length} ${restoreLost.length === 1 ? 'piece' : 'pieces'} of the stored sheet that this build could not read: ${restoreLost.join(', ')} — prose only, so the verdict below does not depend on ${restoreLost.length === 1 ? 'it' : 'them'}; the stored sheet is kept unchanged, and is what ⤓ json exports, until you edit this one`
       : undefined,
   );
+  /** Evaluate the sheet as restored: the user's choice to drop the pieces it could not read, which
+   *  replaces the stored copy like any edit. */
+  const acceptRestore = (): void => onChange(stored);
   const cfg = $derived<SheetDoc>(refusal ? REFUSED : stored);
 
   // The live sheet library (curated ∪ user-imported) and its by-reference index.
@@ -208,11 +223,21 @@
   /** Validation and evaluation diagnostics as one list — walked twice below (warnings, then the
    *  informational range-end notes), so the concatenation is built once. */
   const allWarn = $derived.by(() => [...rr.warnings, ...(result?.warnings ?? [])]);
+  /** A reference that found no sheet, where the sheet it names is in the user library but
+   *  withheld — stored with pieces this build could not read — says so, instead of reading as a
+   *  name that matches nothing. */
+  const explainRef = (message: string): string => {
+    const m = /ref "([^"]+)" does not match any sheet in the library/.exec(message);
+    const held = m ? withheldSheet(m[1]) : undefined;
+    return held
+      ? `${message} — user/${held.name} is in your library but not offered: its stored copy could not be read whole (${(held.lost ?? []).join(', ')})`
+      : message;
+  };
   const shownWarnings = $derived.by(() => {
     // A warning that quotes a range end says where that end is (rangeEndNames).
     const ws = allWarn
       .filter((w) => w.severity !== 'info')
-      .map((w) => ({ ...w, message: namingRangeEnds(w.message, endNames) }));
+      .map((w) => ({ ...w, message: explainRef(namingRangeEnds(w.message, endNames)) }));
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive grouping scratch, discarded on return
     const byChild = new Map<string, { count: number; first: string }>();
     const rest: string[] = [];
@@ -650,7 +675,7 @@
    *  not complying. */
   const runDetail = (r: ConditionRun): string => {
     if (r.state === 'not-evaluated' && r.points[0].state !== 'does-not-comply')
-      return r.issues.map((i) => namingRangeEnds(i.message, endNames)).join(' · ');
+      return r.issues.map((i) => explainRef(namingRangeEnds(i.message, endNames))).join(' · ');
     if (r.points[0].error) return namingRangeEnds(r.points[0].error, endNames);
     const b = r.result && (bindingCheck(r.result) ?? limitingCheck(r.result));
     const centre = b ? `${b.id} ${pct(b.marginPct)}` : '';
@@ -1133,7 +1158,7 @@
   // the recipe exports as JSON, the answers copy as text.
   let copied = $state(false);
   function copyResults(): void {
-    if (!result) return;
+    if (!result || restoreLost?.length) return; // the button is disabled in both states
     const rows = Object.entries(result.values)
       .filter(([, v]) => typeof v === 'number' && Number.isFinite(v))
       .map(([k, v]) => `${k}\t${formatEng(v as number)}`);
@@ -1141,10 +1166,13 @@
   }
 
   function exportSheet(flat: boolean): void {
-    if (flat && flatBlocked) return; // fail-safe; the button is disabled in this state
-    const doc = flat ? flattenSheetDoc(cfg, refs).doc : cfg;
+    if (flat && (flatBlocked || restoreLost?.length)) return; // the button is disabled in these
+    // While a restore loss is recorded the stored copy is the user's document, so that is what is
+    // written — never the restored copy without the pieces it lost.
+    const doc = restoreLost?.length ? restoreStored : flat ? flattenSheetDoc(cfg, refs).doc : cfg;
+    const title = (doc as { title?: unknown } | undefined)?.title;
     const name =
-      cfg.title
+      (typeof title === 'string' ? title : cfg.title)
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '') || 'sheet';
@@ -1570,6 +1598,18 @@
        it. Nothing else is read from it. -->
     <div class="shead">{@render picker()}</div>
     <p class="perr prefused" data-refused>{refusal}</p>
+    {#if verdictLost.length || (unrestored && restoreStored !== undefined)}
+      <div class="srestorebar">
+        {#if verdictLost.length}
+          <button onclick={acceptRestore} title={CONTROL_HELP.restoreAccept} data-restore-accept
+            >evaluate without {verdictLost.length === 1 ? 'this piece' : 'these pieces'}</button
+          >
+        {/if}
+        <button title={CONTROL_HELP.exportStored} onclick={() => exportSheet(false)}
+          >⤓ stored json</button
+        >
+      </div>
+    {/if}
   {:else}
     {#if restoreNote}
       <p class="perr srestore" data-restore-lost>{restoreNote}</p>
@@ -1715,16 +1755,23 @@
         </label>
       {/if}
       <span class="sexp">
-        <button title={CONTROL_HELP.copyResults} disabled={!result} onclick={copyResults}
-          >{copied ? 'copied ✓' : 'copy results'}</button
+        <button
+          title={restoreLost?.length ? CONTROL_HELP.restoreHeld : CONTROL_HELP.copyResults}
+          disabled={!result || !!restoreLost?.length}
+          onclick={copyResults}>{copied ? 'copied ✓' : 'copy results'}</button
         >
-        <button title={CONTROL_HELP.exportSheet} onclick={() => exportSheet(false)}>⤓ json</button>
+        <button
+          title={restoreLost?.length ? CONTROL_HELP.exportStored : CONTROL_HELP.exportSheet}
+          onclick={() => exportSheet(false)}>⤓ json</button
+        >
         {#if hasRefs}
           <button
-            disabled={flatBlocked}
-            title={flatBlocked
-              ? 'a reference did not resolve (see warnings) — a flattened export could not be self-contained'
-              : CONTROL_HELP.exportFlat}
+            disabled={flatBlocked || !!restoreLost?.length}
+            title={restoreLost?.length
+              ? CONTROL_HELP.restoreHeld
+              : flatBlocked
+                ? 'a reference did not resolve (see warnings) — a flattened export could not be self-contained'
+                : CONTROL_HELP.exportFlat}
             onclick={() => exportSheet(true)}>⤓ flat</button
           >
         {/if}
@@ -1841,7 +1888,7 @@
           <b>{refRun.result ? 'no answer' : 'not evaluated'} at {condLabel(refRun.key)}</b>
         </p>
         {#each refRun.issues as issue}
-          <p class="sissue">{issue.message}</p>
+          <p class="sissue">{explainRef(issue.message)}</p>
         {/each}
         {#if refRun.result}
           <p class="sissue">
@@ -2855,5 +2902,10 @@
   /* The one line a document in a format this app does not read gets: the whole reason, wrapped. */
   .prefused {
     white-space: normal;
+  }
+  .srestorebar {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.3rem;
   }
 </style>

@@ -181,9 +181,13 @@ export function tableUid(t: DeviceTable): string {
   // must not dedupe into one uid. Property order is stable for parsed and
   // structured-clone-restored tables, so the JSON text is deterministic here.
   // Except the record of which identity fields were filled in: two copies of one file, one that
-  // declares the `tt` it is read as and one that leaves it to the default, hold the same table,
-  // so a re-import of the declared one replaces the other in place; and a table stored before
-  // the record existed keeps the uid it was stored under.
+  // declares the corner `tt` (or the device name) it is read as and one that leaves it to the
+  // default, hold the same table, so a re-import of the declared one replaces the other in place;
+  // and a table stored before the record existed keeps the uid it was stored under. A declared
+  // temperature is different: it is metadata of its own (`meta.temp`), so a copy that declares
+  // `# temp: 27` is another uid, and loaded beside the headerless one the two claim one condition,
+  // which device QA reports as a duplicate. In one selection the import says which file of two
+  // holding one table it set aside.
   const { filled: _filled, ...meta } = t.meta;
   mix(`${t.id.device}|${t.id.corner}|${t.id.temp}|${JSON.stringify(meta)}`);
   for (const a of t.grid.axes) {
@@ -722,6 +726,26 @@ function restoredSheet(pp: Record<string, unknown>): {
   };
 }
 
+/** The keys of a sheet that only describe it — its title and the prose beside its pieces. A
+ *  restore that could not read one of these loses nothing an evaluation reads. */
+const DESCRIPTIVE_KEYS: ReadonlySet<string> = new Set([
+  'title',
+  'description',
+  'note',
+  'justification',
+]);
+
+/**
+ * The paths of `lost` (sanitizeSheet's record) that can change what an evaluation of the sheet
+ * reports: everything but a descriptive key (DESCRIPTIVE_KEYS). A check, a given, a parameter or
+ * any of its fields, a range end, a block, a wiring key, the polarity, and a key this build does
+ * not know at all are all in it: a dropped one can turn a verdict around, so the panel declines
+ * to give one until the user evaluates without them.
+ */
+export function verdictLoss(lost: readonly string[]): string[] {
+  return lost.filter((path) => !DESCRIPTIVE_KEYS.has(path.slice(path.lastIndexOf('.') + 1)));
+}
+
 /** What a sheet panel whose stored document could not be restored holds in its place: nothing to
  *  read or evaluate. The panel opens refused with the reason (Panel.sheetLost). */
 export const UNRESTORED_SHEET: SheetDoc = {
@@ -754,23 +778,45 @@ export function persistedDashboard(d: Dashboard): Dashboard {
  * the preset). Families absent on the device drop to '' (single curve); cols clamp to
  * 1..4; ids/render/sweep/activeTab are normalized. Expressions are kept verbatim — an
  * unresolvable one surfaces as a per-panel error, never a silent drop of the user's work.
+ * Every tab and panel this pass cannot carry, a render it does not know and a corner mode it
+ * does not read are recorded in `lost` (a sheet's own losses stay on its panel, see
+ * restoredSheet), so a restore that loses them can keep the stored layout instead of saving
+ * over it.
  */
-export function sanitizeDashboard(d: unknown, dev: DeviceTable): Dashboard | null {
+export function sanitizeDashboard(d: unknown, dev: DeviceTable, lost?: string[]): Dashboard | null {
   if (!d || typeof d !== 'object') return null;
   const o = d as Record<string, unknown>;
-  if (!Array.isArray(o.tabs)) return null;
+  if (!Array.isArray(o.tabs)) {
+    lost?.push('tabs');
+    return null;
+  }
   const axes = new Set(dev.grid.axes.filter((a) => a.values.length > 1).map((a) => a.name));
   const str = (v: unknown, fallback: string) => (typeof v === 'string' && v ? v : fallback);
   const tabs: Tab[] = [];
-  for (const t of o.tabs) {
-    if (!t || typeof t !== 'object' || !Array.isArray((t as Record<string, unknown>).panels))
+  for (const [ti, t] of o.tabs.entries()) {
+    if (!t || typeof t !== 'object' || !Array.isArray((t as Record<string, unknown>).panels)) {
+      lost?.push(`tabs[${ti}]`);
       continue;
+    }
     const tt = t as Record<string, unknown>;
     const panels: Panel[] = [];
-    for (const p of tt.panels as unknown[]) {
-      if (!p || typeof p !== 'object') continue;
+    for (const [pi, p] of (tt.panels as unknown[]).entries()) {
+      const at = `tabs[${ti}].panels[${pi}]`;
+      if (!p || typeof p !== 'object') {
+        lost?.push(at);
+        continue;
+      }
       const pp = p as Record<string, unknown>;
-      if (typeof pp.xExpr !== 'string' || typeof pp.yExpr !== 'string') continue;
+      if (typeof pp.xExpr !== 'string' || typeof pp.yExpr !== 'string') {
+        lost?.push(at);
+        continue;
+      }
+      // A render this build does not know becomes a chart, and a chart carries no sheet: that is
+      // a loss, said like one.
+      if (pp.render !== undefined && !['chart', 'table', 'sheet'].includes(pp.render as string))
+        lost?.push(`${at}.render`);
+      if (pp.sheetCornerMode !== undefined && !CORNER_MODES.some((m) => m === pp.sheetCornerMode))
+        lost?.push(`${at}.sheetCornerMode`);
       const legend = sanitizeLegend(pp.legend);
       const render = pp.render === 'table' ? 'table' : pp.render === 'sheet' ? 'sheet' : 'chart';
       const restored: ReturnType<typeof restoredSheet> =

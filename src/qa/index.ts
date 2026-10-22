@@ -17,6 +17,7 @@ import {
 } from '../corners';
 import { DEFAULT_TEMP_C, PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
+import { HEADER_NAMES, unreadHeader, type ReadField } from '../parse';
 import {
   derivedFallbacks,
   derivedForm,
@@ -48,6 +49,11 @@ const GM_ID_CEILING = 1 / UT; // ~38.7 at 27 °C
 
 /** gm/ID above this at 27 °C is almost certainly a unit error, not physics. */
 const GM_ID_UNIT_ERROR = 45;
+
+/** The coldest temperature [°C] a table is plausibly characterized at, for the gm/ID ceiling's
+ *  other reading on a table whose temperature was assumed: a gm/ID that would need a colder one
+ *  to be physical is a unit error whatever the temperature. Well below any qualification range. */
+const COLDEST_PLAUSIBLE_C = -200;
 
 /** Per-step vgs spacing above this (in volts) is coarse enough to warn. */
 const VGS_STEP_WARN = 0.01; // 10 mV
@@ -311,9 +317,8 @@ export function validate(table: DeviceTable): QAWarning[] {
     const tempC = table.meta.temp ?? DEFAULT_TEMP_C;
     // A temperature the table did not declare is the default, and the finding says so: a cold
     // characterization read at 27 °C can sit past these limits and be valid data.
-    const at = table.meta.filled?.includes('temp')
-      ? `${tempC} °C (assumed: the table declares no # temp:)`
-      : `${tempC} °C`;
+    const assumed = table.meta.filled?.includes('temp') ?? false;
+    const at = assumed ? `${tempC} °C (assumed: no readable # temp:)` : `${tempC} °C`;
     const scale = PHYS.T / kelvin(tempC); // 1 @27 °C, >1 colder, <1 hotter
     const ceiling = GM_ID_CEILING * scale; // ~38.7@27, ~49.8@−40, ~29.2@125
     const unitError = GM_ID_UNIT_ERROR * scale; // ~45@27, temp-scaled
@@ -325,18 +330,27 @@ export function validate(table: DeviceTable): QAWarning[] {
       const r = Math.abs(gm[i] / idv);
       if (Number.isFinite(r) && r > maxGmId) maxGmId = r;
     }
+    // On an assumed temperature the other reading is a colder characterization: the temperature
+    // at or below which this gm/ID sits under the 1/U_T ceiling. Named, and the finding is no
+    // stronger than a warning, unless no temperature a table is taken at reaches it.
+    const coldest = (GM_ID_CEILING * PHYS.T) / maxGmId - 273.15;
+    const plausible = assumed && coldest >= COLDEST_PLAUSIBLE_C;
+    const otherwise = plausible
+      ? ` — or a characterization at or below about ${Math.floor(coldest)} °C, where it is ` +
+        `physical; declare # temp: to say which`
+      : '';
     if (maxGmId > unitError) {
       out.push({
         rule: 'gm-id-ceiling',
-        severity: 'error',
-        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds ${unitError.toFixed(1)} at ${at} — likely a unit error`,
+        severity: plausible ? 'warning' : 'error',
+        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds ${unitError.toFixed(1)} at ${at} — likely a unit error${otherwise}`,
         location: 'gm/id',
       });
     } else if (maxGmId > ceiling) {
       out.push({
         rule: 'gm-id-ceiling',
         severity: 'warning',
-        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds the physical ceiling ~${ceiling.toFixed(1)} (1/U_T at ${at})`,
+        message: `max gm/ID ${maxGmId.toFixed(1)} S/A exceeds the physical ceiling ~${ceiling.toFixed(1)} (1/U_T at ${at})${otherwise}`,
         location: 'gm/id',
       });
     }
@@ -720,109 +734,184 @@ export function validate(table: DeviceTable): QAWarning[] {
     });
   }
 
-  out.push(...filledFindings(table), ...unreadableHeaders(table));
+  out.push(...filledFindings(table), ...unreadableHeaders(table), ...idSign(table));
   return out;
 }
+
+/** What filled-in temperature the figures on a table assume, the words several findings share. */
+const ASSUMED_TEMP_CONSEQUENCE =
+  `kT (the thermal noise, the γ read back from sth, kT/C), the gm/ID ceiling checked here and ` +
+  `the condition it is grouped and labelled under all assume it, and every sizing on it says so`;
 
 /**
  * The identity fields the importer filled in (TableMeta.filled), one information finding each.
  * A filled-in field reads like a declared one wherever the table's identity is read, so this is
- * where the import says it was assumed, and what rests on it.
+ * where the import says it was assumed, and what rests on it. A temperature filled in because
+ * its header could not be read is said by that header's own finding (unreadableHeaders), which
+ * names what the file held instead of saying it declared none.
  */
 function filledFindings(table: DeviceTable): QAWarning[] {
-  return (table.meta.filled ?? []).map((field): QAWarning => {
+  return (table.meta.filled ?? []).flatMap((field): QAWarning[] => {
     if (field === 'temp')
-      return {
-        rule: 'no-temp',
-        severity: 'info',
-        message:
-          `the table declares no temperature (# temp:), so it is read at ${table.id.temp} °C: ` +
-          `kT (the thermal noise, the γ read back from sth, kT/C), the gm/ID ceiling checked ` +
-          `here and the condition it is grouped and labelled under all assume it, and every ` +
-          `sizing on it says so`,
-        location: 'temp',
-      };
+      return unreadHeader(table.meta, 'temp')
+        ? []
+        : [
+            {
+              rule: 'no-temp',
+              severity: 'info',
+              message:
+                `the table declares no temperature (# temp:), so it is read at ` +
+                `${table.id.temp} °C: ${ASSUMED_TEMP_CONSEQUENCE}`,
+              location: 'temp',
+            },
+          ];
     if (field === 'corner')
-      return {
-        rule: 'no-corner',
+      return [
+        {
+          rule: 'no-corner',
+          severity: 'info',
+          message:
+            `the table declares no corner (# corner:), so it is taken as "${table.id.corner}": ` +
+            `it is grouped and labelled as that condition of its device, every sizing on it says ` +
+            `so, and it is the automatic nominal only when no condition of its device is declared`,
+          location: 'corner',
+        },
+      ];
+    return [
+      {
+        rule: 'no-device',
         severity: 'info',
         message:
-          `the table declares no corner (# corner:), so it is taken as "${table.id.corner}": it ` +
-          `is grouped and labelled as that condition of its device, and it is the automatic ` +
-          `nominal only when no condition of its device is declared`,
-        location: 'corner',
-      };
-    return {
-      rule: 'no-device',
-      severity: 'info',
-      message:
-        `the table declares no device name (# device:), so it is named "${table.id.device}", ` +
-        `from its file name (or "dev0" without one): tables are grouped into one device by that ` +
-        `name, so a renamed file groups differently`,
-      location: 'device',
-    };
+          `the table declares no device name (# device:), so it is named "${table.id.device}", ` +
+          `from its file name (or "dev0" without one): tables are grouped into one device by ` +
+          `that name, so a renamed file groups differently`,
+        location: 'device',
+      },
+    ];
   });
 }
 
-/** What a recognized numeric or polarity header must hold to be read, and what goes unread when
- *  it does not — keyed by the lower-cased header name the parser recognizes. */
-const HEADER_READING: Readonly<Record<string, { expected: string; unread: string }>> = (() => {
-  const temp = {
+/**
+ * For each field read from a header, what the header must hold, whether a header the importer
+ * could not read leaves the field unread (`missing`: the field has no value from any other
+ * header of the file), and what that costs. The temperature, the width and the polarity change
+ * what every figure on the table means or whether a device can be sized from it at all, so an
+ * unreadable one is a warning; the matching coefficients and the flicker corner are the Sizer's
+ * inputs, with a placeholder it shows as one.
+ */
+const HEADER_READING: Readonly<
+  Record<ReadField, { expected: string; unread: string; severity: 'warning' | 'info' }>
+> = {
+  temp: {
     expected: 'a number in °C (27, not 27C or 300K)',
-    unread: `the table is read at ${DEFAULT_TEMP_C} °C as if it declared none`,
-  };
-  const width = {
+    unread: `the table is read at ${DEFAULT_TEMP_C} °C: ${ASSUMED_TEMP_CONSEQUENCE}`,
+    severity: 'warning',
+  },
+  W: {
     expected: 'a number in metres (1e-6, not 1u)',
     unread: 'the characterization width is unknown, so no device can be sized from the table',
-  };
-  const polarity = {
+    severity: 'warning',
+  },
+  polarity: {
     expected: 'one of n, p, nmos, pmos, nch, pch, nfet, pfet, nmosfet, pmosfet',
     unread:
-      'the table declares no polarity: a signed PMOS export is not folded to magnitudes, and ' +
-      'its channel type is unknown when it is grouped',
-  };
-  return {
-    temp,
-    temperature: temp,
-    w: width,
-    width,
-    avt: {
-      expected: 'a number in V·m (3.5e-9 for 3.5 mV·µm)',
-      unread: 'the sizer’s matching budget uses its generic A_Vth instead',
-    },
-    abeta: {
-      expected: 'a number in metres (2e-8 for 2 %·µm)',
-      unread: 'the sizer’s matching budget uses its generic A_β instead',
-    },
-    fco: {
-      expected: 'a number in Hz (2e6, not 2meg)',
-      unread: 'the sizer does not read it as the 1/f corner',
-    },
-    polarity,
-    type: polarity,
-  };
-})();
+      'the table declares no polarity: a signed p-channel export is not folded to magnitudes, ' +
+      'its channel type is unknown when it is grouped, and no device is sized from it until the ' +
+      'header says n or p',
+    severity: 'warning',
+  },
+  AVT: {
+    expected: 'a number in V·m (3.5e-9 for 3.5 mV·µm)',
+    unread: 'the sizer’s matching budget uses its generic A_Vth instead',
+    severity: 'info',
+  },
+  ABETA: {
+    expected: 'a number in metres (2e-8 for 2 %·µm)',
+    unread: 'the sizer’s matching budget uses its generic A_β instead',
+    severity: 'info',
+  },
+  FCO: {
+    expected: 'a number in Hz (2e6, not 2meg)',
+    unread: 'the sizer does not read it as the 1/f corner',
+    severity: 'info',
+  },
+};
+
+/** The value a field was read at from another header of the same file, when it was. */
+const readValue = (meta: TableMeta, field: ReadField): string | undefined => {
+  if (field === 'polarity') return meta.polarity?.device;
+  const v = meta[field];
+  return v === undefined ? undefined : String(v);
+};
 
 /**
  * Recognized headers whose value the importer could not read. The parser keeps each in `extra`
  * as written (a recognized header is only there when its value was unreadable), so nothing is
- * lost; this names the header, what it holds, what it should hold and what goes unread.
+ * lost; this names the header, what it holds, what it should hold and what goes unread. Where
+ * another header of the same file gave the field its value (`# temp: 85` beside `# temp: 85C`),
+ * nothing goes unread, and the finding says which value was read instead.
  */
 function unreadableHeaders(table: DeviceTable): QAWarning[] {
   return Object.entries(table.meta.extra ?? {}).flatMap(([key, value]): QAWarning[] => {
-    const reading = Object.prototype.hasOwnProperty.call(HEADER_READING, key.toLowerCase())
-      ? HEADER_READING[key.toLowerCase()]
-      : undefined;
-    if (!reading) return [];
+    const field = (Object.keys(HEADER_NAMES) as ReadField[]).find((f) =>
+      (HEADER_NAMES[f] as readonly string[]).includes(key.toLowerCase()),
+    );
+    if (!field) return [];
+    const reading = HEADER_READING[field];
+    const read = readValue(table.meta, field);
+    const said = `its # ${key}: header reads "${value}", which could not be read — it should be ${reading.expected}; it is kept as written`;
     return [
-      {
-        rule: 'unreadable-header',
-        severity: 'info',
-        message: `the # ${key}: header reads "${value}", which is not ${reading.expected} — it is kept as written but not read, so ${reading.unread}`,
-        location: key,
-      },
+      read === undefined
+        ? {
+            rule: 'unreadable-header',
+            severity: reading.severity,
+            message: `${said}, so ${reading.unread}`,
+            location: key,
+          }
+        : {
+            rule: 'unreadable-header',
+            severity: 'info',
+            message: `${said}, and the value is read from another header of the file instead (${read})`,
+            location: key,
+          },
     ];
   });
+}
+
+/**
+ * A signed p-channel export read as magnitudes: the drain current is negative over most of the
+ * table, which only a p-channel export written in the signed convention produces, and the table
+ * declares no polarity that would fold it (none, or one the importer could not read). Every
+ * figure is then of the wrong sign — gm/ID negative everywhere — so it is named here, with the
+ * header that would settle it. Leakage-level negatives near zero current on an n-channel table
+ * are not this: the finding needs most nonzero samples negative.
+ */
+function idSign(table: DeviceTable): QAWarning[] {
+  if (table.meta.polarity) return [];
+  const id = table.grid.quantities.get('id');
+  if (!id) return [];
+  let neg = 0;
+  let nonzero = 0;
+  for (let i = 0; i < id.length; i++) {
+    if (id[i] === 0 || !Number.isFinite(id[i])) continue;
+    nonzero++;
+    if (id[i] < 0) neg++;
+  }
+  if (nonzero === 0 || neg * 2 <= nonzero) return [];
+  const unread = unreadHeader(table.meta, 'polarity');
+  const why = unread
+    ? `its # ${unread[0]}: header reads "${unread[1]}", which could not be read as a channel type`
+    : 'the table declares no polarity (# polarity:)';
+  return [
+    {
+      rule: 'id-sign',
+      severity: 'warning',
+      message:
+        `id is negative at ${neg} of ${nonzero} points — a signed p-channel export, read as ` +
+        `magnitudes because ${why}: every figure on it has the wrong sign; write # polarity: p`,
+      location: 'id',
+    },
+  ];
 }
 
 // --- device QA ---------------------------------------------------------------

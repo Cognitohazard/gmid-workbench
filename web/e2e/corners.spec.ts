@@ -789,6 +789,10 @@ test('a table with no # temp: header reads as an assumed 27 °C wherever it is s
   await expect(condition(page, 'tt').locator('.dname')).toHaveText('tt@27 °C (assumed)');
   await expect(condition(page, 'ss@-40')).toBeVisible();
   await expect(strip(page).locator('[data-nominal-state="none"]')).toBeVisible();
+  // ...and says which table it set aside, and why.
+  await expect(strip(page).locator('[data-nominal-passed-over]')).toContainText(
+    'tt@27 °C (assumed) is not chosen as nominal automatically',
+  );
 
   expect(errors).toEqual([]);
 });

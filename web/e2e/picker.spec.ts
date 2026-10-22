@@ -210,7 +210,7 @@ test('topology picker: a result that rests on an assumption is marked, and its t
 
   const marked = pk.locator('tr.row [data-caveats]');
   await expect(marked.first()).toBeVisible();
-  await expect(marked.first()).toContainText('rests on');
+  await expect(marked.first()).toContainText(/⚠ \d+ caveats?/);
   await expect(marked.first()).toHaveAttribute('title', /at 27 °C \(assumed\)/);
 
   expect(errors).toEqual([]);

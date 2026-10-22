@@ -27,6 +27,7 @@ import {
   type FallbackNote,
 } from '../derive';
 import { AXIS_KEYS, BASE_KEYS, PER_WIDTH_KEYS, isPassthroughKey } from '../namespace';
+import { unreadHeader } from '../parse';
 
 /**
  * A sizing query: a table and length L, plus EXACTLY two bound quantities.
@@ -94,10 +95,11 @@ export interface SizeResult {
   /**
    * The derived quantities this table computes by a fallback rather than their definition (a
    * γ-model noise figure without a `gmb` column, γ without `sth`): the quantity, the missing
-   * column, the form used and what it costs — and, on a table with no `# temp:` header, the
-   * 27 °C its kT was taken at (see tableFallbacks). A fact about the table, decided once for it,
-   * so it applies to every sized point; its sentences are also in `warnings`. Empty when every
-   * quantity is read by its definition and the temperature was declared.
+   * column, the form used and what it costs — and the identity fields the table's file did not
+   * declare: the corner it is read as, the 27 °C its kT was taken at (see tableFallbacks). A
+   * fact about the table, decided once for it, so it applies to every sized point; its sentences
+   * are also in `warnings`. Empty when every quantity is read by its definition and the corner
+   * and temperature were declared.
    */
   fallbacks: FallbackNote[];
   /**
@@ -283,15 +285,23 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   if (Wchar === undefined || !(Wchar > 0)) {
     // A `# W:` header that is present but unreadable is kept in `extra` as written (see parse):
     // the refusal says that, rather than that the width was never given.
-    const written = Object.entries(q.table.meta.extra ?? {}).find(([k]) =>
-      ['w', 'width'].includes(k.toLowerCase()),
-    );
+    const written = unreadHeader(q.table.meta, 'W');
     throw new Error(
       written
-        ? `sizeDevice: the table's # ${written[0]}: header reads "${written[1]}", which is not a number in metres (write 1e-6, not 1u), so the characterization width it sizes W against is unknown`
+        ? `sizeDevice: the table's # ${written[0]}: header reads "${written[1]}", which could not be read as a number in metres (write 1e-6, not 1u), so the characterization width it sizes W against is unknown`
         : 'sizeDevice: table.meta.W (characterization width) is required to size W',
     );
   }
+  // A polarity header that is present but unreadable leaves open whether the value columns are a
+  // signed p-channel export or magnitudes. Reading them as magnitudes would be a guess, so no
+  // device is sized from the table until the header says n or p.
+  const polarityWritten = q.table.meta.polarity
+    ? undefined
+    : unreadHeader(q.table.meta, 'polarity');
+  if (polarityWritten)
+    throw new Error(
+      `sizeDevice: the table's # ${polarityWritten[0]}: header reads "${polarityWritten[1]}", which could not be read as a channel type, so whether its value columns are a signed p-channel export or magnitudes is unknown — write n or p`,
+    );
 
   // Surface — never silently substitute — a length the table cannot represent: the
   // grid's locate() clamps an off-hull L to the nearest characterized node, so the

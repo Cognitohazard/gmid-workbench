@@ -115,8 +115,9 @@ unpickling can execute arbitrary code, so the converter refuses to run without
 `--trust-pickle` — pass it only for a file you produced or trust. A process corner or
 temperature is written only when the table's `device_parameters` state one or you do
 (`--corner ss --temp -40`); left out, the app reads the table as `tt` at 27 °C and says,
-wherever the table is used, that both were assumed. A self-test is
-included:
+wherever the table is used, that both were assumed. A stated temperature above 200 is
+read as kelvin and converted, and one that is not a number is written as stated, for the
+app to report. A self-test is included:
 
 ```sh
 uv run --with numpy python3 tools/test_medwatt2mostab.py

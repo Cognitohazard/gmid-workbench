@@ -157,20 +157,36 @@ describe('validate: gm/ID ceiling', () => {
     expect(validate(t).some((x) => x.rule === 'gm-id-ceiling')).toBe(false);
   });
 
-  it('says the temperature it checked at was assumed when the table declares none', () => {
-    // 48 at the assumed 27 °C: the same flag as a declared 27 °C table, but the finding says the
-    // temperature was the default — a colder characterization would be valid data.
+  it('on an assumed temperature, names the colder reading and is no stronger than a warning', () => {
+    // 48 at 27 °C is past the unit-error line; on a table that declared 27 °C that is an error.
+    // Where the temperature was only assumed, a characterization at or below about -32 °C makes it
+    // physical, so the finding names that reading and stays a warning.
     const vgs = [0.2, 0.4];
     const gm = [4.8e-3, 4.8e-3];
     const id = [1e-4, 4.8e-3];
     const filled = makeTable([axis('vgs', vgs)], { gm, id }, { filled: ['temp'] });
     const c = validate(filled).find((x) => x.rule === 'gm-id-ceiling');
-    expect(c?.severity).toBe('error');
-    expect(c?.message).toContain('27 °C (assumed: the table declares no # temp:)');
-    const declared = makeTable([axis('vgs', vgs)], { gm, id }, { temp: 27 });
-    expect(validate(declared).find((x) => x.rule === 'gm-id-ceiling')?.message).not.toContain(
-      'assumed',
+    expect(c?.severity).toBe('warning');
+    expect(c?.message).toContain('27 °C (assumed: no readable # temp:)');
+    expect(c?.message).toMatch(
+      /or a characterization at or below about -32 °C, where it is physical/,
     );
+    const declared = makeTable([axis('vgs', vgs)], { gm, id }, { temp: 27 });
+    const d = validate(declared).find((x) => x.rule === 'gm-id-ceiling');
+    expect(d?.severity).toBe('error');
+    expect(d?.message).not.toContain('assumed');
+  });
+
+  it('stays an error on an assumed temperature where no characterization temperature reaches it', () => {
+    // gm/ID 1e4: a unit error at any temperature a table is taken at.
+    const t = makeTable(
+      [axis('vgs', [0.2, 0.4])],
+      { gm: [1, 1], id: [1e-4, 1] },
+      { filled: ['temp'] },
+    );
+    const c = validate(t).find((x) => x.rule === 'gm-id-ceiling');
+    expect(c?.severity).toBe('error');
+    expect(c?.message).not.toContain('or a characterization');
   });
 });
 
@@ -202,21 +218,21 @@ describe('validate: identity the importer filled in', () => {
 });
 
 describe('validate: recognized headers it could not read', () => {
-  const unread = (extra: Record<string, string>) =>
-    validate(makeTable([axis('vgs', [0.2, 0.4])], { gm: [1e-3, 1e-3] }, { extra }))
+  const unread = (extra: Record<string, string>, meta: TableMeta = {}) =>
+    validate(makeTable([axis('vgs', [0.2, 0.4])], { gm: [1e-3, 1e-3] }, { ...meta, extra }))
       .filter((w) => w.rule === 'unreadable-header')
       .map((w) => ({ severity: w.severity, location: w.location, message: w.message }));
 
   it('names the header, what it holds, what it should hold and what goes unread', () => {
     const [w] = unread({ W: '1u' });
-    expect(w.severity).toBe('info');
+    expect(w.severity).toBe('warning');
     expect(w.location).toBe('W');
-    expect(w.message).toContain('# W: header reads "1u"');
+    expect(w.message).toContain('its # W: header reads "1u", which could not be read');
     expect(w.message).toContain('a number in metres');
     expect(w.message).toContain('no device can be sized');
   });
 
-  it('covers every recognized numeric header and the polarity, in any case', () => {
+  it('warns on the temperature, the width and the polarity, and informs on the rest', () => {
     const got = unread({
       Temp: '300K',
       AVT: '5m',
@@ -225,13 +241,68 @@ describe('validate: recognized headers it could not read', () => {
       polarity: 'pmos4',
       type: 'core',
     });
-    expect(got.map((w) => w.location)).toEqual(['Temp', 'AVT', 'abeta', 'FCO', 'polarity', 'type']);
+    expect(got.map((w) => [w.location, w.severity])).toEqual([
+      ['Temp', 'warning'],
+      ['AVT', 'info'],
+      ['abeta', 'info'],
+      ['FCO', 'info'],
+      ['polarity', 'warning'],
+      ['type', 'warning'],
+    ]);
     expect(got[0].message).toContain('read at 27 °C');
     expect(got[4].message).toContain('declares no polarity');
   });
 
+  it('says the temperature header could not be read, not that there was none', () => {
+    const t = makeTable(
+      [axis('vgs', [0.2, 0.4])],
+      { gm: [1e-3, 1e-3] },
+      { filled: ['temp'], extra: { temp: '125C' } },
+    );
+    const w = validate(t);
+    expect(w.some((x) => x.rule === 'no-temp')).toBe(false);
+    expect(w.find((x) => x.rule === 'unreadable-header')?.message).toMatch(
+      /^its # temp: header reads "125C", which could not be read/,
+    );
+  });
+
+  it('is information only where another header of the file gave the value', () => {
+    const [t] = unread({ temp: '85C' }, { temp: 85 });
+    expect(t.severity).toBe('info');
+    expect(t.message).toContain('read from another header of the file instead (85)');
+    const [w] = unread({ width: '1u' }, { W: 1e-6 });
+    expect(w.severity).toBe('info');
+    expect(w.message).not.toContain('no device can be sized');
+  });
+
   it('leaves every other carried header alone', () => {
     expect(unread({ mostab: '0.1', source: 'lab', license: 'CC-BY' })).toEqual([]);
+  });
+});
+
+describe('validate: a signed p-channel export without a readable polarity', () => {
+  const signed = generateDemoDevice();
+  const negated = scaleQuantities(signed, { id: -1 });
+  const ids = (meta: TableMeta) =>
+    validate({ ...negated, meta: { ...negated.meta, ...meta } }).filter(
+      (w) => w.rule === 'id-sign',
+    );
+
+  it('names the missing polarity where the drain current is negative over most of the table', () => {
+    const [w] = ids({ polarity: undefined });
+    expect(w.severity).toBe('warning');
+    expect(w.message).toContain('the table declares no polarity (# polarity:)');
+    expect(w.message).toContain('write # polarity: p');
+  });
+
+  it('names a polarity header that could not be read', () => {
+    const [w] = ids({ polarity: undefined, extra: { polarity: 'pmos4' } });
+    expect(w.message).toContain('its # polarity: header reads "pmos4"');
+  });
+
+  it('says nothing of a declared polarity, or of a table whose current is positive', () => {
+    expect(ids({ polarity: { device: 'p', signedInput: false } })).toEqual([]);
+    expect(validate(signed).some((w) => w.rule === 'id-sign')).toBe(false);
   });
 });
 

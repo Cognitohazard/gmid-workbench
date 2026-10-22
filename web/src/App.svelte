@@ -8,6 +8,7 @@
     noiseLabel,
     noiseSource,
     readsGamma,
+    unreadHeader,
     formatEng,
     formatSI,
     validate,
@@ -38,10 +39,15 @@
     TEXT_SCALE_RANGE,
     type Settings,
   } from './settings';
-  import { loadJSON, removeJSON, saveJSON, SIZER_KEY } from './storage';
+  import { loadJSON, readJSON, removeJSON, saveJSON, SIZER_KEY } from './storage';
   import SolverSettings from './SolverSettings.svelte';
   import { resetSolverSettings } from './solver.svelte';
-  import { importSheetJSON, removeUserSheet, userSheets } from './sheetlib.svelte';
+  import {
+    droppedUserSheets,
+    importSheetJSON,
+    removeUserSheet,
+    userSheets,
+  } from './sheetlib.svelte';
   import {
     presetDashboard,
     persistedDashboard,
@@ -278,12 +284,34 @@
   // its sheets up to the current keys — and is then left alone for that earlier build.
   const DASH_KEY = 'gmid.dash.v3';
   const DASH_KEY_BEFORE = 'gmid.dash.v2';
+  // A saved layout this build could not restore whole: what it lost, and whether the copy that
+  // lost it is this build's own slot. While `held`, nothing on the dashboard is saved, so the
+  // stored layout stays exactly as it was until the user chooses to keep what was restored
+  // (keepLayout). A loss read from the earlier slot is said without holding anything: that slot
+  // is never written.
+  let layoutLost = $state<{ lost: string[]; held: boolean } | null>(null);
   const loadDashboard = (dev: DeviceTable): Dashboard => {
-    const parse = (raw: unknown) => sanitizeDashboard(raw, dev);
-    return loadJSON(DASH_KEY, parse, () =>
-      loadJSON(DASH_KEY_BEFORE, parse, () => presetDashboard(dev)),
-    );
+    const restore = (key: string): { dash: Dashboard | null; lost: string[] } | undefined => {
+      const stored = readJSON(key);
+      if (stored === undefined) return undefined;
+      if ('corrupt' in stored)
+        return { dash: null, lost: ['the stored layout is not text this build can read'] };
+      const lost: string[] = [];
+      const dash = sanitizeDashboard(stored.value, dev, lost);
+      if (!dash && !lost.length) lost.push('the stored layout is not a layout this build reads');
+      return { dash, lost };
+    };
+    const now = restore(DASH_KEY);
+    if (now?.lost.length) layoutLost = { lost: now.lost, held: true };
+    if (now?.dash) return now.dash;
+    const before = restore(DASH_KEY_BEFORE);
+    if (before?.lost.length && !now) layoutLost = { lost: before.lost, held: false };
+    return before?.dash ?? presetDashboard(dev);
   };
+  /** Keep the layout as restored: it is saved from now on, without the pieces it lost. */
+  function keepLayout(): void {
+    layoutLost = null;
+  }
   // Null until the first device loads — the dashboard can only be seeded/validated against a
   // device (sanitizeDashboard/presetDashboard both need one). The saved layout in localStorage is
   // restored at that point, so a customized dashboard still survives a reload.
@@ -294,8 +322,9 @@
   // Persist the layout (not the device — that re-seeds on load) so a customized dashboard
   // survives a reload. Best-effort. Never clobber the saved layout with the empty-boot null.
   // A sheet restored with a loss writes back the document as it was stored until it is edited.
+  // A layout restored with a loss of its own is not saved at all until the user keeps it.
   $effect(() => {
-    if (dashboard) saveJSON(DASH_KEY, persistedDashboard(dashboard));
+    if (dashboard && !layoutLost?.held) saveJSON(DASH_KEY, persistedDashboard(dashboard));
   });
 
   // Appearance settings (theme + font sizes). Applied to the document root and persisted on
@@ -571,7 +600,7 @@
     const errors: string[] = [];
     const incoming: Loaded[] = [];
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive dedup scratch, discarded below
-    const seen = new Set<string>();
+    const seen = new Map<string, { file: string; table: DeviceTable }>();
     for (const s of staged) {
       if (s.kind === 'failed') {
         errors.push(`${s.name}: ${s.error}`);
@@ -585,9 +614,19 @@
       for (const t of s.tables) {
         // The same table twice in one selection is one table: the first occurrence stands,
         // so the batch's order (and what "the first import" means below) is deterministic.
+        // Two files can hold one table and differ in what they declare (one states the `tt` the
+        // other leaves to the default): the first still stands, and the line says which was set
+        // aside, since the two are not the same file.
         const uid = tableUid(t);
-        if (seen.has(uid)) continue;
-        seen.add(uid);
+        const first = seen.get(uid);
+        if (first) {
+          if (JSON.stringify(first.table.meta.filled) !== JSON.stringify(t.meta.filled))
+            errors.push(
+              `${s.name}: the same table as ${first.file}, which declares ${first.table.meta.filled?.length ? 'less' : 'more'} of its identity — only ${first.file} is loaded`,
+            );
+          continue;
+        }
+        seen.set(uid, { file: s.name, table: t });
         incoming.push({ table: t, warnings: validate(t) });
       }
     }
@@ -639,6 +678,12 @@
   }
 
   /** The mark a provenance field carries when its file did not declare it (TableMeta.filled). */
+  /** A temperature header the table carried and the importer could not read, in the words the
+   *  assumed mark gives it. */
+  const tempUnread = (t: DeviceTable): string | undefined => {
+    const h = unreadHeader(t.meta, 'temp');
+    return h && `its # ${h[0]}: header reads "${h[1]}", which could not be read`;
+  };
   const assumedMark = (t: DeviceTable, field: 'device' | 'corner' | 'temp', why: string): string =>
     t.meta.filled?.includes(field) ? ` (assumed: ${why})` : '';
 
@@ -696,6 +741,7 @@
     // everything" must not leave a choice behind that nothing on screen can show or undo.
     nominalByFamily = {};
     dashboard = null;
+    layoutLost = null;
     sizerOpen = false;
     pickerOpen = false;
     importError = null;
@@ -767,7 +813,9 @@
         <dt>corner</dt>
         <dd>{device.id.corner}{assumedMark(device, 'corner', 'no # corner:')}</dd>
         <dt>temp</dt>
-        <dd data-temp>{device.id.temp}°C{assumedMark(device, 'temp', 'no # temp:')}</dd>
+        <dd data-temp>
+          {device.id.temp}°C{assumedMark(device, 'temp', tempUnread(device) ?? 'no # temp:')}
+        </dd>
         {#if device.meta.W !== undefined}<dt>char. W</dt>
           <dd>{formatSI(device.meta.W)}m</dd>{/if}
         {#if device.meta.simulator}<dt>simulator</dt>
@@ -775,7 +823,7 @@
         {#if device.meta.date}<dt>date</dt>
           <dd>{device.meta.date}</dd>{/if}
         {#if device.meta.polarity}<dt>polarity</dt>
-          <dd>{device.meta.polarity}</dd>{/if}
+          <dd>{device.meta.polarity.device === 'p' ? 'p-channel' : 'n-channel'}</dd>{/if}
         <dt>noise</dt>
         <dd data-noise title={CONTROL_HELP.noiseSource}>
           {deviceNoise}
@@ -873,6 +921,22 @@
   </details>
 </header>
 
+{#if layoutLost}
+  <!-- The saved layout lost tabs or panels on restore. Held: nothing is saved until the user keeps
+       what was restored, so the stored layout is still there for a build that reads it. -->
+  <div class="qa warning" data-layout-lost>
+    {#if layoutLost.held}
+      the saved layout could not be restored whole — this build does not read {layoutLost.lost.join(
+        ', ',
+      )}. The stored layout is kept as it is, and nothing on the dashboard is saved until you
+      <button class="btn" onclick={keepLayout} data-layout-keep>keep this layout</button>, which
+      saves it without those pieces.
+    {:else}
+      the earlier saved layout was brought forward without {layoutLost.lost.join(', ')}, which this
+      build does not read; that copy is left as it is.
+    {/if}
+  </div>
+{/if}
 {#if importError}
   <!-- One selection can partly succeed: the files that failed are named here even when the
        rest of the batch loaded, so the line says "not imported", not "the import failed". -->
@@ -986,6 +1050,18 @@
             condition; declare it, or designate one</span
           >
         {/if}
+        {#if multi && f.nominalPassedOver?.length}
+          <!-- Why the automatic rule did not pick a member that reads as tt at 27 °C: its file did
+               not declare that condition, and another member declares its own. -->
+          <span class="fw info" data-nominal-passed-over
+            >{f.nominalPassedOver.map((t) => conditionLabel(t)).join(', ')}
+            {f.nominalPassedOver.length > 1 ? 'are' : 'is'} not chosen as nominal automatically: {f
+              .nominalPassedOver.length > 1
+              ? 'their files do'
+              : 'its file does'} not declare that condition, and another table of this device declares
+            its own — designate {f.nominalPassedOver.length > 1 ? 'one' : 'it'} if it is the nominal</span
+          >
+        {/if}
         {#each qa as w}
           <span class="fw {w.severity}" title={w.location ?? ''}>{w.rule}: {w.message}</span>
         {/each}
@@ -1002,7 +1078,7 @@
   </nav>
 {/if}
 
-{#if userSheets().length}
+{#if userSheets().length || droppedUserSheets().length}
   <nav class="devices usheets" aria-label="imported sheets">
     <span class="dlabel">sheets</span>
     <Help text={CONTROL_HELP.userSheets} />
@@ -1021,6 +1097,11 @@
           aria-label="remove sheet">×</button
         >
       </span>
+    {/each}
+    <!-- Stored entries the loader could not take in: kept as stored and written back with the
+         library, so nothing stored is lost; listed so their absence is not silent. -->
+    {#each droppedUserSheets() as d, i (i)}
+      <i class="fw warning" data-sheet-dropped>not in the library: {d.why}</i>
     {/each}
   </nav>
 {/if}
@@ -1246,6 +1327,11 @@
   }
   .qa.error {
     color: var(--err);
+  }
+  /* A sentence with an action in it, not a row of findings. */
+  .qa.warning {
+    display: block;
+    color: var(--warn);
   }
   .qa .w::before {
     content: '';

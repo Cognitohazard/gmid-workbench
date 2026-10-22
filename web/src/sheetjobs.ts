@@ -144,7 +144,10 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
 
 /** A device with its tables replaced by their ids: the worker holds the tables themselves, sent
  *  once each, so a request carries only this outline. */
-export interface DeviceOutline extends Omit<CharacterizedDevice, 'conditions' | 'nominal'> {
+export interface DeviceOutline extends Omit<
+  CharacterizedDevice,
+  'conditions' | 'nominal' | 'nominalPassedOver'
+> {
   conditions: string[];
   nominal: string | undefined;
 }

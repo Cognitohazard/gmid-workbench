@@ -163,22 +163,35 @@
   // where it stores both flicker and thermal drain noise (sfl, sth), the corner is sfl/sth at the
   // sized point, the `fco` every sizing reports — it moves with the operating point, so it is read
   // there rather than seeded once. Next the device's `# FCO:` header, one number for the table;
-  // last a generic 1 MHz, said to be one. A typed value replaces all three.
+  // last a generic 1 MHz, said to be one. A typed value replaces all three. Whichever source is
+  // passed over for the next one says why (`note`): the table's corner not defined at the sized
+  // point, or a header the table's own corner overrides.
   const FCO_GENERIC = 1e6;
   const tableFlicker = $derived(
     sizingTable.grid.quantities.has('sfl') && sizingTable.grid.quantities.has('sth'),
   );
-  const fcoAuto = $derived.by((): { value?: number; from: 'point' | 'header' | 'generic' } => {
-    if (tableFlicker) {
-      const v = sizing.result?.quantities.fco;
-      return {
-        value: v !== undefined && Number.isFinite(v) && v >= 0 ? v : undefined,
-        from: 'point',
-      };
-    }
-    if (device.meta.FCO !== undefined) return { value: device.meta.FCO, from: 'header' };
-    return { value: FCO_GENERIC, from: 'generic' };
-  });
+  const fcoAuto = $derived.by(
+    (): { value?: number; from: 'point' | 'header' | 'generic'; note?: string } => {
+      const header = device.meta.FCO;
+      const next = (note?: string) =>
+        header !== undefined
+          ? { value: header, from: 'header' as const, ...(note ? { note } : {}) }
+          : { value: FCO_GENERIC, from: 'generic' as const, ...(note ? { note } : {}) };
+      if (!tableFlicker) return next();
+      const r = sizing.result;
+      if (!r) return { from: 'point' }; // read once a point is sized
+      const v = r.quantities.fco;
+      if (v !== undefined && Number.isFinite(v) && v >= 0)
+        return header !== undefined
+          ? {
+              value: v,
+              from: 'point',
+              note: `the device’s # FCO: header (${formatEng(header)}Hz) is not used: the table’s own corner at the sized point is`,
+            }
+          : { value: v, from: 'point' };
+      return next('the table’s own corner, sfl/sth, is not defined at the sized point');
+    },
+  );
   const inFco = $derived(fcoTyped ?? (fcoAuto.value !== undefined ? formatEng(fcoAuto.value) : ''));
   /** Where the corner in the field comes from, in the words the noise lines and the copied report
    *  state it in. */
@@ -192,9 +205,18 @@
           : 'generic 1 MHz, not from the device',
   );
   const fcoFrom = $derived(`corner ${fcoSource}`);
-  /** The note a band RMS read on the generic corner carries: it is not this device's. */
-  const fcoGenericNote =
-    'f_co is the generic 1 MHz — the table stores no flicker noise (sfl and sth) and declares no # FCO: header, so the 1/f part of v_n,rms is not this device’s; type its corner to replace it';
+  /** What a band RMS read on a corner other than the table's own carries, when it is not typed:
+   *  the generic corner is not this device's, and a source passed over says why. */
+  const fcoNote = $derived.by((): string | undefined => {
+    if (fcoTyped !== null) return undefined;
+    if (fcoAuto.from === 'generic')
+      return (
+        `f_co is the generic 1 MHz — ${fcoAuto.note ?? 'the table stores no flicker noise (sfl and sth)'} ` +
+        `and the device declares no # FCO: header, so the 1/f part of v_n,rms is not this device’s; ` +
+        `type its corner to replace it`
+      );
+    return fcoAuto.note && `${fcoAuto.note}.`;
+  });
 
   const mism = $derived.by(() => {
     const r = sizing.result;
@@ -466,8 +488,8 @@
         <dd>{formatSI(noise.rms)}V</dd>
       {/if}
     </dl>
-    {#if noise.rms !== null && fcoTyped === null && fcoAuto.from === 'generic'}
-      <ul class="warns" data-fco-generic><li>{fcoGenericNote}</li></ul>
+    {#if noise.rms !== null && fcoNote}
+      <ul class="warns" data-fco-note><li>{fcoNote}</li></ul>
     {/if}
   {/if}
 

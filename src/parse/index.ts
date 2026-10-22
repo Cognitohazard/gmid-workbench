@@ -15,7 +15,7 @@ import type {
 } from '../types';
 import { ALIASES, passthroughKeys } from '../namespace';
 import { makeGrid, strides } from '../grid';
-import { DEFAULT_TEMP_C } from '../constants';
+import { DEFAULT_CORNER, DEFAULT_TEMP_C } from '../constants';
 
 // The canonical sweep-axis keys, in their conventional grid order
 // (first axis varies slowest in row-major storage).
@@ -100,6 +100,42 @@ function normalizePolarity(value: string): 'n' | 'p' | undefined {
 }
 
 /**
+ * The header names each numeric or polarity field is read from, lower-cased — the one list the
+ * parser reads by and every reader of an unreadable header (unreadHeader) looks up.
+ */
+export const HEADER_NAMES = {
+  temp: ['temp', 'temperature'],
+  W: ['w', 'width'],
+  AVT: ['avt'],
+  ABETA: ['abeta'],
+  FCO: ['fco'],
+  polarity: ['polarity', 'type'],
+} as const;
+
+/** A field the importer reads from a header whose value it may be unable to read. */
+export type ReadField = keyof typeof HEADER_NAMES;
+
+/** Header name → the field it is read into. */
+const FIELD_OF: ReadonlyMap<string, ReadField> = new Map(
+  (Object.entries(HEADER_NAMES) as [ReadField, readonly string[]][]).flatMap(([field, names]) =>
+    names.map((n) => [n, field] as const),
+  ),
+);
+
+/**
+ * A header of `field` the importer could not read, as written — `[its key, its value]` — or
+ * undefined. The parser keeps such a header in `extra` (a recognized header is only there when
+ * its value was unreadable), so this is how every reader tells "the file had no such header"
+ * from "the file had one that could not be read".
+ */
+export function unreadHeader(meta: TableMeta, field: ReadField): [string, string] | undefined {
+  const names: readonly string[] = HEADER_NAMES[field];
+  for (const [k, v] of Object.entries(meta.extra ?? {}))
+    if (names.includes(k.toLowerCase())) return [k, String(v)];
+  return undefined;
+}
+
+/**
  * Parse a `# key: value` metadata comment line into the accumulator. A recognized header whose
  * value cannot be read — a number written with a unit or an engineering suffix (`# temp: 27C`,
  * `# W: 1u`), a polarity word off the list — is not dropped: it is kept in `extra` as written,
@@ -124,21 +160,19 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
     unread();
     return undefined;
   };
-  switch (key) {
+  switch (FIELD_OF.get(key) ?? key) {
     case 'device':
       meta.device = value;
       break;
     case 'corner':
       meta.corner = value;
       break;
-    case 'temp':
-    case 'temperature': {
+    case 'temp': {
       const t = num();
       if (t !== undefined) meta.temp = t;
       break;
     }
-    case 'w':
-    case 'width': {
+    case 'W': {
       const w = num();
       if (w !== undefined) meta.W = w;
       break;
@@ -152,23 +186,22 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
     case 'date':
       meta.date = value;
       break;
-    case 'avt': {
+    case 'AVT': {
       const v = num();
       if (v !== undefined) meta.AVT = v;
       break;
     }
-    case 'abeta': {
+    case 'ABETA': {
       const v = num();
       if (v !== undefined) meta.ABETA = v;
       break;
     }
-    case 'fco': {
+    case 'FCO': {
       const v = num();
       if (v !== undefined) meta.FCO = v;
       break;
     }
-    case 'polarity':
-    case 'type': {
+    case 'polarity': {
       // Authoritative declared device type only — never inferred from the device
       // NAME field. An unrecognized value declares no polarity, and is kept as written.
       const p = normalizePolarity(value);
@@ -185,11 +218,14 @@ function applyMetaLine(line: string, meta: ParsedMeta): void {
   }
 }
 
-/** Derive a default device name from a filename hint (basename without extension). */
+/** Derive a default device name from a filename hint: the basename without its extension, the
+ *  format's own double extension `.mostab.csv` taken off whole. */
 function deviceFromFilename(filename: string | undefined): string | undefined {
   if (!filename) return undefined;
   const base = filename.split(/[/\\]/).pop() ?? filename;
-  const stem = base.replace(/\.[^.]+$/, '');
+  const stem = /\.mostab\.csv$/i.test(base)
+    ? base.slice(0, -'.mostab.csv'.length)
+    : base.replace(/\.[^.]+$/, '');
   const trimmed = stem.trim();
   return trimmed === '' ? undefined : trimmed;
 }
@@ -419,7 +455,7 @@ export function parseMostabCsv(text: string | Uint8Array, hints?: ImportHints): 
   const declaredDevice = hints?.device ?? meta.device;
   const device = declaredDevice ?? deviceFromFilename(hints?.filename) ?? 'dev0';
   const declaredCorner = hints?.corner ?? meta.corner;
-  const corner = declaredCorner ?? 'tt';
+  const corner = declaredCorner ?? DEFAULT_CORNER;
   const temp = meta.temp ?? DEFAULT_TEMP_C;
   const filledIn: FilledField[] = [];
   if (declaredDevice === undefined) filledIn.push('device');

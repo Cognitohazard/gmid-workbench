@@ -65,18 +65,24 @@ declares no polarity.
 is read with the default in the table above, and the importer records which of the
 three it filled in. Everything downstream says so: QA reports each as information
 (rules `no-device`, `no-corner`, `no-temp`); a condition label marks the field
-(`tt@27 °C (assumed)`); a table whose corner or temperature was filled in is never
-picked as a device's nominal condition while a declared condition of that device is
-loaded; and every sizing on a table with no `temp` carries a note that kT — the thermal
-noise, the γ read back from `sth`, kT/C — was taken at 27 °C. A device name passed by
-the caller (or a corner) counts as declared; one taken from the file name does not.
+(`tt@27 °C (assumed)`); every sizing on the table carries a note naming the corner it is
+read as and the 27 °C its kT — the thermal noise, the γ read back from `sth`, kT/C — was
+taken at; and a table whose corner or temperature was filled in is never picked as a
+device's nominal condition while a declared condition of that device is loaded (the
+devices strip names the table it set aside). A device name passed by the caller (or a
+corner) counts as declared; one taken from the file name does not, and a file name ending
+in `.mostab.csv` loses that whole double extension.
 
 **Unreadable values are kept.** A recognized key whose value cannot be read — a number
 written with a unit or a suffix (`# temp: 27C`, `# W: 1u`, `# AVT: 5m`), a polarity word
 not in the list above — is not applied, but it is not dropped either: it is kept
-verbatim like an unrecognized key, and QA reports it as information (rule
-`unreadable-header`) with the header, its value, what it should hold and what goes
-unread. Numbers are plain SI values: `1e-6`, not `1u`.
+verbatim like an unrecognized key, and QA reports it (rule `unreadable-header`) with the
+header, its value, what it should hold and what goes unread. An unreadable `temp`, `W` or
+`polarity` is a warning: the table is then read at 27 °C, cannot be sized from, or has an
+unknown sign convention — no device is sized from a table whose `polarity` line could not
+be read. The others are information. Where another line of the file gave the same field a
+value, nothing goes unread and the finding is information. Numbers are plain SI values:
+`1e-6`, not `1u`.
 
 **Strict-superset rule:** any other `# key: value` line (for example `# mostab: 0.1`,
 `# license: …`, `# source: …`) is preserved verbatim through import, under its
@@ -294,9 +300,12 @@ importer's QA pass warns (it never edits data) when:
 - the `vgs` step exceeds **10 mV** anywhere — keep the vgs step at or below 10 mV
   (the bundled open-PDK tables use 8 mV);
 - gm/ID exceeds the physical weak-inversion ceiling ≈ 1/U_T (temperature-scaled from
-  ~38.7 S/A at 27 °C) — usually a unit error. On a file with no `temp` the ceiling is the
-  27 °C one and the finding says the temperature was assumed: a colder characterization
-  legitimately reaches past it, so declare `temp`;
+  ~38.7 S/A at 27 °C) — usually a unit error. On a file with no readable `temp` the
+  ceiling is the 27 °C one; the finding then names the colder characterization at which the
+  value would be physical and is a warning rather than an error, so declare `temp`;
+- the drain current is negative over most of the table while no polarity is declared (or
+  the `polarity` line could not be read) — a signed p-channel export read as magnitudes
+  (rule `id-sign`);
 - |vgs| exceeds 100 V — the axis is probably in mV, not V;
 - the stored `gm` disagrees grossly with a finite difference of `id` along `vgs`;
 - `id` is non-monotonic in `vgs`, or `gamma` is outside a plausible range;

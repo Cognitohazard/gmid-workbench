@@ -124,16 +124,37 @@ def _find_corner(table: dict, entry: dict, override=None) -> str | None:
     return text or None
 
 
-def _find_temp(table: dict, entry: dict, override=None) -> str | None:
-    """The temperature [°C] from an explicit override (wins) or a device_parameters field, or
-    None when the source states none or states something that is not a finite number."""
-    value = override if override is not None else _find_field(table, entry, _TEMP_FIELDS)
+# A stated temperature above this is taken to be in kelvin: no characterization runs at 200 °C,
+# and 27 °C written in kelvin is 300.15.
+_KELVIN_ABOVE = 200.0
+
+
+def _find_temp(table: dict, entry: dict, override=None, name: str = "") -> str | None:
+    """The temperature [°C] from an explicit override (wins, always °C) or a device_parameters
+    field, or None when the source states none. A stated value above _KELVIN_ABOVE is read as
+    kelvin and converted, with a note on stderr. A stated value that is not a number is written
+    as it was stated, so the importer keeps it and says it could not be read, rather than the
+    table silently reading as one that states no temperature."""
+    if override is not None:
+        return fmt_num(float(override), 10)
+    value = _find_field(table, entry, _TEMP_FIELDS)
     if value is None:
         return None
     try:
-        return fmt_num(float(np.asarray(value).ravel()[0]), 10)
+        t = float(np.asarray(value).ravel()[0])
     except (TypeError, ValueError, IndexError):
-        return None
+        return _oneline(value)
+    if not np.isfinite(t):
+        return _oneline(value)
+    if t > _KELVIN_ABOVE:
+        celsius = t - 273.15
+        print(
+            f"medwatt2mostab: {name or 'model'}: stated temperature {fmt_num(t, 10)} read as kelvin "
+            f"-> {fmt_num(celsius, 10)} °C",
+            file=sys.stderr,
+        )
+        t = celsius
+    return fmt_num(t, 10)
 
 
 def _find_width(table: dict, entry: dict):
@@ -191,7 +212,7 @@ def convert_entry(table: dict, name: str, entry: dict, *, polarity=None, corner=
         "device": name,
         # Written only when the source (or a flag) states it; see _CORNER_FIELDS.
         "corner": _find_corner(table, entry, corner),
-        "temp": _find_temp(table, entry, temp),
+        "temp": _find_temp(table, entry, temp, name),
         "simulator": _oneline(table.get("simulator")),
         "description": _oneline(table.get("description")),
         "W": _opt(_find_width(table, entry)),

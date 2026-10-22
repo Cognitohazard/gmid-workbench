@@ -175,6 +175,9 @@ L,VGS,ID,GM
 `;
     const ds = expectOk(parseMostabCsv(csv, { filename: '/data/nmos_x.csv' }));
     expect(ds.tables[0].id.device).toBe('nmos_x');
+    // The format's own double extension comes off whole.
+    const both = expectOk(parseMostabCsv(csv, { filename: 'C:\\data\\nmos_x.mostab.csv' }));
+    expect(both.tables[0].id.device).toBe('nmos_x');
   });
 
   it('auto-detects a semicolon delimiter', () => {

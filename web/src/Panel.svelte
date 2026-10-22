@@ -537,6 +537,7 @@
         cfg={cfg.sheet ?? UNRESTORED_SHEET}
         restoreLost={cfg.sheetLost}
         unrestored={!cfg.sheet}
+        restoreStored={cfg.sheetStored}
         sweep={cfg.sheetSweep ?? ''}
         sweep2={cfg.sheetSweep2 ?? ''}
         cornerMode={cfg.sheetCornerMode ?? 'nominal'}

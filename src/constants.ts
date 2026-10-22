@@ -4,11 +4,14 @@
  *  PHYS.T holds in kelvin. A table read at it without declaring it says so (TableMeta.filled). */
 export const DEFAULT_TEMP_C = 27;
 
+/** The corner a table that declares none is read as, said the same way. */
+export const DEFAULT_CORNER = 'tt';
+
 export const PHYS = {
   pi: Math.PI,
   k: 1.380649e-23, // Boltzmann constant [J/K]
   q: 1.602176634e-19, // elementary charge [C]
-  T: 300.15, // 27 °C in kelvin (methodology default temperature)
+  T: DEFAULT_TEMP_C + 273.15, // the methodology default temperature in kelvin (300.15 exactly)
   eps: 8.8541878128e-12, // vacuum permittivity [F/m]
 } as const;
 

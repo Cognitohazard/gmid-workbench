@@ -15,7 +15,7 @@ import {
   fallbackMessage,
   readsGamma,
   tableFallbacks,
-  temperatureNote,
+  identityNotes,
 } from './index';
 import type { Axis, Grid } from '../types';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
@@ -382,23 +382,24 @@ describe('γ from the table where it carries thermal noise, the default where it
   });
 });
 
-describe('a temperature the table did not declare', () => {
+describe('an identity field the table did not declare', () => {
   const dev = generateDemoDevice();
   const filled = { ...dev, meta: { ...dev.meta, temp: undefined, filled: ['temp' as const] } };
 
-  it('owes no note where the table declares its temperature', () => {
-    expect(temperatureNote(dev.meta)).toBeUndefined();
+  it('owes no note where the table declares its corner and temperature', () => {
+    expect(identityNotes(dev.meta)).toEqual([]);
     expect(tableFallbacks(dev)).toEqual(derivedFallbacks(dev.grid, metaScalars(dev.meta)));
   });
 
   it('is said beside the column fallbacks, as the header it stands for and the value taken', () => {
-    const note = temperatureNote(filled.meta)!;
+    const [note] = identityNotes(filled.meta);
     expect(note).toMatchObject({
       quantity: 'T',
       missing: ['temp'],
       header: '# temp:',
       form: '27 °C',
     });
+    expect(note.unread).toBeUndefined();
     expect(tableFallbacks(filled)).toEqual([
       ...derivedFallbacks(filled.grid, metaScalars(filled.meta)),
       note,
@@ -408,13 +409,40 @@ describe('a temperature the table did not declare', () => {
     );
   });
 
-  it('reads on the noise line as the temperature assumed, after the column fallbacks', () => {
+  it('names a temperature header that was there but could not be read, with what it held', () => {
+    const unread = { ...filled.meta, extra: { temp: '125C' } };
+    const [note] = identityNotes(unread);
+    expect(note).toMatchObject({ header: '# temp:', unread: '125C' });
+    expect(fallbackMessage(note)).toMatch(
+      /^T is read as 27 °C because its # temp: header reads "125C", which could not be read — /,
+    );
+  });
+
+  it('notes a corner taken as tt, ahead of the temperature', () => {
+    const both = identityNotes({ filled: ['device', 'corner', 'temp'] });
+    expect(both.map((n) => [n.quantity, n.form])).toEqual([
+      ['corner', 'tt'],
+      ['T', '27 °C'],
+    ]);
+    expect(fallbackMessage(both[0])).toMatch(
+      /^corner is read as tt because the table has no # corner: header — /,
+    );
+  });
+
+  it('reads on the noise line as the values assumed, after the column fallbacks', () => {
     const noGmb = withoutColumns(filled, ['gmb']);
     expect(noiseLabel(noiseSource(filled.grid), tableFallbacks(filled))).toBe(
       'γ from the table · at 27 °C (assumed)',
     );
     expect(noiseLabel(noiseSource(noGmb.grid), tableFallbacks(noGmb))).toBe(
       'γ from the table · no gmb column: svth_m, vnth_m · at 27 °C (assumed)',
+    );
+    const noCorner = {
+      ...filled,
+      meta: { ...filled.meta, filled: ['corner' as const, 'temp' as const] },
+    };
+    expect(noiseLabel(noiseSource(noCorner.grid), tableFallbacks(noCorner))).toBe(
+      'γ from the table · corner tt (assumed) · at 27 °C (assumed)',
     );
   });
 });

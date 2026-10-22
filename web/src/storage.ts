@@ -26,6 +26,29 @@ export function loadJSON<T>(
   return fallback();
 }
 
+/** What is stored under `key`, parsed: `{ value }`, `{ corrupt: true }` for text that is not
+ *  JSON (or is longer than `maxLen`), or undefined when nothing is stored or storage is
+ *  unavailable. For a caller that must tell "nothing stored" from "stored but unreadable", which
+ *  loadJSON folds into one fallback. */
+export function readJSON(
+  key: string,
+  maxLen?: number,
+): { value: unknown } | { corrupt: true } | undefined {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(key);
+  } catch {
+    return undefined;
+  }
+  if (raw == null) return undefined;
+  if (maxLen !== undefined && raw.length > maxLen) return { corrupt: true };
+  try {
+    return { value: JSON.parse(raw) };
+  } catch {
+    return { corrupt: true };
+  }
+}
+
 /** Persist a value as JSON (best-effort; quota / unavailable storage is non-fatal). */
 export function saveJSON(key: string, value: unknown): void {
   try {

@@ -18,7 +18,8 @@ import {
   isPassthroughKey,
   passthroughName,
 } from '../namespace';
-import { DEFAULT_TEMP_C, GAMMA_DEFAULT_LABEL, thermalScalars } from '../constants';
+import { DEFAULT_CORNER, DEFAULT_TEMP_C, GAMMA_DEFAULT_LABEL, thermalScalars } from '../constants';
+import { unreadHeader } from '../parse';
 import { createEngine } from '../expr';
 
 // Compile each standard derived definition once, shared across all calls.
@@ -134,9 +135,9 @@ export function pointScope(values: Record<string, number>): Scope {
  * carries these, so a lesser form is never chosen without saying so.
  *
  * The same record carries a value a table's figures are read under in place of a header it did
- * not declare (`header` set): the temperature, which kT reads, taken as the 27 °C default on a
- * table with no `# temp:` (see tableFallbacks). `missing` then names the identity field, and the
- * note rides every sizing on the table exactly as a column fallback does.
+ * not declare (`header` set): the corner taken as `tt`, the temperature taken as 27 °C, which kT
+ * reads (see identityNotes). `missing` then names the identity field, and the note rides every
+ * sizing on the table exactly as a column fallback does.
  */
 export interface FallbackNote {
   readonly quantity: string;
@@ -146,6 +147,9 @@ export interface FallbackNote {
   /** The metadata header whose absence this note stands for (`# temp:`); absent on a column
    *  fallback. */
   readonly header?: string;
+  /** The value that header held when it was present but could not be read (`125C`); absent when
+   *  the file had no such header. */
+  readonly unread?: string;
 }
 
 /**
@@ -166,40 +170,62 @@ export function derivedFallbacks(grid: Grid, scalars: Record<string, number> = {
 }
 
 /**
- * The note a table with no `# temp:` header owes every figure read on it (TableMeta.filled): its
- * temperature is the 27 °C default, which T, U_T and so kT take. Undefined on a table that
- * declares its temperature.
+ * The notes a table owes every figure read on it for the identity fields its file did not
+ * declare (TableMeta.filled), corner first, then temperature:
+ *  - a corner taken as `tt`: the table is grouped, labelled and projected as that condition of
+ *    its device, so a result read on it is a tt result by default, not by statement;
+ *  - a temperature taken as 27 °C: T, U_T and so kT take it.
+ * A header that was present but could not be read (`# temp: 125C`, see unreadHeader) is named
+ * as such, with what it held, rather than as missing. Empty on a table that declares both.
  */
-export function temperatureNote(meta: TableMeta): FallbackNote | undefined {
-  if (!meta.filled?.includes('temp')) return undefined;
-  return {
-    quantity: 'T',
-    missing: ['temp'],
-    header: '# temp:',
-    form: `${DEFAULT_TEMP_C} °C`,
-    says:
-      'kT is taken at that temperature, so the thermal noise, the γ read back from sth, ' +
-      'kT/C and the gm/ID ceiling assume it',
-  };
+export function identityNotes(meta: TableMeta): FallbackNote[] {
+  const out: FallbackNote[] = [];
+  if (meta.filled?.includes('corner'))
+    out.push({
+      quantity: 'corner',
+      missing: ['corner'],
+      header: '# corner:',
+      form: DEFAULT_CORNER,
+      says:
+        'the table is grouped, labelled and projected as that corner of its device, so a ' +
+        'result read on it is that corner’s by default, not by statement',
+    });
+  if (meta.filled?.includes('temp')) {
+    const unread = unreadHeader(meta, 'temp');
+    out.push({
+      quantity: 'T',
+      missing: ['temp'],
+      header: unread ? `# ${unread[0]}:` : '# temp:',
+      ...(unread ? { unread: unread[1] } : {}),
+      form: `${DEFAULT_TEMP_C} °C`,
+      says:
+        'kT is taken at that temperature, so the thermal noise, the γ read back from sth, ' +
+        'kT/C and the gm/ID ceiling assume it',
+    });
+  }
+  return out;
 }
 
 /**
  * Everything a figure read on `table` falls back on: the derived quantities it computes by a
- * lesser form (derivedFallbacks, against its metadata scalars) and, when it declares no
- * temperature, the 27 °C its kT is taken at (temperatureNote). What a sizing carries and what a
- * device's noise line states.
+ * lesser form (derivedFallbacks, against its metadata scalars) and the identity fields its file
+ * did not declare (identityNotes) — the corner a result is that corner's by default, the 27 °C
+ * its kT is taken at. What a sizing carries and what a device's noise line states.
  */
 export function tableFallbacks(table: DeviceTable): FallbackNote[] {
-  const notes = derivedFallbacks(table.grid, metaScalars(table.meta));
-  const t = temperatureNote(table.meta);
-  return t ? [...notes, t] : notes;
+  return [...derivedFallbacks(table.grid, metaScalars(table.meta)), ...identityNotes(table.meta)];
 }
 
 /** A fallback note as one sentence: the quantity, the form it was read by, the column (or header)
  *  that forced it, and what that costs. The words a sizing's warnings and a panel's tooltip carry. */
 export function fallbackMessage(n: FallbackNote): string {
-  const absent = n.header ? `${n.header} header` : `${n.missing.join(' or ')} column`;
-  return `${n.quantity} is read as ${n.form} because the table has no ${absent} — ${n.says}`;
+  const why =
+    n.header && n.unread !== undefined
+      ? `its ${n.header} header reads "${n.unread}", which could not be read`
+      : n.header
+        ? `the table has no ${n.header} header`
+        : `the table has no ${n.missing.join(' or ')} column`;
+  return `${n.quantity} is read as ${n.form} because ${why} — ${n.says}`;
 }
 
 /**
@@ -244,8 +270,11 @@ export function noiseLabel(source: NoiseSource, fallbacks: readonly FallbackNote
   const assumed = new Set<string>();
   for (const f of fallbacks) {
     if (f.header) {
-      // A value taken in place of a header (the temperature): stated as the value assumed.
-      assumed.add(`at ${f.form} (assumed)`);
+      // A value taken in place of a header: stated as the value assumed — the temperature as the
+      // one the figures are read at, any other field by its name.
+      assumed.add(
+        f.quantity === 'T' ? `at ${f.form} (assumed)` : `${f.quantity} ${f.form} (assumed)`,
+      );
       continue;
     }
     if (source === 'estimated' && f.quantity === 'gamma') continue;
