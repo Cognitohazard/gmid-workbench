@@ -14,8 +14,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
       - run: npm ci
+      # The core suite round-trips sheets through the web package's loader, and transforming
+      # that file reads the web package's TypeScript configuration, which extends a package
+      # installed with its dependencies.
+      - run: npm ci
+        working-directory: web
       - run: npm test
       - run: npm run typecheck
       # Lint covers web/src too (the flat config parses .svelte); the web job
