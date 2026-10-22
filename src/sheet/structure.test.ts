@@ -9,6 +9,7 @@ import {
   analyzeStructure,
   decomposeGraph,
   widthInvariant,
+  type StructureAssumption,
   type StructureMode,
   type StructureReport,
 } from './structure';
@@ -299,6 +300,65 @@ describe('analyzeStructure', () => {
     expect(sizes('multistage/two-stage-cascode-comp-ota.json', 'size')).toEqual([3]);
     expect(sizes('otas/current-mirror-ota.json', 'size')).toEqual([2]);
     expect(sizes('otas/current-mirror-ota.json', 'verify')).toEqual([3]);
+  });
+});
+
+describe('under an assumption', () => {
+  const five = sheet('otas/five-transistor-ota.json');
+  const chain = (file: string, mode: StructureMode, assume: StructureAssumption[]): string[][] =>
+    analyzeStructure(sheet(file), { mode, refs: REFS, assume }).sets.map((s) => s.params);
+
+  it('without channel-length modulation the five-transistor pair is a chain, split first', () => {
+    for (const mode of ['size', 'verify'] as const) {
+      const r = analyzeStructure(five, {
+        mode,
+        refs: REFS,
+        assume: ['no-channel-length-modulation'],
+      });
+      expect(r.assume).toEqual(['no-channel-length-modulation']);
+      expect(r.sets.map((s) => s.params)).toEqual([['p:out_share'], ['p:V_tail']]);
+      // The pair's gate voltage no longer reads its drain voltage; the body bias it still reads.
+      const vgs = relation(r, 't:in.vgs').reads;
+      expect(vgs).not.toContain('d:in.vds');
+      expect(vgs).toContain('d:in.vsb');
+    }
+  });
+
+  it('without body effect nothing changes: the loop runs through the drain voltages', () => {
+    expect(chain('otas/five-transistor-ota.json', 'size', ['no-body-effect'])).toEqual([
+      ['p:V_tail', 'p:out_share'],
+    ]);
+  });
+
+  it('with ideal mirrors a copied device carries the reference current and the ratio, and the pair is a chain', () => {
+    const r = analyzeStructure(five, { refs: REFS, assume: ['ideal-mirrors'] });
+    expect(relation(r, 't:tail.id').reads).toEqual(['d:tail.id', 'd:bias.id']);
+    expect(relation(r, 't:ld.id').reads).toEqual(['d:ld.id', 'd:ldr.id']);
+    expect(r.sets.map((s) => s.params)).toEqual([['p:out_share'], ['p:V_tail']]);
+  });
+
+  it('every loop in the library runs through a mirror drain-voltage error: one assumption makes each a chain', () => {
+    const looped = [
+      'otas/five-transistor-ota.json',
+      'multistage/two-stage-miller-ota.json',
+      'otas/current-mirror-ota.json',
+      'multistage/two-stage-cascode-comp-ota.json',
+      'otas/telescopic-cascode-ota.json',
+      'otas/folded-cascode-ota.json',
+      'multistage/fd-telescopic-ota.json',
+    ];
+    for (const file of looped)
+      for (const mode of ['size', 'verify'] as const) {
+        expect(
+          chain(file, mode, []).some((s) => s.length > 1) ||
+            (file.includes('fd-') && mode === 'size'),
+        ).toBe(true);
+        for (const assume of [
+          ['no-channel-length-modulation'],
+          ['ideal-mirrors'],
+        ] as StructureAssumption[][])
+          expect(chain(file, mode, assume).every((s) => s.length === 1)).toBe(true);
+      }
   });
 });
 

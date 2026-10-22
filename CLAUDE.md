@@ -60,6 +60,19 @@ Before declaring web work done, the bar is: core tests pass, typecheck, `npm run
 - **Client-only, no network after load.** Characterization data is NDA-sensitive; the offline single-file build is a first-class release artifact. Never add a runtime network dependency. Data may be stored locally in the browser (IndexedDB/localStorage) so a reload restores the bench — but what is retained must stay visible and deletable in the UI, and nothing ever leaves the machine.
 - **medwatt `.npz` is converted out-of-browser only.** Its `.npz` is a pickled dict; the Python converter refuses to unpickle without `--trust-pickle` (arbitrary-code-execution risk). Keep that guard.
 
+## Library and test doctrine
+
+- **Library defaults answer to silicon.** A shipped sheet's defaults are set against the
+  open-PDK tables, not against the synthetic test device; a sheet that reads infeasible on
+  silicon is a valid result, not a defect to tune away.
+- **CI catches defects in the engine, not in sheets.** The goldens run on the synthetic device
+  and pin the engine's arithmetic; whether a library sheet closes on silicon is measured, not
+  enforced.
+- **A typed range on a solved unknown is a search range, not a requirement.** It is searched
+  first and selects the intended root among several; the search then widens to the range the
+  circuit allows, and a root found there is reported with the fact that no root lies inside the
+  search range. Requirements belong to checks (region declarations, saturation margins).
+
 ## Committed-text hygiene
 
 Commit messages, code comments, and committed docs are external-facing. Scrub internal jargon

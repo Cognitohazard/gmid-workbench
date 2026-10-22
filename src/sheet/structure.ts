@@ -128,6 +128,7 @@ export interface StructureSuggestion {
 
 export interface StructureReport {
   mode: StructureMode;
+  assume: StructureAssumption[];
   unknowns: StructureUnknown[];
   relations: StructureRelation[];
   /** Each solved relation → the solved params it reads, transitively: the reduced graph. */
@@ -157,10 +158,28 @@ export interface StructureReport {
   suggestions: StructureSuggestion[];
 }
 
+/** A designer's simplification with an exact graph meaning: each deletes couplings, so the
+ *  analysis under it says which loops the simplification breaks. `fixed-vds-lookups` is the
+ *  first one under the name a lookup convention gives it. */
+export type StructureAssumption =
+  'no-channel-length-modulation' | 'no-body-effect' | 'ideal-mirrors' | 'fixed-vds-lookups';
+
+export const STRUCTURE_ASSUMPTIONS: readonly StructureAssumption[] = [
+  'no-channel-length-modulation',
+  'no-body-effect',
+  'ideal-mirrors',
+  'fixed-vds-lookups',
+];
+
 export interface StructureOptions {
   mode?: StructureMode;
   /** The sheet library, to materialize by-reference children first. */
   refs?: SheetRefIndex;
+  /** Simplifications to analyse under: a device quantity loses its drain-voltage edge under
+   *  `no-channel-length-modulation` (or `fixed-vds-lookups`) and its body-bias edge under
+   *  `no-body-effect`; under `ideal-mirrors` the current of a device that copies another's gate
+   *  voltage and width reads that device's current and the ratio, not the table. */
+  assume?: readonly StructureAssumption[];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -299,8 +318,14 @@ class Builder {
   readonly unresolved = new Set<string>();
   /** Per level, the device quantities something reads, so each gets a table relation. */
   readonly refs = new Map<Level, Set<string>>();
+  readonly assume: ReadonlySet<StructureAssumption>;
 
-  constructor(readonly mode: StructureMode) {}
+  constructor(
+    readonly mode: StructureMode,
+    assume: readonly StructureAssumption[] = [],
+  ) {
+    this.assume = new Set(assume);
+  }
 
   unknown(id: string, kind: UnknownKind, level: string, name: string, solved = false): string {
     if (!this.unknowns.has(id)) this.unknowns.set(id, { id, kind, level, name, solved });
@@ -474,8 +499,14 @@ function device(b: Builder, lv: Level): void {
     selector !== undefined ? [selector] : [...placed].filter((k) => EXTENSIVES.has(k));
   // A diode-connected device is read on the table's vds = vgs diagonal, folded before sizing:
   // its quantities read the gate voltage and the body bias, and the diode relation sets the
-  // drain from the gate. Reading the drain too would draw a loop the fold does not have.
-  const bias = g.diode === true ? [d('L'), d('vsb')] : [d('L'), d('vds'), d('vsb')];
+  // drain from the gate. Reading the drain too would draw a loop the fold does not have. Under
+  // the assumptions, a quantity stops reading the drain voltage or the body bias.
+  const noVds =
+    g.diode === true ||
+    b.assume.has('no-channel-length-modulation') ||
+    b.assume.has('fixed-vds-lookups');
+  const noVsb = b.assume.has('no-body-effect');
+  const bias = [d('L'), ...(noVds ? [] : [d('vds')]), ...(noVsb ? [] : [d('vsb')])];
   if (!placed.has('vgs'))
     b.relation(`t:${P}vgs`, 'table', P, `${P}vgs`, d('vgs'), [...bias, ...placers.map(d)]);
   const extensive = [...placed].find((k) => k !== 'W' && EXTENSIVES.has(k));
@@ -485,11 +516,40 @@ function device(b: Builder, lv: Level): void {
       ...bias,
       ...(extensive === undefined ? [] : [d(extensive)]),
     ]);
+  // Under ideal mirrors, a device that copies another's gate voltage and width carries that
+  // device's current times the ratio: its current reads the reference's and the ratio's params,
+  // never the table. The reference is the one device the gate-voltage given names, read through
+  // the level's own param when the parent's override is what names it (`vgs_l: "ldr__vgs"`).
+  const through = (ids: string[]): string[] =>
+    ids.flatMap((id) => {
+      if (!id.startsWith('p:')) return [id];
+      const over = b.relations.find((r) => r.kind === 'override' && r.determines === id);
+      return over ? over.reads.filter((u) => u !== id) : [id];
+    });
+  const copied = (k: 'vgs' | 'W'): string[] =>
+    supplied.includes(k)
+      ? through(b.reads(lv, (g as unknown as Record<string, unknown>)[k], false))
+      : [];
+  const gateOf = copied('vgs').filter((u) => u.startsWith('d:') && u.endsWith('vgs'));
+  const widthOf = copied('W');
+  const reference = gateOf.length === 1 ? gateOf[0].slice(0, -'vgs'.length) : undefined;
+  const mirrored =
+    b.assume.has('ideal-mirrors') &&
+    reference !== undefined &&
+    !placed.has('id') &&
+    (fixed.has('W') || widthOf.includes(`${reference}W`));
+  if (mirrored) {
+    b.relation(`t:${P}id`, 'table', P, `${P}id`, d('id'), [
+      `${reference}id`,
+      ...widthOf.filter((u) => u !== `${reference}W`),
+    ]);
+  }
   // Every other quantity read, and the current whether or not something reads it: the point
   // placed, the table answers it.
   const refs = new Set(['id', ...(b.refs.get(lv) ?? [])]);
   for (const q of [...refs].sort()) {
     if (placed.has(q) || COORDINATES.includes(q) !== (q === 'id')) continue;
+    if (q === 'id' && mirrored) continue;
     if (SIZED_META.has(q)) {
       // The sized device's own scalar: its width, after the sizing.
       b.relation(`t:${P}${q}`, 'table', P, `${P}${q}`, d(q), [d('W')]);
@@ -504,8 +564,12 @@ function device(b: Builder, lv: Level): void {
 }
 
 /** The graph of a resolved document in one mode, with the levels it was built from. */
-function build(doc: SheetDoc, mode: StructureMode): { b: Builder; levels: Level[] } {
-  const b = new Builder(mode);
+function build(
+  doc: SheetDoc,
+  mode: StructureMode,
+  assume: readonly StructureAssumption[],
+): { b: Builder; levels: Level[] } {
+  const b = new Builder(mode, assume);
   const levels = levelsOf(doc);
   for (const lv of levels) algebra(b, lv);
   // Second pass: the table relations need every quantity anything reads, and a parent reads a
@@ -828,7 +892,7 @@ function suggestions(
 export function analyzeStructure(doc: SheetDoc, opts: StructureOptions = {}): StructureReport {
   const mode = opts.mode ?? 'size';
   const resolved = resolvedSheet(doc, opts.refs).doc;
-  const { b, levels } = build(resolved, mode);
+  const { b, levels } = build(resolved, mode, opts.assume ?? []);
   const { reads, residuals } = forward(b.relations);
 
   // Circular definitions: determined unknowns reading themselves through others.
@@ -877,6 +941,7 @@ export function analyzeStructure(doc: SheetDoc, opts: StructureOptions = {}): St
 
   return {
     mode,
+    assume: [...(opts.assume ?? [])],
     unknowns: [...b.unknowns.values()],
     relations: b.relations,
     depends,
