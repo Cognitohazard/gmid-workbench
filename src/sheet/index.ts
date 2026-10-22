@@ -77,6 +77,8 @@ export * from './resolve';
 export * from './sensitivity';
 export * from './examples';
 export * from './propose';
+// The structural analysis: read-only, table-free, and read by nothing an evaluation does.
+export * from './structure';
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a block's
