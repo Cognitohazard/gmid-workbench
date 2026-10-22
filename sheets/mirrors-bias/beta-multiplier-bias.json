@@ -1,6 +1,6 @@
 {
   "title": "Beta-multiplier bias",
-  "description": "The constant-$g_m$ (beta-multiplier) self-biased reference. A top current mirror forces equal currents down two legs; the bottom devices are a diode-connected small device and a K-times-wider device with a source resistor $R_{bias}$. Because both carry the same current but the wide device runs at a lower current density, the wide device needs less gate-source voltage, and the difference is dropped across $R_{bias}$. Setting that up makes the reference's transconductance depend only on the resistor and the ratio, not on the current or the process: the square-law hand identity is $g_m = (2/R_{bias})*(1 - 1/\\sqrt{K_{bm}})$. Like a Widlar, the loop is a fixed point with one unknown, and the sheet solves it: you pick the resistor, the ratio and the diode device's inversion level, and the engine searches $I_{bias}$ between its min and max for the current at which the gate-source difference equals $I_{bias}*R_{bias}$. It is one named unknown searched in a stated range, not a nodal solve; the fixed-point rule reports the identity the search makes hold, and the search range starts above zero, so it finds the operating state and never the zero-current one. The $g_m$ identity is offered as a guardrail, an estimate, because it comes from the square-law model while the lookup $g_m$ is the truth; the guardrail shows how far the classic formula is off at this inversion level. The circuit has a second, zero-current stable state, so a startup subcircuit is required in practice; it is a simulation-only concern and is not sized here. The resistor-side device's source sits $I_{bias}*R_{bias}$ above ground, declared as its $V_{SB}$.",
+  "description": "The constant-$g_m$ (beta-multiplier) self-biased reference. In the full circuit a top PMOS current mirror forces equal currents down two legs; the bottom devices are a diode-connected small device and a K-times-wider device with a source resistor $R_{bias}$. Because both carry the same current but the wide device runs at a lower current density, the wide device needs less gate-source voltage, and the difference is dropped across $R_{bias}$. Setting that up makes the reference's transconductance depend only on the resistor and the ratio, not on the current or the process: the square-law hand identity is $g_m = (2/R_{bias})*(1 - 1/\\sqrt{K_{bm}})$. This sheet draws the bottom pair and its resistor, not the top mirror. The wide device is given the diode device's current, the equality the top mirror enforces; its drain is held at $V_{dm2}$, the level the top mirror would set; and the diode device's node, the gate wire both bottom devices share, is a port, because the current the top mirror delivers into it arrives from outside the sheet. Like a Widlar, the loop is a fixed point with one unknown, and the sheet solves it: you pick the resistor, the ratio and the diode device's inversion level, and the engine searches $I_{bias}$ between its min and max for the current at which the gate-source difference equals $I_{bias}*R_{bias}$. It is one named unknown searched in a stated range, not a nodal solve; the fixed-point check reports the identity the search makes hold, and the search range starts above zero, so it finds the operating state and never the zero-current one. The $g_m$ identity is an advisory check, an estimate, because it comes from the square-law model while the lookup $g_m$ is the truth; it shows how far the classic formula is off at this inversion level. The circuit has a second, zero-current stable state, so a startup subcircuit is required in practice; it is a simulation-only concern and is not sized here. The resistor-side device's source sits $I_{bias}*R_{bias}$ above ground, declared as its $V_{SB}$.",
   "polarity": "n",
   "params": [
     {
@@ -37,7 +37,7 @@
       "value": 1.8,
       "unit": "V",
       "role": "spec",
-      "note": "supply"
+      "note": "the supply. Nothing on this sheet reads it: the top mirror that would hang from it is not drawn"
     },
     {
       "name": "V_dm2",
@@ -72,7 +72,7 @@
       "name": "m1",
       "doc": {
         "title": "Diode device (small)",
-        "description": "The diode-connected side of the bottom pair, carrying the loop current. Its transconductance is what the constant-gm identity pins, and its vgs is the gate rail the wide device works below.",
+        "description": "The diode-connected side of the bottom pair, carrying the loop current. Its transconductance is the one the constant-$g_m$ identity predicts, and its gate-source voltage is the level of the gate wire the two bottom devices share; the wide device's gate-source voltage sits below it by the resistor drop.",
         "polarity": "n",
         "params": [
           { "name": "I1", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -144,7 +144,7 @@
       "op": "==",
       "rhs": "vgs_drop",
       "tolPct": 3,
-      "note": "the constant-gm loop equation V_GS1 - V_GS2 = I_bias*R_bias. The search on I_bias makes it hold, so this rule is the identity that search solves: it fails only where the search did not settle"
+      "note": "the constant-gm loop equation V_GS1 - V_GS2 = I_bias*R_bias. The search on I_bias makes it hold, so this check is the identity that search solves: it fails only where the search did not settle"
     },
     {
       "id": "gm-identity",

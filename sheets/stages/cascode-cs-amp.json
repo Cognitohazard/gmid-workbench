@@ -1,6 +1,6 @@
 {
   "title": "Cascode CS amp",
-  "description": "A telescopic (non-boosted) cascode common-source stage: a common-source input device with a cascode device stacked in series on top, driving a current-source load. The cascode raises the stage output resistance to about $A_{v0,casc}/g_{ds,in}$, so the gain is no longer limited by the input device's own output resistance but by whatever the load presents - here a plain current source, so the load's $g_{ds}$ sets the ceiling. All three devices carry the same branch current, stacked in series between the rails: the input device and the current-source load are composed children, and the cascode between them is the sheet's own device, sized at the input device's drain current. The load is in series with the stack at DC; it is only in the small-signal output resistance that its $g_{ds}$ appears in parallel with the cascoded branch. The cascode's gate is drawn with the branch that sets it: a diode-connected NMOS at a low inversion level, carrying its own programmed current, one strong-inversion $V_{GS}$ above ground. The node under the cascode is solved under that gate, so wherever the design is held it moves with the devices; the bias diode's inversion level is the knob that places it. The load's gate stays a port: the stage is sized from its bandwidth specification, which fixes the branch current, and a mirror bias drawn there would make that current follow the data and turn the specification into a check. Set load_sign to -1 for a signed-PMOS load table.",
+  "description": "A telescopic (non-boosted) cascode common-source stage: a common-source input device with a cascode device stacked in series on top, driving a current-source load. The cascode raises the stage output resistance to about $A_{v0,casc}/g_{ds,in}$, so the gain is no longer limited by the input device's own output resistance but by whatever the load presents - here a plain current source, so the load's $g_{ds}$ sets the ceiling. All three devices carry the same branch current, stacked in series between the rails: the input device and the current-source load are blocks, and the cascode between them is the sheet's own device, sized at the input device's drain current. The load is in series with the stack at DC; it is only in the small-signal output resistance that its $g_{ds}$ appears in parallel with the cascoded branch. The cascode's gate is drawn with the branch that sets it: a diode-connected NMOS at a low inversion level, carrying its own programmed current, one strong-inversion $V_{GS}$ above ground. The node under the cascode is solved under that gate by a design constraint, so wherever the design is held it moves with the devices; the bias diode's inversion level is the knob that places it. The load's gate stays a port: the stage is sized from its bandwidth specification, which fixes the branch current, and a mirror bias drawn there would make that current follow the data and turn the specification into a check. The input gate is a port as well, driven by the stage before this one. Set load_sign to -1 for a signed-PMOS load table.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -62,7 +62,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "input-pair inversion: sets the stage gm, noise, and gain"
+      "note": "input-device inversion: sets the stage gm, noise, and gain"
     },
     {
       "name": "gm_id_casc",
@@ -136,7 +136,7 @@
       "name": "in",
       "doc": {
         "title": "Common-source input device",
-        "description": "The input device at the branch current. Its drain sits at V_x, one cascode source below the cascode device; it exposes its transconductance, output conductance, drain current (carried up by the cascode), and channel-noise density.",
+        "description": "The input device at the branch current. Its drain is the node under the cascode, V_x, which is the cascode's source; it exposes its transconductance, output conductance, drain current (carried up by the cascode), and channel-noise density.",
         "polarity": "n",
         "params": [
           { "name": "I_in", "value": 20e-6, "unit": "A", "role": "spec" },

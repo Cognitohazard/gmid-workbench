@@ -1,6 +1,6 @@
 {
   "title": "CS amp, resistive load",
-  "description": "Common-source stage with a physical resistor as the load. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor) and $g_m/I_D$ is the efficiency knob; the load resistor $R_{load}$ sets both the gain and the DC drop that eats output headroom. This is the classic gain-vs-headroom trade made explicit: a bigger $R_{load}$ raises the gain but drops more of the supply, so the output DC level $V_{out}$ = VDD - $I*R_{load}$ sinks toward the device's saturation floor. The device's drain sits at that level, so its $V_{DS}$ is $V_{out}$ and nothing is typed for it: with $g_m$ and $g_m/I_D$ both bound, the current is $g_m/(g_m/I_D)$, a closed form of the params, and the bind places the drain from it.",
+  "description": "Common-source stage with a physical resistor as the load. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor) and $g_m/I_D$ is the efficiency knob; the load resistor $R_{load}$ sets both the gain and the DC drop that eats output headroom. This is the classic gain-vs-headroom trade made explicit: a bigger $R_{load}$ raises the gain but drops more of the supply, so the output DC level $V_{out}$ = VDD - $I*R_{load}$ sinks toward the device's saturation floor. The device's drain sits at that level, so its $V_{DS}$ is $V_{out}$ and nothing is typed for it: with $g_m$ and $g_m/I_D$ both among the givens, the current is $g_m/(g_m/I_D)$, a closed form of the params, and the givens place the drain from it. The gate is a port: the stage that drives the input supplies its signal and its DC level, which is the gate-source voltage the sizing lands on. Nothing is solved.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -82,7 +82,7 @@
       "name": "Rout",
       "expr": "par(R_load, 1/gds)",
       "unit": "ohm",
-      "note": "the resistance this stage presents at its output: the load resistor in parallel with the device output resistance. The load knob is already inside this row and inside the gain, so the loading contract here is the arithmetic rather than a separate rule"
+      "note": "the resistance this stage presents at its output: the load resistor in parallel with the device output resistance. The load knob is already inside this equation and inside the gain, so the loading contract here is the arithmetic rather than a separate check"
     },
     {
       "name": "Av",
@@ -100,7 +100,7 @@
       "name": "V_out",
       "expr": "VDD - V_drop",
       "unit": "V",
-      "note": "the output DC level, which is also the device's drain-source voltage. The bind writes the same level with the current expanded as gm/gm_id, because a bind evaluates before any row"
+      "note": "the output DC level, which is also the device's drain-source voltage. The givens write the same level with the current expanded as gm/gm_id, because the givens are evaluated before any equation"
     },
     { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
     { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
@@ -114,13 +114,13 @@
       "name": "cgg_in",
       "expr": "cgg",
       "unit": "F",
-      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [

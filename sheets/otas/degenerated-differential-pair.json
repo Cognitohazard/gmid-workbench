@@ -1,6 +1,6 @@
 {
   "title": "Degenerated differential pair",
-  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The two resistors meet at the tail node, and the tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and each side of the pair carries half of what the tail delivers there. Entered from the COMMON MODE: the tail node $V_{tail}$ is the one free bias variable, solved so that the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. The device's source node sits one resistor drop above the tail node, $V_s = V_{tail} + I_D*R_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — and both bias coordinates follow from it ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), so the body effect is charged in full rather than only the resistor's few tens of millivolts. The resistor drop comes out of the tail device's drain-source voltage, so the low end of the common-mode range is where that device leaves saturation, and a check says so. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
+  "description": "A source-degenerated differential pair: a resistor $R_s$ in each source lifts the linear input range and improves offset at the cost of transconductance. The effective transconductance is $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$; the degeneration factor $n_{deg} = 1 + (g_m + g_{mb})*R_s$ divides GBW and the input offset while the ~1-decade linear range extends to about $V^* + (I_{tail}/2)*R_s$. The two resistors meet at the tail node, and the tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and each side of the pair carries half of what the tail delivers there. Entered from the COMMON MODE: the tail node $V_{tail}$ is the one free bias variable, solved by a design constraint so that the produced $CM_{in} = V_s + V_{GS}$ equals $CM_{dc}$. No gate is a port: the two inputs are held at $CM_{dc}$, and the two drains at $V_{out,dc}$, the level the undrawn load sets. The device's source node sits one resistor drop above the tail node, $V_s = V_{tail} + I_D*R_s$ — its FULL elevation above the bulk, tail lift and resistor drop together — and both bias coordinates follow from it ($v_{sb} = V_s$, $v_{ds} = V_{out} - V_s$), so the body effect is charged in full rather than only the resistor's few tens of millivolts. The resistor drop comes out of the tail device's drain-source voltage, so the low end of the common-mode range is where that device leaves saturation, and a check says so. Degeneration's boost of the device output resistance is neglected here, so the gain into a fixed load conductance is a conservative estimate.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -67,7 +67,7 @@
       "value": 1.25,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "note": "input CM range the application presents, high end — its ENDPOINT checked by the cm-hi range end the same way",
       "class": "independent"
     },
     {
@@ -331,7 +331,7 @@
       "name": "tail_headroom",
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
-      "note": "how far the tail node sits above the tail device's saturation edge — exact here, because the tail node is the variable rather than something inferred from a common mode"
+      "note": "how far the tail node sits above the tail device's saturation voltage — exact here, because the tail node is the variable rather than something inferred from a common mode"
     },
     {
       "name": "cgg_in",
@@ -389,19 +389,19 @@
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
-      "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
+      "note": "paired with cm-not-below; the cm-lo/cm-hi range ends check the held design at the ENDS of the range, and the CM_dc sweep shows the whole landscape"
     }
   ],
   "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there"
+      "note": "the claimed low end, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every physical and spec check must hold there"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high end, checked the same way. The range ends check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],

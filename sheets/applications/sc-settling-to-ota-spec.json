@@ -1,6 +1,6 @@
 {
   "title": "SC settling to OTA spec",
-  "description": "The classic switched-capacitor settling flow (Murmann): it turns a settling-time and error budget into the open-loop OTA requirements a downstream amplifier sheet must meet, then sizes one input device so the flow ends in silicon. The dynamic settling error sets the number of time constants; the clock period (half of it available for settling) sets the maximum closed-loop time constant; from those come the required unity-gain frequency GBW_req, the required DC gain $A_{req}$ (from the static error), and the required slew rate SR_req (from the large-signal step). GBW_req, $A_{req}$, and SR_req are surfaced as rows for a downstream OTA sheet to adopt as its GBW_target, $A_{v,target}$, and SR_target. Assumes a single-pole closed loop and a feedback factor $\\beta$ (typically $C_f/(C_s+C_f)$); the slew/linear-settling boundary and phase margin are sim-owned.",
+  "description": "The classic switched-capacitor settling flow (Murmann): it turns a settling-time and error budget into the open-loop OTA requirements a downstream amplifier sheet must meet, then sizes one input device so the flow ends in silicon. The dynamic settling error sets the number of time constants; the clock period (half of it available for settling) sets the maximum closed-loop time constant; from those come the required unity-gain frequency GBW_req, the required DC gain $A_{req}$ (from the static error), and the required slew rate SR_req (from the large-signal step). GBW_req, $A_{req}$, and SR_req are published as the sheet's provides, for a downstream OTA sheet to adopt as its GBW_target, $A_{v,target}$, and SR_target. Assumes a single-pole closed loop and a feedback factor $\\beta$ (typically $C_f/(C_s+C_f)$); the slew/linear-settling boundary and phase margin are sim-owned. The sheet declares that it is not a circuit: the input device's drain voltage is stated rather than wired, so the sheet has no ports and nothing is solved.",
   "polarity": "n",
   "params": [
     {
@@ -90,7 +90,7 @@
       "name": "in",
       "doc": {
         "title": "SC input device",
-        "description": "One input device sized so the OTA's open-loop unity-gain frequency equals GBW_req into the effective load. gm is pinned from the settling flow; gm/ID is the efficiency knob.",
+        "description": "One input device sized so the OTA's open-loop unity-gain frequency equals GBW_req into the effective load. gm is fixed by the settling flow; gm/ID is the efficiency knob.",
         "polarity": "n",
         "params": [
           { "name": "GBW_c", "value": 1e8, "unit": "Hz", "role": "spec" },
@@ -187,7 +187,7 @@
       "lhs": "ft_in",
       "op": ">=",
       "rhs": "ft_margin*GBW_req",
-      "note": "the sized device's fT must clear GBW_req with margin; a real derived check (the pinned gm hid the gate cap), estimate-grade, sim signs off"
+      "note": "the sized device's fT must clear GBW_req with margin; a real derived check (fixing gm in the givens hid the gate cap), estimate-grade, sim signs off"
     }
   ],
   "provides": ["GBW_req", "A_req", "SR_req", "CL_eff"],

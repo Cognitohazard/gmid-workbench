@@ -1,6 +1,6 @@
 {
   "title": "Rail-to-rail input stage",
-  "description": "A complementary (concurrent) input stage: an NMOS differential pair and a PMOS differential pair in parallel, so their transconductances sum and the input common-mode range spans rail to rail. The NMOS pair conducts near the top rail, the PMOS pair near the bottom rail, and both conduct in the middle. That middle overlap is the well-known weakness: the total $g_m$ nearly doubles where both pairs are on, so the loop gain and bandwidth swing across the common-mode range. The rows expose $g_m$ in the three CM regions and the $g_m$-variation ratio; constant-$g_m$ control (current switching that holds $g_{m,n} + g_{m,p}$ constant) is the standard fix and is a simulation-level technique out of this sheet's scope. The ICMR rows show the overlap window. On the demo NMOS table both pairs size against the same data, so the PMOS sign param stays at +1.",
+  "description": "A complementary (concurrent) input stage: an NMOS differential pair and a PMOS differential pair in parallel, so their transconductances sum and the input common-mode range spans rail to rail. The NMOS pair conducts near the top rail, the PMOS pair near the bottom rail, and both conduct in the middle. That middle overlap is the well-known weakness: the total $g_m$ nearly doubles where both pairs are on, so the loop gain and bandwidth swing across the common-mode range. The equations expose $g_m$ in the three CM regions and the $g_m$-variation ratio; constant-$g_m$ control (current switching that holds $g_{m,n} + g_{m,p}$ constant) is the standard fix and is a simulation-level technique out of this sheet's scope. The common-mode-range equations show the overlap window. The sheet declares that it is not a circuit: each pair is one half-circuit device at half its tail current with its drain-source voltage stated rather than wired, so the sheet has no ports and nothing is solved. On the demo NMOS table both pairs size against the same data, so the PMOS sign param stays at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -74,14 +74,14 @@
       "value": 0.2,
       "unit": "V",
       "role": "spec",
-      "note": "NMOS tail saturation headroom (sets the low edge of the NMOS-pair CM range)"
+      "note": "NMOS tail saturation headroom (sets the low end of the NMOS-pair CM range)"
     },
     {
       "name": "Vtail_p",
       "value": 0.2,
       "unit": "V",
       "role": "spec",
-      "note": "PMOS tail saturation headroom (sets the high edge of the PMOS-pair CM range)"
+      "note": "PMOS tail saturation headroom (sets the high end of the PMOS-pair CM range)"
     },
     {
       "name": "p_sign",
@@ -97,7 +97,7 @@
       "name": "n",
       "doc": {
         "title": "NMOS input pair device",
-        "description": "Half-circuit NMOS input device at half its tail current; conducts toward the top rail. Its vgs and the NMOS tail headroom set the low edge of its common-mode range.",
+        "description": "Half-circuit NMOS input device at half its tail current; conducts toward the top rail. Its vgs and the NMOS tail headroom set the low end of its common-mode range.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -124,7 +124,7 @@
       "name": "p",
       "doc": {
         "title": "PMOS input pair device",
-        "description": "Half-circuit PMOS input device at half its tail current; conducts toward the bottom rail. Its vgs and the PMOS tail headroom set the high edge of its common-mode range.",
+        "description": "Half-circuit PMOS input device at half its tail current; conducts toward the bottom rail. Its vgs and the PMOS tail headroom set the high end of its common-mode range.",
         "polarity": "p",
         "params": [
           { "name": "Ix", "value": 10e-6, "unit": "A", "role": "spec" },
@@ -213,7 +213,7 @@
       "name": "I_q",
       "expr": "I_n + I_p",
       "unit": "A",
-      "note": "estimate: quiescent supply current at mid-supply, which is the worst case — both pairs are live there, and one of them shuts off as the common mode approaches either rail. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current at mid-supply, which is the worst case — both pairs are live there, and one of them shuts off as the common mode approaches either rail. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [

@@ -1,6 +1,6 @@
 {
   "title": "Folded cascode OTA",
-  "description": "A single-ended folded cascode, drawn at rest: the input pair steers current into two folding nodes, and a cascoded branch on each side carries what is left of each folding source's current down to a cascoded NMOS current mirror, whose output side is the high-impedance output. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — where the diode side's PMOS and NMOS cascodes meet — so that node sits one mirror $V_{GS}$ above ground while the output sits at $V_{out,dc}$. The two sides therefore do not sit at the same voltages, and every device below the tail is drawn on its own side. It is the branch-current bookkeeping showcase. The tail is drawn the way the circuit sets it: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and the pair's two transistors are one width, each carrying its own share of what the tail delivers. The folding current sources are mirror outputs of a PMOS bias line derived from the same reference, as one reference programs a whole chip's bias: an NMOS mirror output on the reference's gate wire, $K_p$ times its width, sinks its current from a diode-connected PMOS, and the output side's folding source sits on that diode's gate at $K_b$ times its width. The PMOS gate wire's level is solved so that the NMOS device's drain voltage is the diode's, the one current both carry. The folding source's current, about $K_b K_p I_{tail}$, is read from the table at its own drain voltage, and its partner on the diode side shares its gate and width, so its current is read the same way at its own. On each side the cascoded branch carries the fold current, the folding source's current less the pair transistor's: on the output side that is $I_{fold}$; on the diode side it is what the mirror's diode side carries, and the mirror's output side shares its gate and width, so what it pulls from the output is read from the table at its own drain voltage. The share is solved so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. The fold current is a real design knob, set by the two ratios: it must be at least the input device's current, so that when slewing steers the whole tail current into one folding node the branch there never starves, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is the pair's transconductance times the folded-cascode output resistance, read on the output side; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$; the gates of the cascodes are bias lines both sides share, each a diode-connected device at a low inversion level carrying its own programmed current — an NMOS one strong-inversion $V_{GS}$ above ground for the NMOS cascodes, a PMOS one the same below the supply for the PMOS cascodes. The output side's folding node $V_{fold}$ and mirror-drain node $V_c$ are solved under those gates, and so are the diode side's two nodes, so wherever the design is held the nodes move with the devices; the knobs that place them are the bias diodes' inversion levels. Every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction.",
+  "description": "A single-ended folded cascode, drawn at rest: the input pair steers current into two folding nodes, and a cascoded branch on each side carries what is left of each folding source's current down to a cascoded NMOS current mirror, whose output side is the high-impedance output. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — where the diode side's PMOS and NMOS cascodes meet — so that node sits one mirror $V_{GS}$ above ground while the output sits at $V_{out,dc}$. The two sides therefore do not sit at the same voltages, and every device below the tail is drawn on its own side. It is the branch-current bookkeeping showcase. The tail is drawn the way the circuit sets it: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and the pair's two transistors are one width, each carrying its own share of what the tail delivers. The folding current sources are mirror outputs of a PMOS bias line derived from the same reference, as one reference programs a whole chip's bias: an NMOS mirror output on the reference's gate wire, $K_p$ times its width, sinks its current from a diode-connected PMOS, and the output side's folding source sits on that diode's gate at $K_b$ times its width. The PMOS gate wire's level is solved, by a one-unknown search on that level, so that the NMOS device's drain voltage is the diode's, the one current both carry. The folding source's current, about $K_b K_p I_{tail}$, is read from the table at its own drain voltage, and its partner on the diode side shares its gate and width, so its current is read the same way at its own. On each side the cascoded branch carries the fold current, the folding source's current less the pair transistor's: on the output side that is $I_{fold}$; on the diode side it is what the mirror's diode side carries, and the mirror's output side shares its gate and width, so what it pulls from the output is read from the table at its own drain voltage. The share is solved by a design constraint so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. The fold current is a real design knob, set by the two ratios: it must be at least the input device's current, so that when slewing steers the whole tail current into one folding node the branch there never starves, but the folding current sources add input-referred noise, so more fold current trades noise for slew headroom. Gain is the pair's transconductance times the folded-cascode output resistance, read on the output side; unlike the telescopic it separates the input CM range from the output swing, at the cost of the extra branch current and its noise. The stack is parameterized by its NODES: the tail node is solved by a design constraint so the produced $CM_{in}$ equals $CM_{dc}$; the gates of the cascodes are bias lines both sides share, each a diode-connected device at a low inversion level carrying its own programmed current — an NMOS one strong-inversion $V_{GS}$ above ground for the NMOS cascodes, a PMOS one the same below the supply for the PMOS cascodes. The output side's folding node $V_{fold}$ and mirror-drain node $V_c$ are solved under those gates by design constraints, and so are the diode side's two nodes, so wherever the design is held the nodes move with the devices; the knobs that place them are the bias diodes' inversion levels. Every bias gate is drawn, so the only ports are the two input gates, which the application drives. Every device $V_{DS}$ is a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias, so the drops close each branch by construction.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -45,7 +45,7 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.92-1.64 V on sky130 tt at the shipped choices: below it the tail device leaves saturation, and above it the tail node runs out of its search range). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.92-1.64 V on sky130 tt at the shipped choices: below it the tail device leaves saturation, and above it the tail node runs out of its search range). The range end checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -53,7 +53,7 @@
       "value": 1.45,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "note": "input CM range the application presents, high end — its ENDPOINT checked by the cm-hi range end the same way",
       "class": "independent"
     },
     {
@@ -820,7 +820,7 @@
       "name": "tail_headroom",
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
-      "note": "how far the tail node sits above the tail device's saturation edge — exact, because the tail node is the variable rather than something inferred from a common mode"
+      "note": "how far the tail node sits above the tail device's saturation voltage — exact, because the tail node is the variable rather than something inferred from a common mode"
     },
     {
       "name": "I_fold",
@@ -931,19 +931,19 @@
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
-      "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
+      "note": "paired with cm-not-below; the cm-lo/cm-hi range ends check the held design at the ENDS of the range, and the CM_dc sweep shows the whole landscape"
     }
   ],
   "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there"
+      "note": "the claimed low end, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every physical and spec check must hold there"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high end, checked the same way. The range ends check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],

@@ -1,6 +1,6 @@
 {
   "title": "Source follower",
-  "description": "A source follower (common-drain buffer): the drain sits at VDD, the source drives the load, and the output tracks the input one gate-source drop below it. The voltage gain $A_v = g_m/(g_m + g_{ds} + 1/R_L)$ is just under unity and the output resistance is about $1/g_m$, so this stage buffers a high-impedance node into a resistive load $R_L$ without voltage gain. The DC level shift is one $V_{GS}$: $V_{out} = V_{in} - V_{GS}$. $V_{GS}$ is not known before sizing, yet the drain-source voltage $V_{DD} - V_{out}$ the device is sized at depends on it, so vgs_est is solved: the engine searches its range for the value that equals the sized device's own $V_{GS}$, and its stored value is never read. The body is assumed tied to the source ($V_{SB} = 0$), so no body effect appears and $g_{mb}$ drops out of the gain. That is an assumption about the layout, not an algebraic convenience: it requires an isolated body — a deep-n-well NMOS, or the PMOS-in-its-own-well version of this stage. On a bulk-grounded device the source-body generator loads the source directly; measured on a sky130 tt realization at these defaults it is about 52 uS against a 240 uS $g_m$, which pulls the gain from 0.95 down to roughly 0.79 and misses the 0.85 target. In a shared well, this sheet does not describe the circuit.",
+  "description": "A source follower (common-drain buffer): the drain sits at VDD, the source drives the load, and the output tracks the input one gate-source drop below it. The voltage gain $A_v = g_m/(g_m + g_{ds} + 1/R_L)$ is just under unity and the output resistance is about $1/g_m$, so this stage buffers a high-impedance node into a resistive load $R_L$ without voltage gain. The DC level shift is one $V_{GS}$: $V_{out} = V_{in} - V_{GS}$. $V_{GS}$ is not known before sizing, yet the drain-source voltage $V_{DD} - V_{out}$ the device is sized at depends on it, so vgs_est is solved: the engine searches its range for the value that equals the sized device's own $V_{GS}$, and its stored value is never read. The body is assumed tied to the source ($V_{SB} = 0$), so no body effect appears and $g_{mb}$ drops out of the gain. That is an assumption about the layout, not an algebraic convenience: it requires an isolated body — a deep-n-well NMOS, or the PMOS-in-its-own-well version of this stage. On a bulk-grounded device the source-body generator loads the source directly; measured on a sky130 tt realization at these defaults it is about 52 uS against a 240 uS $g_m$, which pulls the gain from 0.95 down to roughly 0.79 and misses the 0.85 target. In a shared well, this sheet does not describe the circuit. The gate is held at $V_{in}$, the input level the application presents, so no gate is a port; the bias current is drawn as an ideal source from the output to ground, and $R_L$ is a small-signal load only, not drawn, so it takes no DC current.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -19,7 +19,7 @@
       "value": 100e3,
       "unit": "ohm",
       "role": "spec",
-      "note": "load resistance at the source; may be large (a light load approaches Av -> gm/(gm+gds))"
+      "note": "load resistance at the source, counted as a small-signal load only: it is not drawn, so it takes none of the DC bias current. It may be large (a light load approaches Av -> gm/(gm+gds))"
     },
     {
       "name": "Av_target",
@@ -109,13 +109,13 @@
       "name": "cgg_in",
       "expr": "cgg",
       "unit": "F",
-      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings. The drain sits at the supply, so there is no Miller multiplication to miss here; what there is instead is bootstrapping — the source follows the gate to within a few percent, taking most of $C_{GS}$ out of the driver's way, so this row OVERSTATES what the driver sees. No rule reads it"
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings. The drain sits at the supply, so there is no Miller multiplication to miss here; what there is instead is bootstrapping — the source follows the gate to within a few percent, taking most of $C_{GS}$ out of the driver's way, so this estimate OVERSTATES what the driver sees. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "I_bias",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the one branch these rows model, set by the bias source under the follower. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the one branch these equations model, set by the bias source under the follower. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [

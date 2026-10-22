@@ -1,6 +1,6 @@
 {
   "title": "Gain-boosted cascode OTA",
-  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$, and the internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are choice params — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. The tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and the pair carries half of what the tail delivers there — so the low end of the common-mode range is where the tail device runs out of drain-source voltage, and a check says so. Here one booster child models the regulation gain and is applied to both the NMOS and PMOS output cascodes. The output is single-ended, through a current-mirror load whose two devices share a gate on the diode side's output node — where the diode side's two cascodes meet — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$, held there by the feedback the application closes around the amplifier. The diode side's output node is low-impedance, so its cascodes are biased rather than boosted: their gates are bias lines drawn with the branches that set them, each carrying its own programmed current — a stacked NMOS replica bias for the NMOS cascode, a diode on ground whose drop places the node under the cascode with a device at the cascode's inversion level stacked on it, and a diode-connected PMOS at a low inversion level for the PMOS cascode. The diode side's internal nodes, $V_{ar}$ and $V_{br}$, are solved under those gates, so wherever the design is held they move with the devices, as silicon's do, while the boosters hold the output side's at their references. The cascodes are drawn as blocks of their own because their drains sit at the diode side's output node rather than at the output. Everything under and over them is drawn the same on both sides: the two pair transistors share a source and a current, and so do the two mirror devices, so each pair is one sizing placed twice, the tail current splits evenly, and there is no systematic offset to report. That holds while the diode side's nodes sit where the boosters hold the output side's: the bias branches' inversion levels are the knobs that put them there, and the wiring check reports a pair placed twice whose two drains sit apart.",
+  "description": "A cascode OTA whose cascode devices are regulated by auxiliary 'booster' amplifiers (gain-boosting / regulated cascode). A booster senses the cascoded device's drain and drives the cascode gate to hold its source fixed, so the local feedback multiplies the cascode's own intrinsic gain by the booster gain: each side's output resistance becomes about $A_{v0,boost} * A_{v0,casc} * r_o$. That lifts the single-stage gain by the booster gain — often 20-40 dB — without adding a stack device or a second signal-path pole. The price is the booster's own bandwidth: it forms a pole-zero doublet that slows settling, so the closed-loop settling is estimate-grade and the sim owns sign-off. The stack is parameterized by its NODES: the tail node is solved by a design constraint so the produced $CM_{in}$ equals $CM_{dc}$, and the output side's internal nodes $V_a$ (input drain) and $V_b$ (mirror drain) are held at the references the boosters regulate them to — every device $V_{DS}$ is a subtraction between adjacent nodes, every source-above-bulk device carries its true body bias, and the drops sum to the rail by construction. The tail is drawn: a diode-connected bias reference carries the programmed $I_{tail}$, the tail device sits on that reference's gate at that reference's width with the tail node as its drain, and the pair carries half of what the tail delivers there — so the low end of the common-mode range is where the tail device runs out of drain-source voltage, and a check says so. Here one booster block models the regulation gain and is applied to both the NMOS and PMOS output cascodes. It is a stand-in, not a wired loop: its one gain device has its gate on a port and its drain on a held level, so it supplies the gain the output-resistance equations read, and no booster loop is checked. The output-side cascode gates are therefore ports, where the boosters' outputs would connect, and the two inputs are held at $CM_{dc}$. The output is single-ended, through a current-mirror load whose two devices share a gate on the diode side's output node — where the diode side's two cascodes meet — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$, held there by the feedback the application closes around the amplifier. The diode side's output node is low-impedance, so its cascodes are biased rather than boosted: their gates are bias lines drawn with the branches that set them, each carrying its own programmed current — a stacked NMOS replica bias for the NMOS cascode, a diode on ground whose drop places the node under the cascode with a device at the cascode's inversion level stacked on it, and a diode-connected PMOS at a low inversion level for the PMOS cascode. The diode side's internal nodes, $V_{ar}$ and $V_{br}$, are solved under those gates by design constraints, so wherever the design is held they move with the devices, as silicon's do, while the boosters hold the output side's at their references. The cascodes are drawn as blocks of their own because their drains sit at the diode side's output node rather than at the output. Everything under and over them is drawn the same on both sides: the two pair transistors share a source and a current, and so do the two mirror devices, so each pair is one sizing placed twice, the tail current splits evenly, and there is no systematic offset to report. That holds while the diode side's nodes sit where the boosters hold the output side's: the bias branches' inversion levels are the knobs that put them there, and the wiring check reports a pair placed twice whose two drains sit apart.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -46,7 +46,7 @@
       "value": 1.12,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "note": "input CM range the application presents, high end — its ENDPOINT checked by the cm-hi range end the same way",
       "class": "independent"
     },
     {
@@ -268,7 +268,7 @@
       "max": 1.1,
       "unit": "V",
       "role": "choice",
-      "note": "booster output-device vds. Stated by the designer: the one booster child stands for both regulating amplifiers, NMOS side and PMOS side, and of their circuits only one stand-in gain device is on this sheet",
+      "note": "booster output-device vds. Stated by the designer: the one booster block stands for both regulating amplifiers, NMOS side and PMOS side, and of their circuits only one stand-in gain device is on this sheet",
       "class": "independent"
     }
   ],
@@ -692,7 +692,7 @@
       "name": "tail_headroom",
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
-      "note": "how far the tail node sits above the tail device's saturation edge — exact here, because the tail node is the variable rather than something inferred from a common mode"
+      "note": "how far the tail node sits above the tail device's saturation voltage — exact here, because the tail node is the variable rather than something inferred from a common mode"
     },
     {
       "name": "cgg_in",
@@ -741,19 +741,19 @@
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
-      "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
+      "note": "paired with cm-not-below; the cm-lo/cm-hi range ends check the held design at the ENDS of the range, and the CM_dc sweep shows the whole landscape"
     }
   ],
   "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there"
+      "note": "the claimed low end, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every physical and spec check must hold there"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high end, checked the same way. The range ends check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],

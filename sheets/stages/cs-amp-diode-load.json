@@ -1,6 +1,6 @@
 {
   "title": "CS amp, diode-connected load",
-  "description": "Common-source stage with a diode-connected transistor as the load. The load's low-impedance $\\approx 1/g_m$ sets a gain that is a ratio of transconductances, $A_v = g_{m,in}/(g_{m,load} + g_{ds,in} + g_{ds,load})$, which is well-controlled across process and temperature - the classic teaching load. The load is a composed child (pick its device table to the opposite polarity). Because it is diode-connected, its drain-source voltage equals its own gate-source voltage, so the bind declares the connection and the table is read along that diagonal - there is no drop to estimate, and no polarity knob to set, since the diagonal follows whichever sign convention the table itself uses. The output DC level sits one load $V_{GS}$ below the supply.",
+  "description": "Common-source stage with a diode-connected transistor as the load. The load's low-impedance $\\approx 1/g_m$ sets a gain that is a ratio of transconductances, $A_v = g_{m,in}/(g_{m,load} + g_{ds,in} + g_{ds,load})$, which is well-controlled across process and temperature - the classic teaching load. The load is a block (pick its device from a table of the opposite polarity). Because it is diode-connected, its drain-source voltage equals its own gate-source voltage, so its givens and its wiring declare the connection and the table is read along that diagonal - there is no drop to estimate, and no polarity knob to set, since the diagonal follows whichever sign convention the table itself uses. The output DC level sits one load $V_{GS}$ below the supply. The input gate is a port: the stage that drives it supplies its signal and its DC level, which is the gate-source voltage the sizing lands on. Nothing is solved.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -128,7 +128,7 @@
       "name": "Rout",
       "expr": "1/(load__gm + gds + load__gds)",
       "unit": "ohm",
-      "note": "the resistance this stage presents at its output: the diode load's own transconductance dominates it — both output conductances add in parallel and move it by under a tenth. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "the resistance this stage presents at its output: the diode load's own transconductance dominates it — both output conductances add in parallel and move it by under a tenth. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
@@ -141,7 +141,7 @@
       "name": "GBW",
       "expr": "gm/(2*pi*Cout)",
       "unit": "Hz",
-      "note": "the gm/ID currency, and a good estimate of the unity-gain frequency only while Av0 is comfortably above 1. A diode load is exactly the regime where it is not: a single-pole stage crosses unity at f_p*sqrt(Av0^2 - 1), so at Av0 near 1.4-1.5 the literal crossing sits 25-30% below this row. Read it as transconductance per load capacitance, not as a measured bandwidth"
+      "note": "the gm/ID currency, and a good estimate of the unity-gain frequency only while Av0 is comfortably above 1. A diode load is exactly the regime where it is not: a single-pole stage crosses unity at f_p*sqrt(Av0^2 - 1), so at Av0 near 1.4-1.5 the literal crossing sits 25-30% below this value. Read it as transconductance per load capacitance, not as a measured bandwidth"
     },
     {
       "name": "vn_in",
@@ -153,13 +153,13 @@
       "name": "cgg_in",
       "expr": "cgg",
       "unit": "F",
-      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [

@@ -1,6 +1,6 @@
 {
   "title": "Differential pair + tail",
-  "description": "The bare differential-pair transconductor sized by half-circuit: one input device, the tail source under it, and the diode-connected reference that biases the tail. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; and each side of the pair carries half of what the tail delivers. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. The engine searches $V_{tail}$ in its range until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
+  "description": "The bare differential-pair transconductor sized by half-circuit: one input device, the tail source under it, and the diode-connected reference that biases the tail. Biased from the TAIL NODE and entered from the COMMON MODE, exactly like the 5T OTA: the pair's source sits at $V_{tail}$ (its body bias), its drain-source voltage is $V_{out} - V_{tail}$, and the tail device's drop IS the tail node — nothing iterated, no estimate to retune. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares that reference's gate and width, so what it delivers is $I_{tail}$ less the mirror's drain-voltage error; and each side of the pair carries half of what the tail delivers. Held fixed and asked about at another process condition, the design therefore moves as the silicon would — one programmed current, with every other device following it through a shared gate or a shared node. A design constraint places the tail node: the engine searches $V_{tail}$ in its range until the produced $CM_{in} = V_{tail} + V_{GS}$ equals the $CM_{dc}$ the application presents; sweep $CM_{dc}$ to trace the common-mode axis. No gate is a port: the two inputs are held at $CM_{dc}$, and the two drains at $V_{out,dc}$, the level the undrawn load sets. The load is left abstract — a spec conductance gds_load_est (its inverse is the load resistance $R_L$) — so this sheet sizes the input stage independently of whatever mirror, resistor, or cascode terminates the drains. The common-mode gain and CMRR are estimate-grade (the tail output conductance sets them); a real CMRR also depends on drain-load and layout mismatch, so trust the sim for sign-off.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -52,7 +52,7 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.96-1.39 V on sky130 tt at the shipped choices). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.96-1.39 V on sky130 tt at the shipped choices). The range end checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -60,7 +60,7 @@
       "value": 1.15,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, high edge — its ENDPOINT checked by the cm-hi edge",
+      "note": "input CM range, high end — its ENDPOINT checked by the cm-hi range end",
       "class": "independent"
     },
     {
@@ -110,7 +110,7 @@
       "max": 18,
       "unit": "1/V",
       "role": "choice",
-      "note": "input-pair inversion: sets gm per current, noise, and the CM-low edge"
+      "note": "input-pair inversion: sets gm per current, noise, and the low end of the common-mode range"
     },
     {
       "name": "gm_id_tail",
@@ -143,7 +143,7 @@
       "name": "tail",
       "doc": {
         "title": "Tail current source",
-        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. Its saturation headroom sets the CM-low edge, and its output conductance sets the common-mode rejection.",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. Its saturation headroom sets the low end of the common-mode range, and its output conductance sets the common-mode rejection.",
         "polarity": "n",
         "params": [
           {
@@ -294,7 +294,7 @@
       "name": "tail_headroom",
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
-      "note": "how far the tail node sits above the tail device's saturation edge — exact, because the tail node is the variable rather than something inferred from a common mode"
+      "note": "how far the tail node sits above the tail device's saturation voltage — exact, because the tail node is the variable rather than something inferred from a common mode"
     },
     {
       "name": "cgg_in",
@@ -359,12 +359,12 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the sheet re-evaluates at CM_dc = CM_lo on the design this run produced, with its own tail-node solve. Replaces the linearized reach estimate"
+      "note": "the claimed low end, checked exactly: the sheet re-evaluates at CM_dc = CM_lo on the design this run produced, with its own tail-node solve. Replaces the linearized reach estimate"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, checked the same way; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high end, checked the same way; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],

@@ -1,6 +1,6 @@
 {
   "title": "Source-degenerated CS amp",
-  "description": "A common-source stage with a source-degeneration resistor $R_s$. The degeneration lowers the effective transconductance to $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$ and raises the device output resistance by the same factor, so into an ideal load the intrinsic gain is unchanged; the payoff is linearity, since the stage transconductance is set by the (linear) resistor rather than the (nonlinear) device $g_m$. The cost is $R_s$'s own $4kT*R_s$ thermal noise, added directly at the input. The device source sits $I_{bias}*R_s$ above ground, so the bind declares $V_{SB} = I_{bias}*R_s$ (body grounded) — and the resistor degenerates the source-body generator $g_{mb}$ along with $g_m$, since both currents flow through it. A table that carries no $g_{mb}$ column leaves the gain rows unresolved rather than quietly dropping the term. Sweep $R_s$ to trade gain and noise against linearity.",
+  "description": "A common-source stage with a source-degeneration resistor $R_s$. The degeneration lowers the effective transconductance to $G_m = g_m/(1 + (g_m + g_{mb})*R_s)$ and raises the device output resistance by the same factor, so into an ideal load the intrinsic gain is unchanged; the payoff is linearity, since the stage transconductance is set by the (linear) resistor rather than the (nonlinear) device $g_m$. The cost is $R_s$'s own $4kT*R_s$ thermal noise, added directly at the input. The device source sits $I_{bias}*R_s$ above ground, so its givens declare $V_{SB} = I_{bias}*R_s$ (body grounded) — and the resistor degenerates the source-body generator $g_{mb}$ along with $g_m$, since both currents flow through it. A table that carries no $g_{mb}$ column leaves the gain equations unresolved rather than quietly dropping the term. The gate is a port, driven by the stage before it; the drain is held at $V_{out}$, which the circuit outside the sheet sets, and $R_{load}$ is the small-signal load at the output, not a pull-up drawn from the supply. Nothing is solved. Sweep $R_s$ to trade gain and noise against linearity.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec" },
@@ -102,7 +102,7 @@
       "name": "Rout",
       "expr": "par(R_load, Rout_dev)",
       "unit": "ohm",
-      "note": "the resistance this stage presents at its output: the load resistor in parallel with the degeneration-boosted device resistance. The load knob is already inside this row and inside the gain, so the loading contract here is the arithmetic rather than a separate rule"
+      "note": "the resistance this stage presents at its output: the load resistor in parallel with the degeneration-boosted device resistance. The load knob is already inside this equation and inside the gain, so the loading contract here is the arithmetic rather than a separate check"
     },
     {
       "name": "Av",
@@ -120,13 +120,13 @@
       "name": "cgg_in",
       "expr": "cgg",
       "unit": "F",
-      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings: the inverting drain would multiply its share, while the degenerated source follows PART of the gate swing — the fraction 1 - 1/loop, about a third at these defaults — and bootstraps that much of $C_{GS}$ away. The two corrections pull opposite ways and neither is computable from this data. No rule reads it"
+      "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance. The table carries the TOTAL gate capacitance with no gate-drain split, so nothing here can weight the two terminals by how much each one swings: the inverting drain would multiply its share, while the degenerated source follows PART of the gate swing — the fraction 1 - 1/loop, about a third at these defaults — and bootstraps that much of $C_{GS}$ away. The two corrections pull opposite ways and neither is computable from this data. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "I_bias",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the one branch these rows model; the degeneration resistor carries the same current. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the one branch these equations model; the degeneration resistor carries the same current. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [

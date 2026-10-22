@@ -1,6 +1,6 @@
 {
   "title": "Inverter-based OTA",
-  "description": "A complementary common-source (inverter) transconductor: an NMOS and a PMOS input device stacked between the rails share the same bias current, and their gates tie together as the input. Because both devices transconduct the input, the composite transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$ — current reuse buys roughly double the $g_m$ for the same current, so the effective $g_m/I_D$ is $(g_m/I_D)_n + (g_m/I_D)_p$. Gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$ and, for the same current, the input-referred thermal density is below a single device's, by $\\sqrt{2}$ where the two transconductances are equal. The two gates are one node and the two sources are the two rails, so the gate-source voltages add up to the supply, $V_{GS,n} + |V_{GS,p}| = V_{DD}$: one inversion level is a choice and the other follows from it. The sheet is drawn that way. The NMOS is sized from the bias current and its $g_m/I_D$, and its gate-source voltage is the input level $V_{in}$; the PMOS carries the same current at the gate-source voltage the supply leaves above $V_{in}$, and its width is whatever that takes. On a process whose two thresholds add up to well under the supply the PMOS is left a large overdrive and sits deep in strong inversion, narrow and with little of the transconductance; on one whose thresholds nearly fill the supply both devices sit in moderate inversion. The cost is supply sensitivity: the bias current and hence $g_m$ depend directly on VDD, so the inverter needs a replica or common-mode bias loop and has poor native PSRR — sim owns the supply rejection. The PMOS device takes a sign param like the mirror-load convention so it binds against either an N-style or a signed-PMOS table. Held fixed and asked about at another process condition, the inverter keeps its supply: each device keeps its width, the PMOS keeps the gate voltage the supply leaves above the input, and the bias current is solved again so the two devices carry one current.",
+  "description": "A complementary common-source (inverter) transconductor: an NMOS and a PMOS input device stacked between the rails share the same bias current, and their gates tie together as the input. Because both devices transconduct the input, the composite transconductance is the sum $g_{m,tot} = g_{m,n} + g_{m,p}$ — current reuse buys roughly double the $g_m$ for the same current, so the effective $g_m/I_D$ is $(g_m/I_D)_n + (g_m/I_D)_p$. Gain is $g_{m,tot}/(g_{ds,n} + g_{ds,p})$ and, for the same current, the input-referred thermal density is below a single device's, by $\\sqrt{2}$ where the two transconductances are equal. The two gates are one node and the two sources are the two rails, so the gate-source voltages add up to the supply, $V_{GS,n} + |V_{GS,p}| = V_{DD}$: one inversion level is a choice and the other follows from it. The sheet is drawn that way. The NMOS is sized from the bias current and its $g_m/I_D$, and its gate-source voltage is the input level $V_{in}$; the PMOS carries the same current at the gate-source voltage the supply leaves above $V_{in}$, and its width is whatever that takes. On a process whose two thresholds add up to well under the supply the PMOS is left a large overdrive and sits deep in strong inversion, narrow and with little of the transconductance; on one whose thresholds nearly fill the supply both devices sit in moderate inversion. The cost is supply sensitivity: the bias current and hence $g_m$ depend directly on VDD, so the inverter needs a replica or common-mode bias loop and has poor native PSRR — sim owns the supply rejection. The PMOS device takes a sign param like the mirror-load convention so it can be sized on either an N-style or a signed-PMOS table. The shared input gate is a port: whatever drives the input has to hold it at the level the NMOS sets, and the output is held at $V_{out,dc}$ by the application's feedback. Held fixed and asked about at another process condition, the inverter keeps its supply: each device keeps its width, the PMOS keeps the gate voltage the supply leaves above the input, and a hold on $I_{bias}$, the balance of the two devices' currents, solves the bias current again so the two devices carry one current.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -181,7 +181,7 @@
       "name": "Rout",
       "expr": "1/(n__gds + p__gds)",
       "unit": "ohm",
-      "note": "the resistance this stage presents at its output — both devices' output conductances in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "the resistance this stage presents at its output — both devices' output conductances in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
@@ -201,19 +201,19 @@
       "name": "vos",
       "expr": "sqrt((pelgrom_vos(avt, abeta, n__W, L_n, n__gm_id)*n__gm)^2 + (pelgrom_vos(avt, abeta, p__W, L_p, p__gm_id)*p__gm)^2)/gm_tot",
       "unit": "V",
-      "note": "estimate: the N and P mismatch offsets, input-referred, each weighted by its device's share of the composite transconductance, as the noise row weights each device's noise. An offset at one device's gate moves the output current by that device's gm, and the input sees gm_tot, so a device with little of the transconductance contributes little of the offset. Adding the two unweighted would overstate it"
+      "note": "estimate: the N and P mismatch offsets, input-referred, each weighted by its device's share of the composite transconductance, as the noise equation weights each device's noise. An offset at one device's gate moves the output current by that device's gm, and the input sees gm_tot, so a device with little of the transconductance contributes little of the offset. Adding the two unweighted would overstate it"
     },
     {
       "name": "cgg_in",
       "expr": "n__cgg + p__cgg",
       "unit": "F",
-      "note": "estimate: the capacitance the input terminal presents. Both gates are driven together, so both gate capacitances load the driver. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it — and here the drain swings against the gate, so that omission is at its worst. No rule reads it"
+      "note": "estimate: the capacitance the input terminal presents. Both gates are driven together, so both gate capacitances load the driver. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it — and here the drain swings against the gate, so that omission is at its worst. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "I_bias",
       "unit": "A",
-      "note": "estimate: quiescent supply current — a single inverter leg as these rows model it; a pseudo-differential realization doubles it. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — a single inverter leg as these equations model it; a pseudo-differential realization doubles it. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [

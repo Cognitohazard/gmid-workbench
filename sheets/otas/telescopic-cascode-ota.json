@@ -1,6 +1,6 @@
 {
   "title": "Telescopic cascode OTA",
-  "description": "A single-ended telescopic cascode, drawn at rest: an input pair, an input (NMOS) cascode, a load (PMOS) cascode and a cascoded current-mirror load stacked between the rails, plus the tail and the bias reference it copies. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — the drain of the diode side's PMOS cascode, where its NMOS cascode's drain meets it — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$. The two sides of the stack therefore do not sit at the same voltages, and every device is drawn on its own side. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error; the pair's two transistors are one width, each carrying its own share of what the tail delivers; each cascode carries the current of the pair transistor under it; the mirror's diode side carries the diode-side current, and its output side shares its gate and width, so what it returns to the output is read from the table at its own drain voltage. The share is solved so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. Cascoding multiplies each side's output resistance by the cascode intrinsic gain, so $A_v = g_{m,pair} * R_{out}$ with $R_{out}$ = par(NMOS side, PMOS side) and each side's $R_{out} \\approx A_{v0,casc} / g_{ds}$ of the device it cascodes, all read on the output side. That is the topology's headline: the highest single-stage gain per unit current, bought with output-swing headroom — the four stacked $V_{dsat}$ plus the tail eat the rail. The stack is parameterized by its NODES, not by per-device drops: the tail node is solved so the produced $CM_{in}$ equals $CM_{dc}$; the cascode gates are bias lines both sides share, each drawn with the branch that sets it. The NMOS cascode gate is the top of a stacked replica bias: a diode on ground whose drop places the node under the cascode, with a device at the cascode's inversion level stacked on it; the PMOS cascode gate is a diode-connected PMOS at a low inversion level, one strong-inversion $|V_{GS}|$ below the supply. Both carry their own programmed currents. All four nodes under the cascodes are solved under those gates: the output side's $V_a$ (pair drain / NMOS-cascode source) and $V_b$ (mirror drain / PMOS-cascode source), and the diode side's two. The knobs that place them are the bias branches' inversion levels, and wherever the design is held the gates move with the devices, as silicon's do. Every device $V_{DS}$ is then a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias. The cascode-pole and settling behaviour is estimate-grade; sim owns sign-off.",
+  "description": "A single-ended telescopic cascode, drawn at rest: an input pair, an input (NMOS) cascode, a load (PMOS) cascode and a cascoded current-mirror load stacked between the rails, plus the tail and the bias reference it copies. The feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirror is the low-voltage kind: its two devices share a gate, and that gate is the diode side's output node — the drain of the diode side's PMOS cascode, where its NMOS cascode's drain meets it — so that node sits one mirror $V_{GS}$ below the supply while the output sits at $V_{out,dc}$. The two sides of the stack therefore do not sit at the same voltages, and every device is drawn on its own side. The currents are stated the way the circuit sets them: only the bias reference is programmed, with $I_{tail}$; the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error; the pair's two transistors are one width, each carrying its own share of what the tail delivers; each cascode carries the current of the pair transistor under it; the mirror's diode side carries the diode-side current, and its output side shares its gate and width, so what it returns to the output is read from the table at its own drain voltage. The share is solved so that the currents at the output node balance, and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. Cascoding multiplies each side's output resistance by the cascode intrinsic gain, so $A_v = g_{m,pair} * R_{out}$ with $R_{out}$ = par(NMOS side, PMOS side) and each side's $R_{out} \\approx A_{v0,casc} / g_{ds}$ of the device it cascodes, all read on the output side. That is the topology's headline: the highest single-stage gain per unit current, bought with output-swing headroom — the four stacked $V_{dsat}$ plus the tail eat the rail. The stack is parameterized by its NODES, not by per-device drops: the tail node is solved by a design constraint so the produced $CM_{in}$ equals $CM_{dc}$; the cascode gates are bias lines both sides share, each drawn with the branch that sets it. The NMOS cascode gate is the top of a stacked replica bias: a diode on ground whose drop places the node under the cascode, with a device at the cascode's inversion level stacked on it; the PMOS cascode gate is a diode-connected PMOS at a low inversion level, one strong-inversion $|V_{GS}|$ below the supply. Both carry their own programmed currents. All four nodes under the cascodes are solved under those gates by design constraints: the output side's $V_a$ (pair drain / NMOS-cascode source) and $V_b$ (mirror drain / PMOS-cascode source), and the diode side's two. The knobs that place them are the bias branches' inversion levels, and wherever the design is held the gates move with the devices, as silicon's do. Every device $V_{DS}$ is then a subtraction between adjacent nodes and every source-above-bulk device carries its true body bias. Every bias gate is drawn, so the only ports are the two input gates, which the application drives. The cascode-pole and settling behaviour is estimate-grade; sim owns sign-off.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -52,7 +52,7 @@
       "value": 0.95,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, low edge — checked exactly by the cm-lo edge at every evaluation (the sweep put the widest closing range at 0.92-1.21 V on a sky130 tt realization with the PMOS devices on the pfet table, at the shipped choices: below it the tail device leaves saturation, above it the gain falls short). The edge checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range the application presents, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.92-1.21 V on a sky130 tt realization with the PMOS devices on the pfet table, at the shipped choices: below it the tail device leaves saturation, above it the gain falls short). The range end checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {
@@ -60,7 +60,7 @@
       "value": 1.12,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "note": "input CM range the application presents, high end — its ENDPOINT checked by the cm-hi range end the same way",
       "class": "independent"
     },
     {
@@ -699,7 +699,7 @@
       "name": "tail_headroom",
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
-      "note": "how far the tail node sits above the tail device's saturation edge — exact, because the tail node is the variable rather than something inferred from a common mode"
+      "note": "how far the tail node sits above the tail device's saturation voltage — exact, because the tail node is the variable rather than something inferred from a common mode"
     },
     {
       "name": "gm_pair",
@@ -810,19 +810,19 @@
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
-      "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
+      "note": "paired with cm-not-below; the cm-lo/cm-hi range ends check the held design at the ENDS of the range, and the CM_dc sweep shows the whole landscape"
     }
   ],
   "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there"
+      "note": "the claimed low end, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every physical and spec check must hold there"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high end, checked the same way. The range ends check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],

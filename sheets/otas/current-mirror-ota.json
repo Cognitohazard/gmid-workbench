@@ -1,6 +1,6 @@
 {
   "title": "Current-mirror OTA",
-  "description": "A current-mirror OTA, also called a symmetrical OTA or a current-amplifier OTA: the input pair drives diode-connected PMOS mirror loads, and each mirror is copied with ratio $K_m$ to an output branch — one side straight to the output, the other down through a bottom NMOS mirror — so the effective output transconductance is $K_m*g_{m,in}$ to first order. This buys bandwidth and slew almost for free — GBW = $K_m*g_{m,in}/(2*\\pi*C_L)$ and SR = $K_m*I_{tail}/C_L$, to the same order — but not DC gain: raising $K_m$ scales both the output transconductance and the output conductance together, so the low-frequency gain is nearly independent of $K_m$. The amplifier is drawn at rest: the feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirrors are stated the way the circuit has them: each output device sits on its diode device's gate at a multiple of that device's width, and its current is read from the table at its own drain voltage. Nothing is trimmed to make a copy exact, so the ratios the equations report are $K_m$ moved by each mirror's drain-voltage error, and the two output devices would not carry the same current if the two sides of the pair did. One current is typed — the tail current, into a diode-connected bias reference — and every other device reads another device's current or takes it through a shared gate: the tail device sits on that reference's gate at that reference's width with the tail node as its drain; the pair's two transistors are one width, and so are the two PMOS diode devices, each side carrying its own share of what the tail delivers. The share is solved so that the currents at the output node balance — the PMOS output device sources exactly what the NMOS one sinks — and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. One node is solved besides the tail node and the share: the NMOS diode's, which sits at that diode's own gate-source voltage at the current the PMOS output device above it delivers there. The catch of the topology shows up in noise: to hit a fixed GBW at larger $K_m$ the input pair shrinks ($g_{m,in}$ falls as $1/K_m$), so its input-referred thermal density grows as $\\sqrt{K_m}$. Two mirror nodes carry poles: the PMOS node every branch passes (a full pole), and the bottom NMOS node only the folded branch passes (a pole-zero doublet). Both estimates are shown; settling is sim-owned.",
+  "description": "A current-mirror OTA, also called a symmetrical OTA or a current-amplifier OTA: the input pair drives diode-connected PMOS mirror loads, and each mirror is copied with ratio $K_m$ to an output branch — one side straight to the output, the other down through a bottom NMOS mirror — so the effective output transconductance is $K_m*g_{m,in}$ to first order. This buys bandwidth and slew almost for free — GBW = $K_m*g_{m,in}/(2*\\pi*C_L)$ and SR = $K_m*I_{tail}/C_L$, to the same order — but not DC gain: raising $K_m$ scales both the output transconductance and the output conductance together, so the low-frequency gain is nearly independent of $K_m$. The amplifier is drawn at rest: the feedback the application closes around it holds the output at $V_{out,dc}$, and the two inputs sit apart by whatever offset that takes. The mirrors are stated the way the circuit has them: each output device sits on its diode device's gate at a multiple of that device's width, and its current is read from the table at its own drain voltage. Nothing is trimmed to make a copy exact, so the ratios the equations report are $K_m$ moved by each mirror's drain-voltage error, and the two output devices would not carry the same current if the two sides of the pair did. One current is typed — the tail current, into a diode-connected bias reference — and every other device reads another device's current or takes it through a shared gate: the tail device sits on that reference's gate at that reference's width with the tail node as its drain; the pair's two transistors are one width, and so are the two PMOS diode devices, each side carrying its own share of what the tail delivers. The share is solved by a design constraint so that the currents at the output node balance — the PMOS output device sources exactly what the NMOS one sinks — and the difference between the two pair transistors' gate-source voltages is reported as the systematic offset. The tail node is solved by a second design constraint, so that the input common mode it produces equals $CM_{dc}$. One node is solved besides the tail node and the share: the NMOS diode's, found by a one-unknown search on its level, which sits at that diode's own gate-source voltage at the current the PMOS output device above it delivers there. Every bias gate is drawn, so the only ports are the two input gates, which the application drives. The catch of the topology shows up in noise: to hit a fixed GBW at larger $K_m$ the input pair shrinks ($g_{m,in}$ falls as $1/K_m$), so its input-referred thermal density grows as $\\sqrt{K_m}$. Two mirror nodes carry poles: the PMOS node every branch passes (a full pole), and the bottom NMOS node only the folded branch passes (a pole-zero doublet). Both estimates are shown; settling is sim-owned.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -61,7 +61,7 @@
       "value": 1.35,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range the application presents, high edge — its ENDPOINT checked by the cm-hi edge the same way",
+      "note": "input CM range the application presents, high end — its ENDPOINT checked by the cm-hi range end the same way",
       "class": "independent"
     },
     {
@@ -632,7 +632,7 @@
       "name": "tail_headroom",
       "expr": "V_tail - tail__vdsat",
       "unit": "V",
-      "note": "how far the tail node sits above the tail device's saturation edge — exact here, because the tail node is the variable rather than something inferred from a common mode"
+      "note": "how far the tail node sits above the tail device's saturation voltage — exact here, because the tail node is the variable rather than something inferred from a common mode"
     },
     {
       "name": "cgg_in",
@@ -689,19 +689,19 @@
       "lhs": "CM_hi",
       "op": ">=",
       "rhs": "CM_in",
-      "note": "paired with cm-not-below; the cm-lo/cm-hi edges check that the design covers the range ENDS, and the CM_dc sweep shows the whole landscape"
+      "note": "paired with cm-not-below; the cm-lo/cm-hi range ends check the held design at the ENDS of the range, and the CM_dc sweep shows the whole landscape"
     }
   ],
   "operatingRange": [
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there"
+      "note": "the claimed low end, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every physical and spec check must hold there"
     },
     {
       "name": "cm-hi",
       "set": { "CM_dc": "CM_hi" },
-      "note": "the claimed high edge, checked the same way. The edges check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
+      "note": "the claimed high end, checked the same way. The range ends check the ENDPOINTS; the CM_dc sweep remains the authority on the full landscape"
     }
   ],
   "provides": ["Rout", "cgg_in", "I_q"],

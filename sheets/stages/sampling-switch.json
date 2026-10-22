@@ -1,6 +1,6 @@
 {
   "title": "Sampling switch",
-  "description": "An NMOS sampling switch sized by its on-resistance. The device is bound width-first at a small drain-source voltage vds_test (deep triode), with W_sw the geometry knob and gm_id_on the inversion knob. In the on state the gate sits at VDD and the source near ground, so the switch runs at $V_{GS}$ = VDD; gm_id_on is retuned until the reported $V_{GS}$ equals that gate drive, checked by the gate-drive-consistent guardrail. From the sized device the sheet reports the on-resistance $R_{on}$ = vds_test/id, the RC sampling bandwidth into the sample capacitor $C_s$, the sampled $kT/C$ noise, and a worst-case charge-injection voltage step. The charge-injection figure is estimate-grade: it assumes half the inversion charge dumps onto $C_s$, which depends on switching speed and source impedance a lookup table cannot capture.",
+  "description": "An NMOS sampling switch sized by its on-resistance. Its givens are its width and its inversion level at a small drain-source voltage vds_test (deep triode), with W_sw the geometry knob and gm_id_on the inversion knob. In the on state the gate sits at VDD and the source near ground, so the switch runs at $V_{GS}$ = VDD; gm_id_on is retuned until the reported $V_{GS}$ equals that gate drive, checked by the gate-drive-consistent advisory check. From the sized device the sheet reports the on-resistance $R_{on}$ = vds_test/id, the RC sampling bandwidth into the sample capacitor $C_s$, the sampled $kT/C$ noise, and a worst-case charge-injection voltage step. The charge-injection figure is estimate-grade: it assumes half the inversion charge dumps onto $C_s$, which depends on switching speed and source impedance a lookup table cannot capture. The sheet declares that it is not a circuit: the switch's terminals are stated in its givens rather than wired, so the sheet has no ports and nothing is solved.",
   "polarity": "n",
   "params": [
     {
@@ -55,7 +55,7 @@
       "max": 8,
       "unit": "1/V",
       "role": "choice",
-      "note": "on-state inversion knob; retune until the reported vgs equals VDD (gate-drive-consistent guardrail)"
+      "note": "on-state inversion knob; retune until the reported vgs equals VDD (the gate-drive-consistent check)"
     },
     {
       "name": "vds_test",
