@@ -308,7 +308,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "id"]
+        "provides": ["gm", "gds", "id"]
       },
       "params": {
         "W_t": "bias__W",

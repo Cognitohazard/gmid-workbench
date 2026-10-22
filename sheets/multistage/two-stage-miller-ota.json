@@ -260,7 +260,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "vgs", "vdsat", "id", "W"]
+        "provides": ["gm", "vgs", "id", "W"]
       },
       "params": { "Ix": "tail__id*(1 - out_share)", "Lx": "L_ld1", "gx": "gm_id_ld1" },
       "nodes": { "d": "mir", "g": "mir", "s": "vdd", "b": "vdd" }
@@ -294,7 +294,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "cgg", "vgs", "vdsat", "id"]
+        "provides": ["gm", "gds", "cgg", "vgs", "id"]
       },
       "params": {
         "Ix": "ld2__id",

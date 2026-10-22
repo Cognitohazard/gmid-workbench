@@ -572,7 +572,7 @@ const NAMED_INTERFACE: Readonly<Record<string, readonly string[]>> = {
   'mirrors-bias/pmos-bias-reference.json': ['V_b', 'W', 'vgs', 'id'],
   'mirrors-bias/pmos-cascode-bias.json': ['V_c', 'W', 'vgs', 'id'],
   'multistage/rail-to-rail-input-stage.json': ['gm_min', 'gm_mid', 'gm_max'],
-  'multistage/stage2-current-source-load.json': ['id', 'gds', 'vdsat'],
+  'multistage/stage2-current-source-load.json': ['id', 'gds'],
 };
 
 describe('sheet library: the published interface', () => {
@@ -989,12 +989,16 @@ describe('exemplar goldens: CS amp, current-source load', () => {
   // Defaults: GBW 10 MHz into 2 pF with a 1.25 over-design factor, gm/ID 12,
   // load gm/ID 8, both L = 0.5 µm, V_out = 0.9 V.
   const gm = 2 * Math.PI * 10e6 * 2e-12 * 1.25;
+  const sizingOf = (name: string) => res.blocks?.find((b) => b.name === name)?.sizing;
 
   it('sizes the input device exactly from the spec', () => {
-    expect(res.sizing?.ok).toBe(true);
-    expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
-    expect(relErr(res.values.id, gm / 12)).toBeLessThan(1e-9);
-    expect(res.sizing?.bias?.vds).toBe(0.9);
+    expect(sizingOf('in')?.ok).toBe(true);
+    expect(relErr(res.values.in__gm, gm)).toBeLessThan(1e-9);
+    expect(relErr(res.values.in__id, gm / 12)).toBeLessThan(1e-9);
+    expect(sizingOf('in')?.bias?.vds).toBe(0.9);
+    // The load is given the current the input device landed on, not a second copy of its formula,
+    // so the branch current is typed once.
+    expect(sizingOf('load')?.id).toBe(res.values.in__id);
     // The supply-current line is that same derived branch current: on a sheet sized from a
     // bandwidth spec, what it costs to run is an OUTPUT of the sizing rather than a knob.
     expect(relErr(res.values.I_q, gm / 12)).toBeLessThan(1e-9);
@@ -1020,7 +1024,7 @@ describe('exemplar goldens: CS amp, current-source load', () => {
     const id = gm / 12;
     expect(relErr(res.values.Rout, stage2Rout(id, 0.5e-6, 0.9))).toBeLessThan(1e-9);
     expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
-    expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
+    expect(relErr(res.values.cgg_in, cggOf(sizingOf('in')?.W ?? NaN, 0.5e-6))).toBeLessThan(1e-9);
   });
 
   it('is feasible at defaults on the demo device', () => {

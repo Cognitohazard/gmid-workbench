@@ -413,7 +413,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "W", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "gds", "vgs", "W", "id", "vnth_m", "cgg"]
       },
       "params": {
         "I_side": "tail__id*out_share",
@@ -457,7 +457,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "vnth_m", "W", "vgs", "id"]
+        "provides": ["gm", "gds", "vnth_m", "W", "vgs", "id"]
       },
       "params": {
         "W_p": "K_b*pbias__W",
@@ -498,7 +498,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat", "vgs", "W"]
+        "provides": ["av0", "gds", "vgs", "W"]
       },
       "params": {
         "I_f": "pcs__id - in__id",
@@ -593,7 +593,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "vgs", "vdsat", "id", "vnth_m", "cgg"]
+        "provides": ["gm", "vgs", "id", "vnth_m", "cgg"]
       },
       "params": {
         "W_i": "in__W",
@@ -676,7 +676,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "W", "vnth_m", "id"]
+        "provides": ["gm", "gds", "W", "vnth_m", "id"]
       },
       "params": {
         "W_m": "nmir_r__W",
@@ -717,7 +717,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["av0", "gds", "vdsat", "vgs", "W"]
+        "provides": ["av0", "gds", "vgs", "W"]
       },
       "params": {
         "I_f": "nmir__id",
@@ -757,7 +757,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["vgs", "vdsat"]
+        "provides": ["vgs"]
       },
       "params": {
         "W_c": "ncasc__W",
@@ -797,7 +797,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["vgs", "vdsat"]
+        "provides": ["vgs"]
       },
       "params": {
         "W_c": "pcasc__W",

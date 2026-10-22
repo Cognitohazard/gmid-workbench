@@ -1,6 +1,6 @@
 {
   "title": "CS amp, current-source load",
-  "description": "Common-source stage with a current-source load: the canonical $g_m/I_D$ first sheet. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor), $g_m/I_D$ is the efficiency knob, and the load device is a block so its output conductance and noise enter the gain and noise budgets honestly. The load's gate is a port, deliberately: the stage is sized from its bandwidth specification, which fixes the branch current, and a mirror bias drawn there would make that current follow the data and turn the specification into a check. The input gate is a port as well: the stage that drives it supplies its signal and its DC level. The output is held at $V_{out}$, the level the application's feedback keeps it at, and nothing is solved. Pick the load block's device from a table of the opposite polarity (set load_sign to -1 for a signed-PMOS table).",
+  "description": "Common-source stage with a current-source load: the canonical $g_m/I_D$ first sheet. $g_m$ is fixed from the bandwidth spec (with an explicit over-design factor) and $g_m/I_D$ is the efficiency knob. Both devices are blocks: the input device is sized first, from the bandwidth spec, and the load reads the current it lands on, so the branch current is typed once and the load's output conductance and noise enter the gain and noise budgets honestly. The load's gate is a port, deliberately: the stage is sized from its bandwidth specification, which fixes the branch current, and a mirror bias drawn there would make that current follow the data and turn the specification into a check. The input gate is a port as well: the stage that drives it supplies its signal and its DC level. The output is held at $V_{out}$, the level the application's feedback keeps it at, and nothing is solved. Pick the load block's device from a table of the opposite polarity (set load_sign to -1 for a signed-PMOS table).",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -98,6 +98,46 @@
   ],
   "blocks": [
     {
+      "name": "in",
+      "doc": {
+        "title": "Common-source input device",
+        "description": "The input device. Its transconductance is set from the bandwidth spec and its inversion level by the efficiency knob, so the branch current follows from the two, and the current-source device in series reads that current. It exposes its transconductance, output conductance, drain current, gate capacitance and channel-noise density.",
+        "polarity": "n",
+        "params": [
+          { "name": "gm_i", "value": 1.5708e-4, "unit": "S", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 0.9, "unit": "V", "role": "spec" }
+        ],
+        "givens": {
+          "L": "L_i",
+          "gm": "gm_i",
+          "gm_id": "gm_id_i",
+          "vds": "vds_i",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling",
+            "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+          }
+        ],
+        "provides": ["gm", "gds", "id", "vnth_m", "cgg"]
+      },
+      "params": {
+        "gm_i": "2*pi*GBW_target*CL*(1 + gbw_margin)",
+        "L_i": "L",
+        "gm_id_i": "gm_id",
+        "vds_i": "V_out"
+      },
+      "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" }
+    },
+    {
       "name": "load",
       "doc": {
         "title": "Current-source load device",
@@ -135,7 +175,7 @@
         "provides": ["gm", "gds", "vdsat", "id", "vnth_m"]
       },
       "params": {
-        "I_load": "2*pi*GBW_target*CL*(1 + gbw_margin)/gm_id",
+        "I_load": "in__id",
         "L_ld": "L_load",
         "gm_id_ld": "gm_id_load",
         "vds_ld": "load_sign*(VDD - V_out)"
@@ -143,56 +183,41 @@
       "nodes": { "d": "out", "g": "vbp", "s": "vdd", "b": "vdd" }
     }
   ],
-  "givens": {
-    "L": "L",
-    "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
-    "gm_id": "gm_id",
-    "vds": "V_out",
-    "region": "saturation"
-  },
   "equations": [
     {
       "name": "Rout",
-      "expr": "1/(gds + load__gds)",
+      "expr": "1/(in__gds + load__gds)",
       "unit": "ohm",
       "note": "the resistance this stage presents at its output — both devices' output conductances in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
-      "expr": "gm*Rout",
+      "expr": "in__gm*Rout",
       "unit": "V/V",
       "note": "both devices' output conductances load the gain"
     },
     { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
-    { "name": "GBW", "expr": "gm/(2*pi*Cout)", "unit": "Hz" },
+    { "name": "GBW", "expr": "in__gm/(2*pi*Cout)", "unit": "Hz" },
     {
       "name": "vn_in",
-      "expr": "sqrt(vnth_m^2 + load__vnth_m^2*(load__gm/gm)^2)",
+      "expr": "sqrt(in__vnth_m^2 + load__vnth_m^2*(load__gm/in__gm)^2)",
       "unit": "V/sqrt(Hz)",
       "note": "the load's own drain noise (vnth_m_load*gm_load) referred to the input by 1/gm_in"
     },
     {
       "name": "cgg_in",
-      "expr": "cgg",
+      "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     },
     {
       "name": "I_q",
-      "expr": "id",
+      "expr": "in__id",
       "unit": "A",
       "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
-    {
-      "id": "feasible-inversion",
-      "kind": "physical",
-      "lhs": "gm_id",
-      "op": "<=",
-      "rhs": "ceiling",
-      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
-    },
     { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
@@ -213,7 +238,6 @@
   ],
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
-  "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" },
   "levels": { "vdd": "VDD", "out": "V_out" },
   "ports": ["in", "vbp"]
 }

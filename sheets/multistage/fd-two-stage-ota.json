@@ -335,7 +335,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gds", "vdsat", "id"]
+        "provides": ["gds", "id"]
       },
       "params": {
         "Ix": "tail__id/2",

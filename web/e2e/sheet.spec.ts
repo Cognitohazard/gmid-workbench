@@ -501,10 +501,12 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   await pickSheet(sp, 'CS amp, current-source load');
   await expect(sp.locator('.shead')).toContainText('CS amp, current-source load');
 
-  // It sizes on the demo device, reports the declared operating point, evaluates its
-  // composed load child, and is feasible at defaults (the core golden pins the same numbers).
-  await expect(sp.locator('.bind')).toContainText('W=');
-  await expect(sp.locator('.shead .sbias')).toContainText('vds');
+  // The input device is a block sized from the bandwidth spec, and the load is a second block
+  // that reads its current; both cards show the sized width and the stated operating point, and
+  // the sheet is feasible at defaults (the core golden pins the same numbers).
+  const input = sp.locator('.suse', { hasText: 'input device' });
+  await expect(input.locator('.susebind')).toContainText('W=');
+  await expect(input.locator('.sbias')).toContainText('vds');
   await expect(sp.locator('.suse', { hasText: 'load' })).toBeVisible();
   await expect(sp.locator('.feasb')).toHaveText('feasible');
 
@@ -518,8 +520,8 @@ test('design sheet: library topologies load from the grouped picker and evaluate
   // Each block owns its operating point: a per-block bias control shows the vds axis, typeset
   // (V_DS). The curated sheet drives vds from a param, so the block links to it read-only rather
   // than borrowing the (now retired) shared dashboard slider.
-  await expect(sp.locator('.shead .sbiasctl .bx sub').first()).toHaveText('DS'); // V_DS
-  await expect(sp.locator('.shead .sbiasctl .bx.ro').first()).toBeVisible();
+  await expect(input.locator('.sbiasctl .bx sub').first()).toHaveText('DS'); // V_DS
+  await expect(input.locator('.sbiasctl .bx.ro').first()).toBeVisible();
 
   // Equations render (not raw source) and the author notes are shown in place, so a
   // designer can read what each equation computes and why without opening the JSON.

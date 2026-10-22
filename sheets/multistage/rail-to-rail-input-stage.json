@@ -116,7 +116,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "vgs", "vth", "vdsat"]
+        "provides": ["gm", "vgs", "vth"]
       },
       "params": { "Ix": "I_n/2", "Lx": "L_n", "gx": "gm_id_n", "vx": "vds_n" }
     },
@@ -149,7 +149,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "vgs", "vth", "vdsat"]
+        "provides": ["gm", "vgs", "vth"]
       },
       "params": { "Ix": "I_p/2", "Lx": "L_p", "gx": "gm_id_p", "vx": "p_sign*vds_p" }
     }

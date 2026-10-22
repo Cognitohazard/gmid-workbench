@@ -32,6 +32,7 @@ import {
   vthDemo,
   vgsAtGmId,
   sourceNodeUnder,
+  block,
   REFS,
 } from './library.fixtures';
 
@@ -123,13 +124,14 @@ describe('tier1 goldens: CS amp, resistive load', () => {
 
 describe('tier1 goldens: CS amp, diode-connected load', () => {
   const res = runSheet(sheet('cs-amp-diode-load.json'), table);
-  // Input gm from the spec; the load carries the same current (I_load = gm/12), so
+  // Input gm from the spec; the load is given the current the input device lands on (gm/12), so
   // the transconductance ratio is exactly the gm/ID ratio.
   const gm = 2 * Math.PI * 10e6 * 2e-12 * 1.25;
 
   it('takes the input gm exactly from the spec', () => {
-    expect(res.sizing?.ok).toBe(true);
-    expect(relErr(res.values.gm, gm)).toBeLessThan(1e-9);
+    expect(block(res, 'in').ok).toBe(true);
+    expect(relErr(res.values.in__gm, gm)).toBeLessThan(1e-9);
+    expect(block(res, 'load').id).toBe(res.values.in__id);
     // The branch current follows from that gm and the inversion choice, and is what the supply
     // pays — the load sits in the same branch and carries no current of its own.
     expect(relErr(res.values.I_q, gm / 12)).toBeLessThan(1e-9);
@@ -137,7 +139,16 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
 
   it('input/load transconductance ratio is the gm/ID ratio (equal currents)', () => {
     // gm_in/gm_load = (12*id)/(8*id) = 12/8 exactly.
-    expect(relErr(res.values.gm / res.values.load__gm, 12 / 8)).toBeLessThan(1e-9);
+    expect(relErr(res.values.in__gm / res.values.load__gm, 12 / 8)).toBeLessThan(1e-9);
+  });
+
+  it('solves the output level one diode drop below the supply, and the input drain sits there', () => {
+    // The one value the sheet solves: the input device is sized first, so its drain voltage cannot
+    // read the load's drop directly; the engine searches the output level at which the two agree.
+    expect(res.solve?.kind).toBe('settled');
+    expect(relErr(res.values.V_out, 1.8 - res.values.load__vgs)).toBeLessThan(1e-9);
+    expect(relErr(res.values.V_out, 1.8 - VGS_GMID8_L05)).toBeLessThan(1e-4);
+    expect(block(res, 'in').bias?.vds).toBe(res.values.V_out);
   });
 
   it('input noise is the density scaled by the load contribution', () => {
@@ -154,7 +165,7 @@ describe('tier1 goldens: CS amp, diode-connected load', () => {
     const rout = 1 / (8 * id + id / (va + 1.8 - VGS_GMID8_L05) + id / (va + VGS_GMID8_L05));
     expect(relErr(res.values.Rout, rout)).toBeLessThan(2e-3);
     expect(relErr(res.values.Av, gm * res.values.Rout)).toBeLessThan(1e-12);
-    expect(relErr(res.values.cgg_in, cggOf(res.values.W, 0.5e-6))).toBeLessThan(1e-9);
+    expect(relErr(res.values.cgg_in, cggOf(block(res, 'in').W, 0.5e-6))).toBeLessThan(1e-9);
   });
 });
 
@@ -585,12 +596,12 @@ describe('tier1: the regions the stage devices declare', () => {
   > = {
     'cs-amp-resistive-load.json': [{ '': ['saturation', (r) => r.values.V_out] }, ['headroom']],
     'cs-amp-diode-load.json': [
-      { '': ['saturation', (r) => r.values.VDD - Math.abs(r.values.load__vgs)] },
+      { in: ['saturation', (r) => r.values.VDD - Math.abs(r.values.load__vgs)] },
       ['input-sat'],
     ],
     'cs-amp-current-source-load.json': [
       {
-        '': ['saturation', (r) => r.values.V_out],
+        in: ['saturation', (r) => r.values.V_out],
         load: ['saturation', (r) => r.values.VDD - r.values.V_out],
       },
       ['input-sat', 'load-sat'],

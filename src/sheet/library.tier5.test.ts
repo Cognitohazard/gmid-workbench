@@ -25,6 +25,9 @@ import {
   BODY_FACTOR,
   vnthM,
   VGS_GMID10_L05,
+  cggOf,
+  vgsAtGmId,
+  vthDemo,
   sheet as libSheet,
 } from './library.fixtures';
 
@@ -67,6 +70,23 @@ describe('tier5 goldens: Track & hold budget', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.W, 5e-6)).toBeLessThan(1e-9);
     expect(relErr(res.values.gm_id, 5)).toBeLessThan(1e-9);
+  });
+
+  it('charge injection is half the channel charge cgg*(vgs - vth) dumped onto C_s', () => {
+    // The overdrive is vgs - vth, read from the sized switch, not V* = 2/(gm/ID): in triode the
+    // two part ways (on sky130 tt at these defaults V* reads about 1.9x the overdrive). cgg is
+    // W*L*Cox exactly; vgs is where the demo model's gm/ID is 5 at 0.18 um (interpolated, so 1e-3).
+    const L = 0.18e-6;
+    const vov = vgsAtGmId(5, L) - vthDemo(L);
+    expect(relErr(res.values.dV_qinj, (cggOf(5e-6, L) * vov) / (2 * 1e-12))).toBeLessThan(1e-3);
+  });
+
+  it('reads the same charge-injection step as the sampling-switch sheet for the same switch', () => {
+    const sw = runSheet(
+      withParams(libSheet('stages/sampling-switch.json'), { W_sw: 5e-6, gm_id_on: 5 }),
+      table,
+    );
+    expect(relErr(sw.values.dv_inj, res.values.dV_qinj)).toBeLessThan(1e-12);
   });
 });
 

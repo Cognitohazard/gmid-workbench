@@ -250,7 +250,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "cgg", "W", "vnth_m", "id"]
+        "provides": ["gm", "gds", "vgs", "cgg", "W", "vnth_m", "id"]
       },
       "params": {
         "I_side": "tail__id*out_share",

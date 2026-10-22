@@ -52,7 +52,7 @@
       "value": 1.0,
       "unit": "V",
       "role": "spec",
-      "note": "input CM range, low end — checked exactly by the cm-lo range end at every evaluation (the sweep put the widest closing range at 0.96-1.39 V on sky130 tt at the shipped choices). The range end checks the ENDPOINT; the interior is the sweep's to show",
+      "note": "input CM range, low end — checked exactly by the cm-lo range end at every evaluation (on sky130 tt at the shipped choices the sweep finds the tail device leaving saturation below 0.96 V and the input device, its drain held at V_out_dc, leaving it above 1.67 V; the gain target stops closing above 1.45 V, or 1.42 V with the design held at CM_dc, so the widest closing range is 0.96-1.45 V). The range end checks the ENDPOINT; the interior is the sweep's to show",
       "class": "independent"
     },
     {

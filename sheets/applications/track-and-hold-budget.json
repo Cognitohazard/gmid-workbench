@@ -106,9 +106,9 @@
     },
     {
       "name": "dV_qinj",
-      "expr": "cgg*vstar/(2*C_s)",
+      "expr": "cgg*(vgs - vth)/(2*C_s)",
       "unit": "V",
-      "note": "charge-injection step: half the channel inversion charge (cgg*Vov, with Vov ~ V*) onto C_s; estimate, sim owns the clock edge"
+      "note": "charge-injection step: half the channel inversion charge cgg*(vgs - vth) onto C_s, the same form as the sampling-switch sheet; estimate, sim owns the clock edge"
     }
   ],
   "checks": [

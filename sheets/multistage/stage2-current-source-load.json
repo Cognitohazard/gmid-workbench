@@ -37,7 +37,7 @@
   "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "region": "saturation" },
   "equations": [],
   "checks": [],
-  "provides": ["id", "gds", "vdsat"],
+  "provides": ["id", "gds"],
   "formatVersion": 2,
   "nodes": { "d": "out", "g": "vb", "s": "gnd", "b": "gnd" },
   "levels": { "out": "vx" },

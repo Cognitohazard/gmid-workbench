@@ -94,7 +94,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "av0", "vdsat", "vgs"]
+        "provides": ["gm", "gds", "av0", "vgs"]
       },
       "params": { "Ix": "I_fb", "Lx": "L_fb", "gx": "gm_id_fb", "vx": "vds_fb" },
       "nodes": { "d": "out", "g": "x", "s": "gnd", "b": "gnd" }
@@ -130,7 +130,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gmb", "gds", "vgs", "vdsat", "cgg", "W"]
+        "provides": ["gm", "gmb", "gds", "vgs", "cgg", "W"]
       },
       "params": {
         "Ix": "I_in",

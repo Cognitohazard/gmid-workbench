@@ -19,7 +19,7 @@
       "value": 100e3,
       "unit": "ohm",
       "role": "spec",
-      "note": "load resistance at the source, counted as a small-signal load only: it is not drawn, so it takes none of the DC bias current. It may be large (a light load approaches Av -> gm/(gm+gds))"
+      "note": "load resistance at the source, a small-signal load only: the gain and output-resistance equations and the loading check read it, but it is not drawn, so it takes none of the DC bias current. It may be large (a light load approaches Av -> gm/(gm+gds))"
     },
     {
       "name": "Av_target",

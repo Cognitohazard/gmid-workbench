@@ -33,13 +33,6 @@
       "class": "independent"
     },
     {
-      "name": "VDD",
-      "value": 1.8,
-      "unit": "V",
-      "role": "spec",
-      "note": "the supply. Nothing on this sheet reads it: the top mirror that would hang from it is not drawn"
-    },
-    {
       "name": "V_dm2",
       "value": 0.9,
       "min": 0.05,
@@ -90,7 +83,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "vgs", "W", "vdsat", "id"]
+        "provides": ["gm", "vgs", "W", "id"]
       },
       "params": {
         "I1": "I_bias",

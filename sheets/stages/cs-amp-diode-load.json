@@ -1,6 +1,6 @@
 {
   "title": "CS amp, diode-connected load",
-  "description": "Common-source stage with a diode-connected transistor as the load. The load's low-impedance $\\approx 1/g_m$ sets a gain that is a ratio of transconductances, $A_v = g_{m,in}/(g_{m,load} + g_{ds,in} + g_{ds,load})$, which is well-controlled across process and temperature - the classic teaching load. The load is a block (pick its device from a table of the opposite polarity). Because it is diode-connected, its drain-source voltage equals its own gate-source voltage, so its givens and its wiring declare the connection and the table is read along that diagonal - there is no drop to estimate, and no polarity knob to set, since the diagonal follows whichever sign convention the table itself uses. The output DC level sits one load $V_{GS}$ below the supply. The input gate is a port: the stage that drives it supplies its signal and its DC level, which is the gate-source voltage the sizing lands on. Nothing is solved.",
+  "description": "Common-source stage with a diode-connected transistor as the load. The load's low-impedance $\\approx 1/g_m$ sets a gain that is a ratio of transconductances, $A_v = g_{m,in}/(g_{m,load} + g_{ds,in} + g_{ds,load})$, which is well-controlled across process and temperature - the classic teaching load. Both devices are blocks (pick the load's device from a table of the opposite polarity): the input device is sized first, from the bandwidth spec, and the load reads the current it lands on, so the branch current is typed once. Because the load is diode-connected, its drain-source voltage equals its own gate-source voltage, so its givens and its wiring declare the connection and the table is read along that diagonal - there is no drop to estimate, and no polarity knob to set, since the diagonal follows whichever sign convention the table itself uses. The output DC level sits one load $V_{GS}$ below the supply, and it is the one value the sheet solves: the input device's drain sits there, and the load's drop depends on the current the input device sets, so the engine searches for the level at which the two agree. The input gate is a port: the stage that drives it supplies its signal and its DC level, which is the gate-source voltage the sizing lands on.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -75,9 +75,59 @@
       "unit": "1/V",
       "role": "choice",
       "note": "load inversion: lower gm/ID gives a higher gain (smaller load gm) but costs the output more headroom and adds noise"
+    },
+    {
+      "name": "V_out",
+      "value": 1.13,
+      "min": 0,
+      "max": 1.8,
+      "unit": "V",
+      "role": "choice",
+      "solveFor": "VDD - abs(load__vgs)",
+      "note": "output DC level, one diode drop below the supply, and the one value this sheet solves. Solved, not set: the input device's drain-source voltage is this level, the diode load carries the current that device sets, and the load's own gate-source voltage at that current puts the output one drop below the supply. The engine searches for the level at which the two agree; the stored value is never read. The search range is the circuit's: the output lies between its two neighbours, ground and the 1.8 V supply, and where the supply moves the wiring reads the range from the wires themselves (the load's source is on vdd)"
     }
   ],
   "blocks": [
+    {
+      "name": "in",
+      "doc": {
+        "title": "Common-source input device",
+        "description": "The input device. Its transconductance is set from the bandwidth spec and its inversion level by the efficiency knob, so the branch current follows from the two, and the diode-connected device in series reads that current. Its drain is the output, one gate-source drop of that device below the supply. It exposes its transconductance, output conductance, drain current, gate capacitance and channel-noise density.",
+        "polarity": "n",
+        "params": [
+          { "name": "gm_i", "value": 1.5708e-4, "unit": "S", "role": "spec" },
+          { "name": "L_i", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gm_id_i", "value": 12, "unit": "1/V", "role": "choice" },
+          { "name": "vds_i", "value": 1.13, "unit": "V", "role": "spec" }
+        ],
+        "givens": {
+          "L": "L_i",
+          "gm": "gm_i",
+          "gm_id": "gm_id_i",
+          "vds": "vds_i",
+          "region": "saturation"
+        },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gm_id_i",
+            "op": "<=",
+            "rhs": "ceiling",
+            "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
+          }
+        ],
+        "provides": ["gm", "gds", "id", "vnth_m", "cgg"]
+      },
+      "params": {
+        "gm_i": "2*pi*GBW_target*CL*(1 + gbw_margin)",
+        "L_i": "L",
+        "gm_id_i": "gm_id",
+        "vds_i": "V_out"
+      },
+      "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" }
+    },
     {
       "name": "load",
       "doc": {
@@ -100,77 +150,56 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "vgs", "vdsat", "id", "vnth_m"]
+        "provides": ["gm", "gds", "vgs", "id", "vnth_m"]
       },
       "params": {
-        "I_load": "2*pi*GBW_target*CL*(1 + gbw_margin)/gm_id",
+        "I_load": "in__id",
         "L_ld": "L_load",
         "gm_id_ld": "gm_id_load"
       },
       "nodes": { "d": "out", "g": "out", "s": "vdd", "b": "vdd" }
     }
   ],
-  "givens": {
-    "L": "L",
-    "gm": "2*pi*GBW_target*CL*(1 + gbw_margin)",
-    "gm_id": "gm_id",
-    "vds": "VDD - abs(load__vgs)",
-    "region": "saturation"
-  },
   "equations": [
     {
-      "name": "V_out",
-      "expr": "VDD - abs(load__vgs)",
-      "unit": "V",
-      "note": "output DC level: one diode drop below the supply"
-    },
-    {
       "name": "Rout",
-      "expr": "1/(load__gm + gds + load__gds)",
+      "expr": "1/(load__gm + in__gds + load__gds)",
       "unit": "ohm",
       "note": "the resistance this stage presents at its output: the diode load's own transconductance dominates it — both output conductances add in parallel and move it by under a tenth. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
-      "expr": "gm*Rout",
+      "expr": "in__gm*Rout",
       "unit": "V/V",
       "note": "input gm into the diode load conductance (~load gm) plus both output conductances"
     },
     { "name": "Cout", "expr": "CL + cdd_est", "unit": "F" },
     {
       "name": "GBW",
-      "expr": "gm/(2*pi*Cout)",
+      "expr": "in__gm/(2*pi*Cout)",
       "unit": "Hz",
       "note": "the gm/ID currency, and a good estimate of the unity-gain frequency only while Av0 is comfortably above 1. A diode load is exactly the regime where it is not: a single-pole stage crosses unity at f_p*sqrt(Av0^2 - 1), so at Av0 near 1.4-1.5 the literal crossing sits 25-30% below this value. Read it as transconductance per load capacitance, not as a measured bandwidth"
     },
     {
       "name": "vn_in",
-      "expr": "sqrt(vnth_m^2 + load__vnth_m^2*(load__gm/gm)^2)",
+      "expr": "sqrt(in__vnth_m^2 + load__vnth_m^2*(load__gm/in__gm)^2)",
       "unit": "V/sqrt(Hz)",
       "note": "the diode load's own drain noise (vnth_m_load*gm_load) referred to the input by 1/gm_in"
     },
     {
       "name": "cgg_in",
-      "expr": "cgg",
+      "expr": "in__cgg",
       "unit": "F",
       "note": "estimate: the capacitance the input terminal presents — this stage's gate capacitance and nothing else. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     },
     {
       "name": "I_q",
-      "expr": "id",
+      "expr": "in__id",
       "unit": "A",
       "note": "estimate: quiescent supply current — the branch current, which here is an OUTPUT of the sizing rather than a setting: the bandwidth spec fixes gm, and the chosen inversion divides it down to a current. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
-    {
-      "id": "feasible-inversion",
-      "kind": "physical",
-      "lhs": "gm_id",
-      "op": "<=",
-      "rhs": "ceiling",
-      "note": "gm/ID cannot exceed the weak-inversion ceiling of the data"
-    },
     { "id": "gain-spec", "kind": "spec", "lhs": "Av", "op": ">=", "rhs": "Av_target" },
     {
       "id": "noise-spec",
@@ -191,7 +220,6 @@
   ],
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
-  "nodes": { "d": "out", "g": "in", "s": "gnd", "b": "gnd" },
   "levels": { "vdd": "VDD" },
   "ports": ["in"]
 }

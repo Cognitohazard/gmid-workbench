@@ -284,7 +284,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "gds", "vdsat", "id"]
+        "provides": ["gm", "gds", "id"]
       },
       "params": {
         "W_t": "bias__W",
@@ -322,7 +322,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "vgs", "vdsat", "id", "W"]
+        "provides": ["gm", "vgs", "id", "W"]
       },
       "params": { "Ix": "tail__id*(1 - out_share)", "Lx": "L_ld1", "gx": "gm_id_ld1" },
       "nodes": { "d": "mir", "g": "mir", "s": "vdd", "b": "vdd" }
@@ -356,7 +356,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "gds", "cgg", "vgs", "vdsat", "id"]
+        "provides": ["gm", "gds", "cgg", "vgs", "id"]
       },
       "params": {
         "Ix": "ld2__id",
@@ -599,7 +599,7 @@
             "rhs": "ceiling"
           }
         ],
-        "provides": ["gm", "vdsat", "vgs", "W"]
+        "provides": ["gm", "vgs", "W"]
       },
       "params": {
         "Ix": "in__id",
@@ -651,7 +651,7 @@
         },
         "equations": [],
         "checks": [],
-        "provides": ["gm", "vdsat", "vgs"]
+        "provides": ["gm", "vgs"]
       },
       "params": {
         "Wx": "casc__W",
