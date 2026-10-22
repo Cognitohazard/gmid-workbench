@@ -319,7 +319,17 @@ importer's QA pass warns (it never edits data) when:
   that same point (rule `gamma-vs-sth`): the column wins, so the noise figures follow it rather
   than `sth`;
 - `gmb` is negative anywhere (rule `gmb-sign`): it adds to `gm` in the thermal floor, which a
-  negative one lowers.
+  negative one lowers;
+- a standard column is exactly 0 at every point that carries drain current (rule
+  `zero-column`): an exporter writes 0 for a quantity its model does not provide, and the warning
+  names the column and the quantities that read it — a `cgg` of 0 makes `ft` infinite everywhere.
+  Zeros where no current flows are data (flicker noise is 0 at `id` = 0) and are not counted; the
+  noise PSDs and a stored `gamma` are judged by their own checks.
+
+A check that reads a column the file does not carry is not run, and says so as information
+(rule `not-checked`, naming the column): without `gds`, whether the device reaches saturation is
+not checked, and the same where the sweep it is read along holds a single value. A skipped check is
+never reported as a passed one.
 
 ## Example
 

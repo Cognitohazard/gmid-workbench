@@ -363,6 +363,47 @@ describe('validate: saturation', () => {
     const gdsCol = [3e-6, 2e-6, 1e-6]; // falls along vds
     const t = makeTable([axis('l', l), axis('vds', vds), axis('vgs', vgs)], { gds: gdsCol });
     expect(validate(t).some((x) => x.rule === 'no-saturation')).toBe(false);
+    expect(validate(t).some((x) => x.rule === 'not-checked')).toBe(false);
+  });
+
+  it('records the check as not run, naming the column, where the table has no gds', () => {
+    const t = makeTable([axis('l', [1e-7]), axis('vds', [0.1, 0.2, 0.3]), axis('vgs', [0.5])], {
+      gm: [1, 1, 1],
+      id: [1, 1, 1],
+    });
+    const skipped = validate(t).filter((x) => x.rule === 'not-checked');
+    expect(skipped).toEqual([
+      {
+        rule: 'not-checked',
+        severity: 'info',
+        message:
+          'not checked: whether the device reaches saturation (gds falling along its sweep) — ' +
+          'the table has no gds column',
+        location: 'gds',
+      },
+    ]);
+    // A skipped check is not a passed one, and not a failed one either.
+    expect(validate(t).some((x) => x.rule === 'no-saturation')).toBe(false);
+  });
+
+  it('records the check as not run along a sweep of one value', () => {
+    const t = makeTable([axis('l', [1e-7]), axis('vds', [0.6]), axis('vgs', [0.4, 0.5, 0.6])], {
+      gds: [1e-6, 2e-6, 3e-6],
+      gm: [1, 2, 3],
+      id: [1, 2, 3],
+    });
+    const skipped = validate(t).filter((x) => x.rule === 'not-checked');
+    expect(skipped.map((x) => [x.location, x.message])).toEqual([
+      [
+        'vds',
+        'not checked: whether the device reaches saturation (gds falling along its sweep) — ' +
+          'the table holds vds at a single value',
+      ],
+    ]);
+  });
+
+  it('says nothing about a check the demo table can run', () => {
+    expect(validate(generateDemoDevice()).some((x) => x.rule === 'not-checked')).toBe(false);
   });
 });
 
@@ -853,5 +894,44 @@ describe('canonicalizeTable', () => {
     canonicalizeTable(t);
     expect(Array.from(t.grid.quantities.get('id')!)).toEqual([-3e-3, -2e-3]);
     expect(Array.from(t.grid.axes[0].values)).toEqual([-0.4, -0.2]);
+  });
+});
+
+// --- a column that is zero wherever the device conducts ---------------------
+
+describe('validate: zero-column', () => {
+  // One length, vds 0 and 0.5 V, two gate voltages: no current flows at vds = 0, exactly.
+  const axes = [axis('l', [1e-7]), axis('vds', [0, 0.5]), axis('vgs', [0.4, 0.8])];
+  const id = [0, 0, 1e-6, 5e-6];
+  const base = { id, gm: [0, 0, 2e-5, 5e-5], gds: [0, 0, 1e-7, 2e-7], cgd: [0, 0, 1e-16, 2e-16] };
+  const table = (cols: Record<string, number[]>) => makeTable(axes, { ...base, ...cols });
+  const zeroFindings = (t: DeviceTable) => validate(t).filter((w) => w.rule === 'zero-column');
+  const zeros = [0, 0, 0, 0];
+
+  it('warns on a capacitance that is 0 everywhere, naming what reads it and what goes infinite', () => {
+    const found = zeroFindings(table({ cgg: zeros }));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ severity: 'warning', location: 'cgg' });
+    expect(found[0].message).toMatch(/^cgg is 0 at every point that carries drain current/);
+    expect(found[0].message).toContain('ft, cgd_cgg, ft_eff and av0_ft are infinite on it');
+    // A column read but not divided by is named as read, not as infinite.
+    const cgd = zeroFindings(table({ cgg: [1e-15, 1e-15, 1e-15, 1e-15], cgd: zeros }))[0].message;
+    expect(cgd).toContain('gm_cgd is infinite on it, and cgd_cgg reads it');
+  });
+
+  it('does not fire on zeros only where no current flows, nor on the demo table', () => {
+    expect(zeroFindings(generateDemoDevice())).toEqual([]);
+    // cgd, gm and gds above are 0 exactly where id is 0 and positive elsewhere, the way flicker
+    // noise is written: data, not a missing quantity.
+    expect(zeroFindings(table({}))).toEqual([]);
+    // One conducting point that is not zero is enough.
+    expect(zeroFindings(table({ cgg: [0, 0, 0, 1e-15] }))).toEqual([]);
+    // A table that conducts nowhere is left to the other checks.
+    expect(zeroFindings(table({ id: zeros, cgg: zeros }))).toEqual([]);
+  });
+
+  it('leaves the noise PSDs, gamma and pass-through columns to their own checks', () => {
+    for (const key of ['sth', 'sfl', 'gamma', 'my_flag'])
+      expect(zeroFindings(table({ [key]: zeros }))).toEqual([]);
   });
 });

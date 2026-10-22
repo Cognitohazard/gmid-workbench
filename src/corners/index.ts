@@ -57,6 +57,7 @@ import {
   clampMargin,
   dcInputs,
   evaluateSheet,
+  inheritedPolarityWarnings,
   limitingCheck,
   namedBindings,
   resolvedSheet,
@@ -622,7 +623,7 @@ function preflightBindings(
     // A child bound to the primary's own device was already preflighted above; a second
     // issue for the same missing condition would list one problem twice.
     if (device.deviceUid === primaryDevice.deviceUid) continue;
-    memberFor(device, key, `block "${b.path}"`, issues);
+    memberFor(device, key, `block "${b.path}"`, issues, primaryDevice);
   }
   return { primary, issues };
 }
@@ -771,7 +772,7 @@ function runSet(
       state: 'not-run',
       issue: {
         kind: 'no-design',
-        message: `the design was not evaluated at ${conditionLabel(at)}, where it is sized, so there is nothing to hold here`,
+        message: `the design was not evaluated at ${conditionLabelIn(primaryDevice, at)}, where it is sized, so there is nothing to hold here`,
       },
     };
   else if (prepared.assumptions.length)
@@ -911,14 +912,18 @@ function runPrepared(
   // `runSheet`'s two halves, with its validation pass already in hand: the doc is resolved and
   // validated above, so this is exactly what it would return — an error-free validation neither
   // blocks the verdict nor changes a warning.
-  const evaluated = evaluateSheet(
-    held?.doc ?? prepared.doc,
-    primary,
-    projectingResolver(deviceOf, key),
-    { held: held !== undefined, assumed: prepared.assumptions, settings },
-  );
+  const doc = held?.doc ?? prepared.doc;
+  const resolve = projectingResolver(deviceOf, key);
+  const evaluated = evaluateSheet(doc, primary, resolve, {
+    held: held !== undefined,
+    assumed: prepared.assumptions,
+    settings,
+  });
+  // As runSheet does: a block sized on a table of the other polarity is said once for this run,
+  // with the tables this condition binds (see inheritedPolarityWarnings).
+  const bound = inheritedPolarityWarnings(doc, primary, resolve);
   const result: SheetResult = {
-    ...withValidation(prepared.warnings, evaluated),
+    ...withValidation([...prepared.warnings, ...bound], evaluated),
     assumptions: [...prepared.assumptions],
   };
   const completed = stands(result);
@@ -964,10 +969,15 @@ function runPrepared(
  *  statement of the three projection refusals, shared by the run transition and by any caller
  *  that must ask the question before evaluating (the picker preflights with it, so it never
  *  ranks a candidate the sheet panel would then refuse). `undefined` means the device has a
- *  unique, compatible table at the condition. */
+ *  unique, compatible table at the condition.
+ *
+ *  Conditions are named as conditionLabelIn names them, so a field a file did not declare stays
+ *  marked: by the device's own table there, or — where it has none — by the table of `asked`,
+ *  the device whose condition the run is (the primary a child is projected for). */
 export function canProjectAt(
   device: CharacterizedDevice,
   key: ConditionKey,
+  asked: CharacterizedDevice = device,
 ): ConditionIssue | undefined {
   if (new Set(device.conditions.map(axisSignature)).size > 1) {
     return {
@@ -980,28 +990,30 @@ export function canProjectAt(
     return {
       kind: 'ambiguous-condition',
       device: device.device,
-      message: `several loaded tables claim "${device.device}" at ${conditionLabel(key)} — remove one or replace it explicitly`,
+      message: `several loaded tables claim "${device.device}" at ${conditionLabelIn(device, key)} — remove one or replace it explicitly`,
     };
   }
   if (!tableAt(device, key)) {
     return {
       kind: 'absent-condition',
       device: device.device,
-      message: `"${device.device}" is not characterized at ${conditionLabel(key)}`,
+      message: `"${device.device}" is not characterized at ${conditionLabelIn(asked, key)}`,
     };
   }
   return undefined;
 }
 
 /** The device's table at `key`, or `undefined` with the refusal appended to `issues`, said in
- *  terms of `where` the sheet asked for it. */
+ *  terms of `where` the sheet asked for it, and naming the condition as `asked` does where the
+ *  device has no table there (see canProjectAt). */
 function memberFor(
   device: CharacterizedDevice,
   key: ConditionKey,
   where: string,
   issues: ConditionIssue[],
+  asked: CharacterizedDevice = device,
 ): DeviceTable | undefined {
-  const issue = canProjectAt(device, key);
+  const issue = canProjectAt(device, key, asked);
   if (issue) {
     issues.push({ ...issue, message: `${where}: ${issue.message}` });
     return undefined;

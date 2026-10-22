@@ -131,8 +131,12 @@
   // One factor each way: UI = SI × K (display), SI = UI ÷ K (binding) — reciprocal.
   const AVT_UI_PER_SI = 1e9; // V·m → mV·µm
   const ABETA_UI_PER_SI = 1e8; // ·m → %·µm (1% = 0.01)
-  let inAvth = $state('5'); // mV·µm — generic placeholder, matches the library sheets' default
-  let inAbeta = $state('1'); // %·µm
+  // Generic placeholders, used where the device declares no coefficient; the library sheets
+  // default to the same values.
+  const AVTH_GENERIC = '5'; // mV·µm
+  const ABETA_GENERIC = '1'; // %·µm
+  let inAvth = $state(AVTH_GENERIC);
+  let inAbeta = $state(ABETA_GENERIC);
   // Noise band (Hz, engineering notation). The 1/f corner is the table's own where it has one
   // (see fco below); a value typed into its field replaces that until the device changes.
   let fcoTyped = $state<string | null>(null);
@@ -150,13 +154,51 @@
   // (meta.AVT [V·m], meta.ABETA [·m]) instead of silently using generic defaults; fall back to
   // typical values (shown as such) otherwise. Re-seeds on swap, which also drops a typed 1/f
   // corner: it was typed for the device it replaced.
-  const matchFromMeta = $derived(device.meta.AVT !== undefined || device.meta.ABETA !== undefined);
   const toUi = (si: number, k: number) => String(+(si * k).toPrecision(6));
+  const avthSeed = $derived(
+    device.meta.AVT !== undefined ? toUi(device.meta.AVT, AVT_UI_PER_SI) : AVTH_GENERIC,
+  );
+  const abetaSeed = $derived(
+    device.meta.ABETA !== undefined ? toUi(device.meta.ABETA, ABETA_UI_PER_SI) : ABETA_GENERIC,
+  );
   $effect(() => {
-    const m = device.meta;
-    inAvth = m.AVT !== undefined ? toUi(m.AVT, AVT_UI_PER_SI) : '5';
-    inAbeta = m.ABETA !== undefined ? toUi(m.ABETA, ABETA_UI_PER_SI) : '1';
+    inAvth = avthSeed;
+    inAbeta = abetaSeed;
     fcoTyped = null;
+  });
+
+  // Where each coefficient in its field comes from, said per coefficient: a device may declare one
+  // and not the other, and a figure resting on a generic placeholder is not this device's.
+  type CoefFrom = 'device' | 'entered' | 'generic';
+  const coefFrom = (field: string, seed: string, declared: boolean): CoefFrom =>
+    field.trim() !== seed ? 'entered' : declared ? 'device' : 'generic';
+  const avthFrom = $derived(coefFrom(inAvth, avthSeed, device.meta.AVT !== undefined));
+  const abetaFrom = $derived(coefFrom(inAbeta, abetaSeed, device.meta.ABETA !== undefined));
+  const COEF_WORDS: Record<CoefFrom, string> = {
+    device: 'from device',
+    entered: 'entered',
+    generic: 'generic placeholder',
+  };
+  /** The coefficients among `reads` that are the generic placeholder: σ(Vth) reads A_Vth alone,
+   *  σ(Vos) and σ(I)/I read both. */
+  const genericIn = (reads: ('avth' | 'abeta')[]): ('avth' | 'abeta')[] =>
+    reads.filter((c) => (c === 'avth' ? avthFrom : abetaFrom) === 'generic');
+  /** What the matching budget rests on when a coefficient is neither the device's nor typed. */
+  const matchNote = $derived.by((): string | undefined => {
+    const generic = genericIn(['avth', 'abeta']);
+    if (!generic.length) return undefined;
+    const one = generic.length === 1;
+    const names = generic.map((c) => (c === 'avth' ? 'A_Vth' : 'A_β')).join(' and ');
+    const values = generic
+      .map((c) => (c === 'avth' ? `${AVTH_GENERIC} mV·µm` : `${ABETA_GENERIC} %·µm`))
+      .join(', ');
+    const headers = generic.map((c) => (c === 'avth' ? '# AVT:' : '# ABETA:')).join(' or ');
+    const reads = avthFrom === 'generic' ? 'every σ below rests' : 'σ(V_os) and σ(I)/I rest';
+    return (
+      `${names} ${one ? 'is a generic placeholder' : 'are generic placeholders'} (${values}): ` +
+      `the device declares no ${headers} header, so ${reads} on ${one ? 'a typical value' : 'typical values'}, ` +
+      `not this device's — type the PDK's ${one ? 'coefficient' : 'coefficients'} to replace ${one ? 'it' : 'them'}`
+    );
   });
 
   // The 1/f corner the band integral reads, and where it came from. The table's own comes first:
@@ -322,6 +364,13 @@
   // One-click handoff of the sized numbers (engineering notation, one name per line —
   // pastes cleanly into a notebook, a spreadsheet, or a design review chat).
   let copied = $state(false);
+  /** A copied σ line, with the placeholders it rests on named. */
+  const sigmaText = (v: string, reads: ('avth' | 'abeta')[]): string => {
+    const generic = genericIn(reads).map((c) => (c === 'avth' ? 'A_Vth' : 'A_beta'));
+    return generic.length
+      ? `${v} (${generic.join(' and ')} generic placeholder${generic.length > 1 ? 's' : ''}, not from the device)`
+      : v;
+  };
   function copyReport(): void {
     const r = sizing.result;
     if (!r) return;
@@ -355,8 +404,10 @@
       ...(noise?.rms != null
         ? [line('vn_rms', `${formatEng(noise.rms)}V (f_co ${inFco}Hz, ${fcoSource})`)]
         : []),
-      ...(mism ? [line('sigma_Vth', `${formatEng(mism.sigmaVth)}V`)] : []),
-      ...(mism ? [line('sigma_Vos', `${formatEng(mism.sigmaVos)}V`)] : []),
+      ...(mism ? [line('sigma_Vth', sigmaText(`${formatEng(mism.sigmaVth)}V`, ['avth']))] : []),
+      ...(mism
+        ? [line('sigma_Vos', sigmaText(`${formatEng(mism.sigmaVos)}V`, ['avth', 'abeta']))]
+        : []),
     ];
     copyText(rows.join('\n'), (on) => (copied = on));
   }
@@ -494,7 +545,11 @@
   {/if}
 
   <h3>matching <Help text={CONTROL_HELP.matching} /></h3>
-  <p class="match-note">A in mV·µm / %·µm{matchFromMeta ? ' · from device' : ''}</p>
+  <p class="match-note" data-match-from>
+    A in mV·µm / %·µm · A<sub>Vth</sub>
+    {COEF_WORDS[avthFrom]} · A<sub>β</sub>
+    {COEF_WORDS[abetaFrom]}
+  </p>
   <label for="sz-avth"
     ><span>A<sub>Vth</sub> <Help text={CONTROL_HELP.avth} /></span>
     <input id="sz-avth" bind:value={inAvth} placeholder="mV·µm" spellcheck="false" /></label
@@ -512,6 +567,9 @@
       <dt>σ(I)/I</dt>
       <dd>{(mism.sigmaIrel * 100).toFixed(3)}%</dd>
     </dl>
+    {#if matchNote}
+      <ul class="warns" data-match-note><li>{matchNote}</li></ul>
+    {/if}
   {/if}
 </aside>
 

@@ -264,6 +264,13 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   // demo table stores a gamma column of its own.
   await expect(sizer).toContainText('matching');
   await expect(sizer.locator('.budget')).toContainText('σ(Vos) pair');
+  // The demo declares neither Pelgrom coefficient: each is labelled a placeholder on its own, and
+  // the budget says what rests on them.
+  await expect(sizer.locator('[data-match-from]')).toContainText('Vth generic placeholder');
+  await expect(sizer.locator('[data-match-from]')).toContainText('β generic placeholder');
+  await expect(sizer.locator('[data-match-note]')).toContainText(
+    'A_Vth and A_β are generic placeholders',
+  );
   await expect(sizer.locator('.noise')).toContainText('V/√Hz'); // thermal noise
   await expect(sizer.locator('.noise small').first()).toHaveText('γ from the table');
   // Total integrated input-referred noise (thermal + 1/f over the band); raising the
@@ -278,6 +285,13 @@ test('size: bind any two of {gm, gm/ID, ID} → width, vgs, feasibility', async 
   const before = await sigVth.textContent();
   await sizer.getByPlaceholder('mV·µm').fill('8'); // 2× A_Vth
   await expect(sigVth).not.toHaveText(before ?? '');
+  // A typed A_Vth is labelled as entered; A_β alone is still a placeholder, and only the figures
+  // that read it are said to rest on it.
+  await expect(sizer.locator('[data-match-from]')).toContainText('Vth entered');
+  await expect(sizer.locator('[data-match-note]')).toContainText(
+    'A_β is a generic placeholder (1 %·µm)',
+  );
+  await expect(sizer.locator('[data-match-note]')).toContainText('σ(V_os) and σ(I)/I rest');
   // Noise is independent of the matching coeffs: a garbage A_Vth hides the matching
   // budget but the noise line stays visible.
   await sizer.getByPlaceholder('mV·µm').fill('oops');
@@ -528,6 +542,21 @@ test('overlay: NMOS vs signed-PMOS compares on shared gm/ID axes (bias mirrored,
   await expect(p0.locator('canvas')).toBeVisible();
 
   expect(errors).toEqual([]);
+});
+
+test('overlay: a table read away from the pinned bias says where', async ({ page }) => {
+  await page.goto('/');
+  // The primary sweeps no body bias, so the bench has no vsb slider; the overlay does sweep it.
+  await loadDemoNoVsb(page);
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/demo-half.mostab.csv');
+  await expect(page.locator('.devices .dev')).toHaveCount(2);
+  await page.locator('.devices .dev').first().locator('.dname').click();
+  await page.locator('.devices .dev').nth(1).locator('input[type=checkbox]').check();
+  const p0 = page.locator('.grid .panel').first();
+  await expect(p0.locator('.pfoot')).toContainText('nmos_half');
+  await expect(
+    p0.locator('.pwarn', { hasText: 'nmos_half: vsb is not pinned on this chart' }),
+  ).toBeVisible();
 });
 
 test('dashboard: editing, tables, tabs, degeneracy, persistence', async ({ page }) => {
@@ -827,4 +856,39 @@ test('persistence: loaded devices survive a reload and can be forgotten', async 
   await page.reload();
   await expect(page.locator('.welcome')).toBeVisible();
   await expect(page.locator('.devices')).toHaveCount(0);
+});
+
+test('dashboard: a family or sweep the active device lacks is kept, drawn without it, and said', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  const p0 = page.locator('.grid .panel').first();
+  await expect(p0.locator('select.fam')).toHaveValue('l');
+  // An edit makes the canonical panel the user's own, so a device swap keeps it.
+  await p0.locator('button[title="switch chart / table"]').click();
+  await p0.locator('button[title="switch chart / table"]').click();
+  // Sweep the drain voltage, which the demo device sweeps.
+  const sweepSel = page.locator('label.axis', { hasText: 'sweep' }).locator('select');
+  await sweepSel.selectOption('vds');
+
+  // A device with neither a length nor a drain-voltage sweep: the panel draws one curve and the
+  // bench sweeps vgs, each saying so, and neither choice is erased.
+  await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/single-l.mostab.csv');
+  await expect(page.locator('header .device')).toContainText('nch_singleL');
+  await expect(page.locator('[data-family-note]')).toHaveCount(1);
+  await expect(page.locator('[data-family-note]')).toContainText(
+    'family l: this device does not sweep it, so one curve is drawn',
+  );
+  await expect(page.locator('[data-sweep-note]')).toContainText(
+    'vds is not swept by this device — vgs is used',
+  );
+
+  // Back on the demo device both come back as they were.
+  await page.locator('.devices .dev').first().locator('.dname').click();
+  await expect(page.locator('header .device')).toContainText('nmos_demo');
+  await expect(page.locator('[data-family-note]')).toHaveCount(0);
+  await expect(page.locator('[data-sweep-note]')).toHaveCount(0);
+  await expect(sweepSel).toHaveValue('vds');
+  await expect(page.locator('.grid .panel').last().locator('select.fam')).toHaveValue('l');
 });

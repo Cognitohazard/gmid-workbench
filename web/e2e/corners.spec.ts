@@ -796,3 +796,46 @@ test('a table with no # temp: header reads as an assumed 27 °C wherever it is s
 
   expect(errors).toEqual([]);
 });
+
+test('bench: a stored table that cannot be restored is named, kept, and deletable', async ({
+  page,
+}) => {
+  await page.goto('/');
+  // A record the restore cannot read: an axis list with nothing in it.
+  await page.evaluate(async () => {
+    await new Promise<void>((resolve, reject) => {
+      const req = indexedDB.open('gmid', 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains('tables')) req.result.createObjectStore('tables');
+      };
+      req.onsuccess = () => {
+        const tx = req.result.transaction('tables', 'readwrite');
+        tx.objectStore('tables').put(
+          {
+            id: { device: 'broken_dev', corner: 'tt', temp: 27 },
+            meta: {},
+            grid: { axes: [], shape: [], quantities: new Map() },
+          },
+          'broken-key',
+        );
+        tx.oncomplete = () => {
+          req.result.close();
+          resolve();
+        };
+        tx.onerror = () => reject(tx.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  });
+  await page.reload();
+  const line = page.locator('[data-store-skipped]');
+  await expect(line).toContainText('a stored table could not be restored');
+  await expect(line).toContainText('broken_dev (not a readable table)');
+  // Kept until the user deletes it, then gone for good.
+  await page.reload();
+  await expect(line).toBeVisible();
+  await line.locator('[data-store-delete]').click();
+  await expect(line).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('[data-store-skipped]')).toHaveCount(0);
+});

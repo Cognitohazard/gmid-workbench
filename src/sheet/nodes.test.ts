@@ -22,6 +22,7 @@ import {
   type WalkRelation,
 } from './nodes';
 import { holdHardware } from './coverage';
+import { REFS, sheet, table as libraryTable } from './library.fixtures';
 import {
   configEligibility,
   dcInputs,
@@ -1471,5 +1472,113 @@ describe('which wire a solved param is the level of, and the wires it sits betwe
     expect(solvedWiring({ ...doc, nodes: 'none', levels: undefined }, () => demo, ['V_x'])).toBe(
       undefined,
     );
+  });
+});
+
+describe("a device's polarity: compared with the table it inherits, and assumed only with a record", () => {
+  const polarityFindings = (r: SheetResult) =>
+    r.warnings.filter((w) => w.rule === 'sheet-polarity');
+  const undeclared = { ...t, meta: { ...t.meta, polarity: undefined } };
+  /** The inverter with the n block's sheet declaring polarity as `p` gives (absent where undefined). */
+  const withNPolarity = (p: unknown): SheetDoc => {
+    const doc = inverter();
+    const blocks = doc.blocks!.map((b) => {
+      if (b.name !== 'n') return b;
+      const d: Record<string, unknown> = { ...b.doc! };
+      if (p === undefined) delete d.polarity;
+      else d.polarity = p;
+      return { ...b, doc: d as unknown as SheetDoc };
+    });
+    return { ...doc, blocks };
+  };
+
+  it('warns where a child naming no device declares the other polarity than its inherited table', () => {
+    // The demo table declares an n-channel device; the inverter's p block names no device.
+    const r = runSheet(inverter(), t);
+    const found = polarityFindings(r);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ severity: 'warning', location: 'p' });
+    expect(found[0].message).toContain('block "p" names no device');
+    expect(found[0].message).toContain('declares an n-channel device');
+    expect(found[0].message).toContain('bind the block to a p-channel device');
+    // Said, not acted on: every number is what a table declaring no polarity gives.
+    const bare = runSheet(inverter(), undeclared);
+    expect(polarityFindings(bare)).toEqual([]);
+    expect(r.values).toEqual(bare.values);
+    expect(r.blocks!.map((b) => b.sizing)).toEqual(bare.blocks!.map((b) => b.sizing));
+  });
+
+  it('says nothing where the child is bound to its own device', () => {
+    const doc = inverter();
+    const bound = {
+      ...doc,
+      blocks: doc.blocks!.map((b) => (b.name === 'p' ? { ...b, device: 'pdev' } : b)),
+    };
+    const r = runSheet(bound, t, (id) => (id === 'pdev' ? undeclared : undefined));
+    expect(polarityFindings(r)).toEqual([]);
+  });
+
+  it('records a sheet that sizes a device and declares no polarity, and reads it as n', () => {
+    const declared = runSheet(withNPolarity('n'), undeclared);
+    const r = runSheet(withNPolarity(undefined), undeclared);
+    const info = polarityFindings(r);
+    expect(info).toHaveLength(1);
+    expect(info[0].severity).toBe('info');
+    expect(info[0].message).toMatch(
+      /^block "n": this sheet declares no polarity, so its device is read as n-channel/,
+    );
+    // The walk reads it as n, and its current balance says so.
+    const n = r.blocks!.find((b) => b.name === 'n')!;
+    expect(n.terminals).toMatchObject({ polarity: 'n', polarityAssumed: true });
+    expect(r.nodes!.notes.some((m) => m.startsWith('"n" declares no polarity'))).toBe(true);
+    expect(declared.nodes!.notes.some((m) => m.includes('declares no polarity'))).toBe(false);
+    // The assumption is n, so every number is the declared-n one.
+    expect(r.values).toEqual(declared.values);
+    expect(r.nodes!.balance).toEqual(declared.nodes!.balance);
+  });
+
+  it('warns on a polarity that is neither n nor p, and records nothing for a sheet with no device', () => {
+    const odd = polarityFindings(runSheet(withNPolarity('pmos'), undeclared));
+    expect(odd).toHaveLength(1);
+    expect(odd[0].severity).toBe('warning');
+    expect(odd[0].message).toContain(`polarity reads "pmos", which is neither "n" nor "p"`);
+    const noDevice: SheetDoc = { ...inverter(), blocks: [] };
+    delete noDevice.polarity;
+    expect(validateSheet(noDevice).filter((w) => w.rule === 'sheet-polarity')).toEqual([]);
+  });
+
+  it('is said once for the run, not again by the range ends inside it', () => {
+    // The 5T OTA's two mirror-load blocks are p-channel and name no device; the library's demo
+    // table declares an n-channel device. Its common-mode range ends re-evaluate the design, and
+    // the binding is the same there, so they do not repeat what the run already says.
+    const r = runSheet(sheet('otas/five-transistor-ota.json'), libraryTable, undefined, REFS);
+    expect(polarityFindings(r).map((w) => w.location)).toEqual(['ldr', 'ld']);
+    expect(r.rangeEnds?.length).toBeGreaterThan(0);
+    for (const e of r.rangeEnds ?? [])
+      expect(e.warnings.filter((w) => w.rule === 'sheet-polarity')).toEqual([]);
+  });
+
+  it('names a nested block by its path', () => {
+    const inner = inverter();
+    const outer: SheetDoc = {
+      title: 'outer',
+      polarity: 'n',
+      formatVersion: 2,
+      params: [],
+      blocks: [{ name: 'inv', doc: inner }],
+      equations: [],
+      checks: [],
+    };
+    const found = polarityFindings(runSheet(outer, t));
+    expect(found.map((w) => w.location)).toEqual(['inv.p']);
+    expect(found[0].message).toMatch(/^block "inv": block "p" names no device/);
+  });
+
+  it('compares an undeclared child with its inherited table as n', () => {
+    const p = { ...t, meta: { ...t.meta, polarity: { device: 'p' as const, signedInput: false } } };
+    const r = runSheet(withNPolarity(undefined), p);
+    const mismatch = polarityFindings(r).filter((w) => w.severity === 'warning');
+    expect(mismatch.map((w) => w.location)).toEqual(['n']);
+    expect(mismatch[0].message).toContain('declares no polarity and is read as n');
   });
 });

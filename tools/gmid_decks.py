@@ -20,7 +20,8 @@ Conventions (verified live):
   compiled ``.osdi`` first (handled by the caller), corner via sectioned ``.lib``.
 
 PMOS is swept negative (the mostab importer canonicalises sign); vsb applies a
-bulk bias (NMOS bulk below source, PMOS bulk above); temperature via ``.temp``.
+bulk bias (NMOS bulk below source, PMOS bulk above); temperature via ``.temp``, stated in
+every deck.
 
 Two optional additions to the self-running deck:
 - ``vds_fine=(step, stop)`` runs a second nested ``dc`` over ``vd = 0 … stop`` at the
@@ -43,8 +44,9 @@ from dataclasses import dataclass
 from mostab_io import fmt_num
 
 # BSIM4 small-signal op-point outputs to save. gm/gds/id are load-bearing for
-# gm/ID; the rest are standard. An unrecognized name surfaces as the tool's
-# unrecognized-save relay (a fake 0.0 column), so we keep to the common set.
+# gm/ID; the rest are standard. A name the model does not provide comes back as 0
+# at every point (a fake column), so we keep to the common set, and the generator's
+# sanity gate refuses a column that is 0 everywhere.
 SAVE_PARAMS = ["gm", "gds", "id", "vth", "vdsat", "gmbs", "cgg", "cgs", "cgd"]
 
 # The noise columns, in the order the deck echoes them: the drain thermal-noise and
@@ -178,8 +180,9 @@ def build_deck(
     lines += list(pdk.extra_head)
     lines += [f".param {p}" for p in pdk.pre_params]
     lines += list(pdk.corner_lines(corner))
-    if temp != 27.0:
-        lines.append(f".temp {_g(temp)}")
+    # Always stated, 27 C included: the deck then says the temperature it was run at rather than
+    # leaving it to the simulator's default.
+    lines.append(f".temp {_g(temp)}")
     lines += [
         f"vb b 0 {vb}",
         f"{inst} d g 0 b {subckt} L={lw(L_um)} W={lw(W_um)} nf={nf}",
@@ -311,8 +314,8 @@ def _selftest() -> None:
         pass
     else:
         raise AssertionError("noise_to without wrdata_to built a deck")
-    # temp directive only when != 27
-    assert ".temp" not in d and ".temp 125" in build_deck(
+    # The temperature is stated in every deck, the default 27 C included.
+    assert ".temp 27\n" in d and ".temp 125" in build_deck(
         SKY130, subckt="sky130_fd_pr__nfet_01v8", dev_type="n", vdd=1.8, corner="tt",
         L_um=0.15, W_um=1.0, temp=125.0)
     # wrdata decode round-trips the (scale,value)-pair layout in [v(d), *SAVE_PARAMS] order.

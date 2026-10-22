@@ -149,11 +149,16 @@
   const dashFor = (tableIndex: number): number[] | null =>
     tableIndex === 0 ? null : OVERLAY_DASHES[(tableIndex - 1) % OVERLAY_DASHES.length];
 
+  // The family drawn on this device: the panel's own where the device sweeps it. One the device
+  // does not sweep is kept on the panel (a swap back finds it) and drawn as a single curve, said
+  // beside the legend.
+  const family = $derived(families.includes(cfg.family) ? cfg.family : '');
+
   // Pin every shared-bias axis except this panel's own family (which fans into the
   // curves); the sweep axis is consumed by overlayCurvesXY itself. A panel whose
   // family sits on a bias slider simply ignores that slider — by omission.
   const pinned = $derived(
-    Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== cfg.family)),
+    Object.fromEntries(Object.entries(sharedBias).filter(([k]) => k !== family)),
   );
 
   // Sheets receive the UNREDUCED table and own their operating point per block: each block's givens
@@ -175,10 +180,10 @@
       return { ov: null as OverlayCurvesXY | null, err: null as string | null, gated: 0 };
     try {
       // Gate a dense overlay from the cheap count up front, so we never build curves we'd discard.
-      const famCount = overlaid ? familyUnionCount([device, ...overlays], cfg.family) : 0;
+      const famCount = overlaid ? familyUnionCount([device, ...overlays], family) : 0;
       const gated = famCount > LARGE_FAMILY ? famCount : 0;
       const tables = gated ? [device] : [device, ...overlays];
-      const ov = overlayCurvesXY(tables, cfg.xExpr, cfg.yExpr, sweep, cfg.family || null, pinned);
+      const ov = overlayCurvesXY(tables, cfg.xExpr, cfg.yExpr, sweep, family || null, pinned);
       // Nothing drawable (a degenerate single device, or every table failed) is a blocking
       // message; a partial failure (some tables drew) surfaces per-table below instead.
       const err = ov.lines.length === 0 ? (ov.notes.find((n) => n) ?? null) : null;
@@ -438,6 +443,8 @@
       >
         <option value="">(none)</option>
         {#each families as f}<option value={f}>{f}</option>{/each}
+        {#if cfg.family && !family}<option value={cfg.family}>{cfg.family} (not swept here)</option
+          >{/if}
       </select>
       <Help text={CONTROL_HELP.family} />
       <!-- Legend control for a dense family — lives in the toolbar (not its own row) so it
@@ -510,6 +517,10 @@
   </div>
 
   {#if built.err}<p class="perr" title={built.err}>{built.err}</p>{/if}
+  {#if cfg.render !== 'sheet' && cfg.family && !family}<p class="pnote" data-family-note>
+      family {cfg.family}: this device does not sweep it, so one curve is drawn; the panel keeps it
+      for a device that does
+    </p>{/if}
   {#if built.ov?.warning}<p class="pwarn" title={built.ov.warning}>⚠ {built.ov.warning}</p>{/if}
   {#if built.gated}<p class="pwarn">
       ⚠ overlay hidden — {built.gated} family values exceed {LARGE_FAMILY}; showing the active

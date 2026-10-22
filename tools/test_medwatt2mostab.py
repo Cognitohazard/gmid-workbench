@@ -7,13 +7,17 @@ Builds a tiny npz with the real mosplot structure (per-model dict with
 vgs/vds/vbs/length sweeps and (length, vbs, vgs, vds)-shaped parameter arrays),
 converts it, and asserts the mostab CSV: metadata, header, row count, the
 vsb = -vbs sign flip, and a spot value. Also writes the committed fixture that
-the TypeScript importer round-trip test consumes.
+the TypeScript importer round-trip test consumes. The fixture's npz states one
+device parameter, its width; the carry-through of the others is exercised on a
+separate npz (parameter_checks).
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
+import io
 import os
 import tempfile
 
@@ -26,7 +30,8 @@ FIXTURE_DIR = os.path.join(HERE, "__fixtures__")
 MODEL = "medwatt_demo"
 
 
-def build_npz(path: str, model: str = MODEL, device_parameters=None) -> None:
+def build_npz(path: str, model: str = MODEL, device_parameters=None, table_parameters=None,
+              listed=None) -> None:
     length = np.array([45e-9, 100e-9])  # nL = 2
     vbs = np.array([0.0, -0.3])         # nVbs = 2  ->  vsb = [0.0, 0.3]
     vgs = np.array([0.3, 0.5, 0.7])     # nVgs = 3
@@ -43,7 +48,7 @@ def build_npz(path: str, model: str = MODEL, device_parameters=None) -> None:
     entry = {
         "vgs": vgs, "vds": vds, "vbs": vbs, "length": length,
         "model_name": model,
-        "parameter_names": ["id", "gm", "gds", "vth"],
+        "parameter_names": listed or ["id", "gm", "gds", "vth"],
         "device_parameters": device_parameters or {"width": 1e-6},
         "id": ida, "gm": gm, "gds": gds, "vth": vth,
     }
@@ -51,7 +56,7 @@ def build_npz(path: str, model: str = MODEL, device_parameters=None) -> None:
         "description": "synthetic test table",
         "simulator": "NgspiceSimulator",
         "parameter_names": ["id", "gm", "gds", "vth"],
-        "device_parameters": {},
+        "device_parameters": table_parameters or {},
         model: entry,
     }
     np.savez_compressed(path, lookup_table=np.array(table, dtype=object))
@@ -217,6 +222,54 @@ def identity_checks() -> None:
     print("OK — corner and temperature written only when stated")
 
 
+def parameter_checks() -> None:
+    """Every scalar device_parameters entry the converter does not read itself is written as a
+    `# key: value` line, as stated — the model's first, then the table's — so the importer keeps
+    it, or reports a value it cannot read. What is left out is said on stderr: a value that is
+    not a single one, a key the header writes from elsewhere, a key that cannot be a header key,
+    and a listed parameter the model's entry does not hold."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out_dir = os.path.join(tmp, "out")
+        npz = os.path.join(tmp, "params.npz")
+        build_npz(
+            npz,
+            device_parameters={
+                "width": 1e-6, "model_name": "nch_lvt", "vdd": 1.8, "AVT": "5m", "count": 0,
+                "flag": False, "vt0": np.array([0.42]), "sweep": [1, 2], "bad key": 3,
+                "device": "other", "type": "pmos4",
+            },
+            table_parameters={"pdk": "gpdk045", "vdd": 3.3},
+            listed=["id", "gm", "gds", "vth", "cgg"],
+        )
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            m2m.convert(npz, out_dir, trust=True, overwrite=True)
+        meta, header, _ = read_mostab(os.path.join(out_dir, f"{MODEL}.mostab.csv"))
+        carried = {k: meta[k] for k in meta
+                   if k not in ("mostab", "device", "simulator", "description", "W")}
+        # The model's vdd wins over the table's; an unreadable channel type is carried under its
+        # own key for the importer to report, since no polarity was resolved from it.
+        assert carried == {"model_name": "nch_lvt", "vdd": "1.8", "AVT": "5m", "count": "0",
+                           "flag": "False", "vt0": "0.42", "type": "pmos4",
+                           "pdk": "gpdk045"}, carried
+        assert meta["device"] == MODEL and meta["W"] == "1e-06", meta
+        said = err.getvalue()
+        assert "device_parameters 'sweep' not carried: it is not a single value" in said, said
+        assert "device_parameters 'bad key' not carried: the key cannot be written" in said, said
+        assert "device_parameters 'device' not carried: the header writes its own device" in said
+        assert "listed parameter(s) cgg not in the model's entry, so not written" in said, said
+        assert header == ["L", "VDS", "VSB", "VGS", "ID", "GM", "GDS", "VTH"], header
+
+        # A channel type the converter reads is consumed into `# polarity:`, not carried twice.
+        typed = os.path.join(tmp, "typed.npz")
+        build_npz(typed, device_parameters={"width": 1e-6, "type": "pmos"})
+        m2m.convert(typed, out_dir, trust=True, overwrite=True)
+        meta, _, _ = read_mostab(os.path.join(out_dir, f"{MODEL}.mostab.csv"))
+        assert meta["polarity"] == "p" and "type" not in meta, meta
+
+    print("OK — other device parameters carried as stated; what is left out is said")
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="self-test for medwatt2mostab")
     ap.add_argument("--write-fixture", action="store_true",
@@ -226,6 +279,7 @@ def main(argv=None) -> None:
     safety_checks()
     polarity_checks()
     identity_checks()
+    parameter_checks()
 
     fixture = os.path.join(os.path.realpath(FIXTURE_DIR), f"{MODEL}.mostab.csv")
     with tempfile.TemporaryDirectory() as tmp:

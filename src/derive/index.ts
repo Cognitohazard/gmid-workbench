@@ -90,6 +90,11 @@ const holds =
  * A pass-through column is read under the name it is read by everywhere (passthroughName): one
  * called like an expression constant only as `table__<column>`, so `k` keeps meaning Boltzmann's
  * constant here too — in an author's expression and in every definition that reads it.
+ *
+ * `scalars` omitted is a scope with no metadata: T is the engine's 27 °C and there is no width.
+ * That is a default the caller owns saying — a table-backed caller passes metaScalars(table.meta),
+ * whose own missing temperature tableFallbacks reports. The same holds for evalColumn,
+ * deriveColumn and derivedFallbacks.
  */
 export function tableScope(grid: Grid, scalars: Record<string, number> = {}): Scope {
   const has = holds(grid, scalars);
@@ -156,7 +161,8 @@ export interface FallbackNote {
  * Every derived quantity this grid computes by a fallback, in namespace order — decided once per
  * table, by its columns (and `scalars`, its metadata; see metaScalars). A base quantity the table
  * stores (a `gamma` column) is read as stored and owes no note; a quantity it cannot compute by
- * any form is not read at all, so it owes none either.
+ * any form is not read at all, so it owes none either. Omit `scalars` and a form reading the width
+ * is judged as if the table had none (see tableScope).
  */
 export function derivedFallbacks(grid: Grid, scalars: Record<string, number> = {}): FallbackNote[] {
   const has = holds(grid, scalars);
@@ -360,7 +366,8 @@ export function compileExpr(src: string): CompiledExpr {
   return compiled;
 }
 
-/** Evaluate an already-compiled expression over `grid`, returning a full column. */
+/** Evaluate an already-compiled expression over `grid`, returning a full column. `scalars` as in
+ *  tableScope: omitted, the expression reads 27 °C and no width. */
 export function evalColumn(
   grid: Grid,
   compiled: CompiledExpr,

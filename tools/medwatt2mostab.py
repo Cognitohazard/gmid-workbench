@@ -10,7 +10,8 @@ axes ``(length, vbs, vgs, vds)``.
 mostab is a flat CSV — ``# key: value`` metadata lines, a header row, then one
 row per grid point. ``vbs`` is converted to the mostab convention ``vsb = -vbs``;
 parameter names are emitted verbatim (the mostab importer canonicalises aliases).
-One CSV is written per model.
+Every scalar ``device_parameters`` entry the converter does not read itself is
+carried through as a ``# key: value`` line, as stated. One CSV is written per model.
 
 Usage::
 
@@ -50,6 +51,12 @@ _POLARITY_FIELDS = ("polarity", "type", "device_type", "channel_type", "mos_type
 # a declaration nobody made.
 _CORNER_FIELDS = ("corner", "process_corner")
 _TEMP_FIELDS = ("temp", "temperature")
+# device_parameters keys that may carry the characterization width [m].
+_WIDTH_FIELDS = ("width", "w", "W")
+# Every other scalar device_parameters entry is carried through as a `# key: value` header,
+# written as stated, so the importer keeps it (or, for a key it reads, reports a value it cannot
+# read) — the strict-superset rule. A key must look like a header key to be written as one.
+_HEADER_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 
 def _normalize_polarity(value) -> str | None:
@@ -161,7 +168,7 @@ def _find_width(table: dict, entry: dict):
     """Characterisation width [m] from the model or table metadata, if present."""
     for src in (entry.get("device_parameters"), table.get("device_parameters")):
         if isinstance(src, dict):
-            for k in ("width", "w", "W"):
+            for k in _WIDTH_FIELDS:
                 if k in src:
                     return float(np.asarray(src[k]).ravel()[0])
     w = table.get("width")
@@ -173,6 +180,48 @@ def _num(x) -> str:
     return fmt_num(x, 10)
 
 
+def _scalar(value):
+    """``value`` as one plain Python value, or None when it is not a single value (a list, a
+    dict, an array of more than one element, or nothing)."""
+    if isinstance(value, (str, bool, int, float, np.generic)):
+        return value.item() if isinstance(value, np.generic) else value
+    if isinstance(value, np.ndarray) and value.size == 1:
+        return value.reshape(()).item()
+    return None
+
+
+def _carried_parameters(table: dict, entry: dict, meta: dict, consumed: set, name: str) -> dict:
+    """The device_parameters entries no header of the converter's own reads, as headers: the
+    model's, then the table's for a key the model does not state. Each value is written as
+    stated; one that is not a single value, a key the converter writes from elsewhere, and a key
+    that cannot be a header key are left out, each with a note on stderr."""
+    out: dict = {}
+    own = {k.lower() for k in meta}
+    for src in (entry.get("device_parameters"), table.get("device_parameters")):
+        if not isinstance(src, dict):
+            continue
+        for key, value in src.items():
+            k = str(key)
+            if k.lower() in consumed or k in out:
+                continue
+            why = None
+            v = _scalar(value)
+            # As stated, on one line; a zero or a False is a value like any other.
+            text = "" if v is None else " ".join(str(v).split())
+            if not _HEADER_KEY.match(k):
+                why = "the key cannot be written as a header key"
+            elif k.lower() in own:
+                why = f"the header writes its own {k.lower()}"
+            elif not text:
+                why = "it is not a single value"
+            if why:
+                print(f"medwatt2mostab: {name or 'model'}: device_parameters {k!r} not carried: "
+                      f"{why}", file=sys.stderr)
+                continue
+            out[k] = text
+    return out
+
+
 def convert_entry(table: dict, name: str, entry: dict, *, polarity=None, corner=None, temp=None):
     """Return ``(header, rows, meta)`` for one model entry."""
     length = np.asarray(entry["length"], float).ravel()
@@ -181,11 +230,12 @@ def convert_entry(table: dict, name: str, entry: dict, *, polarity=None, corner=
     vds = np.asarray(entry["vds"], float).ravel()
     shape = (len(length), len(vbs), len(vgs), len(vds))
 
-    params = [
-        p
-        for p in entry.get("parameter_names", [])
-        if p in entry and p.lower() not in _AXIS_LIKE
-    ]
+    listed = [p for p in entry.get("parameter_names", []) if p.lower() not in _AXIS_LIKE]
+    params = [p for p in listed if p in entry]
+    absent = [p for p in listed if p not in entry]
+    if absent:
+        print(f"medwatt2mostab: {name}: listed parameter(s) {', '.join(map(str, absent))} not in "
+              f"the model's entry, so not written", file=sys.stderr)
     arrays = {}
     for p in params:
         a = np.asarray(entry[p], float)
@@ -207,6 +257,7 @@ def convert_entry(table: dict, name: str, entry: dict, *, polarity=None, corner=
                     row += [_num(arrays[p][li, bi, gi, di]) for p in params]
                     rows.append(row)
 
+    resolved_polarity = _find_polarity(table, entry, polarity)
     meta = {
         "mostab": "0.1",
         "device": name,
@@ -218,8 +269,15 @@ def convert_entry(table: dict, name: str, entry: dict, *, polarity=None, corner=
         "W": _opt(_find_width(table, entry)),
         # Emitted only when KNOWN (flag override or a device_parameters field); a
         # `# polarity: p` line lets the importer fold a signed PMOS dump to magnitude.
-        "polarity": _find_polarity(table, entry, polarity),
+        "polarity": resolved_polarity,
     }
+    # The fields read above are consumed; a channel-type field is consumed only when a polarity
+    # was resolved, so one this converter cannot read reaches the importer as stated (under its
+    # own key), which reports it rather than reading the table as one that declares none.
+    consumed = {k.lower() for k in (*_CORNER_FIELDS, *_TEMP_FIELDS, *_WIDTH_FIELDS)}
+    if resolved_polarity is not None:
+        consumed |= {k.lower() for k in _POLARITY_FIELDS}
+    meta.update(_carried_parameters(table, entry, meta, consumed, name))
     return header, rows, meta
 
 

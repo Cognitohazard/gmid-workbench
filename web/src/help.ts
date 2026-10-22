@@ -105,7 +105,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   provide:
     'Names this block exposes to a parent sheet. The parent reads each as child__name and writes its own math over it — scalar composition, no circuit solving.',
   copyResults:
-    'Copy every computed value of this sheet (and its children, child__-prefixed) as name/value text — the numbers, where the ⤓ json export is the recipe.',
+    'Copy every computed value of this sheet (and its children, child__-prefixed) as name/value text — the numbers, where the ⤓ json export is the recipe. Comment lines (#) above them carry the verdict and the condition it was asked at, and everything the numbers rest on that the sheet did not state: noise estimated or read by a lesser form, a corner or temperature filled in, a bias left at its default, an assumed input, a coordinate read at the edge of the table, and every warning.',
   refBlock:
     'This block is included by reference from the sheet library — its internals live on the referenced sheet and track its edits (unless the document also embeds a pinned copy, which then wins). Param overrides still apply; detach to make a local editable copy.',
   detachRef:
@@ -176,8 +176,9 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'How many of the fields you typed this sheet actually has a parameter for and treats as a requirement you set. A sheet that consumed two of your ten is answering a smaller question than one that consumed ten, so the two are not comparable and are never ranked against each other. Hover for what was dropped and why — including a field whose name matches but whose unit does not (a noise density is not an integrated RMS), and one the sheet chooses for itself rather than taking from you.',
   fingers:
     'The table is characterized at ONE width; sizing scales it per-µm, and width effects (model bins, narrow-width V_th shifts) are NOT captured — a single wide finger can be off by tens of percent in moderate inversion. Realize the result as this many fingers of the characterization width, which tracks the table. The count is rounded, so the realized total (shown with its deviation) can differ from the sized W — materially at small counts.',
-  avth: 'Pelgrom V_th matching coefficient A_Vth (mV·µm): σ(V_th) ≈ A_Vth/√(W·L). The default is a generic placeholder — replace it with your PDK\u2019s measured value.',
-  abeta: 'Pelgrom current-factor matching coefficient A_β (%·µm).',
+  avth: 'Pelgrom V_th matching coefficient A_Vth (mV·µm): σ(V_th) ≈ A_Vth/√(W·L). Read from the device\u2019s # AVT: header when it has one; otherwise a generic placeholder, said beside the field — replace it with your PDK\u2019s measured value.',
+  abeta:
+    'Pelgrom current-factor matching coefficient A_β (%·µm): σ(Δβ/β) ≈ A_β/√(W·L). Read from the device\u2019s # ABETA: header when it has one; otherwise a generic placeholder, said beside the field — replace it with your PDK\u2019s measured value.',
 };
 
 /** The solver settings page: each setting's name, the unit its value is in (none for a count or a

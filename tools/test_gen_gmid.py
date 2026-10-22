@@ -4,18 +4,21 @@
 Run:  python3 tools/test_gen_gmid.py
 
 Feeds _qa crafted mostab CSVs and asserts its (faults, warns) verdict: a clean table
-passes; a missing column, non-finite value, incomplete grid, dead device, a
-wrong-signed sweep axis (the polarity mix-up the gate exists to catch), or a noise
-PSD of the wrong sign each fault; a gm/Id peak or a noise factor outside its sane
-window only warns. Guards that a hard fault is reported as one, so gen_gmid's exit
-code reflects it. Also checks the drain-voltage axis (dense near zero, coarse above,
-a full grid when non-uniform) and the merge of the two DC sweeps with the noise.
+passes; a missing column, non-finite value, a column that is 0 everywhere, incomplete
+grid, a length or body bias of the matrix missing, dead device, a wrong-signed sweep
+axis (the polarity mix-up the gate exists to catch), or a noise PSD of the wrong sign
+each fault; a gm/Id peak or a noise factor outside its sane window only warns, and so
+does a check that ran on a default or did not run. Guards that a hard fault is reported
+as one, so gen_gmid's exit code reflects it. Also checks the drain-voltage axis (dense
+near zero, coarse above, a full grid when non-uniform), the merge of the two DC sweeps
+with the noise, and that a table with a failed run says so in its header.
 """
 from __future__ import annotations
 
 import math
 import os
 import tempfile
+from types import SimpleNamespace
 
 import gen_gmid
 from gmid_decks import _g, drain_voltages, sweep_values
@@ -33,10 +36,11 @@ CLEAN = [
 ]
 
 
-def _write(path, rows, head=HEAD):
+def _write(path, rows, head=HEAD, meta=None):
     # Format via _g exactly as gen_gmid does, so e.g. vsb=0.0 becomes the "0" that
-    # _qa keys its vsb=0 block on.
-    write_mostab(path, head, [[_g(c) for c in r] for r in rows], {"device": "t"})
+    # _qa keys its vsb=0 block on. The temperature is stated, as the generator states it.
+    write_mostab(path, head, [[_g(c) for c in r] for r in rows],
+                 meta if meta is not None else {"device": "t", "temp": 27.0})
 
 
 def _with(row, **cols):
@@ -47,10 +51,10 @@ def _with(row, **cols):
     return tuple(r)
 
 
-def qa(p, rows, head=HEAD, dev="n", **kw):
+def qa(p, rows, head=HEAD, dev="n", meta=None, **kw):
     """Write ``rows`` under ``head`` to ``p`` and run the sanity gate on it as device ``dev``:
     its (faults, warns). Keyword arguments go to the gate."""
-    _write(p, rows, head)
+    _write(p, rows, head, meta)
     return gen_gmid._qa(p, dev, **kw)
 
 
@@ -118,6 +122,77 @@ def check_noise(p) -> None:
     # the noise factor near 1e12: a soft warning, not a fault.
     faults, warns = qa(p, [_with(r, sth=1e-12) for r in CLEAN])
     assert not faults and any("noise factor" in m for m in warns), (faults, warns)
+
+
+def check_defaults_and_matrix(p) -> None:
+    # A table with no # temp: line is read at 27 C, and the warning says so.
+    faults, warns = qa(p, CLEAN, meta={"device": "t"})
+    assert not faults and warns == ["no # temp: line — read at 27 C for the noise factor"], warns
+
+    # A column that is 0 at every point is a parameter the model did not provide -> fault.
+    head = [*HEAD, "cgg"]
+    faults, warns = qa(p, [(*r, 0.0) for r in CLEAN], head)
+    assert any(m.startswith("CGG is 0 at every point") for m in faults), (faults, warns)
+    faults, warns = qa(p, [(*r, 1e-15) for r in CLEAN], head)
+    assert not faults, faults
+
+    # With no vsb = 0 rows the full-drive checks do not run, and the warning says so.
+    faults, warns = qa(p, [_with(r, vsb=0.3) for r in CLEAN])
+    assert not faults and any("full-drive checks" in m for m in warns), (faults, warns)
+
+    # Every (L, vsb) pair of the matrix is a block: a length with no rows at all, or a body
+    # bias missing beside its siblings, is a fault; the full matrix passes.
+    two = [*CLEAN, *(_with(r, vsb=0.3) for r in CLEAN)]
+    faults, warns = qa(p, two, lengths=[0.1], vsbs=[0.0, 0.3])
+    assert not faults, faults
+    faults, warns = qa(p, two, lengths=[0.1, 0.5], vsbs=[0.0, 0.3])
+    assert faults == ["L=5e-07: no rows — the length is missing from the table"], faults
+    faults, warns = qa(p, CLEAN, lengths=[0.1], vsbs=[0.0, 0.3])
+    assert faults == ["L=1e-07: no rows at vsb=0.3"], faults
+
+    # The noise factor is read as the workbench reads gamma: against gm + gmb where the table
+    # carries gmb. A gmb of 99 gm brings a factor of about 1.1 down to about 0.011 (inside the
+    # window); against gm alone it would stay 1.1. At 9999 gm it leaves the window, named so.
+    head = [*HEAD, "gmbs"]
+    faults, warns = qa(p, [(*r, 99 * r[HEAD.index("gm")]) for r in CLEAN], head)
+    assert not faults and not warns, (faults, warns)
+    faults, warns = qa(p, [(*r, 9999 * r[HEAD.index("gm")]) for r in CLEAN], head)
+    assert any(m.startswith("noise factor sth/(4kT (gm + gmb))") for m in warns), warns
+    faults, warns = qa(p, [_with(r, sth=1e-12) for r in CLEAN])
+    assert any(m.startswith("noise factor sth/(4kT gm) ") for m in warns), warns
+
+
+def check_failed_run(tmp) -> None:
+    # A run that fails is reported, the table is still written with what did run, its header
+    # says which runs are missing, and the exit code is 1.
+    pdk = SimpleNamespace(name="fake")
+    gen_gmid.MATRIX["fake"] = {
+        "pdk": pdk, "W_um": 1.0, "corners": ["tt"], "temps": [27.0], "vsb": [0.0, 0.3],
+        "vds_step": lambda vdd: 0.5, "devices": [("dev", "n", 1.0, [0.1, 0.2])],
+    }
+    n = len(gen_gmid.SAVE_PARAMS) + len(gen_gmid.NOISE_PARAMS)
+
+    def fake_run(pdk, subckt, t, vdd, corner, temp, L, W, vsb, *rest):
+        if (L, vsb) == (0.2, 0.3):
+            raise RuntimeError("simulated failure")
+        return [(vg, vd, [1e-5 * vg * (1 + vd)] * n) for vd in (0.5, 1.0) for vg in (0.4, 0.8)]
+
+    real = gen_gmid._run_one
+    gen_gmid._run_one = fake_run
+    try:
+        try:
+            gen_gmid.main(["fake", "--out", tmp])
+        except SystemExit as e:
+            assert e.code == 1, e.code
+        else:
+            raise AssertionError("a failed run left the exit code at 0")
+    finally:
+        gen_gmid._run_one = real
+        del gen_gmid.MATRIX["fake"]
+    with open(os.path.join(tmp, "fake", "dev__tt__27C.mostab.csv")) as f:
+        header = [ln for ln in f.read().splitlines() if ln.startswith("#")]
+    assert ("# note: incomplete: 1 run(s) failed and are missing from this table "
+            "(L=0.2u vsb=0.3)") in header, header
 
 
 def check_axis(p) -> None:
@@ -196,10 +271,13 @@ def main() -> None:
         p = os.path.join(tmp, "t.csv")
         check_qa(p)
         check_noise(p)
+        check_defaults_and_matrix(p)
         check_axis(p)
+        check_failed_run(tmp)
     check_join()
-    print("OK — _qa faults on column/finite/grid/dead/polarity/noise sign; gm/Id and noise "
-          "factor bands are soft warns; drain axis and sweep/noise join hold")
+    print("OK — _qa faults on column/finite/zero column/grid/matrix/dead/polarity/noise sign; "
+          "gm/Id and noise factor bands, a default temperature and skipped checks are soft "
+          "warns; a failed run is stamped in the header; drain axis and sweep/noise join hold")
 
 
 if __name__ == "__main__":

@@ -67,8 +67,12 @@ VGS_STEP = 0.008  # 10 mV is the workbench's gm/ID-fidelity bar; 8 mV clears it 
 VDS_FINE = (0.025, 0.3)
 
 BOLTZMANN = 1.380649e-23  # J/K, for the noise-factor sanity check
-# The window the noise factor sth/(4kT gm) is expected in at full drive (see _qa).
+# The window the noise factor is expected in at full drive (see _qa): sth/(4kT (gm + gmb)), the
+# workbench's own definition of gamma, where the table carries gmb, and sth/(4kT gm) where not.
 NOISE_FACTOR_LO, NOISE_FACTOR_HI = 0.01, 100
+# The temperature _qa reads a table at when it carries no `# temp:` line (the generator always
+# writes one); said in the warnings whenever it is used.
+DEFAULT_TEMP_C = 27.0
 
 # Noise columns a device's tables leave out, with the reason. The sky130 5 V nfet's model
 # cards declare BSIM4 version 4.5, and for that version ngspice evaluates the channel
@@ -211,21 +215,25 @@ def _join(rows, noise, where=""):
     return merged
 
 
-def _qa(path, dev_type, noise=tuple(NOISE_PARAMS)):
+def _qa(path, dev_type, noise=tuple(NOISE_PARAMS), lengths=None, vsbs=None):
     """Sanity-check one assembled mostab. Returns ``(faults, warns)`` — two message
     lists. Any ``faults`` is a HARD problem — a missing column, a non-finite value, a
-    duplicated or incomplete grid, a dead device, a sweep-axis polarity mix-up, or a
+    column that is 0 at every point, a duplicated or incomplete grid, a length or body
+    bias missing from the matrix, a dead device, a sweep-axis polarity mix-up, or a
     noise PSD of the wrong sign — and fails the generator's exit code. ``warns`` are
     soft suspicions (a gm/Id peak or a noise factor outside its sane window) that a
-    valid corner device can trip, so they don't fail. The real data-trust gate is the
-    workbench importer + ``qa``; this catches gross generation faults before anything
-    ships. Severity is decided by which list a check appends to. ``noise`` names the
-    noise columns the table must carry (all of them unless ``NOISE_OMIT`` drops one).
+    valid corner device can trip, and the checks that could not run or ran on a
+    default, so they don't fail. The real data-trust gate is the workbench importer +
+    ``qa``; this catches gross generation faults before anything ships. Severity is
+    decided by which list a check appends to. ``noise`` names the noise columns the
+    table must carry (all of them unless ``NOISE_OMIT`` drops one); ``lengths`` (um)
+    and ``vsbs`` (V), when given, are the matrix the table was generated over, every
+    pair of which must be in it.
     """
     with open(path) as f:
         lines = f.read().splitlines()
     temp = next((float(ln.split(":", 1)[1]) for ln in lines
-                 if ln.lower().startswith("# temp:")), 27.0)
+                 if ln.lower().startswith("# temp:")), None)
     rows = [r for r in csv.reader(lines) if r and not r[0].startswith("#")]
     head, data = rows[0], rows[1:]
     col = {name: i for i, name in enumerate(head)}
@@ -233,10 +241,21 @@ def _qa(path, dev_type, noise=tuple(NOISE_PARAMS)):
         if k not in col:
             return [f"missing column {k}"], []
     faults, warns = [], []
+    if temp is None:
+        temp = DEFAULT_TEMP_C
+        warns.append(f"no # temp: line — read at {DEFAULT_TEMP_C:g} C for the noise factor")
     # finiteness
     bad = sum(1 for r in data for v in r if v in ("nan", "inf", "-inf"))
     if bad:
         faults.append(f"{bad} non-finite values")
+    # A column that is 0 at every point is not data: ngspice writes 0 for an op-point
+    # parameter the model does not provide (an unrecognized save), and a table would ship
+    # it as a measured value.
+    axes = {"L", "VDS", "VSB", "VGS"}
+    for name, i in col.items():
+        if name not in axes and data and all(_num(r[i]) == 0 for r in data):
+            faults.append(f"{name} is 0 at every point — a parameter the model does not "
+                          f"provide is written as 0, so the column is not data")
     # noise sign: channel thermal noise is present at every bias, even with no current
     # (vds = 0); flicker noise scales with the drain current, so it is 0 exactly where
     # none flows and positive everywhere else.
@@ -267,9 +286,24 @@ def _qa(path, dev_type, noise=tuple(NOISE_PARAMS)):
         if len(uniq) != len(xs) * len(ys):
             faults.append(f"L={L} vsb={vsb}: grid {len(xs)}x{len(ys)} incomplete "
                           f"({len(uniq)} of {len(xs) * len(ys)} points)")
+    # Every (L, vsb) pair of the matrix is a block. A length whose every run failed leaves no
+    # rows at all, and the table would import as one with a shorter length axis; a pair
+    # missing beside its siblings leaves a grid the importer refuses. Both are said here.
+    if lengths is not None and vsbs is not None:
+        have = set(blocks)
+        for L in lengths:
+            Ls = _g(L * 1e-6)
+            missing = [_g(v) for v in vsbs if (Ls, _g(v)) not in have]
+            if len(missing) == len(vsbs):
+                faults.append(f"L={Ls}: no rows — the length is missing from the table")
+            elif missing:
+                faults.append(f"L={Ls}: no rows at vsb={', '.join(missing)}")
     # physical: id/W at strong inversion, gm/Id peak, polarity. Use the smallest-L,
     # vsb=0 block at max |VGS|,|VDS|.
     v0 = [r for r in data if r[col["VSB"]] == "0"]
+    if not v0:
+        warns.append("no vsb = 0 rows — the full-drive checks (dead device, polarity, gm/Id "
+                     "peak, noise factor) did not run")
     if v0:
         Lmin = min(v0, key=lambda r: float(r[col["L"]]))[col["L"]]
         blk = [r for r in v0 if r[col["L"]] == Lmin]
@@ -290,16 +324,29 @@ def _qa(path, dev_type, noise=tuple(NOISE_PARAMS)):
             pk = max(ratios)
             if not (5 < pk < 60):
                 warns.append(f"gm/Id peak {pk:.1f} outside [5,60] (suspect)")
-        # noise factor sth/(4kT gm) at full drive: between about 0.2 and 12 for these
-        # models, so a value far outside the window is a unit slip (a density left
-        # unsquared is off by about 1e12, a lost 4kT by about 1e20).
+        # noise factor at full drive: between about 0.2 and 12 for these models, so a value
+        # far outside the window is a unit slip (a density left unsquared is off by about
+        # 1e12, a lost 4kT by about 1e20). Read as the workbench reads gamma: against
+        # gm + gmb where the table carries gmb, against gm alone where it does not.
         gmv = abs(float(drive[col["GM"]]))
-        if "sth" in noise and gmv > 0:
-            nf = float(drive[col["STH"]]) / (4 * BOLTZMANN * (temp + 273.15) * gmv)
+        gmb = abs(float(drive[col["GMBS"]])) if "GMBS" in col else None
+        form = "sth/(4kT gm)" if gmb is None else "sth/(4kT (gm + gmb))"
+        g = gmv + (gmb or 0.0)
+        if "sth" in noise and g > 0:
+            nf = float(drive[col["STH"]]) / (4 * BOLTZMANN * (temp + 273.15) * g)
             if not (NOISE_FACTOR_LO < nf < NOISE_FACTOR_HI):
-                warns.append(f"noise factor sth/(4kT gm) {nf:.3g} at full drive outside "
+                warns.append(f"noise factor {form} {nf:.3g} at full drive outside "
                              f"[{NOISE_FACTOR_LO},{NOISE_FACTOR_HI}] (suspect)")
     return faults, warns
+
+
+def _num(cell):
+    """A table cell as a number; a non-finite or unreadable one is NaN (the finiteness check
+    reports those)."""
+    try:
+        return float(cell)
+    except ValueError:
+        return math.nan
 
 
 def main(argv=None) -> None:
@@ -342,6 +389,7 @@ def main(argv=None) -> None:
             names = [*SAVE_PARAMS, *noise]
             keep = [cols.index(c) for c in names]
             rows = []
+            failed = []  # the runs of this table that did not run, said in its header
             for L in LS:
                 for vsb in spec["vsb"]:
                     try:
@@ -351,6 +399,7 @@ def main(argv=None) -> None:
                         print(f"   FAIL {subckt} {corner}/{int(temp)}C L={L} vsb={vsb}: {e}",
                               file=sys.stderr)
                         failures += 1
+                        failed.append(f"L={_g(L)}u vsb={_g(vsb)}")
                         continue
                     for vgs, vds, params in pts:
                         rows.append([_g(L * 1e-6), _g(vds), _g(vsb), _g(vgs)]
@@ -363,9 +412,14 @@ def main(argv=None) -> None:
                     "W": W * 1e-6, "simulator": SIM, "license": "Apache-2.0",
                     "source": SOURCES.get(pdk.name, pdk.name),
                     "pdk": pdk.name, "polarity": t}
+            # A table some of whose runs failed is still written, so the runs that did finish
+            # can be looked at, but its header says which are missing, and the exit code is 1.
+            if failed:
+                meta["note"] = (f"incomplete: {len(failed)} run(s) failed and are missing "
+                                f"from this table ({'; '.join(failed)})")
             out = os.path.join(outdir, f"{subckt}__{corner}__{int(temp)}C.mostab.csv")
             write_mostab(out, ["l", "vds", "vsb", "vgs", *names], rows, meta)
-            faults, warns = _qa(out, t, noise)
+            faults, warns = _qa(out, t, noise, lengths=LS, vsbs=spec["vsb"])
             if faults:
                 qa_faults += 1
             tag = "FAIL" if faults else ("WARN" if warns else "ok ")

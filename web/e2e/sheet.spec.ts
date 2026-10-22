@@ -396,6 +396,12 @@ test('design sheet: a table that lacks a sweep the sheet uses refuses the device
   // The block under it has its source at its body, and still sizes.
   await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveClass(/st-pass/);
 
+  // A device whose givens leave the body bias out is sized at the default the table was taken
+  // at, and the bias is marked as assumed, as it is on a table that sweeps it.
+  await pickSheet(sp, 'Gm-C filter pole');
+  await expect(sp.locator('.shead .bind')).toContainText('W=');
+  await expect(sp.locator('.shead .sbias')).toContainText(/vsb 0\s*V\?/);
+
   expect(errors).toEqual([]);
 });
 
@@ -720,6 +726,15 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
   // The hint still matters wherever a child's vds is an AUTHORED expression, as here.
   await pickSheet(sp, '5T OTA');
 
+  // Until they are bound, the p-channel load devices are sized on the active NMOS table, which
+  // declares the other polarity: said once per block, for the run — the range-end chips, which
+  // re-evaluate the same binding, do not repeat it.
+  const inherited = sp.locator('.pwarn', { hasText: 'names no device, so it is sized on' });
+  await expect(inherited.filter({ hasText: 'block "ld"' })).toHaveCount(1);
+  await expect(inherited.filter({ hasText: 'block "ldr"' })).toHaveCount(1);
+  await expect(sp.locator('[data-range-end]').first()).toBeVisible();
+  await expect(sp.locator('[data-range-end][title*="names no device"]')).toHaveCount(0);
+
   // Bind both sides of the mirror load to the signed PMOS table — they share a gate, so they
   // are read from one table. Only the output side's vds is authored, and ld_sign still reads +1,
   // so the panel names the ONE root cause instead of a wall of derived n/a warnings. The diode
@@ -732,6 +747,7 @@ test('composed sheet: a signed-PMOS child with its sign param still +1 gets a ro
   }
   await expect(sp.locator('.pwarn', { hasText: 'set ld_sign = -1' })).toBeVisible();
   await expect(sp.locator('.pwarn', { hasText: 'ldr_sign' })).toHaveCount(0);
+  await expect(inherited).toHaveCount(0); // bound to a p-channel table: nothing to compare
 
   // Fixing the param clears the hint.
   const sign = sp.locator('.svar[data-param="ld_sign"] .num');
@@ -2011,4 +2027,28 @@ test('design sheet: a stored panel whose sheet cannot be read at all opens refus
     .toBe('NMOS noise & matching');
 
   expect(errors).toEqual([]);
+});
+
+test('copy results: the pasted numbers carry the verdict and what they rest on', async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  // Its device leaves the body bias to the default, which the result records as assumed.
+  await pickSheet(sp, 'Gm-C filter pole');
+  await expect(sp.locator('.shead .bind')).toContainText('W=');
+  await sp.locator('.sexp button', { hasText: 'copy results' }).click();
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+  const lines = text.split('\n');
+  expect(lines[0]).toBe('# Gm-C filter pole');
+  expect(lines[1]).toMatch(/^# (in)?feasible/);
+  expect(lines).toContain("# rests on: vsb left at its default: this sheet's own device");
+  // The values follow the comment lines, one name and value per line.
+  const values = lines.filter((l) => !l.startsWith('#'));
+  expect(values.length).toBeGreaterThan(5);
+  expect(values.every((l) => l.split('\t').length === 2)).toBe(true);
 });

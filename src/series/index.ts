@@ -5,7 +5,7 @@
 // family + any other axes) + deriveColumn (evaluate the expression).
 
 import type { DeviceTable, Grid } from '../types';
-import { sliceGrid, orient, interp1 } from '../grid';
+import { sliceGrid, orient, interp1, offHull } from '../grid';
 import type { Oriented } from '../grid';
 import { DERIVED_FORMS, compileExpr, derivedForm, evalColumn, metaScalars } from '../derive';
 import { BASE_QUANTITIES } from '../namespace';
@@ -253,7 +253,7 @@ export interface OverlayCurvesXY {
   readonly famValues: Float64Array; // sorted-unique UNION of all tables' family values (shared colour scale)
   readonly lines: Float64Array[]; // table-major; each resampled onto x, NaN outside its native range
   readonly meta: OverlayLine[]; // parallel to lines
-  readonly warning: string; // first surviving table's near-constant hint, else ''
+  readonly warning: string; // first surviving table's near-constant hint, mirrored pins, tables read off their pins; else ''
   readonly notes: (string | null)[]; // per-INPUT-table reason (throw / degenerate), else null
 }
 
@@ -282,6 +282,39 @@ export function mirrorPinned(
 }
 
 /**
+ * Where `table` is read somewhere other than the bias `fixed` pins: a pinned value outside the
+ * axis's swept range is read at the edge (the slice clamps), and a swept axis `fixed` does not name
+ * — the device the pins come from lacks it — is read at its first node. One sentence per axis, for
+ * the overlay's warning; empty when the table is read exactly where it is pinned. The sweep and the
+ * family are drawn, not pinned. A single-node axis is what the table is, so it is not a default —
+ * only a pin away from its node is reported. A pin past the edge by float rounding only is the
+ * edge (offHull), not a reading elsewhere.
+ */
+export function pinnedElsewhere(
+  table: DeviceTable,
+  fixed: Record<string, number>,
+  sweepName: string,
+  famName: string | null,
+): string[] {
+  const out: string[] = [];
+  const num = (v: number): string => String(+v.toPrecision(6));
+  for (const a of table.grid.axes) {
+    if (a.name === sweepName || a.name === famName) continue;
+    const lo = a.values[0];
+    const hi = a.values[a.values.length - 1];
+    const v = fixed[a.name];
+    if (v === undefined) {
+      if (a.values.length > 1)
+        out.push(`${a.name} is not pinned on this chart, read at its first node ${num(lo)}`);
+    } else if (offHull(a.values, v))
+      out.push(
+        `${a.name} = ${num(v)} is outside its swept range ${num(lo)} … ${num(hi)}, read at ${num(v < lo ? lo : hi)}`,
+      );
+  }
+  return out;
+}
+
+/**
  * Overlay `tables` on one X lattice. A single table is the fast path: it returns
  * `familyCurvesXY`'s own `x`/`lines` unchanged (no second resample) so the lone-device
  * result is identical to plotting it directly. With several tables, each is resolved
@@ -291,6 +324,10 @@ export function mirrorPinned(
  * A table lacking the requested `family` axis contributes a single curve (famValue NaN)
  * rather than erroring, so a device without that axis still overlays. Family values are
  * unioned across tables, so an identical L in two devices maps to the same colour.
+ *
+ * A table read away from the pinned bias — a pin outside its range that mirroring cannot place,
+ * or an axis the pins do not name, read at its first node — is said in `warning`, table by table
+ * (see pinnedElsewhere); the hover readout reads the same point, so the one warning covers both.
  */
 
 export function overlayCurvesXY(
@@ -302,11 +339,23 @@ export function overlayCurvesXY(
   fixed: Record<string, number> = {},
   lattice = 0,
 ): OverlayCurvesXY {
+  /** Every table's reading away from its pins, each named by its table. A name two tables share
+   *  (one device at two conditions) carries the condition. */
+  const elsewhere: string[] = [];
+  const readElsewhere = (tbl: DeviceTable, at: Record<string, number>, fam: string | null) => {
+    const shared = tables.filter((t) => t.id.device === tbl.id.device).length > 1;
+    const name = shared ? `${tbl.id.device} ${tbl.id.corner}@${tbl.id.temp}` : tbl.id.device;
+    for (const n of pinnedElsewhere(tbl, at, sweepName, fam)) elsewhere.push(`${name}: ${n}`);
+  };
+  const elsewhereNote = (): string =>
+    elsewhere.length ? `not read at the pinned bias — ${elsewhere.join('; ')}` : '';
+
   // Fast path: one table ⇒ familyCurvesXY verbatim (its x/lines by reference, no re-resample).
   if (tables.length === 1) {
     const fc = familyCurvesXY(tables[0], xExpr, yExpr, sweepName, family, fixed, lattice);
+    readElsewhere(tables[0], fixed, family);
     if (fc.degenerate) {
-      return empty(xExpr, fc.xLabel, sweepName, fc.famName, [fc.reason]);
+      return empty(xExpr, fc.xLabel, sweepName, fc.famName, [fc.reason], elsewhereNote());
     }
     const meta: OverlayLine[] =
       fc.famName === ''
@@ -321,7 +370,7 @@ export function overlayCurvesXY(
       famValues: fc.famValues,
       lines: fc.lines,
       meta,
-      warning: fc.warning,
+      warning: [fc.warning, elsewhereNote()].filter(Boolean).join(' · '),
       notes: [null],
     };
   }
@@ -331,8 +380,9 @@ export function overlayCurvesXY(
   // clamp to 0 — device off, gm/ID = 0/0, whole table dropped as degenerate. The
   // only physical reading of "compare these devices at this bias" is equal |bias|,
   // so an out-of-range pin whose NEGATION lies inside the table's axis is mirrored
-  // for that table (mirrorPinned). Anything else passes through (and clamps as
-  // before), and every mirror is surfaced in `warning` — adapted, never silent.
+  // for that table (mirrorPinned). Anything else passes through and is read at the
+  // table's edge, and every mirror and every edge read is surfaced in `warning` —
+  // adapted, never silent.
   const mirrored: string[] = [];
   const fixedFor = (tbl: DeviceTable): Record<string, number> => {
     const out = mirrorPinned(tbl, fixed);
@@ -349,8 +399,10 @@ export function overlayCurvesXY(
     // A table without the requested family axis draws as a single curve, not an error.
     const famForTable =
       family !== null && tbl.grid.axes.some((a) => a.name === family) ? family : null;
+    const at = fixedFor(tbl);
+    readElsewhere(tbl, at, famForTable);
     try {
-      const fc = familyCurvesXY(tbl, xExpr, yExpr, sweepName, famForTable, fixedFor(tbl), lattice);
+      const fc = familyCurvesXY(tbl, xExpr, yExpr, sweepName, famForTable, at, lattice);
       if (fc.degenerate) notes.push(fc.reason);
       else {
         notes.push(null);
@@ -366,10 +418,11 @@ export function overlayCurvesXY(
   const warning = [
     survivors[0]?.fc.warning ?? '',
     mirrored.length ? `signed axes — bias mirrored for ${mirrored.join(', ')}` : '',
+    elsewhereNote(),
   ]
     .filter(Boolean)
     .join(' · ');
-  if (survivors.length === 0) return empty(xExpr, xLabel, sweepName, famName, notes);
+  if (survivors.length === 0) return empty(xExpr, xLabel, sweepName, famName, notes, warning);
 
   // Union lattice spanning every survivor's range; M = the densest survivor (never downsample).
   let lo = Infinity;
@@ -382,7 +435,7 @@ export function overlayCurvesXY(
     if (fc.x.length > M) M = fc.x.length;
   }
   if (lattice > 0) M = lattice;
-  if (M === 0) return empty(xExpr, xLabel, sweepName, famName, notes);
+  if (M === 0) return empty(xExpr, xLabel, sweepName, famName, notes, warning);
 
   const span = hi - lo;
   const x = new Float64Array(M);
@@ -408,13 +461,15 @@ export function overlayCurvesXY(
   return { xExpr, xLabel, sweepName, x, famName, famValues, lines, meta, warning, notes };
 }
 
-// An overlay with nothing drawable: empty curves, but the per-table notes still surface.
+// An overlay with nothing drawable: empty curves, but the per-table notes and the warning still
+// surface.
 function empty(
   xExpr: string,
   xLabel: string,
   sweepName: string,
   famName: string,
   notes: (string | null)[],
+  warning = '',
 ): OverlayCurvesXY {
   return {
     xExpr,
@@ -425,7 +480,7 @@ function empty(
     famValues: new Float64Array(0),
     lines: [],
     meta: [],
-    warning: '',
+    warning,
     notes,
   };
 }

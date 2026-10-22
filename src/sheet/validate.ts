@@ -1524,6 +1524,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   out.push(...checkProblems(doc));
   out.push(...rangeProblems(doc));
   out.push(...noiseFormProblems(doc));
+  out.push(...polarityProblems(doc));
 
   // A diode connection already fixes vds; declaring both means one of them is a fiction, and
   // guessing which the author meant would be worse than saying so.
@@ -1576,6 +1577,31 @@ const ALL_NAMES = createEngine({});
 /** The thermal-noise figures that already carry the body effect where the table has gmb (the
  *  γ-model keys) or are the table's own noise (the measured ones). */
 const NOISE_FIGURES = ['svth_m', 'vnth_m', 'svth', 'vnth'] as const;
+
+/**
+ * A sheet that sizes a device and declares no channel type (or one that is neither n nor p) has
+ * that device read as n-channel: the DC walk runs its current in at the drain and reads its
+ * voltages with the n signs, and a child naming no device is compared with its parent's table as
+ * n. Said, never silent: an information finding where the key is absent, a warning where it is
+ * present and unreadable. A sheet with no device of its own reads its polarity nowhere.
+ */
+function polarityProblems(doc: SheetDoc): QAWarning[] {
+  const p: unknown = doc.polarity;
+  if (!doc.givens || p === 'n' || p === 'p') return [];
+  return [
+    {
+      rule: 'sheet-polarity',
+      severity: p === undefined ? 'info' : 'warning',
+      message:
+        (p === undefined
+          ? 'this sheet declares no polarity'
+          : `this sheet's polarity reads ${JSON.stringify(p)}, which is neither "n" nor "p"`) +
+        ', so its device is read as n-channel: the wiring check runs its current in at the drain ' +
+        'and reads its voltages with the n signs. Declare "polarity" to state it',
+      location: 'polarity',
+    },
+  ];
+}
 
 /**
  * An expression that reads γ against gm and reads neither gmb nor a noise figure computes the

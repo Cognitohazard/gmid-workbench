@@ -70,6 +70,12 @@ export function storedKeys(table: DeviceTable): string[] {
  * evaluated from the interpolated scalars (NOT re-interpolated), so vstar = 2/(gm/id) etc. stay
  * self-consistent at the point. Each is computed by the form the table reads it by, which is not
  * always its definition: derivedFallbacks names the quantities that fell back, and why.
+ *
+ * An axis `point` does not name is read at its first node, and a coordinate past an axis's range
+ * at its edge (the axis value returned is the one read). Neither is said here: the caller owns
+ * it — sizeDevice holds the point to the table first (operatingPointAxis, offHull), and a chart
+ * readout reads the point its curve was drawn at, which the overlay's warning describes
+ * (pinnedElsewhere).
  */
 export function lookup(
   table: DeviceTable,

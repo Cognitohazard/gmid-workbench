@@ -851,7 +851,7 @@ describe('validateSheet — every sized device states its drain voltage', () => 
     expect(res.sizing?.needs).toEqual(['vds']);
     // Beside a stated drain voltage the string is ignored by the sizing, not read as a diode.
     const both = evaluateSheet(given({ vds: '0.6', diode: 'true' as unknown as boolean }), dev);
-    expect(both.sizing?.bias).toEqual({ vds: 0.6 });
+    expect(both.sizing?.bias).toEqual({ vds: 0.6, vsb: 0 });
   });
 
   it('names the block whose givens leave it out, and no other', () => {
@@ -1969,7 +1969,7 @@ describe('bias declared in the givens (vds/vsb)', () => {
     });
     const res = evaluateSheet(doc, dev3);
     expect(res.sizing?.ok).toBe(true);
-    expect(res.sizing?.bias).toEqual({ vds: 0.6 });
+    expect(res.sizing?.bias).toEqual({ vds: 0.6, vsb: 0 });
     // equals sizing on a hand-sliced table
     const ref = sizeBound(fixTable(dev3, { vds: 0.6 }));
     expect(res.sizing?.W).toBeCloseTo(ref.W, 12);
@@ -1983,7 +1983,7 @@ describe('bias declared in the givens (vds/vsb)', () => {
     });
     const res = evaluateSheet(doc, dev3);
     expect(res.sizing?.ok).toBe(true);
-    expect(res.sizing?.bias).toEqual({ vds: 0.6 });
+    expect(res.sizing?.bias).toEqual({ vds: 0.6, vsb: 0 });
   });
 
   it('an undeclared vds fails closed and flags the axis for the in-place fixer', () => {
@@ -2007,6 +2007,37 @@ describe('bias declared in the givens (vds/vsb)', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(res.sizing?.bias).toEqual({ vds: 0.6, vsb: 0 });
     expect(res.sizing?.needs).toBeUndefined();
+  });
+
+  it('records the undeclared body bias as assumed whatever the table holds of it', () => {
+    // The same default — the source at the body — on a table that sweeps vsb, one taken at a
+    // single vsb = 0, and one with no vsb column: the same assumption, recorded the same way on
+    // each, at the point the device was read, and the same numbers.
+    const doc = boundDoc({
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6' },
+    });
+    const swept = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.3 },
+      vsb: { min: 0, max: 0.6, step: 0.2 },
+    });
+    const single = generateDemoDevice({
+      vds: { min: 0, max: 1.2, step: 0.3 },
+      vsb: { min: 0, max: 0, step: 0.2 },
+    });
+    const runs = [swept, single, dev3].map((t) => evaluateSheet(doc, t));
+    for (const r of runs) {
+      expect(r.sizing?.ok).toBe(true);
+      expect(r.sizing?.bias).toEqual({ vds: 0.6, vsb: 0 });
+      expect(r.sizing?.assumed).toEqual(['vsb']);
+    }
+    expect(runs[1].sizing?.W).toBe(runs[2].sizing?.W);
+    expect(runs[0].sizing?.W).toBeCloseTo(runs[2].sizing!.W, 12);
+    // A declared body bias is not assumed, on any of them.
+    const declared = boundDoc({
+      givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '0.6', vsb: '0' },
+    });
+    for (const t of [swept, single, dev3])
+      expect(evaluateSheet(declared, t).sizing?.assumed).toBeUndefined();
   });
 
   it('an undeclared vsb fails closed (not a silent clamp) when the table never characterizes 0', () => {
@@ -2098,7 +2129,7 @@ describe('bias declared in the givens (vds/vsb)', () => {
     };
     const res = evaluateSheet(parent, dev3);
     expect(res.blocks?.[0].feasible).toBe(true);
-    expect(res.blocks?.[0].sizing?.bias).toEqual({ vds: 0.6 });
+    expect(res.blocks?.[0].sizing?.bias).toEqual({ vds: 0.6, vsb: 0 });
     expect(res.values.cs__id).toBeGreaterThan(0);
   });
 });
@@ -2226,9 +2257,11 @@ describe('a device is sized only on a table that carries what its givens use', (
     it('sizes a device given that value, silently, on the table as it stands', () => {
       const res = evaluateSheet(given({ vds: '0.6' }), vdsOnce);
       expectSilent(res);
-      // Nothing was sliced, so nothing is reported as sliced; and the answer is the one the
-      // sizer gives on that same table, read as it stands.
-      expect(res.sizing?.bias).toBeUndefined();
+      // Nothing was sliced: the given drain voltage is the one the table holds. The body bias the
+      // givens leave out is reported at the point the table was read (it has no vsb column), as
+      // assumed; and the answer is the one the sizer gives on that same table, read as it stands.
+      expect(res.sizing?.bias).toEqual({ vsb: 0 });
+      expect(res.sizing?.assumed).toEqual(['vsb']);
       const ref = sizeBound(vdsOnce);
       expect(res.sizing?.W).toBe(ref.W);
       expect(res.sizing?.vgs).toBe(ref.vgs);
@@ -3155,7 +3188,7 @@ describe('override and bias reporting fail closed (adversarial review regression
     });
     const res = evaluateSheet(doc, dev3);
     expect(res.sizing?.ok).toBe(true);
-    expect(res.sizing?.bias).toEqual({ vds: 1.2 }); // the slice actually used
+    expect(res.sizing?.bias).toEqual({ vds: 1.2, vsb: 0 }); // the slice actually used
     expect(res.warnings.some((w) => /vds 5 is outside/.test(w.message))).toBe(true);
   });
 });

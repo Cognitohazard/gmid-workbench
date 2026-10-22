@@ -4,6 +4,7 @@ import {
   familyCurvesXY,
   overlayCurvesXY,
   mirrorPinned,
+  pinnedElsewhere,
   familyUnionCount,
   invertX,
   subsample,
@@ -374,5 +375,72 @@ describe('overlayCurvesXY across polarity (signed PMOS axes)', () => {
     const ov = overlayCurvesXY([n, n], 'gm/id', 'id', 'vgs', 'l', { vds: 0.9 });
     expect(ov.warning).not.toContain('mirrored');
     expect(ov.notes).toEqual([null, null]);
+  });
+});
+
+describe('overlayCurvesXY says where a table is read away from the pinned bias', () => {
+  // The primary sweeps vds over 0.3 … 1.2 V and has no vsb axis; the overlay sweeps vds only to
+  // 0.9 V and adds a body-bias sweep the primary's sliders never pin.
+  const primary = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
+  const shortRaw = generateDemoDevice({
+    vds: { min: 0.3, max: 0.9, step: 0.3 },
+    vsb: { min: 0, max: 0.6, step: 0.3 },
+  });
+  const short = { ...shortRaw, id: { ...shortRaw.id, device: 'nmos_short' } };
+
+  it('names a pin past the range that mirroring cannot place, and the edge it is read at', () => {
+    const ov = overlayCurvesXY([primary, short], 'gm/id', 'id', 'vgs', 'l', { vds: 1.2 });
+    expect(ov.notes).toEqual([null, null]);
+    expect(ov.warning).toContain('nmos_short: vds = 1.2 is outside its swept range 0.3 … 0.9');
+    expect(ov.warning).toContain('read at 0.9');
+    // The edge read is what the drawn curve is: the overlay equals the table pinned at its edge.
+    const atEdge = familyCurvesXY(short, 'gm/id', 'id', 'vgs', 'l', { vds: 0.9, vsb: 0 });
+    const clamped = familyCurvesXY(short, 'gm/id', 'id', 'vgs', 'l', { vds: 1.2 });
+    expect(Array.from(clamped.lines[0])).toEqual(Array.from(atEdge.lines[0]));
+  });
+
+  it('names an axis the pins do not carry, read at its first node', () => {
+    const ov = overlayCurvesXY([primary, short], 'gm/id', 'id', 'vgs', 'l', { vds: 0.6 });
+    expect(ov.warning).toContain(
+      'nmos_short: vsb is not pinned on this chart, read at its first node 0',
+    );
+    expect(ov.warning).not.toContain('outside');
+    // The primary is read exactly where it is pinned, so nothing is said about it.
+    expect(ov.warning).not.toContain('nmos_demo');
+  });
+
+  it('says nothing when every table is read where it is pinned', () => {
+    const ov = overlayCurvesXY([primary, short], 'gm/id', 'id', 'vgs', 'l', { vds: 0.6, vsb: 0.3 });
+    expect(ov.warning).toBe('');
+    expect(pinnedElsewhere(short, { vds: 0.6, vsb: 0.3 }, 'vgs', 'l')).toEqual([]);
+  });
+
+  it('a single-node axis is what the table is; only a pin away from its node is reported', () => {
+    const oneRaw = generateDemoDevice({ vsb: { min: 0, max: 0, step: 0.1 } });
+    const one = { ...oneRaw, id: { ...oneRaw.id, device: 'nmos_one' } };
+    expect(pinnedElsewhere(one, {}, 'vgs', 'l')).toEqual([]);
+    expect(pinnedElsewhere(one, { vsb: 0.3 }, 'vgs', 'l')).toEqual([
+      'vsb = 0.3 is outside its swept range 0 … 0, read at 0',
+    ]);
+    // A pin past an edge by float rounding only is the edge itself.
+    expect(0.4 + 0.2 + 0.3).toBeGreaterThan(0.9);
+    expect(pinnedElsewhere(short, { vds: 0.4 + 0.2 + 0.3, vsb: 0 }, 'vgs', 'l')).toEqual([]);
+  });
+
+  it('the single-table path reports the same, and a mirrored pin is not an edge read', () => {
+    const lone = overlayCurvesXY([short], 'gm/id', 'id', 'vgs', 'l', { vds: 2 });
+    expect(lone.warning).toContain('vds = 2 is outside its swept range 0.3 … 0.9, read at 0.9');
+    expect(lone.warning).toContain('vsb is not pinned on this chart');
+    const n = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
+    const ov = overlayCurvesXY([n, signedMirrorDemo(n)], 'gm/id', 'id', 'vgs', 'l', { vds: 0.9 });
+    expect(ov.warning).toContain('mirrored');
+    expect(ov.warning).not.toContain('outside');
+  });
+
+  it('two tables of one device are told apart by their condition', () => {
+    const ss = { ...short, id: { ...short.id, corner: 'ss', temp: 85 } };
+    const ov = overlayCurvesXY([short, ss], 'gm/id', 'id', 'vgs', 'l', { vds: 0.6 });
+    expect(ov.warning).toContain('nmos_short tt@27: vsb');
+    expect(ov.warning).toContain('nmos_short ss@85: vsb');
   });
 });

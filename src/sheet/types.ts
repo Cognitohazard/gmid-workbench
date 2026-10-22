@@ -872,7 +872,13 @@ export interface SheetDoc {
   /** A few sentences on what the sheet designs, its assumptions, and how to use it —
    *  the block comment a designer inheriting the sheet reads first. */
   description?: string;
-  polarity: 'n' | 'p'; // a self-description label only; no contract enforced at leaf
+  /**
+   * The channel type of the device this sheet sizes. The DC walk reads it for the direction of the
+   * device's current and the sign of its terminal voltages, and a child that names no device is
+   * compared with the table it inherits. Absent: the device is read as n-channel, and validation
+   * says so (an information finding, `sheet-polarity`); so does the walk's current balance.
+   */
+  polarity?: 'n' | 'p';
   params: SheetVar[];
   givens?: SheetGivens;
   equations: SheetEquation[];
@@ -1059,6 +1065,9 @@ export interface DevicePoint {
    *  +1 for a table with no vsb axis, where the stated vsb is 0. */
   bodyAxis: 1 | -1;
   polarity: 'n' | 'p';
+  /** Present where the device's document declares no polarity (or one that is neither n nor p):
+   *  `polarity` is then n by default, and the walk's notes say so. */
+  polarityAssumed?: true;
 }
 
 /** The outcome of a sheet's DC wiring check. `not-applicable` is a sheet that declares

@@ -34,6 +34,7 @@
     fallbackSentences,
     noiseLabel,
     noiseSourcesIn,
+    runCaveats,
     devicesIn,
     deviceName,
     joinProvide,
@@ -262,10 +263,13 @@
 
   // The range-end notes are INFO, not warnings: a mirrored current that is different at a
   // range end is the circuit behaving as drawn, not a fault — and an author claiming that range
-  // should still see it. Their own quiet line, in the core's words.
+  // should still see it. So is a device read as n-channel because its sheet declares no polarity:
+  // a default the result rests on, said where it is taken. Their own quiet line, in the core's
+  // words.
+  const INFO_RULES = new Set(['sheet-range', 'sheet-polarity']);
   const rangeNotes = $derived(
     allWarn
-      .filter((w) => w.severity === 'info' && w.rule === 'sheet-range')
+      .filter((w) => w.severity === 'info' && INFO_RULES.has(w.rule))
       .map((w) => namingRangeEnds(w.message, endNames)),
   );
 
@@ -1157,12 +1161,26 @@
   // notation): every computed value plus each child's, already child__-prefixed —
   // the recipe exports as JSON, the answers copy as text.
   let copied = $state(false);
+  /** "copy results" as text: the values under comment lines carrying what the panel says beside
+   *  them — the verdict and the condition it was asked at, what the run rests on that the document
+   *  did not state (runCaveats: a noise source other than the table's own and every fallback, a
+   *  corner or temperature a table filled in, a bias left at its default, an assumed DC input, a
+   *  coordinate read at the table's edge), the numbers read at the characterization width, and
+   *  every warning and note. A pasted number then carries its caveats with it. */
   function copyResults(): void {
     if (!result || restoreLost?.length) return; // the button is disabled in both states
     const rows = Object.entries(result.values)
       .filter(([, v]) => typeof v === 'number' && Number.isFinite(v))
       .map(([k, v]) => `${k}\t${formatEng(v as number)}`);
-    copyText([`# ${cfg.title}`, ...rows].join('\n'), (on) => (copied = on));
+    const head = [
+      `# ${cfg.title}`,
+      `# ${feasText}${refKey && !multi ? ` · at ${condLabel(refKey)}` : ''}`,
+      ...runCaveats(result, rr.doc).sentences.map((c) => `# rests on: ${c}`),
+      ...(unscaled.length ? [`# at w0, not scaled: ${unscaled.join(', ')}`] : []),
+      ...warnLines.map((w) => `# warning: ${w}`),
+      ...rangeNotes.map((n) => `# note: ${n}`),
+    ];
+    copyText([...head, ...rows].join('\n'), (on) => (copied = on));
   }
 
   function exportSheet(flat: boolean): void {
@@ -2165,7 +2183,8 @@
     {/each}
 
     <!-- Informational, and kept out of the warning list above: nothing went wrong — a range end
-       reads a current the circuit as drawn moves there — and the verdict stands. -->
+       reads a current the circuit as drawn moves there, or a device with no declared polarity is
+       read as n-channel — and the verdict stands. -->
     {#each rangeNotes as n}
       <p class="pinfo">{n}</p>
     {/each}

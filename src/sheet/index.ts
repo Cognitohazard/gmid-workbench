@@ -30,7 +30,7 @@ import type {
 } from './types';
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
-import { evaluateSheet, type DeviceResolver } from './eval';
+import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import type { Settings } from './settings';
 
@@ -112,8 +112,11 @@ export function runSheet(
     assumed: assumptions,
     settings: opts.settings,
   });
+  // A block sized on a table of the other polarity is a fact of the document and its binding,
+  // said once for the run rather than by every evaluation inside it (see inheritedPolarityWarnings).
+  const bound = inheritedPolarityWarnings(r.doc, table, resolveDevice);
   return {
-    ...withValidation(pre, res),
+    ...withValidation([...pre, ...bound], res),
     feasible: res.feasible && !pre.some((w) => w.severity === 'error'),
     assumptions,
   };

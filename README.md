@@ -117,7 +117,10 @@ temperature is written only when the table's `device_parameters` state one or yo
 (`--corner ss --temp -40`); left out, the app reads the table as `tt` at 27 °C and says,
 wherever the table is used, that both were assumed. A stated temperature above 200 is
 read as kelvin and converted, and one that is not a number is written as stated, for the
-app to report. A self-test is included:
+app to report. Every other single-valued entry of `device_parameters` is carried through as a
+`# key: value` line, as stated; an entry that is not a single value, or whose key cannot be a
+header key, is named on the console instead, as is a listed parameter the model's entry does not
+hold. A self-test is included:
 
 ```sh
 uv run --with numpy python3 tools/test_medwatt2mostab.py

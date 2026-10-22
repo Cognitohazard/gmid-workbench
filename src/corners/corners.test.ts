@@ -677,6 +677,53 @@ describe('runCondition', () => {
     expect(run.result).toBeUndefined();
   });
 
+  it('names a condition as the table there names it, filled-in fields marked, in every refusal', () => {
+    // The primary's tt@27 is a file that declared neither corner nor temperature.
+    const assumed = 'tt@27 °C (corner and temperature assumed)';
+    const device = soleDevice([
+      retag(dev, 'tt', 27, { filled: ['corner', 'temp'] }),
+      retag(dev, 'ss', -40),
+    ]);
+    // A child characterized only at ss@-40 has no table at tt: the condition it lacks is named as
+    // the primary's table names it.
+    const child = tailDevice(retag(dev, 'ss', -40));
+    const deviceOf = (b: string): CharacterizedDevice | undefined =>
+      b === 'tail-binding' ? child : undefined;
+    const doc = withTail('tail-binding');
+    const at = runCondition(doc, device, key('tt'), deviceOf);
+    expect(at.state).toBe('not-evaluated');
+    if (at.state !== 'not-evaluated') return;
+    expect(at.issues[0].message).toBe(
+      `block "tailblk": "nch_tail" is not characterized at ${assumed}`,
+    );
+    // Sized there, the design is not evaluated, and held at ss it says where it was to be sized.
+    const runs = runConditions(
+      doc,
+      device,
+      [key('tt'), key('ss', -40)],
+      deviceOf,
+      undefined,
+      key('tt'),
+    );
+    const held = runs.find((r) => sameCondition(r.key, key('ss', -40)));
+    expect(held?.state).toBe('not-evaluated');
+    if (held?.state !== 'not-evaluated') return;
+    expect(held.issues[0].message).toBe(
+      `the design was not evaluated at ${assumed}, where it is sized, so there is nothing to hold here`,
+    );
+    // Two tables claiming one condition are named by the device's own table there.
+    const twice = soleDevice([
+      retag(dev, 'tt', 27, { filled: ['temp'] }),
+      retag(dev, 'tt', 27, { filled: ['temp'] }),
+    ]);
+    const dup = runCondition(gainDoc(20), twice, key('tt'), noDevices);
+    expect(dup.state).toBe('not-evaluated');
+    if (dup.state !== 'not-evaluated') return;
+    expect(dup.issues[0].message).toContain(
+      'several loaded tables claim "nmos_demo" at tt@27 °C (assumed)',
+    );
+  });
+
   it('refuses a condition two loaded tables claim', () => {
     const ambiguous = soleDevice([retag(dev, 'tt'), retag(dev, 'tt')]);
     const run = runCondition(gainDoc(20), ambiguous, key('tt'), noDevices);
@@ -1981,6 +2028,29 @@ describe('worstPointByCheck — where each check is tightest', () => {
     expect([...worst.values()].some((w) => w.rangeEnd !== undefined || w.key.corner === 'ss')).toBe(
       true,
     );
+  });
+
+  it('says once per condition run that a block is sized on a table of the other polarity', () => {
+    // The 5T OTA's p-channel mirror-load blocks name no device; both conditions of the demo
+    // device declare n. Each run — the sized one and the held one — says so once, and its range
+    // ends, which re-evaluate the same binding, do not repeat it.
+    const device = soleDevice([retag(libTable, 'tt', 27), retag(libTable, 'ss', -40)]);
+    const doc = loadLibrary().find((s) => s.file === 'otas/five-transistor-ota.json')!.doc;
+    const runs = runConditions(
+      doc,
+      device,
+      [key('tt'), key('ss', -40)],
+      () => undefined,
+      REFS,
+      key('tt'),
+    );
+    expect(runs.map((r) => r.design)).toEqual(['sized', 'held']);
+    for (const r of runs) {
+      const said = r.result!.warnings.filter((w) => w.rule === 'sheet-polarity');
+      expect(said.map((w) => w.location)).toEqual(['ldr', 'ld']);
+      for (const e of r.result!.rangeEnds ?? [])
+        expect(e.warnings.filter((w) => w.rule === 'sheet-polarity')).toEqual([]);
+    }
   });
 });
 

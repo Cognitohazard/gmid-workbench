@@ -553,11 +553,19 @@ function applyGivensBias(
       // at the body, and reading it as if it did would size the device somewhere nobody wrote
       // down. The author states the value — the same fail-closed path a sweep that leaves the
       // default out takes above. (The drain voltage has no default, and never gets here unstated.)
+      //
+      // Where the table was taken at the default — one node there, or no column, which the
+      // importer reads as characterized there — the device is sized at it, and that is the same
+      // assumption a table sweeping the axis makes: reported as assumed, at the point it was read.
       const own = t.grid.axes.find((a) => a.name === axis);
       const def = AXIS_DEFAULT_BIAS.get(axis);
-      if (own && def !== undefined && !takenAt(axis, own.values[0], def)) {
+      if (def === undefined) continue;
+      if (own && !takenAt(axis, own.values[0], def)) {
         needs.push(axis);
         taken.push(`${axis} = ${shown(own.values[0])}, not at the default ${axis} = ${def}`);
+      } else {
+        bias[axis] = own ? own.values[0] : def;
+        assumed.push(axis);
       }
     }
   }
@@ -1207,6 +1215,74 @@ function evalBlocks(
     reports.push(report);
   }
   return reports;
+}
+
+/**
+ * Every block of `doc`'s tree that names no device and is sized on a table declaring the other
+ * channel type than its own sheet states (see inheritedPolarityMismatch), as warnings attributed to
+ * the block by its path. A fact of the document and the tables it is bound to — not of one
+ * evaluation — so a whole run raises it once, beside its validation (runSheet, and each condition
+ * run), and the evaluations inside it (range ends, solver probes) do not repeat it. Each block
+ * sizes on the table evaluation gives it: the one its `device` names through `resolveDevice`, else
+ * its parent's; a block whose device does not resolve, or whose document is missing or in a format
+ * this engine does not read, is refused by the evaluation and has nothing to compare.
+ */
+export function inheritedPolarityWarnings(
+  doc: SheetDoc,
+  table: DeviceTable | undefined,
+  resolveDevice?: DeviceResolver,
+  depth = 0,
+): QAWarning[] {
+  const out: QAWarning[] = [];
+  if (depth >= MAX_BLOCK_DEPTH) return out;
+  const seen = new Set<string>();
+  for (const block of doc.blocks ?? []) {
+    const child = block.doc;
+    if (!child || formatOf(child) === 'unknown' || seen.has(block.name)) continue;
+    seen.add(block.name);
+    let childTable = table;
+    if (block.device !== undefined) {
+      childTable = resolveDevice?.(block.device);
+      if (childTable === undefined) continue;
+    } else {
+      const mismatch = inheritedPolarityMismatch(block.name, child, table);
+      if (mismatch) out.push(mismatch);
+    }
+    for (const w of inheritedPolarityWarnings(child, childTable, resolveDevice, depth + 1))
+      out.push(prefixBlockWarning(block.name, w));
+  }
+  return out;
+}
+
+/**
+ * A child that names no device is sized on its parent's table. Where that table declares a channel
+ * type and the child's document states the other one — or states none and is read as n (see
+ * SheetDoc.polarity) — the child is sized on the wrong kind of device: said, with the remedy. A
+ * table that declares no polarity, or a child that sizes no device, has nothing to compare.
+ */
+function inheritedPolarityMismatch(
+  name: string,
+  doc: SheetDoc,
+  table: DeviceTable | undefined,
+): QAWarning | undefined {
+  const tablePolarity = table?.meta.polarity?.device;
+  if (!doc.givens || tablePolarity === undefined) return undefined;
+  const declared = doc.polarity === 'n' || doc.polarity === 'p' ? doc.polarity : undefined;
+  const read = declared ?? 'n';
+  if (read === tablePolarity) return undefined;
+  const a = (p: 'n' | 'p'): string => (p === 'n' ? `an n-channel` : `a p-channel`);
+  return {
+    rule: 'sheet-polarity',
+    severity: 'warning',
+    message:
+      `block "${name}" names no device, so it is sized on its parent's table, which declares ` +
+      `${a(tablePolarity)} device; ` +
+      (declared
+        ? `its sheet declares polarity ${declared} — bind the block to ${a(declared)} device`
+        : `its sheet declares no polarity and is read as n — declare the polarity it means, or ` +
+          `bind the block to an n-channel device`),
+    location: name,
+  };
 }
 
 /** A number for each object that keys a child's evaluation (a document, a table), so the key can

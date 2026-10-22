@@ -19,6 +19,7 @@ import { DEFAULT_TEMP_C, PHYS, UT, kelvin } from '../constants';
 import { strides } from '../grid';
 import { HEADER_NAMES, unreadHeader, type ReadField } from '../parse';
 import {
+  DERIVED_FORMS,
   derivedFallbacks,
   derivedForm,
   metaScalars,
@@ -26,6 +27,7 @@ import {
   noiseSource,
   pointScope,
 } from '../derive';
+import { scalarScope } from '../expr';
 import {
   AXIS_DEFAULT_BIAS,
   BASE_KEYS,
@@ -247,7 +249,10 @@ function fullDrive(grid: Grid): { at: number; where: string } | undefined {
 
 /**
  * Run data-trust checks on a device table. Pure: never mutates the table.
- * Checks are skipped gracefully when a required column/axis is absent.
+ * A check that reads an optional column the table lacks is skipped, and leaves a `not-checked`
+ * information finding naming the column, so a skipped check never reads as a passed one. A check
+ * of a column's own values (a sign, a range) has nothing to examine without that column, and
+ * says nothing.
  */
 export function validate(table: DeviceTable): QAWarning[] {
   const out: QAWarning[] = [];
@@ -358,10 +363,16 @@ export function validate(table: DeviceTable): QAWarning[] {
 
   // --- saturation: gds should fall as the device saturates ---
   // Walk gds along vds (preferred) or vgs within each L-slice; if it never
-  // decreases anywhere in a slice the device may not reach saturation.
+  // decreases anywhere in a slice the device may not reach saturation. Without a gds column, or
+  // along a sweep of one value, the question is not asked — and the import says so.
   const gds = q.get('gds');
-  if (gds) {
+  const SATURATION = 'whether the device reaches saturation (gds falling along its sweep)';
+  if (!gds) out.push(notChecked(SATURATION, 'gds', 'the table has no gds column'));
+  else {
     const sweepName = axisIndex(grid, 'vds') >= 0 ? 'vds' : 'vgs';
+    const along = grid.axes[axisIndex(grid, sweepName)];
+    if (along && along.values.length < 2)
+      out.push(notChecked(SATURATION, sweepName, `the table holds ${sweepName} at a single value`));
     forEachLSlice(grid, (lIndex, lValue) => {
       const sl = sliceIndices(grid, lIndex, sweepName);
       if (!sl) return;
@@ -399,6 +410,16 @@ export function validate(table: DeviceTable): QAWarning[] {
       });
     }
   }
+
+  // --- a column that is zero wherever the device conducts ---
+  // An exporter writes 0 for an operating-point quantity its model does not provide, and the zeros
+  // import as a measured value: a capacitance of 0 at every point makes fT infinite everywhere, and
+  // nothing else would say so. A quantity is never exactly 0 at every point where drain current
+  // flows, so such a column is reported — named, with what reads it. Zeros where no current flows
+  // are legitimate (flicker noise written as 0 at id = 0), so only conducting points count, and a
+  // table that conducts nowhere is left to the other checks. The noise PSDs and a stored gamma are
+  // judged by their own checks (noise-psd, gamma-range), which already flag a zero.
+  out.push(...zeroColumns(table));
 
   // --- magnitude / positivity checks ---
   // gm and gds are reported as magnitudes; a self-capacitance (cgg, cdd, css, cbb) and a
@@ -737,6 +758,74 @@ export function validate(table: DeviceTable): QAWarning[] {
   out.push(...filledFindings(table), ...unreadableHeaders(table), ...idSign(table));
   return out;
 }
+
+/** Columns another check already judges for a zero (see zeroColumns). */
+const ZERO_JUDGED_ELSEWHERE: ReadonlySet<string> = new Set(['id', 'sth', 'sfl', 'gamma']);
+
+/**
+ * Every standard quantity column of `table` that is exactly 0 at every point carrying drain current
+ * (at least one does), as a `zero-column` warning naming the column, the derived quantities whose
+ * definition reads it, and those of them it makes infinite (a definition dividing by it). Axis
+ * columns, pass-through columns (not checked, see passthrough-columns) and the columns in
+ * ZERO_JUDGED_ELSEWHERE are left out.
+ */
+function zeroColumns(table: DeviceTable): QAWarning[] {
+  const q = table.grid.quantities;
+  const id = q.get('id');
+  if (!id) return [];
+  const conducting: number[] = [];
+  for (let i = 0; i < id.length; i++) if (id[i] !== 0) conducting.push(i);
+  if (!conducting.length) return [];
+  const axes = new Set(table.grid.axes.map((a) => a.name));
+  const out: QAWarning[] = [];
+  for (const [key, col] of q) {
+    if (!BASE_KEYS.has(key) || axes.has(key) || ZERO_JUDGED_ELSEWHERE.has(key)) continue;
+    if (!conducting.every((i) => col[i] === 0)) continue;
+    const readers: string[] = [];
+    const infinite: string[] = [];
+    for (const [derived, forms] of DERIVED_FORMS) {
+      const form = forms.find((f) => f.compiled.names.includes(key));
+      if (!form) continue;
+      readers.push(derived);
+      // Every other name it reads at 1 and this column at 0: a definition that divides by it
+      // comes out non-finite whatever the other values are.
+      const at: Record<string, number> = {};
+      for (const n of form.compiled.names) at[n] = n === key ? 0 : 1;
+      const v = form.compiled.eval(scalarScope(at));
+      if (typeof v === 'number' && !Number.isFinite(v)) infinite.push(derived);
+    }
+    const list = (xs: string[]): string =>
+      xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0];
+    const rest = readers.filter((r) => !infinite.includes(r));
+    const reads = [
+      ...(infinite.length
+        ? [`${list(infinite)} ${infinite.length > 1 ? 'are' : 'is'} infinite on it`]
+        : []),
+      ...(rest.length ? [`${list(rest)} ${rest.length > 1 ? 'read' : 'reads'} it`] : []),
+    ];
+    out.push({
+      rule: 'zero-column',
+      severity: 'warning',
+      message:
+        `${key} is 0 at every point that carries drain current — an exporter writes 0 for a ` +
+        `quantity its model does not provide, so this column is probably not data` +
+        (reads.length ? `; ${reads.join(', and ')}` : ''),
+      location: key,
+    });
+  }
+  return out;
+}
+
+/**
+ * A check `validate` could not run because the table lacks what it reads (`column`, and `why` in
+ * words): an information finding, so a skipped check is never read as a passed one.
+ */
+const notChecked = (check: string, column: string, why: string): QAWarning => ({
+  rule: 'not-checked',
+  severity: 'info',
+  message: `not checked: ${check} — ${why}`,
+  location: column,
+});
 
 /** What filled-in temperature the figures on a table assume, the words several findings share. */
 const ASSUMED_TEMP_CONSEQUENCE =

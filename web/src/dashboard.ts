@@ -640,7 +640,9 @@ export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc 
   return {
     title: str(o.title, 'Sheet'),
     ...(typeof o.description === 'string' && o.description ? { description: o.description } : {}),
-    polarity: o.polarity === 'p' ? 'p' : 'n',
+    // An absent polarity stays absent: the engine reads the device as n and says so (the
+    // sheet-polarity finding), which a default written in here would hide.
+    ...(o.polarity === 'n' || o.polarity === 'p' ? { polarity: o.polarity } : {}),
     params,
     equations,
     checks,
@@ -685,13 +687,14 @@ export function presetDashboard(dev: DeviceTable): Dashboard {
  * Carry a live layout onto a newly active device. Only the auto-generated canonical panels are
  * device-specific, so they are regenerated for the new device; every user-authored panel (a
  * panel the user added, or a canonical one they edited, which clears its `auto` marker) and tab
- * is preserved and re-validated against it (families it lacks relax to a single curve, design
- * sheets kept verbatim). This is what lets a device swap keep the user's work instead of wiping
- * it. The Overview tab is found by its `auto` marker, not by position, so it re-seeds wherever it
- * sits — and not at all if the user has deleted it (their choice is respected).
+ * is preserved and re-validated against it (a family it lacks is kept and drawn as a single
+ * curve, design sheets kept verbatim). This is what lets a device swap keep the user's work
+ * instead of wiping it. The Overview tab is found by its `auto` marker, not by position, so it
+ * re-seeds wherever it sits — and not at all if the user has deleted it (their choice is
+ * respected).
  */
 export function reseatDashboard(dash: Dashboard, dev: DeviceTable): Dashboard {
-  const san = sanitizeDashboard(dash, dev);
+  const san = sanitizeDashboard(dash);
   if (!san) return presetDashboard(dev);
   const fresh = presetTab(dev).panels;
   san.tabs = san.tabs.map((t) =>
@@ -774,23 +777,24 @@ export function persistedDashboard(d: Dashboard): Dashboard {
 
 /**
  * Coerce an untrusted parsed object (e.g. a saved layout from localStorage) into a
- * valid Dashboard for `dev`, or null if it isn't salvageable (caller falls back to
- * the preset). Families absent on the device drop to '' (single curve); cols clamp to
- * 1..4; ids/render/sweep/activeTab are normalized. Expressions are kept verbatim — an
- * unresolvable one surfaces as a per-panel error, never a silent drop of the user's work.
+ * valid Dashboard, or null if it isn't salvageable (caller falls back to the preset). Nothing
+ * here depends on the device: a family or sweep axis the active device does not sweep is kept as
+ * stored — the panel draws one curve and the bench sweeps vgs there, each saying so — so a device
+ * swap does not erase the choice. Cols clamp to 1..4; ids/render/activeTab are normalized.
+ * Expressions are kept verbatim — an unresolvable one surfaces as a per-panel error, never a
+ * silent drop of the user's work.
  * Every tab and panel this pass cannot carry, a render it does not know and a corner mode it
  * does not read are recorded in `lost` (a sheet's own losses stay on its panel, see
  * restoredSheet), so a restore that loses them can keep the stored layout instead of saving
  * over it.
  */
-export function sanitizeDashboard(d: unknown, dev: DeviceTable, lost?: string[]): Dashboard | null {
+export function sanitizeDashboard(d: unknown, lost?: string[]): Dashboard | null {
   if (!d || typeof d !== 'object') return null;
   const o = d as Record<string, unknown>;
   if (!Array.isArray(o.tabs)) {
     lost?.push('tabs');
     return null;
   }
-  const axes = new Set(dev.grid.axes.filter((a) => a.values.length > 1).map((a) => a.name));
   const str = (v: unknown, fallback: string) => (typeof v === 'string' && v ? v : fallback);
   const tabs: Tab[] = [];
   for (const [ti, t] of o.tabs.entries()) {
@@ -839,7 +843,9 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable, lost?: string[])
         id: str(pp.id, uid()),
         xExpr: pp.xExpr,
         yExpr: pp.yExpr,
-        family: typeof pp.family === 'string' && axes.has(pp.family) ? pp.family : '',
+        // Kept as stored even where this device does not sweep it: the panel draws one curve
+        // there and says so, and a swap back to a device that does finds the choice intact.
+        family: typeof pp.family === 'string' ? pp.family : '',
         render,
         ...(pp.xScale === 'log' || pp.xScale === 'lin' ? { xScale: pp.xScale } : {}),
         ...(pp.yScale === 'log' || pp.yScale === 'lin' ? { yScale: pp.yScale } : {}),
@@ -868,6 +874,7 @@ export function sanitizeDashboard(d: unknown, dev: DeviceTable, lost?: string[])
   return {
     tabs,
     activeTab: typeof at === 'number' && at >= 0 && at < tabs.length ? Math.floor(at) : 0,
-    sweep: typeof o.sweep === 'string' && axes.has(o.sweep) ? o.sweep : SWEEP_AXIS,
+    // Kept like a family: the bench sweeps vgs where the device lacks it, and says so.
+    sweep: typeof o.sweep === 'string' && o.sweep ? o.sweep : SWEEP_AXIS,
   };
 }

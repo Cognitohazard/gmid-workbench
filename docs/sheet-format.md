@@ -88,7 +88,7 @@ A sheet is one JSON object (the GUI edits and persists it verbatim). Its fields:
 |-|-|-|
 | `title` | string | Display name of the sheet. |
 | `description` | string, optional | A few sentences on what the sheet designs, its assumptions, and how to use it — the note a designer inheriting the sheet reads first. Supports inline math in `$…$` (see [Inline math](#inline-math-in-prose)), e.g. `$g_m/I_D$`. |
-| `polarity` | `"n"` \| `"p"` | A self-description label only; no contract is enforced at a leaf. |
+| `polarity` | `"n"` \| `"p"`, optional | The channel type of the sheet's device. The wiring check reads it for the direction of the device's current and the signs of its terminal voltages, and a block that names no device is compared with the table it inherits (a warning where the table declares the other polarity). Absent on a sheet that sizes a device: read as `n`, said by an information finding (`sheet-polarity`) and in the wiring check's notes; a value that is neither `n` nor `p` is a warning. |
 | `params` | array | Named scalar design inputs (see [Parameters](#parameters)). |
 | `givens` | object, optional | The bind-any-2 device declaration (see [The givens](#the-givens-givens)). Omit for a sheet that only does author math. |
 | `equations` | array | Named intermediate/output expressions, evaluated in document order (see [Equations](#equations-equations)). |
@@ -684,7 +684,10 @@ device from the menu rewrites the binding in the `family:` form.
 device menu, at any depth, including a block nested inside another embedded block. Left unset, a
 block inherits its parent's device: the active device for a block on the sheet itself, the
 enclosing block's device for one nested inside another — so rebinding a block moves every
-descendant that names no device of its own. A block **inside a by-reference child** belongs to the
+descendant that names no device of its own. Where the inherited table declares a polarity and the
+block's sheet states the other one (or states none, and is read as `n`), the result carries a
+warning naming the block: it is being sized on the other kind of device until it is bound to one
+of its own. A block **inside a by-reference child** belongs to the
 library sheet that child points at, like the rest of that sheet's internals, and has no menu: to
 rebind it, detach the reference (the referenced block itself can always be rebound, because its
 binding is part of the sheet that includes it).

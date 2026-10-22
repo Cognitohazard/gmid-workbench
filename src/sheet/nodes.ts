@@ -1171,6 +1171,7 @@ function devicePoint(
     ...sensitivities,
     ...axesOf(table),
     polarity: doc.polarity === 'p' ? 'p' : 'n',
+    ...(doc.polarity !== 'p' && doc.polarity !== 'n' ? { polarityAssumed: true as const } : {}),
   };
 }
 
@@ -2264,6 +2265,17 @@ function currentBalance(
   const balance: NodesReport['balance'] = [];
   const messages: string[] = [];
   const notes: string[] = [];
+  // A device whose document declares no channel type has its current run the n way; the balance
+  // below rests on that, so it says so.
+  for (const dev of devices)
+    if (dev.point?.polarityAssumed && dev.wires.length) {
+      const who = deviceName(dev.name);
+      notes.push(
+        `${who[0].toUpperCase()}${who.slice(1)} declares no polarity, so its current is taken to ` +
+          `enter at the drain and leave at the source, as an n-channel device's; declare ` +
+          `"polarity" to state it.`,
+      );
+    }
   for (const [w, list] of [...branchesAt].sort(([x], [y]) => cmp(x, y))) {
     if (held.ownPorts.has(w)) continue;
     if (list.some((b) => b.current === undefined)) {

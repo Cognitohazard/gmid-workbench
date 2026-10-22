@@ -109,7 +109,8 @@ interface Level {
 interface DraftDevice {
   name: string;
   givens: SheetGivens;
-  polarity: 'n' | 'p';
+  /** Absent where the document declares none: drafted as n, which validation records. */
+  polarity?: 'n' | 'p';
   block?: SheetBlock;
 }
 

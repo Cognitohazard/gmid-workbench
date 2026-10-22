@@ -59,6 +59,7 @@
     defaultBias,
     TEMPLATES,
     LENGTH_AXIS,
+    SWEEP_AXIS,
     GM_ID,
     type Dashboard,
     type PanelTemplate,
@@ -208,10 +209,19 @@
     // registry recorded; without a registry every rank ties and order is kept).
     const have = new Set(tables.map((d) => tableUid(d.table)));
     const restored: { item: Loaded; rank: number }[] = [];
+    const skipped: StoreSkip[] = [];
+    /** A record that cannot come back is kept as stored and said, never dropped unseen. */
+    const skip = (key: string, raw: unknown, why: string): void => {
+      const device = (raw as { id?: { device?: unknown } } | undefined)?.id?.device;
+      skipped.push({ key, name: typeof device === 'string' && device ? device : key, why });
+    };
     for (const { key, table: raw } of stored) {
       try {
-        // Trust nothing: a corrupt/stale record is skipped, not rendered.
-        if (!saneTable(raw)) continue;
+        // Trust nothing: a corrupt/stale record is not rendered — and the strip says so.
+        if (!saneTable(raw)) {
+          skip(key, raw, 'not a readable table');
+          continue;
+        }
         // A table stored before the importer recorded what it filled in says what it can.
         const dt = withRecordedFill(raw);
         const uid = tableUid(dt);
@@ -245,9 +255,10 @@
           rank: pos.get(key) ?? pos.get(uid) ?? Number.MAX_SAFE_INTEGER,
         });
       } catch {
-        // a table that no longer validates is dropped silently
+        skip(key, raw, 'it no longer validates');
       }
     }
+    storeSkipped = skipped;
     // In the same breath as the tables themselves: the save effect fires as soon as `tables`
     // changes below, and it would persist designations that still name the pre-migration uids.
     // A designation whose table did NOT come back is left exactly as it was — it reads as an
@@ -261,6 +272,15 @@
     if (wasEmpty) select(Math.min(Math.max(bootReg?.active ?? 0, 0), restored.length - 1));
   });
   let importError = $state<string | null>(null);
+  /** A stored table that could not be restored: its storage key, the device it names (or the key
+   *  when it names none) and why. Kept as stored, shown in the strip with a control that deletes
+   *  it, so nothing retained is out of sight. */
+  type StoreSkip = { key: string; name: string; why: string };
+  let storeSkipped = $state<StoreSkip[]>([]);
+  function deleteSkipped(): void {
+    for (const s of storeSkipped) void deleteTable(s.key);
+    storeSkipped = [];
+  }
   let dragging = $state(false);
 
   // Canonical key → display metadata (static; reused by the picker and sliders).
@@ -297,7 +317,7 @@
       if ('corrupt' in stored)
         return { dash: null, lost: ['the stored layout is not text this build can read'] };
       const lost: string[] = [];
-      const dash = sanitizeDashboard(stored.value, dev, lost);
+      const dash = sanitizeDashboard(stored.value, lost);
       if (!dash && !lost.length) lost.push('the stored layout is not a layout this build reads');
       return { dash, lost };
     };
@@ -312,12 +332,18 @@
   function keepLayout(): void {
     layoutLost = null;
   }
-  // Null until the first device loads — the dashboard can only be seeded/validated against a
-  // device (sanitizeDashboard/presetDashboard both need one). The saved layout in localStorage is
+  // Null until the first device loads — the dashboard is seeded against a device
+  // (presetDashboard needs one). The saved layout in localStorage is
   // restored at that point, so a customized dashboard still survives a reload.
   let dashboard = $state<Dashboard | null>(null);
   const activeTab = $derived(
     dashboard ? (dashboard.tabs[dashboard.activeTab] ?? dashboard.tabs[0]) : undefined,
+  );
+  /** The axis every panel sweeps on this device: the layout's own where the device sweeps it,
+   *  else vgs — said beside the control, while the layout keeps its choice for a device that
+   *  does. */
+  const sweep = $derived(
+    dashboard && multiAxes.includes(dashboard.sweep) ? dashboard.sweep : SWEEP_AXIS,
   );
   // Persist the layout (not the device — that re-seeds on load) so a customized dashboard
   // survives a reload. Best-effort. Never clobber the saved layout with the empty-boot null.
@@ -360,7 +386,6 @@
   // on tab/panel edits), so the operating point persists.
   const biasAxes = $derived.by(() => {
     if (!device || !dashboard) return [];
-    const sweep = dashboard.sweep;
     return device.grid.axes.filter((a) => a.name !== sweep && a.values.length > 1);
   });
   // The per-axis slider bind:value={sharedBias[a.name]} needs $state's deep proxy; a
@@ -397,11 +422,7 @@
   // including derived ones the width scalar unlocks (id/w).
   const exprOptions = $derived.by(() => {
     if (!device || !dashboard) return [];
-    const pq = plottableQuantities(
-      device.grid,
-      dashboard.sweep,
-      Object.keys(metaScalars(device.meta)),
-    );
+    const pq = plottableQuantities(device.grid, sweep, Object.keys(metaScalars(device.meta)));
     return [
       ...pq.base.map((k) => ({ value: k, label: `${k} [${baseUnit.get(k)}]` })),
       // A stored column shadows the quantity of the same name it could otherwise derive (a
@@ -745,6 +766,7 @@
     sizerOpen = false;
     pickerOpen = false;
     importError = null;
+    storeSkipped = [];
   }
 
   // Toggle device `i` into/out of the overlay set (the active device can't overlay itself).
@@ -778,11 +800,17 @@
   {#if dashboard}
     <label class="axis"
       >sweep
-      <select bind:value={dashboard.sweep}>
+      <select
+        value={sweep}
+        onchange={(e) => dashboard && (dashboard.sweep = e.currentTarget.value)}
+      >
         {#each multiAxes as ax}<option value={ax}>{ax}</option>{/each}
       </select>
     </label>
     <Help text={CONTROL_HELP.sweep} />
+    {#if dashboard.sweep !== sweep}<span class="sweepnote" data-sweep-note
+        >{dashboard.sweep} is not swept by this device — {sweep} is used, and the layout keeps {dashboard.sweep}</span
+      >{/if}
     {#each shownBiasAxes as a}
       <label class="slider">
         {a.name}
@@ -935,6 +963,17 @@
       the earlier saved layout was brought forward without {layoutLost.lost.join(', ')}, which this
       build does not read; that copy is left as it is.
     {/if}
+  </div>
+{/if}
+{#if storeSkipped.length}
+  <!-- A stored table that could not be restored is kept, not dropped unseen: it is named here,
+       with why, and deleting it is one click (clear all removes it too). -->
+  <div class="qa warning" data-store-skipped>
+    {storeSkipped.length === 1 ? 'a stored table' : `${storeSkipped.length} stored tables`} could not
+    be restored and {storeSkipped.length === 1 ? 'is' : 'are'} not on the bench:
+    {storeSkipped.map((s) => `${s.name} (${s.why})`).join(', ')}. The stored
+    {storeSkipped.length === 1 ? 'copy is kept as it is' : 'copies are kept as they are'} —
+    <button class="btn" onclick={deleteSkipped} data-store-delete>delete</button>
   </div>
 {/if}
 {#if importError}
@@ -1178,7 +1217,7 @@
           {device}
           {overlays}
           {bench}
-          sweep={dashboard.sweep}
+          {sweep}
           {sharedBias}
           {cfg}
           families={multiAxes}
@@ -1246,6 +1285,10 @@
     align-items: baseline;
     gap: 0.3rem;
     opacity: 0.85;
+  }
+  .sweepnote {
+    font-size: 0.85em;
+    opacity: 0.75;
   }
   .axis select {
     font: inherit;
