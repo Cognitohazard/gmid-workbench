@@ -1,0 +1,45 @@
+{
+  "title": "NMOS bias reference",
+  "description": "The bias reference a current mirror copies, drawn as a circuit: a diode-connected NMOS with its programmed current delivered by an ideal current source from the supply port. The programmed current is the one current typed here. The device's drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width, its gate-source voltage and its current: a mirror output on the gate wire at K times this width and at this length copies the current density, and so carries K times the programmed current less its drain-voltage error. The ideal source stands for whatever generates the reference current, which this sheet does not draw. A composing sheet maps the supply port to its supply, or to the supply port it exposes itself, maps the gate port to the gate wire its mirror outputs share, and passes in its own programmed current, length and inversion level. Used alone, the sheet sizes the reference at the values typed here.",
+  "polarity": "n",
+  "params": [
+    {
+      "name": "I_ref",
+      "value": 20e-6,
+      "unit": "A",
+      "role": "spec",
+      "note": "the programmed reference current, delivered by the ideal source into the diode. A composing sheet passes the current its mirror tree is programmed to",
+      "class": "independent"
+    },
+    {
+      "name": "L_ref",
+      "value": 0.5e-6,
+      "unit": "m",
+      "role": "choice",
+      "note": "the reference's length. A mirror copies a current density at one length, so a composing sheet gives its mirror outputs the same one"
+    },
+    {
+      "name": "gm_id_ref",
+      "value": 10,
+      "unit": "1/V",
+      "role": "choice",
+      "note": "inversion level of the reference, which every mirror output on its gate inherits: a higher V* costs headroom at each output's drain and buys matching"
+    }
+  ],
+  "givens": { "L": "L_ref", "id": "I_ref", "gm_id": "gm_id_ref" },
+  "equations": [],
+  "checks": [
+    {
+      "id": "feasible-inversion",
+      "kind": "physical",
+      "lhs": "gm_id_ref",
+      "op": "<=",
+      "rhs": "ceiling"
+    }
+  ],
+  "provides": ["W", "vgs", "id"],
+  "formatVersion": 2,
+  "nodes": { "d": "vb", "g": "vb", "s": "gnd", "b": "gnd" },
+  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vb"], "value": "I_ref" }],
+  "ports": ["vdd", "vb"]
+}

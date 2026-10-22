@@ -1,6 +1,6 @@
 {
   "title": "Fully differential telescopic OTA",
-  "description": "A fully differential telescopic-cascode OTA. Each side stacks an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails, above a tail device shared by the two sides; the cascodes boost the output resistance so a single stage reaches high gain. $A_v = g_{m,in} * R_{out}$, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's $r_o$ by its intrinsic gain ($A_{v0,cascn}/g_{ds,in}$); looking up, the PMOS cascode multiplies the load's $r_o$ ($A_{v0,cascp}/g_{ds,load}$). Those branch expressions are the standard cascode approximation (they drop second-order $g_{mb}$ and finite-cascode-gain terms). Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item $I_{cmfb}$ added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Only the tail's bias reference is programmed, with $I_{tail}$: the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and each side carries half of what it delivers, so a design held fixed at another process condition follows its reference instead of carrying a typed current. Internal node levels are authored choice params, and every device in the stack declares that it must stay saturated. On the demo NMOS table every device sizes against the same data.",
+  "description": "A fully differential telescopic-cascode OTA. Each side stacks an input device, an NMOS cascode, a PMOS cascode, and a PMOS load between the rails, above a tail device shared by the two sides; the cascodes boost the output resistance so a single stage reaches high gain. $A_v = g_{m,in} * R_{out}$, where each side's output resistance is a cascode-boosted branch resistance combined in parallel: looking down, the NMOS cascode multiplies the input device's $r_o$ by its intrinsic gain ($A_{v0,cascn}/g_{ds,in}$); looking up, the PMOS cascode multiplies the load's $r_o$ ($A_{v0,cascp}/g_{ds,load}$). Those branch expressions are the standard cascode approximation (they drop second-order $g_{mb}$ and finite-cascode-gain terms). Being fully differential, there is no current-mirror in the signal path and therefore no mirror pole or its attendant pole-zero doublet — a real frequency-response advantage over the single-ended mirror-loaded stage. Common-mode feedback is required to set the output common mode, but the CMFB loop itself is out of this sheet's scope (no loop solving): it appears only as a current line item $I_{cmfb}$ added to the supply budget. The differential output swing is twice the single-ended cascoded headroom. Only the tail's bias reference is programmed, with $I_{tail}$: the tail device shares its gate and width and delivers the programmed current less the mirror's drain-voltage error, and each side carries half of what it delivers, so a design held fixed at another process condition follows its reference instead of carrying a typed current. Entered from the COMMON MODE like its siblings: the tail node is solved so the input common mode it produces, the tail node plus the input devices' gate-source voltage, equals $CM_{dc}$. The other internal node levels are authored choice params, and every device in the stack declares that it must stay saturated. On the demo NMOS table every device sizes against the same data.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -121,14 +121,24 @@
       "role": "choice"
     },
     {
+      "name": "CM_dc",
+      "value": 0.95,
+      "min": 0.7,
+      "max": 1.3,
+      "unit": "V",
+      "role": "spec",
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. This sheet claims no operating range: the input device's drain sits at the authored V_a, so a higher common mode lifts the tail node into it, and range ends would only restate that",
+      "class": "independent"
+    },
+    {
       "name": "V_s",
       "value": 0.32,
       "min": 0.1,
-      "max": 0.8,
+      "max": 0.45,
       "unit": "V",
       "role": "choice",
-      "note": "tail node (input-pair source) DC level. Stated at this design point. Where the design is held fixed (a range end), the gate bias above this node is what stays put and the node is re-solved under it, between min and max.",
-      "hold": "V_s + in__vgs"
+      "designConstraint": { "lhs": "CM_in", "rhs": "CM_dc" },
+      "note": "the tail node (input-pair source). Solved rather than set: searched between min and max (the range it is searched in, not slider bounds) until the produced common mode equals CM_dc. The range stops below V_a, the input devices' drain, as the single-ended telescopic's does. Fixes the pair's body bias and drain-source voltage in one stroke, and it is the tail device's drain-source voltage, so it also sets the current the tail delivers"
     },
     {
       "name": "V_a",
@@ -172,54 +182,9 @@
   "blocks": [
     {
       "name": "bias",
-      "doc": {
-        "title": "Tail bias reference",
-        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
-        "polarity": "n",
-        "params": [
-          {
-            "name": "I_b",
-            "value": 40e-6,
-            "unit": "A",
-            "role": "spec"
-          },
-          {
-            "name": "L_b",
-            "value": 0.5e-6,
-            "unit": "m",
-            "role": "choice"
-          },
-          {
-            "name": "gm_id_b",
-            "value": 8,
-            "unit": "1/V",
-            "role": "choice"
-          }
-        ],
-        "givens": {
-          "L": "L_b",
-          "id": "I_b",
-          "gm_id": "gm_id_b",
-          "diode": true
-        },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_b",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs"]
-      },
-      "params": {
-        "I_b": "I_tail",
-        "L_b": "L_tail",
-        "gm_id_b": "gm_id_tail"
-      },
-      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_tail", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
+      "ports": { "vdd": "vdd", "vb": "vbn" }
     },
     {
       "name": "tail",
@@ -455,6 +420,12 @@
     }
   ],
   "equations": [
+    {
+      "name": "CM_in",
+      "expr": "V_s + in__vgs",
+      "unit": "V",
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; it rises monotonically with the tail node, so the design constraint that places the tail node from CM_dc is a well-posed one-unknown search"
+    },
     { "name": "gm_in", "expr": "in__gm", "unit": "S", "note": "input-pair transconductance" },
     {
       "name": "Rdown",
@@ -472,7 +443,7 @@
       "name": "Rout",
       "expr": "par(Rdown, Rup)",
       "unit": "ohm",
-      "note": "single-side output resistance = the two cascode branches in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "single-side output resistance = the two cascode branches in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
@@ -490,7 +461,7 @@
       "name": "I_q",
       "expr": "tail__id + I_cmfb",
       "unit": "A",
-      "note": "estimate: quiescent supply current — what the tail device delivers, plus the CMFB network's budget (the CMFB loop itself is out of scope). The reference branch that programs the tail is shared bias infrastructure and is not counted here. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — what the tail device delivers, plus the CMFB network's budget (the CMFB loop itself is out of scope). The reference branch that programs the tail is shared bias infrastructure and is not counted here. The datasheet line for comparing designs; no check reads it"
     },
     {
       "name": "vn_in",
@@ -502,7 +473,7 @@
       "name": "cgg_in",
       "expr": "in__cgg",
       "unit": "F",
-      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     }
   ],
   "checks": [
@@ -527,13 +498,12 @@
   "formatVersion": 2,
   "levels": {
     "vdd": "VDD",
-    "vinp": "V_s + in__vgs",
-    "vinn": "V_s + in__vgs",
+    "vinp": "CM_dc",
+    "vinn": "CM_dc",
     "vcn": "V_a + cascn__vgs",
     "vcp": "V_b - abs(cascp__vgs)",
     "outn": "V_out",
     "outp": "V_out"
   },
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }],
   "ports": ["vbp"]
 }

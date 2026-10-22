@@ -17,7 +17,7 @@
       "value": 8e6,
       "unit": "Hz",
       "role": "spec",
-      "note": "unity-gain bandwidth target into the 2 pF load; the boosters must be faster than this, which the booster-bandwidth row reads against the same number. An example, to be replaced with the design's own spec"
+      "note": "unity-gain bandwidth target into the 2 pF load; the boosters must be faster than this, which the booster-bandwidth equation reads against the same number. An example, to be replaced with the design's own spec"
     },
     {
       "name": "SR_target",
@@ -31,7 +31,7 @@
       "value": 25e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget; with each device's noise read from the tables, the row lands near 26.9 nV/rtHz on a sky130 tt realization with the PMOS devices on the pfet table, the pair receiving less than the programmed tail current — just over this budget. No simulated floor exists for this topology"
+      "note": "input-referred thermal density budget; with each device's noise read from the tables, the equation lands near 26.9 nV/rtHz on a sky130 tt realization with the PMOS devices on the pfet table, the pair receiving less than the programmed tail current — just over this budget. No simulated floor exists for this topology"
     },
     {
       "name": "CM_lo",
@@ -212,34 +212,9 @@
   "blocks": [
     {
       "name": "bias",
-      "doc": {
-        "title": "Tail bias reference",
-        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device in the main branch whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_b", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_b", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_b", "value": 14, "unit": "1/V", "role": "choice" }
-        ],
-        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "diode": true },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_b",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs"]
-      },
-      "params": {
-        "I_b": "I_tail",
-        "L_b": "L_tail",
-        "gm_id_b": "gm_id_tail"
-      },
-      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_tail", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
+      "ports": { "vdd": "vdd", "vb": "vbn" }
     },
     {
       "name": "tail",
@@ -488,7 +463,7 @@
       },
       "params": {
         "W_c": "casc_n__W",
-        "I_side": "tail__id/2",
+        "I_side": "in__id",
         "L_c": "L_casc",
         "vds_c": "VDD - abs(mir__vgs) - V_a",
         "vsb_c": "V_a"
@@ -528,7 +503,7 @@
       },
       "params": {
         "W_c": "casc_p__W",
-        "I_side": "tail__id/2",
+        "I_side": "in__id",
         "L_c": "L_casc",
         "vds_c": "sign_p*(V_b - (VDD - abs(mir__vgs)))",
         "vsb_c": "VDD - V_b"
@@ -580,7 +555,7 @@
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the design constraint that places the tail node from CM_dc is a well-posed one-unknown search"
     },
     {
       "name": "Rout_n",
@@ -598,7 +573,7 @@
       "name": "Rout",
       "expr": "par(Rout_n, Rout_p)",
       "unit": "ohm",
-      "note": "the two regulated-cascode sides in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "the two regulated-cascode sides in parallel. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
@@ -641,13 +616,13 @@
       "name": "cgg_in",
       "expr": "in__cgg",
       "unit": "F",
-      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "tail__id + 2*I_boost",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the main branch at the current the tail device delivers plus one booster per cascode polarity, as these rows model them. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
+      "note": "estimate: quiescent supply current — the main branch at the current the tail device delivers plus one booster per cascode polarity, as these equations model them. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -691,7 +666,7 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard rule must hold there"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there"
     },
     {
       "name": "cm-hi",
@@ -712,6 +687,5 @@
     "br": "V_b",
     "bo": "vds_bo"
   },
-  "ports": ["vgn", "vgp", "vgnr", "vgpr", "bi"],
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }]
+  "ports": ["vgn", "vgp", "vgnr", "vgpr", "bi"]
 }

@@ -42,6 +42,7 @@ import {
   vgsForCurrentRatio,
   vgsAtGmId,
   sheet as libSheet,
+  REFS,
 } from './library.fixtures';
 
 const sheet = (file: string) => libSheet(`mirrors-bias/${file}`);
@@ -563,7 +564,8 @@ const rootOf = (f: (x: number) => number, lo: number, hi: number): number => {
 };
 
 describe('tier-2 goldens: Widlar current source', () => {
-  const res = runSheet(sheet('widlar-current-source.json'), table);
+  // The reference is the library's NMOS bias reference, composed by reference.
+  const res = runSheet(sheet('widlar-current-source.json'), table, undefined, REFS);
   // Defaults: I_in 20 µA, R_s 10 kΩ, M_ratio 1, L = 1 µm, gm/ID 8 on the reference, V_out 0.9 V.
   // The output current is solved: it is the current at which the output device, the reference's
   // width on the reference's gate, sits exactly I_out*R_s below the reference's gate-source
@@ -588,7 +590,7 @@ describe('tier-2 goldens: Widlar current source', () => {
     expect(res.sizing?.ok).toBe(true);
     expect(relErr(res.values.I_out, I_OUT)).toBeLessThan(1e-3);
     expect(res.values.id).toBe(res.values.I_out);
-    // The identity the search makes hold, to the search's own tolerance, and the rule reading it.
+    // The identity the search makes hold, to the search's own tolerance, and the check reading it.
     expect(Math.abs(res.values.delta_vgs - res.values.vgs_drop)).toBeLessThan(1e-6);
     expect(res.checks.find((c) => c.id === 'widlar-fixed-point')!.status).toBe('pass');
     expect(res.feasible).toBe(true);
@@ -664,7 +666,7 @@ describe('tier-2 goldens: beta-multiplier bias', () => {
 });
 
 describe('tier-2 goldens: matched mirror bank', () => {
-  const res = runSheet(sheet('matched-mirror-bank.json'), table);
+  const res = runSheet(sheet('matched-mirror-bank.json'), table, undefined, REFS);
   // Defaults: I_unit 10 µA, N_legs = 8, L = 1 µm, gm/ID 8, unit diode at 0.7 V,
   // output rail at 0.9 V. VA = 5 V.
 
@@ -744,7 +746,7 @@ describe('tier-2: the regions the mirror and bias devices declare', () => {
       Object.fromEntries(Object.keys(devices).map((d) => [d, 'saturation'])),
     );
     for (const id of replaced) expect(doc.checks.map((c) => c.id)).not.toContain(id);
-    const res = runSheet(doc, table);
+    const res = runSheet(doc, table, undefined, REFS);
     for (const [device, vds] of Object.entries(devices)) {
       const { check, vdsat } = regionOf(res, device);
       expect([device, check.kind, check.op, check.status]).toEqual([

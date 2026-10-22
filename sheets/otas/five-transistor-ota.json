@@ -31,14 +31,14 @@
       "value": 30e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor a sky130 tt realization of this OTA shows in simulation. The row reads each device's noise from the tables where they carry it and lands at 28.4 nV/rtHz on that realization; the gamma = 1 estimate a table without stored noise gets, body effect included, would read 25.0 nV/rtHz at the same operating points. Clearing only the estimate is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
+      "note": "input-referred thermal density budget, set above the 28 nV/rtHz floor a sky130 tt realization of this OTA shows in simulation. The equation reads each device's noise from the tables where they carry it and lands at 28.4 nV/rtHz on that realization; the gamma = 1 estimate a table without stored noise gets, body effect included, would read 25.0 nV/rtHz at the same operating points. Clearing only the estimate is how a spec looks closable and is not; tighten this and the sweep shows what the noise really costs"
     },
     {
       "name": "vos_target",
       "value": 10e-3,
       "unit": "V",
       "role": "spec",
-      "note": "input offset budget, 1 sigma. Half-micron devices at 20 uA are SMALL (about 1.8 um x 0.5 um here), so the generic Pelgrom coefficient puts the spread near 9 mV — offset is the 5T's area tax, and shrinking this budget is what forces bigger devices. The systematic part is reported on its own row and is not charged against this budget"
+      "note": "input offset budget, 1 sigma. Half-micron devices at 20 uA are SMALL (about 1.8 um x 0.5 um here), so the generic Pelgrom coefficient puts the spread near 9 mV — offset is the 5T's area tax, and shrinking this budget is what forces bigger devices. The systematic part is reported as its own equation and is not charged against this budget"
     },
     {
       "name": "CM_lo",
@@ -71,7 +71,7 @@
       "value": 0.9,
       "unit": "V",
       "role": "spec",
-      "note": "output DC level; sets the mirror output device's vds and the top of the output-side pair transistor's vds. That transistor's drain and the mirror output device's drain meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here. Wherever that is not one diode drop below the supply, the two sides of the load mirror carry different currents and so do the two transistors of the pair, and the systematic-offset row reports what that costs",
+      "note": "output DC level; sets the mirror output device's vds and the top of the output-side pair transistor's vds. That transistor's drain and the mirror output device's drain meet at a high-impedance output that nothing on this sheet holds; the feedback the application closes around the amplifier holds it here. Wherever that is not one diode drop below the supply, the two sides of the load mirror carry different currents and so do the two transistors of the pair, and the systematic-offset equation reports what that costs",
       "class": "independent"
     },
     {
@@ -79,7 +79,7 @@
       "value": 60,
       "unit": "deg",
       "role": "spec",
-      "note": "phase-margin target: 60 degrees is the usual figure for a well-damped unity-gain follower; the row is estimate-grade, and an open-loop use needs none of it. An example, to be replaced with the design's own spec"
+      "note": "phase-margin target: 60 degrees is the usual figure for a well-damped unity-gain follower; the equation is estimate-grade, and an open-loop use needs none of it. An example, to be replaced with the design's own spec"
     },
     { "name": "avt", "value": 5e-9, "unit": "V*m", "role": "spec", "note": "Pelgrom A_VT" },
     { "name": "abeta", "value": 1e-8, "unit": "m", "role": "spec", "note": "Pelgrom A_beta" },
@@ -163,34 +163,9 @@
   "blocks": [
     {
       "name": "bias",
-      "doc": {
-        "title": "Tail bias reference",
-        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_b", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_b", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_b", "value": 10, "unit": "1/V", "role": "choice" }
-        ],
-        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "diode": true },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_b",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs"]
-      },
-      "params": {
-        "I_b": "I_tail",
-        "L_b": "L_tail",
-        "gm_id_b": "gm_id_tail"
-      },
-      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_tail", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
+      "ports": { "vdd": "vdd", "vb": "vbn" }
     },
     {
       "name": "tail",
@@ -425,7 +400,7 @@
       "name": "CM_in",
       "expr": "V_tail + (in__vgs + inr__vgs)/2",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two pair transistors' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node — which is why the pin that places the tail node from $CM_{dc}$ is a well-posed one-unknown search"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two pair transistors' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node — which is why the design constraint that places the tail node from $CM_{dc}$ is a well-posed one-unknown search"
     },
     {
       "name": "gm_pair",
@@ -437,7 +412,7 @@
       "name": "Rout",
       "expr": "1/(in__gds + ld__gds)",
       "unit": "ohm",
-      "note": "the resistance this OTA presents at its output — the two output-node conductances in parallel, the output-side pair transistor's and the mirror output device's, both read at $V_{out,dc}$. The gain below assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "the resistance this OTA presents at its output — the two output-node conductances in parallel, the output-side pair transistor's and the mirror output device's, both read at $V_{out,dc}$. The gain below assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
@@ -503,7 +478,7 @@
       "name": "I_q",
       "expr": "tail__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current of the amplifier — the current the tail device delivers is the whole of it, because the mirror load carries that same current down from the supply. The reference branch that programs it is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current of the amplifier — the current the tail device delivers is the whole of it, because the mirror load carries that same current down from the supply. The reference branch that programs it is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -557,7 +532,7 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard rule must hold there. Replaces the linearized reach estimate this sheet used to carry"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there. Replaces the linearized reach estimate this sheet used to carry"
     },
     {
       "name": "cm-hi",
@@ -568,6 +543,5 @@
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
   "levels": { "vdd": "VDD", "out": "V_out_dc" },
-  "ports": ["vinp", "vinn"],
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }]
+  "ports": ["vinp", "vinn"]
 }

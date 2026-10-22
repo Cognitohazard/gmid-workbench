@@ -1,6 +1,6 @@
 {
   "title": "Simple current mirror",
-  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference binds electrically (its $V_{DS}$ is its own $V_{GS}$, so the bind declares the connection and the table is read along that diagonal), and the output device binds width-first at K times the reference width, on the reference's own $V_{GS}$ — the gate wire the two share, stated as the sizing rather than approximated by typing one inversion level into both — evaluated at the served output node's $V_{DS}$. The systematic error is then the $\\lambda$ mismatch between the two drain voltages and nothing else; the random error is the Pelgrom spread of the ratio.",
+  "description": "A K:1 current mirror sized as unit devices: the diode-connected reference is the library's NMOS bias reference, its programmed current delivered by an ideal source and its drain wired to its gate (its $V_{DS}$ is its own $V_{GS}$, so the table is read along that diagonal), and the output device is sized width-first at K times the reference width, on the reference's own $V_{GS}$ — the gate wire the two share, stated as the sizing rather than approximated by typing one inversion level into both — evaluated at the served output node's $V_{DS}$. The systematic error is then the $\\lambda$ mismatch between the two drain voltages and nothing else; the random error is the Pelgrom spread of the ratio.",
   "polarity": "n",
   "params": [
     {
@@ -80,34 +80,9 @@
   "blocks": [
     {
       "name": "ref",
-      "doc": {
-        "title": "Reference (diode) device",
-        "description": "The diode-connected reference: binds at the input current, with vds tied to its own vgs by the connection rather than by an estimate. Exposes its width so the output side can size as a unit-device multiple.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_r", "value": 8, "unit": "1/V", "role": "choice" }
-        ],
-        "givens": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r", "diode": true },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_r",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs", "vdsat", "gm", "id"]
-      },
-      "params": {
-        "I_ref": "I_in",
-        "L_r": "L",
-        "gm_id_r": "gm_id_m"
-      },
-      "nodes": { "d": "nref", "g": "nref", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_in", "L_ref": "L", "gm_id_ref": "gm_id_m" },
+      "ports": { "vdd": "vsup", "vb": "nref" }
     }
   ],
   "givens": {
@@ -147,7 +122,7 @@
       "name": "Rout",
       "expr": "ro",
       "unit": "ohm",
-      "note": "output resistance the mirror presents: the output device's own r_o and nothing more. That is the whole cost of the simple mirror — the output current tracks the node voltage through gds, which is what the systematic-error row measures at one particular V_out. This is the number a stage loading the mirror sees"
+      "note": "output resistance the mirror presents: the output device's own r_o and nothing more. That is the whole cost of the simple mirror — the output current tracks the node voltage through gds, which is what the systematic-error equation measures at one particular V_out. This is the number a stage loading the mirror sees"
     }
   ],
   "checks": [
@@ -177,6 +152,5 @@
   "formatVersion": 2,
   "nodes": { "d": "out", "g": "nref", "s": "gnd", "b": "gnd" },
   "levels": { "out": "V_out" },
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vsup", "nref"], "value": "I_in" }],
   "ports": ["vsup"]
 }

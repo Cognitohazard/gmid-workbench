@@ -1,6 +1,6 @@
 {
   "title": "Matched mirror bank (current-steering unit)",
-  "description": "A bank of identical unit current sources, the building block of a current-steering DAC or a binary/thermometer bias array. One diode-connected unit device sets the reference; the bank is $N_{legs}$ copies of it, sized width-first as unit-device multiples (bank width = $N_{legs}$ times the unit) on the unit device's own $V_{GS}$, which is the gate wire every leg shares, so every element is a faithful replica and the full-scale current is $N_{legs}$ times the unit current, give or take the channel-length-modulation gain error between the reference diode point and the shared output rail. Matching is what limits a current-steering converter's linearity: each unit element has a Pelgrom current spread, and across $N_{legs}$ elements the worst-case accumulated error grows as the square root of $N$ (a random-walk bound), which is the estimate this sheet reports and budgets. Compliance is a single saturation voltage, since the bank shares one output rail; a cascoded bank (see the cascode mirror) would trade headroom for a flatter output. The unit reference is diode-connected, so its drop is read off the table rather than estimated.",
+  "description": "A bank of identical unit current sources, the building block of a current-steering DAC or a binary/thermometer bias array. One diode-connected unit device, the library's NMOS bias reference with its programmed current delivered by an ideal source, sets the reference; the bank is $N_{legs}$ copies of it, sized width-first as unit-device multiples (bank width = $N_{legs}$ times the unit) on the unit device's own $V_{GS}$, which is the gate wire every leg shares, so every element is a faithful replica and the full-scale current is $N_{legs}$ times the unit current, give or take the channel-length-modulation gain error between the reference diode point and the shared output rail. Matching is what limits a current-steering converter's linearity: each unit element has a Pelgrom current spread, and across $N_{legs}$ elements the worst-case accumulated error grows as the square root of $N$ (a random-walk bound), which is the estimate this sheet reports and budgets. Compliance is a single saturation voltage, since the bank shares one output rail; a cascoded bank (see the cascode mirror) would trade headroom for a flatter output. The unit reference is diode-connected, so its drop is read off the table rather than estimated.",
   "polarity": "n",
   "params": [
     {
@@ -80,34 +80,9 @@
   "blocks": [
     {
       "name": "unit",
-      "doc": {
-        "title": "Unit reference device (diode)",
-        "description": "The diode-connected unit element at the unit current. Every leg of the bank is a width replica of it, so its Pelgrom current spread is the per-leg matching, and its width sets the bank width.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_u", "value": 10e-6, "unit": "A", "role": "spec" },
-          { "name": "L_u", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_u", "value": 8, "unit": "1/V", "role": "choice" }
-        ],
-        "givens": { "L": "L_u", "id": "I_u", "gm_id": "gm_id_u", "diode": true },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_u",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs", "vdsat", "gm", "id"]
-      },
-      "params": {
-        "I_u": "I_unit",
-        "L_u": "L",
-        "gm_id_u": "gm_id_m"
-      },
-      "nodes": { "d": "nref", "g": "nref", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_unit", "L_ref": "L", "gm_id_ref": "gm_id_m" },
+      "ports": { "vdd": "vsup", "vb": "nref" }
     }
   ],
   "givens": {
@@ -172,6 +147,5 @@
   "formatVersion": 2,
   "nodes": { "d": "out", "g": "nref", "s": "gnd", "b": "gnd" },
   "levels": { "out": "V_out" },
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vsup", "nref"], "value": "I_unit" }],
   "ports": ["vsup"]
 }

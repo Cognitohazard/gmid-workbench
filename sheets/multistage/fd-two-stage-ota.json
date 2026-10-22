@@ -1,6 +1,6 @@
 {
   "title": "Fully differential two-stage OTA",
-  "description": "The fully differential version of the two-stage Miller OTA: a differential input stage with current-source loads driving a differential common-source second stage, Miller-compensated with $C_c$ on each side. The small-signal frequency plan is the same as the single-ended Miller OTA — GBW = $g_{m1}/(2*\\pi*C_c)$, an RHP zero $z = g_{m2}/C_c$ removed by the $R_z = 1/g_{m2}$ nulling resistor, a second-pole/phase-margin estimate, and SR = $min(I_1/C_c, I_2/C_L)$. Three things genuinely differ in the fully differential form: the stage-1 load is a current source rather than a current mirror, so there is no mirror pole or pole-zero doublet in the signal path (a cleaner frequency response); the differential output swing is twice the single-ended range; and a common-mode feedback loop is needed to set the output common mode, costing supply current. As in the telescopic sheet, the CMFB loop is out of scope (no loop solving) and appears only as the current line item $I_{cmfb}$. The stage-1 output common mode $V_1$ is the node the CMFB loop holds, but it is not a free number: that node is the stage-2 gate, so the loop must hold it exactly one stage-2 $V_{GS}$ from the supply, and the sheet derives it there rather than asking for it. The first-stage current is stated the way the circuit sets it: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, and each side of the first stage carries half of what the tail delivers, the stage-1 loads included — their gate is the common-mode feedback loop's to set, and the loop sets it so they carry what the pair hands them. The pole and phase-margin rows are ESTIMATE-grade; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
+  "description": "The fully differential version of the two-stage Miller OTA: a differential input stage with current-source loads driving a differential common-source second stage, Miller-compensated with $C_c$ on each side. The small-signal frequency plan is the same as the single-ended Miller OTA — GBW = $g_{m1}/(2*\\pi*C_c)$, an RHP zero $z = g_{m2}/C_c$ removed by the $R_z = 1/g_{m2}$ nulling resistor, a second-pole/phase-margin estimate, and a slew rate that is the smaller of what the tail delivers into $C_c$ and what one stage-2 load delivers into $C_L$. Three things genuinely differ in the fully differential form: the stage-1 load is a current source rather than a current mirror, so there is no mirror pole or pole-zero doublet in the signal path (a cleaner frequency response); the differential output swing is twice the single-ended range; and a common-mode feedback loop is needed to set the output common mode, costing supply current. As in the telescopic sheet, the CMFB loop is out of scope (no loop solving) and appears only as the current line item $I_{cmfb}$. The stage-1 output common mode $V_1$ is the node the CMFB loop holds, but it is not a free number: that node is the stage-2 gate, so the loop must hold it exactly one stage-2 $V_{GS}$ from the supply, and the sheet derives it there rather than asking for it. The first-stage current is stated the way the circuit sets it: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, and each side of the first stage carries half of what the tail delivers, the stage-1 loads included — their gate is the common-mode feedback loop's to set, and the loop sets it so they carry what the pair hands them. The second stage carries what its load delivers: each stage-2 load is a mirror output of the same reference, on its gate at $K_2$ times its width and at its length, so the stage-2 current is $K_2 I_1$ less that mirror's drain-voltage error, and the second-stage device on each side is handed what its load delivers. The pole and phase-margin equations are ESTIMATE-grade; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -30,7 +30,7 @@
       "value": 45,
       "unit": "deg",
       "role": "spec",
-      "note": "phase-margin target; the PM row is estimate-grade"
+      "note": "phase-margin target; the PM equation is estimate-grade"
     },
     {
       "name": "SR_target",
@@ -60,7 +60,7 @@
       "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis This sheet carries NO containment edges: stage 1 does not close on sky130-class supplies at these defaults, and a range claim that cannot be tuned honestly would be theater — see the single-stage OTAs for the pattern.",
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. This sheet claims no operating range: stage 1 does not close on sky130-class supplies at these defaults, and range ends that cannot be met honestly would be theater — see the single-stage OTAs for the pattern.",
       "class": "independent"
     },
     {
@@ -96,17 +96,17 @@
       "max": 200e-6,
       "unit": "A",
       "role": "choice",
-      "note": "the current the tail bias reference is programmed to — the one first-stage current that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop); the stage-1 slew limit, the bandwidth and the supply current are computed from what is delivered, not from this number",
+      "note": "the current the bias reference is programmed to — the one current on this sheet that is typed. The tail device mirrors it 1:1 through the shared gate and delivers it less the mirror's drain-voltage error (the tail node normally sits below the reference's diode drop), and each stage-2 load mirrors it K2:1 at the output level; the slew limits, the bandwidth and the supply current are computed from what is delivered, not from this number",
       "class": "independent"
     },
     {
-      "name": "I2",
-      "value": 60e-6,
-      "min": 4e-6,
-      "max": 400e-6,
-      "unit": "A",
+      "name": "K2",
+      "value": 3,
+      "min": 1,
+      "max": 16,
+      "unit": "1",
       "role": "choice",
-      "note": "stage-2 branch current (per side)"
+      "note": "mirror ratio of each second-stage load, as a width ratio: each load sits on the bias reference's gate at K2 times its width and at its length, so it is a mirror output of that reference and the device that sets its side's stage-2 current. It delivers K2 times I1 less its drain-voltage error — its drain is the output, above the reference's diode drop — and the second-stage device on its side carries what it delivers. Raising it buys stage-2 slew and a higher second pole for supply current"
     },
     {
       "name": "gm_id_in",
@@ -133,7 +133,7 @@
       "max": 16,
       "unit": "1/V",
       "role": "choice",
-      "note": "inversion level of the tail bias reference, which the tail device inherits through the shared gate: a higher V* costs headroom at the tail node"
+      "note": "inversion level of the bias reference, which the tail device and the stage-2 loads inherit through the shared gate: a higher V* costs headroom at the tail node and at the outputs"
     },
     {
       "name": "gm_id_s2",
@@ -143,15 +143,6 @@
       "unit": "1/V",
       "role": "choice",
       "note": "stage-2 device inversion"
-    },
-    {
-      "name": "gm_id_ld2",
-      "value": 8,
-      "min": 4,
-      "max": 14,
-      "unit": "1/V",
-      "role": "choice",
-      "note": "stage-2 load inversion"
     },
     { "name": "L_in", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
     {
@@ -169,17 +160,9 @@
       "max": 2e-6,
       "unit": "m",
       "role": "choice",
-      "note": "length of the bias reference and of the tail device, which mirror at one length: longer shrinks the mirror's drain-voltage error"
+      "note": "length of the bias reference, the tail device and the stage-2 loads, which mirror at one length: longer shrinks the mirrors' drain-voltage error"
     },
     { "name": "L_s2", "value": 0.5e-6, "min": 0.18e-6, "max": 2e-6, "unit": "m", "role": "choice" },
-    {
-      "name": "L_ld2",
-      "value": 0.5e-6,
-      "min": 0.18e-6,
-      "max": 2e-6,
-      "unit": "m",
-      "role": "choice"
-    },
     {
       "name": "V_out2",
       "value": 0.9,
@@ -209,74 +192,16 @@
   ],
   "blocks": [
     {
-      "name": "s2",
-      "doc": {
-        "title": "Stage-2 common-source device",
-        "description": "The second-stage gain device (per side) carrying the stage-2 current at the output common mode; its gm sets the RHP zero, second pole, and nulling resistor. Sized FIRST, because its gate-source voltage is what fixes the stage-1 output level the rest of the sheet biases against. Its wiring declaration is TAUTOLOGICAL as the sheet stands: $V_1$ is derived from this device’s own gate-source voltage, so the declared node and the checked node are the same number and the check cannot fire. It is kept because it stops being tautological the moment someone re-types $V_1$ as a plain parameter — which is exactly the defect this mechanism was built after.",
-        "polarity": "p",
-        "params": [
-          { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
-          {
-            "name": "vx",
-            "value": 0.9,
-            "unit": "V",
-            "role": "spec",
-            "note": "signed to this table's axis convention"
-          }
-        ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["gm", "gds", "cgg", "vgs", "vdsat", "id"]
-      },
-      "params": { "Ix": "I2", "Lx": "L_s2", "gx": "gm_id_s2", "vx": "out_sign*(VDD - V_out2)" },
-      "nodes": [
-        { "d": "outp", "g": "o1n", "s": "vdd", "b": "vdd" },
-        { "d": "outn", "g": "o1p", "s": "vdd", "b": "vdd" }
-      ]
-    },
-    {
       "name": "bias",
-      "doc": {
-        "title": "Tail bias reference",
-        "description": "The diode-connected reference the programmed current $I_1$ flows into — the one first-stage device whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
-        "polarity": "n",
-        "params": [
-          { "name": "Ix", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 10, "unit": "1/V", "role": "choice" }
-        ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "diode": true },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs"]
-      },
-      "params": { "Ix": "I1", "Lx": "L_tail", "gx": "gm_id_tail" },
-      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I1", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
+      "ports": { "vdd": "vdd", "vb": "vbn" }
     },
     {
       "name": "tail",
       "doc": {
         "title": "Tail current source",
-        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what the tail-headroom row watches.",
+        "description": "The tail device, on the bias reference's gate at the reference's width: a 1:1 mirror of the programmed current, with the tail node as its drain-source voltage. Its current is read off the table rather than typed — the reference sits at its own diode drop and this device at $V_{tail}$, so it delivers the programmed current scaled by what that difference in $V_{DS}$ does through its $g_{ds}$. It leaves saturation when $V_{tail}$ falls below its own $V_{dsat}$, which is what the tail-headroom equation watches.",
         "polarity": "n",
         "params": [
           {
@@ -305,6 +230,83 @@
       "nodes": { "d": "tail", "g": "vbn", "s": "gnd", "b": "gnd" }
     },
     {
+      "name": "ld2",
+      "doc": {
+        "title": "Stage-2 current-source load",
+        "description": "The second-stage current-source load (per side), drawn as a mirror output of the bias reference: on the reference's gate wire at $K_2$ times its width and at its length, with its drain at the output common mode. It is the device that sets the stage-2 current, and that current is read off the table at its own drain voltage rather than typed: $K_2 I_1$, scaled by what the difference between its drain voltage and the reference's diode drop does through its $g_{ds}$. The second-stage device on its side is handed what it delivers, and its output conductance loads the second-stage gain.",
+        "polarity": "n",
+        "params": [
+          {
+            "name": "Wx",
+            "value": 3e-6,
+            "unit": "m",
+            "role": "spec",
+            "note": "the bias reference's width times K2"
+          },
+          {
+            "name": "vgsx",
+            "value": 0.61,
+            "unit": "V",
+            "role": "spec",
+            "note": "the bias reference's gate voltage — the gate wire the two share"
+          },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "vx", "value": 0.9, "unit": "V", "role": "spec", "note": "the output level" }
+        ],
+        "givens": { "L": "Lx", "W": "Wx", "vgs": "vgsx", "vds": "vx", "region": "saturation" },
+        "equations": [],
+        "checks": [],
+        "provides": ["id", "gds", "vdsat"]
+      },
+      "params": { "Wx": "K2*bias__W", "vgsx": "bias__vgs", "Lx": "L_tail", "vx": "V_out2" },
+      "nodes": [
+        { "d": "outp", "g": "vbn", "s": "gnd", "b": "gnd" },
+        { "d": "outn", "g": "vbn", "s": "gnd", "b": "gnd" }
+      ]
+    },
+    {
+      "name": "s2",
+      "doc": {
+        "title": "Stage-2 common-source device",
+        "description": "The second-stage gain device (per side), carrying what the stage-2 load on its side delivers, at the output common mode; its gm sets the RHP zero, second pole, and nulling resistor. It is sized before the first stage, because its gate-source voltage is what fixes the stage-1 output level the rest of the sheet biases against.",
+        "polarity": "p",
+        "params": [
+          { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
+          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
+          { "name": "gx", "value": 12, "unit": "1/V", "role": "choice" },
+          {
+            "name": "vx",
+            "value": 0.9,
+            "unit": "V",
+            "role": "spec",
+            "note": "signed to this table's axis convention"
+          }
+        ],
+        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
+        "equations": [],
+        "checks": [
+          {
+            "id": "feasible-inversion",
+            "kind": "physical",
+            "lhs": "gx",
+            "op": "<=",
+            "rhs": "ceiling"
+          }
+        ],
+        "provides": ["gm", "gds", "cgg", "vgs", "vdsat", "id"]
+      },
+      "params": {
+        "Ix": "ld2__id",
+        "Lx": "L_s2",
+        "gx": "gm_id_s2",
+        "vx": "out_sign*(VDD - V_out2)"
+      },
+      "nodes": [
+        { "d": "outp", "g": "o1n", "s": "vdd", "b": "vdd" },
+        { "d": "outn", "g": "o1p", "s": "vdd", "b": "vdd" }
+      ]
+    },
+    {
       "name": "ld1",
       "doc": {
         "title": "Stage-1 current-source load",
@@ -319,7 +321,7 @@
             "value": 0.67,
             "unit": "V",
             "role": "spec",
-            "note": "signed to this table's axis convention. The parent drives it from the supply minus the stage-1 output level, which is the V1 row's expression written out — use params are evaluated before rows, so the level is restated here rather than referenced"
+            "note": "signed to this table's axis convention. The parent drives it from the supply minus the stage-1 output level, which is the V1 equation's expression written out — a block's overrides are evaluated before the sheet's equations, so the level is restated here rather than referenced"
           }
         ],
         "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
@@ -361,7 +363,7 @@
             "value": 0.7,
             "unit": "V",
             "role": "spec",
-            "note": "the drain sits at the stage-1 output level and the source at the tail node, so the parent drives this from the V1 row's expression written out — use params are evaluated before rows, so the level is restated here rather than referenced"
+            "note": "the drain sits at the stage-1 output level and the source at the tail node, so the parent drives this from the V1 equation's expression written out — a block's overrides are evaluated before the sheet's equations, so the level is restated here rather than referenced"
           },
           { "name": "vsbx", "value": 0.4, "unit": "V", "role": "spec" }
         ],
@@ -396,37 +398,6 @@
         { "d": "o1n", "g": "vinp", "s": "tail", "b": "gnd" },
         { "d": "o1p", "g": "vinn", "s": "tail", "b": "gnd" }
       ]
-    },
-    {
-      "name": "ld2",
-      "doc": {
-        "title": "Stage-2 current-source load",
-        "description": "The second-stage current-source load (per side) carrying the stage-2 current at the output common mode.",
-        "polarity": "n",
-        "params": [
-          { "name": "Ix", "value": 60e-6, "unit": "A", "role": "spec" },
-          { "name": "Lx", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gx", "value": 8, "unit": "1/V", "role": "choice" },
-          { "name": "vx", "value": 0.9, "unit": "V", "role": "spec" }
-        ],
-        "givens": { "L": "Lx", "id": "Ix", "gm_id": "gx", "vds": "vx", "region": "saturation" },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gx",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["gds", "vdsat"]
-      },
-      "params": { "Ix": "s2__id", "Lx": "L_ld2", "gx": "gm_id_ld2", "vx": "V_out2" },
-      "nodes": [
-        { "d": "outp", "g": "vbn2", "s": "gnd", "b": "gnd" },
-        { "d": "outn", "g": "vbn2", "s": "gnd", "b": "gnd" }
-      ]
     }
   ],
   "equations": [
@@ -434,13 +405,13 @@
       "name": "V1",
       "expr": "VDD - abs(s2__vgs)",
       "unit": "V",
-      "note": "stage-1 output common-mode DC. Derived, not typed: this node IS the stage-2 gate, so the level is whatever the stage-2 device's own gate-source voltage asks for, one vgs below the supply for a p-type stage-2 (abs() keeps both table conventions working). The common-mode feedback loop is what holds the node there — it commands the level, it does not choose it, and typing a different number here is the classic way to starve stage 2. The wiring declaration on the stage-2 use is what keeps the two descriptions of this node in agreement"
+      "note": "stage-1 output common-mode DC. Derived, not typed: this node IS the stage-2 gate, so the level is whatever the stage-2 device's own gate-source voltage asks for, one vgs below the supply for a p-type stage-2 (abs() keeps both table conventions working). The common-mode feedback loop is what holds the node there — it commands the level, it does not choose it, and typing a different number here is the classic way to starve stage 2. The netlist puts each stage-1 output on the stage-2 gate of its side, so the wiring check holds the stage-1 drains to this level and reports a loop that misses it"
     },
     {
       "name": "CM_in",
       "expr": "V_tail + in__vgs",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting; rises monotonically with the tail node, so the design constraint that places the tail node from CM_dc is a well-posed one-unknown search"
     },
     {
       "name": "gm1",
@@ -470,7 +441,7 @@
       "name": "z_rhp",
       "expr": "gm2/Cc",
       "unit": "rad/s",
-      "note": "the right-half-plane zero the feedforward path through Cc would place, kept as a reference point for the UNCOMPENSATED stage: the Rz = 1/gm2 nulling resistor below moves it to infinity, which is why the phase-margin row carries no zero term"
+      "note": "the right-half-plane zero the feedforward path through Cc would place, kept as a reference point for the UNCOMPENSATED stage: the Rz = 1/gm2 nulling resistor below moves it to infinity, which is why the phase-margin equation carries no zero term"
     },
     {
       "name": "p2",
@@ -492,9 +463,9 @@
     },
     {
       "name": "SR",
-      "expr": "min(tail__id/Cc, I2/CL)",
+      "expr": "min(tail__id/Cc, ld2__id/CL)",
       "unit": "V/s",
-      "note": "the smaller slew limit: the current the tail device delivers charging Cc, or the stage-2 current charging CL"
+      "note": "the smaller slew limit: the current the tail device delivers charging Cc, or the current one second-stage load delivers charging CL"
     },
     {
       "name": "Av1",
@@ -506,7 +477,7 @@
       "name": "Rout",
       "expr": "1/(s2__gds + ld2__gds)",
       "unit": "ohm",
-      "note": "SINGLE-SIDE output resistance: stage two's own output conductance in parallel with its load device's, on one of the two output branches. The differential output resistance a parent loads is twice this, the same half-circuit convention the gain and the input-capacitance rows use. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "SINGLE-SIDE output resistance: stage two's own output conductance in parallel with its load device's, on one of the two output branches. The differential output resistance a parent loads is twice this, the same half-circuit convention the gain and the input-capacitance equations use. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av2",
@@ -534,9 +505,9 @@
     },
     {
       "name": "I_q",
-      "expr": "2*I2 + tail__id + I_cmfb",
+      "expr": "2*ld2__id + tail__id + I_cmfb",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the two stage-2 branches, the current the tail device delivers to the first stage, and the CMFB network's budget. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
+      "note": "estimate: quiescent supply current — the two stage-2 branches, each carrying what its load delivers, the current the tail device delivers to the first stage, and the CMFB network's budget. The reference branch that programs the tail and the loads is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     },
     {
       "name": "cgg2",
@@ -548,7 +519,7 @@
       "name": "cgg_in",
       "expr": "in__cgg",
       "unit": "F",
-      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     }
   ],
   "checks": [
@@ -590,7 +561,7 @@
       "lhs": "PM",
       "op": ">=",
       "rhs": "PM_target",
-      "note": "ESTIMATE-grade phase margin; the simulator owns the real stability sign-off. This is also the sheet’s only check on pole spacing: PM falls as the second pole approaches the crossover, so a design that crowds them fails here rather than needing a separate zero/pole guardrail"
+      "note": "ESTIMATE-grade phase margin; the simulator owns the real stability sign-off. This is also the sheet’s only check on pole spacing: PM falls as the second pole approaches the crossover, so a design that crowds them fails here rather than needing a separate check on the zero and the pole"
     },
     {
       "id": "input-sat-margin",
@@ -604,6 +575,5 @@
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
   "levels": { "vdd": "VDD", "vinp": "CM_dc", "vinn": "CM_dc", "outp": "V_out2", "outn": "V_out2" },
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I1" }],
-  "ports": ["vbp", "vbn2"]
+  "ports": ["vbp"]
 }

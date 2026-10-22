@@ -1,6 +1,6 @@
 {
   "title": "Widlar current source",
-  "description": "A Widlar source generates a small, well-defined output current from a larger reference without a large resistor. The reference device is diode-connected at $I_{in}$; the output device shares the gate but has a source resistor $R_s$, so its gate-source voltage is lower than the reference's by exactly the IR drop it develops: $V_{GS,ref} - V_{GS,out} = I_{out}*R_s$. That single equation sets the output current, and it is the one unknown this sheet solves: you pick the resistor $R_s$ and the width ratio, and the engine searches $I_{out}$ between its min and max for the current at which the output device, bound at that current, sits exactly $I_{out}*R_s$ below the reference's gate-source voltage. It is one named unknown searched in a stated range against the lookup tables, not a nodal solve. The fixed-point rule reports the identity that search makes hold, and fails where the search does not settle. Because the output runs at a lower current density than the reference, its $V_{GS}$ sits below the reference's, so the difference is positive only when $I_{out} < I_{in}$. The output device's source sits $I_{out}*R_s$ above ground, declared as its $V_{SB}$.",
+  "description": "A Widlar source generates a small, well-defined output current from a larger reference without a large resistor. The reference device is the library's NMOS bias reference, diode-connected at $I_{in}$ delivered by an ideal source; the output device shares the gate but has a source resistor $R_s$, so its gate-source voltage is lower than the reference's by exactly the IR drop it develops: $V_{GS,ref} - V_{GS,out} = I_{out}*R_s$. That single equation sets the output current, and it is the one unknown this sheet solves: you pick the resistor $R_s$ and the width ratio, and the engine searches $I_{out}$ between its min and max for the current at which the output device, sized at that current, sits exactly $I_{out}*R_s$ below the reference's gate-source voltage. It is one named unknown searched in a stated range against the lookup tables, not a nodal solve. The fixed-point check reports the identity that search makes hold, and fails where the search does not settle. Because the output runs at a lower current density than the reference, its $V_{GS}$ sits below the reference's, so the difference is positive only when $I_{out} < I_{in}$. The output device's source sits $I_{out}*R_s$ above ground, declared as its $V_{SB}$.",
   "polarity": "n",
   "params": [
     {
@@ -66,46 +66,14 @@
       "unit": "1/V",
       "role": "choice",
       "note": "reference-device inversion"
-    },
-    {
-      "name": "fp_tol",
-      "value": 2,
-      "unit": "%",
-      "role": "spec",
-      "note": "how tightly the Widlar fixed point must hold once I_out is solved"
     }
   ],
   "blocks": [
     {
       "name": "ref",
-      "doc": {
-        "title": "Reference (diode) device",
-        "description": "The diode-connected reference at the full input current. Its gate-source voltage is the gate rail both devices share; the output device develops a lower vgs by the R_s drop. Exposes vgs and its width.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_ref", "value": 20e-6, "unit": "A", "role": "spec" },
-          { "name": "L_r", "value": 1e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_r2", "value": 8, "unit": "1/V", "role": "choice" }
-        ],
-        "givens": { "L": "L_r", "id": "I_ref", "gm_id": "gm_id_r2", "diode": true },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_r2",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs", "vdsat", "gm", "id"]
-      },
-      "params": {
-        "I_ref": "I_in",
-        "L_r": "L",
-        "gm_id_r2": "gm_id_r"
-      },
-      "nodes": { "d": "ngate", "g": "ngate", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_in", "L_ref": "L", "gm_id_ref": "gm_id_r" },
+      "ports": { "vdd": "vsup", "vb": "ngate" }
     }
   ],
   "givens": {
@@ -158,7 +126,7 @@
       "op": "==",
       "rhs": "vgs_drop",
       "tolPct": 2,
-      "note": "the defining Widlar equation V_GS_ref - V_GS_out = I_out*R_s. The search on I_out makes it hold, so this rule is the identity that search solves: it fails only where the search did not settle"
+      "note": "the defining Widlar equation V_GS_ref - V_GS_out = I_out*R_s. The search on I_out makes it hold, so this check is the identity that search solves: it fails only where the search did not settle"
     },
     {
       "id": "widlar-steps-down",
@@ -173,9 +141,6 @@
   "formatVersion": 2,
   "nodes": { "d": "out", "g": "ngate", "s": "src", "b": "gnd" },
   "levels": { "out": "V_out" },
-  "elements": [
-    { "name": "rs", "kind": "R", "between": ["src", "gnd"], "value": "R_s" },
-    { "name": "iref", "kind": "I", "between": ["vsup", "ngate"], "value": "I_in" }
-  ],
+  "elements": [{ "name": "rs", "kind": "R", "between": ["src", "gnd"], "value": "R_s" }],
   "ports": ["vsup"]
 }

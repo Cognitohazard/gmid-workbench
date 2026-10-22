@@ -1,6 +1,6 @@
 {
   "title": "Two-stage OTA, cascode compensation",
-  "description": "The Ahuja (cascode) variant of the two-stage Miller OTA: the compensation cap $C_c$ returns to a low-impedance cascode node instead of directly across the second stage. Routing the compensation current through the common-gate cascode blocks the feedforward path, so the right-half-plane zero that plagues plain Miller compensation is removed and the pole-splitting is better damped — for the same GBW the phase margin comes almost entirely from the second pole. The stage structure mirrors the plain Miller OTA (stage-1 input pair + mirror load, stage-2 common source + load); the added cascode devices carry the stage-1 branch currents, and the one on the output side provides the node $C_c$ returns through. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply, and the cascode and the input device stack under that node. On the output side the mirror's output device and the cascode share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. The stage is drawn at rest, as the feedback around the amplifier holds it: the stage-1 output sits at the second stage's gate, and the two inputs sit apart by whatever offset that takes. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices are one width and carry what the tail delivers between them, each its own share, and the second stage carries what its load delivers: the load is a second mirror output of the same reference, on its gate at $K_2$ times its width, so the stage-2 current is $K_2 I_1$ less that mirror's drain-voltage error, and the second-stage device is handed it. The mirror's output device takes its diode-side partner's width and gate and carries what the table gives at its own drain voltage. The pair is sized on its output side, and the share is solved so that the currents at the stage-1 output balance: the output-side cascode passes up exactly what the mirror's output device returns. The output-side cascode takes the diode-side cascode's width and carries the current of the input device below it, and the node under it is solved: it sits where that cascode needs the gate voltage the two cascodes share. The tail node, the share and that node read each other, so the engine settles the three together by repeated one-unknown searches. Wherever the two levels differ, the two input devices need different gate-source voltages for their currents, and the systematic-offset row reports that difference directly. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved so the produced $CM_{in}$, the tail node plus the mean of the two gate-source voltages, equals $CM_{dc}$. The pole and phase-margin rows are ESTIMATE-grade small-signal approximations; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
+  "description": "The Ahuja (cascode) variant of the two-stage Miller OTA: the compensation cap $C_c$ returns to a low-impedance cascode node instead of directly across the second stage. Routing the compensation current through the common-gate cascode blocks the feedforward path, so the right-half-plane zero that plagues plain Miller compensation is removed and the pole-splitting is better damped — for the same GBW the phase margin comes almost entirely from the second pole. The stage structure mirrors the plain Miller OTA (stage-1 input pair + mirror load, stage-2 common source + load); the added cascode devices carry the stage-1 branch currents, and the one on the output side provides the node $C_c$ returns through. The first stage is drawn with both of its sides, because they do not sit at the same voltages. On the diode side the mirror device's drain is its own gate, one diode drop below the supply, and the cascode and the input device stack under that node. On the output side the mirror's output device and the cascode share a drain that is the second stage's gate, so it sits one second-stage $V_{GS}$ below the supply instead. The stage is drawn at rest, as the feedback around the amplifier holds it: the stage-1 output sits at the second stage's gate, and the two inputs sit apart by whatever offset that takes. The currents are stated the way the circuit sets them: the bias reference is programmed with $I_1$, the tail device shares that reference's gate and width, the two input devices are one width and carry what the tail delivers between them, each its own share, and the second stage carries what its load delivers: the load is a second mirror output of the same reference, on its gate at $K_2$ times its width, so the stage-2 current is $K_2 I_1$ less that mirror's drain-voltage error, and the second-stage device is handed it. The mirror's output device takes its diode-side partner's width and gate and carries what the table gives at its own drain voltage. The pair is sized on its output side, and the share is solved so that the currents at the stage-1 output balance: the output-side cascode passes up exactly what the mirror's output device returns. The output-side cascode takes the diode-side cascode's width and carries the current of the input device below it, and the node under it is solved: it sits where that cascode needs the gate voltage the two cascodes share. The tail node, the share and that node read each other, so the engine settles the three together by repeated one-unknown searches. Wherever the two levels differ, the two input devices need different gate-source voltages for their currents, and the systematic-offset equation reports that difference directly. Entered from the COMMON MODE like the 5T: the input pair's tail node is solved so the produced $CM_{in}$, the tail node plus the mean of the two gate-source voltages, equals $CM_{dc}$. The pole and phase-margin equations are ESTIMATE-grade small-signal approximations; the simulator owns stability sign-off. On the demo NMOS table the polarity-inverted devices keep their sign params at +1.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -53,7 +53,7 @@
       "max": 1.3,
       "unit": "V",
       "role": "spec",
-      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis This sheet carries NO containment edges; see the single-stage OTAs for the pattern.",
+      "note": "the input common mode the application presents. The engine places the tail node so the sheet sits exactly here; sweep it to trace the common-mode axis. This sheet claims no operating range; see the single-stage OTAs for the pattern.",
       "class": "independent"
     },
     {
@@ -236,54 +236,9 @@
   "blocks": [
     {
       "name": "bias",
-      "doc": {
-        "title": "Tail bias reference",
-        "description": "The diode-connected reference the programmed current $I_1$ flows into — the one device on the sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device and the second-stage load need to copy it.",
-        "polarity": "n",
-        "params": [
-          {
-            "name": "I_b",
-            "value": 20e-6,
-            "unit": "A",
-            "role": "spec"
-          },
-          {
-            "name": "L_b",
-            "value": 0.5e-6,
-            "unit": "m",
-            "role": "choice"
-          },
-          {
-            "name": "gm_id_b",
-            "value": 10,
-            "unit": "1/V",
-            "role": "choice"
-          }
-        ],
-        "givens": {
-          "L": "L_b",
-          "id": "I_b",
-          "gm_id": "gm_id_b",
-          "diode": true
-        },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_b",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs"]
-      },
-      "params": {
-        "I_b": "I1",
-        "L_b": "L_tail",
-        "gm_id_b": "gm_id_tail"
-      },
-      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I1", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
+      "ports": { "vdd": "vdd", "vb": "vbn" }
     },
     {
       "name": "tail",
@@ -579,7 +534,7 @@
       },
       "params": {
         "Wx": "ino__W",
-        "Ix": "tail__id*(1 - out_share)",
+        "Ix": "ld1__id",
         "Lx": "L_in",
         "vx": "VDD - abs(ld1__vgs) - V_casc - V_tail",
         "vsbx": "V_tail"
@@ -713,7 +668,7 @@
       "name": "CM_in",
       "expr": "V_tail + (ino__vgs + in__vgs)/2",
       "unit": "V",
-      "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two input devices' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node, so the pin is a well-posed one-unknown search"
+      "note": "the input common mode this bias produces — an OUTPUT here, not a setting: the tail node plus the mean of the two input devices' gate-source voltages, the level the two inputs sit about. It rises monotonically with the tail node, so the design constraint that places the tail node from CM_dc is a well-posed one-unknown search"
     },
     {
       "name": "V_mir",
@@ -779,13 +734,13 @@
       "name": "Av1",
       "expr": "gm1/(ino__gds + ld1o__gds)",
       "unit": "V/V",
-      "note": "stage-1 gain into the output conductances of the pair's output-side device and of the mirror's output device. The cascode above the input device raises the resistance looking down from the stage-1 output; this row does not count that, so it understates the gain"
+      "note": "stage-1 gain into the output conductances of the pair's output-side device and of the mirror's output device. The cascode above the input device raises the resistance looking down from the stage-1 output; this equation does not count that, so it understates the gain"
     },
     {
       "name": "Rout",
       "expr": "1/(s2__gds + ld2__gds)",
       "unit": "ohm",
-      "note": "the resistance the amplifier presents at its output — stage two's own output conductance in parallel with its load device's. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "the resistance the amplifier presents at its output — stage two's own output conductance in parallel with its load device's. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av2",
@@ -815,13 +770,13 @@
       "name": "cgg_in",
       "expr": "in__cgg",
       "unit": "F",
-      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "tail__id + ld2__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the current the tail device delivers plus the current the second-stage load delivers. The reference branch that programs the tail and the load is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the current the tail device delivers plus the current the second-stage load delivers. The reference branch that programs the tail and the load is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -877,6 +832,5 @@
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
   "levels": { "vdd": "VDD", "out": "V_out2", "vcas": "V_mir - V_casc + casc__vgs" },
-  "ports": ["vinp", "vinn"],
-  "elements": [{ "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I1" }]
+  "ports": ["vinp", "vinn"]
 }

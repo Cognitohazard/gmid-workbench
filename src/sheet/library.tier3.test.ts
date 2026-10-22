@@ -147,7 +147,7 @@ const itDrawsItsTail = (
     // as the low end changes nothing where the design is sized, and at that range end the tail's
     // saturation check is the one hard check that fails.
     const vdsat = vdsatDemo(vgsRef, L);
-    const claimed = runSheet(withParams(doc, { CM_lo: cmTooLow }), table);
+    const claimed = runSheet(withParams(doc, { CM_lo: cmTooLow }), table, undefined, REFS);
     expect(claimed.feasible).toBe(res.feasible);
     const lo = claimed.rangeEnds!.find((e) => e.name === 'cm-lo')!;
     expect(lo.error).toBeUndefined();
@@ -276,7 +276,7 @@ describe('tier-3: which devices each OTA needs saturated', () => {
 });
 
 describe('tier-3 goldens: differential pair + tail', () => {
-  const res = runSheet(sheet('differential-pair-tail.json'), table);
+  const res = runSheet(sheet('differential-pair-tail.json'), table, undefined, REFS);
   // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 10, input gm/ID 12,
   // L 0.5 µm, V_out 0.9, CM_dc 1.05 (placed so the tail stays honestly saturated on a 1.8 V
   // process); the tail node is constrained to CM_dc.
@@ -360,7 +360,7 @@ describe('tier-3 goldens: differential pair + tail', () => {
 
 describe('tier-3 goldens: degenerated differential pair', () => {
   const doc = sheet('degenerated-differential-pair.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
   // Defaults: the bias reference programmed to I_tail = 22 µA at gm/ID 14 and 0.5 µm, the tail
   // device on its gate, the pair at gm/ID 14 and L 2 µm with R_s 12 kΩ in each source, V_out 0.9,
   // CM_dc 1.15. The two resistors meet at the tail node, which is the variable the common mode is
@@ -484,7 +484,7 @@ describe('tier-3 goldens: degenerated differential pair', () => {
 
 describe('tier-3 goldens: telescopic cascode OTA', () => {
   const doc = sheet('telescopic-cascode-ota.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
   // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 10, the tail device on its
   // gate, gm/ID in 14 / casc 10 / mir 13, all L 0.5 µm; the output side's nodes V_a 0.55 and
   // V_b 1.52, V_out 0.9, the tail node constrained so CM_in lands on CM_dc 0.97. The sheet is
@@ -699,12 +699,12 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
     // against a saturation voltage of 0.25 V. At the 1.35 V the output side once sat at it would
     // have 0.12 V, in triode, which is why V_b sits at 1.52 V.
     expect(regionOf(res, 'casc_pr').status).toBe('pass');
-    expect(hardFailsIn(runSheet(withParams(doc, { V_b: 1.35 }), table))).toContain(
+    expect(hardFailsIn(runSheet(withParams(doc, { V_b: 1.35 }), table, undefined, REFS))).toContain(
       'casc_pr.region',
     );
     // Squeeze the pair's drain node down onto its source and its declarations are what trip:
     // V_a 0.40 leaves it 35 mV against a saturation voltage of 0.16 V.
-    const squeezed = runSheet(withParams(doc, { V_a: 0.4 }), table);
+    const squeezed = runSheet(withParams(doc, { V_a: 0.4 }), table, undefined, REFS);
     expect(hardFailsIn(squeezed)).toEqual(expect.arrayContaining(['in.region', 'inr.region']));
   });
 
@@ -751,7 +751,7 @@ describe('tier-3 goldens: telescopic cascode OTA', () => {
 
 describe('tier-3 goldens: folded cascode OTA', () => {
   const doc = sheet('folded-cascode-ota.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
   // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 8 and 0.5 µm, the tail
   // device on its gate, I_branch 30 µA into the output side's folding source, gm/ID in 14 / casc
   // 10 / cs 8; the cascodes at 0.5 µm, the input pair, the folding sources and the output mirror
@@ -846,8 +846,13 @@ describe('tier-3 goldens: folded cascode OTA', () => {
 
   itDrawsItsTail(doc, res, I_TAIL, vTail, VGS_GMID8_L05, cmTooLow, 'inr');
 
-  it('the fold current is the branch bias less what the input device takes', () => {
+  it('the fold current is what the folding source carries less what the input device takes', () => {
     expect(relErr(res.values.I_fold, iFold)).toBeLessThan(1e-3);
+    // The fold reads the output side's folding source, which carries the I_branch it is biased at
+    // exactly: reading the device rather than the number changes nothing while the source is
+    // sized at that current, and follows it once the source is a mirror output.
+    expect(res.values.pcs__id).toBe(30e-6);
+    expect(res.values.I_fold).toBe(res.values.pcs__id - res.values.in__id);
     expect(relErr(res.values.I_fold, 30e-6 - res.values.in__id)).toBeLessThan(1e-12);
     expect(relErr(res.values.GBW, gmPair / (TWO_PI * CL))).toBeLessThan(1e-3);
     expect(relErr(res.values.GBW, res.values.gm_pair / (TWO_PI * CL))).toBeLessThan(1e-12);
@@ -898,9 +903,9 @@ describe('tier-3 goldens: folded cascode OTA', () => {
   it('the split is solved so the currents at the output node balance', () => {
     // What the output side's PMOS cascode brings down is what the bottom mirror's output side
     // pulls, to the solve's tolerance; the split lands 0.0015 under one half here.
-    expect(relErr(res.values.I_branch - res.values.in__id, res.values.nmir__id)).toBeLessThan(1e-6);
+    expect(relErr(res.values.pcs__id - res.values.in__id, res.values.nmir__id)).toBeLessThan(1e-6);
     expect(doc.params.find((p) => p.name === 'out_share')?.designConstraint).toEqual({
-      lhs: 'I_branch - in__id',
+      lhs: 'pcs__id - in__id',
       rhs: 'nmir__id',
     });
     expect(relErr(res.values.out_share - 0.5, rest.share - 0.5)).toBeLessThan(2e-2);
@@ -913,6 +918,12 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     const diodeFold = block(res, 'pcs_r').id - res.values.inr__id;
     for (const name of ['nmir_r', 'ncasc_r', 'pcasc_r'])
       expect([name, block(res, name).id]).toEqual([name, diodeFold]);
+    // The fold current is written once, into the mirror's diode side; the two cascodes in series
+    // with it read that device's current rather than restating the subtraction.
+    const params = (name: string) => doc.blocks!.find((u) => u.name === name)!.params!;
+    expect(params('nmir_r').I_f).toBe('pcs_r__id - inr__id');
+    for (const name of ['ncasc_r', 'pcasc_r'])
+      expect([name, params(name).I_f]).toEqual([name, 'nmir_r__id']);
   });
 
   it('the diode side hangs under the gates the output side sets, and its drain is the mirror gate', () => {
@@ -997,7 +1008,9 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // The bottom mirror sits near its saturation voltage at V_c = 0.31 V on this table, and its
     // diode side a few millivolts lower, because that side's cascode has its drain on the mirror
     // node; a node 20 mV lower takes the diode side out first, and its declaration says so.
-    expect(hardFailsIn(runSheet(withParams(doc, { V_c: 0.29 }), table))).toContain('nmir_r.region');
+    expect(hardFailsIn(runSheet(withParams(doc, { V_c: 0.29 }), table, undefined, REFS))).toContain(
+      'nmir_r.region',
+    );
   });
 
   it('meets its own checks where it is sized, and at both ends of its common-mode range', () => {
@@ -1009,7 +1022,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
       ['cm-lo', 'complies'],
       ['cm-hi', 'complies'],
     ]);
-    const short = runSheet(withParams(doc, { L_cs: 0.5e-6, L_in: 0.5e-6 }), table);
+    const short = runSheet(withParams(doc, { L_cs: 0.5e-6, L_in: 0.5e-6 }), table, undefined, REFS);
     expect(hardFailsIn(short)).toEqual(expect.arrayContaining(['gain-spec', 'offset-spec']));
   });
 
@@ -1063,7 +1076,7 @@ describe('tier-3 goldens: folded cascode OTA', () => {
     // in the bracket, so nothing was measured at that end: it is no answer, not a failure, and
     // `solved` is left empty so no consumer can go looking for a landing.
     expect(0.8 + vgsAtBody(vgsIn, 0.8)).toBeLessThan(1.6);
-    const far = runSheet(withParams(doc, { CM_hi: 1.6 }), table);
+    const far = runSheet(withParams(doc, { CM_hi: 1.6 }), table, undefined, REFS);
     const hi = far.rangeEnds?.find((e) => e.name === 'cm-hi');
     expect(hi?.state).toBe('no-answer');
     expect(hi?.error).toMatch(/does not change sign/);
@@ -1237,7 +1250,7 @@ const itIsAMirrorOta = (
     const guess = doc.params.find((p) => p.name === 'V_nmir');
     expect(guess?.solveFor).toBe('nmir__vgs');
     expect(Math.abs(guess!.value - v.V_nmir)).toBeGreaterThan(0.1);
-    const other = runSheet(withParams(doc, { V_nmir: 0.5 }), table);
+    const other = runSheet(withParams(doc, { V_nmir: 0.5 }), table, undefined, REFS);
     expect(relErr(other.values.V_nmir, v.V_nmir)).toBeLessThan(1e-6);
   });
 
@@ -1305,7 +1318,7 @@ const itIsAMirrorOta = (
     ).toBeLessThan(1e-3);
     expect(relErr(v.Av, v.Gm_out * v.Rout)).toBeLessThan(1e-12);
     // K_m scales every output-side width and current together, so it cancels on the table too.
-    const wider = runSheet(withParams(doc, { K_m: 4 }), table);
+    const wider = runSheet(withParams(doc, { K_m: 4 }), table, undefined, REFS);
     expect(relErr(wider.values.Av, v.Av)).toBeLessThan(1e-6);
   });
 
@@ -1397,7 +1410,7 @@ const itIsAMirrorOta = (
     // a 1.4 V supply, an output 0.2 V above ground squeezes the NMOS output device and one 0.2 V
     // below the supply the PMOS output device beside it.
     const failing = (over: Record<string, number>): string[] => {
-      const r = runSheet(withParams(doc, over), table);
+      const r = runSheet(withParams(doc, over), table, undefined, REFS);
       expect(r.feasible).toBe(false);
       return hardFailsIn(r).filter((id) => id.endsWith('.region'));
     };
@@ -1413,7 +1426,7 @@ const itIsAMirrorOta = (
 
 describe('tier-3 goldens: current-mirror OTA', () => {
   const doc = sheet('current-mirror-ota.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
 
   itIsAMirrorOta(doc, res, 'mload', 'f_pole');
 
@@ -1551,7 +1564,7 @@ describe('tier-3 goldens: current-mirror OTA', () => {
 
 describe('tier-3 goldens: gain-boosted cascode OTA', () => {
   const doc = sheet('gain-boosted-cascode-ota.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
   // Defaults: the bias reference programmed to I_tail = 20 µA at gm/ID 14, the tail device on its
   // gate, gm/ID in 14 / casc 10 / mir 13 / boost 12, all L 0.5 µm; the stack is node-parameterized
   // — V_a 0.55 and V_b 1.52 on both sides, V_out 0.9, the tail node constrained so CM_in lands on
@@ -1614,13 +1627,24 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
     expect(relErr(1.8 - block(res, 'mir').vgs, X)).toBeLessThan(1e-4);
     expect(block(res, 'casc_nr').W).toBe(block(res, 'casc_n').W);
     expect(block(res, 'casc_pr').W).toBe(block(res, 'casc_p').W);
+    // They are in series with the diode-side pair transistor, and read its current rather than
+    // restating the half of the tail it carries.
+    for (const name of ['casc_nr', 'casc_pr']) {
+      expect([name, doc.blocks!.find((u) => u.name === name)!.params!.I_side]).toEqual([
+        name,
+        'in__id',
+      ]);
+      expect([name, block(res, name).id]).toEqual([name, block(res, 'in').id]);
+    }
     expect(relErr(block(res, 'casc_nr').bias!.vds, X - 0.55)).toBeLessThan(1e-4);
     expect(relErr(block(res, 'casc_pr').bias!.vds, 1.52 - X)).toBeLessThan(1e-3);
     // Each is held saturated there; the diode side's PMOS cascode is the one with least to spare,
     // and at the 1.3 V V_b once shipped it would sit in triode, which is why V_b is 1.52 V.
     for (const name of ['casc_nr', 'casc_pr'])
       expect([name, regionOf(res, name).status]).toEqual([name, 'pass']);
-    expect(hardFailsIn(runSheet(withParams(doc, { V_b: 1.3 }), table))).toContain('casc_pr.region');
+    expect(hardFailsIn(runSheet(withParams(doc, { V_b: 1.3 }), table, undefined, REFS))).toContain(
+      'casc_pr.region',
+    );
   });
 
   itIsOneInputGate(res);
@@ -1628,7 +1652,7 @@ describe('tier-3 goldens: gain-boosted cascode OTA', () => {
 
 describe('tier-3 goldens: inverter-based OTA', () => {
   const doc = sheet('inverter-based-ota.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
   // Defaults: I_bias 20 µA typed into the NMOS at gm/ID 10, both L 0.5 µm, V_out 0.9, VDD 1.8. The
   // two gates are one node and the two sources are the rails, so the PMOS is not given an
   // inversion level: it carries the NMOS's current at the gate-source voltage the supply leaves.
@@ -1678,7 +1702,7 @@ describe('tier-3 goldens: inverter-based OTA', () => {
           : u,
       ),
     };
-    const moved = runSheet(off, table);
+    const moved = runSheet(off, table, undefined, REFS);
     expect(moved.nodes!.state).toBe('checked-with-findings');
     const [dispute] = moved.nodes!.disputes;
     expect(dispute.relations).toEqual(expect.arrayContaining(['n.gs', 'p.gs']));
@@ -1750,7 +1774,7 @@ describe('tier-3 goldens: inverter-based OTA', () => {
     expect(relErr(saturated.rhsValue!, vdsatDemo(1.8 - vIn, L))).toBeLessThan(1e-3);
     expect(relErr(regionOf(res, 'n').rhsValue!, vdsatDemo(vIn, L))).toBeLessThan(1e-3);
     // An output 0.2 V higher leaves the PMOS 0.7 V, under that, and the sheet says so.
-    const high = runSheet(withParams(doc, { V_out_dc: 1.1 }), table);
+    const high = runSheet(withParams(doc, { V_out_dc: 1.1 }), table, undefined, REFS);
     expect(regionOf(high, 'p').status).toBe('fail');
     expect(hardFailsIn(high)).toContain('p.region');
     expect(doc.checks.map((c) => c.id)).not.toContain('p-saturated');
@@ -1833,7 +1857,7 @@ describe('operating-range honesty on the demo table', () => {
   // it is sized; what it cannot be given on this table is a compliance answer at that end.
   // Locked as a golden so neither half is lost: the range end must never read as complying, and
   // must never drag feasibility down with it.
-  const res = runSheet(sheet('current-mirror-ota.json'), table);
+  const res = runSheet(sheet('current-mirror-ota.json'), table, undefined, REFS);
 
   it('the unreachable cm-hi end is no answer, with the solver reason, and feasibility stands', () => {
     expect(res.feasible).toBe(true);

@@ -1,6 +1,6 @@
 {
   "title": "Super source follower",
-  "description": "A super source follower (SSF): a plain source follower whose output resistance is driven down by a local feedback device. The input follower sets the DC level shift (the output sits about one input $V_{GS}$ below the input), and the feedback device senses the follower current and closes a local loop that lowers the output resistance by the loop gain $g_{m,fb}/g_{ds,in}$ (the feedback transconductance into the follower's own output resistance): $R_{out} \\approx g_{ds,in}/((g_{m,in} + g_{mb,in}) * g_{m,fb})$, versus $1/g_{m,in}$ for a plain follower. The two devices share one branch: the input device's source is the output, the feedback device sits between the output and ground, and the feedback device's gate is the input device's drain. So the input device's drain-source voltage is not a free choice — it is the feedback device's gate-source voltage minus the output level. That makes it a compact low-impedance buffer. The feedback is a local loop; its own phase margin (whether that loop is stable) is a small-signal AC check the simulator owns, out of this sheet's scope — this sheet sizes the DC operating point and the low-frequency output resistance only. On the demo NMOS table both devices size against the same data.",
+  "description": "A super source follower (SSF): a plain source follower whose output resistance is driven down by a local feedback device. The input follower sets the DC level shift (the output sits about one input $V_{GS}$ below the input), and the feedback device senses the follower current and closes a local loop that lowers the output resistance by the loop gain $g_{m,fb}/g_{ds,in}$ (the feedback transconductance into the follower's own output resistance): $R_{out} \\approx g_{ds,in}/((g_{m,in} + g_{mb,in}) * g_{m,fb})$, versus $1/g_{m,in}$ for a plain follower. The input device's source is the output, the feedback device sits between the output and ground, and the feedback device's gate is the input device's drain. So the input device's drain-source voltage is not a free choice — it is the feedback device's gate-source voltage minus the output level. Two currents are typed, one per source: the bias source into the input device's drain sets $I_{in}$, which the input device carries down to the output, and the output source, an ideal current from the supply into the output node worth $I_{fb} - I_{in}$, adds the rest, so the feedback device carries $I_{fb}$ to ground. That output source is what makes this a super source follower rather than a flipped voltage follower: it lets the feedback device run at its own current, and with it its own $g_m$, while the input device's current stays fixed. Both sources are ideal: each stands for the bias device a realization places there, typically a current-source transistor on a bias line, which this sheet does not size. That makes it a compact low-impedance buffer. The feedback is a local loop; its own phase margin (whether that loop is stable) is a small-signal AC check the simulator owns, out of this sheet's scope — this sheet sizes the DC operating point and the low-frequency output resistance only. On the demo NMOS table both devices size against the same data.",
   "polarity": "n",
   "params": [
     { "name": "VDD", "value": 1.8, "unit": "V", "role": "spec", "class": "independent" },
@@ -18,7 +18,7 @@
       "max": 500e-6,
       "unit": "A",
       "role": "choice",
-      "note": "current through the input follower device (held fixed by the bias source, which linearizes the buffer)",
+      "note": "the bias source's current into the input device's drain: the input follower carries it, held fixed, which linearizes the buffer",
       "class": "independent"
     },
     {
@@ -28,7 +28,8 @@
       "max": 500e-6,
       "unit": "A",
       "role": "choice",
-      "note": "feedback device current"
+      "note": "the feedback device's current: what the input device brings down to the output plus what the output source adds, so the output source is worth I_fb - I_in. At I_fb = I_in that source carries nothing and the cell is a flipped voltage follower",
+      "class": "independent"
     },
     {
       "name": "gm_id_in",
@@ -74,7 +75,7 @@
       "name": "fb",
       "doc": {
         "title": "Feedback device",
-        "description": "The local-feedback device that senses the follower current; its transconductance into the follower's output resistance, gm_fb/gds_in, is the loop gain that lowers the output resistance.",
+        "description": "The local-feedback device that senses the follower current; its transconductance into the follower's output resistance, gm_fb/gds_in, is the loop gain that lowers the output resistance. It sinks everything that arrives at the output node: the input device's current plus the output source's.",
         "polarity": "n",
         "params": [
           { "name": "Ix", "value": 50e-6, "unit": "A", "role": "spec" },
@@ -182,13 +183,13 @@
       "name": "cgg_in",
       "expr": "in__cgg",
       "unit": "F",
-      "note": "estimate: the capacitance the input terminal presents, taken as the input device's whole gate capacitance. It OVERSTATES what a driver sees — the source follows the gate near unity, bootstrapping most of the gate-source capacitance away. No rule reads it"
+      "note": "estimate: the capacitance the input terminal presents, taken as the input device's whole gate capacitance. It OVERSTATES what a driver sees — the source follows the gate near unity, bootstrapping most of the gate-source capacitance away. No check reads it"
     },
     {
       "name": "I_q",
-      "expr": "I_in",
+      "expr": "I_fb",
       "unit": "A",
-      "note": "estimate: quiescent supply current — ONE stacked branch: the feedback device reuses the input device's current rather than drawing its own, so the supply pays for it once. A realization that biases the output node with a source of its own adds that current on top. The datasheet line for comparing designs; no rule reads it"
+      "note": "estimate: quiescent supply current — the two sources drawn: the bias source's I_in into the input device and the output source's I_fb - I_in into the output, which together are what the feedback device sinks. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -204,5 +205,8 @@
   "provides": ["Rout", "cgg_in", "I_q"],
   "formatVersion": 2,
   "levels": { "vin": "vds_fb + in__vgs", "vdd": "VDD" },
-  "elements": [{ "name": "ix", "kind": "I", "between": ["vdd", "x"], "value": "I_in" }]
+  "elements": [
+    { "name": "ix", "kind": "I", "between": ["vdd", "x"], "value": "I_in" },
+    { "name": "iout", "kind": "I", "between": ["vdd", "out"], "value": "I_fb - I_in" }
+  ]
 }

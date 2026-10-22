@@ -290,7 +290,7 @@ describe('sheet library: vetting lints', () => {
       'otas/telescopic-cascode-ota.json': { V_a: 'casc_n', V_b: 'casc_p' },
       'otas/folded-cascode-ota.json': { V_c: 'ncasc', V_fold: 'pcasc' },
       'stages/cascode-cs-amp.json': { V_x: '' },
-      'multistage/fd-telescopic-ota.json': { V_s: 'in', V_a: 'cascn', V_b: 'cascp' },
+      'multistage/fd-telescopic-ota.json': { V_a: 'cascn', V_b: 'cascp' },
       'multistage/flipped-voltage-follower.json': { V_out: 'in' },
       'multistage/super-source-follower.json': { vds_fb: 'in' },
       'multistage/two-stage-cascode-comp-ota.json': { V_casc: 'casc' },
@@ -552,6 +552,7 @@ const CONSUMER_GROUP = 'applications/';
 const NAMED_INTERFACE: Readonly<Record<string, readonly string[]>> = {
   'applications/sc-settling-to-ota-spec.json': ['GBW_req', 'A_req', 'SR_req', 'CL_eff'],
   'mirrors-bias/beta-multiplier-bias.json': ['gm_target'],
+  'mirrors-bias/nmos-bias-reference.json': ['W', 'vgs', 'id'],
   'multistage/rail-to-rail-input-stage.json': ['gm_min', 'gm_mid', 'gm_max'],
   'multistage/stage2-current-source-load.json': ['id', 'gds', 'vdsat'],
 };
@@ -613,6 +614,135 @@ describe('sheet library: the published interface', () => {
   });
 });
 
+// Every NMOS mirror tree in the library starts from the same reference: a diode-connected device
+// carrying its programmed current from an ideal source. It is drawn once, as a library sheet of its
+// own, and composed by reference, so no parent carries a copy of it or a current source for it.
+describe('sheet library: the NMOS bias reference is drawn once', () => {
+  const CHILD = 'mirrors-bias/nmos-bias-reference';
+  // Written down from the schematics, not read off the sheets: each sheet built on an NMOS
+  // reference, the block that holds it, the wire its source draws from, and its gate wire.
+  const USERS: Record<string, [string, string, string]> = {
+    'mirrors-bias/matched-mirror-bank.json': ['unit', 'vsup', 'nref'],
+    'mirrors-bias/simple-mirror.json': ['ref', 'vsup', 'nref'],
+    'mirrors-bias/widlar-current-source.json': ['ref', 'vsup', 'ngate'],
+    'multistage/fd-telescopic-ota.json': ['bias', 'vdd', 'vbn'],
+    'multistage/fd-two-stage-ota.json': ['bias', 'vdd', 'vbn'],
+    'multistage/two-stage-cascode-comp-ota.json': ['bias', 'vdd', 'vbn'],
+    'multistage/two-stage-miller-ota.json': ['bias', 'vdd', 'vbn'],
+    'otas/current-mirror-ota.json': ['bias', 'vdd', 'vbn'],
+    'otas/degenerated-differential-pair.json': ['bias', 'vdd', 'vbn'],
+    'otas/differential-pair-tail.json': ['bias', 'vdd', 'vbn'],
+    'otas/five-transistor-ota.json': ['bias', 'vdd', 'vbn'],
+    'otas/folded-cascode-ota.json': ['bias', 'vdd', 'vbn'],
+    'otas/gain-boosted-cascode-ota.json': ['bias', 'vdd', 'vbn'],
+    'otas/telescopic-cascode-ota.json': ['bias', 'vdd', 'vbn'],
+  };
+
+  it('every OTA bias and every NMOS mirror reference is a reference to the one child', () => {
+    const found: Record<string, [string, string, string]> = {};
+    for (const { file, doc } of LIBRARY)
+      for (const b of doc.blocks ?? [])
+        if (b.ref === CHILD) found[file] = [b.name, b.ports?.vdd ?? '', b.ports?.vb ?? ''];
+    expect(found).toEqual(USERS);
+    // Every amplifier with a bias block is among them: the eleven OTAs.
+    const amps = LIBRARY.filter(
+      ({ file, doc }) =>
+        /^(otas|multistage)\//.test(file) && doc.blocks?.some((b) => b.name === 'bias'),
+    ).map(({ file }) => file);
+    expect(amps).toHaveLength(11);
+    expect(amps.every((f) => f in USERS)).toBe(true);
+    for (const file of Object.keys(USERS)) {
+      const doc = LIBRARY.find((s) => s.file === file)!.doc;
+      const b = doc.blocks!.find((u) => u.name === USERS[file][0])!;
+      // A reference, not a copy: no embedded document, the parent's current, length and inversion
+      // passed in, both ports wired. The source of the programmed current lives in the child, so
+      // the parent draws no current source of its own.
+      expect([file, b.doc, Object.keys(b.params ?? {}).sort()]).toEqual([
+        file,
+        undefined,
+        ['I_ref', 'L_ref', 'gm_id_ref'],
+      ]);
+      expect([file, (doc.elements ?? []).filter((e) => e.kind === 'I')]).toEqual([file, []]);
+    }
+  });
+
+  it('alone, it is a diode at its programmed current with its source drawn', () => {
+    // Defaults: 20 µA at gm/ID 10, L 0.5 µm. The current is the given, exactly; the drain is the
+    // gate, so the device sits at vgs(10) = 0.610063 V, read along the vds = vgs diagonal.
+    const doc = sheet(`${CHILD}.json`);
+    const res = runSheet(doc, table);
+    expect(res.feasible).toBe(true);
+    expect(res.values.id).toBe(20e-6);
+    expect(relErr(res.values.gm, 10 * 20e-6)).toBeLessThan(1e-9);
+    expect(relErr(res.values.vgs, VGS_GMID10_L05)).toBeLessThan(1e-3);
+    expect(doc.nodes).toEqual({ d: 'vb', g: 'vb', s: 'gnd', b: 'gnd' });
+    expect(doc.elements).toEqual([
+      { name: 'iref', kind: 'I', between: ['vdd', 'vb'], value: 'I_ref' },
+    ]);
+    expect(doc.ports).toEqual(['vdd', 'vb']);
+    expect(res.nodes!.state).toBe('checked-clean');
+  });
+
+  it('each parent reads exactly what the inline copy it replaced gave', () => {
+    // Rebuild the copy each parent used to carry — the same diode embedded in the earlier format
+    // with `diode: true`, wired by the parent's own nodes, its programmed current a current source
+    // of the parent's — and run both. Every value the copy produced, every check and every range
+    // end comes out the same to the last bit; the reference adds its current to the interface.
+    const child = sheet(`${CHILD}.json`);
+    const inline = (doc: SheetDoc, name: string): SheetDoc => {
+      const b = doc.blocks!.find((u) => u.name === name)!;
+      const { vdd, vb } = b.ports as Record<string, string>;
+      const copy = {
+        title: child.title,
+        polarity: child.polarity,
+        params: child.params.map(({ name: n, value, unit, role }) => ({
+          name: n,
+          value,
+          unit,
+          role,
+        })),
+        givens: { ...child.givens!, diode: true },
+        equations: [],
+        checks: child.checks,
+        provides: ['W', 'vgs'],
+      };
+      return {
+        ...doc,
+        blocks: doc.blocks!.map((u) =>
+          u.name === name
+            ? { name, doc: copy, params: b.params, nodes: { d: vb, g: vb, s: 'gnd', b: 'gnd' } }
+            : u,
+        ),
+        elements: [
+          ...(doc.elements ?? []),
+          { name: 'iref', kind: 'I', between: [vdd, vb], value: b.params!.I_ref },
+        ],
+      };
+    };
+    const mismatched: string[] = [];
+    for (const [file, [name]] of Object.entries(USERS)) {
+      const { doc, res } = EVALUATED.find((s) => s.file === file)!;
+      const was = runSheet(inline(doc, name), table, undefined, REFS);
+      const now = res!;
+      for (const [k, x] of Object.entries(was.values))
+        if (now.values[k] !== x) mismatched.push(`${file}: ${k}`);
+      const extra = Object.keys(now.values).filter((k) => !(k in was.values));
+      if (extra.join() !== `${name}__id`) mismatched.push(`${file}: adds ${extra.join(', ')}`);
+      const outcome = (r: SheetResult) => ({
+        feasible: r.feasible,
+        complies: r.complies,
+        checks: r.checks.map((c) => [c.id, c.status, c.margin]),
+        warnings: r.warnings.map((w) => w.message),
+        ends: (r.rangeEnds ?? []).map((e) => [e.name, e.state, e.solved]),
+        nodes: r.nodes?.state,
+      });
+      if (JSON.stringify(outcome(now)) !== JSON.stringify(outcome(was)))
+        mismatched.push(`${file}: outcome`);
+    }
+    expect(mismatched).toEqual([]);
+  });
+});
+
 describe('exemplar goldens: CS amp, current-source load', () => {
   const res = runSheet(sheet('stages/cs-amp-current-source-load.json'), table);
   // Defaults: GBW 10 MHz into 2 pF with a 1.25 over-design factor, gm/ID 12,
@@ -658,7 +788,7 @@ describe('exemplar goldens: CS amp, current-source load', () => {
 });
 
 describe('exemplar goldens: simple current mirror', () => {
-  const res = runSheet(sheet('mirrors-bias/simple-mirror.json'), table);
+  const res = runSheet(sheet('mirrors-bias/simple-mirror.json'), table, undefined, REFS);
   // Defaults: I_in 20 µA, K = 4, gm/ID 8, L = 1 µm, output at V_out 0.9 V. The reference
   // needs no bias default — it is diode-connected, so the table's vds = vgs diagonal fixes it.
 
@@ -713,7 +843,7 @@ describe('exemplar goldens: simple current mirror', () => {
 
 describe('exemplar goldens: 5T OTA', () => {
   const doc = sheet('otas/five-transistor-ota.json');
-  const res = runSheet(doc, table);
+  const res = runSheet(doc, table, undefined, REFS);
   // Defaults: the bias reference programmed to I_tail = 20 µA, CL 2 pF, reference gm/ID 10,
   // input gm/ID 12, load gm/ID 8, all L 0.5 µm, VDD 1.8 V, common mode 1.1 V, output at 0.9 V.
   const I_TAIL = 20e-6;
@@ -819,7 +949,7 @@ describe('exemplar goldens: 5T OTA', () => {
     // The stored value is never read: from 0.3 or from 0.7 the split lands exactly where it does
     // from one half.
     for (const stored of [0.3, 0.7]) {
-      const from = runSheet(withParams(doc, { out_share: stored }), table);
+      const from = runSheet(withParams(doc, { out_share: stored }), table, undefined, REFS);
       expect(from.values.out_share).toBe(res.values.out_share);
       expect(from.values.in__W).toBe(res.values.in__W);
     }
@@ -881,7 +1011,12 @@ describe('exemplar goldens: 5T OTA', () => {
     // are the mirror's, so neither pair of devices has anything to differ by. What is left is the
     // table's own resolution: the tied devices are read between drain-voltage nodes and their
     // partners on a node or along the diode diagonal.
-    const level = runSheet(withParams(doc, { V_out_dc: 1.8 - VGS_GMID8_L05 }), table);
+    const level = runSheet(
+      withParams(doc, { V_out_dc: 1.8 - VGS_GMID8_L05 }),
+      table,
+      undefined,
+      REFS,
+    );
     expect(Math.abs(level.values.vos_sys)).toBeLessThan(1e-2 * res.values.vos_sys);
     expect(Math.abs(level.values.out_share - 0.5)).toBeLessThan(
       1e-2 * Math.abs(res.values.out_share - 0.5),
@@ -891,7 +1026,7 @@ describe('exemplar goldens: 5T OTA', () => {
     // At 1.3 V the output is 0.168 V above the diode node; the model gives
     //   mirror  (2.5 + 0.5)/(2.5 + 0.668042) = 0.946957, so the output side takes 48.64 %
     // and the offset is 9.0 mV the other way.
-    const above = runSheet(withParams(doc, { V_out_dc: 1.3 }), table);
+    const above = runSheet(withParams(doc, { V_out_dc: 1.3 }), table, undefined, REFS);
     const restAbove = atRest(1.3);
     expect(above.values.out_share).toBeLessThan(0.5);
     expect(
@@ -1074,7 +1209,7 @@ describe('exemplar goldens: 5T OTA', () => {
     const { V_tail, in__vdsat } = res.values;
     expect(margin(res)).toBeCloseTo(0.9 - V_tail - in__vdsat, 12);
     // Raise the output past the diode node and the diode side becomes the one that binds.
-    const raised = runSheet(withParams(doc, { V_out_dc: 1.3 }), table);
+    const raised = runSheet(withParams(doc, { V_out_dc: 1.3 }), table, undefined, REFS);
     const v = raised.values;
     expect(margin(raised)).toBeCloseTo(1.8 - v.ldr__vgs - v.V_tail - v.inr__vdsat, 12);
     expect(margin(raised)).toBeLessThan(1.3 - v.V_tail - v.in__vdsat);

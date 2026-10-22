@@ -38,7 +38,7 @@
       "value": 35e-9,
       "unit": "V/sqrt(Hz)",
       "role": "spec",
-      "note": "input-referred thermal density budget, set above the 32.5 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model estimate — a budget that only clears the model is not a budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm it is most of the power, and the row, reading the devices' own noise from a sky130 tt table, lands near 32.5 nV/rtHz"
+      "note": "input-referred thermal density budget, set above the 32.5 nV/rtHz floor measured on a sky130 tt realization of this pair rather than above the gamma-model estimate — a budget that only clears the model is not a budget. The degeneration resistor's own 4kT*R_s is the linearity price: at the default 12 kOhm it is most of the power, and the equation, reading the devices' own noise from a sky130 tt table, lands near 32.5 nV/rtHz"
     },
     {
       "name": "vos_target",
@@ -160,34 +160,9 @@
   "blocks": [
     {
       "name": "bias",
-      "doc": {
-        "title": "Tail bias reference",
-        "description": "The diode-connected reference the programmed current $I_{tail}$ flows into — the one device on this sheet whose current is typed. Its drain is its gate, so its $V_{DS}$ is its own $V_{GS}$ and the table is read along that diagonal with nothing estimated. It publishes its width and its gate voltage, which is all the tail device needs to copy it.",
-        "polarity": "n",
-        "params": [
-          { "name": "I_b", "value": 22e-6, "unit": "A", "role": "spec" },
-          { "name": "L_b", "value": 0.5e-6, "unit": "m", "role": "choice" },
-          { "name": "gm_id_b", "value": 14, "unit": "1/V", "role": "choice" }
-        ],
-        "givens": { "L": "L_b", "id": "I_b", "gm_id": "gm_id_b", "diode": true },
-        "equations": [],
-        "checks": [
-          {
-            "id": "feasible-inversion",
-            "kind": "physical",
-            "lhs": "gm_id_b",
-            "op": "<=",
-            "rhs": "ceiling"
-          }
-        ],
-        "provides": ["W", "vgs"]
-      },
-      "params": {
-        "I_b": "I_tail",
-        "L_b": "L_tail",
-        "gm_id_b": "gm_id_tail"
-      },
-      "nodes": { "d": "vbn", "g": "vbn", "s": "gnd", "b": "gnd" }
+      "ref": "mirrors-bias/nmos-bias-reference",
+      "params": { "I_ref": "I_tail", "L_ref": "L_tail", "gm_id_ref": "gm_id_tail" },
+      "ports": { "vdd": "vdd", "vb": "vbn" }
     },
     {
       "name": "tail",
@@ -313,7 +288,7 @@
       "name": "Rout",
       "expr": "1/(in__gds + gds_load_est)",
       "unit": "ohm",
-      "note": "the resistance this stage presents at its output: the input device's own output conductance in parallel with the estimated load conductance. Like the gain built on it, this neglects the degeneration boost the source resistor also gives the device r_o — so the row reads LOW, which is conservative for gain but not for loading: a parent checking a ratio against it will clear the check more easily than the real node would allow. The gain assumes a capacitive load, so nothing here models a resistive one; this row is what a composing parent checks its own loading against"
+      "note": "the resistance this stage presents at its output: the input device's own output conductance in parallel with the estimated load conductance. Like the gain built on it, this neglects the degeneration boost the source resistor also gives the device r_o — so the equation reads LOW, which is conservative for gain but not for loading: a parent checking a ratio against it will clear the check more easily than the real node would allow. The gain assumes a capacitive load, so nothing here models a resistive one; this equation is what a composing parent checks its own loading against"
     },
     {
       "name": "Av",
@@ -362,13 +337,13 @@
       "name": "cgg_in",
       "expr": "in__cgg",
       "unit": "F",
-      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No rule reads it"
+      "note": "estimate: the capacitance one input terminal presents — the gate capacitance of a single input device. Gate capacitance only, because the Miller term needs the gate-drain fraction and these tables do not carry it, so a driving stage sees more than this. No check reads it"
     },
     {
       "name": "I_q",
       "expr": "tail__id",
       "unit": "A",
-      "note": "estimate: quiescent supply current — the current the tail device delivers is the only branch these rows model, since the load is entered as a conductance rather than sized as a branch. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
+      "note": "estimate: quiescent supply current — the current the tail device delivers is the only branch these equations model, since the load is entered as a conductance rather than sized as a branch. The reference branch that programs the tail is shared bias infrastructure, typically one reference feeding several stages, and is not counted here. The datasheet line for comparing designs; no check reads it"
     }
   ],
   "checks": [
@@ -421,7 +396,7 @@
     {
       "name": "cm-lo",
       "set": { "CM_dc": "CM_lo" },
-      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard rule must hold there"
+      "note": "the claimed low edge, checked exactly: the whole sheet re-evaluates at CM_dc = CM_lo on the design this run produced — its own tail-node solve over its full range, every device held at the geometry it was sized to — and every hard check must hold there"
     },
     {
       "name": "cm-hi",
@@ -440,7 +415,6 @@
   },
   "elements": [
     { "name": "rs_p", "kind": "R", "between": ["sp", "tail"], "value": "R_s" },
-    { "name": "rs_n", "kind": "R", "between": ["sn", "tail"], "value": "R_s" },
-    { "name": "iref", "kind": "I", "between": ["vdd", "vbn"], "value": "I_tail" }
+    { "name": "rs_n", "kind": "R", "between": ["sn", "tail"], "value": "R_s" }
   ]
 }
