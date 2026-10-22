@@ -99,11 +99,13 @@ change:
   click would not need the page.
 - **A view, never a source.** When it disagrees with the code, the code is right.
 - **Monospace is machine-checkable fact; serif is judgement the maintainer may overrule.**
-- **`#calls` is their authority surface.** Every judgement call you make that they would
-  plausibly overrule gets a block there: the call, and the position currently in force,
-  so their silence is a real answer rather than a default nobody chose. Delete a block
-  when they rule on it — resolved decisions belong in a commit message or a plan doc.
-  Reference that section by its `#calls` anchor, never by ordinal.
+- **`#calls` is their authority surface.** Only calls about the design, vision and
+  direction of the app go there: the call, and the position currently in force, so their
+  silence is a real answer rather than a default nobody chose. Implementation calls are
+  yours to make — when in doubt, take the more proper, honest, best-practice, future-proof
+  option — and are recorded in a plan doc or the commit that implements them, never on the
+  page. Delete a block when they rule on it — resolved decisions belong in a commit message
+  or a plan doc. Reference that section by its `#calls` anchor, never by ordinal.
 
 **Maintain it at commit-batch time, not per commit** — after the cleanup pass and the
 test gate, before reporting done. Refresh when the batch changed a doctrine, a contract,
