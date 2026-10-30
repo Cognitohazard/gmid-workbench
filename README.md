@@ -217,6 +217,19 @@ const refs = buildSheetRefIndex([{ path: 'blocks/cs-load', doc: loadSheet }]);
 runSheet(sheet, table, (id) => byKey.get(id), refs);
 ```
 
+To vary a param of a composed sheet — a child's included — set it by its path with
+`withOverrides`, which writes a child's value as an override on the block that composes it, so
+the child's own file is never rewritten:
+
+```js
+import { withOverrides } from '@gmid/mostab-core';
+
+for (const L of [2e-6, 4e-6, 6e-6]) {
+  const res = runSheet(withOverrides(sheet, { 'bias.L_MB5': L }, refs), table, resolve, refs);
+  console.log(L, res.feasible);
+}
+```
+
 A sheet read from a file goes through the loader the app uses before anything else reads it:
 `sanitizeSheet(JSON.parse(text), 0, lost)` brings earlier key spellings up to the current ones at
 every level of a composed tree, and lists in `lost` every piece it could not carry over rather than
