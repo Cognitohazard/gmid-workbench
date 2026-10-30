@@ -1333,8 +1333,12 @@
     result !== undefined &&
     !result.feasible &&
     result.warnings.some((w) => w.message.includes(`constrained param "${p.name}"`));
+  /** The root a rounded solved param was solved to, where its `quantize` rounded it this run. */
+  const exactOf = (p: SheetVar): number | undefined =>
+    result?.quantized?.find((q) => q.param === p.name)?.exact;
   // The read-only field's tooltip: which mechanism owns the number, or that there is none.
   const solvedHelp = (p: SheetVar): string | undefined => {
+    if (exactOf(p) !== undefined) return CONTROL_HELP.quantizedParam;
     if (torn(p)) return CONTROL_HELP.solvedParam;
     if (!isConstrained(p)) return undefined;
     return constraintFailed(p) ? CONTROL_HELP.constraintNotMet : CONTROL_HELP.constrainedParam;
@@ -1447,6 +1451,13 @@
         : formatEng(engineSolved(p) ? (result?.values[p.name] ?? p.value) : p.value)}
       onchange={(e) => commitEng(e.currentTarget, p.value, (v) => v != null && setParam(p.name, v))}
     />
+    {#if exactOf(p) !== undefined}
+      <!-- A rounded solved value: the sheet is read at the rounded number, and the root it was
+           rounded from is said beside it. -->
+      <span class="qexact" title={CONTROL_HELP.quantizedParam}
+        >from {formatEng(exactOf(p) as number)}</span
+      >
+    {/if}
     {#if isSweepable(p)}
       <input
         class="sld"
@@ -2570,6 +2581,12 @@
     width: 5rem;
     font: inherit;
     font-family: ui-monospace, monospace;
+  }
+  .qexact {
+    font-family: ui-monospace, monospace;
+    font-size: 0.85em;
+    opacity: 0.7;
+    white-space: nowrap;
   }
   /* A param the engine solves reads as a reported value, not a field you can type into. */
   .num.solved {

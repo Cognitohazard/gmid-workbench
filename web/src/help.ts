@@ -143,6 +143,8 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Solved, not set. This parameter stands in for a value only the evaluated sheet knows, closing a bias loop the block order cannot express. The engine searches for it inside the parameter\u2019s min and max until the two agree; the stored number is never read, so the field is read-only and the parameter cannot be swept.',
   constrainedParam:
     'Solved, not set. This is an internal bias node the engine chooses so a sheet output equals a spec you typed (e.g. the tail node placed so the common mode lands exactly on CM_dc). Found by a search between the parameter\u2019s min and max — the range it is searched in first, not slider bounds — and, where the node is a wire\u2019s level and nothing is found there, over the rest of the range its wiring puts it in. Sweep the spec on the other side of the design constraint instead; the shown value is where the node landed.',
+  quantizedParam:
+    'Solved, then rounded. The engine found the value this parameter\u2019s relation asks for (shown after "from"), rounded it the way the parameter\u2019s quantize says, and evaluated the sheet again with the rounded value, so every check reads the value that is built. Where the design is held at a range end, the rounded value is held too.',
   constraintNotMet:
     'This design constraint was not solved, so there is no solved value to show: its search inside the parameter’s [min, max] either found no solution there, did not settle, or ran out of the evaluation budget — the warnings below say which, and why. Move or widen min/max, relax the spec the constraint chases, or simplify the solves it depends on.',
   operatingRange:
