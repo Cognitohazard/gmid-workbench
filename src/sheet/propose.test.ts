@@ -525,3 +525,92 @@ describe('carrying the netlist through a loader', () => {
     expect(paramLost).toEqual(['params[0].convention']);
   });
 });
+
+describe('a sheet that composes sub-sheets of devices', () => {
+  /** One n device whose drain and source the given expressions place. */
+  const device = (vds: string, vsb?: string): SheetDoc => ({
+    title: 'm',
+    polarity: 'n',
+    params: [
+      { name: 'Vd', value: 0.6 },
+      { name: 'Vs', value: 0 },
+      { name: 'I', value: 1e-6 },
+    ],
+    givens: { L: '1e-6', id: 'I', gm_id: '10', vds, ...(vsb ? { vsb } : {}) },
+    equations: [],
+    checks: [],
+  });
+  /** A bias branch of two stacked devices, written before the netlist: its node and supply come
+   *  in as overrides of its own params. */
+  const branch: SheetDoc = {
+    title: 'branch',
+    polarity: 'n',
+    params: [
+      { name: 'VDD_b', value: 1.8 },
+      { name: 'V_n', value: 0.6 },
+    ],
+    blocks: [
+      { name: 'lo', doc: device('Vd'), params: { Vd: 'V_n' } },
+      { name: 'hi', doc: device('Vd - Vs', 'Vs'), params: { Vd: 'VDD_b', Vs: 'V_n' } },
+    ],
+    equations: [],
+    checks: [],
+  };
+  const top: SheetDoc = {
+    title: 'top',
+    polarity: 'n',
+    params: [
+      { name: 'VDD', value: 1.8, class: 'independent' },
+      { name: 'V_N', value: 0.6, class: 'independent' },
+    ],
+    blocks: [
+      { name: 'bias', doc: branch, params: { VDD_b: 'VDD', V_n: 'V_N' } },
+      { name: 'out', doc: device('Vd'), params: { Vd: 'V_N' } },
+    ],
+    equations: [],
+    checks: [],
+  };
+
+  it('drafts the sub-sheet, and maps its node onto the wire the parent writes at the same level', () => {
+    const p = proposeWiring(top);
+    // Inside the branch: the two devices stack on its node, and the upper one's drain sits at the
+    // supply the branch is handed — a part split out of the device's own vds, read through the
+    // branch's override.
+    expect(wireOf(p, 'lo', 'd', 'bias')).toBe('n');
+    expect(wireOf(p, 'hi', 's', 'bias')).toBe('n');
+    expect(wireOf(p, 'hi', 'd', 'bias')).toBe('vdd_b');
+    // The branch's node is the wire the parent writes at the same level, and the parent holds it.
+    expect(p.portMaps.find((m) => m.block === 'bias' && m.port === 'n')).toMatchObject({
+      at: '',
+      wire: wireOf(p, 'out', 'd'),
+      mark: 'inferred',
+    });
+    expect(p.levels).toContainEqual(expect.objectContaining({ at: '', wire: 'n', expr: 'V_N' }));
+    expect(p.levels.some((l) => l.at === 'bias' && l.wire === 'n')).toBe(false);
+    // The gates nothing places are the branch's ports, each mapped to a new wire of the parent.
+    for (const port of ['lo_g', 'hi_g'])
+      expect(p.portMaps.find((m) => m.port === port)?.mark).toBe('unknown');
+
+    const copy = applyWiringProposal(top, p);
+    expect(copy.formatVersion).toBe(2);
+    expect(copy.blocks?.[0].doc?.formatVersion).toBe(2);
+    expect(copy.blocks?.[0].ports).toEqual({ n: 'n', lo_g: 'bias_lo_g', hi_g: 'bias_hi_g' });
+    expect(validateSheet(copy).filter((w) => w.severity === 'error')).toEqual([]);
+    // Wiring is read, never fed back: the sized design is the same as before the draft.
+    const before = runSheet(top, table);
+    const after = runSheet(copy, table);
+    for (const k of ['bias__lo__W', 'bias__hi__W', 'out__W'].filter((k) => k in before.values))
+      expect(after.values[k]).toBe(before.values[k]);
+    expect(after.blocks?.map((b) => b.sizing?.W ?? b.blocks?.map((c) => c.sizing?.W))).toEqual(
+      before.blocks?.map((b) => b.sizing?.W ?? b.blocks?.map((c) => c.sizing?.W)),
+    );
+  });
+
+  it('says when a child is by reference and was not resolved, rather than drafting around it', () => {
+    const p = proposeWiring({ ...top, blocks: [{ name: 'lib', ref: 'stages/cs-amp' }] });
+    expect(p.devices).toEqual([]);
+    expect(p.notes.join('\n')).toMatch(
+      /block "lib" is included by reference \("stages\/cs-amp"\) and was not resolved/,
+    );
+  });
+});

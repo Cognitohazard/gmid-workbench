@@ -48,6 +48,41 @@ export function namesOf(expr: unknown): readonly string[] {
  * re-balance the design). Untagged params render ungrouped, as before. `note` is a
  * one-line derivation/intent annotation for the designer inheriting the sheet.
  */
+/** How a solved value is rounded (see SheetVar.quantize). */
+export interface Quantize {
+  sigFigs: number;
+  round?: QuantizeRound;
+}
+
+export type QuantizeRound = 'up' | 'down' | 'nearest';
+
+/** The ways a solved value may be rounded. */
+export const QUANTIZE_ROUNDS: ReadonlySet<string> = new Set<QuantizeRound>([
+  'up',
+  'down',
+  'nearest',
+]);
+
+/** A solved param rounded by its `quantize`: the root its relation was solved to, and the value
+ *  the sheet was then evaluated at. */
+export interface QuantizedValue {
+  param: string;
+  exact: number;
+  rounded: number;
+}
+
+/** `x` rounded to `sigFigs` significant figures, `up` toward +∞, `down` toward −∞, or to the
+ *  nearest. The scaled value is read to twelve figures first, so a value that is already round
+ *  (1.5e-6 held as 1.4999999999999999e-6) stays where it is rather than stepping a digit. */
+export function roundSig(x: number, sigFigs: number, round: QuantizeRound = 'nearest'): number {
+  if (x === 0 || !Number.isFinite(x)) return x;
+  const exp = Math.floor(Math.log10(Math.abs(x)));
+  const scale = 10 ** (sigFigs - 1 - exp);
+  const m = Number((x * scale).toPrecision(12));
+  const r = round === 'up' ? Math.ceil(m) : round === 'down' ? Math.floor(m) : Math.round(m);
+  return Number((r / scale).toPrecision(Math.max(sigFigs, 1)));
+}
+
 export interface SheetVar {
   name: string;
   value: number;
@@ -128,6 +163,17 @@ export interface SheetVar {
    * current where the design is held.
    */
   hold?: string;
+  /**
+   * Round the value the engine solves this param to, as an author rounds a computed target to a
+   * value worth building: `sigFigs` significant figures, rounded `up` (to the next value at or
+   * above), `down` (at or below) or to the `nearest` (the default). The engine solves the param to
+   * its relation's root, rounds it, and evaluates the sheet again with the rounded value as an
+   * ordinary input, so every check is read at the value that is built; the result reports both
+   * (SheetResult.quantized). Where the hardware is held — a range end, another condition — the
+   * rounded value is held, not solved again. Only a param the engine solves (`solveFor` or
+   * `designConstraint`) may carry it.
+   */
+  quantize?: Quantize;
   /**
    * What kind of DC sizing input this param is, for a voltage that a device's bias or givens are
    * built from. `independent` is a voltage nothing on the sheet determines, so the designer
@@ -260,11 +306,22 @@ export function constraintProblem(params: readonly SheetVar[]): string | null {
   return constraintIssue(params)?.message ?? null;
 }
 
-/** constraintProblem with the param it is about — what a failed solve names as its unknown. */
+/** The quoted names of `ps`, joined for a message: `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
+const quotedNames = (ps: readonly SheetVar[]): string => {
+  const q = ps.map((p) => `"${p.name}"`);
+  return q.length > 1 ? `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}` : q[0];
+};
+
+/** constraintProblem with the params it is about — what a failed solve names as its unknowns. A
+ *  problem that every one of several params shares is said once, naming them all, so an author
+ *  fixes the document in one pass rather than one param per run. */
 export function constraintIssue(
   params: readonly SheetVar[],
-): { param: string; message: string } | null {
-  const issue = (p: SheetVar, message: string) => ({ param: p.name, message });
+): { params: string[]; message: string } | null {
+  const issue = (p: SheetVar | readonly SheetVar[], message: string) => ({
+    params: (Array.isArray(p) ? p : [p]).map((q: SheetVar) => q.name),
+    message,
+  });
   const half = params.find((p) => p.designConstraint !== undefined && !constrained(p));
   if (half)
     return issue(
@@ -280,12 +337,13 @@ export function constraintIssue(
       `param "${both.name}" has a design constraint and also carries solveFor — the two would fight over ` +
         `it; keep one relation`,
     );
-  const unranged = params.find((p) => engineSolved(p) && !ranged(p));
-  if (unranged)
+  const unranged = params.filter((p) => engineSolved(p) && !ranged(p));
+  if (unranged.length)
     return issue(
       unranged,
-      `solved param "${unranged.name}" needs finite min < max — they are the range it is searched ` +
-        `in, not slider bounds`,
+      `solved ${unranged.length > 1 ? 'params' : 'param'} ${quotedNames(unranged)} ` +
+        `${unranged.length > 1 ? 'need' : 'needs'} finite min < max — they are the range ` +
+        `${unranged.length > 1 ? 'each is' : 'it is'} searched in, not slider bounds`,
     );
   const held = params.filter(holds);
   const twice = held.find((p) => p.designConstraint !== undefined || torn(p));
@@ -295,12 +353,13 @@ export function constraintIssue(
       `param "${twice.name}" carries hold and also has a design constraint or carries solveFor — a param ` +
         `takes one of the three`,
     );
-  const loose = held.find((p) => !ranged(p));
-  if (loose)
+  const loose = held.filter((p) => !ranged(p));
+  if (loose.length)
     return issue(
       loose,
-      `held param "${loose.name}" needs finite min < max — the range it is re-solved in ` +
-        `where the hardware is held`,
+      `held ${loose.length > 1 ? 'params' : 'param'} ${quotedNames(loose)} ` +
+        `${loose.length > 1 ? 'need' : 'needs'} finite min < max — the range ` +
+        `${loose.length > 1 ? 'each is' : 'it is'} re-solved in where the hardware is held`,
     );
   const shapeless = held.find((p) => additiveCoefficient(p.hold, p.name) === undefined);
   if (shapeless)
@@ -804,6 +863,7 @@ export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
     ...w,
     message: blockMessage(blockName, w.message),
     location: `${blockName}${PATH_SEP}${w.location ?? ''}`,
+    ...(w.cause !== undefined ? { cause: `${blockName}${PATH_SEP}${w.cause}` } : {}),
   };
 }
 
@@ -941,7 +1001,7 @@ export const WIRING_DOC_KEYS: readonly string[] = [
 export const WIRING_BLOCK_KEYS: readonly string[] = ['nodes', 'ports'];
 export const WIRING_VAR_KEYS: readonly string[] = ['convention'];
 export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
-  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'designConstraint', 'hold', 'class',
+  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'designConstraint', 'hold', 'class', 'quantize',
   ...WIRING_VAR_KEYS,
 ]); // prettier-ignore
 export const EQUATION_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
@@ -1025,6 +1085,8 @@ export interface SheetBlockReport {
   wiringValues?: WiringValues;
   /** How the block's own solved params came out (see SheetResult.solve). */
   solve?: SolveOutcome;
+  /** The block's own solved params that were rounded (see SheetResult.quantized). */
+  quantized?: QuantizedValue[];
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
@@ -1429,6 +1491,9 @@ export interface SheetResult {
   /** How this sheet's own solved params came out (see SolveOutcome); a child's own are on its
    *  report. */
   solve?: SolveOutcome;
+  /** This sheet's own solved params that its `quantize` rounded: each root, and the value the sheet
+   *  was evaluated at (see SheetVar.quantize). */
+  quantized?: QuantizedValue[];
   /** The range each of this sheet's own solved params was searched in, in document order (see
    *  SolveRange). Absent where the sheet solves nothing, or the solve did not start. */
   ranges?: SolveRange[];
@@ -1670,19 +1735,39 @@ export const noiseSourcesIn = (
   );
 
 /** `pre` — what resolving and validating a sheet found — without the findings the evaluation
- *  then repeats in the same words at the same place. A device that states no drain voltage is
- *  named when the sheet is validated and refused when it is sized; a reader needs it once, and
- *  the evaluation's is the one that carries the consequence. */
+ *  then repeats in the same words. A device that states no drain voltage is named when the sheet
+ *  is validated and refused when it is sized; a solved param with no range is refused by
+ *  validation and fails its solve in the same words; a reader needs each once, and the
+ *  evaluation's is the one that carries the consequence. The same words are the same finding,
+ *  whichever rule raised them, at what severity, and wherever each places it. */
 export function withoutRestated(
   pre: readonly QAWarning[],
   evaluated: readonly QAWarning[],
 ): QAWarning[] {
-  return pre.filter(
-    (w) =>
-      !evaluated.some(
-        (e) => e.rule === w.rule && e.location === w.location && e.message === w.message,
-      ),
-  );
+  return pre.filter((w) => !evaluated.some((e) => e.message === w.message));
+}
+
+/**
+ * One line over the findings that follow from others (QAWarning.cause): how many, and the blocks
+ * they trace back to, so a reader starts from those blocks and a display can fold the rest under
+ * the line. Undefined where nothing follows from anything.
+ */
+export function followOnSummary(warnings: readonly QAWarning[]): QAWarning | undefined {
+  const by = new Map<string, number>();
+  for (const w of warnings) if (w.cause !== undefined) by.set(w.cause, (by.get(w.cause) ?? 0) + 1);
+  if (!by.size) return undefined;
+  let n = 0;
+  for (const k of by.values()) n += k;
+  const blocks = [...by].map(([cause, k]) => `"${cause}" (${k})`).join(', ');
+  return {
+    rule: 'sheet-follow-on',
+    severity: 'info',
+    message:
+      `${n} ${n > 1 ? 'findings follow' : 'finding follows'} from ${by.size > 1 ? 'blocks' : 'a block'} ` +
+      `whose outputs were withheld — ${blocks}: fix what ${by.size > 1 ? 'those blocks report' : 'that block reports'} ` +
+      `and ${n > 1 ? 'these go' : 'this goes'} with it`,
+    location: '',
+  };
 }
 
 /**
@@ -1708,9 +1793,13 @@ export function withValidation(pre: readonly QAWarning[], res: SheetResult): She
           findings: res.nodes.findings + structural,
         }
       : res.nodes;
+  const warnings = [...withoutRestated(pre, res.warnings), ...res.warnings];
+  // Ahead of everything: where most of a long list follows from a few blocks, that is the first
+  // thing to read.
+  const summary = followOnSummary(warnings);
   return {
     ...res,
-    warnings: [...withoutRestated(pre, res.warnings), ...res.warnings],
+    warnings: summary ? [summary, ...warnings] : warnings,
     ...(nodes ? { nodes } : {}),
   };
 }

@@ -16,6 +16,7 @@ import {
   type WalkRelation,
   type WalkResult,
 } from './nodes';
+import { sanitizeSheet } from './load';
 import { readFileSync } from 'node:fs';
 import { EARLIER_FORMAT_NOTE } from './nodes';
 import { buildSheetRefIndex } from './resolve';
@@ -977,12 +978,8 @@ describe('a point with no answer is not walked', () => {
 
 describe('the loader: restore, save, reload', () => {
   type Loader = (v: unknown, depth?: number, lost?: string[]) => SheetDoc | undefined;
-  // The web app's loader, read from outside the core's sources by a path the compiler does not
-  // follow.
-  const loader = async (): Promise<Loader> => {
-    const at = '../../web/src/dashboard';
-    return ((await import(/* @vite-ignore */ at)) as { sanitizeSheet: Loader }).sanitizeSheet;
-  };
+  // The loader the app and a script share.
+  const loader = async (): Promise<Loader> => sanitizeSheet;
   const stored = {
     title: 'x',
     polarity: 'n',

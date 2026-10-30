@@ -503,6 +503,59 @@ describe('a gate on a shared node keeps its supply where the design is held', ()
     ).toEqual([]);
   });
 
+  it('asks nothing of a diode connection: its gate follows its current', () => {
+    // A diode given its drop and the current fed into it, and no width, is held at that width
+    // and current, and its gate voltage — its own drain — is read from the table: the circuit's
+    // behaviour, so neither way out the warning offers fits it.
+    const diode = (wired: boolean): SheetDoc => ({
+      formatVersion: 2,
+      title: 'diode bias',
+      params: [
+        { name: 'I_c', value: 1.6e-6, class: 'independent' },
+        { name: 'V_set', value: 0.6, class: 'independent' },
+      ],
+      blocks: [
+        {
+          name: 'd',
+          doc: {
+            title: 'd',
+            params: [
+              { name: 'I_d', value: 1e-6 },
+              { name: 'vgs_d', value: 0.5 },
+            ],
+            givens: { L: '1e-6', id: 'I_d', vgs: 'vgs_d', ...(wired ? {} : { diode: true }) },
+            equations: [],
+            checks: [],
+          },
+          params: { I_d: 'I_c', vgs_d: 'V_set' },
+          nodes: { d: 'vb', g: wired ? 'vb' : 'vg', s: 'gnd', b: 'gnd' },
+        },
+      ],
+      equations: [],
+      checks: [],
+    });
+    expect(flagged(diode(true))).toEqual([]);
+    expect(flagged(diode(false))).toEqual([]);
+    // The sheet's own device, wired as a diode, likewise.
+    const own: SheetDoc = {
+      formatVersion: 2,
+      title: 'own diode',
+      params: [
+        { name: 'I_c', value: 1.6e-6, class: 'independent' },
+        { name: 'V_set', value: 0.6, class: 'independent' },
+      ],
+      givens: { L: '1e-6', id: 'I_c', vgs: 'V_set' },
+      nodes: { d: 'vb', g: 'vb', s: 'gnd', b: 'gnd' },
+      equations: [],
+      checks: [],
+    };
+    expect(flagged(own)).toEqual([]);
+    // The same device with its gate on another wire is asked, as before.
+    expect(flagged({ ...own, nodes: { d: 'vb', g: 'vg', s: 'gnd', b: 'gnd' } })).toEqual([
+      'warning givens',
+    ]);
+  });
+
   it('refuses a current balance that is not zero where the design is sized', () => {
     for (const hold of ['2*I_bias - p__id', 'I_bias - p__id - 1e-6']) {
       const base = evaluateSheet(inverter(hold), dev, (id) => (id === 'pmos' ? dev : undefined));

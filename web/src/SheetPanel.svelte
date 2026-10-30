@@ -241,8 +241,18 @@
       .map((w) => ({ ...w, message: explainRef(namingRangeEnds(w.message, endNames)) }));
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive grouping scratch, discarded on return
     const byChild = new Map<string, { count: number; first: string }>();
+    // A finding the core traces to a block whose outputs were withheld (its `cause`) is folded
+    // under that block: the block's own findings, listed above, are the ones to fix.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive grouping scratch, discarded on return
+    const byCause = new Map<string, { count: number; first: string }>();
     const rest: string[] = [];
     for (const w of ws) {
+      if (w.cause !== undefined) {
+        const e = byCause.get(w.cause) ?? { count: 0, first: w.message };
+        e.count++;
+        byCause.set(w.cause, e);
+        continue;
+      }
       // The core reports the undefined name structurally; a child-provide symbol
       // (`ld__gm`) groups under its child prefix.
       const sep = w.rule === 'sheet-undeclared' && w.symbol ? w.symbol.indexOf(PROVIDE_SEP) : -1;
@@ -258,7 +268,12 @@
         ? `block "${child}" resolves nothing yet — ${e.count} dependent expressions read n/a (assign its device and check its params)`
         : e.first,
     );
-    return [...rest, ...collapsed];
+    const followOn = [...byCause].map(([cause, e]) =>
+      e.count > 1
+        ? `${e.count} more findings follow from block "${cause}", whose outputs were withheld — fix what it reports above and they go with it`
+        : e.first,
+    );
+    return [...rest, ...collapsed, ...followOn];
   });
 
   // The range-end notes are INFO, not warnings: a mirrored current that is different at a

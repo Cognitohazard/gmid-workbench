@@ -3267,6 +3267,34 @@ describe('diode-connected givens', () => {
     expect(diodeGrid(covered).clamped).toBe(false);
   });
 
+  it('warns of the clamped diagonal only for a device that settles off the vds axis', () => {
+    // A table whose vds axis starts at 0.1 V while its vgs sweep starts lower: the diagonal is
+    // clamped below 0.1 V, and only a diode whose drop lands there is read from the edge.
+    const late = generateDemoDevice({
+      vds: { min: 0.1, max: 1.2, step: 0.05 },
+      vsb: { min: 0, max: 0.9, step: 0.05 },
+    });
+    expect(diodeGrid(late.grid).clamped).toBe(true);
+    const at = (v: number): SheetResult =>
+      runSheet(diodeDoc({ gm_id: undefined, vgs: String(v), id: '1e-9' }) as SheetDoc, late);
+    const clampWarnings = (r: SheetResult) =>
+      r.warnings.filter((w) => /diode connection: the device settles at/.test(w.message));
+
+    const inside = at(0.5);
+    expect(inside.sizing?.ok).toBe(true);
+    expect(clampWarnings(inside)).toHaveLength(0);
+    expect(inside.sizing?.clamped ?? []).not.toContain('vds');
+
+    const below = at(0.05);
+    expect(below.sizing?.ok).toBe(true);
+    expect(below.sizing?.clamped).toContain('vds');
+    const said = clampWarnings(below);
+    expect(said).toHaveLength(1);
+    expect(said[0].severity).toBe('warning');
+    expect(said[0].message).toMatch(/vgs = 0\.05 V/);
+    expect(said[0].message).toMatch(/\[0\.1 V, 1\.2 V\]/);
+  });
+
   it('refuses givens that declare both the connection and a vds', () => {
     const errs = validateSheet(diodeDoc({ vds: '0.5' })).filter((w) => w.severity === 'error');
     expect(errs).toHaveLength(1);
@@ -5349,5 +5377,273 @@ describe('a sheet that reads the table’s temperature with no device sized on i
     const r = evaluateSheet(sized, filled);
     expect(notes(r)).toEqual([]);
     expect(r.sizing?.fallbacks?.some((f) => f.quantity === 'T')).toBe(true);
+  });
+});
+
+describe('a block whose inputs failed', () => {
+  /** One device, its current an input, providing its width and current. */
+  const leg = (title: string): SheetDoc => ({
+    title,
+    polarity: 'n',
+    params: [{ name: 'I', value: 10e-6 }],
+    givens: { L: '0.5e-6', id: 'I', gm_id: '10', vds: '0.6' },
+    equations: [],
+    checks: [{ id: 'small', kind: 'spec', lhs: 'W', rhs: '1', op: '<=' }],
+    provides: ['W', 'id'],
+  });
+  /** A leg whose current and gm/ID are solved params with no range: its solve is refused. */
+  const unranged: SheetDoc = {
+    ...leg('m'),
+    params: [
+      { name: 'I', value: 10e-6, designConstraint: { lhs: 'W', rhs: '1e-6' } },
+      { name: 'G', value: 10, designConstraint: { lhs: 'vgs', rhs: '0.5' } },
+    ],
+    givens: { L: '0.5e-6', id: 'I', gm_id: 'G', vds: '0.6' },
+  };
+  /** m fails; a reads m's output; b reads a's; the sheet's own math reads b's. */
+  const chain = (): SheetDoc =>
+    notACircuit({
+      title: 'chain',
+      polarity: 'n',
+      params: [],
+      blocks: [
+        { name: 'm', doc: unranged },
+        { name: 'a', doc: leg('a'), params: { I: 'm__id' } },
+        { name: 'b', doc: leg('b'), params: { I: 'a__id' } },
+      ],
+      equations: [{ name: 'Wb', expr: 'b__W' }],
+      checks: [{ id: 'wb', kind: 'spec', lhs: 'Wb', rhs: '1', op: '<=' }],
+    });
+
+  it('does not size a block on its own defaults when an override failed', () => {
+    const res = runSheet(chain(), dev);
+    for (const name of ['a', 'b']) {
+      const r = res.blocks?.find((x) => x.name === name);
+      expect(r?.feasible, name).toBe(false);
+      expect(r?.sizing, name).toBeUndefined();
+      expect(r?.checks, name).toEqual([]);
+      expect(r?.provides, name).toEqual({});
+    }
+    // Nothing was sized for a or b, so nothing about their sizing is reported.
+    expect(res.warnings.some((w) => /block "[ab]": .*sizing failed/.test(w.message))).toBe(false);
+    expect(res.checks.find((c) => c.id === 'wb')?.status).toBe('na');
+  });
+
+  it('names the block every downstream finding follows from, and says so first', () => {
+    const res = runSheet(chain(), dev);
+    const followOn = res.warnings.filter((w) => w.cause !== undefined);
+    // a's and b's failed overrides, the undefined names they read, and the sheet's own equation
+    // and check — all of it m's.
+    expect(followOn.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(followOn.map((w) => w.cause))).toEqual(new Set(['m']));
+    expect(followOn.filter((w) => w.rule === 'sheet-block-param').map((w) => w.location)).toEqual([
+      'a',
+      'b',
+    ]);
+    // The root finding is m's own, and carries no cause.
+    const root = res.warnings.filter((w) => w.severity === 'error' && w.cause === undefined);
+    expect(root.map((w) => w.message)).toEqual([
+      'block "m": solved params "I" and "G" need finite min < max — they are the range each is ' +
+        'searched in, not slider bounds',
+    ]);
+    // One line ahead of the rest says where to start.
+    expect(res.warnings[0]).toMatchObject({ rule: 'sheet-follow-on', severity: 'info' });
+    expect(res.warnings[0].message).toMatch(
+      new RegExp(
+        `^${followOn.length} findings follow from a block whose outputs were withheld — "m" \\(${followOn.length}\\)`,
+      ),
+    );
+  });
+
+  it('carries the cause up the tree by block path', () => {
+    const top = notACircuit({
+      title: 'top',
+      polarity: 'n',
+      params: [],
+      blocks: [
+        { name: 'amp', doc: { ...chain(), provides: ['Wb'] } },
+        { name: 'c', doc: leg('c'), params: { I: 'amp__Wb*1e-3' } },
+      ],
+      equations: [],
+      checks: [],
+    });
+    const res = runSheet(top, dev);
+    const causes = new Set(res.warnings.map((w) => w.cause).filter(Boolean));
+    // Inside amp the findings trace to amp's m; amp itself raised a finding of its own (m's
+    // refused solve), so what reads amp's withheld output traces to amp.
+    expect(causes).toEqual(new Set(['amp.m', 'amp']));
+    expect(
+      res.warnings.find((w) => w.rule === 'sheet-block-param' && w.location === 'c')?.cause,
+    ).toBe('amp');
+  });
+
+  it('a block whose override fails on its own is the cause of what reads it', () => {
+    const doc = notACircuit({
+      title: 'own',
+      polarity: 'n',
+      params: [],
+      blocks: [
+        { name: 'a', doc: leg('a'), params: { I: 'sqrt(-1)' } },
+        { name: 'b', doc: leg('b'), params: { I: 'a__id' } },
+      ],
+      equations: [],
+      checks: [],
+    });
+    const res = runSheet(doc, dev);
+    const aErr = res.warnings.find((w) => w.rule === 'sheet-block-param' && w.location === 'a');
+    expect(aErr?.cause).toBeUndefined();
+    expect(aErr?.message).toMatch(
+      /the block is not evaluated, rather than sized on its own default/,
+    );
+    const bErr = res.warnings.find((w) => w.rule === 'sheet-block-param' && w.location === 'b');
+    expect(bErr?.cause).toBe('a');
+  });
+
+  it('says a refused solve once, naming every param it refuses', () => {
+    const res = runSheet(notACircuit(unranged), dev);
+    const said = res.warnings.filter((w) => /need finite min < max/.test(w.message));
+    expect(said).toHaveLength(1);
+    expect(said[0].message).toMatch(/"I" and "G"/);
+    expect(res.solve).toMatchObject({ kind: 'not-settled', unknowns: ['I', 'G'] });
+  });
+});
+
+describe('solving a length for a width', () => {
+  /** A bias sheet whose diode is held at a width and solved for the length that gives its drop. */
+  const bias = (vSet: number): SheetDoc =>
+    notACircuit({
+      title: 'diode at a set drop, at a set width',
+      polarity: 'n',
+      params: [
+        { name: 'I_cbias', value: 1.6e-6, class: 'independent' },
+        { name: 'V_set', value: vSet, class: 'independent' },
+        { name: 'W_diode', value: 0.5e-6 },
+        {
+          name: 'L_d',
+          value: 1e-6,
+          min: 0.18e-6,
+          max: 2e-6,
+          designConstraint: { lhs: 'd__W', rhs: 'W_diode' },
+        },
+      ],
+      blocks: [
+        {
+          name: 'd',
+          doc: {
+            title: 'diode',
+            polarity: 'n',
+            params: [
+              { name: 'L', value: 1e-6 },
+              { name: 'I', value: 1e-6 },
+              { name: 'V', value: 0.5 },
+            ],
+            givens: { L: 'L', id: 'I', vgs: 'V', diode: true },
+            equations: [],
+            checks: [],
+            provides: ['W', 'L'],
+          },
+          params: { L: 'L_d', I: 'I_cbias', V: 'V_set' },
+        },
+      ],
+      equations: [],
+      checks: [],
+    });
+
+  it('re-solves the length when the drop moves, with the width held', () => {
+    const at = (v: number) => runSheet(bias(v), devBias);
+    const lo = at(0.45);
+    const hi = at(0.55);
+    for (const r of [lo, hi]) {
+      expect(r.feasible).toBe(true);
+      expect(r.solve).toEqual({ kind: 'settled' });
+      expect(Math.abs(r.values.d__W / 0.5e-6 - 1)).toBeLessThan(1e-4);
+      expect(r.values.d__L).toBe(r.values.L_d);
+    }
+    // A larger drop at the same current and width needs a longer device.
+    expect(hi.values.L_d).toBeGreaterThan(lo.values.L_d);
+  });
+
+  it('says so when the length the drop needs lies past the table', () => {
+    const r = runSheet(bias(0.7), devBias);
+    expect(r.feasible).toBe(false);
+    expect(r.solve).toMatchObject({ kind: 'no-solution', unknown: 'L_d' });
+  });
+});
+
+describe('rounding a solved value', () => {
+  /** One device whose current is solved so its width meets a target, then rounded. */
+  const rounded = (round: 'up' | 'down', ranges = false): SheetDoc =>
+    notACircuit({
+      title: 'rounded current',
+      polarity: 'n',
+      params: [
+        { name: 'W_target', value: 1.453e-6 },
+        { name: 'V_d', value: 0.6, unit: 'V', class: 'independent' },
+        {
+          name: 'I',
+          value: 1e-6,
+          min: 1e-7,
+          max: 1e-4,
+          unit: 'A',
+          designConstraint: { lhs: 'W', rhs: 'W_target' },
+          quantize: { sigFigs: 2, round },
+        },
+      ],
+      givens: { L: '0.5e-6', id: 'I', gm_id: '12', vds: 'V_d' },
+      equations: [],
+      checks: [{ id: 'wide-enough', kind: 'spec', lhs: 'W', op: '>=', rhs: 'W_target' }],
+      ...(ranges ? { operatingRange: [{ name: 'lo', set: { V_d: '0.5' } }] } : {}),
+    });
+
+  it('solves to the root, rounds, and reads every check at the rounded value', () => {
+    const res = runSheet(rounded('up'), devBias);
+    expect(res.solve).toEqual({ kind: 'settled' });
+    const [q] = res.quantized ?? [];
+    expect(q.param).toBe('I');
+    expect(q.rounded).toBeGreaterThanOrEqual(q.exact);
+    expect(Number(q.rounded.toPrecision(2))).toBe(q.rounded);
+    // The design is the rounded one: the device carries that current, and is wider than the root's.
+    expect(res.values.I).toBe(q.rounded);
+    expect(res.sizing?.id).toBeCloseTo(q.rounded, 15);
+    expect(res.values.W).toBeGreaterThanOrEqual(1.453e-6);
+    // Rounded up, the spec holds — narrowly, so amber is as good as a pass.
+    expect(['pass', 'amber']).toContain(res.checks.find((c) => c.id === 'wide-enough')?.status);
+    expect(res.feasible).toBe(true);
+  });
+
+  it('says so when rounding the other way misses the spec', () => {
+    const res = runSheet(rounded('down'), devBias);
+    const [q] = res.quantized ?? [];
+    expect(q.rounded).toBeLessThan(q.exact);
+    expect(res.checks.find((c) => c.id === 'wide-enough')?.status).toBe('fail');
+    expect(res.feasible).toBe(false);
+  });
+
+  it('holds the rounded value where the hardware is held', () => {
+    const res = runSheet(rounded('up', true), devBias);
+    const end = res.rangeEnds?.[0];
+    expect(end?.solved ?? {}).not.toHaveProperty('I');
+    expect(end?.state).toBe('complies');
+  });
+
+  it('refuses a quantize that has nothing to round, or cannot be applied', () => {
+    const errs = (doc: SheetDoc) =>
+      validateSheet(doc)
+        .filter((w) => w.severity === 'error' && /quantize/.test(w.message))
+        .map((w) => w.message);
+    const typed = rounded('up');
+    typed.params = typed.params.map((p) =>
+      p.name === 'V_d' ? { ...p, quantize: { sigFigs: 2 } } : p,
+    );
+    expect(errs(typed)).toEqual([
+      'param "V_d": quantize rounds a value the engine solves, and "V_d" carries neither solveFor ' +
+        'nor a design constraint — round a typed value where it is typed',
+    ]);
+    const bad = rounded('up');
+    bad.params = bad.params.map((p) =>
+      p.name === 'I' ? { ...p, quantize: { sigFigs: 0, round: 'up' as const } } : p,
+    );
+    expect(errs(bad)).toEqual(['param "I": quantize needs sigFigs, a whole number from 1 to 15']);
+    expect(errs(rounded('up'))).toEqual([]);
   });
 });

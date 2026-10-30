@@ -41,17 +41,28 @@ import {
   prefixBlockWarning,
   REGION_CHECK_ID,
   lastSolveFailure,
+  namesOf,
+  PATH_SEP,
   refusedIn,
   solveFailedIn,
   stands,
   unfinishedBecause,
   withParams,
+  roundSig,
   type NoSolutionWhy,
   type NotSettledWhy,
+  type Quantize,
+  type QuantizedValue,
   type SolveFailure,
   type SolveRange,
 } from './types';
-import { assumedLevelRefusal, heldGateWarnings, holdHardware, type HeldHardware } from './coverage';
+import {
+  asInput,
+  assumedLevelRefusal,
+  heldGateWarnings,
+  holdHardware,
+  type HeldHardware,
+} from './coverage';
 // A value as a message quotes it: what the author wrote, without the float tail arithmetic leaves
 // on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004).
 import { shown } from './linear';
@@ -70,6 +81,7 @@ import {
   STANDALONE,
   structuralDiodes,
   unwalkedReport,
+  volts,
   withNodes,
   withoutWalk,
   type SolvedWire,
@@ -443,10 +455,11 @@ function applyGivensBias(
       assumed: string[];
       clamped: string[];
       /** A diode connection folded the vds axis; `clamped` when the vgs sweep leaves the
-       *  characterized vds range somewhere, so part of the diagonal reads the table's edge. */
-      diode?: { clamped: boolean };
+       *  characterized vds range somewhere, so part of the diagonal reads the table's edge, and
+       *  `range` that vds range. */
+      diode?: { clamped: boolean; range: [number, number] };
     }
-  | { error: string; needs?: string[]; unswept?: string[] } {
+  | { error: string; needs?: string[]; unswept?: string[]; from?: unknown } {
   let t = table;
   const bias: Record<string, number> = {};
   const stated: Record<string, number> = {};
@@ -455,7 +468,7 @@ function applyGivensBias(
   const taken: string[] = [];
   const assumed: string[] = [];
   const clamped: string[] = [];
-  let diode: { clamped: boolean } | undefined;
+  let diode: { clamped: boolean; range: [number, number] } | undefined;
   // The slices are taken once every axis has been read (atBias), in the order they are found
   // here; slicing one bias axis leaves the others as they were, so each is read off `t` the same.
   const steps: [string, number][] = [];
@@ -475,20 +488,13 @@ function applyGivensBias(
     const live = t.grid.axes.find((a) => a.name === 'vds' && a.values.length > 1);
     if (live) {
       const fold = diodeFolded(t);
-      diode = { clamped: fold.clamped };
-      // Say it out loud when the diagonal cannot be followed everywhere: past the characterized
-      // vds range the fold reads the table's edge, so a diode biased up there is reported at a
-      // drop the data never measured. Silently clamping is exactly what this project does not do.
-      if (fold.clamped)
-        warn({
-          rule: 'sheet-givens',
-          severity: 'warning',
-          message:
-            `diode connection: the vgs sweep runs outside the characterized vds range, so the ` +
-            `vds = vgs diagonal is clamped to the table's edge where it does. A drop landing in ` +
-            `that region is read from data taken at a different vds`,
-          location: 'givens',
-        });
+      // Where the vgs sweep runs past the characterized vds range the fold reads the table's
+      // edge. That is a fact about the table, not about this device: whether the device's own
+      // point lies there is known only once it is sized, and is said there (see runSizing).
+      diode = {
+        clamped: fold.clamped,
+        range: [live.values[0], live.values[live.values.length - 1]],
+      };
       t = fold.table;
     } else lacking.push(unsweptDiode(t));
   }
@@ -508,7 +514,8 @@ function applyGivensBias(
     const declared = (b as unknown as Partial<Record<string, string>>)[axis];
     if (declared !== undefined) {
       const v = evalFinite(declared, values, scope, warn, `given ${axis}`);
-      if (v === undefined) return { error: `given ${axis} did not resolve to a finite number` };
+      if (v === undefined)
+        return { error: `given ${axis} did not resolve to a finite number`, from: declared };
       stated[axis] = v;
       if (!live) {
         // Nothing to slice: the table was taken at one point on this axis. Where the given
@@ -731,14 +738,25 @@ function runSizing(
   scope: Scope,
   equations: ReadonlySet<string>,
   warn: (w: QAWarning) => void,
+  causeOf: (src: unknown) => string | undefined = () => undefined,
 ): { report: SizingReport; point: RegionPoint } {
   // Every sizing failure surfaces an error warning AND an ok:false report, so the feasibility
-  // aggregate fails closed no matter which path failed (no silent unsized "feasible" design).
+  // aggregate fails closed no matter which path failed (no silent unsized "feasible" design). A
+  // given that did not resolve because it read a name a block withheld follows from that block,
+  // and says so (`from`, the given's source).
   const fail = (
     error: string,
     why: Pick<SizingReport, 'needs' | 'clamped' | 'unswept'> = {},
+    from?: unknown,
   ): { report: SizingReport; point: RegionPoint } => {
-    warn({ rule: 'sheet-givens', severity: 'error', message: error, location: 'givens' });
+    const cause = from === undefined ? undefined : causeOf(from);
+    warn({
+      rule: 'sheet-givens',
+      severity: 'error',
+      message: error,
+      location: 'givens',
+      ...(cause !== undefined ? { cause } : {}),
+    });
     const report: SizingReport = {
       ok: false,
       W: NaN,
@@ -760,7 +778,7 @@ function runSizing(
   if (problem) return fail(`givens ${problem}`);
 
   const L = evalFinite(b.L, values, scope, warn, 'given L');
-  if (L === undefined) return fail('given L did not resolve to a finite number');
+  if (L === undefined) return fail('given L did not resolve to a finite number', {}, b.L);
 
   // A table taken at ONE length says which: a device is sized on it at that length and refused
   // at any other, like a bias on an axis the table does not sweep (see Unswept). A table with no
@@ -774,14 +792,14 @@ function runSizing(
   }
 
   const sliced = applyGivensBias(b, atLength(table, L), values, scope, warn, lacking);
-  if ('error' in sliced) return fail(sliced.error, sliced);
+  if ('error' in sliced) return fail(sliced.error, sliced, sliced.from);
 
   // The sized table holds only the lengths L reads; the table's own range is the one an off-hull
   // length is judged and reported against.
   const q: SizeQuery = { table: sliced.table, L, ...(lAxis ? { lengths: lAxis.values } : {}) };
   for (const k of supplied) {
     const v = evalFinite(b[k] as string, values, scope, warn, `given ${k}`);
-    if (v === undefined) return fail(`given ${k} did not resolve to a finite number`);
+    if (v === undefined) return fail(`given ${k} did not resolve to a finite number`, {}, b[k]);
     q[k] = v;
   }
 
@@ -826,14 +844,28 @@ function runSizing(
     const clamped = [...sliced.clamped, ...res.clamped];
     // A diode connection is read on the vds = vgs diagonal. Where the gate voltage this device
     // landed on lies past the characterized vds range, the fold read the table's edge instead:
-    // the folded table's own `vds` column says which drain voltage the point was taken at.
+    // the folded table's own `vds` column says which drain voltage the point was taken at. Said
+    // out loud for this device's point alone — a table whose vgs sweep merely starts below its
+    // first vds value says nothing about a diode that settles well inside the range.
     const vdsRead = res.quantities.vds;
     if (
       sliced.diode?.clamped &&
       Number.isFinite(vdsRead) &&
       Math.abs(vdsRead - res.vgs) > HULL_SNAP * Math.max(1, Math.abs(res.vgs))
-    )
+    ) {
       clamped.push('vds');
+      const [lo, hi] = sliced.diode.range;
+      warn({
+        rule: 'sheet-givens',
+        severity: 'warning',
+        message:
+          `diode connection: the device settles at vgs = ${volts(res.vgs)}, outside the ` +
+          `characterized vds range [${volts(lo)}, ${volts(hi)}], so its point is read at the ` +
+          `table's edge, vds = ${volts(vdsRead)}, not on the vds = vgs diagonal — from data taken ` +
+          `at a different drain voltage`,
+        location: 'givens',
+      });
+    }
     if (clamped.length) report.clamped = clamped;
     return { report, point };
   } catch (e) {
@@ -1005,6 +1037,34 @@ function regionCheck(
 }
 
 /**
+ * What one node of a tree could not compute because a composed block's outputs were withheld — the
+ * block did not settle, or was not evaluated — by name, each with the path of the block it traces
+ * back to (QAWarning.cause). A child's provided names (`bias__W`) enter it where the child's
+ * outputs are withheld, and an equation that read one enters it in turn, so a check two steps
+ * downstream still names the block. An expression that fails because it reads one of these is a
+ * consequence of that block, not a finding of its own.
+ */
+type Withheld = Map<string, string>;
+
+/** The withheld names of the evaluation that produced a result, where it withheld any — read by a
+ *  failed solve to say whether it had anything to steer by (see solveCause). */
+const WITHHELD = new WeakMap<SheetResult, ReadonlyMap<string, string>>();
+
+/** The block a failure to evaluate `src` traces back to: the first name it reads that was
+ *  withheld, if any. */
+function causeIn(withheld: ReadonlyMap<string, string>, src: unknown): string | undefined {
+  if (!withheld.size) return undefined;
+  for (const n of namesOf(src)) {
+    const cause = withheld.get(n);
+    if (cause !== undefined) return cause;
+  }
+  return undefined;
+}
+
+/** A result that stands for a block that was not evaluated: nothing sized, nothing checked. */
+const NOT_EVALUATED: SheetResult = { values: {}, checks: [], feasible: false, warnings: [] };
+
+/**
  * Build a child doc with its param values overridden by expressions evaluated in the
  * PARENT scope as built so far: parent params, constants, and the provides of EARLIER
  * siblings (children evaluate in document order — the ratified idiom for a later block
@@ -1016,8 +1076,13 @@ function regionCheck(
  * Fail-closed: a declared override is the parent EXPLICITLY supplying a value, so one that
  * cannot resolve to a finite number must NOT silently fall back to the child's embedded
  * default — that would size a different design than the author wired and could still read
- * feasible. A failed override raises an error (blocking feasibility) and returns ok:false
- * so the caller withholds the child's provides too.
+ * feasible. A failed override raises an error (blocking feasibility) and returns ok:false,
+ * and the caller then does not evaluate the child at all: sized on its own default it would report
+ * a design nobody wired, and its findings would read as findings about this one.
+ *
+ * An override that failed because it read a name a sibling withheld (see Withheld) follows from
+ * that sibling, and says so (`cause`). Where every failed override does, so does the child: its
+ * outputs are withheld with the same cause. One that failed on its own makes this block the cause.
  */
 function applyBlockParams(
   block: SheetBlock,
@@ -1025,11 +1090,15 @@ function applyBlockParams(
   parentValues: Record<string, number>,
   parentScope: Scope,
   warn: (w: QAWarning) => void,
-): { doc: SheetDoc; ok: boolean } {
+  withheld: ReadonlyMap<string, string>,
+): { doc: SheetDoc; ok: boolean; cause?: string } {
   if (!block.params) return { doc: childDoc, ok: true };
   const childParams = new Map(childDoc.params.map((p) => [p.name, p]));
   const overrides: Record<string, number> = {};
   let ok = true;
+  /** The block every failed override traces back to; undefined once one failed on its own. */
+  let cause: string | undefined;
+  let rootFailed = false;
   for (const [k, expr] of Object.entries(block.params)) {
     // An override key that names no child param is the same failure as an unresolvable
     // one: the parent explicitly supplied a value (typo and all) that will NOT reach the
@@ -1038,6 +1107,7 @@ function applyBlockParams(
     const child = childParams.get(k);
     if (child === undefined) {
       ok = false;
+      rootFailed = true;
       warn({
         rule: 'sheet-block-param',
         severity: 'error',
@@ -1064,11 +1134,15 @@ function applyBlockParams(
     const v = evalFinite(expr, parentValues, parentScope, warn, `block "${block.name}" param ${k}`);
     if (v === undefined) {
       ok = false;
+      const from = causeIn(withheld, expr);
+      if (from === undefined) rootFailed = true;
+      else cause ??= from;
       warn({
         rule: 'sheet-block-param',
         severity: 'error',
-        message: `block "${block.name}": override "${k}" did not resolve to a finite number (refusing to fall back to the child default)`,
+        message: `block "${block.name}": override "${k}" did not resolve to a finite number — the block is not evaluated, rather than sized on its own default`,
         location: block.name,
+        ...(from !== undefined ? { cause: from } : {}),
       });
       continue;
     }
@@ -1084,7 +1158,17 @@ function applyBlockParams(
       ),
     },
     ok,
+    ...(!ok && !rootFailed && cause !== undefined ? { cause } : {}),
   };
+}
+
+/** The block a child's withheld outputs trace back to, in its parent's terms: where every error the
+ *  child raised follows from a block inside it, that block; otherwise the child itself. */
+function childCause(name: string, res: SheetResult): string {
+  const errors = res.warnings.filter((w) => w.severity === 'error');
+  return errors.length && errors.every((w) => w.cause !== undefined)
+    ? `${name}${PATH_SEP}${errors[0].cause}`
+    : name;
 }
 
 /**
@@ -1094,12 +1178,18 @@ function applyBlockParams(
  * child's outputs anywhere — including its own givens (e.g. a cascode carrying the child's
  * current). Fail-closed: a child that errors or is infeasible drags the parent down via
  * the rolled-up error warning + the children-feasibility fold in evaluateSheet.
+ *
+ * `warn` raises this node's own findings; `rollUp` passes a child's on, already attributed to its
+ * block. Every output a child does not publish because it failed enters `withheld`, with the block
+ * it traces back to, so what this node then cannot compute from it says where it comes from.
  */
 function evalBlocks(
   { doc: parent, table, resolveDevice, depth, budget, settings }: NodeRef,
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
+  rollUp: (w: QAWarning) => void,
+  withheld: Withheld,
 ): SheetBlockReport[] {
   const reports: SheetBlockReport[] = [];
   // Structural self-defense for direct evaluateSheet callers (runSheet validates, but
@@ -1158,18 +1248,43 @@ function evalBlocks(
       }
     }
 
-    const { doc: childDoc, ok: paramsOk } = applyBlockParams(block, srcDoc, values, scope, warn);
-    // evaluateNode, not evaluateSheet: a composed child never evaluates its own range ends —
-    // the parent owns range claims (validation says so at the block). Its wiring is read once the
-    // whole tree has settled (see finishWiring), in the mode its parent asks for: a block that
-    // names the wires its child's device sits on, or whose device reads a selector the parent
-    // declares, asks for that device's operating point; a child that states wiring joins the
-    // parent's walk and reports its held levels and element values — no child walks itself (see
-    // flattened, withNodes).
+    const {
+      doc: childDoc,
+      ok: paramsOk,
+      cause,
+    } = applyBlockParams(block, srcDoc, values, scope, warn, withheld);
+    /** Withhold `key` of this block's outputs, as following from `from`. */
+    const withhold = (key: string, from: string): void =>
+      void withheld.set(joinProvide(block.name, key), from);
+    // A child's wiring is read once the whole tree has settled (see finishWiring), in the mode its
+    // parent asks for: a block that names the wires its child's device sits on, or whose device
+    // reads a selector the parent declares, asks for that device's operating point; a child that
+    // states wiring joins the parent's walk and reports its held levels and element values — no
+    // child walks itself (see flattened, withNodes).
     const mode: WiringMode = {
       wired: blockWires(parent, block) !== undefined || readsParentSelector(parent, block),
       flattened: flattened(srcDoc),
     };
+    // An override that did not resolve leaves the child with no inputs of the parent's to size on.
+    // It is not evaluated: sized on its own defaults, it would report a design nobody wired —
+    // checks passing on it, a device sized at a current no circuit carries — and its findings
+    // would read as findings about this sheet. Its outputs are withheld, from the block whose
+    // withheld outputs the override read where that is why it failed, and from this one otherwise.
+    if (!paramsOk) {
+      const report: SheetBlockReport = {
+        name: block.name,
+        title: srcDoc.title,
+        feasible: false,
+        provides: {},
+        checks: [],
+      };
+      for (const key of srcDoc.provides ?? []) withhold(key, cause ?? block.name);
+      PENDING_WIRING.set(report, { doc: childDoc, res: NOT_EVALUATED, table: childTable, mode });
+      reports.push(report);
+      continue;
+    }
+    // evaluateNode, not evaluateSheet: a composed child never evaluates its own range ends —
+    // the parent owns range claims (validation says so at the block).
     const res = evaluateChild(
       srcDoc,
       childDoc,
@@ -1182,16 +1297,16 @@ function evalBlocks(
 
     // Roll up child warnings, attributed to the block (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
-    for (const w of res.warnings) warn(prefixBlockWarning(block.name, w));
+    for (const w of res.warnings) rollUp(prefixBlockWarning(block.name, w));
 
-    // Expose the child's declared `provides` as flat parent scalars — but ONLY when the
-    // parent wiring was honored (paramsOk) and the child's own solve landed. On a broken override
-    // the child sized with the wrong input; after a solve that found nothing or did not settle,
-    // its numbers are whatever its last probe left behind. Either way its outputs are
-    // meaningless: withhold them so dependent parent math goes `na` — and a parent search does not
-    // steer by them, which would land it on roots that exist only in a failed child's leftovers.
+    // Expose the child's declared `provides` as flat parent scalars — but ONLY when the child's
+    // own solve landed. After a solve that found nothing or did not settle, its numbers are
+    // whatever its last probe left behind: withhold them so dependent parent math goes `na` — and
+    // a parent search does not steer by them, which would land it on roots that exist only in a
+    // failed child's leftovers.
     const provides: Record<string, number> = {};
-    if (paramsOk && !solveFailedIn(res)) {
+    const published = !solveFailedIn(res);
+    if (published) {
       for (const key of srcDoc.provides ?? []) {
         const v = res.values[key];
         if (v !== undefined && Number.isFinite(v)) {
@@ -1200,16 +1315,23 @@ function evalBlocks(
         }
       }
     }
+    // A child that failed — its solve, or anything else that stops it standing — leaves the outputs
+    // it did not publish withheld, as following from it, or from the block inside it its own
+    // failure follows from.
+    if (!published || !stands(res))
+      for (const key of srcDoc.provides ?? [])
+        if (!(key in provides)) withhold(key, childCause(block.name, res));
     const report: SheetBlockReport = {
       name: block.name,
       title: srcDoc.title,
-      feasible: paramsOk && res.feasible,
+      feasible: res.feasible,
       ...(res.sizing ? { sizing: res.sizing } : {}),
       provides,
       checks: res.checks,
       ...(res.blocks ? { blocks: res.blocks } : {}),
       ...(res.held ? { held: res.held } : {}),
       ...(res.solve ? { solve: res.solve } : {}),
+      ...(res.quantized ? { quantized: res.quantized } : {}),
     };
     PENDING_WIRING.set(report, { doc: childDoc, res, table: childTable, mode });
     reports.push(report);
@@ -1484,7 +1606,19 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
   budget.left--;
   budget.counted++;
   const warnings: QAWarning[] = [];
-  const warn = (w: QAWarning): void => void warnings.push(w);
+  const withheld: Withheld = new Map();
+  // A name this node could not compute because a block withheld it makes the warning about it a
+  // consequence: it carries that block as its cause. Only this node's own names are read so — a
+  // child's warnings arrive already attributed (rollUp), in the child's own namespace.
+  const warn = (w: QAWarning): void => {
+    const cause =
+      w.cause === undefined && w.rule === 'sheet-undeclared' && w.symbol !== undefined
+        ? withheld.get(w.symbol)
+        : undefined;
+    warnings.push(cause === undefined ? w : { ...w, cause });
+  };
+  const rollUp = (w: QAWarning): void => void warnings.push(w);
+  const causeOf = (src: unknown): string | undefined => causeIn(withheld, src);
   const values: Record<string, number> = {};
 
   // 0. Device-metadata scalars — the same scope derive/tableScope uses: T/UT (so
@@ -1504,11 +1638,21 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
   // 2. Compose children FIRST, so the parent can reference their provided scalars
   //    (name__key) in its own givens/equations/checks.
   const blocks =
-    doc.blocks && doc.blocks.length > 0 ? evalBlocks(node, values, scope, warn) : undefined;
+    doc.blocks && doc.blocks.length > 0
+      ? evalBlocks(node, values, scope, warn, rollUp, withheld)
+      : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when givens are declared.
   const sized = doc.givens
-    ? runSizing(doc.givens, table, values, scope, new Set(doc.equations.map((e) => e.name)), warn)
+    ? runSizing(
+        doc.givens,
+        table,
+        values,
+        scope,
+        new Set(doc.equations.map((e) => e.name)),
+        warn,
+        causeOf,
+      )
     : undefined;
   const sizing = sized?.report;
 
@@ -1521,7 +1665,13 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
   //    render a green verdict over a NaN).
   for (const equation of doc.equations) {
     const r = evalScalar(equation.expr, values, scope, warn, `equation "${equation.name}"`);
-    if (r === undefined) continue;
+    if (r === undefined) {
+      // Undefined because it read a withheld name: whatever reads it next follows from the same
+      // block.
+      const cause = causeOf(equation.expr);
+      if (cause !== undefined) withheld.set(equation.name, cause);
+      continue;
+    }
     if (!Number.isFinite(r)) {
       warn({
         rule: 'sheet-nonfinite',
@@ -1572,7 +1722,7 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
     (blocks?.every((c) => c.feasible) ?? true) &&
     !warnings.some((w) => w.severity === 'error');
 
-  return {
+  const out: SheetResult = {
     values,
     sizing,
     checks,
@@ -1580,6 +1730,8 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
     warnings,
     ...(blocks ? { blocks } : {}),
   };
+  if (withheld.size) WITHHELD.set(out, withheld);
+  return out;
 }
 
 /** How close a solved param must be to its root, as a fraction of its stated range: the default
@@ -1622,16 +1774,40 @@ interface SolveBudget {
 
 /** The evaluation, marked infeasible, with the failure as its solve outcome and its message as one
  *  more error warning. */
-function solveFailed(res: SheetResult, failure: SolveFailure): SheetResult {
+function solveFailed(res: SheetResult, failure: SolveFailure, cause?: string): SheetResult {
   return {
     ...res,
     feasible: false,
     solve: failure,
     warnings: [
       ...res.warnings,
-      { rule: 'sheet-solve', severity: 'error', message: failure.message },
+      {
+        rule: 'sheet-solve',
+        severity: 'error',
+        message: failure.message,
+        ...(cause !== undefined ? { cause } : {}),
+      },
     ],
   };
+}
+
+/** The params a failed solve names. */
+const failedParams = (f: SolveFailure): string[] =>
+  f.kind === 'no-solution' ? [f.unknown] : f.kind === 'not-settled' ? f.unknowns : [f.param];
+
+/** The block a failed solve of `doc` traces back to, where it has one: the relation of a param it
+ *  names reads, in the evaluation it failed on, a name a composed block withheld (see Withheld).
+ *  Such a search had nothing to steer by; the block that withheld it is the finding. */
+function solveCause(doc: SheetDoc, res: SheetResult, f: SolveFailure): string | undefined {
+  const withheld = WITHHELD.get(res);
+  if (!withheld?.size) return undefined;
+  for (const name of failedParams(f)) {
+    const p = doc.params.find((q) => q.name === name);
+    const rel = p && solvedRelation(p);
+    const c = rel && (causeIn(withheld, rel.lhs) ?? causeIn(withheld, rel.rhs));
+    if (c !== undefined) return c;
+  }
+  return undefined;
 }
 
 /**
@@ -2891,7 +3067,7 @@ function solveNode(node: NodeRef): SheetResult {
   if (problem)
     return solveFailed(evaluateOnce(node), {
       kind: 'not-settled',
-      unknowns: [problem.param],
+      unknowns: problem.params,
       why: 'malformed',
       message: problem.message,
     });
@@ -2934,7 +3110,10 @@ function solveNode(node: NodeRef): SheetResult {
       }
       outcome = found;
     } else outcome = settle(ctx, set, slope);
-    if (!outcome.ok) return ranged(solveFailed(outcome.res, outcome.failure));
+    if (!outcome.ok)
+      return ranged(
+        solveFailed(outcome.res, outcome.failure, solveCause(doc, outcome.res, outcome.failure)),
+      );
     last = outcome.res;
   }
 
@@ -2943,27 +3122,64 @@ function solveNode(node: NodeRef): SheetResult {
   const off = unknowns
     .filter((u) => !holdsAt(u, final, slope, solveTolRel))
     .map((u) => ({ u, g: relationAt(u, final), tol: tolOf(u, slope, solveTolRel) }));
-  if (off.length)
-    return ranged(
-      solveFailed(final, {
-        kind: 'not-settled',
-        unknowns: off.map((o) => o.u.p.name),
-        why: 'verification',
-        message:
-          `${off.length > 1 ? 'solved params' : off[0].u.held ? 'held param' : 'solved param'} ` +
-          `${nameList(off.map((o) => o.u))} did not settle: read from the final evaluation, ` +
-          off
-            .map(
-              ({ u, g, tol }) =>
-                `${u.lhs} - (${u.rhs}) ${g === undefined ? 'does not evaluate' : `reads ${g.toExponential(3)}`}` +
-                ` against a tolerance of ${tol.toExponential(3)} (its slope there times ` +
-                `${solveTolRel} of its range)`,
-            )
-            .join('; ') +
-          ` — the values it was solved with moved after it landed`,
-      }),
-    );
-  return ranged({ ...final, solve: { kind: 'settled' } });
+  if (off.length) {
+    const failure: SolveFailure = {
+      kind: 'not-settled',
+      unknowns: off.map((o) => o.u.p.name),
+      why: 'verification',
+      message:
+        `${off.length > 1 ? 'solved params' : off[0].u.held ? 'held param' : 'solved param'} ` +
+        `${nameList(off.map((o) => o.u))} did not settle: read from the final evaluation, ` +
+        off
+          .map(
+            ({ u, g, tol }) =>
+              `${u.lhs} - (${u.rhs}) ${g === undefined ? 'does not evaluate' : `reads ${g.toExponential(3)}`}` +
+              ` against a tolerance of ${tol.toExponential(3)} (its slope there times ` +
+              `${solveTolRel} of its range)`,
+          )
+          .join('; ') +
+        ` — the values it was solved with moved after it landed`,
+    };
+    return ranged(solveFailed(final, failure, solveCause(doc, final, failure)));
+  }
+  return roundedSolve(node, unknowns, ranged({ ...final, solve: { kind: 'settled' } }));
+}
+
+/**
+ * A settled solve of params that carry `quantize`, evaluated again with each rounded: the param is
+ * an ordinary input at its rounded value there, and every other solved param is found again by the
+ * same one-unknown searches, so the checks read the design that is built. The rounded params'
+ * relations are not asked to hold at the rounded value — that is what rounding means — but each
+ * root is reported beside the value used (SheetResult.quantized), and the outcome is the second
+ * evaluation's: settled, or the other params' failure at the rounded value.
+ */
+function roundedSolve(
+  node: NodeRef,
+  unknowns: readonly Unknown[],
+  settled: SheetResult,
+): SheetResult {
+  const round = unknowns.filter((u) => !u.held && u.p.quantize !== undefined);
+  if (!round.length) return settled;
+  const quantized: QuantizedValue[] = round.map((u) => {
+    const q = u.p.quantize as Quantize;
+    const exact = settled.values[u.p.name];
+    return { param: u.p.name, exact, rounded: roundSig(exact, q.sigFigs, q.round) };
+  });
+  const at = new Map(quantized.map((q) => [q.param, q.rounded]));
+  const doc: SheetDoc = {
+    ...node.doc,
+    params: node.doc.params.map((p) => {
+      const r = at.get(p.name);
+      return r === undefined ? p : asInput(p, r);
+    }),
+  };
+  const again = solveNode({ ...node, doc });
+  return {
+    ...again,
+    solve: again.solve ?? { kind: 'settled' },
+    quantized,
+    ...(settled.ranges ? { ranges: settled.ranges } : {}),
+  };
 }
 
 /**

@@ -1595,7 +1595,8 @@ export const CLOSURE_NOTE =
   'held wires compared along a path through several chords, can differ by more than the ' +
   'tolerance; each derived level is reported with the path it was derived along.';
 
-const volts = (v: number): string => `${Number(v.toPrecision(4))} V`;
+/** A voltage as the messages quote one: in volts, to four significant figures. */
+export const volts = (v: number): string => `${Number(v.toPrecision(4))} V`;
 
 /** A current as a reader reads one: an SI prefix, `10 µA` rather than `0.00001 A`. */
 export function amps(i: number): string {

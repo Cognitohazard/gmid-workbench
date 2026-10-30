@@ -39,6 +39,7 @@ import {
   constraintProblem,
   drainProblem,
   PARAM_CLASSES,
+  QUANTIZE_ROUNDS,
   PROVIDE_SEP,
   REGIONS,
   REGION_CHECK_ID,
@@ -203,9 +204,11 @@ function assumptionEstimates(doc: SheetDoc): QAWarning[] {
  * remedies, because which one fits is the circuit's to say: a series partner on a shared wire
  * wants a hold that balances the two currents, and a mirror copy of a reference wants the
  * reference's width and gate voltage, so its current follows the data. A current given as a
- * number is a source by statement and draws nothing. The sheet's own device is asked about only
- * at the top of a tree: a child's own givens are checked from its parent's block, where its
- * overrides and the holds that could settle it are.
+ * number is a source by statement and draws nothing. A diode connection is not asked about either:
+ * its gate is its own drain, so held at its width and current its gate voltage follows the current
+ * as the circuit's does. The sheet's own device is asked about only at the top of a tree: a child's
+ * own givens are checked from its parent's block, where its overrides and the holds that could
+ * settle it are.
  */
 function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
   const out: QAWarning[] = [];
@@ -218,8 +221,9 @@ function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
     block: SheetBlock | undefined,
     who: string,
     location: string,
+    diode: boolean,
   ): void => {
-    if (!givens || givens.W !== undefined || givens.vgs === undefined) return;
+    if (!givens || givens.W !== undefined || givens.vgs === undefined || diode) return;
     if (typeof givens.id !== 'string') return;
     const id = ((block && blockOverride(block, givens.id.trim())) ?? givens.id).trim();
     const name = (k: string): string => (block ? joinProvide(block.name, k) : k);
@@ -240,9 +244,23 @@ function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
       location,
     });
   };
-  if (top) ask(doc.givens, undefined, deviceName('givens'), 'givens');
+  if (top)
+    ask(
+      doc.givens,
+      undefined,
+      deviceName('givens'),
+      'givens',
+      doc.givens?.diode === true || structuralDiode(doc),
+    );
   for (const block of doc.blocks ?? [])
-    ask(block.doc?.givens, block, `block "${block.name}"`, block.name);
+    ask(
+      block.doc?.givens,
+      block,
+      `block "${block.name}"`,
+      block.name,
+      !!block.doc &&
+        (block.doc.givens?.diode === true || structuralDiode(block.doc, blockWires(doc, block))),
+    );
   return out;
 }
 
@@ -1663,6 +1681,31 @@ function paramProblems(doc: SheetDoc): QAWarning[] {
         message: `param "${p.name}" is not a finite number`,
         location: p.name,
       });
+    }
+    // Rounding applies to a value the engine solves, in a shape it can apply.
+    const q: unknown = p.quantize;
+    if (q !== undefined) {
+      const shape = q as { sigFigs?: unknown; round?: unknown };
+      const problem =
+        typeof q !== 'object' || q === null || Array.isArray(q)
+          ? 'must be an object { sigFigs, round }'
+          : !Number.isInteger(shape.sigFigs) ||
+              (shape.sigFigs as number) < 1 ||
+              (shape.sigFigs as number) > 15
+            ? 'needs sigFigs, a whole number from 1 to 15'
+            : shape.round !== undefined && !QUANTIZE_ROUNDS.has(shape.round as string)
+              ? `has round "${String(shape.round)}" — use one of ${quoted([...QUANTIZE_ROUNDS])}`
+              : !engineSolved(p)
+                ? `rounds a value the engine solves, and "${p.name}" carries neither solveFor nor ` +
+                  `a design constraint — round a typed value where it is typed`
+                : undefined;
+      if (problem)
+        out.push({
+          rule: 'sheet-param',
+          severity: 'error',
+          message: `param "${p.name}": quantize ${problem}`,
+          location: p.name,
+        });
     }
     // `class` is the author's word on what kind of DC level the param is. `solved` is not theirs
     // to give — the engine decides that from designConstraint/solveFor — and a solved param
