@@ -668,14 +668,14 @@ test('settings: a forced theme overrides the OS scheme, keeping text and backgro
 
   // Forced light: a genuinely light background with darker text, despite the dark OS, AND the
   // canvas tick labels drawn dark (visible on the light plot — the reported bug was white-on-white).
-  await page.locator('.prefs-pop select').selectOption('light');
+  await page.locator('.prefs-pop select[data-theme-select]').selectOption('light');
   await expect.poll(async () => (await root()).bg).toBeGreaterThan(170);
   expect((await root()).bg).toBeGreaterThan((await root()).fg);
   await expect.poll(async () => (await ticks()).dark).toBeGreaterThan(0);
   await page.screenshot({ path: `${SCREENS}/settings-light-on-dark-os.png`, fullPage: true });
 
   // Forced dark: a genuinely dark background with lighter text, AND the tick labels drawn light.
-  await page.locator('.prefs-pop select').selectOption('dark');
+  await page.locator('.prefs-pop select[data-theme-select]').selectOption('dark');
   await expect.poll(async () => (await root()).bg).toBeLessThan(90);
   expect((await root()).bg).toBeLessThan((await root()).fg);
   await expect.poll(async () => (await ticks()).light).toBeGreaterThan(0);
@@ -697,7 +697,7 @@ test('settings: theme toggle and font sliders apply, rebuild the chart, and pers
   await expect(page.locator('.prefs-pop')).toBeVisible();
 
   // Dark theme forces color-scheme on the document root; the canvas chart still renders.
-  await page.locator('.prefs-pop select').selectOption('dark');
+  await page.locator('.prefs-pop select[data-theme-select]').selectOption('dark');
   await expect
     .poll(() => page.evaluate(() => document.documentElement.style.colorScheme))
     .toBe('dark');

@@ -311,9 +311,13 @@ telemetry. Your tables never leave the browser. The single-file offline build ex
 precisely so the tool can run on air-gapped machines.
 
 Loaded tables are kept locally in the browser (IndexedDB) so a reload restores your
-bench. What is retained is always visible in the devices strip; the × on a chip
-deletes that table's stored copy and **clear all** wipes everything. On a shared
-machine, clear before you walk away.
+bench. To use a table for this session only, untick **keep after reload** beside the
+load button before importing (or make that the default under ⚙): the table is held in
+memory, never written to browser storage, and gone after a reload — and a table's
+chip switches it either way later. What is retained is always visible in the devices
+strip: each chip says whether it is stored, the **stored** list gives every stored
+table's size and import date, the × on a chip deletes that table's stored copy and
+**clear all** wipes everything. On a shared machine, clear before you walk away.
 
 ## License
 
