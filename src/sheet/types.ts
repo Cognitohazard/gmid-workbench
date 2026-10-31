@@ -256,9 +256,17 @@ export function heldOnGate(doc: SheetDoc, parentBalances: boolean): boolean {
  * frozen at its authored value with no warning, and the sheet reported feasible on a design never
  * solved.
  */
-export function constraintProblem(params: readonly SheetVar[]): string | null {
-  return constraintIssue(params)?.message ?? null;
+export function constraintProblem(params: readonly SheetVar[], open?: OpenRange): string | null {
+  return constraintIssue(params, open)?.message ?? null;
 }
+
+/**
+ * Whether a solved or held param that states no `min`/`max` may go without them: the engine reads
+ * its range from what the sheet is — a node's voltage from the wiring, a device's length from the
+ * table (see RangeSource) — or, where it cannot, why not. A param this does not clear needs a range
+ * of its author's. The default clears none.
+ */
+export type OpenRange = (p: SheetVar) => { ok: true } | { ok: false; why?: string };
 
 /** The quoted names of `ps`, joined for a message: `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
 const quotedNames = (ps: readonly SheetVar[]): string => {
@@ -271,7 +279,16 @@ const quotedNames = (ps: readonly SheetVar[]): string => {
  *  fixes the document in one pass rather than one param per run. */
 export function constraintIssue(
   params: readonly SheetVar[],
+  open: OpenRange = () => ({ ok: false }),
 ): { params: string[]; message: string } | null {
+  /** Why no range could be read for each of `ps` that says, as a clause to append. */
+  const whyNone = (ps: readonly SheetVar[]): string =>
+    ps
+      .flatMap((p) => {
+        const o = open(p);
+        return !o.ok && o.why ? [`; no range can be read for "${p.name}" — ${o.why}`] : [];
+      })
+      .join('');
   const issue = (p: SheetVar | readonly SheetVar[], message: string) => ({
     params: (Array.isArray(p) ? p : [p]).map((q: SheetVar) => q.name),
     message,
@@ -291,13 +308,14 @@ export function constraintIssue(
       `param "${both.name}" has a design constraint and also carries solveFor — the two would fight over ` +
         `it; keep one relation`,
     );
-  const unranged = params.filter((p) => engineSolved(p) && !ranged(p));
+  const unranged = params.filter((p) => engineSolved(p) && !ranged(p) && !open(p).ok);
   if (unranged.length)
     return issue(
       unranged,
       `solved ${unranged.length > 1 ? 'params' : 'param'} ${quotedNames(unranged)} ` +
         `${unranged.length > 1 ? 'need' : 'needs'} finite min < max — they are the range ` +
-        `${unranged.length > 1 ? 'each is' : 'it is'} searched in, not slider bounds`,
+        `${unranged.length > 1 ? 'each is' : 'it is'} searched in, not slider bounds` +
+        whyNone(unranged),
     );
   const held = params.filter(holds);
   const twice = held.find((p) => p.designConstraint !== undefined || torn(p));
@@ -307,13 +325,14 @@ export function constraintIssue(
       `param "${twice.name}" carries hold and also has a design constraint or carries solveFor — a param ` +
         `takes one of the three`,
     );
-  const loose = held.filter((p) => !ranged(p));
+  const loose = held.filter((p) => !ranged(p) && !open(p).ok);
   if (loose.length)
     return issue(
       loose,
       `held ${loose.length > 1 ? 'params' : 'param'} ${quotedNames(loose)} ` +
         `${loose.length > 1 ? 'need' : 'needs'} finite min < max — the range ` +
-        `${loose.length > 1 ? 'each is' : 'it is'} re-solved in where the hardware is held`,
+        `${loose.length > 1 ? 'each is' : 'it is'} re-solved in where the hardware is held` +
+        whyNone(loose),
     );
   const shapeless = held.find((p) => additiveCoefficient(p.hold, p.name) === undefined);
   if (shapeless)
@@ -701,7 +720,8 @@ export function engineSolved(p: SheetVar): boolean {
 
 /** Whether a param states a finite range, min below max: what a slider sweeps, and what a solved
  *  or held param is searched in. */
-const ranged = (v: { min?: number; max?: number }): v is { min: number; max: number } =>
+/** Whether a param states a range: finite `min` below finite `max`. */
+export const ranged = (v: { min?: number; max?: number }): v is { min: number; max: number } =>
   Number.isFinite(v.min) && Number.isFinite(v.max) && (v.min as number) < (v.max as number);
 
 /** True when a param is a finitely-bounded slider variable (sweepable). The ONE
@@ -1501,12 +1521,16 @@ export type NoSolutionWhy = 'no-crossing' | 'step' | 'undetermined';
 /**
  * Where the range a solved param may be searched in came from:
  *  - `wiring`: the range the wiring puts the param's wire in, between the wires its devices'
- *    channels join it to (see SolveRange). The author's `min`/`max` are searched first, where they
- *    lie inside it; with no crossing there the search goes on over the rest of it;
+ *    channels join it to (see SolveRange) — the physical range. Where the author states `min`/`max`
+ *    they are searched first, where they lie inside it, and with no crossing there the search goes
+ *    on over the rest of it; where the author states none, it is the whole search;
+ *  - `table`: for a param that states no range and is a device's length, the lengths the tables
+ *    it is read on hold — from the shortest, the process's own minimum, to the longest, which is
+ *    only as far as the data reaches;
  *  - `author`: the author's `min`/`max` alone — the param is not a wire's level, or no range could
  *    be read from the wiring (`SolveRange.why` says which).
  */
-export type RangeSource = 'wiring' | 'author';
+export type RangeSource = 'wiring' | 'table' | 'author';
 
 /** The range one solved param of a sheet may be searched in, and where it came from. */
 export interface SolveRange {
@@ -1514,8 +1538,9 @@ export interface SolveRange {
   /** The range it may be searched in: the wiring's where one is read, else the author's. */
   range: [number, number];
   from: RangeSource;
-  /** The author's `min` and `max`, searched first. */
-  author: [number, number];
+  /** The author's `min` and `max`, searched first; absent where the author states none and the
+   *  range is the wiring's or the table's alone. */
+  author?: [number, number];
   /** The wires whose level the param is, where it is one (see solvedWiring); absent for a param
    *  that is no wire's level, whose range can only be its author's. */
   wires?: string[];

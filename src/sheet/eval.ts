@@ -43,6 +43,8 @@ import {
   lastSolveFailure,
   namesOf,
   PATH_SEP,
+  providePrefix,
+  ranged,
   refusedIn,
   solveFailedIn,
   stands,
@@ -57,7 +59,7 @@ import { assumedLevelRefusal, heldGateWarnings, holdHardware, type HeldHardware 
 // A value as a message quotes it: what the author wrote, without the float tail arithmetic leaves
 // on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004).
 import { shown } from './linear';
-import { dcInputs, solvePlan, solvedRelation, spelled } from './validate';
+import { dcInputs, openRangesAllowed, solvePlan, solvedRelation, spelled } from './validate';
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
   amps,
@@ -68,6 +70,7 @@ import {
   formatProblems,
   linearValue,
   readsParentSelector,
+  lengthsSetBy,
   solvedWiring,
   STANDALONE,
   structuralDiodes,
@@ -76,6 +79,7 @@ import {
   withNodes,
   withoutWalk,
   type SolvedWire,
+  type SolvedWiring,
   type WiringMode,
 } from './nodes';
 import type {
@@ -1175,7 +1179,7 @@ function childCause(name: string, res: SheetResult): string {
  * it traces back to, so what this node then cannot compute from it says where it comes from.
  */
 function evalBlocks(
-  { doc: parent, table, resolveDevice, depth, budget, settings }: NodeRef,
+  { doc: parent, table, resolveDevice, depth, budget, settings, found }: NodeRef,
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
@@ -1284,6 +1288,7 @@ function evalBlocks(
       depth + 1,
       budget,
       settings,
+      found && { ranges: found.ranges, prefix: `${found.prefix}${joinProvide(block.name, '')}` },
     );
 
     // Roll up child warnings, attributed to the block (so a child error fails the
@@ -1433,23 +1438,38 @@ function evaluateChild(
   depth: number,
   budget: SolveBudget,
   settings: Settings,
+  found?: FoundAt,
 ): SheetResult {
   const values = doc.params.map((p) => p.value);
   if (!values.every((v) => typeof v === 'number'))
-    return evaluateNode(doc, table, resolveDevice, depth, { budget, settings });
-  // String(v) tells every two numbers apart but the two zeros, which are kept apart here.
+    return evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found });
+  // String(v) tells every two numbers apart but the two zeros, which are kept apart here. The
+  // ranges read for this child's params that state none depend on where in the tree it sits, so
+  // a child that has any is keyed by its place too.
+  const placed = found ? foundKey(found) : '';
   const key =
     `${objectId(src)}|${table ? objectId(table) : 0}|${depth}|` +
-    values.map((v) => (Object.is(v, -0) ? '-0' : String(v))).join(',');
+    values.map((v) => (Object.is(v, -0) ? '-0' : String(v))).join(',') +
+    (placed ? `|${placed}` : '');
   const known = budget.children.get(key);
   if (known && budget.left > known.cost) {
     budget.counted += known.cost;
     return known.res;
   }
   const counted = budget.counted;
-  const res = evaluateNode(doc, table, resolveDevice, depth, { budget, settings });
+  const res = evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found });
   if (budget.left > 0) budget.children.set(key, { res, cost: budget.counted - counted });
   return res;
+}
+
+/** The ranges read for the params under one node, as a memo key part: empty where there are none,
+ *  so a tree whose params all state ranges keys its children as it always has. */
+function foundKey(found: FoundAt): string {
+  const parts: string[] = [];
+  for (const [k, f] of found.ranges)
+    if (k.startsWith(found.prefix))
+      parts.push(`${k}=${'range' in f ? `${f.range[0]},${f.range[1]}` : 'none'}`);
+  return parts.length ? `${found.prefix}:${parts.join(';')}` : '';
 }
 
 /** A child's wiring, to be read once its tree has settled: what withNodes needs of it. Keyed by
@@ -1535,6 +1555,27 @@ interface NodeRef {
   depth: number;
   budget: SolveBudget;
   settings: Settings;
+  /** The ranges read at the top of the tree for its params that state none (see rangesOfTree),
+   *  and the prefix that names this node's params among them. */
+  found?: FoundAt;
+}
+
+/** A range read for a param that states none: the physical one its wiring gives a node, or the
+ *  table's for a length — or why none could be read. */
+type FoundRange =
+  | {
+      range: [number, number];
+      from: 'wiring' | 'table';
+      note: string;
+      wires?: string[];
+      wiring?: SolveRange['wiring'];
+    }
+  | { why: string; wires?: string[] };
+
+/** The ranges read for a tree (see rangesOfTree), and the prefix naming one node's params there. */
+interface FoundAt {
+  ranges: ReadonlyMap<string, FoundRange>;
+  prefix: string;
 }
 
 /** What in a sheet's own math reads the table's temperature scalars, `T` and `UT` (see
@@ -1856,6 +1897,9 @@ export interface EvaluateOptions {
  *  the top, how its point is classified. */
 interface NodeOptions extends EvaluateOptions {
   budget?: SolveBudget;
+  /** The ranges read at the top of the tree for its params that state none; absent at the top,
+   *  which reads them (see rangesOfTree). */
+  found?: FoundAt;
 }
 
 /**
@@ -1877,6 +1921,8 @@ function evaluateNode(
   opts: NodeOptions = {},
 ): SheetResult {
   const settings = opts.settings ?? DEFAULT_SETTINGS;
+  const found =
+    opts.found ?? (depth === 0 ? rangesOfTree(doc, { table, resolveDevice }) : undefined);
   const solved = withHeld(
     doc,
     solveNode({
@@ -1886,6 +1932,7 @@ function evaluateNode(
       depth,
       budget: opts.budget ?? { left: settings.solveEvaluations, counted: 0, children: new Map() },
       settings,
+      ...(found ? { found } : {}),
     }),
   );
   if (depth > 0) return solved;
@@ -1969,11 +2016,34 @@ interface Unknown {
   range: SolveRange;
 }
 
-function unknownOf(p: SheetVar): Unknown {
+function unknownOf(p: SheetVar, found?: FoundRange): Unknown {
   const { lhs, rhs } = solvedRelation(p) as { lhs: string; rhs: string };
   const held = constrained(p) && p.designConstraint.held === true;
-  const author: [number, number] = [p.min as number, p.max as number];
   const what = `${held ? 'held' : 'solved'} param "${p.name}"`;
+  // A param that states no range is searched in the one read for it (see rangesOfTree); one with
+  // none to read never reaches here (constraintIssue refuses it first).
+  if (!ranged(p) && found && 'range' in found) {
+    const [lo, hi] = found.range;
+    return {
+      p,
+      lhs,
+      rhs,
+      held,
+      what,
+      lo,
+      hi,
+      span: hi - lo,
+      range: {
+        param: p.name,
+        range: found.range,
+        from: found.from,
+        ...(found.wires ? { wires: found.wires } : {}),
+        ...(found.wiring ? { wiring: found.wiring } : {}),
+        note: `${what}: ${found.note}`,
+      },
+    };
+  }
+  const author: [number, number] = [p.min as number, p.max as number];
   return {
     p,
     lhs,
@@ -2030,31 +2100,25 @@ function docAtPath(doc: SheetDoc, path: readonly string[]): SheetDoc | undefined
  * end is one of finitely many numbers (a stated level, a held gate's value, an author's end), and
  * the ranges only widen, so the rounds end.
  */
-function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message: string }[] {
-  if (node.depth > 0) return [];
-  const { doc } = node;
-  const solved = new Set(unknowns.map((u) => u.p.name));
-  const tableAt = (chain: readonly SheetBlock[]): DeviceTable | undefined => {
-    let t = node.table;
-    for (const b of chain) if (b.device !== undefined) t = node.resolveDevice?.(b.device);
-    return t;
-  };
-  const wiring = solvedWiring(doc, tableAt, [...solved]);
-  const values = new Map(doc.params.map((p) => [p.name, p.value]));
-  const valueOf = (atom: string): number | undefined =>
-    solved.has(atom) ? undefined : values.get(atom);
-  /** Each wire held at a hold's value where the design is held (rule 2). */
-  const heldGate = new Map<string, number>();
-  for (const [w, h] of wiring?.held ?? []) {
-    const p = docAtPath(doc, h.path)?.params.find(
-      (q) =>
-        constrained(q) &&
-        q.designConstraint.held === true &&
-        spelled(q.designConstraint.lhs) === spelled(h.expr),
-    );
-    const v = p && constrained(p) ? Number(p.designConstraint.rhs) : NaN;
-    if (Number.isFinite(v)) heldGate.set(w, v);
-  }
+/** A wire-level param's reading of the wiring: its range between the wires around it, or why none
+ *  was read. */
+type WiringRead =
+  { range: [number, number]; below: string; above: string } | { why: string; wires: string[] };
+
+/**
+ * The wiring range of each of `names` that is the level of a wire (solvedWiring), read from the
+ * wires around it: a neighbour held or fixed by the params' values (rules 1 and 2), or the outer
+ * end of a solved neighbour's current reach, starting at `reach` and widened round by round as each
+ * neighbour's own range is read (rule 3). Undefined for a name that is no wire's level.
+ */
+function readWiringRanges(
+  wiring: SolvedWiring | undefined,
+  names: readonly string[],
+  reach0: ReadonlyMap<string, [number, number]>,
+  valueOf: (atom: string) => number | undefined,
+  heldGate: ReadonlyMap<string, number>,
+  unitOf: (name: string) => string,
+): Map<string, WiringRead | undefined> {
   /** A wire's level here by rules 1 and 2, or undefined. */
   const fixed = (w: string): number | undefined => {
     for (const f of wiring?.forms.get(w) ?? []) {
@@ -2063,12 +2127,12 @@ function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message
     }
     return heldGate.get(w);
   };
-
-  type Read =
-    { range: [number, number]; below: string; above: string } | { why: string; wires: string[] };
   /** One param's wiring range, from the outer ends of the others' current ranges (rule 3). */
-  const read = (u: Unknown, reach: ReadonlyMap<string, [number, number]>): Read | undefined => {
-    const sw = wiring?.wires.get(u.p.name);
+  const read = (
+    name: string,
+    reach: ReadonlyMap<string, [number, number]>,
+  ): WiringRead | undefined => {
+    const sw = wiring?.wires.get(name);
     if (!sw) return undefined;
     const bound = (side: 'below' | 'above'): { v: number; wire: string } | { why: string } => {
       const ns = sw[side];
@@ -2078,7 +2142,7 @@ function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message
         let v = fixed(n.wire);
         if (v === undefined)
           for (const [q, other] of wiring?.wires ?? [])
-            if (q !== u.p.name && other.wires.includes(n.wire)) {
+            if (q !== name && other.wires.includes(n.wire)) {
               const r = reach.get(q);
               if (r) v = side === 'below' ? r[0] : r[1];
             }
@@ -2107,29 +2171,31 @@ function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message
     if (!(lo.v < hi.v))
       return {
         why:
-          `the wire below it, ${wireName(lo.wire)}, is placed at ${shown(lo.v)}${unitOf(u)}, not ` +
-          `below the wire above it, ${wireName(hi.wire)}, at ${shown(hi.v)}${unitOf(u)}`,
+          `the wire below it, ${wireName(lo.wire)}, is placed at ${shown(lo.v)}${unitOf(name)}, not ` +
+          `below the wire above it, ${wireName(hi.wire)}, at ${shown(hi.v)}${unitOf(name)}`,
         wires: sw.wires,
       };
     return { range: [lo.v, hi.v], below: lo.wire, above: hi.wire };
   };
 
   // The rounds (rule 3): each param's reach is its author's range, widened to its wiring range.
-  const reach = new Map<string, [number, number]>(unknowns.map((u) => [u.p.name, u.range.author]));
-  let reads = new Map<string, Read | undefined>();
+  const reach = new Map(reach0);
+  let reads = new Map<string, WiringRead | undefined>();
   let widened = true;
   // Each round carries a range end at least one solved neighbour further, so 2n + 2 rounds cover
   // every chain; the cap is a backstop, and a reading it cut short is not used (below).
-  for (let round = 0; widened && round <= 2 * unknowns.length + 2; round++) {
-    reads = new Map(unknowns.map((u) => [u.p.name, read(u, reach)]));
+  for (let round = 0; widened && round <= 2 * names.length + 2; round++) {
+    reads = new Map(names.map((n) => [n, read(n, reach)]));
     widened = false;
-    for (const u of unknowns) {
-      const r = reads.get(u.p.name);
-      const at = reach.get(u.p.name) as [number, number];
+    for (const n of names) {
+      const r = reads.get(n);
       if (!r || !('range' in r)) continue;
-      const next: [number, number] = [Math.min(at[0], r.range[0]), Math.max(at[1], r.range[1])];
-      if (next[0] !== at[0] || next[1] !== at[1]) {
-        reach.set(u.p.name, next);
+      const at = reach.get(n);
+      const next: [number, number] = at
+        ? [Math.min(at[0], r.range[0]), Math.max(at[1], r.range[1])]
+        : r.range;
+      if (!at || next[0] !== at[0] || next[1] !== at[1]) {
+        reach.set(n, next);
         widened = true;
       }
     }
@@ -2137,16 +2203,170 @@ function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message
   // A reading still widening when the rounds stopped could bound a wire by a neighbour's range
   // before it widened: none of it is used.
   if (widened)
-    for (const u of unknowns)
-      if (reads.get(u.p.name))
-        reads.set(u.p.name, {
+    for (const n of names)
+      if (reads.get(n))
+        reads.set(n, {
           why: 'the ranges of the solved wires around it did not stop widening, so none is read',
-          wires: (wiring?.wires.get(u.p.name) as SolvedWire).wires,
+          wires: (wiring?.wires.get(n) as SolvedWire).wires,
         });
+  return reads;
+}
+
+/** Each wire a `hold` keeps at a value where the design is held, and that value (rule 2). */
+function heldGatesOf(doc: SheetDoc, wiring: SolvedWiring | undefined): Map<string, number> {
+  const heldGate = new Map<string, number>();
+  for (const [w, h] of wiring?.held ?? []) {
+    const p = docAtPath(doc, h.path)?.params.find(
+      (q) =>
+        constrained(q) &&
+        q.designConstraint.held === true &&
+        spelled(q.designConstraint.lhs) === spelled(h.expr),
+    );
+    const v = p && constrained(p) ? Number(p.designConstraint.rhs) : NaN;
+    if (Number.isFinite(v)) heldGate.set(w, v);
+  }
+  return heldGate;
+}
+
+/** The table each block chain below a node is sized on: the node's, or the one the last block on the
+ *  way down that names a device resolves to. */
+const tablesBelow =
+  (node: Pick<NodeRef, 'table' | 'resolveDevice'>) =>
+  (chain: readonly SheetBlock[]): DeviceTable | undefined => {
+    let t = node.table;
+    for (const b of chain) if (b.device !== undefined) t = node.resolveDevice?.(b.device);
+    return t;
+  };
+
+/**
+ * The range of every solved or held param in the tree that states none and may go without one
+ * (openRangesAllowed), read once at the top of the tree, where the whole netlist is: a param that is
+ * a node's voltage is searched in its physical range, between the wires its devices' channels join
+ * its wire to (see readWiringRanges), wherever in the tree it is declared; a param that is a
+ * device's length, over the lengths the tables it is read on hold. Each is keyed by its name in the
+ * walk (`bias__V_B1`), and a child reads its own under its prefix (FoundAt). One whose range cannot
+ * be read says why, and its solve is refused with that reason (constraintIssue). Undefined where
+ * every solved param states a range, so a sheet that states them all is solved exactly as before.
+ */
+function rangesOfTree(
+  doc: SheetDoc,
+  node: Pick<NodeRef, 'table' | 'resolveDevice'>,
+): FoundAt | undefined {
+  const allowed = openRangesAllowed(doc);
+  if (!allowed.size) return undefined;
+  const solved: string[] = [];
+  const reach = new Map<string, [number, number]>();
+  const values = new Map<string, number>();
+  const units = new Map<string, string>();
+  const walk = (d: SheetDoc, chain: readonly SheetBlock[]): void => {
+    if (chain.length > MAX_BLOCK_DEPTH) return;
+    const pre = providePrefix(chain);
+    for (const p of d.params) {
+      const atom = `${pre}${p.name}`;
+      if (p.unit && p.unit !== '1') units.set(atom, ` ${p.unit}`);
+      if (engineSolved(p) || holds(p)) {
+        solved.push(atom);
+        if (ranged(p)) reach.set(atom, [p.min, p.max]);
+      } else values.set(atom, p.value);
+    }
+    for (const b of d.blocks ?? []) if (b.doc) walk(b.doc, [...chain, b]);
+  };
+  walk(doc, []);
+  const tableAt = tablesBelow(node);
+  const wiring = solvedWiring(doc, tableAt, solved);
+  const isSolved = new Set(solved);
+  const unit = (n: string): string => units.get(n) ?? '';
+  const span = (n: string, [lo, hi]: [number, number]): string =>
+    `[${shown(lo)}, ${shown(hi)}]${unit(n)}`;
+  const reads = readWiringRanges(
+    wiring,
+    solved,
+    reach,
+    (a) => (isSolved.has(a) ? undefined : values.get(a)),
+    heldGatesOf(doc, wiring),
+    unit,
+  );
+  const lengths = lengthsSetBy(
+    doc,
+    [...allowed].filter((a) => !wiring?.wires.has(a)),
+  );
+  const ranges = new Map<string, FoundRange>();
+  for (const atom of allowed) {
+    const r = reads.get(atom);
+    const sw = wiring?.wires.get(atom);
+    if (r && 'range' in r && sw) {
+      const on = sw.wires.map(wireName).join(' and ');
+      ranges.set(atom, {
+        range: r.range,
+        from: 'wiring',
+        wires: sw.wires,
+        wiring: { range: r.range, below: r.below, above: r.above },
+        note:
+          `it states no range, and is searched in the range the wiring puts its wire ${on} in, ` +
+          `${span(atom, r.range)} between ${wireName(r.below)} below and ${wireName(r.above)} above`,
+      });
+      continue;
+    }
+    if (r && 'why' in r) {
+      ranges.set(atom, { why: r.why, ...(sw ? { wires: sw.wires } : {}) });
+      continue;
+    }
+    const chains = lengths.get(atom);
+    if (!chains) {
+      ranges.set(atom, { why: "it is not the level of any wire, and it sets no device's length" });
+      continue;
+    }
+    const axes = chains.map((c) => tableAt(c)?.grid.axes.find((a) => a.name === 'l')?.values);
+    if (axes.some((v) => !v || v.length < 2)) {
+      ranges.set(atom, {
+        why: 'a table it is read on holds one length or none, so it gives no range of lengths',
+      });
+      continue;
+    }
+    const lo = Math.max(...axes.map((v) => (v as ArrayLike<number>)[0]));
+    const hi = Math.min(
+      ...axes.map((v) => (v as ArrayLike<number>)[(v as ArrayLike<number>).length - 1]),
+    );
+    if (!(lo < hi)) {
+      ranges.set(atom, { why: 'the tables it is read on hold no length in common' });
+      continue;
+    }
+    ranges.set(atom, {
+      range: [lo, hi],
+      from: 'table',
+      note:
+        `it states no range, and is searched over the lengths its table holds, ` +
+        `${span(atom, [lo, hi])}: from the shortest, the process's own minimum, to the longest ` +
+        `the table reaches`,
+    });
+  }
+  return { ranges, prefix: '' };
+}
+
+function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message: string }[] {
+  if (node.depth > 0) return [];
+  const { doc } = node;
+  const solved = new Set(unknowns.map((u) => u.p.name));
+  const wiring = solvedWiring(doc, tablesBelow(node), [...solved]);
+  const values = new Map(doc.params.map((p) => [p.name, p.value]));
+  const valueOf = (atom: string): number | undefined =>
+    solved.has(atom) ? undefined : values.get(atom);
+  const byName = new Map(unknowns.map((u) => [u.p.name, u]));
+  // A param that states no range already has the one read for it (see rangesOfTree): it only
+  // bounds its neighbours here, at that range.
+  const reads = readWiringRanges(
+    wiring,
+    unknowns.map((u) => u.p.name),
+    new Map(unknowns.map((u) => [u.p.name, u.range.author ?? u.range.range])),
+    valueOf,
+    heldGatesOf(doc, wiring),
+    (n) => unitOf(byName.get(n) as Unknown),
+  );
 
   const outside: { u: Unknown; message: string }[] = [];
   for (const u of unknowns) {
     const author = u.range.author;
+    if (!author) continue;
     const span = (lo: number, hi: number): string => rangeOf(u, lo, hi);
     const r = reads.get(u.p.name);
     if (!r) {
@@ -2213,7 +2433,7 @@ function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message
 function searchStaged(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found {
   const over = (lo: number, hi: number): Found => search(ctx, { ...u, lo, hi }, also);
   const first = over(u.lo, u.hi);
-  if (u.range.from !== 'wiring') return first;
+  if (u.range.from !== 'wiring' || !u.range.author) return first;
   const [wlo, whi] = u.range.range;
   if (first.ok ? first.x >= wlo && first.x <= whi : outOfBudget(first.failure)) return first;
   return over(wlo, whi);
@@ -2224,14 +2444,17 @@ function searchStaged(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): 
 function rangeSource(u: Unknown): string | undefined {
   const r = u.range;
   if (r.from === 'author') return r.wires ? `the author's range — ${r.why}` : undefined;
+  if (r.from === 'table')
+    return `the lengths its table holds, from the process's shortest to the longest the table reaches`;
   const w = r.wiring as NonNullable<SolveRange['wiring']>;
   const between = `between ${wireName(w.below)} and ${wireName(w.above)}`;
   const whole = u.lo === w.range[0] && u.hi === w.range[1];
   if (!whole)
     return `the author's range, before the wiring's ${rangeOf(u, w.range[0], w.range[1])} ${between}`;
+  const a = r.author;
   const first =
-    r.author[0] !== w.range[0] || r.author[1] !== w.range[1]
-      ? `, after the author's range ${rangeOf(u, r.author[0], r.author[1])}`
+    a && (a[0] !== w.range[0] || a[1] !== w.range[1])
+      ? `, after the author's range ${rangeOf(u, a[0], a[1])}`
       : '';
   return `the range the wiring puts its wire in, ${between}${first}`;
 }
@@ -2240,6 +2463,12 @@ function rangeSource(u: Unknown): string | undefined {
  *  own may be in the wrong place; the wiring's range is where the circuit can put the wire, so no
  *  crossing there — read at both ends — is the design not reaching its target. */
 function noCrossingAdvice(u: Unknown, endsRead: boolean): string {
+  if (u.range.from === 'table')
+    return (
+      `No length the table holds reaches the target: none shorter can be built, and past the ` +
+      `longest the table does not reach — re-export the table with longer lengths, or state ` +
+      `min/max`
+    );
   if (u.range.from !== 'wiring')
     return (
       `Move or widen min/max to bracket one, or the relation does not reach its target on ` +
@@ -2267,7 +2496,9 @@ function withRanges(
   const settled = res.solve?.kind === 'settled';
   const ranges = unknowns.map((u): SolveRange => {
     const x = res.values[u.p.name];
-    const [a, b] = u.range.author;
+    const author = u.range.author;
+    if (!author) return u.range;
+    const [a, b] = author;
     if (!settled || u.range.from !== 'wiring' || !Number.isFinite(x) || (x >= a && x <= b))
       return u.range;
     return {
@@ -3053,7 +3284,13 @@ function solveNode(node: NodeRef): SheetResult {
   // One home for the structural checks (validateSheet raises the same words as errors); checked
   // BEFORE filtering by the engineSolved() shape guard, because the guard rejects a half-written
   // constraint — which would otherwise sail past as "nothing to solve" and freeze the param.
-  const problem = constraintIssue(doc.params);
+  const found = node.found;
+  const foundOf = (p: SheetVar): FoundRange | undefined =>
+    found?.ranges.get(`${found.prefix}${p.name}`);
+  const problem = constraintIssue(doc.params, (p) => {
+    const f = foundOf(p);
+    return f && 'range' in f ? { ok: true } : f ? { ok: false, why: f.why } : { ok: false };
+  });
   if (problem)
     return solveFailed(evaluateOnce(node), {
       kind: 'not-settled',
@@ -3061,7 +3298,7 @@ function solveNode(node: NodeRef): SheetResult {
       why: 'malformed',
       message: problem.message,
     });
-  const unknowns = doc.params.filter(engineSolved).map(unknownOf);
+  const unknowns = doc.params.filter(engineSolved).map((p) => unknownOf(p, foundOf(p)));
   if (unknowns.length === 0) return evaluateOnce(node);
   // The range each may be searched in: its author's, and the wiring's where that can be read.
   const outside = searchRanges(node, unknowns);

@@ -131,7 +131,7 @@ Each entry in `params` is a named scalar input:
 |-|-|-|
 | `name` | string | The identifier used in expressions. |
 | `value` | number | The current value (SI units). |
-| `min`, `max` | number, optional | Bound the GUI slider **and** make the parameter sweepable. On a parameter the engine solves (`solveFor`, `designConstraint`, `hold`) they are instead the range it is searched in, and required. |
+| `min`, `max` | number, optional | Bound the GUI slider **and** make the parameter sweepable. On a parameter the engine solves (`solveFor`, `designConstraint`, `hold`) they are instead the range it is searched in — required, except on a node's voltage and on a device's length, whose range the engine reads itself (see [A solved parameter with no range](#a-solved-parameter-with-no-range)). |
 | `unit` | string, optional | Display unit. |
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
@@ -1203,8 +1203,9 @@ agree.
 
 A solved parameter is found the way a design constraint is (see
 [Entering from a spec](#entering-from-a-spec-designconstraint)): the engine searches it between
-`min` and `max` until `param − solveFor` reads zero. Both are required, and they are the range
-searched, not slider bounds. State the range the answer is physically bound to lie in — a share
+`min` and `max` until `param − solveFor` reads zero. They are the range searched, not slider
+bounds, and they are required unless the parameter is a node's voltage or a device's length
+(see [A solved parameter with no range](#a-solved-parameter-with-no-range)). State the range the answer is physically bound to lie in — a share
 between 0 and 1, a node between its neighbours, a gate-source voltage between the threshold region
 and the supply — and say so in the note. Where the parameter is the level of a wire, the wiring
 reads that range itself: `min` and `max` are searched first, and the wiring's range after them
@@ -1234,7 +1235,7 @@ its own:
 | situation | result |
 |-|-|
 | the named target does not resolve to a finite number at either end of the range or at its middle | infeasible, `sheet-solve` error: the solve did not settle, because nothing of the range could be evaluated, and why |
-| `min`/`max` missing or inverted | validation error — the range is required, and evaluation fails closed in the same words |
+| `min`/`max` inverted, or missing where the parameter is neither a node's voltage nor a device's length | validation error — the range is required (see [A solved parameter with no range](#a-solved-parameter-with-no-range)), and evaluation fails closed in the same words |
 | a param solves for itself by name | validation error (the relation reads zero everywhere, and hides the loop) |
 | a param solves for itself through an equation, or its relation reads the same everywhere | infeasible, `sheet-solve` error: the same value at both ends of the range and at its middle — the relation does not depend on the param, so no value of it is singled out |
 | the parameter also carries `designConstraint` | validation error — one relation per parameter |
@@ -1361,9 +1362,11 @@ with the diode's block sized from its current and drop — `"params": { "L": "L_
 its `provides`. On the sheet that sizes the diode itself the relation reads its own `W`. At a fixed
 current and drop the width the table asks for grows with the length, so the search has one crossing
 to find; a length between two characterized lengths is read by interpolation along the length axis.
-Change `V_B3_set` and the length is found again, with the width where the layout put it. State the
-range inside the table's length axis: a drop that needs a length past it finds no solution, and says
-so with the relation read at both ends — not a width that has quietly drifted from `W_diode`.
+Change `V_B3_set` and the length is found again, with the width where the layout put it. `min` and
+`max` may be left out: a length is searched over the lengths its table holds (see
+[A solved parameter with no range](#a-solved-parameter-with-no-range)). Either way, a drop that needs
+a length past the longest finds no solution, and says so with the relation read at both ends — not a
+width that has quietly drifted from `W_diode`.
 
 ### The range a wire is searched in
 
@@ -1509,7 +1512,7 @@ Validation adds:
 | `designConstraint` missing `lhs` or `rhs` | validation error — a half-written design constraint would freeze the parameter without solving it |
 | `designConstraint` carries `held` | validation error — the engine sets that flag on the constraint it generates from a `hold` where the hardware is held; it is never written |
 | the relation does not read the parameter it solves at all | validation error — it cannot single the parameter out |
-| `min`/`max` missing or inverted | validation error — the range is required |
+| `min`/`max` inverted, or missing where the parameter is neither a node's voltage nor a device's length | validation error — the range is required (see [A solved parameter with no range](#a-solved-parameter-with-no-range)) |
 
 Messages print the relation as `lhs - (rhs)`, so `Q = A/2 + 0.8` reads `Q - (A/2 + 0.8)`. The
 tolerance is **form-invariant**: scaling the relation scales its slope with it, so `lhs: "CM_in",
@@ -1524,6 +1527,39 @@ instead. The library's 5T OTA is the worked example: the tail node is constraine
 common mode equals `CM_dc`, which makes the common-mode axis a sweep of `CM_dc` with one search
 per point.
 
+
+### A solved parameter with no range
+
+A design is an operating point and a scale. The operating point — every node's voltage, every
+device's current density, gm/ID and length — is bounded by physics: the supplies, and the process.
+The scale — every current, width, gm, capacitance, mirror ratio and resistance — is the designer's
+choice: multiply every width and every current by the same factor and every voltage stays where it
+was, so nothing in the circuit says where a current should be. The engine can find where to look
+for an operating-point quantity; only the designer can say where to look for the scale.
+
+A solved parameter may therefore state no `min` and `max` where it is one of two things:
+
+- **A node's voltage** — the level of a wire, anywhere in the tree, a child sheet's included. It is
+  searched in its physical range, between the wires its devices' channels join its wire to, read
+  from the wiring of the whole tree as in
+  [The range a wire is searched in](#the-range-a-wire-is-searched-in). No crossing anywhere there,
+  with both ends read, is the design failing, as for any wire.
+- **A device's length** — a parameter that is exactly a device's `L`, read through every override
+  above it. It is searched over the lengths its table holds. The shortest is the process's own
+  minimum, so nothing below it can be built; the longest is only as far as the table reaches, so no
+  crossing anywhere in the range is no answer — re-export the table with longer lengths, or state
+  `min` and `max` — never the design failing.
+
+The result's `ranges` says which each was searched in (`from: "wiring"` or `"table"`, with no
+`author` range). A range the author states is used as before, so a sheet that states every range is
+solved exactly as it was. Anything else a sheet solves is its scale, and states its range.
+
+Validation refuses a missing range where it can tell before any table is read that none can be
+supplied: on a sheet that states no wiring, and on a parameter in a unit other than volts that sets
+no device's length. Whether a volt-valued parameter is a node's voltage, and whether its range can be
+read, depends on the tables — which way each p device's voltages run — so it is settled when the
+sheet is evaluated, and a parameter whose range cannot be read is refused there with the reason: it
+is the level of no wire, or the wires around it move with the operating point.
 
 ### Several solved parameters on one sheet
 
@@ -1609,7 +1645,7 @@ parameter's own term is there to read. Any other relation is a `designConstraint
 |-|-|
 | the parameter appears twice, inside a function, divided, or not at all | validation error — write the relation as a `designConstraint` |
 | the parameter also carries `designConstraint`, `solveFor` or `class` | validation error — a parameter takes one of the three, and a held node's class is derived |
-| `min`/`max` missing or inverted | validation error — the range is required |
+| `min`/`max` inverted, or missing where the parameter is neither a node's voltage nor a device's length | validation error — the range is required (see [A solved parameter with no range](#a-solved-parameter-with-no-range)) |
 | a range end sets the parameter | validation error — the range end re-solves it, so the override would be discarded |
 | a parent wires a value into a node its child holds | warning — the value is used at the design point, but a range end re-solves the node inside the child and the parent's own value does not follow. Hold the node on the parent |
 | the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at), and validation names the name |

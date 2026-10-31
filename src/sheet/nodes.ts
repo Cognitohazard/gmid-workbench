@@ -2552,6 +2552,32 @@ export function linearValue(
 }
 
 /**
+ * Each of `atoms` — a param by its name in the walk, `L_d` on the top sheet or `bias__L_MB5` in the
+ * block `bias` — that is a device's length somewhere in the tree: the device's given `L`, read
+ * through every override above it, is exactly that param. With the chain of blocks down to each
+ * device it sets, so a caller can read the length axis of the table each is sized on. Read from the
+ * givens alone; no table is needed to say which params set a length.
+ */
+export function lengthsSetBy(doc: SheetDoc, atoms: readonly string[]): Map<string, SheetBlock[][]> {
+  const out = new Map<string, SheetBlock[][]>();
+  if (!atoms.length) return out;
+  const want = new Map(atoms.map((a) => [canon(atomPoly(a)), a]));
+  const sym = symbolsOf(doc, Object.fromEntries(doc.params.map((p) => [p.name, p.value])));
+  const walk = (d: SheetDoc, chain: SheetBlock[]): void => {
+    if (chain.length > MAX_BLOCK_DEPTH) return;
+    const L = d.givens?.L;
+    if (typeof L === 'string') {
+      const atom = want.get(canon(sym.srcIn(L, chain)));
+      if (atom !== undefined) out.set(atom, [...(out.get(atom) ?? []), chain]);
+    }
+    for (const b of Array.isArray(d.blocks) ? d.blocks : [])
+      if (isObject(b) && b.doc) walk(b.doc, [...chain, b]);
+  };
+  walk(doc, []);
+  return out;
+}
+
+/**
  * What the wiring of `doc` says about the params named in `solved` — the params the sheet solves —
  * read from the netlist and the givens alone, before anything is evaluated: which of them is the
  * level of a wire, and which wires the devices on that wire put it between. A solved param is the

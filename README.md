@@ -265,10 +265,11 @@ to the file its `ref` names.
 Since the sheet format reference of October 11 (38029f9), a script that builds or runs sheets
 needs to know:
 
-- **A solved param states its range.** Every `solveFor`, `designConstraint` and `hold` param
-  carries finite `min < max`: the range it is searched in. The stored value is never read as a
-  starting point. Without a range the param is refused, and all such params on a sheet are named in
-  one message (`solve.unknowns` lists them).
+- **A solved param is searched in a range.** Every `solveFor`, `designConstraint` and `hold` param
+  is searched between `min` and `max`; the stored value is never read as a starting point. A node's
+  voltage or a device's length may leave them out and is searched in the range its wiring or its
+  table gives it; any other param — a current, a ratio — without a range is refused, and all such
+  params on a sheet are named in one message (`solve.unknowns` lists them).
 - **A sheet names its wiring.** Format version 2 (`"formatVersion": 2`) carries `nodes`, `levels`,
   `elements` and `ports`. A sized device names the wires it sits on, or the sheet declares
   `"nodes": "none"`; a sheet in the earlier format with a sized device is refused. A block's
