@@ -122,12 +122,11 @@ interface Level {
 }
 
 /** A wire a sub-sheet drafted, as the sheet above it reads it to connect it: its name there, the
- *  levels it was placed at (in the sub-sheet's own names), how many terminals it joins there, and
- *  whether it is already a port of the sub-sheet. */
+ *  levels it was placed at (in the sub-sheet's own names), and whether it is already a port of the
+ *  sub-sheet. */
 interface ChildWire {
   wire: string;
   levels: Level[];
-  terminals: number;
   ported: boolean;
 }
 
@@ -412,12 +411,15 @@ function draftFromHolds(s: Draft): void {
  *  sheet written the same way; any other reads in the sub-sheet's names, and only matches. */
 function draftFromChildren(s: Draft): void {
   for (const ps of s.ports)
-    for (const l of ps.cw.levels) {
-      const w = written(l.text, ps.block) as { text: string; block?: SheetBlock };
-      const reason = `in "${ps.block.name}", ${l.why}`;
-      if (w.block === undefined) at(s, ps.slot, w.text, reason);
-      else at(s, ps.slot, w.text, reason, ps.block, true);
-    }
+    for (const l of ps.cw.levels)
+      at(
+        s,
+        ps.slot,
+        l.text,
+        `in "${ps.block.name}", ${l.why}`,
+        ps.block,
+        blockOverride(ps.block, l.text.trim()) === undefined,
+      );
 }
 
 /** Two terminals written at the same level are drafted onto one wire; then, once, a gate is drafted
@@ -471,10 +473,14 @@ interface Wires {
   classLevels: (members: Slot[]) => Level[];
 }
 
-/** Name each wire: ground, the param its level is written as, or a fresh name. `extra` are the
- *  sub-sheet wires (port slots) this sheet connects. */
-function nameWires(s: Draft, extra: readonly Slot[] = []): Wires {
-  const slots = [...s.devices.flatMap((d) => TERMINALS.map((t) => `${d.name}.${t}`)), ...extra];
+/** The terminals of the devices a sheet wires, as slots. */
+const deviceSlots = (devices: readonly DraftDevice[]): Slot[] =>
+  devices.flatMap((d) => TERMINALS.map((t) => `${d.name}.${t}`));
+
+/** Name each wire, the sub-sheet wires this sheet connects (its port slots) among them: ground, the
+ *  param its level is written as, or a fresh name. */
+function nameWires(s: Draft): Wires {
+  const slots = [...deviceSlots(s.devices), ...s.ports.map((p) => p.slot)];
   const classes = new Map<Slot, Slot[]>();
   for (const x of slots) classes.set(s.uf.find(x), [...(classes.get(s.uf.find(x)) ?? []), x]);
   const wire = new Map<Slot, string>();
@@ -752,17 +758,11 @@ function proposeLevel(
   joinByLevel(s);
   // A sub-sheet wire is connected here where it joins something of this sheet, or where the
   // sub-sheet already made it a port; any other stays inside the sub-sheet.
-  const slots = [
-    ...devices.flatMap((d) => TERMINALS.map((t) => `${d.name}.${t}`)),
-    ...offered.map((p) => p.slot),
-  ];
+  const slots = [...deviceSlots(devices), ...offered.map((p) => p.slot)];
   s.ports = offered.filter(
     (ps) => ps.cw.ported || slots.some((x) => x !== ps.slot && s.uf.find(x) === s.uf.find(ps.slot)),
   );
-  const w = nameWires(
-    s,
-    s.ports.map((p) => p.slot),
-  );
+  const w = nameWires(s);
   deviceDrafts(s, w);
   heldLevelDrafts(s, w);
   singleTerminalDrafts(s, w);
@@ -774,7 +774,6 @@ function proposeLevel(
       return {
         wire,
         levels: w.classLevels(members).filter((l) => !l.foreign),
-        terminals: members.length,
         ported: out.ports.some((p) => p.at === level && p.wire === wire),
       };
     }),
@@ -857,7 +856,7 @@ export function proposeWiring(doc: SheetDoc): WiringProposal {
   if (unjoined.length)
     out.notes.push(
       `sub-sheet ports joined to nothing above them, each given a new wire to name: ` +
-        unjoined.map((m) => `${m.at ? `${m.at}${PATH_SEP}` : ''}${m.block}.${m.port}`).join(', '),
+        unjoined.map((m) => `${childPath(m.at, m.block)}.${m.port}`).join(', '),
     );
   for (const s of out.selectors)
     out.notes.push(

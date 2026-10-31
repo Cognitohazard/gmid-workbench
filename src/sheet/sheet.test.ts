@@ -5471,12 +5471,49 @@ describe('a block whose inputs failed', () => {
     });
     const res = runSheet(top, dev);
     const causes = new Set(res.warnings.map((w) => w.cause).filter(Boolean));
-    // Inside amp the findings trace to amp's m; amp itself raised a finding of its own (m's
-    // refused solve), so what reads amp's withheld output traces to amp.
-    expect(causes).toEqual(new Set(['amp.m', 'amp']));
+    // amp's output Wb is withheld because amp's own m was: what reads it, inside amp or beside it,
+    // traces to amp.m.
+    expect(causes).toEqual(new Set(['amp.m']));
     expect(
       res.warnings.find((w) => w.rule === 'sheet-block-param' && w.location === 'c')?.cause,
-    ).toBe('amp');
+    ).toBe('amp.m');
+  });
+
+  it('follows a device that did not size through what reads its quantities', () => {
+    // The sheet's own device takes its current from m, which is withheld: the sizing fails as a
+    // consequence, and so does every equation and check that reads the width it never had.
+    const doc = notACircuit({
+      title: 'own device',
+      polarity: 'n',
+      params: [],
+      blocks: [{ name: 'm', doc: unranged }],
+      givens: { L: '0.5e-6', id: 'm__id', gm_id: '10', vds: '0.6' },
+      equations: [{ name: 'Wx', expr: 'W' }],
+      checks: [{ id: 'w', kind: 'spec', lhs: 'Wx', op: '<=', rhs: '1' }],
+    });
+    const res = runSheet(doc, dev);
+    const followOn = res.warnings.filter((w) => w.cause !== undefined);
+    expect(followOn.find((w) => w.rule === 'sheet-givens')?.cause).toBe('m');
+    expect(followOn.some((w) => /equation "Wx": "W" is not defined/.test(w.message))).toBe(true);
+    expect(followOn.some((w) => /check "w" lhs: "Wx" is not defined/.test(w.message))).toBe(true);
+  });
+
+  it('blames a misspelt name on nobody, even beside a withheld one', () => {
+    const doc = notACircuit({
+      title: 'typo',
+      polarity: 'n',
+      params: [],
+      blocks: [
+        { name: 'm', doc: unranged },
+        { name: 'a', doc: leg('a'), params: { I: 'typo + m__id' } },
+      ],
+      equations: [],
+      checks: [],
+    });
+    const res = runSheet(doc, dev);
+    const aErr = res.warnings.find((w) => w.rule === 'sheet-block-param' && w.location === 'a');
+    expect(aErr?.severity).toBe('error');
+    expect(aErr?.cause).toBeUndefined();
   });
 
   it('a block whose override fails on its own is the cause of what reads it', () => {

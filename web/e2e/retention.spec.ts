@@ -1,11 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
-import { loadDemo } from './helpers';
+import { loadDemo, strip } from './helpers';
 
 // Where a loaded table lives: stored in this browser (IndexedDB) so a reload restores it, or held
 // for this session only and never written to browser storage. These tests read IndexedDB itself,
 // not only what the page says about it.
 
-const strip = (page: Page) => page.locator('nav[aria-label="loaded devices"]');
 const chip = (page: Page, device: string) => strip(page).locator('.dev', { hasText: device });
 
 /** Every key the table store holds, read straight from the browser. Opens the database the way

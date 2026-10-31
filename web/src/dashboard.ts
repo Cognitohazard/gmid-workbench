@@ -318,8 +318,8 @@ function sanitizeLegend(v: unknown): LegendConfig | undefined {
  * The core's sheet loader (see sanitizeSheet in the core), naming a check written without an id
  * with a fresh unique one, as the app always has.
  */
-export function sanitizeSheet(v: unknown, depth = 0, lost?: string[]): SheetDoc | undefined {
-  return loadSheet(v, depth, lost, uid);
+export function sanitizeSheet(v: unknown, lost?: string[]): SheetDoc | undefined {
+  return loadSheet(v, 0, lost, uid);
 }
 
 /**
@@ -385,7 +385,7 @@ function restoredSheet(pp: Record<string, unknown>): {
 } {
   const stored = 'sheetStored' in pp ? pp.sheetStored : pp.sheet;
   const lost: string[] = [];
-  const sheet = sanitizeSheet(stored, 0, lost);
+  const sheet = sanitizeSheet(stored, lost);
   if (sheet && sheetFormat(sheet).format === 'unknown') return { sheet };
   if (sheet && !lost.length) return { sheet };
   return {

@@ -318,7 +318,7 @@ export function sweepOf(
   n: number,
   refs: SheetRefIndex | undefined,
   sample: (doc: SheetDoc) => SweepSample,
-  edges?: { readonly probe: (doc: SheetDoc) => SweepSample },
+  probe?: (doc: SheetDoc) => SweepSample,
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -356,6 +356,14 @@ export function sweepOf(
   const x: number[] = [];
   const feasible: boolean[] = [];
   const stood: boolean[] = [];
+  /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry. */
+  const failingIn = (byPath: ReadonlyMap<string, CheckResult>): string[] =>
+    checks.flatMap((c) => {
+      const rr = byPath.get(c.id);
+      return rr && isFailing(rr) ? [c.id] : [];
+    });
+  /** Each sample's failing hard checks, kept where windows are asked for (see windowsOf). */
+  const failedAt: string[][] = [];
 
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
@@ -364,6 +372,7 @@ export function sweepOf(
     feasible.push(!blocked && ok);
     const byPath = new Map<string, CheckResult>();
     if (res) indexTreeResults(res.checks, res.blocks, '', byPath);
+    if (probe) failedAt.push(failingIn(byPath));
     for (const rl of checks) {
       const rr = byPath.get(rl.id);
       rl.marginPct.push(
@@ -386,19 +395,13 @@ export function sweepOf(
     feasible,
     stands: stood,
   };
-  if (!edges) return out;
-  // The hard checks that fail in one evaluation, by the ids the sweep's curves carry.
-  const failing = (s: SweepSample): string[] => {
-    if (!s.res) return [];
-    const byPath = new Map<string, CheckResult>();
-    indexTreeResults(s.res.checks, s.res.blocks, '', byPath);
-    return checks
-      .filter((c) => isHardCheck(c.kind) && byPath.get(c.id)?.status === 'fail')
-      .map((c) => c.id);
+  if (!probe) return out;
+  const at = (t: number): { ok: boolean; failing: string[] } => {
+    if (blocked) return { ok: false, failing: [] };
+    const s = probe(withParams(r.doc, { [param]: t }));
+    return { ok: s.feasible, failing: s.res ? failingIn(ownChecks(s.res)) : [] };
   };
-  const at = (t: number): SweepSample =>
-    blocked ? { feasible: false, stands: false } : edges.probe(withParams(r.doc, { [param]: t }));
-  return { ...out, windows: windowsOf(x, feasible, at, failing) };
+  return { ...out, windows: windowsOf(x, feasible, failedAt, at) };
 }
 
 /** Halvings that pin a window's edge between two samples: 2^-8 of their spacing, about a
@@ -410,33 +413,34 @@ export const WINDOW_EDGE_STEPS = 8;
 function windowsOf(
   x: readonly number[],
   ok: readonly boolean[],
-  at: (t: number) => SweepSample,
-  failing: (s: SweepSample) => string[],
+  failedAt: readonly string[][],
+  at: (t: number) => { ok: boolean; failing: string[] },
 ): SweepWindow[] {
-  /** The edge between a passing value and a failing one: the passing end of the last bracket, and
-   *  what fails at its other end. */
+  /** The edge between the passing sample `good` and the failing one `bad`: the passing end of the
+   *  last bracket, and what fails at its other end — the failing sample's own, where no value
+   *  between them failed. */
   const pin = (good: number, bad: number): { at: number; closedBy: string[] } => {
-    let g = good;
-    let b = bad;
-    let last: SweepSample | undefined;
+    let g = x[good];
+    let b = x[bad];
+    let closedBy = failedAt[bad];
     for (let k = 0; k < WINDOW_EDGE_STEPS; k++) {
       const m = (g + b) / 2;
       const s = at(m);
-      if (s.feasible) g = m;
+      if (s.ok) g = m;
       else {
         b = m;
-        last = s;
+        closedBy = s.failing;
       }
     }
-    return { at: g, closedBy: failing(last ?? at(b)) };
+    return { at: g, closedBy };
   };
   const out: SweepWindow[] = [];
   for (let i = 0; i < ok.length; i++) {
     if (!ok[i]) continue;
     let j = i;
     while (j + 1 < ok.length && ok[j + 1]) j++;
-    const lo = i === 0 ? undefined : pin(x[i], x[i - 1]);
-    const hi = j === ok.length - 1 ? undefined : pin(x[j], x[j + 1]);
+    const lo = i === 0 ? undefined : pin(i, i - 1);
+    const hi = j === ok.length - 1 ? undefined : pin(j, j + 1);
     out.push({
       lo: lo?.at ?? x[i],
       hi: hi?.at ?? x[j],
@@ -473,7 +477,7 @@ export function sweepSheet(
     n,
     refs,
     sample,
-    opts.windows ? { probe: (d) => sample(withoutRange(d)) } : undefined,
+    opts.windows ? (d) => sample(withoutRange(d)) : undefined,
   );
 }
 

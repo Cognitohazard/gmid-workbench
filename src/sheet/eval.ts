@@ -42,8 +42,8 @@ import {
   REGION_CHECK_ID,
   lastSolveFailure,
   namesOf,
-  PATH_SEP,
-  providePrefix,
+  childPath,
+  DEVICE_NAMES,
   ranged,
   refusedIn,
   solveFailedIn,
@@ -59,7 +59,15 @@ import { assumedLevelRefusal, heldGateWarnings, holdHardware, type HeldHardware 
 // A value as a message quotes it: what the author wrote, without the float tail arithmetic leaves
 // on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004).
 import { shown } from './linear';
-import { dcInputs, openRangesAllowed, solvePlan, solvedRelation, spelled } from './validate';
+import {
+  dcInputs,
+  openRanges,
+  paramsOfTree,
+  solvePlan,
+  solvedRelation,
+  spelled,
+  type OpenRanges,
+} from './validate';
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
   amps,
@@ -70,7 +78,6 @@ import {
   formatProblems,
   linearValue,
   readsParentSelector,
-  lengthsSetBy,
   solvedWiring,
   STANDALONE,
   structuralDiodes,
@@ -733,7 +740,7 @@ function runSizing(
   scope: Scope,
   equations: ReadonlySet<string>,
   warn: (w: QAWarning) => void,
-  causeOf: (src: unknown) => string | undefined = () => undefined,
+  causeOf: (src: unknown) => string | undefined,
 ): { report: SizingReport; point: RegionPoint } {
   // Every sizing failure surfaces an error warning AND an ok:false report, so the feasibility
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design). A
@@ -1041,19 +1048,28 @@ function regionCheck(
  */
 type Withheld = Map<string, string>;
 
-/** The withheld names of the evaluation that produced a result, where it withheld any — read by a
- *  failed solve to say whether it had anything to steer by (see solveCause). */
-const WITHHELD = new WeakMap<SheetResult, ReadonlyMap<string, string>>();
-
-/** The block a failure to evaluate `src` traces back to: the first name it reads that was
- *  withheld, if any. */
-function causeIn(withheld: ReadonlyMap<string, string>, src: unknown): string | undefined {
+/** The block a failure to evaluate `src` against `values` traces back to: where every name it reads
+ *  that is not defined there was withheld, the block the first of them was withheld for. A name
+ *  missing for any other reason — a misspelling — is a finding of its own, and so is `src`'s
+ *  failure. */
+function causeIn(
+  withheld: ReadonlyMap<string, string>,
+  src: unknown,
+  values: Readonly<Record<string, number>>,
+): string | undefined {
   if (!withheld.size) return undefined;
+  let cause: string | undefined;
   for (const n of namesOf(src)) {
-    const cause = withheld.get(n);
-    if (cause !== undefined) return cause;
+    if (
+      Object.prototype.hasOwnProperty.call(values, n) ||
+      Object.prototype.hasOwnProperty.call(CONSTANTS, n)
+    )
+      continue;
+    const from = withheld.get(n);
+    if (from === undefined) return undefined;
+    cause ??= from;
   }
-  return undefined;
+  return cause;
 }
 
 /** A result that stands for a block that was not evaluated: nothing sized, nothing checked. */
@@ -1091,9 +1107,8 @@ function applyBlockParams(
   const childParams = new Map(childDoc.params.map((p) => [p.name, p]));
   const overrides: Record<string, number> = {};
   let ok = true;
-  /** The block every failed override traces back to; undefined once one failed on its own. */
-  let cause: string | undefined;
-  let rootFailed = false;
+  /** The block every failed override traces back to so far; null once one failed on its own. */
+  let cause: string | null | undefined;
   for (const [k, expr] of Object.entries(block.params)) {
     // An override key that names no child param is the same failure as an unresolvable
     // one: the parent explicitly supplied a value (typo and all) that will NOT reach the
@@ -1102,7 +1117,7 @@ function applyBlockParams(
     const child = childParams.get(k);
     if (child === undefined) {
       ok = false;
-      rootFailed = true;
+      cause = null;
       warn({
         rule: 'sheet-block-param',
         severity: 'error',
@@ -1129,9 +1144,8 @@ function applyBlockParams(
     const v = evalFinite(expr, parentValues, parentScope, warn, `block "${block.name}" param ${k}`);
     if (v === undefined) {
       ok = false;
-      const from = causeIn(withheld, expr);
-      if (from === undefined) rootFailed = true;
-      else cause ??= from;
+      const from = causeIn(withheld, expr, parentValues);
+      cause = from === undefined || cause === null ? null : (cause ?? from);
       warn({
         rule: 'sheet-block-param',
         severity: 'error',
@@ -1153,17 +1167,15 @@ function applyBlockParams(
       ),
     },
     ok,
-    ...(!ok && !rootFailed && cause !== undefined ? { cause } : {}),
+    ...(cause ? { cause } : {}),
   };
 }
 
-/** The block a child's withheld outputs trace back to, in its parent's terms: where every error the
- *  child raised follows from a block inside it, that block; otherwise the child itself. */
-function childCause(name: string, res: SheetResult): string {
-  const errors = res.warnings.filter((w) => w.severity === 'error');
-  return errors.length && errors.every((w) => w.cause !== undefined)
-    ? `${name}${PATH_SEP}${errors[0].cause}`
-    : name;
+/** The block a child's withheld output `key` traces back to, in its parent's terms: the block inside
+ *  the child that the child's own record names for it (SheetResult.withheld), or the child itself. */
+function childCause(name: string, res: SheetResult, key: string): string {
+  const inner = res.withheld?.[key];
+  return inner === undefined ? name : childPath(name, inner);
 }
 
 /**
@@ -1288,7 +1300,7 @@ function evalBlocks(
       depth + 1,
       budget,
       settings,
-      found && { ranges: found.ranges, prefix: `${found.prefix}${joinProvide(block.name, '')}` },
+      found?.blocks.get(block.name),
     );
 
     // Roll up child warnings, attributed to the block (so a child error fails the
@@ -1316,7 +1328,7 @@ function evalBlocks(
     // failure follows from.
     if (!published || !stands(res))
       for (const key of srcDoc.provides ?? [])
-        if (!(key in provides)) withhold(key, childCause(block.name, res));
+        if (!(key in provides)) withhold(key, childCause(block.name, res, key));
     const report: SheetBlockReport = {
       name: block.name,
       title: srcDoc.title,
@@ -1438,19 +1450,18 @@ function evaluateChild(
   depth: number,
   budget: SolveBudget,
   settings: Settings,
-  found?: FoundAt,
+  found?: FoundNode,
 ): SheetResult {
   const values = doc.params.map((p) => p.value);
   if (!values.every((v) => typeof v === 'number'))
     return evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found });
   // String(v) tells every two numbers apart but the two zeros, which are kept apart here. The
   // ranges read for this child's params that state none depend on where in the tree it sits, so
-  // a child that has any is keyed by its place too.
-  const placed = found ? foundKey(found) : '';
+  // a child that has any is keyed by them too.
   const key =
     `${objectId(src)}|${table ? objectId(table) : 0}|${depth}|` +
     values.map((v) => (Object.is(v, -0) ? '-0' : String(v))).join(',') +
-    (placed ? `|${placed}` : '');
+    (found?.key ? `|${found.key}` : '');
   const known = budget.children.get(key);
   if (known && budget.left > known.cost) {
     budget.counted += known.cost;
@@ -1460,16 +1471,6 @@ function evaluateChild(
   const res = evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found });
   if (budget.left > 0) budget.children.set(key, { res, cost: budget.counted - counted });
   return res;
-}
-
-/** The ranges read for the params under one node, as a memo key part: empty where there are none,
- *  so a tree whose params all state ranges keys its children as it always has. */
-function foundKey(found: FoundAt): string {
-  const parts: string[] = [];
-  for (const [k, f] of found.ranges)
-    if (k.startsWith(found.prefix))
-      parts.push(`${k}=${'range' in f ? `${f.range[0]},${f.range[1]}` : 'none'}`);
-  return parts.length ? `${found.prefix}:${parts.join(';')}` : '';
 }
 
 /** A child's wiring, to be read once its tree has settled: what withNodes needs of it. Keyed by
@@ -1555,27 +1556,23 @@ interface NodeRef {
   depth: number;
   budget: SolveBudget;
   settings: Settings;
-  /** The ranges read at the top of the tree for its params that state none (see rangesOfTree),
-   *  and the prefix that names this node's params among them. */
-  found?: FoundAt;
+  /** The ranges read at the top of the tree for this node's params that state none, and its
+   *  blocks' (see rangesOfTree). */
+  found?: FoundNode;
 }
 
 /** A range read for a param that states none: the physical one its wiring gives a node, or the
  *  table's for a length — or why none could be read. */
 type FoundRange =
-  | {
-      range: [number, number];
-      from: 'wiring' | 'table';
-      note: string;
-      wires?: string[];
-      wiring?: SolveRange['wiring'];
-    }
+  | (Pick<SolveRange, 'range' | 'note' | 'wires' | 'wiring'> & { from: 'wiring' | 'table' })
   | { why: string; wires?: string[] };
 
-/** The ranges read for a tree (see rangesOfTree), and the prefix naming one node's params there. */
-interface FoundAt {
+/** The ranges read for one sheet of a tree (see rangesOfTree): its own params', by name, each
+ *  block's below it, and a key that says them all, for the memo of child results. */
+interface FoundNode {
   ranges: ReadonlyMap<string, FoundRange>;
-  prefix: string;
+  blocks: ReadonlyMap<string, FoundNode>;
+  key: string;
 }
 
 /** What in a sheet's own math reads the table's temperature scalars, `T` and `UT` (see
@@ -1649,7 +1646,7 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
     warnings.push(cause === undefined ? w : { ...w, cause });
   };
   const rollUp = (w: QAWarning): void => void warnings.push(w);
-  const causeOf = (src: unknown): string | undefined => causeIn(withheld, src);
+  const causeOf = (src: unknown): string | undefined => causeIn(withheld, src, values);
   const values: Record<string, number> = {};
 
   // 0. Device-metadata scalars — the same scope derive/tableScope uses: T/UT (so
@@ -1686,6 +1683,13 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
       )
     : undefined;
   const sizing = sized?.report;
+  // A device that did not size because a given read a withheld name publishes nothing, and what
+  // reads its quantities follows from the same block.
+  if (sizing && !sizing.ok) {
+    const cause = warnings.find((w) => w.rule === 'sheet-givens' && w.severity === 'error')?.cause;
+    if (cause !== undefined)
+      for (const n of DEVICE_NAMES) if (!(n in values)) withheld.set(n, cause);
+  }
 
   // 4. Author equations, in document order. An equation that cannot RESOLVE (missing quantity,
   //    parse error) is skipped with a plain warning — graceful degradation for optional
@@ -1760,8 +1764,8 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
     feasible,
     warnings,
     ...(blocks ? { blocks } : {}),
+    ...(withheld.size ? { withheld: Object.fromEntries(withheld) } : {}),
   };
-  if (withheld.size) WITHHELD.set(out, withheld);
   return out;
 }
 
@@ -1805,7 +1809,8 @@ interface SolveBudget {
 
 /** The evaluation, marked infeasible, with the failure as its solve outcome and its message as one
  *  more error warning. */
-function solveFailed(res: SheetResult, failure: SolveFailure, cause?: string): SheetResult {
+function solveFailed(res: SheetResult, failure: SolveFailure, doc?: SheetDoc): SheetResult {
+  const cause = doc && solveCause(doc, res, failure);
   return {
     ...res,
     feasible: false,
@@ -1830,12 +1835,13 @@ const failedParams = (f: SolveFailure): string[] =>
  *  names reads, in the evaluation it failed on, a name a composed block withheld (see Withheld).
  *  Such a search had nothing to steer by; the block that withheld it is the finding. */
 function solveCause(doc: SheetDoc, res: SheetResult, f: SolveFailure): string | undefined {
-  const withheld = WITHHELD.get(res);
-  if (!withheld?.size) return undefined;
+  if (!res.withheld) return undefined;
+  const withheld = new Map(Object.entries(res.withheld));
   for (const name of failedParams(f)) {
     const p = doc.params.find((q) => q.name === name);
     const rel = p && solvedRelation(p);
-    const c = rel && (causeIn(withheld, rel.lhs) ?? causeIn(withheld, rel.rhs));
+    const c =
+      rel && (causeIn(withheld, rel.lhs, res.values) ?? causeIn(withheld, rel.rhs, res.values));
     if (c !== undefined) return c;
   }
   return undefined;
@@ -1897,9 +1903,9 @@ export interface EvaluateOptions {
  *  the top, how its point is classified. */
 interface NodeOptions extends EvaluateOptions {
   budget?: SolveBudget;
-  /** The ranges read at the top of the tree for its params that state none; absent at the top,
-   *  which reads them (see rangesOfTree). */
-  found?: FoundAt;
+  /** The ranges read at the top of the tree for this node's params that state none; absent at
+   *  the top, which reads them (see rangesOfTree). */
+  found?: FoundNode;
 }
 
 /**
@@ -2020,47 +2026,21 @@ function unknownOf(p: SheetVar, found?: FoundRange): Unknown {
   const { lhs, rhs } = solvedRelation(p) as { lhs: string; rhs: string };
   const held = constrained(p) && p.designConstraint.held === true;
   const what = `${held ? 'held' : 'solved'} param "${p.name}"`;
+  const author: [number, number] = [p.min as number, p.max as number];
   // A param that states no range is searched in the one read for it (see rangesOfTree); one with
   // none to read never reaches here (constraintIssue refuses it first).
-  if (!ranged(p) && found && 'range' in found) {
-    const [lo, hi] = found.range;
-    return {
-      p,
-      lhs,
-      rhs,
-      held,
-      what,
-      lo,
-      hi,
-      span: hi - lo,
-      range: {
-        param: p.name,
-        range: found.range,
-        from: found.from,
-        ...(found.wires ? { wires: found.wires } : {}),
-        ...(found.wiring ? { wiring: found.wiring } : {}),
-        note: `${what}: ${found.note}`,
-      },
-    };
-  }
-  const author: [number, number] = [p.min as number, p.max as number];
-  return {
-    p,
-    lhs,
-    rhs,
-    held,
-    what,
-    lo: author[0],
-    hi: author[1],
-    span: author[1] - author[0],
-    range: {
-      param: p.name,
-      range: author,
-      from: 'author',
-      author,
-      note: `${what} is searched in the author's range`,
-    },
-  };
+  const range: SolveRange =
+    !ranged(p) && found && 'range' in found
+      ? { ...found, param: p.name, note: `${what}: ${found.note}` }
+      : {
+          param: p.name,
+          range: author,
+          from: 'author',
+          author,
+          note: `${what} is searched in the author's range`,
+        };
+  const [lo, hi] = range.range;
+  return { p, lhs, rhs, held, what, lo, hi, span: hi - lo, range };
 }
 
 /** A wire's name as a message quotes it. */
@@ -2240,107 +2220,88 @@ const tablesBelow =
 
 /**
  * The range of every solved or held param in the tree that states none and may go without one
- * (openRangesAllowed), read once at the top of the tree, where the whole netlist is: a param that is
- * a node's voltage is searched in its physical range, between the wires its devices' channels join
+ * (openRanges), read once at the top of the tree, where the whole netlist is: a param that is a
+ * node's voltage is searched in its physical range, between the wires its devices' channels join
  * its wire to (see readWiringRanges), wherever in the tree it is declared; a param that is a
- * device's length, over the lengths the tables it is read on hold. Each is keyed by its name in the
- * walk (`bias__V_B1`), and a child reads its own under its prefix (FoundAt). One whose range cannot
- * be read says why, and its solve is refused with that reason (constraintIssue). Undefined where
- * every solved param states a range, so a sheet that states them all is solved exactly as before.
+ * device's length, over the lengths the tables it is read on hold. Each sheet of the tree reads its
+ * own params' under its block (FoundNode). One whose range cannot be read says why, and its solve is
+ * refused with that reason (constraintIssue). Undefined where every solved param states a range, so
+ * a sheet that states them all is solved exactly as before.
  */
 function rangesOfTree(
   doc: SheetDoc,
   node: Pick<NodeRef, 'table' | 'resolveDevice'>,
-): FoundAt | undefined {
-  const allowed = openRangesAllowed(doc);
-  if (!allowed.size) return undefined;
+): FoundNode | undefined {
+  const params = paramsOfTree(doc);
+  const open = openRanges(doc, params);
+  if (!open) return undefined;
   const solved: string[] = [];
   const reach = new Map<string, [number, number]>();
   const values = new Map<string, number>();
-  const units = new Map<string, string>();
-  const walk = (d: SheetDoc, chain: readonly SheetBlock[]): void => {
-    if (chain.length > MAX_BLOCK_DEPTH) return;
-    const pre = providePrefix(chain);
-    for (const p of d.params) {
-      const atom = `${pre}${p.name}`;
-      if (p.unit && p.unit !== '1') units.set(atom, ` ${p.unit}`);
-      if (engineSolved(p) || holds(p)) {
-        solved.push(atom);
-        if (ranged(p)) reach.set(atom, [p.min, p.max]);
-      } else values.set(atom, p.value);
-    }
-    for (const b of d.blocks ?? []) if (b.doc) walk(b.doc, [...chain, b]);
-  };
-  walk(doc, []);
+  const units = new Map<string, string | undefined>();
+  for (const { p, atom } of params) {
+    units.set(atom, p.unit);
+    if (engineSolved(p) || holds(p)) {
+      solved.push(atom);
+      if (ranged(p)) reach.set(atom, [p.min, p.max]);
+    } else values.set(atom, p.value);
+  }
   const tableAt = tablesBelow(node);
   const wiring = solvedWiring(doc, tableAt, solved);
   const isSolved = new Set(solved);
-  const unit = (n: string): string => units.get(n) ?? '';
-  const span = (n: string, [lo, hi]: [number, number]): string =>
-    `[${shown(lo)}, ${shown(hi)}]${unit(n)}`;
   const reads = readWiringRanges(
     wiring,
     solved,
     reach,
     (a) => (isSolved.has(a) ? undefined : values.get(a)),
     heldGatesOf(doc, wiring),
-    unit,
+    (a) => unitText(units.get(a)),
   );
-  const lengths = lengthsSetBy(
-    doc,
-    [...allowed].filter((a) => !wiring?.wires.has(a)),
-  );
-  const ranges = new Map<string, FoundRange>();
-  for (const atom of allowed) {
+  /** The range read for one param, by its name in the walk. */
+  const read = (atom: string, lengths: SheetBlock[][] | undefined): FoundRange => {
     const r = reads.get(atom);
     const sw = wiring?.wires.get(atom);
-    if (r && 'range' in r && sw) {
-      const on = sw.wires.map(wireName).join(' and ');
-      ranges.set(atom, {
+    if (r && 'range' in r && sw)
+      return {
         range: r.range,
         from: 'wiring',
         wires: sw.wires,
         wiring: { range: r.range, below: r.below, above: r.above },
         note:
-          `it states no range, and is searched in the range the wiring puts its wire ${on} in, ` +
-          `${span(atom, r.range)} between ${wireName(r.below)} below and ${wireName(r.above)} above`,
-      });
-      continue;
-    }
-    if (r && 'why' in r) {
-      ranges.set(atom, { why: r.why, ...(sw ? { wires: sw.wires } : {}) });
-      continue;
-    }
-    const chains = lengths.get(atom);
-    if (!chains) {
-      ranges.set(atom, { why: "it is not the level of any wire, and it sets no device's length" });
-      continue;
-    }
-    const axes = chains.map((c) => tableAt(c)?.grid.axes.find((a) => a.name === 'l')?.values);
-    if (axes.some((v) => !v || v.length < 2)) {
-      ranges.set(atom, {
+          `it states no range, and is searched in the range the wiring puts its wire ` +
+          `${sw.wires.map(wireName).join(' and ')} in, ${rangeText(...r.range, units.get(atom))} ` +
+          `between ${wireName(r.below)} below and ${wireName(r.above)} above`,
+      };
+    if (r && 'why' in r) return { why: r.why, ...(sw ? { wires: sw.wires } : {}) };
+    if (!lengths) return { why: "it is not the level of any wire, and it sets no device's length" };
+    const axes = lengths.map((c) => tableAt(c)?.grid.axes.find((a) => a.name === 'l')?.values);
+    if (axes.some((v) => !v || v.length < 2))
+      return {
         why: 'a table it is read on holds one length or none, so it gives no range of lengths',
-      });
-      continue;
-    }
-    const lo = Math.max(...axes.map((v) => (v as ArrayLike<number>)[0]));
-    const hi = Math.min(
-      ...axes.map((v) => (v as ArrayLike<number>)[(v as ArrayLike<number>).length - 1]),
-    );
-    if (!(lo < hi)) {
-      ranges.set(atom, { why: 'the tables it is read on hold no length in common' });
-      continue;
-    }
-    ranges.set(atom, {
+      };
+    const ends = axes as ArrayLike<number>[];
+    const lo = Math.max(...ends.map((v) => v[0]));
+    const hi = Math.min(...ends.map((v) => v[v.length - 1]));
+    if (!(lo < hi)) return { why: 'the tables it is read on hold no length in common' };
+    return {
       range: [lo, hi],
       from: 'table',
       note:
         `it states no range, and is searched over the lengths its table holds, ` +
-        `${span(atom, [lo, hi])}: from the shortest, the process's own minimum, to the longest ` +
-        `the table reaches`,
-    });
-  }
-  return { ranges, prefix: '' };
+        `${rangeText(lo, hi, units.get(atom))}: from the shortest, the process's own minimum, to ` +
+        `the longest the table reaches`,
+    };
+  };
+  const build = (o: OpenRanges): FoundNode => {
+    const ranges = new Map([...o.params].map(([name, q]) => [name, read(q.atom, q.lengths)]));
+    const blocks = new Map([...o.blocks].map(([name, c]) => [name, build(c)]));
+    const key = [
+      ...[...ranges].map(([n, f]) => `${n}=${'range' in f ? f.range.join(',') : 'none'}`),
+      ...[...blocks].map(([n, c]) => `${n}{${c.key}}`),
+    ].join(';');
+    return { ranges, blocks, key };
+  };
+  return build(open);
 }
 
 function searchRanges(node: NodeRef, unknowns: Unknown[]): { u: Unknown; message: string }[] {
@@ -2492,7 +2453,24 @@ function withRanges(
   unknowns: readonly Unknown[],
   refused: readonly Unknown[] = [],
 ): SheetResult {
-  if (node.depth > 0) return res;
+  // Below the top a block's ranges are its author's (see searchRanges), except a param that states
+  // none, which was searched in the range read for it: that is said, never used silently.
+  if (node.depth > 0) {
+    const read = unknowns.filter((u) => !u.range.author && !refused.includes(u));
+    if (!read.length) return res;
+    return {
+      ...res,
+      warnings: [
+        ...res.warnings,
+        ...read.map((u): QAWarning => ({
+          rule: 'sheet-range',
+          severity: 'info',
+          message: u.range.note,
+          location: u.p.name,
+        })),
+      ],
+    };
+  }
   const settled = res.solve?.kind === 'settled';
   const ranges = unknowns.map((u): SolveRange => {
     const x = res.values[u.p.name];
@@ -2521,12 +2499,17 @@ function withRanges(
 }
 
 /** An unknown's unit as a message appends it — none for a dimensionless share. */
-const unitOf = (u: Unknown): string => (u.p.unit && u.p.unit !== '1' ? ` ${u.p.unit}` : '');
+/** A unit as a message follows a number with it: nothing for none or a pure number. */
+const unitText = (unit: string | undefined): string => (unit && unit !== '1' ? ` ${unit}` : '');
+/** A range as a message quotes it. */
+const rangeText = (lo: number, hi: number, unit: string | undefined): string =>
+  `[${shown(lo)}, ${shown(hi)}]${unitText(unit)}`;
+
+const unitOf = (u: Unknown): string => unitText(u.p.unit);
 
 /** A value, and a range, of an unknown as a message quotes them. */
 const valueOf = (u: Unknown, x: number): string => `${shown(x)}${unitOf(u)}`;
-const rangeOf = (u: Unknown, lo: number, hi: number): string =>
-  `[${shown(lo)}, ${shown(hi)}]${unitOf(u)}`;
+const rangeOf = (u: Unknown, lo: number, hi: number): string => rangeText(lo, hi, u.p.unit);
 
 /** Unknowns named for a sentence, each with the range it is searched in: `"a" in [0, 1] V`,
  *  `"a" in … and "b" in …`, `"a" in …, "b" in … and "c" in …`. */
@@ -3284,9 +3267,7 @@ function solveNode(node: NodeRef): SheetResult {
   // One home for the structural checks (validateSheet raises the same words as errors); checked
   // BEFORE filtering by the engineSolved() shape guard, because the guard rejects a half-written
   // constraint — which would otherwise sail past as "nothing to solve" and freeze the param.
-  const found = node.found;
-  const foundOf = (p: SheetVar): FoundRange | undefined =>
-    found?.ranges.get(`${found.prefix}${p.name}`);
+  const foundOf = (p: SheetVar): FoundRange | undefined => node.found?.ranges.get(p.name);
   const problem = constraintIssue(doc.params, (p) => {
     const f = foundOf(p);
     return f && 'range' in f ? { ok: true } : f ? { ok: false, why: f.why } : { ok: false };
@@ -3337,10 +3318,7 @@ function solveNode(node: NodeRef): SheetResult {
       }
       outcome = found;
     } else outcome = settle(ctx, set, slope);
-    if (!outcome.ok)
-      return ranged(
-        solveFailed(outcome.res, outcome.failure, solveCause(doc, outcome.res, outcome.failure)),
-      );
+    if (!outcome.ok) return ranged(solveFailed(outcome.res, outcome.failure, doc));
     last = outcome.res;
   }
 
@@ -3367,7 +3345,7 @@ function solveNode(node: NodeRef): SheetResult {
           .join('; ') +
         ` — the values it was solved with moved after it landed`,
     };
-    return ranged(solveFailed(final, failure, solveCause(doc, final, failure)));
+    return ranged(solveFailed(final, failure, doc));
   }
   return ranged({ ...final, solve: { kind: 'settled' } });
 }

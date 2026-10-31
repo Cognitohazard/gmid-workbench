@@ -431,23 +431,19 @@
    * is worth saying; a session-only import of a table that was not stored deletes only to be sure,
    * and a failure there says nothing about a copy.
    */
-  function retain(
-    uid: string,
-    table: DeviceTable,
-    stored: boolean,
-    importedAt: number | undefined,
-    hadCopy: boolean,
-  ): void {
+  function retain(d: Loaded, hadCopy: boolean): void {
+    const { table, stored } = d;
+    const uid = tableUid(table);
     const seq = ++retentionSeq;
     lastRetention.set(uid, seq);
-    const op = stored ? putTable(uid, plainTable(table), importedAt) : deleteTable(uid);
+    const op = stored ? putTable(uid, plainTable(table), d.importedAt) : deleteTable(uid);
     void op.then((ok) => {
       // A record under this key that could not be restored has just been replaced or deleted.
       if (ok) storeSkipped = storeSkipped.filter((s) => s.key !== uid);
       if (ok || lastRetention.get(uid) !== seq || (!stored && !hadCopy)) return;
-      const d = tables.find((x) => tableUid(x.table) === uid);
-      if (!d) return;
-      d.stored = !stored;
+      const live = tables.find((x) => tableUid(x.table) === uid);
+      if (!live) return;
+      live.stored = !stored;
       storeFailed = [
         ...storeFailed,
         stored
@@ -461,7 +457,7 @@
     const d = tables[i];
     if (!d || d.stored === stored) return;
     d.stored = stored;
-    retain(tableUid(d.table), d.table, stored, d.importedAt, true);
+    retain(d, true);
   }
   /** What the browser holds, for the list in the strip: every stored table on the bench, and every
    *  stored record that could not be restored. */
@@ -796,10 +792,7 @@
     importError = errors.length ? errors.join(' · ') : null;
     // A session-only import is never written; it deletes any stored copy of the same table (an
     // earlier import kept it), so nothing of it is left in the browser after this.
-    for (const d of incoming) {
-      const uid = tableUid(d.table);
-      retain(uid, d.table, d.stored, d.importedAt, replacedStored.has(uid));
-    }
+    for (const d of incoming) retain(d, replacedStored.has(tableUid(d.table)));
   }
 
   // Make device `i` active (overlays cleared). The user's authored panels and tabs are preserved

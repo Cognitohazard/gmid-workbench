@@ -281,14 +281,32 @@ export function constraintIssue(
   params: readonly SheetVar[],
   open: OpenRange = () => ({ ok: false }),
 ): { params: string[]; message: string } | null {
-  /** Why no range could be read for each of `ps` that says, as a clause to append. */
-  const whyNone = (ps: readonly SheetVar[]): string =>
-    ps
-      .flatMap((p) => {
-        const o = open(p);
-        return !o.ok && o.why ? [`; no range can be read for "${p.name}" — ${o.why}`] : [];
-      })
-      .join('');
+  /** Each of `ps` that states no range and may not go without one, with why no range could be
+   *  read for it where that is known. */
+  const rangeless = (ps: readonly SheetVar[]): { p: SheetVar; why?: string }[] =>
+    ps.flatMap((p) => {
+      if (ranged(p)) return [];
+      const o = open(p);
+      return o.ok ? [] : [{ p, ...(o.why ? { why: o.why } : {}) }];
+    });
+  /** The params of `need` refused for their missing range: `kind` names them, `purpose` says what
+   *  the range is for. */
+  const needsRange = (
+    need: readonly { p: SheetVar; why?: string }[],
+    kind: 'solved' | 'held',
+    purpose: [string, string],
+  ) => {
+    const many = need.length > 1;
+    const ps = need.map((n) => n.p);
+    return issue(
+      ps,
+      `${kind} ${many ? 'params' : 'param'} ${quotedNames(ps)} ${many ? 'need' : 'needs'} finite ` +
+        `min < max — ${many ? purpose[1] : purpose[0]}` +
+        need
+          .flatMap((n) => (n.why ? [`; no range can be read for "${n.p.name}" — ${n.why}`] : []))
+          .join(''),
+    );
+  };
   const issue = (p: SheetVar | readonly SheetVar[], message: string) => ({
     params: (Array.isArray(p) ? p : [p]).map((q: SheetVar) => q.name),
     message,
@@ -308,15 +326,12 @@ export function constraintIssue(
       `param "${both.name}" has a design constraint and also carries solveFor — the two would fight over ` +
         `it; keep one relation`,
     );
-  const unranged = params.filter((p) => engineSolved(p) && !ranged(p) && !open(p).ok);
+  const unranged = rangeless(params.filter(engineSolved));
   if (unranged.length)
-    return issue(
-      unranged,
-      `solved ${unranged.length > 1 ? 'params' : 'param'} ${quotedNames(unranged)} ` +
-        `${unranged.length > 1 ? 'need' : 'needs'} finite min < max — they are the range ` +
-        `${unranged.length > 1 ? 'each is' : 'it is'} searched in, not slider bounds` +
-        whyNone(unranged),
-    );
+    return needsRange(unranged, 'solved', [
+      'they are the range it is searched in, not slider bounds',
+      'they are the range each is searched in, not slider bounds',
+    ]);
   const held = params.filter(holds);
   const twice = held.find((p) => p.designConstraint !== undefined || torn(p));
   if (twice)
@@ -325,15 +340,12 @@ export function constraintIssue(
       `param "${twice.name}" carries hold and also has a design constraint or carries solveFor — a param ` +
         `takes one of the three`,
     );
-  const loose = held.filter((p) => !ranged(p) && !open(p).ok);
+  const loose = rangeless(held);
   if (loose.length)
-    return issue(
-      loose,
-      `held ${loose.length > 1 ? 'params' : 'param'} ${quotedNames(loose)} ` +
-        `${loose.length > 1 ? 'need' : 'needs'} finite min < max — the range ` +
-        `${loose.length > 1 ? 'each is' : 'it is'} re-solved in where the hardware is held` +
-        whyNone(loose),
-    );
+    return needsRange(loose, 'held', [
+      'the range it is re-solved in where the hardware is held',
+      'the range each is re-solved in where the hardware is held',
+    ]);
   const shapeless = held.find((p) => additiveCoefficient(p.hold, p.name) === undefined);
   if (shapeless)
     return issue(
@@ -720,7 +732,6 @@ export function engineSolved(p: SheetVar): boolean {
 
 /** Whether a param states a finite range, min below max: what a slider sweeps, and what a solved
  *  or held param is searched in. */
-/** Whether a param states a range: finite `min` below finite `max`. */
 export const ranged = (v: { min?: number; max?: number }): v is { min: number; max: number } =>
   Number.isFinite(v.min) && Number.isFinite(v.max) && (v.min as number) < (v.max as number);
 
@@ -1466,6 +1477,10 @@ export interface SheetResult {
   /** The range each of this sheet's own solved params was searched in, in document order (see
    *  SolveRange). Absent where the sheet solves nothing, or the solve did not start. */
   ranges?: SolveRange[];
+  /** What this sheet could not compute because a composed block's outputs were withheld, or its
+   *  own device did not size for that reason: each name, with the path of the block it traces back
+   *  to (see QAWarning.cause). Absent where nothing was. */
+  withheld?: Record<string, string>;
 }
 
 /**
@@ -1872,12 +1887,6 @@ export interface SheetSweepCheck {
 }
 
 /**
- * A leaf sheet evaluated across a grid of one parameter's [min,max] range: the X samples, each
- * check's relative-margin curve, and the overall feasibility at each point. The classic gm/ID
- * feasibility-region view — wherever every hard check's curve sits at or above zero, the design
- * is feasible. Empty (`x: []`) when the named parameter is not a finitely-bounded slider variable.
- */
-/**
  * One stretch of a swept knob's range where every hard check passes (on a held sweep: where the
  * held design complies), with the knob's other params where they are. An edge between two samples
  * is pinned by halving the gap between them (WINDOW_EDGE_STEPS times) and is the last passing
@@ -1893,6 +1902,12 @@ export interface SweepWindow {
   above?: string[];
 }
 
+/**
+ * A leaf sheet evaluated across a grid of one parameter's [min,max] range: the X samples, each
+ * check's relative-margin curve, and the overall feasibility at each point. The classic gm/ID
+ * feasibility-region view — wherever every hard check's curve sits at or above zero, the design
+ * is feasible. Empty (`x: []`) when the named parameter is not a finitely-bounded slider variable.
+ */
 export interface SheetSweep {
   param: string;
   unit: string;

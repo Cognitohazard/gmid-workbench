@@ -1528,27 +1528,36 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
 const readsAffixedColumn = (doc: SheetDoc, name: string): boolean =>
   !!doc.givens && splitProvide(name)?.[0] === TABLE_AFFIX;
 
-/** Which params of a tree may state no range (see openRangesAllowed), and the prefix that names
- *  the params of the sheet being validated in that set. */
-interface OpenAt {
-  allowed: ReadonlySet<string>;
-  prefix: string;
+/** One param of a tree: the block path of the sheet that declares it, and its name in the whole
+ *  tree's walk (`bias__V_B1` for `V_B1` in the block `bias`). */
+export interface TreeParam {
+  p: SheetVar;
+  path: readonly string[];
+  atom: string;
 }
 
-/** Every solved or held param of a tree that states no `min`/`max`, by its name in the walk
- *  (`bias__V_B1` for `V_B1` in the block `bias`). */
-export function rangelessParams(doc: SheetDoc): { atom: string; p: SheetVar }[] {
-  const out: { atom: string; p: SheetVar }[] = [];
+/** Every param of a tree, the top sheet's first, each sheet's before its blocks'. */
+export function paramsOfTree(doc: SheetDoc): TreeParam[] {
+  const out: TreeParam[] = [];
   const walk = (d: SheetDoc, chain: readonly SheetBlock[]): void => {
     if (chain.length > MAX_BLOCK_DEPTH) return;
     const pre = providePrefix(chain);
+    const path = chain.map((b) => b.name);
     for (const p of Array.isArray(d.params) ? d.params : [])
-      if ((engineSolved(p) || holds(p)) && !ranged(p)) out.push({ atom: `${pre}${p.name}`, p });
+      out.push({ p, path, atom: `${pre}${p.name}` });
     for (const b of Array.isArray(d.blocks) ? d.blocks : [])
       if (isObject(b) && b.doc) walk(b.doc, [...chain, b]);
   };
   walk(doc, []);
   return out;
+}
+
+/** The solved and held params of one sheet of a tree that state no range and may go without one
+ *  (see openRanges), by name — each with its name in the tree's walk and, for a device's length,
+ *  the chains of the devices it sets — and the same for each block below it, by block name. */
+export interface OpenRanges {
+  params: Map<string, { atom: string; lengths?: SheetBlock[][] }>;
+  blocks: Map<string, OpenRanges>;
 }
 
 /**
@@ -1558,23 +1567,35 @@ export function rangelessParams(doc: SheetDoc): { atom: string; p: SheetVar }[] 
  * the wiring gives. Whether it is a node's voltage, and whether its range can be read, is settled
  * when the sheet is evaluated, where the tables say which way each device's voltages run; one whose
  * range cannot be read is refused there, with the reason. Anything else — a current, a ratio, a
- * resistance — is the design's scale, which only its author can say where to look for.
+ * resistance — is the design's scale, which only its author can say where to look for. Undefined
+ * where the tree has none.
  */
-export function openRangesAllowed(doc: SheetDoc): Set<string> {
-  const open = rangelessParams(doc);
-  if (!open.length) return new Set();
+export function openRanges(
+  doc: SheetDoc,
+  params: readonly TreeParam[] = paramsOfTree(doc),
+): OpenRanges | undefined {
+  const rangeless = params.filter(({ p }) => (engineSolved(p) || holds(p)) && !ranged(p));
+  if (!rangeless.length) return undefined;
   const lengths = lengthsSetBy(
     doc,
-    open.map((o) => o.atom),
+    rangeless.map((r) => r.atom),
   );
   const wired = flattened(doc);
-  return new Set(
-    open
-      .filter(
-        ({ atom, p }) => lengths.has(atom) || (wired && (p.unit === undefined || p.unit === 'V')),
-      )
-      .map((o) => o.atom),
-  );
+  const root: OpenRanges = { params: new Map(), blocks: new Map() };
+  let any = false;
+  for (const { p, path, atom } of rangeless) {
+    const ls = lengths.get(atom);
+    if (!ls && !(wired && (p.unit === undefined || p.unit === 'V'))) continue;
+    let node = root;
+    for (const seg of path) {
+      let next = node.blocks.get(seg);
+      if (!next) node.blocks.set(seg, (next = { params: new Map(), blocks: new Map() }));
+      node = next;
+    }
+    node.params.set(p.name, { atom, ...(ls ? { lengths: ls } : {}) });
+    any = true;
+  }
+  return any ? root : undefined;
 }
 
 /** Surface authoring problems as warnings; never throws, never mutates the doc. Structural
@@ -1584,7 +1605,7 @@ export function validateSheet(
   doc: SheetDoc,
   _depth = 0,
   _wiredBy?: unknown,
-  _open?: OpenAt,
+  _open?: OpenRanges,
 ): QAWarning[] {
   // A document in a format this app does not read is kept as stored and read no further: anything
   // said about its keys would be said in the wrong format's terms.
@@ -1595,7 +1616,7 @@ export function validateSheet(
   const wiredAsDiode = structuralDiode(doc, _wiredBy);
 
   // Which params of the tree may state no range is a question of the whole tree, asked at its top.
-  const open = _open ?? { allowed: openRangesAllowed(doc), prefix: '' };
+  const open = _depth === 0 ? openRanges(doc) : _open;
   out.push(...paramProblems(doc, open));
   out.push(...givensProblems(doc, wiredAsDiode));
   out.push(...checkProblems(doc));
@@ -1730,7 +1751,7 @@ function noiseFormProblems(doc: SheetDoc): QAWarning[] {
 }
 
 /** The params' own problems: each param on its own, then the solved params' structure. */
-function paramProblems(doc: SheetDoc, open: OpenAt): QAWarning[] {
+function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[] {
   const out: QAWarning[] = [];
   for (const p of doc.params) {
     if (!Number.isFinite(p.value)) {
@@ -1817,7 +1838,7 @@ function paramProblems(doc: SheetDoc, open: OpenAt): QAWarning[] {
   // which would otherwise freeze the param: neither swept nor solved, with the sheet still reading
   // feasible.
   const constraintIssue = constraintProblem(doc.params, (p) =>
-    open.allowed.has(`${open.prefix}${p.name}`) ? { ok: true } : { ok: false },
+    open?.params.has(p.name) ? { ok: true } : { ok: false },
   );
   if (constraintIssue) {
     out.push({
@@ -2079,7 +2100,7 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
 /** The composition's problems: collisions with what the blocks provide, hand-tuned assumptions,
  *  forward references, each block's shape, and each embedded child's own findings, attributed to
  *  its block. `depth` is how deep `doc` sits in the tree. */
-function blockProblems(doc: SheetDoc, depth: number, open: OpenAt): QAWarning[] {
+function blockProblems(doc: SheetDoc, depth: number, open: OpenRanges | undefined): QAWarning[] {
   const out: QAWarning[] = [];
   if (doc.blocks) {
     // Collision guard: a child exposes scalars into the parent scope as `name__key`. If a
@@ -2262,10 +2283,7 @@ function blockProblems(doc: SheetDoc, depth: number, open: OpenAt): QAWarning[] 
             location: block.name,
           });
         }
-        const below = {
-          allowed: open.allowed,
-          prefix: `${open.prefix}${joinProvide(block.name, '')}`,
-        };
+        const below = open?.blocks.get(block.name);
         for (const w of validateSheet(block.doc, depth + 1, blockWires(doc, block), below)) {
           out.push(prefixBlockWarning(block.name, w));
         }

@@ -70,6 +70,7 @@ import {
   unfinishedBecause,
   withParams,
   withValidation,
+  withoutRange,
   validateSheet,
 } from '../sheet';
 import {
@@ -855,15 +856,15 @@ export function sweepAtCondition(
       stands: evaluated,
     };
   };
-  // An edge is pinned with the sweep's own sample: on a held sweep, passing is complying at the
-  // condition, which reads what the held run reads.
+  // An edge is pinned with the sweep's own sample, less the range ends: passing — feasible where
+  // the design is sized, complying at the condition's own point where it is held — never reads them.
   const sweep = sweepOf(
     doc,
     param,
     opts.points ?? SWEEP_POINTS,
     refs,
     sample,
-    opts.windows ? { probe: sample } : undefined,
+    opts.windows ? (d) => sample(withoutRange(d)) : undefined,
   );
   return { ...sweep, key, base, design };
 }
