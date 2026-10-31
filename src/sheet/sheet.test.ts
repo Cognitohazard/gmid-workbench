@@ -37,6 +37,8 @@ import {
   SOLVE_EVALUATIONS,
   SOLVE_SWEEPS,
   SOLVE_TOL_REL,
+  SWEEP_POINTS,
+  WINDOW_EDGE_STEPS,
   noiseSourcesIn,
 } from './index';
 import { EXAMPLES } from './examples';
@@ -5567,5 +5569,70 @@ describe('solving a length for a width', () => {
     const r = runSheet(bias(0.7), devBias);
     expect(r.feasible).toBe(false);
     expect(r.solve).toMatchObject({ kind: 'no-solution', unknown: 'L_d' });
+  });
+});
+
+describe('where a swept knob passes', () => {
+  /** A sheet with one knob, x in [0, 10], and the checks given on y = x. */
+  const knob = (checks: SheetDoc['checks'], equations = [{ name: 'y', expr: 'x' }]): SheetDoc =>
+    notACircuit({
+      title: 'window',
+      params: [{ name: 'x', value: 5, min: 0, max: 10 }],
+      equations,
+      checks,
+    });
+  /** The spacing between two of the sweep's samples, divided as often as an edge is halved. */
+  const pinned = 10 / (SWEEP_POINTS - 1) / 2 ** WINDOW_EDGE_STEPS;
+
+  it('pins each edge between samples, on its passing side, and names the check that closes it', () => {
+    const doc = knob([
+      { id: 'floor', kind: 'physical', lhs: 'y', op: '>=', rhs: '2.3' },
+      { id: 'ceiling', kind: 'spec', lhs: 'y', op: '<=', rhs: '7.77' },
+    ]);
+    const s = sweepSheet(doc, 'x', undefined, SWEEP_POINTS, undefined, undefined, {
+      windows: true,
+    });
+    expect(s.windows).toHaveLength(1);
+    const [w] = s.windows!;
+    expect(w.lo).toBeGreaterThanOrEqual(2.3);
+    expect(w.lo - 2.3).toBeLessThanOrEqual(pinned);
+    expect(w.hi).toBeLessThanOrEqual(7.77);
+    expect(7.77 - w.hi).toBeLessThanOrEqual(pinned);
+    expect(w.below).toEqual(['floor']);
+    expect(w.above).toEqual(['ceiling']);
+  });
+
+  it('reports each stretch apart, and leaves an edge at the end of the range unnamed', () => {
+    const doc = knob([{ id: 'gap', kind: 'spec', lhs: 'abs(y - 5)', op: '>=', rhs: '1.5' }]);
+    const s = sweepSheet(doc, 'x', undefined, SWEEP_POINTS, undefined, undefined, {
+      windows: true,
+    });
+    expect(s.windows?.map((w) => [w.below, w.above])).toEqual([
+      [undefined, ['gap']],
+      [['gap'], undefined],
+    ]);
+    const [a, b] = s.windows!;
+    expect(a.lo).toBe(0);
+    expect(3.5 - a.hi).toBeLessThanOrEqual(pinned);
+    expect(b.lo - 6.5).toBeLessThanOrEqual(pinned);
+    expect(b.hi).toBe(10);
+  });
+
+  it('names no check where the design stops standing rather than failing one', () => {
+    const doc = knob(
+      [{ id: 'room', kind: 'physical', lhs: 'r', op: '>=', rhs: '0' }],
+      [{ name: 'r', expr: 'sqrt(5 - x)' }],
+    );
+    const s = sweepSheet(doc, 'x', undefined, SWEEP_POINTS, undefined, undefined, {
+      windows: true,
+    });
+    expect(s.windows).toHaveLength(1);
+    expect(5 - s.windows![0].hi).toBeLessThanOrEqual(pinned);
+    expect(s.windows![0].above).toEqual([]);
+  });
+
+  it('is found only when asked for, so a scan of many knobs pays nothing for it', () => {
+    const doc = knob([{ id: 'floor', kind: 'physical', lhs: 'y', op: '>=', rhs: '2.3' }]);
+    expect(sweepSheet(doc, 'x').windows).toBeUndefined();
   });
 });

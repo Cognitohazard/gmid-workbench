@@ -51,6 +51,8 @@ import type {
   SheetResult,
   SheetSweep,
   Settings,
+  SweepOptions,
+  SweepSample,
 } from '../sheet';
 import {
   SWEEP_POINTS,
@@ -827,7 +829,7 @@ export function sweepAtCondition(
   key: ConditionKey,
   deviceOf: DeviceLookup,
   refs?: SheetRefIndex,
-  opts: RunOptions & { readonly base?: ConditionKey; readonly points?: number } = {},
+  opts: SweepOptions & { readonly base?: ConditionKey; readonly points?: number } = {},
 ): ConditionSweep {
   const base = opts.base ?? key;
   const design = sameCondition(base, key) ? 'sized' : 'held';
@@ -835,7 +837,7 @@ export function sweepAtCondition(
   // Prepared once, at the stand-in value sweepOf validates with; each sample swaps in its own
   // document, which differs from it only in the swept value.
   const prepared = prepareRun(sweepable(v) ? withParams(doc, { [param]: v.min }) : doc, refs);
-  const sweep = sweepOf(doc, param, opts.points ?? SWEEP_POINTS, refs, (d) => {
+  const sample = (d: SheetDoc): SweepSample => {
     const runs = runSet(
       { ...prepared, doc: d },
       primaryDevice,
@@ -852,7 +854,17 @@ export function sweepAtCondition(
       feasible: design === 'sized' ? evaluated && run.feasible : run.points[0].state === 'complies',
       stands: evaluated,
     };
-  });
+  };
+  // An edge is pinned with the sweep's own sample: on a held sweep, passing is complying at the
+  // condition, which reads what the held run reads.
+  const sweep = sweepOf(
+    doc,
+    param,
+    opts.points ?? SWEEP_POINTS,
+    refs,
+    sample,
+    opts.windows ? { probe: sample } : undefined,
+  );
   return { ...sweep, key, base, design };
 }
 

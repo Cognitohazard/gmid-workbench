@@ -1852,12 +1852,31 @@ export interface SheetSweepCheck {
  * feasibility-region view — wherever every hard check's curve sits at or above zero, the design
  * is feasible. Empty (`x: []`) when the named parameter is not a finitely-bounded slider variable.
  */
+/**
+ * One stretch of a swept knob's range where every hard check passes (on a held sweep: where the
+ * held design complies), with the knob's other params where they are. An edge between two samples
+ * is pinned by halving the gap between them (WINDOW_EDGE_STEPS times) and is the last passing
+ * value found, so the window never claims a value that fails. `below` and `above` name the hard
+ * checks that fail just past each edge, by tree path; empty where none does — the design did not
+ * size or a solve did not land there — and absent where the window runs to the end of the range.
+ * A stretch narrower than the sample spacing between two failing samples is not seen.
+ */
+export interface SweepWindow {
+  lo: number;
+  hi: number;
+  below?: string[];
+  above?: string[];
+}
+
 export interface SheetSweep {
   param: string;
   unit: string;
   x: number[];
   checks: SheetSweepCheck[];
   feasible: boolean[];
+  /** Where the knob passes, its edges pinned between samples — present only when asked for (see
+   *  SweepOptions.windows), since each edge costs a few more evaluations. */
+  windows?: SweepWindow[];
   /**
    * Whether each sample's evaluation completed (see `stands`). A sample that did not is
    * infeasible, and its check margins were read wherever a solve stopped — carried as data so a

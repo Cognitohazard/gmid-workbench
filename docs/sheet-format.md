@@ -1893,6 +1893,21 @@ Two views trace a sheet across parameter ranges (both need finitely-bounded slid
   feasible across the whole `gm_id` range?" Each infeasible cell names the worst failing hard
   check (by tree path), so a child's constraint is attributed to the block it lives in.
 
+**Where a knob passes.** A one-parameter sweep can also say where along the knob the design
+passes, to better than the sample spacing: pass `{ windows: true }` to `sweepSheet` or
+`sweepAtCondition` and the result carries `windows`, one per stretch of the range where every hard
+check holds (on a held sweep, where the held design complies). An edge that lies between two
+samples is pinned by halving the gap between them eight times — a ten-thousandth of the range at
+the default 41 samples — and is the last passing value found, so a window never claims a value
+that fails. Each edge inside the range names the hard checks that fail just past it (`below`,
+`above`); an empty list there means the design stops standing rather than failing a check — a
+device that will not size, a solve that does not land. A spec written as an inequality is the
+author's to place inside its window: `p_2X >= floor` leaves `I_REF` a window whose lower edge is the
+current that puts the pole on its floor, and the knob is set inside it, rounded the way the design
+needs. Pinning costs a few evaluations per edge, feasibility only, so a caller that scans many
+knobs — the topology picker — leaves it off; the sheet panel asks for it on the knob it charts. A
+stretch narrower than the sample spacing between two failing samples is not seen.
+
 A margin says how much room a check has but not which knob moves it, so the core also exports
 `sheetSensitivities(doc, table?, resolveDevice?, opts?)`: it re-evaluates the whole sheet a
 step either side of each `choice` param and reports, per check, how far that check's margin

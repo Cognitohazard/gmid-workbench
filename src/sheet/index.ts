@@ -27,6 +27,7 @@ import type {
   SheetSweep,
   SheetSweep2,
   SheetSweepCheck,
+  SweepWindow,
 } from './types';
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
@@ -88,6 +89,14 @@ export * from './spice';
 export interface RunOptions {
   /** The tolerances and caps to evaluate under (see Settings). Absent: DEFAULT_SETTINGS. */
   readonly settings?: Settings;
+}
+
+/** What a one-parameter sweep takes besides a run's options. */
+export interface SweepOptions extends RunOptions {
+  /** Also find where the knob passes, each edge pinned between samples (SheetSweep.windows): a
+   *  few more evaluations per edge, so asked for by a caller that shows the answer, and left off
+   *  by one that scans many knobs. */
+  readonly windows?: boolean;
 }
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
@@ -309,6 +318,7 @@ export function sweepOf(
   n: number,
   refs: SheetRefIndex | undefined,
   sample: (doc: SheetDoc) => SweepSample,
+  edges?: { readonly probe: (doc: SheetDoc) => SweepSample },
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -368,7 +378,7 @@ export function sweepOf(
     // `runSheet` reports it.
     stood.push(!blocked && done);
   }
-  return {
+  const out: SheetSweep = {
     param,
     unit: v.unit ?? '',
     x,
@@ -376,6 +386,66 @@ export function sweepOf(
     feasible,
     stands: stood,
   };
+  if (!edges) return out;
+  // The hard checks that fail in one evaluation, by the ids the sweep's curves carry.
+  const failing = (s: SweepSample): string[] => {
+    if (!s.res) return [];
+    const byPath = new Map<string, CheckResult>();
+    indexTreeResults(s.res.checks, s.res.blocks, '', byPath);
+    return checks
+      .filter((c) => isHardCheck(c.kind) && byPath.get(c.id)?.status === 'fail')
+      .map((c) => c.id);
+  };
+  const at = (t: number): SweepSample =>
+    blocked ? { feasible: false, stands: false } : edges.probe(withParams(r.doc, { [param]: t }));
+  return { ...out, windows: windowsOf(x, feasible, at, failing) };
+}
+
+/** Halvings that pin a window's edge between two samples: 2^-8 of their spacing, about a
+ *  ten-thousandth of the range on a sweep of SWEEP_POINTS samples. */
+export const WINDOW_EDGE_STEPS = 8;
+
+/** Every run of passing samples as a window, each edge that lies between two samples pinned by
+ *  halving the gap (see SweepWindow). */
+function windowsOf(
+  x: readonly number[],
+  ok: readonly boolean[],
+  at: (t: number) => SweepSample,
+  failing: (s: SweepSample) => string[],
+): SweepWindow[] {
+  /** The edge between a passing value and a failing one: the passing end of the last bracket, and
+   *  what fails at its other end. */
+  const pin = (good: number, bad: number): { at: number; closedBy: string[] } => {
+    let g = good;
+    let b = bad;
+    let last: SweepSample | undefined;
+    for (let k = 0; k < WINDOW_EDGE_STEPS; k++) {
+      const m = (g + b) / 2;
+      const s = at(m);
+      if (s.feasible) g = m;
+      else {
+        b = m;
+        last = s;
+      }
+    }
+    return { at: g, closedBy: failing(last ?? at(b)) };
+  };
+  const out: SweepWindow[] = [];
+  for (let i = 0; i < ok.length; i++) {
+    if (!ok[i]) continue;
+    let j = i;
+    while (j + 1 < ok.length && ok[j + 1]) j++;
+    const lo = i === 0 ? undefined : pin(x[i], x[i - 1]);
+    const hi = j === ok.length - 1 ? undefined : pin(x[j], x[j + 1]);
+    out.push({
+      lo: lo?.at ?? x[i],
+      hi: hi?.at ?? x[j],
+      ...(lo ? { below: lo.closedBy } : {}),
+      ...(hi ? { above: hi.closedBy } : {}),
+    });
+    i = j;
+  }
+  return out;
 }
 
 /**
@@ -390,12 +460,21 @@ export function sweepSheet(
   n = SWEEP_POINTS,
   resolveDevice?: DeviceResolver,
   refs?: SheetRefIndex,
-  opts: RunOptions = {},
+  opts: SweepOptions = {},
 ): SheetSweep {
-  return sweepOf(doc, param, n, refs, (d) => {
+  const sample = (d: SheetDoc): SweepSample => {
     const res = evaluateSheet(d, table, resolveDevice, { settings: opts.settings });
     return { res, feasible: res.feasible, stands: stands(res) };
-  });
+  };
+  // Feasibility never reads a range end, so an edge is pinned without them: one evaluation a probe.
+  return sweepOf(
+    doc,
+    param,
+    n,
+    refs,
+    sample,
+    opts.windows ? { probe: (d) => sample(withoutRange(d)) } : undefined,
+  );
 }
 
 /** Default per-axis sample count for a 2-D sweep (samples² evaluations per call). */

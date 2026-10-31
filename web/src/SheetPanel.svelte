@@ -49,6 +49,7 @@
     type SheetCheck,
     type SheetBlock,
     type SheetSweep2,
+    type SweepWindow,
     type SheetSensitivity,
     type SheetBlockReport,
     type RangeEndReport,
@@ -1003,19 +1004,41 @@
 
   // The contiguous span of the swept param where the design is feasible (the feasibility window)
   // — or, on a held sweep, where the held design complies at its own operating point.
+  // The core pins each window's edges between samples and names the checks that close them
+  // (SheetSweep.windows); a sweep answered without them is read from its samples alone, to the
+  // sample spacing.
   const feasWindow = $derived.by(() => {
     if (!swept || swept.feasible.length === 0) return null;
+    if (swept.windows)
+      return swept.windows.length
+        ? { none: false as const, pinned: true as const, windows: swept.windows }
+        : { none: true as const };
     const idx = swept.feasible.flatMap((f, i) => (f ? [i] : []));
     if (idx.length === 0) return { none: true as const };
     const lo = idx[0];
     const hi = idx[idx.length - 1];
     return {
       none: false as const,
+      pinned: false as const,
       lo: swept.x[lo],
       hi: swept.x[hi],
       gap: idx.length !== hi - lo + 1,
     };
   });
+  /** One pinned window as the line under the chart reads it: its span, and what fails just past
+   *  each edge that lies inside the range. */
+  const windowText = (w: SweepWindow): string => {
+    const past = (side: string, ids: readonly string[] | undefined): string[] =>
+      ids === undefined
+        ? []
+        : [
+            ids.length
+              ? `${side} it ${ids.join(', ')} ${ids.length > 1 ? 'fail' : 'fails'}`
+              : `${side} it the design does not stand`,
+          ];
+    const closers = [...past('below', w.below), ...past('above', w.above)];
+    return `${fmt(w.lo)}…${fmt(w.hi)}${sweptUnit}${closers.length ? ` (${closers.join('; ')})` : ''}`;
+  };
 
   // The embedded uPlot chart, owned outside Svelte via the shared host: destroyed on
   // leaving sweep mode, refit in place on data edits, restyled on a theme/font change.
@@ -2157,10 +2180,13 @@
         {/each}
       </div>
       {#if feasWindow}
-        <p class="feas">
+        <p class="feas" data-sweep-window>
           {#if swept.design === 'held'}
             {#if feasWindow.none}
               the held design complies at {at} nowhere in this range of {active}
+            {:else if feasWindow.pinned}
+              the held design complies at {at} for {active}
+              {feasWindow.windows.map(windowText).join(' · ')}
             {:else}
               the held design complies at {at} for {active} ≈ {fmt(feasWindow.lo)}…{fmt(
                 feasWindow.hi,
@@ -2169,6 +2195,9 @@
             {/if}
           {:else if feasWindow.none}
             no feasible {active} in this range
+          {:else if feasWindow.pinned}
+            feasible {active}
+            {feasWindow.windows.map(windowText).join(' · ')}
           {:else}
             feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(
               feasWindow.hi,
