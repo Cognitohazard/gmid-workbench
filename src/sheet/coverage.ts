@@ -28,15 +28,7 @@ import {
   PATH_SEP,
   prefixBlockPath,
 } from './types';
-import type {
-  QuantizedValue,
-  SizingReport,
-  SheetGivens,
-  SheetBlockReport,
-  SheetDoc,
-  SheetBlock,
-  SheetVar,
-} from './types';
+import type { SizingReport, SheetGivens, SheetBlockReport, SheetDoc, SheetBlock } from './types';
 
 /** The three quantities a range end holds fixed: the geometry, and a current the author wrote. */
 export const HELD_AT_A_RANGE_END: ReadonlySet<string> = new Set(['W', 'L', 'id']);
@@ -73,7 +65,6 @@ interface SizingTree {
   sizing?: SizingReport;
   blocks?: readonly SheetBlockReport[];
   held?: Record<string, number>;
-  quantized?: readonly QuantizedValue[];
 }
 
 /** The transformed document plus the blocks whose current the transformation had to ASSUME (see
@@ -241,12 +232,6 @@ export function heldGateWarnings(doc: SheetDoc): QAWarning[] {
   return out;
 }
 
-/** `p` as an ordinary input at `value`: no longer solved, nor rounded. */
-export function asInput(p: SheetVar, value: number): SheetVar {
-  const { solveFor: _solveFor, designConstraint: _constraint, quantize: _quantize, ...rest } = p;
-  return { ...rest, value };
-}
-
 function holdNode(
   doc: SheetDoc,
   base: SizingTree,
@@ -264,11 +249,7 @@ function holdNode(
   // A node under a gate: the gate voltage the base run needed is part of the hardware, so the
   // held expression becomes a design constraint against that value and the node is re-solved
   // (SheetVar.hold). A current balance becomes one the same way, against the zero it read.
-  // A solved value the author rounded is the value that was built: held at it, not solved again.
-  const rounded = new Map((base.quantized ?? []).map((q) => [q.param, q.rounded]));
   const params = doc.params.map((p) => {
-    const r = rounded.get(p.name);
-    if (r !== undefined && p.quantize !== undefined) return asInput(p, r);
     if (!holds(p)) return p;
     const v = base.held?.[p.name];
     if (v === undefined || !Number.isFinite(v)) {

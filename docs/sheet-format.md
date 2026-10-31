@@ -137,7 +137,6 @@ Each entry in `params` is a named scalar input:
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
 | `solveFor` | string, optional | Makes this parameter solved: it names the value the parameter must agree with, closing a bias loop, and the engine searches the parameter between `min` and `max` until the two agree (see [Closing a bias loop](#closing-a-bias-loop-solvefor)). A solved parameter is not sweepable. |
 | `hold` | string, optional | Names the quantity that stays fixed where the design is held, and makes this parameter the one re-solved to keep it there. For a node voltage that hangs under a transistor's gate it is the gate voltage, written as the node plus the device's gate-source voltage (see [A node under a gate](#a-node-under-a-gate-hold)); for a current the design point types, it is the balance of the currents that current sets (see [A current the design point chooses](#a-current-the-design-point-chooses)). The parameter stays an ordinary, sweepable input at the design point. |
-| `quantize` | `{ "sigFigs": n, "round": "up" \| "down" \| "nearest" }`, optional | On a solved parameter: round the value it is solved to before the sheet is read (see [Rounding a solved value](#rounding-a-solved-value-quantize)). |
 | `class` | `"independent"` \| `"assumed"`, optional | What kind of DC sizing input this voltage is. `independent`: nothing on the sheet determines it, so the designer states it (a supply, a ground reference, an input common mode, an applied bias, a characterization probe, an output level that a feedback loop outside the sheet holds, a voltage across a device whose surrounding circuit is not on the sheet). `assumed`: the sheet's own parts determine it, but the sheet types a value for now instead of deriving it (an internal stack node, a guessed gate-source drop). An assumed voltage is not a permanent state: it marks a value the sheet still has to derive, and deriving it removes the assumption. Required on every param with unit exactly `V` that a device's bias axes or givens are built from, anywhere in the tree — including params a range end's `set` expressions name — and the `sheet-dc-inputs` rule refuses one without it. The same rule refuses a device whose sizing depends on its own operating point with no `designConstraint` or `solveFor` on the loop. A voltage typed as a literal in an expression is not a param and carries no class. The param that carries a `designConstraint` or `solveFor` is *solved*, and one that carries `hold` is *held*; those classes are derived and never written. Assumed inputs that reach a device are listed with the result of a sheet run. |
 
 The `role` separates *what the sheet is for* from *how it gets there*:
@@ -1117,8 +1116,8 @@ declares no ports — since a sheet that composes a child stating wiring states 
 already in format version 2 that wires itself is connected through the ports it declares, which the
 draft leaves to the author. A child included by reference is drafted only once the sheet is resolved
 against its library (`resolvedSheet(doc, refs).doc`); an unresolved one is named in the notes, not
-passed over. The copy then holds every child inline; the migration command (see "Scripting the core"
-in the README) writes each by-reference child back to a file of its own.
+passed over. The copy then holds every child inline; a script that keeps a child in a file of its
+own writes each block's `doc` back to the file its `ref` names.
 
 ### Every sheet names its wiring
 
@@ -1365,32 +1364,6 @@ to find; a length between two characterized lengths is read by interpolation alo
 Change `V_B3_set` and the length is found again, with the width where the layout put it. State the
 range inside the table's length axis: a drop that needs a length past it finds no solution, and says
 so with the relation read at both ends — not a width that has quietly drifted from `W_diode`.
-
-### Rounding a solved value (`quantize`)
-
-A target computed backward from a spec is rarely the value that gets built. A reference current
-sized so a pole lands exactly at its floor comes out at 1.453 µA, and the author builds 1.5 µA —
-rounded up, so the pole lands at or above the floor. `quantize` makes that one run:
-
-```json
-{ "name": "I_REF", "value": 1.5e-6, "min": 0.2e-6, "max": 10e-6, "unit": "A", "role": "choice",
-  "designConstraint": { "lhs": "p_2X", "rhs": "p_2X_floor" },
-  "quantize": { "sigFigs": 2, "round": "up" },
-  "note": "the reference current that puts the degeneration pole at its floor, rounded up to build" }
-```
-
-The engine solves `I_REF` to its relation's root as for any solved parameter, rounds it to
-`sigFigs` significant figures — `up` to the next value at or above, `down` at or below, or the
-`nearest` (the default) — and evaluates the sheet again with the rounded value as an ordinary
-input. Every other solved parameter is found again there by the same searches, and every check is
-read at the rounded value: a spec check on `p_2X` is the verdict on the value that is built, which
-is why the direction of rounding is the author's to state. The rounded parameter's own relation is
-not asked to hold there — that is what rounding it means — so the result reports both numbers
-(`quantized`: the param, the root it was solved to, and the value used), and the outcome is the
-second evaluation's: settled, or a failure of another solved parameter at the rounded value.
-Where the hardware is held — a range end, another condition — the rounded value is part of the
-hardware and is held, not solved and rounded again. `quantize` belongs only on a parameter the
-engine solves (`solveFor` or `designConstraint`); validation refuses it anywhere else.
 
 ### The range a wire is searched in
 

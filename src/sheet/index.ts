@@ -38,7 +38,6 @@ export * from './types';
 export * from './settings';
 export * from './legacy';
 export * from './load';
-export * from './migrate';
 export * from './overrides';
 export * from './eval';
 // Named rather than `export *`: validate.ts also exports reachedGivens, for a test that holds it

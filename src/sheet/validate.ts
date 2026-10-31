@@ -39,7 +39,6 @@ import {
   constraintProblem,
   drainProblem,
   PARAM_CLASSES,
-  QUANTIZE_ROUNDS,
   PROVIDE_SEP,
   REGIONS,
   REGION_CHECK_ID,
@@ -1681,31 +1680,6 @@ function paramProblems(doc: SheetDoc): QAWarning[] {
         message: `param "${p.name}" is not a finite number`,
         location: p.name,
       });
-    }
-    // Rounding applies to a value the engine solves, in a shape it can apply.
-    const q: unknown = p.quantize;
-    if (q !== undefined) {
-      const shape = q as { sigFigs?: unknown; round?: unknown };
-      const problem =
-        typeof q !== 'object' || q === null || Array.isArray(q)
-          ? 'must be an object { sigFigs, round }'
-          : !Number.isInteger(shape.sigFigs) ||
-              (shape.sigFigs as number) < 1 ||
-              (shape.sigFigs as number) > 15
-            ? 'needs sigFigs, a whole number from 1 to 15'
-            : shape.round !== undefined && !QUANTIZE_ROUNDS.has(shape.round as string)
-              ? `has round "${String(shape.round)}" — use one of ${quoted([...QUANTIZE_ROUNDS])}`
-              : !engineSolved(p)
-                ? `rounds a value the engine solves, and "${p.name}" carries neither solveFor nor ` +
-                  `a design constraint — round a typed value where it is typed`
-                : undefined;
-      if (problem)
-        out.push({
-          rule: 'sheet-param',
-          severity: 'error',
-          message: `param "${p.name}": quantize ${problem}`,
-          location: p.name,
-        });
     }
     // `class` is the author's word on what kind of DC level the param is. `solved` is not theirs
     // to give — the engine decides that from designConstraint/solveFor — and a solved param

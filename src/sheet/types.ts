@@ -48,41 +48,6 @@ export function namesOf(expr: unknown): readonly string[] {
  * re-balance the design). Untagged params render ungrouped, as before. `note` is a
  * one-line derivation/intent annotation for the designer inheriting the sheet.
  */
-/** How a solved value is rounded (see SheetVar.quantize). */
-export interface Quantize {
-  sigFigs: number;
-  round?: QuantizeRound;
-}
-
-export type QuantizeRound = 'up' | 'down' | 'nearest';
-
-/** The ways a solved value may be rounded. */
-export const QUANTIZE_ROUNDS: ReadonlySet<string> = new Set<QuantizeRound>([
-  'up',
-  'down',
-  'nearest',
-]);
-
-/** A solved param rounded by its `quantize`: the root its relation was solved to, and the value
- *  the sheet was then evaluated at. */
-export interface QuantizedValue {
-  param: string;
-  exact: number;
-  rounded: number;
-}
-
-/** `x` rounded to `sigFigs` significant figures, `up` toward +∞, `down` toward −∞, or to the
- *  nearest. The scaled value is read to twelve figures first, so a value that is already round
- *  (1.5e-6 held as 1.4999999999999999e-6) stays where it is rather than stepping a digit. */
-export function roundSig(x: number, sigFigs: number, round: QuantizeRound = 'nearest'): number {
-  if (x === 0 || !Number.isFinite(x)) return x;
-  const exp = Math.floor(Math.log10(Math.abs(x)));
-  const scale = 10 ** (sigFigs - 1 - exp);
-  const m = Number((x * scale).toPrecision(12));
-  const r = round === 'up' ? Math.ceil(m) : round === 'down' ? Math.floor(m) : Math.round(m);
-  return Number((r / scale).toPrecision(Math.max(sigFigs, 1)));
-}
-
 export interface SheetVar {
   name: string;
   value: number;
@@ -163,17 +128,6 @@ export interface SheetVar {
    * current where the design is held.
    */
   hold?: string;
-  /**
-   * Round the value the engine solves this param to, as an author rounds a computed target to a
-   * value worth building: `sigFigs` significant figures, rounded `up` (to the next value at or
-   * above), `down` (at or below) or to the `nearest` (the default). The engine solves the param to
-   * its relation's root, rounds it, and evaluates the sheet again with the rounded value as an
-   * ordinary input, so every check is read at the value that is built; the result reports both
-   * (SheetResult.quantized). Where the hardware is held — a range end, another condition — the
-   * rounded value is held, not solved again. Only a param the engine solves (`solveFor` or
-   * `designConstraint`) may carry it.
-   */
-  quantize?: Quantize;
   /**
    * What kind of DC sizing input this param is, for a voltage that a device's bias or givens are
    * built from. `independent` is a voltage nothing on the sheet determines, so the designer
@@ -1001,7 +955,7 @@ export const WIRING_DOC_KEYS: readonly string[] = [
 export const WIRING_BLOCK_KEYS: readonly string[] = ['nodes', 'ports'];
 export const WIRING_VAR_KEYS: readonly string[] = ['convention'];
 export const VAR_KEYS: ReadonlySet<string> = new Set<string>([
-  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'designConstraint', 'hold', 'class', 'quantize',
+  'name', 'value', 'min', 'max', 'unit', 'role', 'note', 'solveFor', 'designConstraint', 'hold', 'class',
   ...WIRING_VAR_KEYS,
 ]); // prettier-ignore
 export const EQUATION_KEYS: ReadonlySet<string> = new Set<string>(['name', 'expr', 'unit', 'note']);
@@ -1085,8 +1039,6 @@ export interface SheetBlockReport {
   wiringValues?: WiringValues;
   /** How the block's own solved params came out (see SheetResult.solve). */
   solve?: SolveOutcome;
-  /** The block's own solved params that were rounded (see SheetResult.quantized). */
-  quantized?: QuantizedValue[];
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
@@ -1491,9 +1443,6 @@ export interface SheetResult {
   /** How this sheet's own solved params came out (see SolveOutcome); a child's own are on its
    *  report. */
   solve?: SolveOutcome;
-  /** This sheet's own solved params that its `quantize` rounded: each root, and the value the sheet
-   *  was evaluated at (see SheetVar.quantize). */
-  quantized?: QuantizedValue[];
   /** The range each of this sheet's own solved params was searched in, in document order (see
    *  SolveRange). Absent where the sheet solves nothing, or the solve did not start. */
   ranges?: SolveRange[];

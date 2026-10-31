@@ -48,21 +48,12 @@ import {
   stands,
   unfinishedBecause,
   withParams,
-  roundSig,
   type NoSolutionWhy,
   type NotSettledWhy,
-  type Quantize,
-  type QuantizedValue,
   type SolveFailure,
   type SolveRange,
 } from './types';
-import {
-  asInput,
-  assumedLevelRefusal,
-  heldGateWarnings,
-  holdHardware,
-  type HeldHardware,
-} from './coverage';
+import { assumedLevelRefusal, heldGateWarnings, holdHardware, type HeldHardware } from './coverage';
 // A value as a message quotes it: what the author wrote, without the float tail arithmetic leaves
 // on it (`0.1 + 0.2` reads 0.3, not 0.30000000000000004).
 import { shown } from './linear';
@@ -1331,7 +1322,6 @@ function evalBlocks(
       ...(res.blocks ? { blocks: res.blocks } : {}),
       ...(res.held ? { held: res.held } : {}),
       ...(res.solve ? { solve: res.solve } : {}),
-      ...(res.quantized ? { quantized: res.quantized } : {}),
     };
     PENDING_WIRING.set(report, { doc: childDoc, res, table: childTable, mode });
     reports.push(report);
@@ -3142,44 +3132,7 @@ function solveNode(node: NodeRef): SheetResult {
     };
     return ranged(solveFailed(final, failure, solveCause(doc, final, failure)));
   }
-  return roundedSolve(node, unknowns, ranged({ ...final, solve: { kind: 'settled' } }));
-}
-
-/**
- * A settled solve of params that carry `quantize`, evaluated again with each rounded: the param is
- * an ordinary input at its rounded value there, and every other solved param is found again by the
- * same one-unknown searches, so the checks read the design that is built. The rounded params'
- * relations are not asked to hold at the rounded value — that is what rounding means — but each
- * root is reported beside the value used (SheetResult.quantized), and the outcome is the second
- * evaluation's: settled, or the other params' failure at the rounded value.
- */
-function roundedSolve(
-  node: NodeRef,
-  unknowns: readonly Unknown[],
-  settled: SheetResult,
-): SheetResult {
-  const round = unknowns.filter((u) => !u.held && u.p.quantize !== undefined);
-  if (!round.length) return settled;
-  const quantized: QuantizedValue[] = round.map((u) => {
-    const q = u.p.quantize as Quantize;
-    const exact = settled.values[u.p.name];
-    return { param: u.p.name, exact, rounded: roundSig(exact, q.sigFigs, q.round) };
-  });
-  const at = new Map(quantized.map((q) => [q.param, q.rounded]));
-  const doc: SheetDoc = {
-    ...node.doc,
-    params: node.doc.params.map((p) => {
-      const r = at.get(p.name);
-      return r === undefined ? p : asInput(p, r);
-    }),
-  };
-  const again = solveNode({ ...node, doc });
-  return {
-    ...again,
-    solve: again.solve ?? { kind: 'settled' },
-    quantized,
-    ...(settled.ranges ? { ranges: settled.ranges } : {}),
-  };
+  return ranged({ ...final, solve: { kind: 'settled' } });
 }
 
 /**

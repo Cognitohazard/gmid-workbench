@@ -235,39 +235,30 @@ A sheet read from a file goes through the loader the app uses before anything el
 every level of a composed tree, and lists in `lost` every piece it could not carry over rather than
 dropping it unsaid.
 
-### Migrating a sheet written before the netlist
+### Updating a sheet written for an earlier format
 
-A sheet saved before the format carried wiring (no `formatVersion`) is still read, but a
-transistor in it is refused until the sheet names the wires it sits on, and a solved param with
-no range is refused until it states one. One command migrates a sheet and every sheet it includes
-by reference:
+The sheet format is still changing, and a sheet written for an earlier version is updated by its
+author: the list below says what each change asks for. A sheet saved before the format carried
+wiring (no `formatVersion`) is still read, but a transistor in it is refused until the sheet names
+the wires it sits on, and a solved param with no range is refused until it states one. Running it
+lists exactly what is missing, ahead of anything that follows from it.
 
-```bash
-npm run migrate -- design/top.json --blocks design/blocks
-```
-
-Every JSON file under a `--blocks` folder can be named by a `ref` — `blocks/bias` for
-`design/blocks/bias.json`, or `bias` where that name is unique. The command loads each file as the
-app does, resolves the references, drafts the wiring across the whole tree (see "The wiring
-proposal" in the sheet format), and writes format-version-2 copies under `design/migrated/` (or
-`--out <dir>`) at the same relative paths, so the copies still name each other by reference. The
-originals are never touched. Beside them, `top.migration.txt` lists what to confirm: each solved
-param that had no range (a voltage is given the span of the levels the sheet holds, to narrow;
-anything else is left for you to state), each voltage the sizing rests on with no class, every wire
-the draft could not place, and whatever validation still refuses — followed by the draft itself,
-each wire marked certain, inferred or unknown. The wiring is read, never fed back into the sizing,
-so a migrated sheet sizes as it did before.
-
-The same steps are core functions a script can call — `migrateSheet` for the whole tree, or
-`proposeWiring`, `formatWiringProposal` and `applyWiringProposal` for one document already in hand:
+The core drafts the wiring from the givens — a draft to correct, since the earlier format never
+said which wire a terminal sits on: only a diode connection is certain, and every other join is
+inferred from two terminals written at the same level. Resolve a sheet that includes others by
+reference first, so the draft covers its children:
 
 ```js
-import { migrateSheet } from '@gmid/mostab-core';
+import { applyWiringProposal, formatWiringProposal, proposeWiring, resolvedSheet } from '@gmid/mostab-core';
 
-const m = migrateSheet({ path: 'top', raw: topJson }, [{ path: 'blocks/bias', raw: biasJson }]);
-console.log(m.report); // what to confirm, then the draft
-for (const d of m.documents) save(d.path, d.doc); // the top, then each by-reference child
+const tree = resolvedSheet(oldSheet, refs).doc;
+const proposal = proposeWiring(tree);
+console.log(formatWiringProposal(proposal)); // each wire marked certain, inferred or unknown
+const copy = applyWiringProposal(tree, proposal); // format version 2; the input is untouched
 ```
+
+The copy holds every child inline; to keep a child in its own file, write each block's `doc` back
+to the file its `ref` names.
 
 ### Breaking changes for core callers
 

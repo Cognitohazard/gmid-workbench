@@ -26,7 +26,6 @@ import {
   type CheckKind,
   type CheckOp,
   type ParamClass,
-  type QuantizeRound,
   type SheetBlock,
   type SheetCheck,
   type SheetDoc,
@@ -180,19 +179,6 @@ export function sanitizeSheet(
         if (typeof pp.class === 'string' && PARAM_CLASSES.has(pp.class))
           out.class = pp.class as ParamClass;
         else dropField(pp.class !== undefined, `params[${i}].class`);
-        // Rounding of a solved value: carried as written, so validation names a bad one instead of
-        // the loader turning a rounded design back into an exact one unsaid.
-        const q = pp.quantize as { sigFigs?: unknown; round?: unknown } | undefined;
-        if (q && typeof q === 'object' && !Array.isArray(q) && typeof q.sigFigs === 'number')
-          out.quantize = {
-            sigFigs: q.sigFigs,
-            ...(typeof q.round === 'string' ? { round: q.round as QuantizeRound } : {}),
-          };
-        else dropField(pp.quantize !== undefined, `params[${i}].quantize`);
-        dropField(
-          !!q && typeof q === 'object' && q.round !== undefined && typeof q.round !== 'string',
-          `params[${i}].quantize.round`,
-        );
         // The axis-sign marker: dropping it would turn a sign the wiring check reads as the table's
         // axis direction back into an unknown product.
         Object.assign(out, carriedConvention(pp, `params[${i}].`, lost));

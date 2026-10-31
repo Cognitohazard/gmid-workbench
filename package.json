@@ -23,7 +23,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc",
-    "migrate": "vite-node scripts/migrate-sheet.ts --",
     "lint": "eslint src web/src web/e2e",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -39,7 +38,6 @@
     "prettier-plugin-svelte": "^4.1.1",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.62.1",
-    "vite-node": "^2.1.9",
     "vitest": "^2.1.8"
   }
 }
