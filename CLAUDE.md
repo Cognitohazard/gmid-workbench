@@ -47,19 +47,43 @@ Before declaring web work done, the bar is: core tests pass, typecheck, `npm run
 
 ## Architecture rules (load-bearing — do not violate)
 
-- **Scope rule.** In scope: anything that is a pointwise or family-wise function of the device lookup tables plus a few PDK constants, and the algebraic consequences of declared connectivity — a shared node, Kirchhoff's current law at a node, Kirchhoff's voltage law around a loop. Stating those laws and propagating what they determine is physics, not solving. Out of scope: solving the node set simultaneously. **Every unknown is found by a one-unknown search inside a range the author states — or, for an operating-point quantity the author gives no range, the range physics gives it: a node's voltage between the wires around it, a device's length over the lengths its table holds. Unknowns that depend on each other are settled only by repeating those searches a fixed number of times. Every outcome is one of: settled and verified; a named unknown has no solution in its range; the named unknowns did not settle. The engine never solves several unknowns at once from a starting guess, and never reports an unverified result.** The lookup-table substrate is the guardrail.
+- **Scope rule.** In scope: anything that is a pointwise or family-wise function of the device lookup tables plus a few PDK constants, and the algebraic consequences of declared connectivity — a shared node, Kirchhoff's current law at a node, Kirchhoff's voltage law around a loop. Stating those laws and propagating what they determine is physics, not solving. Out of scope: solving the node set simultaneously. A small-signal analysis at an operating point already found is one linear solve, with no iteration and no convergence question, and is in scope. **The sizing engine evaluates author-written expressions and checks author-written rules; it may propagate declared connectivity, but only in one bounded, non-iterative pass. Before it evaluates, it proves structurally that the sheet determines one design: every unknown determined by exactly one relation or found by one named search, no relation left over, and the searches ordered so that each reads only what is already found. A decision the designer has released is counted as set: a strategy, run outside the engine and only by request, gives it a trial value for every evaluation, so each evaluation is still one design and the engine never solves for it. A relation the engine cannot write out explicitly is closed by a one-dimensional bracketed inversion, never from a starting guess. A node's voltage is searched over its physical range, between the wires around it, and a sign test there is a proof: a root exists, or the design has none. A device's length is searched over the lengths its table holds, and a current, ratio or resistance over the range the designer states; finding no root there shows only that none lies in that range, and the outcome is undetermined. One unknown per inversion; two unknowns that read each other are found by one inversion inside the other's probes, and the result says so. Unknowns that read each other beyond such a pair are proved on the circuit with a declared simplification under which they no longer read each other, and the full circuit is then settled from that point by repeating their searches a fixed number of times; the result says what each statement is about, settled and verified or did not settle and why, and a repetition never proves that no design exists. Every verdict is one of three — feasible, infeasible (proved), undetermined (with the reason) — and no two share a label.** The lookup-table substrate is the guardrail.
 - **Operating point and scale.** A design is an operating point and a scale. Physics bounds the operating point (every voltage, current density, gm/ID and length), so the engine can find where to look for it; the scale (every current, width, gm, mirror ratio and resistance) is the designer's choice, so only the designer can say where to look for it.
+- **The designer's intuition guides the solver's mechanics.** Where the engine must simplify,
+  order or prove, it uses the moves an analog designer makes by hand, declared and reported:
+  prove on the circuit with a stated simplification (ideal mirrors, no channel-length
+  modulation) before settling the full one from there; decide a node and derive what follows
+  rather than solve both; search first where the designer expects the root. A move the designer
+  would not recognise is not a mechanism to add.
 - **Core is pure and DOM-free.** All numerics live in `src/`, reusable outside the UI. Bulk data is `Float64Array`. Functions are deterministic. The chart system is imperative and lives *outside* Svelte, behind the owned `ChartAdapter`.
 - **Store raw, derive everything.** Tables hold raw simulator outputs only; every figure of merit is derived through the expression engine. Each derived quantity has exactly one definition in `namespace.ts` — add there, don't hand-roll the formula elsewhere.
 - **Fall back, never silently.** When a table lacks a column a definition needs, the next-best
   definition is used and the result says so: a warning naming the quantity, the missing column
   and the form that was used, carried to the sizing report, the sheet result and the panel. A
   lesser form chosen without saying so is a defect, wherever it is.
+- **Withhold what is not determined.** When a sheet has a structural problem, everything the problem does not touch is evaluated and shown. Everything downstream of it is withheld, never shown at a stored or default value. The verdict is undetermined, with the problem and its fix named. The app and a script get the same result.
 - **QA surfaces warnings, never silent fixes.** Data trust is a core differentiator: gm/gds are derivatives, exquisitely sensitive to sweep quality, so bad inputs must be flagged, not quietly repaired. New checks go in `qa/validate()` and should not false-flag valid data (including signed PMOS).
 - **Importing loses nothing.** Unknown columns pass through as normalized (lower-cased) numeric quantity columns; unrecognized `# key: value` metadata scalars are preserved in `meta.extra` (strict-superset rule). The required columns are `vgs`, `id`, `gm`.
 - **SI units throughout.** Sign convention: `vsb = -vbs`. PMOS exports are accepted signed; the **value columns** (id/gm/gds/…) are canonicalized to magnitudes with polarity recorded, while the swept **axis** columns (e.g. a negative `vgs`) stay signed.
-- **Client-only, no network after load.** Characterization data is NDA-sensitive; the offline single-file build is a first-class release artifact. Never add a runtime network dependency. Data may be stored locally in the browser (IndexedDB/localStorage) so a reload restores the bench — but what is retained must stay visible and deletable in the UI, and nothing ever leaves the machine.
+- **Client-only, no network after load.** Characterization data is NDA-sensitive; the offline single-file build is a first-class release artifact. Never add a runtime network dependency. Data may be stored locally in the browser (IndexedDB/localStorage) so a reload restores the bench — but what is retained must stay visible and deletable in the UI, and nothing ever leaves the machine. The app itself sends nothing. The scripting interface does not restrict what a script or an agent reads; whoever runs it is responsible for where that data goes.
 - **medwatt `.npz` is converted out-of-browser only.** Its `.npz` is a pickled dict; the Python converter refuses to unpickle without `--trust-pickle` (arbitrary-code-execution risk). Keep that guard.
+
+## Library and test doctrine
+
+- **Library defaults answer to silicon.** A shipped sheet's defaults are set against the
+  open-PDK tables, not against the synthetic test device; a sheet that reads infeasible on
+  silicon is a valid result, not a defect to tune away.
+- **CI catches defects in the engine, not in sheets.** The goldens run on the synthetic device
+  and pin the engine's arithmetic; whether a library sheet closes on silicon is measured, not
+  enforced.
+- **A typed range on a solved unknown is a search range, not a requirement.** It is searched
+  first and selects the intended root among several; the search then widens to the range the
+  circuit allows, and a root found there is reported with the fact that no root lies inside the
+  search range. Requirements belong to checks (region declarations, saturation margins).
+
+## Priorities
+
+Every piece of work is one of six kinds, sorted by its effect on the person using the tool, not by the size of the change: (1) a critical issue that prevents normal use; (2) an important problem that reduces what the tool can do or how efficiently; (3) an important missing feature; (4) a good-to-have feature; (5) polishing; (6) a minor bug. A wrong number shown without a warning is never below kind 2. A refactor or rewrite has no kind of its own: it takes the kind of the most important item that needs it, names that item, and goes only as far as that item needs. Work on kinds 1 to 4. Do not work on kinds 5 and 6: list them in your final report so they are kept, not lost. A regression, something that worked before and no longer does, is fixed whatever its kind.
 
 ## Committed-text hygiene
 
@@ -85,8 +109,11 @@ The maintainer reads this project through a guided tour of its *decisions* — s
 Republish with the Artifact tool passing that address as `url` so the page keeps it; a
 publish without it mints a new URL and orphans the one the maintainer has open.
 
-Its layout is expected to change — it is a live document, not a template. What must not
-change:
+Its layout is expected to change — it is a live document, not a template. As of 2026-10-22 it
+has three tabs: the tour (the entries, in sequence), the calls, and the changelog (the state of
+the bench, the batch log, the rulings). Batch lines, gate chips and measured-state notes go on
+the changelog tab, never at the top of the tour; an anchor into any tab opens that tab. What
+must not change:
 
 - **Decisions, not code.** Each entry is a question a returning reader would not know to
   ask ("why is the dependency's kill-all function deliberately never called?"), answered
@@ -100,11 +127,13 @@ change:
   click would not need the page.
 - **A view, never a source.** When it disagrees with the code, the code is right.
 - **Monospace is machine-checkable fact; serif is judgement the maintainer may overrule.**
-- **`#calls` is their authority surface.** Every judgement call you make that they would
-  plausibly overrule gets a block there: the call, and the position currently in force,
-  so their silence is a real answer rather than a default nobody chose. Delete a block
-  when they rule on it — resolved decisions belong in a commit message or a plan doc.
-  Reference that section by its `#calls` anchor, never by ordinal.
+- **`#calls` is their authority surface.** Only calls about the design, vision and
+  direction of the app go there: the call, and the position currently in force, so their
+  silence is a real answer rather than a default nobody chose. Implementation calls are
+  yours to make — when in doubt, take the more proper, honest, best-practice, future-proof
+  option — and are recorded in a plan doc or the commit that implements them, never on the
+  page. Delete a block when they rule on it — resolved decisions belong in a commit message
+  or a plan doc. Reference that section by its `#calls` anchor, never by ordinal.
 
 **Maintain it at commit-batch time, not per commit** — after the cleanup pass and the
 test gate, before reporting done. Refresh when the batch changed a doctrine, a contract,

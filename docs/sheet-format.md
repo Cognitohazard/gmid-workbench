@@ -9,7 +9,8 @@ from, write intermediate equations, and declare pass/fail checks with margins.
 A sheet is evaluated, never *solved*. It reads the device lookup tables and a few physical
 constants, evaluates the expressions you wrote, and compares the results. There is no nodal
 solver — the engine never solves the node set simultaneously — and the only operating-point
-solving is the explicit, designer-named sizing from the givens. This document specifies the model
+solving is what the designer names: the sizing from the givens, and a one-unknown search for each
+param the sheet declares solved. This document specifies the model
 precisely enough to author a sheet by hand or generate one from code — see also [Scripting the
 core](../README.md#scripting-the-core).
 
@@ -1991,8 +1992,9 @@ silently repairs one.
    measures. Backstop: the wiring check reports that loop's residual.
 5. **Close a genuine loop explicitly, or do not close it at all.** `solveFor` is for a
    quantity defined in terms of the device's own answer; `designConstraint` is for a typed specification
-   an internal node must produce. Both state the range the answer must lie in, and the note says
-   why (see *Closing a bias loop* and *Entering from a spec*). Backstop: every solve ends in one
+   an internal node must produce. A range either states is searched first — a search
+   range that picks the intended root, not a requirement (see *The range a wire is searched in*) —
+   and the note says why (see *Closing a bias loop* and *Entering from a spec*). Backstop: every solve ends in one
    of three named outcomes — settled and verified, no solution in its range, did not settle — and
    only the first is ever reported as a sized design.
 6. **A claimed operating range is a claim to check.** Declare `operatingRange` so both ends are
