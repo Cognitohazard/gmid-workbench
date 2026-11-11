@@ -217,20 +217,86 @@ const refs = buildSheetRefIndex([{ path: 'blocks/cs-load', doc: loadSheet }]);
 runSheet(sheet, table, (id) => byKey.get(id), refs);
 ```
 
-A sheet saved before the format carried wiring (no `formatVersion`) is still read, but a
-transistor in it is refused until the sheet names the wires it sits on. The core drafts that
-wiring from the givens; the author reads the draft, corrects what it marks as inferred or
-unknown, and imports the copy:
+To vary a param of a composed sheet — a child's included — set it by its path with
+`withOverrides`, which writes a child's value as an override on the block that composes it, so
+the child's own file is never rewritten:
 
 ```js
-import { proposeWiring, applyWiringProposal, formatWiringProposal } from '@gmid/mostab-core';
-import { writeFileSync } from 'node:fs';
+import { withOverrides } from '@gmid/mostab-core';
 
-const proposal = proposeWiring(oldSheet);
-console.log(formatWiringProposal(proposal)); // each wire marked certain, inferred or unknown
-const migrated = applyWiringProposal(oldSheet, proposal); // a format-version-2 copy; oldSheet is untouched
-writeFileSync('sheet.v2.json', JSON.stringify(migrated, null, 2));
+for (const L of [2e-6, 4e-6, 6e-6]) {
+  const res = runSheet(withOverrides(sheet, { 'bias.L_MB5': L }, refs), table, resolve, refs);
+  console.log(L, res.feasible);
+}
 ```
+
+A sheet read from a file goes through the loader the app uses before anything else reads it:
+`sanitizeSheet(JSON.parse(text), 0, lost)` brings earlier key spellings up to the current ones at
+every level of a composed tree, and lists in `lost` every piece it could not carry over rather than
+dropping it unsaid.
+
+### Updating a sheet written for an earlier format
+
+The sheet format is still changing, and a sheet written for an earlier version is updated by its
+author: the list below says what each change asks for. A sheet saved before the format carried
+wiring (no `formatVersion`) is still read, but a transistor in it is refused until the sheet names
+the wires it sits on, and a solved param with no range is refused until it states one. Running it
+lists exactly what is missing, ahead of anything that follows from it.
+
+The core drafts the wiring from the givens — a draft to correct, since the earlier format never
+said which wire a terminal sits on: only a diode connection is certain, and every other join is
+inferred from two terminals written at the same level. Resolve a sheet that includes others by
+reference first, so the draft covers its children:
+
+```js
+import { applyWiringProposal, formatWiringProposal, proposeWiring, resolvedSheet } from '@gmid/mostab-core';
+
+const tree = resolvedSheet(oldSheet, refs).doc;
+const proposal = proposeWiring(tree);
+console.log(formatWiringProposal(proposal)); // each wire marked certain, inferred or unknown
+const copy = applyWiringProposal(tree, proposal); // format version 2; the input is untouched
+```
+
+The copy holds every child inline; to keep a child in its own file, write each block's `doc` back
+to the file its `ref` names.
+
+### Breaking changes for core callers
+
+Since the sheet format reference of October 11 (38029f9), a script that builds or runs sheets
+needs to know:
+
+- **A solved param is searched in a range.** Every `solveFor`, `designConstraint` and `hold` param
+  is searched between `min` and `max`; the stored value is never read as a starting point. A node's
+  voltage or a device's length may leave them out and is searched in the range its wiring or its
+  table gives it; any other param — a current, a ratio — without a range is refused, and all such
+  params on a sheet are named in one message (`solve.unknowns` lists them).
+- **A sheet names its wiring.** Format version 2 (`"formatVersion": 2`) carries `nodes`, `levels`,
+  `elements` and `ports`. A sized device names the wires it sits on, or the sheet declares
+  `"nodes": "none"`; a sheet in the earlier format with a sized device is refused. A block's
+  earlier gate `wiring` is read by no format.
+- **A parent of a wired child states wiring too.** A sheet that composes a child stating its own
+  wiring maps every port the child declares through the block's `ports` (an empty map for none).
+- **A solved wire is searched where its wiring allows.** The author's range first, then the range
+  the wiring puts the wire in; a solved wire with no crossing anywhere there makes a range end
+  `does-not-comply`, not `no-answer`.
+- **A held design keeps a device's gate only when the sheet says so.** A device given a gate voltage
+  and a current and no width is held at its width and current unless a `hold` balances its current;
+  validation warns (`sheet-held-current`) where nothing says which, except for a diode connection.
+- **Library sheets changed shape.** Bias references and cascode bias branches are drawn as child
+  sheets, and `provides` nothing read were dropped: a sheet that includes a library sheet by
+  reference and reads one of its outputs should check the name still exists.
+- **Table columns reach sheets.** A column the namespace does not name is read by its name; one
+  that collides with a name the sheet uses is read as `table__<column>`, with a warning.
+- **Derived figures moved.** Body effect counts in the thermal-noise floor, and cascode output
+  resistance, margins, noise and capacitance formulas were corrected against simulation. Sizing and
+  operating points are unchanged; figures derived from them may differ.
+- **A block whose inputs failed is not evaluated.** When a block's override does not resolve, the
+  block reports no sizing and no checks instead of a design sized on its own defaults. A finding
+  that follows from a block whose outputs were withheld carries that block's path as `cause`, and a
+  `sheet-follow-on` info line leads the list. A finding that validation and evaluation state in the
+  same words is reported once.
+- **The loader is in the core.** `sanitizeSheet` moved from the web app to the core; a check with
+  no id is named `check-<n>` by default.
 
 See [docs/sheet-format.md](docs/sheet-format.md) for the full design-sheet model.
 
@@ -250,9 +316,13 @@ telemetry. Your tables never leave the browser. The single-file offline build ex
 precisely so the tool can run on air-gapped machines.
 
 Loaded tables are kept locally in the browser (IndexedDB) so a reload restores your
-bench. What is retained is always visible in the devices strip; the × on a chip
-deletes that table's stored copy and **clear all** wipes everything. On a shared
-machine, clear before you walk away.
+bench. To use a table for this session only, untick **keep after reload** beside the
+load button before importing (or make that the default under ⚙): the table is held in
+memory, never written to browser storage, and gone after a reload — and a table's
+chip switches it either way later. What is retained is always visible in the devices
+strip: each chip says whether it is stored, the **stored** list gives every stored
+table's size and import date, the × on a chip deletes that table's stored copy and
+**clear all** wipes everything. On a shared machine, clear before you walk away.
 
 ## License
 

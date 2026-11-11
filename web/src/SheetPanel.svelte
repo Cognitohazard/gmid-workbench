@@ -49,6 +49,7 @@
     type SheetCheck,
     type SheetBlock,
     type SheetSweep2,
+    type SweepWindow,
     type SheetSensitivity,
     type SheetBlockReport,
     type RangeEndReport,
@@ -243,6 +244,10 @@
     const byChild = new Map<string, { count: number; first: string }>();
     const rest: string[] = [];
     for (const w of ws) {
+      // A finding the core traces to a block whose outputs were withheld (its `cause`) is not
+      // listed: the core's own line (`sheet-follow-on`, below) counts them under the blocks whose
+      // findings, listed here, are the ones to fix.
+      if (w.cause !== undefined) continue;
       // The core reports the undefined name structurally; a child-provide symbol
       // (`ld__gm`) groups under its child prefix.
       const sep = w.rule === 'sheet-undeclared' && w.symbol ? w.symbol.indexOf(PROVIDE_SEP) : -1;
@@ -258,7 +263,8 @@
         ? `block "${child}" resolves nothing yet — ${e.count} dependent expressions read n/a (assign its device and check its params)`
         : e.first,
     );
-    return [...rest, ...collapsed];
+    const followOn = allWarn.filter((w) => w.rule === 'sheet-follow-on').map((w) => w.message);
+    return [...rest, ...collapsed, ...followOn];
   });
 
   // The range-end notes are INFO, not warnings: a mirrored current that is different at a
@@ -988,19 +994,40 @@
 
   // The contiguous span of the swept param where the design is feasible (the feasibility window)
   // — or, on a held sweep, where the held design complies at its own operating point.
+  // The core pins each window's edges between samples and names the checks that close them
+  // (SheetSweep.windows), which the panel's sweeps always ask for.
   const feasWindow = $derived.by(() => {
     if (!swept || swept.feasible.length === 0) return null;
-    const idx = swept.feasible.flatMap((f, i) => (f ? [i] : []));
-    if (idx.length === 0) return { none: true as const };
-    const lo = idx[0];
-    const hi = idx[idx.length - 1];
-    return {
-      none: false as const,
-      lo: swept.x[lo],
-      hi: swept.x[hi],
-      gap: idx.length !== hi - lo + 1,
-    };
+    // A sweep that carries no pinned windows still says where its samples pass, to the spacing.
+    const windows = swept.windows ?? sampledWindows(swept.x, swept.feasible);
+    return windows.length ? { none: false as const, windows } : { none: true as const };
   });
+  /** Each run of passing samples as a window, its edges at the samples themselves. */
+  const sampledWindows = (x: readonly number[], ok: readonly boolean[]): SweepWindow[] => {
+    const out: SweepWindow[] = [];
+    for (let i = 0; i < ok.length; i++) {
+      if (!ok[i]) continue;
+      let j = i;
+      while (j + 1 < ok.length && ok[j + 1]) j++;
+      out.push({ lo: x[i], hi: x[j] });
+      i = j;
+    }
+    return out;
+  };
+  /** One pinned window as the line under the chart reads it: its span, and what fails just past
+   *  each edge that lies inside the range. */
+  const windowText = (w: SweepWindow): string => {
+    const past = (side: string, ids: readonly string[] | undefined): string[] =>
+      ids === undefined
+        ? []
+        : [
+            ids.length
+              ? `${side} it ${ids.join(', ')} ${ids.length > 1 ? 'fail' : 'fails'}`
+              : `${side} it the design does not stand`,
+          ];
+    const closers = [...past('below', w.below), ...past('above', w.above)];
+    return `${fmt(w.lo)}…${fmt(w.hi)}${sweptUnit}${closers.length ? ` (${closers.join('; ')})` : ''}`;
+  };
 
   // The embedded uPlot chart, owned outside Svelte via the shared host: destroyed on
   // leaving sweep mode, refit in place on data edits, restyled on a theme/font change.
@@ -2142,23 +2169,19 @@
         {/each}
       </div>
       {#if feasWindow}
-        <p class="feas">
+        <p class="feas" data-sweep-window>
           {#if swept.design === 'held'}
             {#if feasWindow.none}
               the held design complies at {at} nowhere in this range of {active}
             {:else}
-              the held design complies at {at} for {active} ≈ {fmt(feasWindow.lo)}…{fmt(
-                feasWindow.hi,
-              )}{sweptUnit}{#if feasWindow.gap}
-                (non-contiguous){/if}
+              the held design complies at {at} for {active}
+              {feasWindow.windows.map(windowText).join(' · ')}
             {/if}
           {:else if feasWindow.none}
             no feasible {active} in this range
           {:else}
-            feasible {active} ≈ {fmt(feasWindow.lo)}…{fmt(
-              feasWindow.hi,
-            )}{sweptUnit}{#if feasWindow.gap}
-              (non-contiguous){/if}
+            feasible {active}
+            {feasWindow.windows.map(windowText).join(' · ')}
           {/if}
         </p>
       {/if}

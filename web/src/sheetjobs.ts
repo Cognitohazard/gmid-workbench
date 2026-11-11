@@ -107,9 +107,13 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
           base: job.base,
           points: job.points,
           settings,
+          windows: true,
         });
       const resolve = projectingResolver(deviceOf, job.at);
-      const sweep = sweepSheet(job.doc, job.param, t, job.points, resolve, undefined, { settings });
+      const sweep = sweepSheet(job.doc, job.param, t, job.points, resolve, undefined, {
+        settings,
+        windows: true,
+      });
       return { ...sweep, key: job.at, base: job.at, design: 'sized' };
     }
     case 'sweep2': {

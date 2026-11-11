@@ -80,18 +80,20 @@ interface Running extends Pending {
   superseded: boolean;
 }
 
-/** A table as the worker can receive it. The bench keeps its tables in Svelte state, whose
- *  proxies cannot cross to a worker; the bulk columns inside are never proxied, so this copies
- *  only the small parts and hands the typed arrays over as they are. Every field but the grid is
- *  copied as it is, so a field a table gains reaches the worker as it reaches the page. Without
- *  `columns`, the table's outline: the same with no quantity columns (see JobRequest.outlines). */
-function plainTable(t: DeviceTable, columns = true): DeviceTable {
+/** A table as the worker (or anything else that structured-clones it, such as IndexedDB) can
+ *  receive it. The bench keeps its tables in Svelte state, whose proxies cannot be cloned; the
+ *  bulk columns inside are never proxied, so this copies only the small parts and hands the typed
+ *  arrays over as they are. Every field but the grid is copied as it is, so a field a table gains
+ *  reaches the worker as it reaches the page. Without `columns`, the table's outline: the same
+ *  with no quantity columns (see JobRequest.outlines). */
+export function plainTable(t: DeviceTable, columns = true): DeviceTable {
   const { grid, ...rest } = t;
   return {
     ...($state.snapshot(rest) as Omit<DeviceTable, 'grid'>),
     grid: {
       axes: grid.axes.map((a) => ({ name: a.name, values: a.values })),
       shape: [...grid.shape],
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity -- a copy to be cloned, never state
       quantities: columns ? new Map(grid.quantities) : new Map(),
     },
   };

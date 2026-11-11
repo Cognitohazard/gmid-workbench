@@ -95,7 +95,7 @@ function parseUserSheets(raw: unknown, dropped: DroppedEntry[]): UserSheet[] {
       });
     rawByName.set(o.name, e);
     const lost: string[] = [];
-    const doc = sanitizeSheet(o.doc, 0, lost);
+    const doc = sanitizeSheet(o.doc, lost);
     // Keep whatever is structurally a sheet, valid or not: validity is reported where the sheet
     // is opened, and evaluation refuses an invalid one. A document in a format this app does not
     // read is kept whole and refused by its own reason wherever it is opened, so it is no loss.
@@ -171,7 +171,7 @@ export function importSheetJSON(filename: string, text: string): string | null {
   const unread = unreadFormatIn(parsed);
   if (unread) return `${unread} — nothing was imported`;
   const lost: string[] = [];
-  const doc = sanitizeSheet(parsed, 0, lost);
+  const doc = sanitizeSheet(parsed, lost);
   // A document refused outright still says why when the loader knows — a key written in two
   // spellings, most likely.
   if (!doc) return lost.length ? `not a sheet document: ${lost[0]}` : 'not a sheet document';

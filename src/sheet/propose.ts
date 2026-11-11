@@ -13,7 +13,7 @@
 // zero DOM.
 
 import { levelEligibility, spelled } from './validate';
-import { currentInto, placementsOf, unionFind } from './nodes';
+import { currentInto, flattened, placementsOf, unionFind } from './nodes';
 import {
   DEVICE_NAMES,
   EARLIER_BLOCK_KEYS,
@@ -83,11 +83,24 @@ export interface PortDraft {
   why: string;
 }
 
+/** One drafted entry of a block's port map: in the sheet at `at`, block `block`'s port `port` is
+ *  this sheet's wire `wire`. */
+export interface PortMapDraft {
+  at: string;
+  block: string;
+  port: string;
+  wire: string;
+  mark: WireMark;
+  why: string;
+}
+
 export interface WiringProposal {
   title: string;
   devices: DeviceDraft[];
   levels: LevelDraft[];
   ports: PortDraft[];
+  /** How each sub-sheet that composes devices of its own connects to the sheet above it. */
+  portMaps: PortMapDraft[];
   /** Params that multiply a whole bias axis of a p device and look like the table's axis direction:
    *  candidates for `convention: "axis-sign"`, by block path. */
   selectors: { at: string; param: string }[];
@@ -103,6 +116,27 @@ interface Level {
   why: string;
   /** A level derived for matching only (a gate one vgs from its source): never names a wire. */
   derived?: boolean;
+  /** Its text is in a child's names, not this sheet's: it matches by its key, but names, holds and
+   *  places nothing here. */
+  foreign?: boolean;
+}
+
+/** A wire a sub-sheet drafted, as the sheet above it reads it to connect it: its name there, the
+ *  levels it was placed at (in the sub-sheet's own names), and whether it is already a port of the
+ *  sub-sheet. */
+interface ChildWire {
+  wire: string;
+  levels: Level[];
+  ported: boolean;
+}
+
+/** One sub-sheet wire offered to the sheet above it: the slot it is drafted as there (`block.@wire`),
+ *  the block, and the sub-sheet's path. */
+interface PortSlot {
+  slot: Slot;
+  block: SheetBlock;
+  child: string;
+  cw: ChildWire;
 }
 
 /** One device the sheet being drafted wires: its own, or a child that sizes one and composes none. */
@@ -146,6 +180,8 @@ interface Draft {
   why: Map<Slot, string[]>;
   marks: Map<Slot, WireMark[]>;
   levels: Map<Slot, Level[]>;
+  /** The wires of each sub-sheet below this one that composes devices of its own. */
+  ports: PortSlot[];
 }
 
 const note = (s: Draft, x: Slot, mark: WireMark, reason: string): void => {
@@ -205,10 +241,21 @@ function at(
   block?: SheetBlock,
   derived = false,
 ): void {
-  const key = canon(formOf(s, text, block));
+  // A bare child param this sheet overrides reads as the override, in this sheet's own names — a
+  // part a split took out of a child's expression is still the child's name until it is.
+  const over = block ? blockOverride(block, text.trim()) : undefined;
+  const inSheet = over !== undefined ? undefined : block;
+  const t = (over ?? text).trim();
+  const key = canon(formOf(s, t, inSheet));
   s.levels.set(x, [
     ...(s.levels.get(x) ?? []),
-    { key, text: text.trim(), why: reason, ...(derived ? { derived } : {}) },
+    {
+      key,
+      text: t,
+      why: reason,
+      ...(derived ? { derived } : {}),
+      ...(inSheet ? { foreign: true } : {}),
+    },
   ]);
   if (!derived) note(s, x, 'inferred', reason);
 }
@@ -359,6 +406,22 @@ function draftFromHolds(s: Draft): void {
   }
 }
 
+/** Each wire a sub-sheet drafted, placed in this sheet at the levels it was placed at there: a level
+ *  written as a param this sheet overrides reads as the override, so it can join a terminal of this
+ *  sheet written the same way; any other reads in the sub-sheet's names, and only matches. */
+function draftFromChildren(s: Draft): void {
+  for (const ps of s.ports)
+    for (const l of ps.cw.levels)
+      at(
+        s,
+        ps.slot,
+        l.text,
+        `in "${ps.block.name}", ${l.why}`,
+        ps.block,
+        blockOverride(ps.block, l.text.trim()) === undefined,
+      );
+}
+
 /** Two terminals written at the same level are drafted onto one wire; then, once, a gate is drafted
  *  one gate-source voltage from its source, which joins a gate to a drain written that way. */
 function joinByLevel(s: Draft): void {
@@ -410,9 +473,14 @@ interface Wires {
   classLevels: (members: Slot[]) => Level[];
 }
 
-/** Name each wire: ground, the param its level is written as, or a fresh name. */
+/** The terminals of the devices a sheet wires, as slots. */
+const deviceSlots = (devices: readonly DraftDevice[]): Slot[] =>
+  devices.flatMap((d) => TERMINALS.map((t) => `${d.name}.${t}`));
+
+/** Name each wire, the sub-sheet wires this sheet connects (its port slots) among them: ground, the
+ *  param its level is written as, or a fresh name. */
 function nameWires(s: Draft): Wires {
-  const slots = s.devices.flatMap((d) => TERMINALS.map((t) => `${d.name}.${t}`));
+  const slots = [...deviceSlots(s.devices), ...s.ports.map((p) => p.slot)];
   const classes = new Map<Slot, Slot[]>();
   for (const x of slots) classes.set(s.uf.find(x), [...(classes.get(s.uf.find(x)) ?? []), x]);
   const wire = new Map<Slot, string>();
@@ -426,11 +494,11 @@ function nameWires(s: Draft): Wires {
     let name: string;
     if (distinct.includes('0')) name = GROUND;
     else {
-      const param = ls.find((l) => isBareParam(l.text, s.doc));
+      const param = ls.find((l) => !l.foreign && isBareParam(l.text, s.doc));
       const pick = members.find((x) => !x.startsWith('givens.')) ?? members[0];
       name = param
         ? wireFromParam(param.text.trim())
-        : pick.replace('givens.', 'own_').replace('.', '_');
+        : pick.replace('givens.', 'own_').replace('.@', '_').replace('.', '_');
       for (let k = 2; used.has(name); k++) name = `${name.replace(/_\d+$/, '')}_${k}`;
       used.add(name);
     }
@@ -485,7 +553,7 @@ function heldLevelDrafts(s: Draft, w: Wires): void {
     for (const l of w.classLevels(members)) {
       const text = l.text.trim();
       const isHold = s.doc.params.some((q) => holds(q) && spelled(q.hold) === spelled(text));
-      if (!isBareParam(text, s.doc) && !isHold) continue;
+      if (l.foreign || (!isBareParam(text, s.doc) && !isHold)) continue;
       if (s.out.levels.some((x) => x.at === s.level && x.wire === name)) break;
       const verdict = levelEligibility(s.top, s.level, text);
       if (verdict.kind === 'held') {
@@ -530,18 +598,18 @@ function heldLevelDrafts(s: Draft, w: Wires): void {
  * A wire the draft leaves with one terminal is a misspelt name to validation unless it is held or a
  * port, so each is made one: held at the level the draft placed it at — a number, or the drain or
  * body voltage that placed it — where that level may be held, and a port otherwise, the wire a
- * parent or the application connects. Ports are drafted for the top sheet only; on a sheet below
- * it, a port would need its parent's port map as well, so the wire is left to the author with a
- * note. Each choice is noted with its reason.
+ * parent or the application connects. Below the top, the sheet that composes this one maps the
+ * port to a wire of its own (see portMapDrafts). Each choice is noted with its reason.
  */
 function singleTerminalDrafts(s: Draft, w: Wires): void {
   for (const members of w.ordered) {
     const name = w.wire.get(members[0]) as string;
     if (name === GROUND || members.length > 1) continue;
     if (s.out.levels.some((x) => x.at === s.level && x.wire === name)) continue;
-    const level = w.classLevels(members)[0];
-    const terminal = members[0].replace('givens.', 'own.');
-    if (level) {
+    const levels = w.classLevels(members);
+    const level = levels.find((l) => !l.foreign) ?? levels[0];
+    const terminal = members[0].replace('givens.', 'own.').replace('.@', ' wire ');
+    if (level && !level.foreign) {
       const verdict = levelEligibility(s.top, s.level, level.text);
       if (verdict.kind === 'held') {
         s.out.levels.push({
@@ -562,9 +630,14 @@ function singleTerminalDrafts(s: Draft, w: Wires): void {
       ? `it sits at ${level.text}, which cannot be held`
       : 'nothing on the sheet places its level';
     if (s.level !== '') {
+      s.out.ports.push({
+        at: s.level,
+        wire: name,
+        why: `${terminal} is the only terminal on it, and ${why}`,
+      });
       s.out.notes.push(
-        `${s.where}wire "${name}" has one terminal (${terminal}) and ${why} — make it a port of ` +
-          `this sheet, mapped in its parent block's ports, or hold it`,
+        `${s.where}wire "${name}" has one terminal (${terminal}) and ${why}: drafted as a port of ` +
+          `this sheet, which the sheet composing it maps to a wire of its own`,
       );
       continue;
     }
@@ -580,18 +653,76 @@ function singleTerminalDrafts(s: Draft, w: Wires): void {
   }
 }
 
+/**
+ * How each sub-sheet wire this sheet connects maps to a wire of this sheet: an entry of the block's
+ * port map, and the port the sub-sheet declares for it. A wire joined to something here is
+ * inferred; one joined to nothing is a new wire of this sheet, to confirm or replace. Where this
+ * sheet holds the wire, the sub-sheet's own hold on it is dropped, so a level is stated once.
+ */
+function portMapDrafts(s: Draft, w: Wires): void {
+  for (const ps of s.ports) {
+    const wire = w.wire.get(ps.slot) as string;
+    const members = w.classes.get(s.uf.find(ps.slot)) as Slot[];
+    const joined = members.length > 1;
+    s.out.portMaps.push({
+      at: s.level,
+      block: ps.block.name,
+      port: ps.cw.wire,
+      wire,
+      mark: joined ? 'inferred' : 'unknown',
+      why: joined
+        ? [...new Set(s.why.get(ps.slot) ?? [])].join('; ')
+        : 'nothing on this sheet joins it: a new wire, to confirm or replace',
+    });
+    if (!s.out.ports.some((p) => p.at === ps.child && p.wire === ps.cw.wire))
+      s.out.ports.push({
+        at: ps.child,
+        wire: ps.cw.wire,
+        why: `it is the wire "${wire}" of the sheet that composes it`,
+      });
+    const held = s.out.levels.some((l) => l.at === s.level && l.wire === wire);
+    if (held && s.out.levels.some((l) => l.at === ps.child && l.wire === ps.cw.wire)) {
+      s.out.levels = s.out.levels.filter((l) => !(l.at === ps.child && l.wire === ps.cw.wire));
+      s.out.notes.push(
+        `in "${ps.child}": wire "${ps.cw.wire}" is not held there after all — it is the wire ` +
+          `"${wire}" ${s.level ? `of "${s.level}"` : 'of the top sheet'}, which holds it`,
+      );
+    }
+  }
+}
+
 /** Draft the wiring of the sheet at `level` (and of every sub-sheet below it that composes devices
- *  of its own). */
-function proposeLevel(top: SheetDoc, doc: SheetDoc, level: string, out: WiringProposal): void {
+ *  of its own, first, so this sheet can connect their wires). `children` collects each drafted
+ *  sheet's wires, by path, for the sheet above it. */
+function proposeLevel(
+  top: SheetDoc,
+  doc: SheetDoc,
+  level: string,
+  out: WiringProposal,
+  children: Map<string, ChildWire[]> = new Map(),
+): void {
   const where = level === '' ? '' : `in "${level}": `;
   const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
   // The devices this sheet wires: its own, and each child that sizes a device and composes none.
   const devices: DraftDevice[] = [];
+  const composites: SheetBlock[] = [];
   if (doc.givens) devices.push({ name: 'givens', givens: doc.givens, polarity: doc.polarity });
   for (const b of blocks) {
-    if (!b.doc) continue;
-    if (b.doc.blocks?.length) proposeLevel(top, b.doc, childPath(level, b.name), out);
-    else if (b.doc.givens && placementsOf(b.doc.nodes))
+    if (!b.doc) {
+      // A child by reference is a document this one does not hold: nothing in it can be drafted
+      // until the sheet is resolved against the library it was written for.
+      if (typeof b.ref === 'string')
+        out.notes.push(
+          `${where}block "${b.name}" is included by reference ("${b.ref}") and was not resolved, ` +
+            `so nothing in it is drafted — resolve the sheet against its library first ` +
+            `(resolvedSheet(doc, refs).doc)`,
+        );
+      continue;
+    }
+    if (b.doc.blocks?.length) {
+      proposeLevel(top, b.doc, childPath(level, b.name), out, children);
+      composites.push(b);
+    } else if (b.doc.givens && placementsOf(b.doc.nodes))
       out.notes.push(
         `${where}block "${b.name}" wires its own device, so it is connected through its ports, not ` +
           `drafted here`,
@@ -599,7 +730,14 @@ function proposeLevel(top: SheetDoc, doc: SheetDoc, level: string, out: WiringPr
     else if (b.doc.givens)
       devices.push({ name: b.name, givens: b.doc.givens, polarity: b.doc.polarity, block: b });
   }
-  if (!devices.length) return;
+  // The wires each sub-sheet drafted, offered to this sheet to connect.
+  const offered: PortSlot[] = composites.flatMap((b) => {
+    const child = childPath(level, b.name);
+    return (children.get(child) ?? [])
+      .filter((cw) => cw.wire !== GROUND)
+      .map((cw) => ({ slot: `${b.name}.@${cw.wire}`, block: b, child, cw }));
+  });
+  if (!devices.length && !offered.length) return;
   const s: Draft = {
     top,
     doc,
@@ -612,14 +750,34 @@ function proposeLevel(top: SheetDoc, doc: SheetDoc, level: string, out: WiringPr
     why: new Map(),
     marks: new Map(),
     levels: new Map(),
+    ports: offered,
   };
   draftFromGivens(s);
   draftFromHolds(s);
+  draftFromChildren(s);
   joinByLevel(s);
+  // A sub-sheet wire is connected here where it joins something of this sheet, or where the
+  // sub-sheet already made it a port; any other stays inside the sub-sheet.
+  const slots = [...deviceSlots(devices), ...offered.map((p) => p.slot)];
+  s.ports = offered.filter(
+    (ps) => ps.cw.ported || slots.some((x) => x !== ps.slot && s.uf.find(x) === s.uf.find(ps.slot)),
+  );
   const w = nameWires(s);
   deviceDrafts(s, w);
   heldLevelDrafts(s, w);
   singleTerminalDrafts(s, w);
+  portMapDrafts(s, w);
+  children.set(
+    level,
+    w.ordered.map((members) => {
+      const wire = w.wire.get(members[0]) as string;
+      return {
+        wire,
+        levels: w.classLevels(members).filter((l) => !l.foreign),
+        ported: out.ports.some((p) => p.at === level && p.wire === wire),
+      };
+    }),
+  );
 }
 
 type Parsed = NonNullable<ReturnType<typeof parseExpr>>;
@@ -680,6 +838,7 @@ export function proposeWiring(doc: SheetDoc): WiringProposal {
     devices: [],
     levels: [],
     ports: [],
+    portMaps: [],
     selectors: [],
     notes: [],
   };
@@ -692,6 +851,12 @@ export function proposeWiring(doc: SheetDoc): WiringProposal {
   if (unknown.length)
     out.notes.push(
       `terminals no declaration places, given new wires to name: ${unknown.join(', ')}`,
+    );
+  const unjoined = out.portMaps.filter((m) => m.mark === 'unknown');
+  if (unjoined.length)
+    out.notes.push(
+      `sub-sheet ports joined to nothing above them, each given a new wire to name: ` +
+        unjoined.map((m) => `${childPath(m.at, m.block)}.${m.port}`).join(', '),
     );
   for (const s of out.selectors)
     out.notes.push(
@@ -720,9 +885,11 @@ function docAt(doc: SheetDoc, at: string): SheetDoc | undefined {
 
 /**
  * A format-version-2 copy of `doc` carrying the proposal: each device's nodes (a sheet's own on
- * its `nodes`, a child's on its block), the held levels, the ports and the selector marks, with no
- * block keeping the earlier gate `wiring` no format reads. What an author confirms; the input is
- * untouched.
+ * its `nodes`, a child's on its block), the held levels, the ports, each block's port map and the
+ * selector marks, with no block keeping the earlier gate `wiring` no format reads. A sheet that
+ * composes a child stating wiring states wiring itself and maps the child's ports, so every sheet
+ * above one the draft wired is brought to format version 2 too, its block given a port map — an
+ * empty one where the child declares no ports. What an author confirms; the input is untouched.
  */
 export function applyWiringProposal(doc: SheetDoc, proposal: WiringProposal): SheetDoc {
   const out = cloneDoc(doc);
@@ -754,10 +921,27 @@ export function applyWiringProposal(doc: SheetDoc, proposal: WiringProposal): Sh
     const h = host(p.at);
     if (h && !(h.ports ?? []).includes(p.wire)) h.ports = [...(h.ports ?? []), p.wire];
   }
+  for (const m of proposal.portMaps ?? []) {
+    const block = host(m.at)?.blocks?.find((b) => b.name === m.block);
+    if (block) block.ports = { ...(block.ports ?? {}), [m.port]: m.wire };
+  }
   for (const s of proposal.selectors) {
     const p = host(s.at)?.params.find((q) => q.name === s.param);
     if (p && (p.value === 1 || p.value === -1)) p.convention = 'axis-sign';
   }
+  // Upward from the leaves: a block whose child now states wiring, and that names no device wires of
+  // its own, connects the child through a port map.
+  const connect = (d: SheetDoc): void => {
+    for (const b of Array.isArray(d.blocks) ? d.blocks : []) {
+      if (!b.doc) continue;
+      connect(b.doc);
+      if (b.nodes === undefined && flattened(b.doc)) {
+        b.ports ??= {};
+        d.formatVersion = FORMAT_VERSION;
+      }
+    }
+  };
+  connect(out);
   const drop = (d: SheetDoc): void => {
     for (const b of Array.isArray(d.blocks) ? d.blocks : []) {
       for (const k of EARLIER_BLOCK_KEYS) delete (b as unknown as Record<string, unknown>)[k];
@@ -785,6 +969,12 @@ export function formatWiringProposal(p: WiringProposal): string {
   lines.push('  ports:');
   if (!(p.ports ?? []).length) lines.push('      (none)');
   for (const q of p.ports ?? []) lines.push(`      ${q.at ? `${q.at}: ` : ''}${q.wire} (${q.why})`);
+  lines.push('  port maps:');
+  if (!(p.portMaps ?? []).length) lines.push('      (none)');
+  for (const m of p.portMaps ?? [])
+    lines.push(
+      `      ${m.at ? `${m.at}: ` : ''}block "${m.block}" port ${m.port} = ${m.wire} (${m.mark}: ${m.why})`,
+    );
   lines.push('  notes:');
   for (const n of p.notes) lines.push(`      - ${n}`);
   return lines.join('\n');

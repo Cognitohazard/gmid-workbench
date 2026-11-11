@@ -256,15 +256,62 @@ export function heldOnGate(doc: SheetDoc, parentBalances: boolean): boolean {
  * frozen at its authored value with no warning, and the sheet reported feasible on a design never
  * solved.
  */
-export function constraintProblem(params: readonly SheetVar[]): string | null {
-  return constraintIssue(params)?.message ?? null;
+export function constraintProblem(params: readonly SheetVar[], open?: OpenRange): string | null {
+  return constraintIssue(params, open)?.message ?? null;
 }
 
-/** constraintProblem with the param it is about — what a failed solve names as its unknown. */
+/**
+ * Whether a solved or held param that states no `min`/`max` may go without them: the engine reads
+ * its range from what the sheet is — a node's voltage from the wiring, a device's length from the
+ * table (see RangeSource) — or, where it cannot, why not. A param this does not clear needs a range
+ * of its author's. The default clears none.
+ */
+export type OpenRange = (p: SheetVar) => { ok: true } | { ok: false; why?: string };
+
+/** Items joined for a sentence: `a`, `a and b`, `a, b and c`. */
+export const andList = (q: readonly string[]): string =>
+  q.length > 1 ? `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}` : (q[0] ?? '');
+
+/** The quoted names of `ps`, joined for a message: `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
+const quotedNames = (ps: readonly SheetVar[]): string => andList(ps.map((p) => `"${p.name}"`));
+
+/** constraintProblem with the params it is about — what a failed solve names as its unknowns. A
+ *  problem that every one of several params shares is said once, naming them all, so an author
+ *  fixes the document in one pass rather than one param per run. */
 export function constraintIssue(
   params: readonly SheetVar[],
-): { param: string; message: string } | null {
-  const issue = (p: SheetVar, message: string) => ({ param: p.name, message });
+  open: OpenRange = () => ({ ok: false }),
+): { params: string[]; message: string } | null {
+  /** Each of `ps` that states no range and may not go without one, with why no range could be
+   *  read for it where that is known. */
+  const rangeless = (ps: readonly SheetVar[]): { p: SheetVar; why?: string }[] =>
+    ps.flatMap((p) => {
+      if (ranged(p)) return [];
+      const o = open(p);
+      return o.ok ? [] : [{ p, ...(o.why ? { why: o.why } : {}) }];
+    });
+  /** The params of `need` refused for their missing range: `kind` names them, `purpose` says what
+   *  the range is for. */
+  const needsRange = (
+    need: readonly { p: SheetVar; why?: string }[],
+    kind: 'solved' | 'held',
+    purpose: [string, string],
+  ) => {
+    const many = need.length > 1;
+    const ps = need.map((n) => n.p);
+    return issue(
+      ps,
+      `${kind} ${many ? 'params' : 'param'} ${quotedNames(ps)} ${many ? 'need' : 'needs'} finite ` +
+        `min < max — ${many ? purpose[1] : purpose[0]}` +
+        need
+          .flatMap((n) => (n.why ? [`; no range can be read for "${n.p.name}" — ${n.why}`] : []))
+          .join(''),
+    );
+  };
+  const issue = (p: SheetVar | readonly SheetVar[], message: string) => ({
+    params: (Array.isArray(p) ? p : [p]).map((q: SheetVar) => q.name),
+    message,
+  });
   const half = params.find((p) => p.designConstraint !== undefined && !constrained(p));
   if (half)
     return issue(
@@ -280,13 +327,12 @@ export function constraintIssue(
       `param "${both.name}" has a design constraint and also carries solveFor — the two would fight over ` +
         `it; keep one relation`,
     );
-  const unranged = params.find((p) => engineSolved(p) && !ranged(p));
-  if (unranged)
-    return issue(
-      unranged,
-      `solved param "${unranged.name}" needs finite min < max — they are the range it is searched ` +
-        `in, not slider bounds`,
-    );
+  const unranged = rangeless(params.filter(engineSolved));
+  if (unranged.length)
+    return needsRange(unranged, 'solved', [
+      'they are the range it is searched in, not slider bounds',
+      'they are the range each is searched in, not slider bounds',
+    ]);
   const held = params.filter(holds);
   const twice = held.find((p) => p.designConstraint !== undefined || torn(p));
   if (twice)
@@ -295,13 +341,12 @@ export function constraintIssue(
       `param "${twice.name}" carries hold and also has a design constraint or carries solveFor — a param ` +
         `takes one of the three`,
     );
-  const loose = held.find((p) => !ranged(p));
-  if (loose)
-    return issue(
-      loose,
-      `held param "${loose.name}" needs finite min < max — the range it is re-solved in ` +
-        `where the hardware is held`,
-    );
+  const loose = rangeless(held);
+  if (loose.length)
+    return needsRange(loose, 'held', [
+      'the range it is re-solved in where the hardware is held',
+      'the range each is re-solved in where the hardware is held',
+    ]);
   const shapeless = held.find((p) => additiveCoefficient(p.hold, p.name) === undefined);
   if (shapeless)
     return issue(
@@ -688,7 +733,7 @@ export function engineSolved(p: SheetVar): boolean {
 
 /** Whether a param states a finite range, min below max: what a slider sweeps, and what a solved
  *  or held param is searched in. */
-const ranged = (v: { min?: number; max?: number }): v is { min: number; max: number } =>
+export const ranged = (v: { min?: number; max?: number }): v is { min: number; max: number } =>
   Number.isFinite(v.min) && Number.isFinite(v.max) && (v.min as number) < (v.max as number);
 
 /** True when a param is a finitely-bounded slider variable (sweepable). The ONE
@@ -804,6 +849,7 @@ export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
     ...w,
     message: blockMessage(blockName, w.message),
     location: `${blockName}${PATH_SEP}${w.location ?? ''}`,
+    ...(w.cause !== undefined ? { cause: `${blockName}${PATH_SEP}${w.cause}` } : {}),
   };
 }
 
@@ -1432,6 +1478,10 @@ export interface SheetResult {
   /** The range each of this sheet's own solved params was searched in, in document order (see
    *  SolveRange). Absent where the sheet solves nothing, or the solve did not start. */
   ranges?: SolveRange[];
+  /** What this sheet could not compute because a composed block's outputs were withheld, or its
+   *  own device did not size for that reason: each name, with the path of the block it traces back
+   *  to (see QAWarning.cause). Absent where nothing was. */
+  withheld?: Record<string, string>;
 }
 
 /**
@@ -1487,12 +1537,16 @@ export type NoSolutionWhy = 'no-crossing' | 'step' | 'undetermined';
 /**
  * Where the range a solved param may be searched in came from:
  *  - `wiring`: the range the wiring puts the param's wire in, between the wires its devices'
- *    channels join it to (see SolveRange). The author's `min`/`max` are searched first, where they
- *    lie inside it; with no crossing there the search goes on over the rest of it;
+ *    channels join it to (see SolveRange) — the physical range. Where the author states `min`/`max`
+ *    they are searched first, where they lie inside it, and with no crossing there the search goes
+ *    on over the rest of it; where the author states none, it is the whole search;
+ *  - `table`: for a param that states no range and is a device's length, the lengths the tables
+ *    it is read on hold — from the shortest, the process's own minimum, to the longest, which is
+ *    only as far as the data reaches;
  *  - `author`: the author's `min`/`max` alone — the param is not a wire's level, or no range could
  *    be read from the wiring (`SolveRange.why` says which).
  */
-export type RangeSource = 'wiring' | 'author';
+export type RangeSource = 'wiring' | 'table' | 'author';
 
 /** The range one solved param of a sheet may be searched in, and where it came from. */
 export interface SolveRange {
@@ -1500,8 +1554,9 @@ export interface SolveRange {
   /** The range it may be searched in: the wiring's where one is read, else the author's. */
   range: [number, number];
   from: RangeSource;
-  /** The author's `min` and `max`, searched first. */
-  author: [number, number];
+  /** The author's `min` and `max`, searched first; absent where the author states none and the
+   *  range is the wiring's or the table's alone. */
+  author?: [number, number];
   /** The wires whose level the param is, where it is one (see solvedWiring); absent for a param
    *  that is no wire's level, whose range can only be its author's. */
   wires?: string[];
@@ -1670,19 +1725,39 @@ export const noiseSourcesIn = (
   );
 
 /** `pre` — what resolving and validating a sheet found — without the findings the evaluation
- *  then repeats in the same words at the same place. A device that states no drain voltage is
- *  named when the sheet is validated and refused when it is sized; a reader needs it once, and
- *  the evaluation's is the one that carries the consequence. */
+ *  then repeats in the same words. A device that states no drain voltage is named when the sheet
+ *  is validated and refused when it is sized; a solved param with no range is refused by
+ *  validation and fails its solve in the same words; a reader needs each once, and the
+ *  evaluation's is the one that carries the consequence. The same words are the same finding,
+ *  whichever rule raised them, at what severity, and wherever each places it. */
 export function withoutRestated(
   pre: readonly QAWarning[],
   evaluated: readonly QAWarning[],
 ): QAWarning[] {
-  return pre.filter(
-    (w) =>
-      !evaluated.some(
-        (e) => e.rule === w.rule && e.location === w.location && e.message === w.message,
-      ),
-  );
+  return pre.filter((w) => !evaluated.some((e) => e.message === w.message));
+}
+
+/**
+ * One line over the findings that follow from others (QAWarning.cause): how many, and the blocks
+ * they trace back to, so a reader starts from those blocks and a display can fold the rest under
+ * the line. Undefined where nothing follows from anything.
+ */
+export function followOnSummary(warnings: readonly QAWarning[]): QAWarning | undefined {
+  const by = new Map<string, number>();
+  for (const w of warnings) if (w.cause !== undefined) by.set(w.cause, (by.get(w.cause) ?? 0) + 1);
+  if (!by.size) return undefined;
+  let n = 0;
+  for (const k of by.values()) n += k;
+  const blocks = [...by].map(([cause, k]) => `"${cause}" (${k})`).join(', ');
+  return {
+    rule: 'sheet-follow-on',
+    severity: 'info',
+    message:
+      `${n} ${n > 1 ? 'findings follow' : 'finding follows'} from ${by.size > 1 ? 'blocks' : 'a block'} ` +
+      `whose outputs were withheld — ${blocks}: fix what ${by.size > 1 ? 'those blocks report' : 'that block reports'} ` +
+      `and ${n > 1 ? 'these go' : 'this goes'} with it`,
+    location: '',
+  };
 }
 
 /**
@@ -1708,9 +1783,13 @@ export function withValidation(pre: readonly QAWarning[], res: SheetResult): She
           findings: res.nodes.findings + structural,
         }
       : res.nodes;
+  const warnings = [...withoutRestated(pre, res.warnings), ...res.warnings];
+  // Ahead of everything: where most of a long list follows from a few blocks, that is the first
+  // thing to read.
+  const summary = followOnSummary(warnings);
   return {
     ...res,
-    warnings: [...withoutRestated(pre, res.warnings), ...res.warnings],
+    warnings: summary ? [summary, ...warnings] : warnings,
     ...(nodes ? { nodes } : {}),
   };
 }
@@ -1809,6 +1888,22 @@ export interface SheetSweepCheck {
 }
 
 /**
+ * One stretch of a swept knob's range where every hard check passes (on a held sweep: where the
+ * held design complies), with the knob's other params where they are. An edge between two samples
+ * is pinned by halving the gap between them (WINDOW_EDGE_STEPS times) and is the last passing
+ * value found, so the window never claims a value that fails. `below` and `above` name the hard
+ * checks that fail just past each edge, by tree path; empty where none does — the design did not
+ * size or a solve did not land there — and absent where the window runs to the end of the range.
+ * A stretch narrower than the sample spacing between two failing samples is not seen.
+ */
+export interface SweepWindow {
+  lo: number;
+  hi: number;
+  below?: string[];
+  above?: string[];
+}
+
+/**
  * A leaf sheet evaluated across a grid of one parameter's [min,max] range: the X samples, each
  * check's relative-margin curve, and the overall feasibility at each point. The classic gm/ID
  * feasibility-region view — wherever every hard check's curve sits at or above zero, the design
@@ -1820,6 +1915,9 @@ export interface SheetSweep {
   x: number[];
   checks: SheetSweepCheck[];
   feasible: boolean[];
+  /** Where the knob passes, its edges pinned between samples — present only when asked for (see
+   *  SweepOptions.windows), since each edge costs a few more evaluations. */
+  windows?: SweepWindow[];
   /**
    * Whether each sample's evaluation completed (see `stands`). A sample that did not is
    * infeasible, and its check margins were read wherever a solve stopped — carried as data so a

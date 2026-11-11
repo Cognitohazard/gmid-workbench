@@ -60,6 +60,17 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   active:
     'Make this the active device: it drives the dashboard, the pickers, the bias sliders, and the sizer.',
   template: 'Add a panel pre-set to a canonical plot — no expression typing.',
+  // where a loaded table lives: stored in this browser, or held for this session only
+  keepNext:
+    'Ticked: the device tables you import next are kept after a reload — a copy is stored in this browser (IndexedDB), and nothing leaves the machine. Unticked: they are used for this session only — held in memory, never written to browser storage, and gone after a reload. The default is in ⚙; a table’s chip switches it later.',
+  newTables:
+    'Whether newly imported device tables are kept after a reload (a copy stored in this browser) or used for this session only (never written to browser storage). Sets the keep box beside the load button each time the page opens; a table’s chip switches it later.',
+  storedTable:
+    'Stored in this browser, so a reload restores it. Click to use it for this session only: the stored copy is deleted now, and the table is gone after a reload.',
+  sessionTable:
+    'Session only: held in memory and never written to browser storage — it will be gone after a reload. Click to keep it after a reload, which stores a copy in this browser.',
+  storedList:
+    'What this browser holds: every stored table, with its approximate size and when it was imported. Session-only tables are not listed — nothing of them is stored. Delete a stored copy from its chip (× removes the table, or switch it to session only), or clear all.',
   // characterized devices: one logical device characterized at several (corner, temperature)
   // conditions
   deviceConditions:

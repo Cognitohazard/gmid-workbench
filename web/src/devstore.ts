@@ -2,16 +2,31 @@ import { DEFAULT_TEMP_C } from '@gmid/mostab-core';
 // Local persistence for loaded device tables — IndexedDB, because a characterization
 // grid (megabytes of Float64Array) is far past localStorage budgets and structured
 // clone stores Maps and typed arrays natively. Client-only like everything else: the
-// data never leaves the machine. Every stored table has a visible chip in the devices
-// strip with a remove control, and clear-all wipes the store — so what is retained is
-// always inspectable and deletable. All operations are best-effort: blocked or
-// unavailable storage (private mode, some file:// contexts) degrades to the previous
-// in-memory-only behavior, never to an error the user must handle.
+// data never leaves the machine. Only a table the user chose to keep across reloads is
+// written here; a session-only table lives in memory and is never passed to putTable.
+// Every stored table has a visible chip in the devices strip (marked stored, with a
+// control that turns it session-only and deletes the stored copy), the strip lists what
+// is stored with its size and import date, and clear-all wipes the store — so what is
+// retained is always inspectable and deletable. Storage failures never throw: blocked
+// or unavailable storage (private mode, some file:// contexts) degrades to in-memory
+// only, and the write and delete calls report whether they took effect so the page can
+// say so instead of showing a table as stored when it is not.
 
 import type { DeviceTable } from '@gmid/mostab-core';
 
 const DB = 'gmid';
 const STORE = 'tables';
+
+/**
+ * What one stored record holds: the table and when it was imported (ms since the epoch).
+ * Records written before the date was kept are the bare DeviceTable; both shapes are read
+ * back (see unwrap), and a bare one simply has no import date.
+ */
+interface StoredRecord {
+  v: 1;
+  table: DeviceTable;
+  importedAt?: number;
+}
 
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -32,41 +47,86 @@ function req<T>(r: IDBRequest<T>): Promise<T> {
   });
 }
 
+/** Settles when the transaction commits; rejects when it aborts. A write is only on disk once
+ *  its transaction completes — a request can succeed and its transaction still abort (a quota
+ *  error is reported that way). */
+function committed(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 async function txn<T>(
   mode: IDBTransactionMode,
   run: (s: IDBObjectStore) => IDBRequest<T>,
 ): Promise<T> {
   const db = await open();
   try {
-    return await req(run(db.transaction(STORE, mode).objectStore(STORE)));
+    const tx = db.transaction(STORE, mode);
+    // Both are awaited together so neither rejection goes unhandled.
+    const [result] = await Promise.all([req(run(tx.objectStore(STORE))), committed(tx)]);
+    return result;
   } finally {
     db.close();
   }
 }
 
-/** Store one table under its uid; re-storing the same uid replaces the old copy. */
-export async function putTable(uid: string, table: DeviceTable): Promise<void> {
-  try {
-    await txn('readwrite', (s) => s.put(table, uid));
-  } catch {
-    // best-effort
-  }
+// Writes run one after another in the order they were asked for. Each opens its own
+// connection, and without this a delete asked for after a put (a table imported, then
+// turned session-only at once) could commit first and leave the stored copy behind.
+let writes: Promise<unknown> = Promise.resolve();
+function inOrder(op: () => Promise<boolean>): Promise<boolean> {
+  const next = writes.then(op, op);
+  writes = next;
+  return next;
 }
 
-export async function deleteTable(uid: string): Promise<void> {
-  try {
-    await txn('readwrite', (s) => s.delete(uid));
-  } catch {
-    // best-effort
-  }
+/** Run a write; true when it committed, false when storage refused or is unavailable. */
+const attempt = <T>(run: (s: IDBObjectStore) => IDBRequest<T>): Promise<boolean> =>
+  inOrder(async () => {
+    try {
+      await txn('readwrite', run);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+/**
+ * Store one table under its uid with its import date; re-storing the same uid replaces the old
+ * copy. Resolves false when the write did not commit (storage blocked, full or unavailable).
+ * The table must be a plain object: structured clone refuses a reactive proxy.
+ */
+export function putTable(uid: string, table: DeviceTable, importedAt?: number): Promise<boolean> {
+  const record: StoredRecord =
+    importedAt === undefined ? { v: 1, table } : { v: 1, table, importedAt };
+  return attempt((s) => s.put(record, uid));
 }
 
-export async function clearTables(): Promise<void> {
-  try {
-    await txn('readwrite', (s) => s.clear());
-  } catch {
-    // best-effort
+/** Delete one stored table; resolves false when the delete did not commit. */
+export function deleteTable(uid: string): Promise<boolean> {
+  return attempt((s) => s.delete(uid));
+}
+
+export function clearTables(): Promise<boolean> {
+  return attempt((s) => s.clear());
+}
+
+/** A record as read back: the table (still unvalidated — see saneTable) and its import date
+ *  when the record carries one. */
+function unwrap(raw: unknown): { table: DeviceTable; importedAt?: number } {
+  // A bare table has a grid; a record written with its date holds the table under `table`.
+  if (raw && typeof raw === 'object' && 'table' in raw && !('grid' in raw)) {
+    const { table, importedAt } = raw as Partial<StoredRecord>;
+    return {
+      table: table as DeviceTable,
+      importedAt:
+        typeof importedAt === 'number' && Number.isFinite(importedAt) ? importedAt : undefined,
+    };
   }
+  return { table: raw as DeviceTable };
 }
 
 /**
@@ -75,24 +135,32 @@ export async function clearTables(): Promise<void> {
  * record, and deletion must target it — a uid recomputed by a newer algorithm can
  * differ, and deleting by the recomputed value would strand the record invisibly.
  */
-export async function loadTables(): Promise<{ key: string; table: DeviceTable }[]> {
+export async function loadTables(): Promise<
+  { key: string; table: DeviceTable; importedAt?: number }[]
+> {
   try {
     const db = await open();
     try {
       const s = db.transaction(STORE, 'readonly').objectStore(STORE);
       // Same store, same transaction: both results are ordered by key, so the
       // arrays align index-for-index.
-      const [keys, tables] = await Promise.all([
-        req(s.getAllKeys()),
-        req(s.getAll() as IDBRequest<DeviceTable[]>),
-      ]);
-      return tables.map((table, i) => ({ key: String(keys[i]), table }));
+      const [keys, records] = await Promise.all([req(s.getAllKeys()), req(s.getAll())]);
+      return records.map((raw, i) => ({ key: String(keys[i]), ...unwrap(raw) }));
     } finally {
       db.close();
     }
   } catch {
     return [];
   }
+}
+
+/** Approximate size of a table's stored record in bytes: its axis vectors and quantity
+ *  columns, which are all but a few hundred bytes of it. */
+export function tableBytes(dt: DeviceTable): number {
+  let n = 0;
+  for (const a of dt.grid.axes) n += a.values.byteLength;
+  for (const col of dt.grid.quantities.values()) n += col.byteLength;
+  return n;
 }
 
 /**

@@ -51,6 +51,8 @@ import type {
   SheetResult,
   SheetSweep,
   Settings,
+  SweepOptions,
+  SweepSample,
 } from '../sheet';
 import {
   SWEEP_POINTS,
@@ -68,6 +70,7 @@ import {
   unfinishedBecause,
   withParams,
   withValidation,
+  withoutRange,
   validateSheet,
 } from '../sheet';
 import {
@@ -827,7 +830,7 @@ export function sweepAtCondition(
   key: ConditionKey,
   deviceOf: DeviceLookup,
   refs?: SheetRefIndex,
-  opts: RunOptions & { readonly base?: ConditionKey; readonly points?: number } = {},
+  opts: SweepOptions & { readonly base?: ConditionKey; readonly points?: number } = {},
 ): ConditionSweep {
   const base = opts.base ?? key;
   const design = sameCondition(base, key) ? 'sized' : 'held';
@@ -835,7 +838,7 @@ export function sweepAtCondition(
   // Prepared once, at the stand-in value sweepOf validates with; each sample swaps in its own
   // document, which differs from it only in the swept value.
   const prepared = prepareRun(sweepable(v) ? withParams(doc, { [param]: v.min }) : doc, refs);
-  const sweep = sweepOf(doc, param, opts.points ?? SWEEP_POINTS, refs, (d) => {
+  const sample = (d: SheetDoc): SweepSample => {
     const runs = runSet(
       { ...prepared, doc: d },
       primaryDevice,
@@ -852,7 +855,17 @@ export function sweepAtCondition(
       feasible: design === 'sized' ? evaluated && run.feasible : run.points[0].state === 'complies',
       stands: evaluated,
     };
-  });
+  };
+  // An edge is pinned with the sweep's own sample, less the range ends: passing — feasible where
+  // the design is sized, complying at the condition's own point where it is held — never reads them.
+  const sweep = sweepOf(
+    doc,
+    param,
+    opts.points ?? SWEEP_POINTS,
+    refs,
+    sample,
+    opts.windows ? (d) => sample(withoutRange(d)) : undefined,
+  );
   return { ...sweep, key, base, design };
 }
 

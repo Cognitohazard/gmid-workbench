@@ -1595,7 +1595,8 @@ export const CLOSURE_NOTE =
   'held wires compared along a path through several chords, can differ by more than the ' +
   'tolerance; each derived level is reported with the path it was derived along.';
 
-const volts = (v: number): string => `${Number(v.toPrecision(4))} V`;
+/** A voltage as the messages quote one: in volts, to four significant figures. */
+export const volts = (v: number): string => `${Number(v.toPrecision(4))} V`;
 
 /** A current as a reader reads one: an SI prefix, `10 µA` rather than `0.00001 A`. */
 export function amps(i: number): string {
@@ -2548,6 +2549,32 @@ export function linearValue(
     sum += c * v;
   }
   return sum;
+}
+
+/**
+ * Each of `atoms` — a param by its name in the walk, `L_d` on the top sheet or `bias__L_MB5` in the
+ * block `bias` — that is a device's length somewhere in the tree: the device's given `L`, read
+ * through every override above it, is exactly that param. With the chain of blocks down to each
+ * device it sets, so a caller can read the length axis of the table each is sized on. Read from the
+ * givens alone; no table is needed to say which params set a length.
+ */
+export function lengthsSetBy(doc: SheetDoc, atoms: readonly string[]): Map<string, SheetBlock[][]> {
+  const out = new Map<string, SheetBlock[][]>();
+  if (!atoms.length) return out;
+  const want = new Map(atoms.map((a) => [canon(atomPoly(a)), a]));
+  const sym = symbolsOf(doc, Object.fromEntries(doc.params.map((p) => [p.name, p.value])));
+  const walk = (d: SheetDoc, chain: SheetBlock[]): void => {
+    if (chain.length > MAX_BLOCK_DEPTH) return;
+    const L = d.givens?.L;
+    if (typeof L === 'string') {
+      const atom = want.get(canon(sym.srcIn(L, chain)));
+      if (atom !== undefined) out.set(atom, [...(out.get(atom) ?? []), chain]);
+    }
+    for (const b of Array.isArray(d.blocks) ? d.blocks : [])
+      if (isObject(b) && b.doc) walk(b.doc, [...chain, b]);
+  };
+  walk(doc, []);
+  return out;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-import { loadDemo, pickSheet } from './helpers';
+import { loadDemo, pickSheet, strip } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 const FIX = 'e2e/fixtures';
@@ -34,7 +34,6 @@ async function dropTwice(page: Page, first: string[], second: string[]): Promise
   );
 }
 
-const strip = (page: Page) => page.locator('nav[aria-label="loaded devices"]');
 /** One condition's chip in the strip. Scoped by device where the bench holds two devices whose
  *  conditions share a name (every `tt` is a `tt`). */
 const condition = (page: Page, label: string, device = '') =>

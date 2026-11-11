@@ -25,7 +25,9 @@ jobs:
 
   web:
     name: Web (check + e2e + offline build)
-    runs-on: ubuntu-latest
+    # Pinned: the browser tests need a runner image Playwright ships Chromium for, and the
+    # latest image is newer than the pinned Playwright supports.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

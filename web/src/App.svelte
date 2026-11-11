@@ -10,6 +10,7 @@
     readsGamma,
     unreadHeader,
     formatEng,
+    formatQuantity,
     formatSI,
     validate,
     validateDevices,
@@ -70,8 +71,10 @@
     loadTables,
     putTable,
     saneTable,
+    tableBytes,
     withRecordedFill,
   } from './devstore';
+  import { plainTable } from './sheetEvaluator.svelte';
   import {
     benchDevices,
     deviceLabel,
@@ -91,12 +94,24 @@
   // (NMOS vs PMOS, corner vs corner). `device` is the active/primary one — it drives the
   // dashboard, the expression pickers, the bias sliders, and the sizer. It is `undefined` only in
   // the empty boot state, which the template gates behind a load prompt. The overlay set is
-  // chart-only and in-memory. Loaded tables persist LOCALLY in IndexedDB (client-only — nothing
-  // ever leaves the machine) so a reload restores the bench; the devices strip is the visible
-  // registry of what is retained, with per-device remove and clear-all as the deletion controls.
+  // chart-only and in-memory. A loaded table is either STORED — persisted LOCALLY in IndexedDB
+  // (client-only — nothing ever leaves the machine) so a reload restores it — or SESSION-ONLY:
+  // held in memory, never written to browser storage, and gone after a reload. The choice is
+  // made per import and can be changed per table from its chip. The devices strip is the visible
+  // registry of what is retained — each chip says which of the two it is, and a list gives every
+  // stored table's size and import date — with per-device remove, the chip's switch and
+  // clear-all as the deletion controls.
   // QA warnings live WITH their table so the displayed QA always matches the active device and
   // can never go stale when the active device changes or a device is removed.
-  type Loaded = { table: DeviceTable; warnings: readonly QAWarning[] };
+  type Loaded = {
+    table: DeviceTable;
+    warnings: readonly QAWarning[];
+    /** A copy is kept in this browser; false = session only, never written to browser storage. */
+    stored: boolean;
+    /** When it was imported (ms since the epoch); absent for a record stored before the date was
+     *  recorded. */
+    importedAt?: number;
+  };
   let tables = $state<Loaded[]>([]);
   let activeIdx = $state(0);
   let overlayIdx = $state<number[]>([]);
@@ -109,14 +124,20 @@
 
   // The registry sidecar: load order + active index + each device's nominal designation, so a
   // reload restores the bench exactly (IndexedDB getAll returns key order, which is not load
-  // order, and holds no designations at all).
+  // order, and holds no designations at all). It lists STORED tables only, and the active index
+  // counts among them: a session-only table leaves no entry in browser storage, and a stored
+  // record the registry does not list is a leftover the next boot deletes — so a stored copy a
+  // failed delete left behind cannot bring a session-only table back. A designation naming a
+  // session-only table is kept, like one naming a removed table: after a reload it reads as
+  // unresolved rather than letting the device quietly designate another condition.
   const REG_KEY = 'gmid.devreg';
   $effect(() => {
     if (tables.length) {
+      const kept = tables.filter((d) => d.stored);
       saveJSON(REG_KEY, {
         v: REGISTRY_VERSION,
-        order: tables.map((d) => tableUid(d.table)),
-        active: activeIdx,
+        order: kept.map((d) => tableUid(d.table)),
+        active: Math.max(0, kept.indexOf(tables[activeIdx])),
         nominalByFamily,
       });
     }
@@ -211,15 +232,20 @@
     const restored: { item: Loaded; rank: number }[] = [];
     const skipped: StoreSkip[] = [];
     /** A record that cannot come back is kept as stored and said, never dropped unseen. */
-    const skip = (key: string, raw: unknown, why: string): void => {
+    const skip = (key: string, raw: unknown, why: string, importedAt?: number): void => {
       const device = (raw as { id?: { device?: unknown } } | undefined)?.id?.device;
-      skipped.push({ key, name: typeof device === 'string' && device ? device : key, why });
+      skipped.push({
+        key,
+        name: typeof device === 'string' && device ? device : key,
+        why,
+        importedAt,
+      });
     };
-    for (const { key, table: raw } of stored) {
+    for (const { key, table: raw, importedAt } of stored) {
       try {
         // Trust nothing: a corrupt/stale record is not rendered — and the strip says so.
         if (!saneTable(raw)) {
-          skip(key, raw, 'not a readable table');
+          skip(key, raw, 'not a readable table', importedAt);
           continue;
         }
         // A table stored before the importer recorded what it filled in says what it can.
@@ -228,7 +254,9 @@
         if (have.has(uid)) {
           // A fresh import superseded this record; drop a stale-keyed copy. Both spellings are
           // in hand here, so the migration map records them: a designation naming the old key
-          // would otherwise read as unresolved while the table it names is on the bench.
+          // would otherwise read as unresolved while the table it names is on the bench. A copy
+          // under the current key is the import's to keep or delete (session only), which it
+          // has already asked for.
           if (key !== uid) {
             void deleteTable(key);
             rekey.set(key, uid);
@@ -245,17 +273,18 @@
         }
         if (key !== uid) {
           // Self-migration: the uid algorithm changed since this was stored — re-key
-          // the record; the registry effect below then records the new uids.
-          void putTable(uid, dt);
+          // the record; the registry effect below then records the new uids. Only a stored
+          // record is ever re-keyed: a session-only table has no record to come back from.
+          void putTable(uid, dt, importedAt);
           void deleteTable(key);
           rekey.set(key, uid);
         }
         restored.push({
-          item: { table: dt, warnings: validate(dt) },
+          item: { table: dt, warnings: validate(dt), stored: true, importedAt },
           rank: pos.get(key) ?? pos.get(uid) ?? Number.MAX_SAFE_INTEGER,
         });
       } catch {
-        skip(key, raw, 'it no longer validates');
+        skip(key, raw, 'it no longer validates', importedAt);
       }
     }
     storeSkipped = skipped;
@@ -273,9 +302,9 @@
   });
   let importError = $state<string | null>(null);
   /** A stored table that could not be restored: its storage key, the device it names (or the key
-   *  when it names none) and why. Kept as stored, shown in the strip with a control that deletes
-   *  it, so nothing retained is out of sight. */
-  type StoreSkip = { key: string; name: string; why: string };
+   *  when it names none), why, and when it was imported if the record says. Kept as stored, shown
+   *  in the strip with a control that deletes it, so nothing retained is out of sight. */
+  type StoreSkip = { key: string; name: string; why: string; importedAt?: number };
   let storeSkipped = $state<StoreSkip[]>([]);
   function deleteSkipped(): void {
     for (const s of storeSkipped) void deleteTable(s.key);
@@ -353,8 +382,9 @@
     if (dashboard && !layoutLost?.held) saveJSON(DASH_KEY, persistedDashboard(dashboard));
   });
 
-  // Appearance settings (theme + font sizes). Applied to the document root and persisted on
-  // every change. The whole UI and the canvas chart follow (both read system colours + vars).
+  // Settings (theme + font sizes, and the default retention of new imports). Applied to the
+  // document root and persisted on every change. The whole UI and the canvas chart follow (both
+  // read system colours + vars).
   let settings = $state<Settings>(loadSettings());
   // Live readout while dragging the UI-zoom slider. The zoom (root font-size) drives EVERY rem
   // in the layout — including the header this popover hangs off — so applying it mid-drag would
@@ -380,6 +410,83 @@
       untrack(() => (styleVersion += 1));
     }
   });
+
+  // ── Retention: whether a table is kept in this browser across reloads.
+  // The choice for the next import starts at the setting's default and is changed beside the
+  // load control; changing the default in settings resets it to the new default.
+  let keepNext = $derived(settings.newTables === 'stored');
+  /** A store or delete that did not take effect, said in a line above the strip: a table is never
+   *  shown as stored when the browser refused the copy, nor as session only while its stored copy
+   *  is still there. */
+  let storeFailed = $state<string[]>([]);
+  // The latest retention change asked for, per table uid. Writes complete in the order they were
+  // asked for, but an outcome that arrives after a newer change to the same table no longer
+  // describes it.
+  let retentionSeq = 0;
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive bookkeeping, never rendered
+  const lastRetention = new Map<string, number>();
+  /**
+   * Make the browser's copy of one table match its retention: store it (with its import date), or
+   * delete any stored copy. `hadCopy` says a stored copy is known to exist, so a delete that fails
+   * is worth saying; a session-only import of a table that was not stored deletes only to be sure,
+   * and a failure there says nothing about a copy.
+   */
+  function retain(d: Loaded, hadCopy: boolean): void {
+    const { table, stored } = d;
+    const uid = tableUid(table);
+    const seq = ++retentionSeq;
+    lastRetention.set(uid, seq);
+    const op = stored ? putTable(uid, plainTable(table), d.importedAt) : deleteTable(uid);
+    void op.then((ok) => {
+      // A record under this key that could not be restored has just been replaced or deleted.
+      if (ok) storeSkipped = storeSkipped.filter((s) => s.key !== uid);
+      if (ok || lastRetention.get(uid) !== seq || (!stored && !hadCopy)) return;
+      const live = tables.find((x) => tableUid(x.table) === uid);
+      if (!live) return;
+      live.stored = !stored;
+      storeFailed = [
+        ...storeFailed,
+        stored
+          ? `${deviceKey(table)} could not be stored in this browser (storage is unavailable or full) — it is for this session only`
+          : `the stored copy of ${deviceKey(table)} could not be deleted — it is still stored`,
+      ];
+    });
+  }
+  /** Switch loaded table `i` between stored and session only, from its chip. */
+  function setStored(i: number, stored: boolean): void {
+    const d = tables[i];
+    if (!d || d.stored === stored) return;
+    d.stored = stored;
+    retain(d, true);
+  }
+  /** What the browser holds, for the list in the strip: every stored table on the bench, and every
+   *  stored record that could not be restored. */
+  type StoredRow = { key: string; name: string; bytes?: number; importedAt?: number; note: string };
+  const storedRows = $derived<StoredRow[]>([
+    ...tables
+      .filter((d) => d.stored)
+      .map((d) => ({
+        key: tableUid(d.table),
+        name: deviceKey(d.table),
+        bytes: tableBytes(d.table),
+        importedAt: d.importedAt,
+        note: '',
+      })),
+    ...storeSkipped.map((s) => ({
+      key: s.key,
+      name: s.name,
+      importedAt: s.importedAt,
+      note: 'not restored',
+    })),
+  ]);
+  const storedBytes = $derived(storedRows.reduce((n, r) => n + (r.bytes ?? 0), 0));
+  /** An import date as local `YYYY-MM-DD hh:mm`. */
+  const importStamp = (ms: number | undefined): string => {
+    if (ms === undefined) return 'not recorded';
+    const t = new Date(ms);
+    const p = (n: number): string => String(n).padStart(2, '0');
+    return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}`;
+  };
 
   // Operating point: sharedBias carries a value for EVERY non-sweep multi-value axis, so
   // any panel can pin the axes it doesn't fan. Seeded on a device/sweep change only (never
@@ -588,10 +695,15 @@
    * batch is discarded whole. That is what keeps "last selected wins" meaning what it says —
    * committing file by file would let a stale batch leave half a bench behind, with a load
    * order that depends on which read finished first.
+   *
+   * Every device table in the selection is kept across reloads or used for this session only, as
+   * the keep control said when the files were chosen.
    */
   async function loadFiles(files: FileList | null | undefined): Promise<void> {
     const batch = files ? [...files] : [];
     if (!batch.length) return;
+    const stored = keepNext;
+    const importedAt = Date.now();
     const seq = ++importSeq;
     // Read in parallel, reassembled in selection order: load order is part of the grouping
     // contract, and completion order is not an order at all.
@@ -648,17 +760,23 @@
           continue;
         }
         seen.set(uid, { file: s.name, table: t });
-        incoming.push({ table: t, warnings: validate(t) });
+        incoming.push({ table: t, warnings: validate(t), stored, importedAt });
       }
     }
     // A table already loaded under the same identity is REPLACED IN PLACE (a re-import
-    // refreshes it without moving its chip); the rest append in selection order.
+    // refreshes it without moving its chip); the rest append in selection order. The re-import
+    // takes the retention chosen for this import, like every other table in it.
     // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive merge scratch, discarded below
     const fresh = new Map(incoming.map((d) => [tableUid(d.table), d]));
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- non-reactive merge scratch, discarded below
+    const replacedStored = new Set<string>();
     const next = tables.map((d) => {
       const uid = tableUid(d.table);
       const r = fresh.get(uid);
-      if (r) fresh.delete(uid);
+      if (r) {
+        fresh.delete(uid);
+        if (d.stored) replacedStored.add(uid);
+      }
       return r ?? d;
     });
     next.push(...fresh.values());
@@ -672,7 +790,9 @@
     // AFTER select(), which clears the error line: a batch that loaded three files and lost
     // one must still say which one, and say it by name.
     importError = errors.length ? errors.join(' · ') : null;
-    for (const d of incoming) void putTable(tableUid(d.table), d.table);
+    // A session-only import is never written; it deletes any stored copy of the same table (an
+    // earlier import kept it), so nothing of it is left in the browser after this.
+    for (const d of incoming) retain(d, replacedStored.has(tableUid(d.table)));
   }
 
   // Make device `i` active (overlays cleared). The user's authored panels and tabs are preserved
@@ -767,6 +887,7 @@
     pickerOpen = false;
     importError = null;
     storeSkipped = [];
+    storeFailed = [];
   }
 
   // Toggle device `i` into/out of the overlay set (the active device can't overlay itself).
@@ -863,20 +984,31 @@
       </dl>
     </details>
   {/if}
-  <!-- `multiple`: one file carries one table, so a device's corners arrive as a selection of
-       files — which is imported as ONE transaction (see loadFiles). -->
-  <label
-    class="load"
-    title="load mostab .csv characterization tables (several at once — one per corner), or a design-sheet .json"
-  >
-    Load .csv / .json
-    <input
-      type="file"
-      multiple
-      accept=".csv,.txt,text/csv,.json,application/json"
-      onchange={(e) => loadFiles((e.currentTarget as HTMLInputElement).files)}
-    />
-  </label>
+  <span class="loadgroup">
+    <!-- `multiple`: one file carries one table, so a device's corners arrive as a selection of
+         files — which is imported as ONE transaction (see loadFiles). -->
+    <label
+      class="load"
+      title="load mostab .csv characterization tables (several at once — one per corner), or a design-sheet .json"
+    >
+      Load .csv / .json
+      <input
+        type="file"
+        multiple
+        accept=".csv,.txt,text/csv,.json,application/json"
+        onchange={(e) => loadFiles((e.currentTarget as HTMLInputElement).files)}
+      />
+    </label>
+    <!-- Applies to the next import (picker or drop); starts at the default set in ⚙. -->
+    <label class="keepnext" title={CONTROL_HELP.keepNext}>
+      <input
+        type="checkbox"
+        checked={keepNext}
+        onchange={(e) => (keepNext = e.currentTarget.checked)}
+        data-keep-next
+      />keep after reload
+    </label>
+  </span>
   {#if device}<button
       class="btn size"
       class:on={sizerOpen}
@@ -892,11 +1024,13 @@
   <!-- Escape-to-dismiss is a keyboard ENHANCEMENT on a natively interactive disclosure -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <details class="prefs" onkeydown={closeOnEscape}>
-    <summary class="btn" title="appearance: theme and font sizes">⚙</summary>
+    <summary class="btn" title="settings: theme, font sizes, and whether new tables are kept"
+      >⚙</summary
+    >
     <div class="prefs-pop">
       <label class="prow"
         >theme
-        <select bind:value={settings.theme}>
+        <select bind:value={settings.theme} data-theme-select>
           <option value="auto">auto</option>
           <option value="light">light</option>
           <option value="dark">dark</option>
@@ -945,6 +1079,13 @@
         />
         <span class="pval">{settings.fontAxisLabel}px</span>
       </label>
+      <label class="prow" title={CONTROL_HELP.newTables}
+        >new tables
+        <select bind:value={settings.newTables} data-new-tables>
+          <option value="stored">kept after reload</option>
+          <option value="session">this session only</option>
+        </select>
+      </label>
     </div>
   </details>
 </header>
@@ -974,6 +1115,14 @@
     {storeSkipped.map((s) => `${s.name} (${s.why})`).join(', ')}. The stored
     {storeSkipped.length === 1 ? 'copy is kept as it is' : 'copies are kept as they are'} —
     <button class="btn" onclick={deleteSkipped} data-store-delete>delete</button>
+  </div>
+{/if}
+{#if storeFailed.length}
+  <!-- A copy the browser refused, or a delete it refused: the chip already shows the outcome, and
+       this line says why it differs from what was asked. -->
+  <div class="qa warning" data-store-failed>
+    {storeFailed.join(' · ')}
+    <button class="btn" onclick={() => (storeFailed = [])}>dismiss</button>
   </div>
 {/if}
 {#if importError}
@@ -1022,9 +1171,11 @@
         {#each f.conditions as t (tableUid(t))}
           {@const i = indexOfUid.get(tableUid(t)) ?? -1}
           {@const nominal = f.nominal === t}
+          {@const stored = tables[i]?.stored ?? false}
           <span
             class="dev"
             class:active={i === activeIdx}
+            class:session={!stored}
             data-variant={conditionLabel(t.id)}
             title={provenanceOf(t)}
           >
@@ -1063,6 +1214,16 @@
                 onchange={() => toggleOverlay(i)}
               />overlay
             </label>
+            <!-- Where this table lives, said on its chip and switched here: stored in this browser,
+                 or held for this session only and gone after a reload. -->
+            <button
+              class="dret"
+              class:session={!stored}
+              data-retention={stored ? 'stored' : 'session'}
+              onclick={() => setStored(i, !stored)}
+              title={stored ? CONTROL_HELP.storedTable : CONTROL_HELP.sessionTable}
+              >{stored ? 'stored' : 'session only'}</button
+            >
             <button
               class="drm"
               onclick={() => removeDevice(i)}
@@ -1114,6 +1275,39 @@
       onclick={clearAll}
       title="remove every loaded device and delete the locally stored copies">clear all</button
     >
+    <!-- What this browser holds, entry by entry. Escape-to-dismiss is a keyboard ENHANCEMENT on a
+         natively interactive disclosure. -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <details class="stored" onkeydown={closeOnEscape} data-stored-list>
+      <summary title={CONTROL_HELP.storedList}
+        >stored: {storedRows.length
+          ? `${storedRows.length} ${storedRows.length === 1 ? 'table' : 'tables'} · ${formatQuantity(storedBytes, 'B')}`
+          : 'nothing'}</summary
+      >
+      <div class="stored-pop">
+        {#if storedRows.length}
+          <table>
+            <thead><tr><th>table</th><th>size</th><th>imported</th></tr></thead>
+            <tbody>
+              <!-- An unrestorable record and the import replacing it share a key for a moment. -->
+              {#each storedRows as r (`${r.note}|${r.key}`)}
+                <tr data-stored-row>
+                  <td
+                    >{r.name}{#if r.note}<i> ({r.note})</i>{/if}</td
+                  >
+                  <td data-stored-size
+                    >{r.bytes === undefined ? 'unknown' : formatQuantity(r.bytes, 'B')}</td
+                  >
+                  <td data-stored-date>{importStamp(r.importedAt)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <p>Nothing is stored in this browser: every loaded table is for this session only.</p>
+        {/if}
+      </div>
+    </details>
   </nav>
 {/if}
 
@@ -1261,7 +1455,11 @@
       </p>
     </div>
   {/if}
-  {#if dragging}<div class="drophint">drop a mostab .csv or a sheet .json</div>{/if}
+  {#if dragging}<div class="drophint">
+      drop a mostab .csv or a sheet .json — tables {keepNext
+        ? 'are kept after reload'
+        : 'are for this session only'}
+    </div>{/if}
 </div>
 
 <style>
@@ -1357,6 +1555,19 @@
   }
   .load input {
     display: none;
+  }
+  /* The keep box sits right after the load button it qualifies, closer than the header's gap. */
+  .loadgroup {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.45rem;
+  }
+  .keepnext {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    font-size: 0.85em;
+    opacity: 0.85;
   }
   .qa {
     display: flex;
@@ -1655,6 +1866,80 @@
   }
   .dclear:hover {
     opacity: 1;
+  }
+  /* Where a table lives. Stored is the quiet case; session only is marked on the chip itself
+     (dashed outline) and on this pill, since it is the one that disappears on reload. */
+  .dret {
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.92em;
+    color: inherit;
+    background: none;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 999px;
+    padding: 0 0.35rem;
+    opacity: 0.55;
+  }
+  .dret:hover {
+    opacity: 1;
+  }
+  .dret.session {
+    opacity: 1;
+    color: var(--warn);
+    border-color: currentColor;
+  }
+  .dev.session {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--warn) 70%, transparent);
+  }
+  .stored {
+    position: relative;
+    margin-left: 0.4rem;
+  }
+  .stored summary {
+    cursor: pointer;
+    list-style: none;
+    font-size: calc(0.72rem * var(--text-scale, 1));
+    opacity: 0.6;
+  }
+  .stored summary::-webkit-details-marker {
+    display: none;
+  }
+  .stored[open] summary,
+  .stored summary:hover {
+    opacity: 1;
+  }
+  .stored-pop {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 30;
+    margin-top: 0.3rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--bg, canvas);
+    border: 1px solid #8884;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px #0004;
+    white-space: nowrap;
+  }
+  .stored-pop table {
+    border-collapse: collapse;
+  }
+  .stored-pop th {
+    text-align: left;
+    font-weight: normal;
+    opacity: 0.6;
+  }
+  .stored-pop th,
+  .stored-pop td {
+    padding: 0.1rem 0.5rem 0.1rem 0;
+  }
+  .stored-pop td i {
+    font-style: normal;
+    color: var(--warn);
+  }
+  .stored-pop p {
+    margin: 0;
   }
   .drm {
     cursor: pointer;

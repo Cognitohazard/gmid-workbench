@@ -1,12 +1,18 @@
-// User appearance settings: theme, a UI-zoom (root size, scales the whole interface via rem), a
-// content text-scale (multiplies panel text only, independent of the zoom), and two axis-font
-// sizes for the chart. Persisted to localStorage and applied as `color-scheme` + CSS custom
-// properties on the document root — the whole UI and the canvas chart follow, since both read
-// system colours and these vars. Web-only; the pure core is unaware of any of this.
+// User settings: the appearance ones — theme, a UI-zoom (root size, scales the whole interface
+// via rem), a content text-scale (multiplies panel text only, independent of the zoom), and two
+// axis-font sizes for the chart — and whether newly imported device tables are kept across
+// reloads by default. Persisted to localStorage; the appearance ones are applied as
+// `color-scheme` + CSS custom properties on the document root — the whole UI and the canvas chart
+// follow, since both read system colours and these vars. Web-only; the pure core is unaware of
+// any of this.
 
 import { loadJSON, saveJSON } from './storage';
 
 export type Theme = 'auto' | 'light' | 'dark';
+
+/** Where an imported table lives: `stored` keeps a copy in this browser (IndexedDB) so a reload
+ *  restores it; `session` holds it in memory only and never writes it to browser storage. */
+export type Retention = 'stored' | 'session';
 
 export interface Settings {
   theme: Theme;
@@ -14,6 +20,7 @@ export interface Settings {
   textScale: number; // unitless — extra multiplier on panel text only, independent of the zoom
   fontAxisTitle: number; // px — DOM axis titles (.xlabel/.ylabel, colorbar label)
   fontAxisLabel: number; // px — uPlot tick labels (drawn on the canvas)
+  newTables: Retention; // the retention a new import starts with (changeable per import and per table)
 }
 
 export const DEFAULTS: Settings = {
@@ -22,6 +29,8 @@ export const DEFAULTS: Settings = {
   textScale: 1,
   fontAxisTitle: 14,
   fontAxisLabel: 13,
+  // Stored, as before this choice existed: a reload restores the bench unless the user opts out.
+  newTables: 'stored',
 };
 
 /** Per-field font clamp [min, max] in px — bounds both a stored value and the UI sliders. */
@@ -57,6 +66,7 @@ export function sanitizeSettings(v: unknown): Settings {
     textScale: clampScale(o.textScale, DEFAULTS.textScale),
     fontAxisTitle: clampFont(o.fontAxisTitle, DEFAULTS.fontAxisTitle),
     fontAxisLabel: clampFont(o.fontAxisLabel, DEFAULTS.fontAxisLabel),
+    newTables: o.newTables === 'session' ? 'session' : 'stored',
   };
 }
 

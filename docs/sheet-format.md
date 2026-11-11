@@ -131,7 +131,7 @@ Each entry in `params` is a named scalar input:
 |-|-|-|
 | `name` | string | The identifier used in expressions. |
 | `value` | number | The current value (SI units). |
-| `min`, `max` | number, optional | Bound the GUI slider **and** make the parameter sweepable. On a parameter the engine solves (`solveFor`, `designConstraint`, `hold`) they are instead the range it is searched in, and required. |
+| `min`, `max` | number, optional | Bound the GUI slider **and** make the parameter sweepable. On a parameter the engine solves (`solveFor`, `designConstraint`, `hold`) they are instead the range it is searched in — required, except on a node's voltage and on a device's length, whose range the engine reads itself (see [A solved parameter with no range](#a-solved-parameter-with-no-range)). |
 | `unit` | string, optional | Display unit. |
 | `role` | `"spec"` \| `"choice"`, optional | Groups the parameter (see below). |
 | `note` | string, optional | A one-line intent/derivation annotation for the next designer. Renders inline math in `$…$` (see [Inline math](#inline-math-in-prose)). |
@@ -1101,10 +1101,23 @@ gate's wire held at the hold expression, for a block's device and for the sheet'
 
 A wire the draft leaves with one terminal would be a misspelt name to validation, so each is made
 something: held at the level the draft placed it at — a number, or the drain or body voltage that
-placed it — where that level may be held, and otherwise a port of the top sheet (`ports`), the wire
-a parent or the application connects; a note says which and why. On a sheet below the top, a port
-would need its parent block's port map too, so the wire is left to the author with a note. A child
-that wires itself is connected through its ports, which the draft leaves to the author.
+placed it — where that level may be held, and otherwise a port (`ports`) of the sheet it is on: at
+the top, the wire the application connects; below it, a wire the sheet above maps to one of its
+own. A note says which and why.
+
+A sub-sheet that composes devices of its own is drafted first, and the sheet above it then connects
+its wires through the block's port map. A sub-sheet wire placed at the same level as a wire of the
+sheet above — a param the block overrides read as the override — is mapped onto that wire
+(**inferred**); a port joined to nothing there is mapped to a new wire of the sheet above
+(**unknown**), which is itself held or made a port in turn. Where the sheet above holds the wire, the
+sub-sheet's own hold on it is dropped, so the level is stated once. Every sheet above one the draft
+wired is brought to format version 2, its block given a port map — an empty one where the child
+declares no ports — since a sheet that composes a child stating wiring states wiring itself. A child
+already in format version 2 that wires itself is connected through the ports it declares, which the
+draft leaves to the author. A child included by reference is drafted only once the sheet is resolved
+against its library (`resolvedSheet(doc, refs).doc`); an unresolved one is named in the notes, not
+passed over. The copy then holds every child inline; a script that keeps a child in a file of its
+own writes each block's `doc` back to the file its `ref` names.
 
 ### Every sheet names its wiring
 
@@ -1190,8 +1203,9 @@ agree.
 
 A solved parameter is found the way a design constraint is (see
 [Entering from a spec](#entering-from-a-spec-designconstraint)): the engine searches it between
-`min` and `max` until `param − solveFor` reads zero. Both are required, and they are the range
-searched, not slider bounds. State the range the answer is physically bound to lie in — a share
+`min` and `max` until `param − solveFor` reads zero. They are the range searched, not slider
+bounds, and they are required unless the parameter is a node's voltage or a device's length
+(see [A solved parameter with no range](#a-solved-parameter-with-no-range)). State the range the answer is physically bound to lie in — a share
 between 0 and 1, a node between its neighbours, a gate-source voltage between the threshold region
 and the supply — and say so in the note. Where the parameter is the level of a wire, the wiring
 reads that range itself: `min` and `max` are searched first, and the wiring's range after them
@@ -1221,7 +1235,7 @@ its own:
 | situation | result |
 |-|-|
 | the named target does not resolve to a finite number at either end of the range or at its middle | infeasible, `sheet-solve` error: the solve did not settle, because nothing of the range could be evaluated, and why |
-| `min`/`max` missing or inverted | validation error — the range is required, and evaluation fails closed in the same words |
+| `min`/`max` inverted, or missing where the parameter is neither a node's voltage nor a device's length | validation error — the range is required (see [A solved parameter with no range](#a-solved-parameter-with-no-range)), and evaluation fails closed in the same words |
 | a param solves for itself by name | validation error (the relation reads zero everywhere, and hides the loop) |
 | a param solves for itself through an equation, or its relation reads the same everywhere | infeasible, `sheet-solve` error: the same value at both ends of the range and at its middle — the relation does not depend on the param, so no value of it is singled out |
 | the parameter also carries `designConstraint` | validation error — one relation per parameter |
@@ -1329,6 +1343,30 @@ evaluates, so it searches between them once more. Only when a later probe falls 
 stretch already stepped round, and neither half changes sign again, is the crossing taken to be
 out of reach; that is reported as the solve not settling, naming the stretch where the points tried
 do not evaluate, never as no solution.
+
+### Holding a width, solving the length
+
+A design constraint's unknown need not be a voltage. A diode that makes a cascode gate voltage is
+often drawn at a width the layout fixes, carrying a branch current the sheet sets, and has to drop a
+set voltage: the free variable is its length. Make the length the solved param, and the width the
+relation:
+
+```json
+{ "name": "L_MB5", "value": 2e-6, "min": 0.18e-6, "max": 20e-6, "unit": "m", "role": "choice",
+  "designConstraint": { "lhs": "MB5__W", "rhs": "W_diode" },
+  "note": "the length at which the diode, carrying I_cbias at the drop V_B3_set, is W_diode wide" }
+```
+
+with the diode's block sized from its current and drop — `"params": { "L": "L_MB5", "I": "I_cbias",
+"V": "V_B3_set" }` into givens `{ "L": "L", "id": "I", "vgs": "V", "diode": true }` — and `W` among
+its `provides`. On the sheet that sizes the diode itself the relation reads its own `W`. At a fixed
+current and drop the width the table asks for grows with the length, so the search has one crossing
+to find; a length between two characterized lengths is read by interpolation along the length axis.
+Change `V_B3_set` and the length is found again, with the width where the layout put it. `min` and
+`max` may be left out: a length is searched over the lengths its table holds (see
+[A solved parameter with no range](#a-solved-parameter-with-no-range)). Either way, a drop that needs
+a length past the longest finds no solution, and says so with the relation read at both ends — not a
+width that has quietly drifted from `W_diode`.
 
 ### The range a wire is searched in
 
@@ -1474,7 +1512,7 @@ Validation adds:
 | `designConstraint` missing `lhs` or `rhs` | validation error — a half-written design constraint would freeze the parameter without solving it |
 | `designConstraint` carries `held` | validation error — the engine sets that flag on the constraint it generates from a `hold` where the hardware is held; it is never written |
 | the relation does not read the parameter it solves at all | validation error — it cannot single the parameter out |
-| `min`/`max` missing or inverted | validation error — the range is required |
+| `min`/`max` inverted, or missing where the parameter is neither a node's voltage nor a device's length | validation error — the range is required (see [A solved parameter with no range](#a-solved-parameter-with-no-range)) |
 
 Messages print the relation as `lhs - (rhs)`, so `Q = A/2 + 0.8` reads `Q - (A/2 + 0.8)`. The
 tolerance is **form-invariant**: scaling the relation scales its slope with it, so `lhs: "CM_in",
@@ -1489,6 +1527,39 @@ instead. The library's 5T OTA is the worked example: the tail node is constraine
 common mode equals `CM_dc`, which makes the common-mode axis a sweep of `CM_dc` with one search
 per point.
 
+
+### A solved parameter with no range
+
+A design is an operating point and a scale. The operating point — every node's voltage, every
+device's current density, gm/ID and length — is bounded by physics: the supplies, and the process.
+The scale — every current, width, gm, capacitance, mirror ratio and resistance — is the designer's
+choice: multiply every width and every current by the same factor and every voltage stays where it
+was, so nothing in the circuit says where a current should be. The engine can find where to look
+for an operating-point quantity; only the designer can say where to look for the scale.
+
+A solved parameter may therefore state no `min` and `max` where it is one of two things:
+
+- **A node's voltage** — the level of a wire, anywhere in the tree, a child sheet's included. It is
+  searched in its physical range, between the wires its devices' channels join its wire to, read
+  from the wiring of the whole tree as in
+  [The range a wire is searched in](#the-range-a-wire-is-searched-in). No crossing anywhere there,
+  with both ends read, is the design failing, as for any wire.
+- **A device's length** — a parameter that is exactly a device's `L`, read through every override
+  above it. It is searched over the lengths its table holds. The shortest is the process's own
+  minimum, so nothing below it can be built; the longest is only as far as the table reaches, so no
+  crossing anywhere in the range is no answer — re-export the table with longer lengths, or state
+  `min` and `max` — never the design failing.
+
+The result's `ranges` says which each was searched in (`from: "wiring"` or `"table"`, with no
+`author` range). A range the author states is used as before, so a sheet that states every range is
+solved exactly as it was. Anything else a sheet solves is its scale, and states its range.
+
+Validation refuses a missing range where it can tell before any table is read that none can be
+supplied: on a sheet that states no wiring, and on a parameter in a unit other than volts that sets
+no device's length. Whether a volt-valued parameter is a node's voltage, and whether its range can be
+read, depends on the tables — which way each p device's voltages run — so it is settled when the
+sheet is evaluated, and a parameter whose range cannot be read is refused there with the reason: it
+is the level of no wire, or the wires around it move with the operating point.
 
 ### Several solved parameters on one sheet
 
@@ -1574,7 +1645,7 @@ parameter's own term is there to read. Any other relation is a `designConstraint
 |-|-|
 | the parameter appears twice, inside a function, divided, or not at all | validation error — write the relation as a `designConstraint` |
 | the parameter also carries `designConstraint`, `solveFor` or `class` | validation error — a parameter takes one of the three, and a held node's class is derived |
-| `min`/`max` missing or inverted | validation error — the range is required |
+| `min`/`max` inverted, or missing where the parameter is neither a node's voltage nor a device's length | validation error — the range is required (see [A solved parameter with no range](#a-solved-parameter-with-no-range)) |
 | a range end sets the parameter | validation error — the range end re-solves it, so the override would be discarded |
 | a parent wires a value into a node its child holds | warning — the value is used at the design point, but a range end re-solves the node inside the child and the parent's own value does not follow. Hold the node on the parent |
 | the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at), and validation names the name |
@@ -1632,6 +1703,9 @@ and its current and input level follow the condition.
 The warning is raised for blocks, through the parent's overrides, and for the sheet's own device at
 the top of a tree; a child's own device is asked about from its parent's block, where the holds
 that could settle it are. A current given as a number is a source by statement and draws nothing.
+A diode connection — `diode: true`, or its gate on its drain wire — is not asked about: its gate is
+its own drain, so held at its width and the current fed into it, its gate voltage is read from the
+table as the circuit's would follow.
 
 ## The operating range (`operatingRange`)
 
@@ -1854,6 +1928,21 @@ Two views trace a sheet across parameter ranges (both need finitely-bounded slid
   is the classic), answering questions a 1-D cut cannot: "what is the minimum `L` that stays
   feasible across the whole `gm_id` range?" Each infeasible cell names the worst failing hard
   check (by tree path), so a child's constraint is attributed to the block it lives in.
+
+**Where a knob passes.** A one-parameter sweep can also say where along the knob the design
+passes, to better than the sample spacing: pass `{ windows: true }` to `sweepSheet` or
+`sweepAtCondition` and the result carries `windows`, one per stretch of the range where every hard
+check holds (on a held sweep, where the held design complies). An edge that lies between two
+samples is pinned by halving the gap between them eight times — a ten-thousandth of the range at
+the default 41 samples — and is the last passing value found, so a window never claims a value
+that fails. Each edge inside the range names the hard checks that fail just past it (`below`,
+`above`); an empty list there means the design stops standing rather than failing a check — a
+device that will not size, a solve that does not land. A spec written as an inequality is the
+author's to place inside its window: `p_2X >= floor` leaves `I_REF` a window whose lower edge is the
+current that puts the pole on its floor, and the knob is set inside it, rounded the way the design
+needs. Pinning costs a few evaluations per edge, feasibility only, so a caller that scans many
+knobs — the topology picker — leaves it off; the sheet panel asks for it on the knob it charts. A
+stretch narrower than the sample spacing between two failing samples is not seen.
 
 A margin says how much room a check has but not which knob moves it, so the core also exports
 `sheetSensitivities(doc, table?, resolveDevice?, opts?)`: it re-evaluates the whole sheet a

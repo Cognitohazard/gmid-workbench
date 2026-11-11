@@ -17,8 +17,10 @@ import {
   blockWires,
   composedWiringProblems,
   deviceGateWires,
+  flattened,
   formatOf,
   formatProblems,
+  lengthsSetBy,
   nodesProblems,
   structuralDiode,
   wiringRefusal,
@@ -48,6 +50,8 @@ import {
   providedNames,
   prefixBlockPath,
   prefixBlockWarning,
+  providePrefix,
+  ranged,
   splitProvide,
   balancedBy,
   balancesOf,
@@ -203,9 +207,11 @@ function assumptionEstimates(doc: SheetDoc): QAWarning[] {
  * remedies, because which one fits is the circuit's to say: a series partner on a shared wire
  * wants a hold that balances the two currents, and a mirror copy of a reference wants the
  * reference's width and gate voltage, so its current follows the data. A current given as a
- * number is a source by statement and draws nothing. The sheet's own device is asked about only
- * at the top of a tree: a child's own givens are checked from its parent's block, where its
- * overrides and the holds that could settle it are.
+ * number is a source by statement and draws nothing. A diode connection is not asked about either:
+ * its gate is its own drain, so held at its width and current its gate voltage follows the current
+ * as the circuit's does. The sheet's own device is asked about only at the top of a tree: a child's
+ * own givens are checked from its parent's block, where its overrides and the holds that could
+ * settle it are.
  */
 function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
   const out: QAWarning[] = [];
@@ -218,8 +224,9 @@ function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
     block: SheetBlock | undefined,
     who: string,
     location: string,
+    diode: boolean,
   ): void => {
-    if (!givens || givens.W !== undefined || givens.vgs === undefined) return;
+    if (!givens || givens.W !== undefined || givens.vgs === undefined || diode) return;
     if (typeof givens.id !== 'string') return;
     const id = ((block && blockOverride(block, givens.id.trim())) ?? givens.id).trim();
     const name = (k: string): string => (block ? joinProvide(block.name, k) : k);
@@ -240,9 +247,23 @@ function unsettledGates(doc: SheetDoc, top: boolean): QAWarning[] {
       location,
     });
   };
-  if (top) ask(doc.givens, undefined, deviceName('givens'), 'givens');
+  if (top)
+    ask(
+      doc.givens,
+      undefined,
+      deviceName('givens'),
+      'givens',
+      doc.givens?.diode === true || structuralDiode(doc),
+    );
   for (const block of doc.blocks ?? [])
-    ask(block.doc?.givens, block, `block "${block.name}"`, block.name);
+    ask(
+      block.doc?.givens,
+      block,
+      `block "${block.name}"`,
+      block.name,
+      !!block.doc &&
+        (block.doc.givens?.diode === true || structuralDiode(block.doc, blockWires(doc, block))),
+    );
   return out;
 }
 
@@ -1507,10 +1528,85 @@ function complianceReach(doc: SheetDoc): QAWarning[] {
 const readsAffixedColumn = (doc: SheetDoc, name: string): boolean =>
   !!doc.givens && splitProvide(name)?.[0] === TABLE_AFFIX;
 
+/** One param of a tree: the block path of the sheet that declares it, and its name in the whole
+ *  tree's walk (`bias__V_B1` for `V_B1` in the block `bias`). */
+export interface TreeParam {
+  p: SheetVar;
+  path: readonly string[];
+  atom: string;
+}
+
+/** Every param of a tree, the top sheet's first, each sheet's before its blocks'. */
+export function paramsOfTree(doc: SheetDoc): TreeParam[] {
+  const out: TreeParam[] = [];
+  const walk = (d: SheetDoc, chain: readonly SheetBlock[]): void => {
+    if (chain.length > MAX_BLOCK_DEPTH) return;
+    const pre = providePrefix(chain);
+    const path = chain.map((b) => b.name);
+    for (const p of Array.isArray(d.params) ? d.params : [])
+      out.push({ p, path, atom: `${pre}${p.name}` });
+    for (const b of Array.isArray(d.blocks) ? d.blocks : [])
+      if (isObject(b) && b.doc) walk(b.doc, [...chain, b]);
+  };
+  walk(doc, []);
+  return out;
+}
+
+/** The solved and held params of one sheet of a tree that state no range and may go without one
+ *  (see openRanges), by name — each with its name in the tree's walk and, for a device's length,
+ *  the chains of the devices it sets — and the same for each block below it, by block name. */
+export interface OpenRanges {
+  params: Map<string, { atom: string; lengths?: SheetBlock[][] }>;
+  blocks: Map<string, OpenRanges>;
+}
+
+/**
+ * The solved and held params of a tree that state no range and may go without one, as far as can be
+ * told before a table is read: a device's length, whose range the table gives; and, in a tree that
+ * states its wiring, a param that can be a node's voltage — in volts, or with no unit — whose range
+ * the wiring gives. Whether it is a node's voltage, and whether its range can be read, is settled
+ * when the sheet is evaluated, where the tables say which way each device's voltages run; one whose
+ * range cannot be read is refused there, with the reason. Anything else — a current, a ratio, a
+ * resistance — is the design's scale, which only its author can say where to look for. Undefined
+ * where the tree has none.
+ */
+export function openRanges(
+  doc: SheetDoc,
+  params: readonly TreeParam[] = paramsOfTree(doc),
+): OpenRanges | undefined {
+  const rangeless = params.filter(({ p }) => (engineSolved(p) || holds(p)) && !ranged(p));
+  if (!rangeless.length) return undefined;
+  const lengths = lengthsSetBy(
+    doc,
+    rangeless.map((r) => r.atom),
+  );
+  const wired = flattened(doc);
+  const root: OpenRanges = { params: new Map(), blocks: new Map() };
+  let any = false;
+  for (const { p, path, atom } of rangeless) {
+    const ls = lengths.get(atom);
+    if (!ls && !(wired && (p.unit === undefined || p.unit === 'V'))) continue;
+    let node = root;
+    for (const seg of path) {
+      let next = node.blocks.get(seg);
+      if (!next) node.blocks.set(seg, (next = { params: new Map(), blocks: new Map() }));
+      node = next;
+    }
+    node.params.set(p.name, { atom, ...(ls ? { lengths: ls } : {}) });
+    any = true;
+  }
+  return any ? root : undefined;
+}
+
 /** Surface authoring problems as warnings; never throws, never mutates the doc. Structural
  *  and device-independent — identifier resolution against the live values is eval's job.
  *  Recurses into composed children, attributing each child's findings to its block. */
-export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QAWarning[] {
+export function validateSheet(
+  doc: SheetDoc,
+  _depth = 0,
+  _wiredBy?: unknown,
+  _open?: OpenRanges,
+): QAWarning[] {
   // A document in a format this app does not read is kept as stored and read no further: anything
   // said about its keys would be said in the wrong format's terms.
   if (formatOf(doc) === 'unknown') return formatProblems(doc);
@@ -1519,7 +1615,9 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   // say so — its own `nodes`, or the parent block's (`_wiredBy`) — and is sized on the diagonal.
   const wiredAsDiode = structuralDiode(doc, _wiredBy);
 
-  out.push(...paramProblems(doc));
+  // Which params of the tree may state no range is a question of the whole tree, asked at its top.
+  const open = _depth === 0 ? openRanges(doc) : _open;
+  out.push(...paramProblems(doc, open));
   out.push(...givensProblems(doc, wiredAsDiode));
   out.push(...checkProblems(doc));
   out.push(...rangeProblems(doc));
@@ -1566,7 +1664,7 @@ export function validateSheet(doc: SheetDoc, _depth = 0, _wiredBy?: unknown): QA
   out.push(...provideCoverage(doc));
 
   // Composition: validate each block and attribute its findings to it.
-  out.push(...blockProblems(doc, _depth));
+  out.push(...blockProblems(doc, _depth, open));
   return out;
 }
 
@@ -1653,7 +1751,7 @@ function noiseFormProblems(doc: SheetDoc): QAWarning[] {
 }
 
 /** The params' own problems: each param on its own, then the solved params' structure. */
-function paramProblems(doc: SheetDoc): QAWarning[] {
+function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[] {
   const out: QAWarning[] = [];
   for (const p of doc.params) {
     if (!Number.isFinite(p.value)) {
@@ -1739,7 +1837,9 @@ function paramProblems(doc: SheetDoc): QAWarning[] {
   // catches a half-written constraint ({lhs} only), which the constrained() shape guard rejects and
   // which would otherwise freeze the param: neither swept nor solved, with the sheet still reading
   // feasible.
-  const constraintIssue = constraintProblem(doc.params);
+  const constraintIssue = constraintProblem(doc.params, (p) =>
+    open?.params.has(p.name) ? { ok: true } : { ok: false },
+  );
   if (constraintIssue) {
     out.push({
       rule: 'sheet-param',
@@ -2000,7 +2100,7 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
 /** The composition's problems: collisions with what the blocks provide, hand-tuned assumptions,
  *  forward references, each block's shape, and each embedded child's own findings, attributed to
  *  its block. `depth` is how deep `doc` sits in the tree. */
-function blockProblems(doc: SheetDoc, depth: number): QAWarning[] {
+function blockProblems(doc: SheetDoc, depth: number, open: OpenRanges | undefined): QAWarning[] {
   const out: QAWarning[] = [];
   if (doc.blocks) {
     // Collision guard: a child exposes scalars into the parent scope as `name__key`. If a
@@ -2183,7 +2283,8 @@ function blockProblems(doc: SheetDoc, depth: number): QAWarning[] {
             location: block.name,
           });
         }
-        for (const w of validateSheet(block.doc, depth + 1, blockWires(doc, block))) {
+        const below = open?.blocks.get(block.name);
+        for (const w of validateSheet(block.doc, depth + 1, blockWires(doc, block), below)) {
           out.push(prefixBlockWarning(block.name, w));
         }
       }
