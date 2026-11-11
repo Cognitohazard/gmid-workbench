@@ -268,11 +268,12 @@ export function constraintProblem(params: readonly SheetVar[], open?: OpenRange)
  */
 export type OpenRange = (p: SheetVar) => { ok: true } | { ok: false; why?: string };
 
+/** Items joined for a sentence: `a`, `a and b`, `a, b and c`. */
+export const andList = (q: readonly string[]): string =>
+  q.length > 1 ? `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}` : (q[0] ?? '');
+
 /** The quoted names of `ps`, joined for a message: `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
-const quotedNames = (ps: readonly SheetVar[]): string => {
-  const q = ps.map((p) => `"${p.name}"`);
-  return q.length > 1 ? `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}` : q[0];
-};
+const quotedNames = (ps: readonly SheetVar[]): string => andList(ps.map((p) => `"${p.name}"`));
 
 /** constraintProblem with the params it is about — what a failed solve names as its unknowns. A
  *  problem that every one of several params shares is said once, naming them all, so an author
