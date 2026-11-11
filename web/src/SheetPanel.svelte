@@ -998,9 +998,22 @@
   // (SheetSweep.windows), which the panel's sweeps always ask for.
   const feasWindow = $derived.by(() => {
     if (!swept || swept.feasible.length === 0) return null;
-    const windows = swept.windows ?? [];
+    // A sweep that carries no pinned windows still says where its samples pass, to the spacing.
+    const windows = swept.windows ?? sampledWindows(swept.x, swept.feasible);
     return windows.length ? { none: false as const, windows } : { none: true as const };
   });
+  /** Each run of passing samples as a window, its edges at the samples themselves. */
+  const sampledWindows = (x: readonly number[], ok: readonly boolean[]): SweepWindow[] => {
+    const out: SweepWindow[] = [];
+    for (let i = 0; i < ok.length; i++) {
+      if (!ok[i]) continue;
+      let j = i;
+      while (j + 1 < ok.length && ok[j + 1]) j++;
+      out.push({ lo: x[i], hi: x[j] });
+      i = j;
+    }
+    return out;
+  };
   /** One pinned window as the line under the chart reads it: its span, and what fails just past
    *  each edge that lies inside the range. */
   const windowText = (w: SweepWindow): string => {

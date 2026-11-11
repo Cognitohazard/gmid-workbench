@@ -5498,6 +5498,35 @@ describe('a block whose inputs failed', () => {
     expect(followOn.some((w) => /check "w" lhs: "Wx" is not defined/.test(w.message))).toBe(true);
   });
 
+  it("does not blame a device's own failure on a child's, rolled up before it", () => {
+    // The child `w` reports a sizing that failed because of its own block `m`; this sheet's device
+    // then fails on its own (a misspelt name). What reads that device's width follows from it, not
+    // from `w.m`.
+    const own = notACircuit({
+      title: 'own device',
+      polarity: 'n',
+      params: [],
+      blocks: [{ name: 'm', doc: unranged }],
+      givens: { L: '0.5e-6', id: 'm__id', gm_id: '10', vds: '0.6' },
+      equations: [],
+      checks: [],
+    });
+    const doc = notACircuit({
+      title: 'wrapper',
+      polarity: 'n',
+      params: [],
+      blocks: [{ name: 'w', doc: own }],
+      givens: { L: '0.5e-6', id: '1e-6', gm_id: 'typo', vds: '0.6' },
+      equations: [{ name: 'Wp', expr: 'W' }],
+      checks: [],
+    });
+    const res = runSheet(doc, dev);
+    expect(res.warnings.some((w) => w.cause === 'w.m')).toBe(true);
+    const wp = res.warnings.find((w) => /equation "Wp": "W" is not defined/.test(w.message));
+    expect(wp).toBeDefined();
+    expect(wp?.cause).toBeUndefined();
+  });
+
   it('blames a misspelt name on nobody, even beside a withheld one', () => {
     const doc = notACircuit({
       title: 'typo',

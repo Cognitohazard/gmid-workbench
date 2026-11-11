@@ -42,6 +42,7 @@ import {
   REGION_CHECK_ID,
   lastSolveFailure,
   namesOf,
+  andList,
   childPath,
   DEVICE_NAMES,
   ranged,
@@ -1671,6 +1672,7 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
       : undefined;
 
   // 3. Size the device — the ONLY place physics enters — when givens are declared.
+  const beforeSizing = warnings.length;
   const sized = doc.givens
     ? runSizing(
         doc.givens,
@@ -1684,9 +1686,12 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
     : undefined;
   const sizing = sized?.report;
   // A device that did not size because a given read a withheld name publishes nothing, and what
-  // reads its quantities follows from the same block.
+  // reads its quantities follows from the same block. Only the sizing's own failure is read: the
+  // children's warnings, rolled up before it, carry causes of their own.
   if (sizing && !sizing.ok) {
-    const cause = warnings.find((w) => w.rule === 'sheet-givens' && w.severity === 'error')?.cause;
+    const cause = warnings
+      .slice(beforeSizing)
+      .find((w) => w.rule === 'sheet-givens' && w.severity === 'error')?.cause;
     if (cause !== undefined)
       for (const n of DEVICE_NAMES) if (!(n in values)) withheld.set(n, cause);
   }
@@ -2513,10 +2518,8 @@ const rangeOf = (u: Unknown, lo: number, hi: number): string => rangeText(lo, hi
 
 /** Unknowns named for a sentence, each with the range it is searched in: `"a" in [0, 1] V`,
  *  `"a" in … and "b" in …`, `"a" in …, "b" in … and "c" in …`. */
-const nameList = (us: readonly Unknown[]): string => {
-  const q = us.map((u) => `"${u.p.name}" in ${rangeOf(u, ...u.range.range)}`);
-  return q.length > 1 ? `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}` : q[0];
-};
+const nameList = (us: readonly Unknown[]): string =>
+  andList(us.map((u) => `"${u.p.name}" in ${rangeOf(u, ...u.range.range)}`));
 
 /** What the search reads at a node: the node, and the current value of every solved param of it,
  *  which each probe evaluates with. */
