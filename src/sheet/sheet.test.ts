@@ -70,7 +70,7 @@ const devBias = generateDemoDevice({
 });
 
 /** gm/gds on the 0.5 µm slice at a chosen vgs — used to pick a sizing target off-node. */
-const lookupAt = (vgs: number): number => lookup(devAt, { l: 0.5e-6, vgs }).gm_gds;
+const lookupAt = (vgs: number): number => lookup(devAt, { l: 0.5e-6, vgs }).values.gm_gds;
 
 /** A minimal sheet with givens at a known in-range operating point (gm/ID = 12, L = 0.5 µm,
  *  vds = 0.6 V), declared not a circuit. */

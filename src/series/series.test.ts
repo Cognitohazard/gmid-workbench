@@ -4,6 +4,7 @@ import {
   familyCurvesXY,
   overlayCurvesXY,
   mirrorPinned,
+  pinnedPoint,
   pinnedElsewhere,
   familyUnionCount,
   invertX,
@@ -33,7 +34,7 @@ describe('familyCurves', () => {
     const k = 1;
     const i = 30;
     const L = fc.famValues[k];
-    const expected = lookup(dev, { l: L, vgs: fc.x[i] }, ['gm_id']).gm_id;
+    const expected = lookup(dev, { l: L, vgs: fc.x[i] }, ['gm_id']).values.gm_id;
     expect(fc.lines[k][i]).toBeCloseTo(expected, 9);
   });
 
@@ -105,7 +106,7 @@ describe('familyCurves', () => {
     // The single curve sits at l = first node, vds = 0.6.
     const i = 70;
     const L = dev3.grid.axes.find((a) => a.name === 'l')!.values[0];
-    const expected = lookup(dev3, { l: L, vds: 0.6, vgs: fc.x[i] }, ['gm_id']).gm_id;
+    const expected = lookup(dev3, { l: L, vds: 0.6, vgs: fc.x[i] }, ['gm_id']).values.gm_id;
     expect(fc.lines[0][i]).toBeCloseTo(expected, 9);
   });
 
@@ -118,8 +119,8 @@ describe('familyCurves', () => {
     // values match the original table interpolated at vds = 0.6.
     const i = 60;
     const L = t.grid.axes[0].values[0];
-    expect(lookup(t, { l: L, vgs: t.grid.axes[1].values[i] }, ['gm_id']).gm_id).toBeCloseTo(
-      lookup(dev3, { l: L, vds: 0.6, vgs: t.grid.axes[1].values[i] }, ['gm_id']).gm_id,
+    expect(lookup(t, { l: L, vgs: t.grid.axes[1].values[i] }, ['gm_id']).values.gm_id).toBeCloseTo(
+      lookup(dev3, { l: L, vds: 0.6, vgs: t.grid.axes[1].values[i] }, ['gm_id']).values.gm_id,
       9,
     );
   });
@@ -249,7 +250,7 @@ describe('familyCurvesXY (X as an expression, parametric in a sweep)', () => {
   it('invertX recovers the sweep coordinate where X hits a value (gm/ID → vgs)', () => {
     const L = lAxis.values[0];
     const vgsNode = dev.grid.axes.find((a) => a.name === 'vgs')!.values[40];
-    const gmid = lookup(dev, { l: L, vgs: vgsNode }, ['gm_id']).gm_id;
+    const gmid = lookup(dev, { l: L, vgs: vgsNode }, ['gm_id']).values.gm_id;
     expect(invertX(dev, 'gm/id', gmid, 'vgs', { l: L })).toBeCloseTo(vgsNode, 6);
     // Out of range → null (never extrapolates).
     expect(invertX(dev, 'gm/id', 1e6, 'vgs', { l: L })).toBeNull();
@@ -442,5 +443,18 @@ describe('overlayCurvesXY says where a table is read away from the pinned bias',
     const ov = overlayCurvesXY([short, ss], 'gm/id', 'id', 'vgs', 'l', { vds: 0.6 });
     expect(ov.warning).toContain('nmos_short tt@27: vsb');
     expect(ov.warning).toContain('nmos_short ss@85: vsb');
+  });
+});
+
+describe('pinnedPoint — the point a chart readout looks up', () => {
+  it('writes every axis out: pins it names, first node for the rest, foreign pins dropped', () => {
+    const t = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
+    const l0 = t.grid.axes[0].values[0];
+    const vds0 = t.grid.axes[1].values[0];
+    expect(pinnedPoint(t, { vgs: 0.7, vsb: 0.2 })).toEqual({ l: l0, vds: vds0, vgs: 0.7 });
+    // A lookup accepts it, and reads what the old lookup read for the bare pins.
+    const r = lookup(t, pinnedPoint(t, { vgs: 0.7, l: 1e-6 }));
+    expect(r.at).toEqual({ l: 1e-6, vds: vds0, vgs: 0.7 });
+    expect(r.clamped).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@
   import {
     overlayCurvesXY,
     mirrorPinned,
+    pinnedPoint,
     familyUnionCount,
     invertX,
     lookup,
@@ -309,11 +310,13 @@
     const v = invertX(dev, cfg.xExpr, c.x, sweep, fixed);
     if (v == null) return null;
     try {
+      // The point the curve was drawn at, every axis written out (a lookup refuses to choose
+      // one); what it reads away from the pins is the overlay's warning.
       const q = lookup(
         dev,
-        { [sweep]: v, ...fixed },
+        pinnedPoint(dev, { ...fixed, [sweep]: v }),
         OP_FIELDS.map((f) => f[1]),
-      );
+      ).values;
       return {
         label: seriesKey[c.focusedLine]?.label ?? '',
         color: d.lineColors[c.focusedLine] ?? '',

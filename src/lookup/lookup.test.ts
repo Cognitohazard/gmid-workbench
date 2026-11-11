@@ -46,7 +46,7 @@ describe('lookup (forward)', () => {
     const L = lAxis[li];
     const vgs = vgsAxis[vi];
 
-    const out = lookup(table, { l: L, vgs });
+    const out = lookup(table, { l: L, vgs }).values;
 
     for (const key of ['id', 'gm', 'gds', 'cgg', 'vth', 'vdsat']) {
       expect(out[key]).toBeCloseTo(nodeValue(table, key, li, vi), 9);
@@ -58,7 +58,7 @@ describe('lookup (forward)', () => {
 
   it('default keys include base columns plus computable standard derived', () => {
     const table = generateDemoDevice();
-    const out = lookup(table, { l: table.grid.axes[0].values[0], vgs: 0.6 });
+    const out = lookup(table, { l: table.grid.axes[0].values[0], vgs: 0.6 }).values;
 
     // Present base columns.
     for (const key of ['id', 'gm', 'gds', 'cgg', 'vth', 'vdsat', 'l', 'vgs']) {
@@ -89,14 +89,14 @@ describe('lookup (forward)', () => {
     const noGmb = lookup(withoutColumns(table, ['gmb']), {
       l: table.grid.axes[0].values[0],
       vgs: 0.6,
-    });
+    }).values;
     expect(noGmb.gmb_gm).toBeUndefined();
     expect(noGmb.av0).toBeDefined();
   });
 
   it('derived are evaluated from the interpolated base scalars (self-consistent)', () => {
     const table = generateDemoDevice();
-    const out = lookup(table, { l: 0.5e-6, vgs: 0.55 });
+    const out = lookup(table, { l: 0.5e-6, vgs: 0.55 }).values;
 
     expect(out.gm_id).toBeCloseTo(out.gm / out.id, 12);
     expect(out.vstar).toBeCloseTo((2 * out.id) / out.gm, 12);
@@ -108,13 +108,13 @@ describe('lookup (forward)', () => {
 
   it('honours an explicit keys list', () => {
     const table = generateDemoDevice();
-    const out = lookup(table, { l: 1e-6, vgs: 0.7 }, ['gm', 'gm_id']);
+    const out = lookup(table, { l: 1e-6, vgs: 0.7 }, ['gm', 'gm_id']).values;
     expect(Object.keys(out).sort()).toEqual(['gm', 'gm_id']);
   });
 
   it('throws for an unknown requested key', () => {
     const table = generateDemoDevice();
-    expect(() => lookup(table, { l: 1e-6, vgs: 0.7 }, ['nope'])).toThrow(
+    expect(() => lookup(table, { l: 1e-6, vgs: 0.7 }, ['nope']).values).toThrow(
       /neither a present column/,
     );
   });
@@ -127,8 +127,8 @@ describe('lookupByGmId (inverse)', () => {
 
     // Pick interior vgs values, forward-lookup gm/id, then invert.
     for (const vgs of [0.45, 0.6, 0.75, 0.9]) {
-      const fwd = lookup(table, { l: L, vgs });
-      const back = lookupByGmId(table, fwd.gm_id, L);
+      const fwd = lookup(table, { l: L, vgs }).values;
+      const back = lookupByGmId(table, fwd.gm_id, L).values;
       expect(back.vgs).toBeCloseTo(vgs, 4);
       // gm/id at the recovered point matches the target.
       expect(back.gm_id).toBeCloseTo(fwd.gm_id, 6);
@@ -143,7 +143,7 @@ describe('lookupByGmId (inverse)', () => {
     const vgs = table.grid.axes[1].values[vi];
 
     const gmId = nodeValue(table, 'gm', li, vi) / nodeValue(table, 'id', li, vi);
-    const back = lookupByGmId(table, gmId, L);
+    const back = lookupByGmId(table, gmId, L).values;
     expect(back.vgs).toBeCloseTo(vgs, 6);
   });
 
@@ -151,8 +151,8 @@ describe('lookupByGmId (inverse)', () => {
     const table = generateDemoDevice();
     const L = table.grid.axes[0].values[0];
     // gm/id ceiling is ~1/(n·UT) ≈ 29.9 for the demo; 1e6 is well above.
-    expect(() => lookupByGmId(table, 1e6, L)).toThrow(/out of range/);
-    expect(() => lookupByGmId(table, -1, L)).toThrow(/out of range/);
+    expect(() => lookupByGmId(table, 1e6, L).values).toThrow(/out of range/);
+    expect(() => lookupByGmId(table, -1, L).values).toThrow(/out of range/);
   });
 
   it('shares its inverse kernel with series.invertX (agree interior + at endpoints)', () => {
@@ -163,12 +163,12 @@ describe('lookupByGmId (inverse)', () => {
     // An interior gm/ID plus BOTH curve endpoints (max gm/ID at the lowest vgs, min at
     // the highest) — the spots where the old hand-rolled bracket, lacking interp1's ULP
     // clamp, could disagree with the cursor's invertX. They must now match exactly.
-    const interior = lookup(table, { l: L, vgs: 0.6 }).gm_id;
-    const hiEnd = lookup(table, { l: L, vgs: vgsAxis[0] }).gm_id;
-    const loEnd = lookup(table, { l: L, vgs: vgsAxis[vgsAxis.length - 1] }).gm_id;
+    const interior = lookup(table, { l: L, vgs: 0.6 }).values.gm_id;
+    const hiEnd = lookup(table, { l: L, vgs: vgsAxis[0] }).values.gm_id;
+    const loEnd = lookup(table, { l: L, vgs: vgsAxis[vgsAxis.length - 1] }).values.gm_id;
 
     for (const gmId of [interior, hiEnd, loEnd]) {
-      const viaLookup = lookupByGmId(table, gmId, L).vgs;
+      const viaLookup = lookupByGmId(table, gmId, L).values.vgs;
       const viaCursor = invertX(table, 'gm/id', gmId, 'vgs', { l: L });
       expect(viaCursor).not.toBeNull();
       expect(viaLookup).toBeCloseTo(viaCursor as number, 12);
@@ -178,16 +178,16 @@ describe('lookupByGmId (inverse)', () => {
   it('forwards an explicit keys list through to the recovered point', () => {
     const table = generateDemoDevice();
     const L = table.grid.axes[0].values[0];
-    const fwd = lookup(table, { l: L, vgs: 0.6 });
-    const back = lookupByGmId(table, fwd.gm_id, L, ['vgs', 'id']);
+    const fwd = lookup(table, { l: L, vgs: 0.6 }).values;
+    const back = lookupByGmId(table, fwd.gm_id, L, ['vgs', 'id']).values;
     expect(Object.keys(back).sort()).toEqual(['id', 'vgs']);
   });
 
   it('models input-referred thermal noise vnth_m = √(4kTγ·(gm + gmb))/gm, falling as gm rises', () => {
     const table = generateDemoDevice();
     const L = table.grid.axes[0].values[0];
-    const weak = lookup(table, { l: L, vgs: 0.45 }); // low gm
-    const strong = lookup(table, { l: L, vgs: 0.9 }); // high gm
+    const weak = lookup(table, { l: L, vgs: 0.45 }).values; // low gm
+    const strong = lookup(table, { l: L, vgs: 0.9 }).values; // high gm
 
     // The γ-model quantity is exactly the closed form with the default γ, body effect included.
     const expected =
@@ -202,7 +202,7 @@ describe('lookupByGmId (inverse)', () => {
     // The MEASURED keys need stored PSDs: a device WITHOUT them reports no measured
     // thermal (sth) or flicker (sfl) noise — no model masquerades as data.
     const bare = withoutColumns(table, ['sth', 'sfl', 'gamma']);
-    const w2 = lookup(bare, { l: L, vgs: 0.45 });
+    const w2 = lookup(bare, { l: L, vgs: 0.45 }).values;
     expect(w2.vnth).toBeUndefined();
     expect(w2.svth).toBeUndefined();
     expect(w2.vnfl).toBeUndefined();
@@ -220,7 +220,7 @@ describe('lookupByGmId (inverse)', () => {
     const res = importMostab(new TextEncoder().encode(csv), { filename: 'noisy.mostab.csv' });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const out = lookup(res.dataset.tables[0], { l: 1e-7, vgs: 0.4 }); // node: sth=4e-21, sfl=1e-20, gm=1e-5
+    const out = lookup(res.dataset.tables[0], { l: 1e-7, vgs: 0.4 }).values; // node: sth=4e-21, sfl=1e-20, gm=1e-5
     expect(out.svth).toBeCloseTo(4e-21 / 1e-5 ** 2, 18); // thermal input-referred PSD
     expect(out.vnth).toBeCloseTo(Math.sqrt(4e-21) / 1e-5, 18); // thermal density = √PSD
     expect(out.svfl).toBeCloseTo(1e-20 / 1e-5 ** 2, 18); // flicker input-referred PSD @1Hz
@@ -241,14 +241,14 @@ describe('lookupByGmId (inverse)', () => {
     let result: Record<string, number> | null = null;
     let threw = false;
     try {
-      result = lookupByGmId(table, 10, L);
+      result = lookupByGmId(table, 10, L).values;
     } catch {
       threw = true;
     }
     expect(threw).toBe(true);
     // And specifically: no fabricated record with a NaN vgs/quantity leaked out.
     expect(result).toBeNull();
-    expect(() => lookupByGmId(table, 10, L)).toThrow(/invertible/);
+    expect(() => lookupByGmId(table, 10, L).values).toThrow(/invertible/);
   });
 
   it('fails closed on a folded (non-monotone) gm/id-vs-vgs slice instead of sizing an arbitrary branch', () => {
@@ -262,12 +262,12 @@ describe('lookupByGmId (inverse)', () => {
     const gm = [1e-6, 2e-6, 3e-6, 2e-6, 1e-6]; // gm/id = [1,2,3,2,1] — a fold
     const table = makeFixedLTable(L, vgs, gm, id);
 
-    expect(() => lookupByGmId(table, 2, L)).toThrow(/monoton/);
+    expect(() => lookupByGmId(table, 2, L).values).toThrow(/monoton/);
     // A fold is a per-LENGTH failure, not a structural one: it is typed so a caller can
     // offer the lengths that do invert (gm/gds folds near threshold on real data), where a
     // missing column — no length would help — stays a plain Error.
-    expect(() => lookupByGmId(table, 2, L)).toThrow(LookupError);
-    expect(() => lookupByQuantity(table, 'ft', 1e9, L)).not.toThrow(LookupError);
+    expect(() => lookupByGmId(table, 2, L).values).toThrow(LookupError);
+    expect(() => lookupByQuantity(table, 'ft', 1e9, L).values).not.toThrow(LookupError);
   });
 });
 
@@ -280,26 +280,26 @@ describe('lookup — γ from the table where it carries thermal noise', () => {
   const bare = withoutColumns(dev, ['gamma', 'sth']);
 
   it('reports the measured γ at the point, and the γ-model keys read it', () => {
-    const out = lookup(measured, { l: L, vgs: 0.6 });
+    const out = lookup(measured, { l: L, vgs: 0.6 }).values;
     expect(out.gamma).toBeCloseTo(out.sth / (4 * PHYS.k * PHYS.T * (out.gm + out.gmb)), 12);
     expect(out.gamma).toBeCloseTo(2 * GAMMA_DEFAULT, 12);
     expect(out.vnth_m / out.vnth).toBeCloseTo(1, 12);
     expect(out.svth_m / out.svth).toBeCloseTo(1, 12);
     // Asked for alone, the γ-model key still reads the measured γ.
-    const alone = lookup(measured, { l: L, vgs: 0.6 }, ['vnth_m']);
+    const alone = lookup(measured, { l: L, vgs: 0.6 }, ['vnth_m']).values;
     expect(alone.vnth_m).toBe(out.vnth_m);
   });
 
   it('takes the default where the table carries no sth, and says so when asked by name', () => {
-    const out = lookup(bare, { l: L, vgs: 0.6 });
+    const out = lookup(bare, { l: L, vgs: 0.6 }).values;
     expect(out).not.toHaveProperty('gamma');
     expect(out.vnth_m).toBeCloseTo(
       Math.sqrt(4 * PHYS.k * PHYS.T * GAMMA_DEFAULT * (out.gm + out.gmb)) / out.gm,
       18,
     );
-    expect(lookup(bare, { l: L, vgs: 0.6 }, ['gamma'])).toEqual({ gamma: GAMMA_DEFAULT });
+    expect(lookup(bare, { l: L, vgs: 0.6 }, ['gamma']).values).toEqual({ gamma: GAMMA_DEFAULT });
     // Without gmb the point reads the form the table does, without the body-effect term.
-    const noGmb = lookup(withoutColumns(bare, ['gmb']), { l: L, vgs: 0.6 });
+    const noGmb = lookup(withoutColumns(bare, ['gmb']), { l: L, vgs: 0.6 }).values;
     expect(noGmb.vnth_m).toBeCloseTo(
       Math.sqrt((4 * PHYS.k * PHYS.T * GAMMA_DEFAULT) / noGmb.gm),
       18,
@@ -315,7 +315,7 @@ describe('inverse lookup by γ reads it the way the forward lookup does', () => 
     // A flat curve of the 1.0 default is no reading of the table: inverting it would land on an
     // arbitrary gate voltage.
     const bare = withoutColumns(dev, ['gamma', 'sth']);
-    expect(() => lookupByQuantity(bare, 'gamma', 1, L)).toThrow(
+    expect(() => lookupByQuantity(bare, 'gamma', 1, L).values).toThrow(
       'inverse lookup: cannot invert "gamma" on this table — it carries no "sth" column',
     );
   });
@@ -325,8 +325,8 @@ describe('inverse lookup by γ reads it the way the forward lookup does', () => 
     // the column, so the inverse looks for the target on the column too (a flat one here, which
     // the target 1 is outside).
     const own = scaleQuantities(dev, { gamma: 1.5 });
-    expect(lookup(own, { l: L, vgs: 0.6 }).gamma).toBeCloseTo(1.5, 12);
-    expect(() => lookupByQuantity(own, 'gamma', 1, L)).toThrow(/\[1\.5, 1\.5\]/);
+    expect(lookup(own, { l: L, vgs: 0.6 }).values.gamma).toBeCloseTo(1.5, 12);
+    expect(() => lookupByQuantity(own, 'gamma', 1, L).values).toThrow(/\[1\.5, 1\.5\]/);
   });
 });
 
@@ -335,8 +335,8 @@ describe('lookup temperature', () => {
     const dev = generateDemoDevice();
     const hot = { ...dev, meta: { ...dev.meta, temp: 125 } };
     const L = dev.grid.axes[0].values[1];
-    const a = lookup(dev, { l: L, vgs: 0.6 });
-    const b = lookup(hot, { l: L, vgs: 0.6 });
+    const a = lookup(dev, { l: L, vgs: 0.6 }).values;
+    const b = lookup(hot, { l: L, vgs: 0.6 }).values;
     // svth_m = 4kTγ·(gm + gmb)/gm²: same interpolated point, T scaled 300.15 K → 398.15 K.
     expect(b.svth_m / a.svth_m).toBeCloseTo((125 + 273.15) / PHYS.T, 12);
     expect(a.gm).toBeCloseTo(b.gm, 15); // the data itself is untouched
@@ -358,14 +358,14 @@ describe('lookup pass-through columns', () => {
 
   it('reports the column at a grid node, in the default key set', () => {
     const p = { l: l.values[1], vds: vds.values[2], vgs: vgs.values[60] };
-    const out = lookup(table, p);
+    const out = lookup(table, p).values;
     expect(out.ueff).toBeCloseTo(ueffAt(p), 12);
   });
 
   it('interpolates the column between nodes like any quantity', () => {
     // ueff is affine in every axis, so the multilinear read is exact off the nodes too.
     const p = { l: 0.33e-6, vds: 0.75, vgs: 0.537 };
-    const out = lookup(table, p);
+    const out = lookup(table, p).values;
     expect(out.ueff).toBeCloseTo(ueffAt(p), 12);
     // …through the same corner walk as the base columns: it is read at the same point.
     expect(out.vgs).toBe(p.vgs);
@@ -373,8 +373,8 @@ describe('lookup pass-through columns', () => {
 
   it('answers when asked for by name', () => {
     const p = { l: 0.5e-6, vds: 0.6, vgs: 0.6 };
-    expect(lookup(table, p, ['ueff'])).toEqual({ ueff: ueffAt(p) });
-    expect(() => lookup(table, p, ['cjx'])).toThrow(/"cjx" is neither/);
+    expect(lookup(table, p, ['ueff']).values).toEqual({ ueff: ueffAt(p) });
+    expect(() => lookup(table, p, ['cjx']).values).toThrow(/"cjx" is neither/);
   });
 
   it('inverts on the column like any stored quantity', () => {
@@ -383,7 +383,7 @@ describe('lookup pass-through columns', () => {
     const at = fixTable(table, { vds: 0.6 });
     const L = 0.5e-6;
     const target = ueffAt({ l: L, vds: 0.6, vgs: 0.6 });
-    const out = lookupByQuantity(at, 'ueff', target, L);
+    const out = lookupByQuantity(at, 'ueff', target, L).values;
     expect(out.vgs).toBeCloseTo(0.6, 12);
     expect(out.ueff).toBeCloseTo(target, 12);
   });
@@ -396,8 +396,8 @@ describe('lookup pass-through columns', () => {
     const plain = generateDemoDevice();
     const withK = withColumns(plain, { k: 1 });
     const p = { l: plain.grid.axes[0].values[1], vgs: 0.55 };
-    const a = lookup(plain, p);
-    const b = lookup(withK, p);
+    const a = lookup(plain, p).values;
+    const b = lookup(withK, p).values;
     expect(b.table__k).toBe(1);
     const { table__k: _k, ...rest } = b;
     expect(rest).toEqual(a);
@@ -409,7 +409,111 @@ describe('lookup pass-through columns', () => {
     const plain = generateDemoDevice();
     const shadowed = withColumns(plain, { ft: 42 });
     const p = { l: plain.grid.axes[0].values[1], vgs: 0.55 };
-    expect(lookup(shadowed, p).ft).toBe(lookup(plain, p).ft);
-    expect(lookup(shadowed, p, ['ft']).ft).toBe(lookup(plain, p).ft);
+    expect(lookup(shadowed, p).values.ft).toBe(lookup(plain, p).values.ft);
+    expect(lookup(shadowed, p, ['ft']).values.ft).toBe(lookup(plain, p).values.ft);
+  });
+});
+
+describe('lookup refuses a point it cannot read as asked, and reports a clamp', () => {
+  // A three-axis table: l, vds, vgs. Upper-case keys used to be ignored, so every axis was read
+  // at its first node with no word said.
+  const t = generateDemoDevice({ vds: { min: 0.3, max: 1.8, step: 0.1 } });
+  const axes = t.grid.axes.map((a) => a.name);
+
+  it('upper-case keys are refused, naming the key and the axes', () => {
+    expect(axes).toEqual(['l', 'vds', 'vgs']);
+    expect(() => lookup(t, { L: 0.5e-6, VGS: 0.7, VDS: 0.9 })).toThrow(LookupError);
+    expect(() => lookup(t, { L: 0.5e-6, VGS: 0.7, VDS: 0.9 })).toThrow(
+      'lookup: the point gives "L" = 5e-7, but this table has no axis called "L"; its axes are "l", "vds", "vgs". Axis names are lower-case: write "l" instead of "L".',
+    );
+    // Written as the axes are named, the same point reads a different device from the one the
+    // ignored keys used to read (every axis at its first node).
+    const right = lookup(t, { l: 0.5e-6, vgs: 0.7, vds: 0.9 });
+    const firstNodes = lookup(t, Object.fromEntries(t.grid.axes.map((a) => [a.name, a.values[0]])));
+    expect(right.clamped).toEqual([]);
+    expect(right.warnings).toEqual([]);
+    expect(right.at).toEqual({ l: 0.5e-6, vds: 0.9, vgs: 0.7 });
+    // 7.16 is the device at the point asked; 29.7 is what the ignored keys
+    // returned, the table's first nodes (weak inversion at the shortest length).
+    expect(right.values.gm_id).toBeCloseTo(7.16, 2);
+    expect(firstNodes.values.gm_id).toBeCloseTo(29.7, 1);
+  });
+
+  it('a misspelled key is refused and told to check the spelling', () => {
+    expect(() => lookup(t, { l: 0.5e-6, vgs: 0.7, vsd: 0.9 })).toThrow(
+      /no axis called "vsd"; its axes are "l", "vds", "vgs"\. Check the spelling/,
+    );
+  });
+
+  it('a stored column given as a coordinate is refused as a quantity, not an axis', () => {
+    expect(() => lookup(t, { l: 0.5e-6, vgs: 0.7, vds: 0.9, id: 1e-6 })).toThrow(
+      /"id" is a quantity this table stores, not one it is swept over/,
+    );
+  });
+
+  it('a swept axis left out is refused, naming it and its range', () => {
+    expect(() => lookup(t, { l: 0.5e-6, vgs: 0.7 })).toThrow(
+      /does not give "vds", which this table sweeps over 16 values from 300 mV to 1\.8 V/,
+    );
+  });
+
+  it('an axis with one value may be left out: it is read at that value', () => {
+    const one = fixTable(t, { vds: 0.9 });
+    const r = lookup(one, { l: 0.5e-6, vgs: 0.7 });
+    expect(r.clamped).toEqual([]);
+    expect(r.values.gm_id).toBeCloseTo(
+      lookup(t, { l: 0.5e-6, vgs: 0.7, vds: 0.9 }).values.gm_id,
+      9,
+    );
+  });
+
+  it('a coordinate that is not a finite number is refused', () => {
+    expect(() => lookup(t, { l: 0.5e-6, vgs: NaN, vds: 0.9 })).toThrow(
+      /"vgs" = NaN, which is not a finite number/,
+    );
+  });
+
+  it('vgs = 5 is read at the edge and the result says so', () => {
+    const vgs = t.grid.axes[2].values;
+    const hi = vgs[vgs.length - 1];
+    const r = lookup(t, { l: 0.5e-6, vgs: 5, vds: 0.9 });
+    expect(r.clamped).toEqual(['vgs']);
+    expect(r.at.vgs).toBe(hi);
+    expect(r.values.vgs).toBe(hi);
+    expect(r.warnings).toHaveLength(1);
+    expect(hi).toBe(1.2);
+    expect(r.warnings).toEqual([
+      "vgs = 5 V is outside this table's vgs range 0 V to 1.2 V, 3.8 V past the edge; it was read at 1.2 V, the nearest characterized value, so every quantity here describes vgs = 1.2 V, not the value asked for. Ask within the range, or characterize the device further.",
+    ]);
+    expect(r.values.gm_id).toBeCloseTo(
+      lookup(t, { l: 0.5e-6, vgs: hi, vds: 0.9 }).values.gm_id,
+      12,
+    );
+  });
+
+  it('L = 50 µm is read at the longest length and the result says so', () => {
+    const lAx = t.grid.axes[0].values;
+    const r = lookup(t, { l: 50e-6, vgs: 0.7, vds: 0.9 });
+    expect(r.clamped).toEqual(['l']);
+    expect(r.at.l).toBe(lAx[lAx.length - 1]);
+    expect(r.warnings[0]).toMatch(
+      /^l = 50 µm is outside this table's l range 180 nm to 2 µm, 48 µm past the edge; it was read at 2 µm/,
+    );
+  });
+
+  it('a coordinate past the edge by float rounding only is the edge, not a clamp', () => {
+    const vgs = t.grid.axes[2].values;
+    const r = lookup(t, { l: 0.5e-6, vgs: vgs[vgs.length - 1] * (1 + 1e-15), vds: 0.9 });
+    expect(r.clamped).toEqual([]);
+  });
+
+  it('the inverse lookup reports a length it had to clamp', () => {
+    const two = generateDemoDevice();
+    const lAx = two.grid.axes[0].values;
+    const r = lookupByGmId(two, 10, 50e-6);
+    expect(r.clamped).toEqual(['l']);
+    expect(r.at.l).toBe(lAx[lAx.length - 1]);
+    expect(r.values.gm_id).toBeCloseTo(10, 1);
+    expect(lookupByGmId(two, 10, lAx[1]).clamped).toEqual([]);
   });
 });

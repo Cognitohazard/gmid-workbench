@@ -36,7 +36,7 @@ describe('medwatt2mostab → importMostab round-trip', () => {
     expect(Array.from(vsb.values)).toEqual([0, 0.3]);
 
     // gm/ID = 10 everywhere in the synthetic table; id is exact at a node.
-    const q = lookup(t, { l: 100e-9, vds: 1.0, vgs: 0.7, vsb: 0 }, ['gm_id', 'id']);
+    const q = lookup(t, { l: 100e-9, vds: 1.0, vgs: 0.7, vsb: 0 }, ['gm_id', 'id']).values;
     expect(q.gm_id).toBeCloseTo(10, 9);
     expect(q.id).toBeCloseTo(6e-6, 18);
   });

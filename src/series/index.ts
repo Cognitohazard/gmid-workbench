@@ -282,6 +282,22 @@ export function mirrorPinned(
 }
 
 /**
+ * The point a chart reads `table` at, written out for a forward lookup: each pin that names one of
+ * the table's axes, and every axis left unpinned at its first node — exactly where the drawn curves
+ * read it (familyCurvesXY, invertX). A pin naming an axis this table lacks (it comes from another
+ * device on the overlay) is dropped. What this reads away from the pins is said by
+ * pinnedElsewhere, in the overlay's warning; a lookup at this point reports the same clamps again.
+ */
+export function pinnedPoint(
+  table: DeviceTable,
+  fixed: Record<string, number>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const a of table.grid.axes) out[a.name] = fixed[a.name] ?? a.values[0];
+  return out;
+}
+
+/**
  * Where `table` is read somewhere other than the bias `fixed` pins: a pinned value outside the
  * axis's swept range is read at the edge (the slice clamps), and a swept axis `fixed` does not name
  * — the device the pins come from lacks it — is read at its first node. One sentence per axis, for
