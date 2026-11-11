@@ -81,6 +81,10 @@ Before declaring web work done, the bar is: core tests pass, typecheck, `npm run
   circuit allows, and a root found there is reported with the fact that no root lies inside the
   search range. Requirements belong to checks (region declarations, saturation margins).
 
+## Priorities
+
+Every piece of work is one of six kinds, sorted by its effect on the person using the tool, not by the size of the change: (1) a critical issue that prevents normal use; (2) an important problem that reduces what the tool can do or how efficiently; (3) an important missing feature; (4) a good-to-have feature; (5) polishing; (6) a minor bug. A wrong number shown without a warning is never below kind 2. A refactor or rewrite has no kind of its own: it takes the kind of the most important item that needs it, names that item, and goes only as far as that item needs. Work on kinds 1 to 4. Do not work on kinds 5 and 6: list them in your final report so they are kept, not lost. A regression, something that worked before and no longer does, is fixed whatever its kind.
+
 ## Committed-text hygiene
 
 Commit messages, code comments, and committed docs are external-facing. Scrub internal jargon
