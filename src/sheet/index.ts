@@ -569,3 +569,6 @@ export function sweepSheet2(
   }
   return { ...empty, x, y, feasible, binding };
 }
+
+// The structural analysis: read-only, table-free, and read by nothing an evaluation does.
+export * from './structure';
