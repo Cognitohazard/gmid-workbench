@@ -30,6 +30,7 @@ import {
   formatOf,
   measurable,
   noiseSourcesIn,
+  PATH_SEP,
   placementsOf,
   refusedIn,
   resolvedSheet,
@@ -236,7 +237,8 @@ export interface PickerCandidate {
   /** What the reported point rests on that the spec did not state, one sentence each, from the
    *  run that produced it (see runCaveats): noise figures read by the γ estimate or a lesser
    *  form or at an assumed temperature, a bias left at its default, a DC input the design was
-   *  sized under, a coordinate read at a table's edge. A `closed` row can rest on any of them,
+   *  sized under, a coordinate read at a table's edge, a device sized on a table of the other
+   *  polarity. A `closed` row can rest on any of them,
    *  so a consumer shows them beside the verdict. Absent when there are none. */
   caveats?: string[];
   /** How many separate things `caveats` names (a device, an axis of a device, an input, a
@@ -843,7 +845,9 @@ function byAxis(
  * words, grouped by what they say); bias axes left at their defaults (SizingReport.assumed) —
  * except a body bias the wiring of `doc`, the document the run evaluated, ties to zero; the DC
  * inputs the design was sized under (SheetResult.assumptions); coordinates a device was read at
- * the edge of its table instead of where it was asked (SizingReport.clamped). Empty when the run
+ * the edge of its table instead of where it was asked (SizingReport.clamped); devices sized on a
+ * table of the other polarity, or read as n-channel because their sheet's polarity cannot be read
+ * (the run's `sheet-polarity` warnings). Empty when the run
  * rests on none of them. A device whose noise is its table's own, by its definition, owes no
  * sentence.
  */
@@ -875,6 +879,32 @@ export function runCaveats(res: SheetResult, doc?: SheetDoc): RunCaveats {
     ...byAxis(clamped, (axis) => `${axis} read at the edge of the table instead of where asked`),
   );
   items += clamped.length;
+  // A device read as a channel type no one stated: sized on a table of the other polarity (a block
+  // naming no device inherits its parent's table), or a sheet whose polarity cannot be read, read
+  // as n. The run says each as a `sheet-polarity` warning; an information finding (a sheet that
+  // declares no polarity, read as n on an n table) is no caveat. The two kinds of warning differ in
+  // where they point: a mismatch at the block, an unreadable polarity at the sheet's `polarity` key.
+  const otherPolarity: string[] = [];
+  const unreadPolarity: string[] = [];
+  for (const w of res.warnings) {
+    if (w.rule !== 'sheet-polarity' || w.severity !== 'warning') continue;
+    const at = w.location ?? '';
+    if (at === 'polarity' || at.endsWith(`${PATH_SEP}polarity`))
+      unreadPolarity.push(deviceName(at.slice(0, -'polarity'.length - 1) || 'givens'));
+    else otherPolarity.push(deviceName(at));
+  }
+  if (otherPolarity.length) {
+    sentences.push(
+      `sized on a table of the other polarity (n-channel data for a p-channel device, or the reverse), so its figures are not that device's: ${otherPolarity.join(', ')} — load a table of the right polarity and bind each to it`,
+    );
+    items += otherPolarity.length;
+  }
+  if (unreadPolarity.length) {
+    sentences.push(
+      `polarity could not be read, so the device is read as n-channel: ${unreadPolarity.join(', ')}`,
+    );
+    items += unreadPolarity.length;
+  }
   return { sentences, items };
 }
 

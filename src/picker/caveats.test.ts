@@ -7,6 +7,7 @@ import { EXAMPLES } from '../sheet/examples';
 import { runSheet, type SheetDoc } from '../sheet';
 import type { DeviceTable } from '../types';
 import { pickTopology, runCaveats } from './index';
+import { libraryEntries, REFS, table as nTable } from '../sheet/library.fixtures';
 
 const declared = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
 /** The same device as the importer reads a file with no `gamma` or `gmb` column and no
@@ -65,5 +66,37 @@ describe('pickTopology carries the run’s caveats', () => {
     const expected = runCaveats(runSheet(EXAMPLES[0], lessDeclared), EXAMPLES[0]);
     expect(c.caveats).toEqual(expected.sentences);
     expect(c.caveatItems).toBe(expected.items);
+  });
+});
+
+describe('a design sized on a table of the other polarity says so', () => {
+  // One n-channel table loaded, a sheet whose p-channel blocks name no device: every p-channel
+  // block is sized on the n table. The run warns (sheet-polarity); the picker row must too.
+  const folded = libraryEntries().find((e) => e.path === 'otas/folded-cascode-ota')!;
+
+  it('names each such block in the run’s caveats', () => {
+    const res = runSheet(folded.doc, nTable, undefined, REFS);
+    const mismatched = res.warnings
+      .filter((w) => w.rule === 'sheet-polarity' && w.severity === 'warning')
+      .map((w) => w.location);
+    expect(mismatched.length).toBeGreaterThan(0);
+    const c = runCaveats(res, folded.doc);
+    const line = c.sentences.find((s) => s.startsWith('sized on a table of the other polarity'));
+    expect(line).toBeDefined();
+    for (const at of mismatched) expect(line).toContain(`"${at}"`);
+    expect(c.items).toBeGreaterThanOrEqual(mismatched.length);
+  });
+
+  it('on the picker row, as data a script reads', () => {
+    const row = pickTopology({}, folded, nTable, undefined, { evalBudget: 4, refs: REFS });
+    expect(row.verdict).not.toBe('could-not-be-searched');
+    expect(row.caveats?.some((s) => s.startsWith('sized on a table of the other polarity'))).toBe(
+      true,
+    );
+  });
+
+  it('owes nothing on a sheet whose blocks are all of the table’s polarity', () => {
+    const c = runCaveats(runSheet(EXAMPLES[0], declared), EXAMPLES[0]);
+    expect(c.sentences.some((s) => s.includes('polarity'))).toBe(false);
   });
 });
