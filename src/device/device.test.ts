@@ -28,7 +28,7 @@ import { demoCsvWith, importOne, ueffAt, withUeff } from '../import/passthrough.
 
 /** A known operating point: forward-lookup the demo at (L, vgs) to get a self-consistent (gm, id, gm/id). */
 function knownPoint(table: DeviceTable, L: number, vgs: number) {
-  const out = lookup(table, { l: L, vgs });
+  const out = lookup(table, { l: L, vgs }).values;
   return { gm: out.gm, id: out.id, gm_id: out.gm_id, vgs };
 }
 
@@ -470,7 +470,7 @@ describe('sizeDevice — quantities describe the SIZED device (width rescale)', 
     const res = sizeDevice({ table, L, gm_id: 12, id: 20e-6 });
     const w0 = table.meta.W as number;
     const k = res.W / w0;
-    const char = lookup(table, { l: L, vgs: res.vgs }); // characterization-width point
+    const char = lookup(table, { l: L, vgs: res.vgs }).values; // characterization-width point
     expect(res.quantities.gds).toBeCloseTo(char.gds * k, 15);
     expect(res.quantities.cgg).toBeCloseTo(char.cgg * k, 20);
     expect(res.quantities.w).toBeCloseTo(res.W, 12);
@@ -507,7 +507,7 @@ describe('sizeDevice — pass-through columns', () => {
     expect(res.feasible).toBe(true);
     expect(res.W / w0).not.toBeCloseTo(1, 1); // sized well away from w0, so a rescale would show
     expect(res.quantities.ueff).toBeCloseTo(ueffAt({ l: L, vds: 0.6, vgs: res.vgs }), 12);
-    expect(res.quantities.ueff).toBe(lookup(table, { l: L, vgs: res.vgs }).ueff);
+    expect(res.quantities.ueff).toBe(lookup(table, { l: L, vgs: res.vgs }).values.ueff);
     expect(res.quantities.w0).toBe(w0);
   });
 
@@ -555,17 +555,17 @@ describe('a pass-through column named like something the engine means is read as
   const vgs = 0.7;
 
   it('in a lookup: table__k and table__w0, while ueff keeps its own name', () => {
-    const out = lookup(table, { l: L, vgs });
+    const out = lookup(table, { l: L, vgs }).values;
     expect(out.table__k).toBe(1);
     expect(out.table__w0).toBe(7);
     expect(out.ueff).toBe(3);
     expect(out).not.toHaveProperty('k');
     expect(out).not.toHaveProperty('w0');
     // Asking for the column by its own name says which name it is read by.
-    expect(() => lookup(table, { l: L, vgs }, ['k'])).toThrow(
+    expect(() => lookup(table, { l: L, vgs }, ['k']).values).toThrow(
       /"k" column is read as "table__k" — "k" is an expression constant/,
     );
-    expect(lookup(table, { l: L, vgs }, ['table__k'])).toEqual({ table__k: 1 });
+    expect(lookup(table, { l: L, vgs }, ['table__k']).values).toEqual({ table__k: 1 });
   });
 
   it("in a sizing's report: the column beside the sizer's own w0, neither overwriting the other", () => {
@@ -679,7 +679,7 @@ describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
   });
 
   it('binds intrinsic gain, landing on the requested gm/gds', () => {
-    const target = lookup(table, { l: L, vgs: 0.55 }).gm_gds;
+    const target = lookup(table, { l: L, vgs: 0.55 }).values.gm_gds;
     const res = sizeDevice({ table, L, gm_gds: target, id: 2e-5 });
 
     expect(res.quantities.gm_gds / target).toBeCloseTo(1, 6);
@@ -691,7 +691,7 @@ describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
   });
 
   it('a selector carries no size: fT + W and fT + ID agree on the operating point', () => {
-    const ft = lookup(table, { l: L, vgs: 0.6 }).ft;
+    const ft = lookup(table, { l: L, vgs: 0.6 }).values.ft;
     const byId = sizeDevice({ table, L, ft, id: 2e-5 });
     const byW = sizeDevice({ table, L, ft, W: byId.W });
 
@@ -764,7 +764,7 @@ describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
     quantities.set('ft', bogus);
     const shadowed: DeviceTable = { ...table, grid: makeGrid([...table.grid.axes], quantities) };
 
-    const target = lookup(table, { l: L, vgs: 0.6 }).ft;
+    const target = lookup(table, { l: L, vgs: 0.6 }).values.ft;
     const res = sizeDevice({ table: shadowed, L, ft: target, id: 2e-5 });
 
     expect(res.quantities.ft / target).toBeCloseTo(1, 9);
@@ -790,7 +790,7 @@ describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
     // The top of the range is the fT at the top of the vgs sweep on this slice.
     const vgsAxis = table.grid.axes.find((a) => a.name === 'vgs') as { values: Float64Array };
     const vgsTop = vgsAxis.values[vgsAxis.values.length - 1];
-    expect(e.max / lookup(table, { l: L, vgs: vgsTop }).ft).toBeCloseTo(1, 9);
+    expect(e.max / lookup(table, { l: L, vgs: vgsTop }).values.ft).toBeCloseTo(1, 9);
 
     // A width-first bind reports the gm the caller asked for, NOT the internal density
     // target (gm·w0/W) the lookup actually inverted.
@@ -811,7 +811,7 @@ describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
     // negative, so a spec-first bind must give the same geometry as the NMOS twin and return
     // the signed operating point rather than a mirrored magnitude.
     const p = signedMirrorDemo(table);
-    const ft = lookup(table, { l: L, vgs: 0.6 }).ft;
+    const ft = lookup(table, { l: L, vgs: 0.6 }).values.ft;
     const n = sizeDevice({ table, L, ft, id: 2e-5 });
     const res = sizeDevice({ table: p, L, ft, id: 2e-5 });
 
@@ -824,7 +824,7 @@ describe('sizeDevice — spec-first binds (fT, intrinsic gain, V*)', () => {
   it('sizeableLengths agrees exactly with where sizing succeeds', () => {
     // A target the short devices reach and the long ones cannot: fT falls with L.
     const lAxis = table.grid.axes[0].values;
-    const target = lookup(table, { l: lAxis[0], vgs: 0.7 }).ft;
+    const target = lookup(table, { l: lAxis[0], vgs: 0.7 }).values.ft;
     const reachable = sizeableLengths({ table, L, ft: target, id: 2e-5 });
 
     expect(reachable.length).toBeGreaterThan(0);

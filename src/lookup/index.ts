@@ -6,7 +6,8 @@
 
 import { type Axis, type DeviceTable, type Grid, LookupError, LookupRangeError } from '../types';
 import { BASE_KEYS, engineNameReason, passthroughKeys, passthroughName } from '../namespace';
-import { interpolate, sliceGrid, orient, interp1, type Oriented } from '../grid';
+import { interpolate, sliceGrid, orient, interp1, offHull, type Oriented } from '../grid';
+import { formatQuantity } from '../units';
 import { DERIVED_FORMS, derivedForm, metaScalars, evalColumn, pointScope } from '../derive';
 
 // The Map is authoritative (shared with derive); a module-level key array keeps the per-lookup
@@ -59,6 +60,95 @@ export function storedKeys(table: DeviceTable): string[] {
 }
 
 /**
+ * What a forward lookup read and where. `values` holds the quantities, by name; `at` holds the
+ * coordinate each axis of the table was read at; `clamped` names the axes whose requested
+ * coordinate lay outside the table's swept range and were read at its nearest edge instead, and
+ * `warnings` says the same for each in a sentence (the requested value, the range, the value read
+ * and the distance between them). Empty `clamped` means the table was read exactly where it was
+ * asked: every value is an interpolation of characterized data, none an edge stand-in.
+ */
+export interface LookupResult {
+  values: Record<string, number>;
+  at: Record<string, number>;
+  clamped: string[];
+  warnings: string[];
+}
+
+/** The unit an axis coordinate is written in, for a message (m for the length, V otherwise). */
+const axisUnit = (name: string): string => (name === 'l' ? 'm' : 'V');
+const q = (v: number, unit: string): string => formatQuantity(v, unit);
+
+/**
+ * Check a requested point against the table's axes and settle the coordinate each axis is read at.
+ *
+ * Refused, by a LookupError naming the key or axis, the table's axes and the fix: a key that names
+ * no axis of the table (axis names are lower-case — `L` is not `l` — and a column or a misspelling
+ * is not an axis either), a coordinate that is not a finite number, and a swept axis (one with more
+ * than one node) the point leaves out. A lookup never chooses a bias for its caller: reading an
+ * omitted vds at the table's first node returned a different device's numbers with no word said.
+ * An axis with a single node is what the table is, so it may be left out and is read at that node.
+ *
+ * A coordinate past an axis's range is read at the nearest edge and reported: its name in
+ * `clamped`, a sentence in `warnings`. One past the edge by float rounding only (offHull) is the
+ * edge, read without a report.
+ */
+function settlePoint(
+  grid: Grid,
+  point: Record<string, number>,
+  prefix: string,
+): Pick<LookupResult, 'at' | 'clamped' | 'warnings'> {
+  // Built only for a message: lookup runs on every solver probe.
+  const listed = (): string => grid.axes.map((a) => `"${a.name}"`).join(', ');
+  for (const key in point) {
+    if (!Object.prototype.hasOwnProperty.call(point, key)) continue;
+    if (grid.axes.some((a) => a.name === key)) continue;
+    const names = grid.axes.map((a) => a.name);
+    const lower = key.toLowerCase();
+    const hint = names.includes(lower)
+      ? ` Axis names are lower-case: write "${lower}" instead of "${key}".`
+      : grid.quantities.has(key)
+        ? ` "${key}" is a quantity this table stores, not one it is swept over, so it cannot place a point.`
+        : ' Check the spelling, or drop the key if this table is not swept over it.';
+    throw new LookupError(
+      `${prefix}: the point gives "${key}" = ${point[key]}, but this table has no axis called "${key}"; its axes are ${listed()}.${hint}`,
+    );
+  }
+  const at: Record<string, number> = {};
+  const clamped: string[] = [];
+  const warnings: string[] = [];
+  for (const axis of grid.axes) {
+    const vals = axis.values;
+    const lo = vals[0];
+    const hi = vals[vals.length - 1];
+    const unit = axisUnit(axis.name);
+    const raw = point[axis.name];
+    if (raw === undefined) {
+      if (vals.length > 1) {
+        throw new LookupError(
+          `${prefix}: the point does not give "${axis.name}", which this table sweeps over ${vals.length} values from ${q(lo, unit)} to ${q(hi, unit)}; a lookup does not pick a value for a swept axis, so give every one of ${listed()} (only an axis with a single value may be left out).`,
+        );
+      }
+      at[axis.name] = lo;
+      continue;
+    }
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      throw new LookupError(
+        `${prefix}: the point gives "${axis.name}" = ${String(raw)}, which is not a finite number; give the coordinate in ${unit} (write 0.5e-6, not "0.5u").`,
+      );
+    }
+    const x = raw < lo ? lo : raw > hi ? hi : raw;
+    at[axis.name] = x;
+    if (offHull(vals, raw)) {
+      clamped.push(axis.name);
+      warnings.push(
+        `${axis.name} = ${q(raw, unit)} is outside this table's ${axis.name} range ${q(lo, unit)} to ${q(hi, unit)}, ${q(Math.abs(raw - x), unit)} past the edge; it was read at ${q(x, unit)}, the nearest characterized value, so every quantity here describes ${axis.name} = ${q(x, unit)}, not the value asked for. Ask within the range, or characterize the device further.`,
+      );
+    }
+  }
+  return { at, clamped, warnings };
+}
+
+/**
  * Forward lookup: multilinearly interpolate the stored columns at `point` (axis-space),
  * then evaluate any requested derived quantity from the interpolated base scalars.
  *
@@ -71,18 +161,19 @@ export function storedKeys(table: DeviceTable): string[] {
  * self-consistent at the point. Each is computed by the form the table reads it by, which is not
  * always its definition: derivedFallbacks names the quantities that fell back, and why.
  *
- * An axis `point` does not name is read at its first node, and a coordinate past an axis's range
- * at its edge (the axis value returned is the one read). Neither is said here: the caller owns
- * it — sizeDevice holds the point to the table first (operatingPointAxis, offHull), and a chart
- * readout reads the point its curve was drawn at, which the overlay's warning describes
- * (pinnedElsewhere).
+ * The point must name axes of the table only, and every swept axis (see settlePoint, which refuses
+ * anything else with a LookupError). A coordinate past an axis's range is read at the nearest edge,
+ * and the result says so: the axis in `clamped`, a sentence in `warnings`, the coordinate read in
+ * `at` (and as the axis value in `values`).
  */
 export function lookup(
   table: DeviceTable,
   point: Record<string, number>,
   keys?: string[],
-): Record<string, number> {
+): LookupResult {
   const grid = table.grid;
+  const settled = settlePoint(grid, point, 'lookup');
+  const at = settled.at;
 
   // Interpolate every present stored column once (one corner walk), then split the pass-through
   // columns back out: they are reported, but they stay out of the scope the derived layer reads.
@@ -93,7 +184,7 @@ export function lookup(
   // and a sheet.
   const basePresent = baseKeysPresent(grid);
   const columns = passthroughKeys(grid);
-  const baseScalars = interpolate(grid, point, [...basePresent, ...columns]);
+  const baseScalars = interpolate(grid, at, [...basePresent, ...columns]);
   const extraScalars: Record<string, number> = {};
   for (const key of columns) {
     extraScalars[passthroughName(key)] = baseScalars[key];
@@ -113,16 +204,12 @@ export function lookup(
   }
 
   // Always expose the axis coordinates at the point, even when a grid does not
-  // materialize axis columns (e.g. the demo grid). The coordinate is the requested
-  // value clamped to the axis range, matching the grid's clamp-at-edge convention.
+  // materialize axis columns (e.g. the demo grid): the coordinate read, which settlePoint
+  // clamped to the axis range and reported if it had to.
   const axisKeys: string[] = [];
   for (const axis of grid.axes) {
-    const vals = axis.values;
-    const raw = point[axis.name];
-    const x = raw === undefined ? vals[0] : raw;
-    const clamped = x < vals[0] ? vals[0] : x > vals[vals.length - 1] ? vals[vals.length - 1] : x;
     if (!Object.prototype.hasOwnProperty.call(baseScalars, axis.name)) {
-      baseScalars[axis.name] = clamped;
+      baseScalars[axis.name] = at[axis.name];
       axisKeys.push(axis.name);
     }
   }
@@ -169,7 +256,7 @@ export function lookup(
     out[key] = v;
   }
 
-  return out;
+  return { values: out, ...settled };
 }
 
 /**
@@ -186,6 +273,10 @@ export function lookup(
  * Fails closed: throws if the table cannot compute `key` at all, if the slice carries
  * no invertible data (e.g. every id==0), if the curve is non-monotonic in vgs (an
  * ambiguous fold), or if `target` lies outside the slice's [min, max] range.
+ *
+ * A length `L` outside the table's length range is inverted on the slice at the nearest
+ * characterized length, and the result says so the way a forward lookup does: `l` in `clamped`,
+ * the length read in `at`, a sentence in `warnings`.
  */
 export function lookupByQuantity(
   table: DeviceTable,
@@ -193,7 +284,7 @@ export function lookupByQuantity(
   target: number,
   L: number,
   keys?: string[],
-): Record<string, number> {
+): LookupResult {
   return lookup(table, { l: L, vgs: invertOnSlice(table, L, key, target) }, keys);
 }
 
@@ -203,7 +294,7 @@ export function lookupByGmId(
   gmId: number,
   L: number,
   keys?: string[],
-): Record<string, number> {
+): LookupResult {
   return lookupByQuantity(table, 'gm_id', gmId, L, keys);
 }
 

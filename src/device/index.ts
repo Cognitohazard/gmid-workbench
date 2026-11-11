@@ -214,7 +214,7 @@ function atDensity(
   keys: string[],
 ): Record<string, number> {
   try {
-    return lookupByQuantity(table, key, bound * scale, L, keys);
+    return lookupByQuantity(table, key, bound * scale, L, keys).values;
   } catch (e) {
     throw e instanceof LookupRangeError ? e.rescaled(scale) : e;
   }
@@ -260,7 +260,7 @@ function atGateVoltage(
       `requested vgs ${vgs} V is outside the table's vgs range [${lo}, ${hi}] V at L=${L} m; clamped to the nearest characterized gate voltage`,
     );
   }
-  return lookup(table, { l: L, vgs: used }, keys);
+  return lookup(table, { l: L, vgs: used }, keys).values;
 }
 
 /**
@@ -341,7 +341,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     point =
       selector === 'vgs'
         ? atGateVoltage(q.table, q.vgs as number, L, warnings, clamped, keys)
-        : lookupByQuantity(q.table, selector, q[selector] as number, L, keys);
+        : lookupByQuantity(q.table, selector, q[selector] as number, L, keys).values;
     // A bound gm/ID is honoured exactly: interpolating gm and id separately does not
     // preserve their ratio, so reading it back off the point would return a hair off what
     // the designer asked for — and a gm to match. Every other selector has no such closed
@@ -360,7 +360,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     gm = q.gm as number;
     id = q.id as number;
     gm_id = gm / id;
-    point = lookupByGmId(q.table, gm_id, L, keys);
+    point = lookupByGmId(q.table, gm_id, L, keys).values;
     W = (id / point.id) * Wchar;
   } else {
     // W + gm or W + id: invert whichever characterization column was bound, at its
