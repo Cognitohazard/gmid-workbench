@@ -13,7 +13,7 @@ Two packages in one repo:
 Core (run from repo root):
 - `npm test` — Vitest (the numeric/golden suite; run this on any `src/` change)
 - `npm run typecheck` — `tsc --noEmit`
-- `npm run build` — `tsc` to `dist/`
+- `npm run build` — `dist/index.js`, one ES module plain Node imports, plus type declarations (`scripts/build-core.mjs`; a core test builds it and runs the README's scripting examples against it)
 - `npm run lint` — ESLint over `src/`, `web/src/`, `web/e2e/`
 - `npm run format:check` — Prettier check (`npm run format` to fix)
 

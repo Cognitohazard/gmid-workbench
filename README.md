@@ -63,7 +63,7 @@ Core (run from the repo root):
 npm ci
 npm test           # Vitest — the numeric/golden suite
 npm run typecheck  # tsc --noEmit
-npm run build      # tsc to dist/
+npm run build      # dist/index.js: one ES module plain Node imports, with type declarations
 ```
 
 Web (run from `web/`; run `npm ci` at the repo root first — `gmid-web` links the core
@@ -162,12 +162,22 @@ audio band — treat table-derived noise as a floor, not a budget.
 ## Scripting the core
 
 The core (`@gmid/mostab-core`) is a pure library — you can import tables, size devices, and
-run design sheets from Node without the UI. It is TypeScript-first (the package entry is
-`src/index.ts`), so run these under a TypeScript-aware loader such as `tsx`, or build once
-with `npm run build` and import from `dist/`.
+run design sheets from Node without the UI. Build it once, from the repository root; nothing
+here needs the network after `npm ci`:
+
+```sh
+npm ci
+npm run build    # writes dist/index.js (one ES module) and its type declarations
+```
+
+Plain Node (20 or later) then runs a script that imports `dist/index.js`. Save the example below
+as `example.mjs` in the repository root and run `node example.mjs`; from anywhere else, import the
+same file by its path. The package's own entry (`@gmid/mostab-core`, which the web app imports) is
+the TypeScript source, for a bundler or a TypeScript-aware runner; plain Node cannot load it.
+Rebuild after changing anything under `src/`, or the script runs the older code.
 
 ```js
-import { importMostab, runSheet, sweepSheet } from '@gmid/mostab-core';
+import { importMostab, runSheet, sweepSheet } from './dist/index.js';
 import { readFileSync } from 'node:fs';
 
 const res = importMostab(readFileSync('nch_1v8__tt__27C.mostab.csv', 'utf8'));
@@ -203,6 +213,29 @@ console.log(out.feasible, out.values.W, out.checks);
 const sweep = sweepSheet(sheet, 'gm_id', table);
 ```
 
+A forward lookup reads the table at a point and says what it read. The point names every axis
+the table sweeps, by the table's own lower-case names (`l`, `vgs`, `vds`, `vsb`; the table lists
+them in `table.grid.axes`): a key that names no axis, or a swept axis left out, is refused with a
+`LookupError` that names it and lists the axes. A coordinate outside an axis's range is read at
+the nearest edge and reported, never silently:
+
+```js
+import { fixTable, lookup, lookupByGmId } from './dist/index.js';
+
+const r = lookup(table, { l: 0.5e-6, vgs: 0.7, vds: 0.9, vsb: 0 });
+console.log(r.values.gm_id, r.values.ft); // the quantities, by name
+console.log(r.at); // the coordinate each axis was read at
+console.log(r.clamped, r.warnings); // [] and [] unless a coordinate was off the table
+
+// Inverse: the vgs that gives gm/ID = 12 at L = 0.5 µm. The slice must leave only vgs swept, so
+// fix the other axes first. fixTable does NOT yet check what it is given: a key that names no
+// axis is ignored and a value off the table is read at the edge, both without a word, so give it
+// the table's own axis names and values inside their ranges.
+const atBias = fixTable(table, { vds: 0.9, vsb: 0 });
+const op = lookupByGmId(atBias, 12, 0.5e-6);
+console.log(op.values.vgs, op.clamped);
+```
+
 A composed sheet's block names its device by a resolver key (the block's `device`); pass a
 resolver — `(id) => DeviceTable | undefined` — as the third argument to map those keys to
 tables. In a script you choose the key, so long as each child's `device` matches; the app reads
@@ -222,7 +255,7 @@ To vary a param of a composed sheet — a child's included — set it by its pat
 the child's own file is never rewritten:
 
 ```js
-import { withOverrides } from '@gmid/mostab-core';
+import { withOverrides } from './dist/index.js';
 
 for (const L of [2e-6, 4e-6, 6e-6]) {
   const res = runSheet(withOverrides(sheet, { 'bias.L_MB5': L }, refs), table, resolve, refs);
@@ -249,7 +282,7 @@ inferred from two terminals written at the same level. Resolve a sheet that incl
 reference first, so the draft covers its children:
 
 ```js
-import { applyWiringProposal, formatWiringProposal, proposeWiring, resolvedSheet } from '@gmid/mostab-core';
+import { applyWiringProposal, formatWiringProposal, proposeWiring, resolvedSheet } from './dist/index.js';
 
 const tree = resolvedSheet(oldSheet, refs).doc;
 const proposal = proposeWiring(tree);
@@ -295,6 +328,12 @@ needs to know:
   that follows from a block whose outputs were withheld carries that block's path as `cause`, and a
   `sheet-follow-on` info line leads the list. A finding that validation and evaluation state in the
   same words is reported once.
+- **A lookup returns what it read and where.** `lookup`, `lookupByQuantity` and `lookupByGmId`
+  return `{ values, at, clamped, warnings }` instead of the bare quantities: read `r.values.gm_id`
+  where a script read `r.gm_id` (which is now `undefined`). The point must name the table's axes
+  exactly (`l`, not `L`) and every swept axis; a script that left `vds` out, or wrote an axis in
+  capitals, now gets a `LookupError` instead of a reading at the table's first node. A coordinate
+  off the table is still read at the edge, and now `clamped` and `warnings` say so.
 - **The loader is in the core.** `sanitizeSheet` moved from the web app to the core; a check with
   no id is named `check-<n>` by default.
 
