@@ -1,13 +1,8 @@
 # gm/ID Workbench (Work In Progress)
 
-A browser-based, simulator-agnostic gm/ID characterization viewer, expression/lookup
-engine, and transistor-sizing tool. It runs entirely client-side and ships in two forms:
-a hosted static site, and a single self-contained HTML file for offline or air-gapped
-use.
+A browser-based platform for designing analog circuits on device characterization tables. The tables are simulated once per process; after that the design loop needs no simulator, and simulation is kept for final confirmation. It runs entirely client-side and ships in two forms: a hosted static site, and a single self-contained HTML file for offline or air-gapped use.
 
-You load transistor characterization tables (DC sweeps of `id`, `gm`, `gds`, … over a
-`L × VDS × VSB × VGS` operating grid, exported from any simulator), and the workbench
-turns them into gm/ID design charts, operating-point lookups, and sized devices.
+You load transistor characterization tables (DC sweeps of `id`, `gm`, `gds`, … over a `L × VDS × VSB × VGS` operating grid, exported from any simulator). The workbench turns them into gm/ID design charts, operating-point lookups and sized devices, and evaluates design sheets on them: circuits written as equations and decisions over the table quantities, checked for being fully determined and composed from smaller sheets.
 
 ## Capabilities
 
