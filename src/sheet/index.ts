@@ -2,12 +2,13 @@
 // it validates then evaluates, attaching the validation warnings — mirroring the
 // importMostab discipline so a caller cannot skip validation.
 
-import type { DeviceTable } from '../types';
+import type { DeviceTable, OutsideTable } from '../types';
 import {
   RANGE_END_SEP,
   engineChecks,
   indexTreeResults,
   isHardCheck,
+  outsideIn,
   sweepable,
   stands,
   withValidation,
@@ -322,7 +323,15 @@ export function sweepOf(
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
-    return { param, unit: v?.unit ?? '', x: [], checks: [], feasible: [], stands: [] };
+    return {
+      param,
+      unit: v?.unit ?? '',
+      x: [],
+      checks: [],
+      feasible: [],
+      stands: [],
+      outside: [],
+    };
   }
 
   const pts = Math.max(2, Math.min(401, Math.floor(n)));
@@ -356,6 +365,7 @@ export function sweepOf(
   const x: number[] = [];
   const feasible: boolean[] = [];
   const stood: boolean[] = [];
+  const beyond: OutsideTable[][] = [];
   /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry. */
   const failingIn = (byPath: ReadonlyMap<string, CheckResult>): string[] =>
     checks.flatMap((c) => {
@@ -370,6 +380,7 @@ export function sweepOf(
     x.push(t);
     const { res, feasible: ok, stands: done } = sample(withParams(r.doc, { [param]: t }));
     feasible.push(!blocked && ok);
+    beyond.push(res ? outsideIn(res) : []);
     const byPath = new Map<string, CheckResult>();
     if (res) indexTreeResults(res.checks, res.blocks, '', byPath);
     if (probe) failedAt.push(failingIn(byPath));
@@ -394,14 +405,19 @@ export function sweepOf(
     checks: [...checks, ...rangeEndChecks],
     feasible,
     stands: stood,
+    outside: beyond,
   };
   if (!probe) return out;
-  const at = (t: number): { ok: boolean; failing: string[] } => {
-    if (blocked) return { ok: false, failing: [] };
+  const at = (t: number): { ok: boolean; failing: string[]; outside: OutsideTable[] } => {
+    if (blocked) return { ok: false, failing: [], outside: [] };
     const s = probe(withParams(r.doc, { [param]: t }));
-    return { ok: s.feasible, failing: s.res ? failingIn(ownChecks(s.res)) : [] };
+    return {
+      ok: s.feasible,
+      failing: s.res ? failingIn(ownChecks(s.res)) : [],
+      outside: s.res ? outsideIn(s.res) : [],
+    };
   };
-  return { ...out, windows: windowsOf(x, feasible, failedAt, at) };
+  return { ...out, windows: windowsOf(x, feasible, failedAt, beyond, at) };
 }
 
 /** Halvings that pin a window's edge between two samples: 2^-8 of their spacing, about a
@@ -414,15 +430,20 @@ function windowsOf(
   x: readonly number[],
   ok: readonly boolean[],
   failedAt: readonly string[][],
-  at: (t: number) => { ok: boolean; failing: string[] },
+  outsideAt: readonly OutsideTable[][],
+  at: (t: number) => { ok: boolean; failing: string[]; outside: OutsideTable[] },
 ): SweepWindow[] {
   /** The edge between the passing sample `good` and the failing one `bad`: the passing end of the
    *  last bracket, and what fails at its other end — the failing sample's own, where no value
-   *  between them failed. */
-  const pin = (good: number, bad: number): { at: number; closedBy: string[] } => {
+   *  between them failed — or what it read beyond a table, where that is why it does not pass. */
+  const pin = (
+    good: number,
+    bad: number,
+  ): { at: number; closedBy: string[]; outside: OutsideTable[] } => {
     let g = x[good];
     let b = x[bad];
     let closedBy = failedAt[bad];
+    let outside = outsideAt[bad];
     for (let k = 0; k < WINDOW_EDGE_STEPS; k++) {
       const m = (g + b) / 2;
       const s = at(m);
@@ -430,9 +451,10 @@ function windowsOf(
       else {
         b = m;
         closedBy = s.failing;
+        outside = s.outside;
       }
     }
-    return { at: g, closedBy };
+    return { at: g, closedBy, outside };
   };
   const out: SweepWindow[] = [];
   for (let i = 0; i < ok.length; i++) {
@@ -446,6 +468,8 @@ function windowsOf(
       hi: hi?.at ?? x[j],
       ...(lo ? { below: lo.closedBy } : {}),
       ...(hi ? { above: hi.closedBy } : {}),
+      ...(lo?.outside.length ? { belowOutside: lo.outside } : {}),
+      ...(hi?.outside.length ? { aboveOutside: hi.outside } : {}),
     });
     i = j;
   }
@@ -530,6 +554,7 @@ export function sweepSheet2(
     y: [],
     feasible: [],
     binding: [],
+    outside: [],
   };
   if (paramX === paramY || !sweepable(px) || !sweepable(py)) return empty;
 
@@ -550,10 +575,12 @@ export function sweepSheet2(
   const y = Array.from({ length: pts }, (_, i) => py.min + ((py.max - py.min) * i) / (pts - 1));
   const feasible: boolean[][] = [];
   const binding: (string | null)[][] = [];
+  const beyond: OutsideTable[][][] = [];
 
   for (let yi = 0; yi < pts; yi++) {
     const frow: boolean[] = [];
     const brow: (string | null)[] = [];
+    const orow: OutsideTable[][] = [];
     for (let xi = 0; xi < pts; xi++) {
       const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice, {
         settings: opts.settings,
@@ -563,11 +590,13 @@ export function sweepSheet2(
       // infeasibility came from something other than a failing check (sizing error, child
       // structural error), which bindingCheck reports as "no check to name".
       brow.push(res.feasible ? null : (bindingCheck(res)?.id ?? null));
+      orow.push(outsideIn(res));
     }
     feasible.push(frow);
     binding.push(brow);
+    beyond.push(orow);
   }
-  return { ...empty, x, y, feasible, binding };
+  return { ...empty, x, y, feasible, binding, outside: beyond };
 }
 
 // The structural analysis: read-only, table-free, and read by nothing an evaluation does.

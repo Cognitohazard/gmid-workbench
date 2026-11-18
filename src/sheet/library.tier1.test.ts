@@ -473,13 +473,13 @@ describe('tier1 goldens: CMOS inverter amplifier', () => {
 
   it('the two gate-source voltages add up to the supply', () => {
     // The fact the sheet is drawn from. The NMOS is sized for its gm/ID and its gate-source
-    // voltage is the input level; the PMOS is read at what is left of the supply above it. A
-    // given gate voltage is reported as the coordinate the table was read at, so the sum is the
-    // supply to rounding, and here that coordinate lies on the table, 107 mV inside its 1.2 V.
+    // voltage is the input level; the PMOS is read at what is left of the supply above it, so the
+    // sum is the supply to rounding, and here that gate voltage lies on the table, 107 mV inside
+    // its 1.2 V.
     const n = blockOf(res, 'n').sizing!;
     const p = blockOf(res, 'p').sizing!;
     expect(relErr(n.vgs + p.vgs, 1.8)).toBeLessThan(1e-12);
-    expect(p.clamped).toBeUndefined();
+    expect(p.outside).toBeUndefined();
     expect(res.values.V_in).toBe(n.vgs);
     expect(relErr(res.values.V_in, vIn)).toBeLessThan(1e-4);
     // One current: typed into the NMOS, read from the NMOS by the PMOS.
@@ -510,18 +510,18 @@ describe('tier1 goldens: CMOS inverter amplifier', () => {
     expect(n.lhsValue).toBe(res.values.V_in);
     expect(n.rhsValue).toBe(0.9);
     expect(relErr(n.margin, 0.009 - (0.9 - res.values.V_in))).toBeLessThan(1e-9);
-    // Where the gate the tie hands the PMOS lies past the table, the assertion trips. At gm/ID
-    // 12 the input level is vgs(12) = 0.567 V, so the PMOS is asked for 1.233 V and read at the
-    // table's 1.2 V edge: its gate is then 33 mV above the input level, and the check says so
-    // together with the wiring check, whose loop through the two gates misses by the same amount.
-    const clamped = runSheet(withParams(doc, { gm_id_n: 12 }), table);
-    expect(blockOf(clamped, 'p').sizing!.clamped).toEqual(['vgs']);
-    const tripped = checkOf(clamped, 'input-consistent-p');
-    expect(tripped.status).toBe('fail');
-    expect(relErr(tripped.lhsValue, 1.8 - 1.2)).toBeLessThan(1e-12);
-    expect(relErr(tripped.rhsValue, VGS_GMID12_L05)).toBeLessThan(1e-4);
-    expect(clamped.nodes!.state).toBe('checked-with-findings');
-    expect(relErr(clamped.nodes!.closureError, 1.8 - 1.2 - clamped.values.V_in)).toBeLessThan(1e-9);
+    // Where the gate the tie hands the PMOS lies past the table, the PMOS is not sized. At gm/ID
+    // 12 the input level is vgs(12) = 0.567 V, so the PMOS is asked for 1.233 V against the
+    // table's 1.2 V: the record says so, the tie's check reads the PMOS and is na, and the point
+    // has no answer — never a trip measured at the table's edge.
+    const beyond = runSheet(withParams(doc, { gm_id_n: 12 }), table);
+    const [rec] = blockOf(beyond, 'p').sizing!.outside!;
+    expect(rec.quantity).toBe('vgs');
+    expect(relErr(rec.asked, 1.8 - VGS_GMID12_L05)).toBeLessThan(1e-4);
+    expect(rec.held[1]).toBeCloseTo(1.2, 12);
+    expect(checkOf(beyond, 'input-consistent-p').status).toBe('na');
+    expect(beyond.point?.state).toBe('no-answer');
+    expect(beyond.nodes!.state).toBe('not-evaluated');
   });
 
   it('combined transconductance is I_bias*(gm/ID_n + gm/ID_p)', () => {

@@ -274,3 +274,39 @@ export class LookupRangeError extends LookupError {
  *  behind would silently stop matching. Anyone holding the error itself should read its fields
  *  instead. */
 export const LOOKUP_RANGE_MESSAGE = /inverse lookup: (id|gm) (\S+) out of range \[(\S+), (\S+)\]/;
+
+/**
+ * A read a design asked of a device's table that lies beyond the data: the device it is for, what
+ * was asked (a bias axis such as `vds`, the length `l`, a bound gate voltage `vgs`, or the quantity
+ * an inverse lookup was asked to reach such as `gm_id` or `id`), the value asked, and the two ends
+ * of what the table holds for it. A device read beyond its table is not sized: nothing the table
+ * holds answers for that point, and a number taken at the table's edge would be a number from a
+ * different bias. Plain data, one shape wherever such a read is found, so a reader decides from
+ * these fields and never from a message.
+ *
+ * `device` is the device's path as findings name it: `givens` for a sheet's own device, the block
+ * path below it (`pair`, `amp.load`). The sizer, which does not know the device's name, leaves it
+ * empty for its caller to fill.
+ */
+export interface OutsideTable {
+  readonly device: string;
+  readonly quantity: string;
+  readonly asked: number;
+  readonly held: readonly [number, number];
+}
+
+/** One read beyond the table in words, from its fields alone. It names the quantity, not the
+ *  device: a finding is attributed to its device where it is listed (a block's findings carry the
+ *  block's name). */
+export function outsideTableMessage(r: OutsideTable): string {
+  const [lo, hi] = r.held;
+  const side = r.asked > hi ? 'above' : 'below';
+  // Ten significant digits: an axis end built by repeated addition reads 1.2, not
+  // 1.2000000000000002, and nothing a table resolves is lost.
+  const n = (v: number): string => String(Number(v.toPrecision(10)));
+  return (
+    `${r.quantity} = ${n(r.asked)} is ${side} what the table holds for this device ` +
+    `(${r.quantity} from ${n(lo)} to ${n(hi)}), so the device is not sized: no data answers for ` +
+    `that point, and a value read at the table's edge would come from a different one`
+  );
+}

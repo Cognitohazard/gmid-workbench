@@ -11,7 +11,7 @@ import { makeGrid } from '../grid';
 import { validateDevices, validateDeviceConditions } from '../qa';
 import { loadLibrary, REFS, table as libTable, notACircuit } from '../sheet/library.fixtures';
 import {
-  clampedIn,
+  outsideIn,
   evaluateSheet,
   namedBindings,
   buildSheetRefIndex,
@@ -1129,11 +1129,12 @@ describe('runCondition', () => {
     expect(evaluateSheet(drained('assumed'), withDrain).assumptions).toBeUndefined();
   });
 
-  it('calls a held device that cannot carry its current a failure, not a missing answer', () => {
+  it('gives no answer where a held device would need a gate voltage past its table', () => {
     // Sized at gm/ID = 4 for 20 µA, the device sits near the top of its swept gate-voltage
     // range. At a condition where every gate voltage carries a quarter of the current, no
-    // characterized gate voltage reaches 20 µA at that width (the table tops out near 12 µA):
-    // the built transistor cannot do its job there. That is a verdict about the design.
+    // characterized gate voltage reaches 20 µA at that width (the table tops out near 12 µA).
+    // The table does not show the transistor fails there — only that it stops short — so the
+    // point is a read beyond the table: no answer, with the record of what was asked.
     const quarter = retag(scaleQuantities(dev, { id: 0.25, gm: 0.25 }), 'ss', -40);
     const doc: SheetDoc = {
       ...gainDoc(0),
@@ -1152,12 +1153,13 @@ describe('runCondition', () => {
     // still carries the verdict.
     expect(ss.state).toBe('not-evaluated');
     expect(ss.points).toHaveLength(1);
-    expect(ss.points[0].state).toBe('does-not-comply');
-    expect(ss.points[0].error).toMatch(/^this device cannot carry its current here/);
+    expect(ss.points[0].state).toBe('no-answer');
+    expect(ss.points[0].error).toMatch(/^id = 0\.00002 is above what the table holds/);
+    expect(ss.points[0].outside?.map((r) => [r.device, r.quantity])).toEqual([['givens', 'id']]);
     expect(aggregateConditionRuns([tt, ss]).compliance).toEqual({
       complies: 1,
-      doesNotComply: 1,
-      noAnswer: 0,
+      doesNotComply: 0,
+      noAnswer: 1,
       notRun: 0,
       total: 2,
     });
@@ -1267,8 +1269,8 @@ describe('runCondition', () => {
 
   it('gives no answer at a condition whose table does not reach the bias the design sits at', () => {
     // The design is biased at vds = 1.0 V. The second condition was characterized only to
-    // 0.8 V, so the held device is read 0.2 V away from where it sits. The run completes and
-    // every check passes — on the wrong data — so the point is neither a pass nor a failure.
+    // 0.8 V, so the held device would be read 0.2 V away from where it sits. It is not sized
+    // there, and the point is neither a pass nor a failure.
     const wide = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
     const narrow = generateDemoDevice({ vds: { min: 0, max: 0.8, step: 0.05 } });
     const doc: SheetDoc = {
@@ -1284,9 +1286,14 @@ describe('runCondition', () => {
       key('tt'),
     );
     const ss = runs[1];
-    expect(ss.state === 'evaluated' && ss.feasible).toBe(true); // what the clamped data says
+    expect(ss.state).toBe('not-evaluated');
     expect(ss.points[0].state).toBe('no-answer');
-    expect(ss.points[0].error).toMatch(/^the table does not reach this point \(givens vds\)/);
+    expect(ss.points[0].outside).toEqual([
+      { device: 'givens', quantity: 'vds', asked: 1, held: [0, expect.closeTo(0.8, 12)] },
+    ]);
+    expect(ss.points[0].error).toMatch(
+      /^vds = 1 is above what the table holds .*\(vds from 0 to 0\.8\)/,
+    );
     const agg = aggregateConditionRuns(runs);
     expect(agg.compliance).toEqual({
       complies: 1,
@@ -1372,7 +1379,7 @@ describe('runCondition', () => {
       // One difference is by design: a bias the table does not reach is an advisory where the
       // design is sized and no answer where it is held. No shipped sheet sits off this table at
       // its own centre, and this is where that would show.
-      expect(clampedIn(sized.result), file).toEqual([]);
+      expect(outsideIn(sized.result), file).toEqual([]);
       expect(other.points, file).toEqual(sized.points);
     }
     // Not vacuous: the library does evaluate on this table.

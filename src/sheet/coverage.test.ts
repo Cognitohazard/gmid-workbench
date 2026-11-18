@@ -22,7 +22,7 @@ import { sizeDevice } from '../device';
 import { scalarScope } from '../expr';
 import { makeGrid } from '../grid';
 import { fixTable } from '../series';
-import type { DeviceTable } from '../types';
+import { outsideTableMessage, type DeviceTable } from '../types';
 import {
   runSheet,
   evaluateSheet,
@@ -36,7 +36,7 @@ import { holdHardware } from './coverage';
 // The closed forms, from the module the library goldens share — not the fixtures that re-export
 // them, whose import walks sheets/ off disk and builds a demo table this suite does not use.
 import { gdsOf, relErr } from './library.math';
-import { clampedIn, stands, treeCheckResults } from './types';
+import { outsideIn, stands, treeCheckResults } from './types';
 import type { SizingReport, SheetBlockReport, SheetDoc } from './types';
 import { notACircuit } from './library.fixtures';
 
@@ -1071,11 +1071,12 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
     expect(end.bias!.vsb + end.vgs).toBeCloseTo(base.held!.X, 5);
   });
 
-  it('says a device cannot carry its current at the endpoint in the vocabulary of the question', () => {
-    // A failure mode a re-sizing range end could not produce: at a fixed width the authored current
-    // needs a density the swept vgs range no longer reaches once the body bias raises vth. The
-    // lookup's own words are accurate but width-domain, so the finding leads with what it means
-    // and keeps them behind it.
+  it('records a held current the endpoint cannot reach, in the quantity the givens author', () => {
+    // A case a re-sizing range end could not produce: at a fixed width the authored current needs
+    // a density the swept vgs range no longer reaches once the body bias raises vth. That is a
+    // read beyond the table, not a shown failure of the hardware — whether the gate could go
+    // further than the table sweeps is not checked — so the end has no answer, and its record
+    // says what was asked and what the table holds, in the quantity the givens author.
     const doc: SheetDoc = {
       title: 'edge-of-table',
       polarity: 'n',
@@ -1091,16 +1092,18 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
     const res = runSheet(doc, dev);
     expect(res.sizing?.ok).toBe(true); // the center sized; it is the range end that cannot
     const e = res.rangeEnds?.[0];
-    expect(e?.state).toBe('does-not-comply');
-    expect(e?.error).toMatch(/^this device cannot carry its current here/);
-    expect(e?.error).toMatch(/inverse lookup: id .* out of range/); // the reach, verbatim
+    expect(e?.state).toBe('no-answer');
+    expect(e?.error).toMatch(/^id = 0\.00002 is above what the table holds for this device/);
+    expect(outsideIn(e!).map((r) => [r.device, r.quantity, r.asked])).toEqual([
+      ['givens', 'id', expect.closeTo(20e-6, 18)],
+    ]);
     expect(res.complies).toBe(false);
   });
 
-  it('names the transconductance instead when that is what the endpoint cannot reach', () => {
+  it('records the transconductance instead when that is what the endpoint cannot reach', () => {
     // Width-first givens are carried through untouched, so the quantity they run out of table on is
-    // whichever one they authored. Saying "current" over a given gm would describe the wrong
-    // quantity to the one reader who most needs it named.
+    // whichever one they authored. Recording "id" over a given gm would name the wrong quantity to
+    // the one reader who most needs it named.
     const doc: SheetDoc = {
       title: 'edge-of-table-gm',
       polarity: 'n',
@@ -1114,9 +1117,9 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
       operatingRange: [{ name: 'body-hi', set: { VSB: 'VSB_hi' } }],
     };
     const e = runSheet(doc, dev).rangeEnds?.[0];
-    expect(e?.state).toBe('does-not-comply');
-    expect(e?.error).toMatch(/^this device cannot reach its transconductance here/);
-    expect(e?.error).toMatch(/inverse lookup: gm .* out of range/);
+    expect(e?.state).toBe('no-answer');
+    expect(e?.error).toMatch(/^gm = 0\.008 is above what the table holds for this device/);
+    expect(outsideIn(e!).map((r) => r.quantity)).toEqual(['gm']);
   });
 });
 
@@ -1247,7 +1250,7 @@ describe('complies — the second question, answered apart from feasibility', ()
 // ---------------------------------------------------------------------------------------
 
 describe('no answer — a range end the data or the sheet cannot speak for', () => {
-  // The demo table characterizes vds up to 1.2 V. A range end at 1.5 V is read at 1.2 V instead.
+  // The demo table characterizes vds up to 1.2 V. A range end at 1.5 V asks beyond it.
   const offHull = (over: Partial<SheetDoc> = {}): SheetDoc => ({
     title: 'off-hull',
     polarity: 'n',
@@ -1267,31 +1270,44 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     expect(res.feasible).toBe(true);
     const e = res.rangeEnds![0];
     expect(e.set).toEqual({ VD: 1.5 });
-    // The run completed — on data taken 0.3 V away. Its `vd-cap` check even fails there
-    // (1.5 > 1.4), and that still is not a finding: the device numbers beside it are not this
-    // point's, so the end is no answer rather than a failure, and no check of it is named.
+    // The device is not sized at the table's edge. Its `vd-cap` check, which reads no device,
+    // still fails there (1.5 > 1.4), and that still is not a finding: the point has no answer, so
+    // the end is no answer rather than a failure, and no check of it is named.
     expect(e.state).toBe('no-answer');
-    expect(e.error).toMatch(/^the table does not reach this point \(givens vds\)/);
+    expect(e.error).toMatch(
+      /^vds = 1\.5 is above what the table holds for this device \(vds from 0 to 1\.2\)/,
+    );
     expect(e.solved).toEqual({});
-    expect(e.warnings.some((w) => /clamped to 1.2/.test(w.message))).toBe(true);
+    expect(outsideIn(e)).toEqual([
+      { device: 'givens', quantity: 'vds', asked: 1.5, held: [0, expect.closeTo(1.2, 12)] },
+    ]);
     expect(rangeEndCheck(res)).toBeUndefined();
     expect(res.complies).toBe(false);
   });
 
-  it('keeps the same clamp advisory where the design is sized', () => {
-    // At the design's own operating point a clamp is the author's to see and judge, as it always
-    // was: a warning beside a verdict, not a refusal.
+  it('gives the same outcome where the design is sized: no answer, never a verdict', () => {
+    // At the design's own operating point a read beyond the table is the same outcome as at a range
+    // end: the device is not sized, what reads it is withheld, and the point has no answer — not
+    // feasible on data from another bias with a warning beside it.
     const doc = offHull({ operatingRange: undefined });
     doc.params[0].value = 1.3;
     doc.params[0].max = 1.5;
-    const res = evaluateSheet(doc, dev);
-    expect(res.sizing?.clamped).toEqual(['vds']);
-    expect(res.sizing?.bias?.vds).toBeCloseTo(1.2, 12); // the table's last vds node
-    expect(res.feasible).toBe(true);
-    expect(clampedIn(res)).toEqual(['givens vds']);
+    const res = runSheet(doc, dev);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.sizing?.bias).toBeUndefined();
+    expect(res.feasible).toBe(false);
+    expect(res.point?.state).toBe('no-answer');
+    expect(res.point?.error).toMatch(/^vds = 1\.3 is above what the table holds/);
+    expect(outsideIn(res).map((r) => [r.device, r.quantity, r.asked])).toEqual([
+      ['givens', 'vds', 1.3],
+    ]);
+    // What reads the device is withheld, with the device as its cause; `vd-cap`, which reads only
+    // a param, is still evaluated.
+    expect(res.withheld?.gm).toBe('givens');
+    expect(res.checks.find((c) => c.id === 'vd-cap')?.status).toBe('pass');
   });
 
-  it('names a clamped child by its block path', () => {
+  it('names a child read beyond its table by its block path', () => {
     const parent: SheetDoc = {
       title: 'p',
       polarity: 'n',
@@ -1302,12 +1318,16 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
         { name: 'load', doc: offHull({ operatingRange: undefined }), params: { VD: '1.3' } },
       ],
     };
-    expect(clampedIn(evaluateSheet(parent, dev))).toEqual(['load vds']);
+    const res = runSheet(parent, dev);
+    expect(outsideIn(res).map((r) => [r.device, r.quantity, r.asked])).toEqual([
+      ['load', 'vds', 1.3],
+    ]);
+    expect(res.point?.error).toMatch(/^block "load": vds = 1\.3 is above what the table holds/);
   });
 
-  it('declines a range end read off the hull on any coordinate, not only vds', () => {
+  it('declines a range end read beyond the table on any coordinate, not only vds', () => {
     // The body bias, the length and a supplied gate voltage each have a nearest characterized
-    // node to fall back to, exactly as vds does — and each fallback is a different point.
+    // node the grid would fall back to, exactly as vds does — and each is a different point.
     const end = (
       givens: SheetDoc['givens'],
       params: SheetDoc['params'],
@@ -1337,7 +1357,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { VB: 'VB_hi' },
     );
     expect(vsb.state).toBe('no-answer');
-    expect(vsb.error).toMatch(/\(givens vsb\)/);
+    expect(vsb.error).toMatch(/^vsb = 0\.6 is above what the table holds .*\(vsb from 0 to 0\.4\)/);
     // Width-first givens keep their length as an authored expression, so an end can move it:
     // 5 µm against a table that stops at 2 µm.
     const len = end(
@@ -1349,7 +1369,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { Lp: 'Lp_hi' },
     );
     expect(len.state).toBe('no-answer');
-    expect(len.error).toMatch(/\(givens l\)/);
+    expect(len.error).toMatch(/^l = 0\.000005 is above what the table holds/);
     // A supplied gate voltage of 1.5 V against a sweep that ends at 1.2 V.
     const vgs = end(
       { L: '0.5u', W: '10u', vgs: 'VG', vds: '0.6', vsb: '0' },
@@ -1360,15 +1380,14 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { VG: 'VG_hi' },
     );
     expect(vgs.state).toBe('no-answer');
-    expect(vgs.error).toMatch(/\(givens vgs\)/);
+    expect(vgs.error).toMatch(/^vgs = 1\.5 is above what the table holds .*\(vgs from 0 to 1\.2\)/);
   });
 
-  it('does not call it a failure when the lookup runs out of range on clamped data', () => {
-    // The trap behind the clamp: at vds = 1.5 V the device carries the current asked of it, but
-    // this table stops at 1.2 V, and at 1.2 V it does not. The inverse lookup then fails on the
-    // clamped slice with the very message that otherwise means "this device cannot carry its
-    // current". That would be a verdict about a point nobody measured. A table that reaches
-    // 1.5 V gives the true one.
+  it('does not call it a failure when the bias the device is asked for is beyond the table', () => {
+    // The trap a clamp would set: at vds = 1.5 V the device carries the current asked of it, but
+    // this table stops at 1.2 V, and at 1.2 V it does not. Read at the edge, the inverse lookup
+    // would fail there and look like a verdict about a point nobody measured. The read is refused
+    // on the drain voltage first, and a table that reaches 1.5 V gives the true answer.
     const wide = generateDemoDevice({
       vds: { min: 0, max: 1.6, step: 0.05 },
       vsb: { min: 0, max: 0.4, step: 0.05 },
@@ -1401,15 +1420,15 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     };
     const narrowEnd = evaluateSheet(doc, dev).rangeEnds![0];
     expect(narrowEnd.state).toBe('no-answer');
-    expect(narrowEnd.error).toMatch(/^the table does not reach this point \(givens vds\)/);
-    expect(narrowEnd.error).toMatch(/the run then stopped: sizing failed: inverse lookup: id/);
+    expect(outsideIn(narrowEnd).map((r) => r.quantity)).toEqual(['vds']);
+    expect(narrowEnd.error).toMatch(/^vds = 1\.5 is above what the table holds/);
     expect(evaluateSheet(doc, wide).rangeEnds![0].state).toBe('complies');
   });
 
   it('declines a diode-connected device whose gate voltage lies past the characterized drain range', () => {
     // A diode connection is read where vds = vgs. Raise the current and the gate voltage climbs
-    // to about 0.97 V; a table swept only to vds = 0.6 V reads that point at 0.6 V instead and
-    // reports a gate voltage 30 mV away from the real one — enough to flip a check either way.
+    // to about 0.97 V; a table swept only to vds = 0.6 V would read that point at 0.6 V instead,
+    // a gate voltage 30 mV away from the real one — enough to flip a check either way.
     const mk = (vdsMax: number) => generateDemoDevice({ vds: { min: 0, max: vdsMax, step: 0.05 } });
     const doc: SheetDoc = {
       title: 'diode',
@@ -1427,9 +1446,11 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     expect(reached.rangeEnds![0].state).toBe('complies'); // 0.967 V against the 0.975 V cap
     const short = evaluateSheet(doc, mk(0.6));
     // At the centre the gate sits near 0.57 V, inside the drain range: read where it was asked.
-    expect(short.sizing?.clamped).toBeUndefined();
+    expect(short.sizing?.outside).toBeUndefined();
     expect(short.rangeEnds![0].state).toBe('no-answer');
-    expect(short.rangeEnds![0].error).toMatch(/\(givens vds\)/);
+    expect(short.rangeEnds![0].error).toMatch(
+      /^vds = 0\.9\d+ is above what the table holds .*\(vds from 0 to 0\.6\)/,
+    );
   });
 
   it('does not mistake float rounding at the hull for a clamp', () => {
@@ -1449,16 +1470,17 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     };
     const res = evaluateSheet(doc, dev);
     expect(0.3 - (0.1 + 0.2)).toBeLessThan(0);
-    expect(res.sizing?.clamped).toBeUndefined();
-    expect(res.warnings.filter((w) => /clamped/.test(w.message))).toEqual([]);
+    expect(res.sizing?.outside).toBeUndefined();
+    expect(res.warnings.filter((w) => /what the table holds/.test(w.message))).toEqual([]);
     expect(res.rangeEnds![0].state).toBe('complies');
   });
 
-  it('reads a held current from the table: too much is a failure, too little is no answer', () => {
+  it('reads a held current beyond the table as no answer, too much or too little', () => {
     // The same device at its sized width, asked for an absurd current either way. One ampere is
-    // more than any characterized gate voltage carries: the device cannot do it. A femtoampere
-    // is less than the sweep's lowest point carries: the device would sit below anything
-    // measured, and the data cannot say how it behaves there.
+    // more than any characterized gate voltage carries; a femtoampere is less than the sweep's
+    // lowest point carries. Either way the gate voltage it needs lies past the swept range, and
+    // whether the hardware could get there is not something the table shows: no answer, with the
+    // record of what was asked and what the table reaches.
     const doc: SheetDoc = {
       title: 'reach',
       polarity: 'n',
@@ -1477,9 +1499,10 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     };
     const [lo, hi] = evaluateSheet(doc, dev).rangeEnds!;
     expect(lo.state).toBe('no-answer');
-    expect(lo.error).toMatch(/^sizing failed: inverse lookup: id 1e-15 out of range/);
-    expect(hi.state).toBe('does-not-comply');
-    expect(hi.error).toMatch(/^this device cannot carry its current here/);
+    expect(lo.error).toMatch(/^id = 1e-15 is below what the table holds for this device/);
+    expect(hi.state).toBe('no-answer');
+    expect(hi.error).toMatch(/^id = 1 is above what the table holds for this device/);
+    expect(outsideIn(hi).map((r) => r.quantity)).toEqual(['id']);
   });
 
   it('declines every range end of a design sized under an assumed voltage', () => {
@@ -1525,24 +1548,48 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
     expect(heldOutcome(run(undefined, false))).toEqual({ state: 'does-not-comply' });
   });
 
-  it('calls a current past the TOP of the swept range a failure of the design', () => {
-    // The device is asked for 2 mA and the table tops out at 1 mA: no gate voltage it was
-    // characterized at carries that, so the held design does not work here.
-    const out = heldOutcome(
-      run('sizing failed: inverse lookup: id 0.002 out of range [1e-9, 0.001] for L=5e-7'),
-    );
-    expect(out.state).toBe('does-not-comply');
-    expect(out.error).toMatch(/^this device cannot carry its current here — sizing failed/);
+  // A held device asked for a current its fixed width carries only at a gate voltage past the
+  // swept range, either end, as the sizing records it (SizingReport.outside).
+  const beyond = (asked: number): Parameters<typeof heldOutcome>[0] => {
+    const record = { device: 'givens', quantity: 'id', asked, held: [1e-9, 1e-3] as const };
+    const message = outsideTableMessage(record);
+    return {
+      ...run(message),
+      sizing: { ok: false, W: NaN, L: NaN, vgs: NaN, id: NaN, error: message, outside: [record] },
+    };
+  };
+
+  it('calls a current past the TOP of the swept range no answer, from the record', () => {
+    // The device is asked for 2 mA and the table tops out at 1 mA. No characterized gate voltage
+    // carries that — but whether the hardware fails here would need the table's gate range to
+    // cover all the wiring permits and the current to rise with gate voltage along the slice,
+    // neither of which is checked. So it is no answer, never a failure the design is shown to have.
+    const out = heldOutcome(beyond(0.002));
+    expect(out).toEqual({
+      state: 'no-answer',
+      error: outsideTableMessage({
+        device: 'givens',
+        quantity: 'id',
+        asked: 0.002,
+        held: [1e-9, 1e-3],
+      }),
+    });
+    expect(out.error).toMatch(/^id = 0\.002 is above what the table holds/);
   });
 
-  it('calls a current below the BOTTOM of the swept range no answer', () => {
+  it('calls a current below the BOTTOM of the swept range no answer, the same way', () => {
     // 1 pA against a sweep that starts at 1 nA: the device would sit at a gate voltage below
     // anything characterized. It may well work there; the data cannot say.
-    const out = heldOutcome(
-      run('sizing failed: inverse lookup: id 1e-12 out of range [1e-9, 0.001] for L=5e-7'),
-    );
+    const out = heldOutcome(beyond(1e-12));
     expect(out.state).toBe('no-answer');
-    expect(out.error).toMatch(/^sizing failed: inverse lookup/);
+    expect(out.error).toMatch(/^id = 1e-12 is below what the table holds/);
+  });
+
+  it('decides by the record, never by the words of an error', () => {
+    // An error that merely reads like a reach failure, with no record behind it, is the run's own
+    // error: no answer, in its own words.
+    const words = 'sizing failed: inverse lookup: id 0.002 out of range [1e-9, 0.001] for L=5e-7';
+    expect(heldOutcome(run(words))).toEqual({ state: 'no-answer', error: words });
   });
 
   it('calls any other run that did not complete no answer, with its message', () => {
@@ -1555,8 +1602,7 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
   it("reads a solve's failure as no answer even when it quotes a device past the top of its range", () => {
     // A solve's message can quote the device failure that bounded its search — here the end where
     // a held device could not carry 2 mA. That quote is why the range was searched where it was,
-    // not this point's verdict: the solve found nothing, so the point is unanswered. The same text
-    // as the run's own sizing error is a verdict (above).
+    // not this point's verdict: the solve found nothing, so the point is unanswered.
     const quoted =
       'solved param "V" found no solution in the searched range [0.2, 0.8] V (the relation does ' +
       'not evaluate below V = 0.2 V: block "m": sizing failed: inverse lookup: id 0.002 out of ' +

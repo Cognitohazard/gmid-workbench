@@ -62,6 +62,7 @@ import {
   type SheetElement,
   type SheetGivens,
   type SheetResult,
+  type SizingReport,
   type SheetVar,
   type WiringValues,
 } from './types';
@@ -1746,7 +1747,7 @@ function selectorProblems(
   devices: readonly {
     name: string;
     givens: SheetGivens;
-    point?: DevicePoint;
+    point?: Pick<DevicePoint, 'axis'>;
     chain: SheetBlock[];
   }[],
   root: SheetDoc,
@@ -1774,6 +1775,48 @@ function selectorProblems(
     }
   }
   return out;
+}
+
+/**
+ * The declared axis-sign selectors held to the tables of the devices that were refused for reading
+ * beyond them (SizingReport.outside) — each device of `doc`'s tree, its own included, read through
+ * the table direction its refusal records (SizingReport.vgsAxis). Such a device has no operating
+ * point, so no walk reads it; a selector of the wrong sign is the likeliest reason a gate voltage
+ * lands past the table at all, and is named as it would be on a sized device. Empty on a document
+ * in the earlier format, which declares no selectors.
+ */
+export function selectorsBeyondTable(doc: SheetDoc, res: SheetResult): QAWarning[] {
+  if (formatOf(doc) !== 2) return [];
+  const devices: {
+    name: string;
+    givens: SheetGivens;
+    point: { axis: 1 | -1 };
+    chain: SheetBlock[];
+  }[] = [];
+  const refusedAxis = (s: SizingReport | undefined): 1 | -1 | undefined =>
+    s?.outside?.length ? s.vgsAxis : undefined;
+  // Every device of the tree, whatever wiring each sheet states: a sheet that declares
+  // `nodes: "none"` still holds its selectors to its devices' tables.
+  const visit = (
+    d: SheetDoc,
+    r: { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] } | undefined,
+    chain: SheetBlock[],
+  ): void => {
+    const axis = refusedAxis(r?.sizing);
+    if (d.givens && axis !== undefined)
+      devices.push({
+        name: chain.map((b) => b.name).join(PATH_SEP) || 'givens',
+        givens: d.givens,
+        point: { axis },
+        chain,
+      });
+    if (chain.length >= MAX_BLOCK_DEPTH) return;
+    (Array.isArray(d.blocks) ? d.blocks : []).forEach((b, i) => {
+      if (b?.doc) visit(b.doc, r?.blocks?.[i], [...chain, b]);
+    });
+  };
+  visit(doc, res, []);
+  return devices.length ? selectorProblems(devices, doc, symbolsOf(doc, res.values)) : [];
 }
 
 /** The levels of one walk: its own sheet and, recursively, every sheet whose wiring joins it.

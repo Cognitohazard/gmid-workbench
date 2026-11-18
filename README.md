@@ -329,6 +329,14 @@ needs to know:
   search. A script that read a failed search's last trial value from `values` now reads
   `undefined`. The params that read nothing not found are still searched, and what the failure
   does not touch is evaluated as before.
+- **A device read beyond its table is not sized.** Where a sheet asks a device's table for a bias,
+  length, gate voltage, or a gm/ID or current it does not hold, the device is not sized and the point
+  has no answer — never feasible, never `does-not-comply`. `SizingReport.clamped` and
+  `SizeResult.clamped` (axis names) are replaced by `outside`, a list of records
+  `{ device, quantity, asked, held: [lo, hi] }`; `clampedIn` is replaced by `outsideIn`, which returns
+  those records. A range end, a process condition's compliance point, a sweep sample and a
+  sensitivity entry carry the same records as `outside`. A held device whose current would need a gate
+  voltage past its table is now `no-answer` where it was `does-not-comply`.
 - **A lookup returns what it read and where.** `lookup`, `lookupByQuantity` and `lookupByGmId`
   return `{ values, at, clamped, warnings }` instead of the bare quantities: read `r.values.gm_id`
   where a script read `r.gm_id` (which is now `undefined`). The point must name the table's axes

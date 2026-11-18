@@ -5,7 +5,7 @@
 // the density target when W is bound). The gm/ID ceiling at the L-slice gates
 // feasibility. Pure, deterministic, zero DOM imports.
 
-import { type DeviceTable, LookupRangeError } from '../types';
+import { type DeviceTable, type OutsideTable, LookupRangeError } from '../types';
 import {
   gmIdCeiling,
   lookup,
@@ -103,13 +103,14 @@ export interface SizeResult {
    */
   fallbacks: FallbackNote[];
   /**
-   * The coordinates this sizing was asked for and could not be read at, because they fall off
-   * the table's hull: `l` (the length), `vgs` (a gate voltage supplied rather than solved). Each
-   * was moved to the nearest characterized value and has a note in `warnings`. Empty when the
-   * operating point was read where it was asked for — the structured form of those notes, for a
-   * caller that must not report a number taken somewhere else as an answer.
+   * The coordinates this sizing was asked for and the table does not hold: `l` (the length), `vgs`
+   * (a gate voltage supplied rather than solved), each as one record of what was asked and what
+   * the table holds (`device` left empty for the caller to name). Each was read at the nearest
+   * characterized value instead and has a note in `warnings`. Empty when the operating point was
+   * read where it was asked for. A caller that must not report a number taken somewhere else as an
+   * answer reads this field: the sheet engine does not size such a device at all.
    */
-  clamped: string[];
+  outside: OutsideTable[];
 }
 
 /**
@@ -243,7 +244,7 @@ function atGateVoltage(
   vgs: number,
   L: number,
   warnings: string[],
-  clamped: string[],
+  outside: OutsideTable[],
   keys: string[],
 ): Record<string, number> {
   const vgsAxis = operatingPointAxis(
@@ -255,7 +256,7 @@ function atGateVoltage(
   const hi = vgsAxis.values[vgsAxis.values.length - 1];
   const used = vgs < lo ? lo : vgs > hi ? hi : vgs;
   if (offHull(vgsAxis.values, vgs)) {
-    clamped.push('vgs');
+    outside.push({ device: '', quantity: 'vgs', asked: vgs, held: [lo, hi] });
     warnings.push(
       `requested vgs ${vgs} V is outside the table's vgs range [${lo}, ${hi}] V at L=${L} m; clamped to the nearest characterized gate voltage`,
     );
@@ -308,13 +309,13 @@ export function sizeDevice(q: SizeQuery): SizeResult {
   // sizing then runs at a different L than requested. This is a warned clamp, NOT an
   // infeasibility (unlike a gm/ID past the ceiling, which the inverse lookup throws on).
   const warnings: string[] = [];
-  const clamped: string[] = [];
+  const outside: OutsideTable[] = [];
   const lengths = q.lengths ?? q.table.grid.axes.find((a) => a.name === 'l')?.values;
   if (lengths && lengths.length > 0) {
     const lLo = lengths[0];
     const lHi = lengths[lengths.length - 1];
     if (offHull(lengths, L)) {
-      clamped.push('l');
+      outside.push({ device: '', quantity: 'l', asked: L, held: [lLo, lHi] });
       warnings.push(
         `requested L ${L} m is outside the table's L range [${lLo}, ${lHi}] m; clamped to the nearest characterized length`,
       );
@@ -340,7 +341,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     // invert, the point is read forward at the gate voltage given.
     point =
       selector === 'vgs'
-        ? atGateVoltage(q.table, q.vgs as number, L, warnings, clamped, keys)
+        ? atGateVoltage(q.table, q.vgs as number, L, warnings, outside, keys)
         : lookupByQuantity(q.table, selector, q[selector] as number, L, keys).values;
     // A bound gm/ID is honoured exactly: interpolating gm and id separately does not
     // preserve their ratio, so reading it back off the point would return a hair off what
@@ -478,7 +479,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     passthrough: Object.keys(passthrough),
     warnings,
     fallbacks,
-    clamped,
+    outside,
   };
 }
 

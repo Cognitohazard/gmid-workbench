@@ -5,7 +5,7 @@
 // identities, which the engine checks for DC consistency after sizing and never solves — no
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
-import type { QAWarning } from '../types';
+import { outsideTableMessage, type OutsideTable, type QAWarning } from '../types';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
@@ -842,6 +842,17 @@ export function withParams(doc: SheetDoc, o: Record<string, number>): SheetDoc {
   };
 }
 
+/** The cause (QAWarning.cause, SheetResult.withheld) a finding carries when it follows from the
+ *  sheet's own device, which was not sized because the givens read it beyond its table: the name
+ *  findings give that device. One level up the device is its block, so the cause becomes the
+ *  block's path (prefixBlockWarning). */
+export const OWN_DEVICE = 'givens';
+
+/** A cause as the parent of block `blockName` names it: the block itself for its own device, the
+ *  path below it for anything inside. */
+export const causeInParent = (blockName: string, cause: string): string =>
+  cause === OWN_DEVICE ? blockName : `${blockName}${PATH_SEP}${cause}`;
+
 /** Re-attribute a composed child's warning to its block, so a rolled-up warning points at
  *  the offending one (and a child error still blocks the parent's closed feasibility). */
 export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
@@ -849,7 +860,7 @@ export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
     ...w,
     message: blockMessage(blockName, w.message),
     location: `${blockName}${PATH_SEP}${w.location ?? ''}`,
-    ...(w.cause !== undefined ? { cause: `${blockName}${PATH_SEP}${w.cause}` } : {}),
+    ...(w.cause !== undefined ? { cause: causeInParent(blockName, w.cause) } : {}),
   };
 }
 
@@ -1207,14 +1218,13 @@ export interface RangeEndReport {
    * - `not-run`: the question was never put, because the base run produced no design to hold
    *   (see `stands`). Carries no `error` and no outcomes — nothing ran.
    * - `no-answer`: the question was put and could not be answered. The run did not complete (a
-   *   solve that did not land, an override that did not resolve), or it completed on data read
-   *   off the table's hull. `error` says which; the check outcomes it may carry were taken at a
-   *   point that is not the one asked about, so nothing reads them as findings.
+   *   solve that did not land, an override that did not resolve), or a device was read beyond its
+   *   table (`outside`). `error` says which; the check outcomes it may carry were taken at a point
+   *   that is not the one asked about, so nothing reads them as findings.
    *
-   * `does-not-comply` carries an `error` in two cases: a device held at its width cannot carry
-   * its current at this end at all, or a solved wire finds no crossing anywhere the wiring lets it
-   * go (designFailure). Each is a measured failure of the design, not a gap in the tool, though it
-   * leaves no check outcomes either.
+   * `does-not-comply` carries an `error` in one case: a solved wire finds no crossing anywhere the
+   * wiring lets it go, both ends read on the table (designFailure). That is a measured failure of
+   * the design, not a gap in the tool, though it leaves no check outcomes either.
    */
   state: PointState;
   set: Record<string, number>;
@@ -1226,6 +1236,10 @@ export interface RangeEndReport {
   ranges?: SolveRange[];
   warnings: QAWarning[];
   error?: string;
+  /** Every device this run read beyond its table (see OutsideTable, outsideIn), the sheet's own
+   *  among them — the end's report carries no sizing of its own, so the records ride here. Absent
+   *  where every device was read on its table. Such an end is `no-answer`. */
+  outside?: OutsideTable[];
   /** The DC wiring check of this run, on a sheet that states wiring: `not-evaluated` wherever the
    *  end has no answer (see NodesState). */
   nodes?: NodesReport;
@@ -1363,8 +1377,8 @@ export interface CheckResult {
 export interface SizingReport {
   ok: boolean;
   W: number;
-  /** The length the givens resolved to — what the sizing was ASKED for (a length off the table's
-   *  L hull is clamped by the sizer, which says so in its own warning). Reported beside W
+  /** The length the givens resolved to — what the sizing was ASKED for (a length beyond the
+   *  lengths the table holds is not sized at all, see `outside`). Reported beside W
    *  because the two together are the transistor: a caller holding a design fixed while its
    *  bias moves needs the geometry, and re-evaluating the authored L expression at the new
    *  bias is exactly what "fixed" forbids. */
@@ -1386,11 +1400,18 @@ export interface SizingReport {
    *  apart. Reported rather than warned, so the UI can mark it in place; see
    *  docs/sheet-format.md for when the default is wrong and why this is not a warning. */
   assumed?: string[];
-  /** Coordinates the sizing asked for and the table does not reach (`vds`, `vsb`, `l`, a
-   *  supplied `vgs`), each read at the nearest characterized value instead and warned about.
-   *  At the design's own operating point that is an advisory; where a held design is being
-   *  asked whether it still works, an answer read somewhere else is no answer (see clampedIn). */
-  clamped?: string[];
+  /** What the givens asked of the table beyond the data it holds — a bias (`vds`, `vsb`), the
+   *  length, a bound gate voltage, a diode connection that settles off the characterized
+   *  diagonal, or a target the inverse lookup cannot reach — one record each (see OutsideTable),
+   *  with `device` `givens`. Present only on a sizing that failed for that reason: such a device
+   *  is not sized, everything that reads it is withheld with the device as its cause, and the
+   *  point it belongs to has no answer (see outsideIn). */
+  outside?: OutsideTable[];
+  /** On a sizing refused for a read beyond its table (`outside`): the direction of that table's vgs
+   *  axis, +1 where it holds no negative value and -1 where it holds no positive one (absent where
+   *  it spans both). The device has no operating point for the wiring check to read, and a
+   *  declared axis-sign selector its bias axes read is still held to this (selectorsBeyondTable). */
+  vgsAxis?: 1 | -1;
   /** Axes the givens use and the table does not sweep (`vds`, `vsb`, `l`) — present only on a
    *  failed sizing, and what marks it as REFUSED: the table cannot answer for this device at
    *  all, which no knob, search range or re-bias changes (see refusedIn). `error` says why. */
@@ -1516,11 +1537,10 @@ export type SolveOutcome =
       from: RangeSource;
       /** What the search showed (see NoSolutionWhy). */
       because: NoSolutionWhy;
-      /** Whether both ends of the stretch searched read the design: each is an end of the range,
-       *  or was stepped in from one past a stretch where a device cannot carry its current — the
-       *  design failing there itself — and neither read a device off its table or had one refused.
-       *  An end stepped in for any other reason (a gap in the data, a block's own solve finding
-       *  nothing) leaves the stretch beyond it unread. */
+      /** Whether both ends of the stretch searched read the design: each is an end of the range
+       *  itself, and neither read a device beyond its table or had one refused. An end stepped in
+       *  past a stretch that did not evaluate — a device read beyond its table there, one refused,
+       *  a block's own solve finding nothing — leaves the stretch beyond it unread. */
       endsRead: boolean;
     }
   | { kind: 'not-settled'; unknowns: string[]; why: NotSettledWhy; message: string }
@@ -1585,8 +1605,8 @@ export interface SolveRange {
  * search read the design (`endsRead`) — the relation does not reach its target anywhere the circuit
  * can put the wire. A design point that ends so is infeasible and does not comply; a held point
  * does not comply. Every other failure — a range that is the author's alone, a step, an
- * undetermined relation, an end read off the table or stepped in past a stretch that does not
- * evaluate for a reason of its own, a set that did not settle — is no answer.
+ * undetermined relation, an end read beyond the table or stepped in past a stretch that does not
+ * evaluate, a set that did not settle — is no answer.
  */
 export const designFailure = (o: SolveOutcome | undefined): o is SolveFailure =>
   o?.kind === 'no-solution' && o.from === 'wiring' && o.because === 'no-crossing' && o.endsRead;
@@ -1662,8 +1682,8 @@ export function lastSolveFailure(res: {
 /**
  * One run as a point of the compliance question, classified once and read by every reader — the
  * wiring walk's gate, a range end, a process condition. Two facts, kept apart:
- *  - `sized`: the sizing at this point stood — no solve error, no device refused or unsized, and,
- *    for a held design, no device read off its table's hull. Only then does the wiring check run.
+ *  - `sized`: the sizing at this point stood — no solve error, no device refused or unsized, and
+ *    no device read beyond its table. Only then does the wiring check run.
  *  - `state` (with `error` where the point is no verdict): the answer the point gives. A design
  *    resting on an assumed level was sized, and still has no answer.
  */
@@ -1712,12 +1732,25 @@ export function withoutRange(doc: SheetDoc): SheetDoc {
   return rest;
 }
 
-/** Every coordinate, anywhere in one evaluation's tree, that a device was asked for and its
- *  table does not reach (see SizingReport.clamped) — `givens vds` for the sheet's own device,
- *  `stage1.load l` for a child's. Empty when every operating point was read where it was asked
- *  for. A held design's run consults it before calling its outcome an answer. */
-export const clampedIn = (res: TreeSizings): string[] =>
-  devicesIn(res, (s, at) => (s.clamped ?? []).map((axis) => `${at} ${axis}`));
+/** Every read beyond a table anywhere in one evaluation's tree (see SizingReport.outside) — or,
+ *  for a report that carries them already gathered (RangeEndReport.outside), those — each
+ *  with `device` set to the device's path as findings name it — `givens` for the sheet's own
+ *  device, `stage1.load` for a child's — in tree order. Empty when every device was read on its
+ *  table. A run with any has no answer: the design point, a held run, a range end and a condition
+ *  run alike. */
+export const outsideIn = (
+  res: TreeSizings & { outside?: readonly OutsideTable[] },
+): OutsideTable[] =>
+  res.outside
+    ? [...res.outside]
+    : devicesIn(res, (s, device) => (s.outside ?? []).map((r) => ({ ...r, device })));
+
+/** One read beyond a table as a finding names it: the block it belongs to, then the record's own
+ *  words (outsideTableMessage). */
+export const outsideMessage = (r: OutsideTable): string =>
+  r.device === 'givens' || r.device === ''
+    ? outsideTableMessage(r)
+    : blockMessage(r.device, outsideTableMessage(r));
 
 /** One evaluation's tree as the walks over its sizings read it. */
 type TreeSizings = { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] };
@@ -1747,7 +1780,7 @@ export function refusedIn(res: TreeSizings): string[] {
 
 /** Every device sized anywhere in one evaluation's tree, with where its thermal-noise figures
  *  come from (SizingReport.noise) and the fallback forms its table forced (SizingReport.fallbacks,
- *  empty when none), named as clampedIn names them (`givens` for the sheet's own device, a block
+ *  empty when none), named as outsideIn names them (`givens` for the sheet's own device, a block
  *  path below it) and in tree order. A device that did not size is not listed. */
 export const noiseSourcesIn = (
   res: TreeSizings,
@@ -1782,12 +1815,17 @@ export function followOnSummary(
 ): QAWarning | undefined {
   const byBlock = new Map<string, number>();
   const byParam = new Map<string, number>();
+  let own = 0;
   for (const w of warnings) {
     if (w.cause === undefined) continue;
+    if (w.cause === OWN_DEVICE && !unfound.has(w.cause)) {
+      own++;
+      continue;
+    }
     const by = unfound.has(w.cause) ? byParam : byBlock;
     by.set(w.cause, (by.get(w.cause) ?? 0) + 1);
   }
-  if (!byBlock.size && !byParam.size) return undefined;
+  if (!byBlock.size && !byParam.size && !own) return undefined;
   const count = (by: ReadonlyMap<string, number>): number => {
     let n = 0;
     for (const k of by.values()) n += k;
@@ -1804,6 +1842,12 @@ export function followOnSummary(
         `and ${n > 1 ? 'these go' : 'this goes'} with it`,
     );
   }
+  if (own)
+    parts.push(
+      `${own} ${own > 1 ? 'findings follow' : 'finding follows'} from the sheet's own device, ` +
+        `which is not sized because its givens read it beyond its table: what reads it is ` +
+        `withheld until it is asked for a point the table holds`,
+    );
   if (byParam.size) {
     const n = count(byParam);
     parts.push(
@@ -1869,7 +1913,7 @@ export function indexTreeResults(
  *  the sensitivity readout), so they can never disagree about what a check is called.
  *
  *  A range end that carries an `error` contributes NOTHING: its checks were evaluated wherever its
- *  solve stopped, or on data read off the table's hull — a point the engine was not asked about
+ *  solve stopped, or with a device read beyond its table — a point the engine was not asked about
  *  — so reading them as outcomes names a check that was measured on a phantom. The range end's
  *  own `error` is the finding there. A range end that was not run contributes nothing for the
  *  plainer reason that it has no outcomes at all — stated rather than left to the empty array,
@@ -1924,6 +1968,10 @@ export interface SheetSensitivity {
   step: number;
   checks: SheetSensitivityCheck[];
   error?: string;
+  /** What a probe of this knob read beyond a table (see OutsideTable): that probe is not used —
+   *  its numbers would come from another bias — and `error` says so. Absent where every probe read
+   *  its devices on their tables. */
+  outside?: OutsideTable[];
 }
 
 /**
@@ -1957,6 +2005,13 @@ export interface SweepWindow {
   hi: number;
   below?: string[];
   above?: string[];
+  /** Where the stretch ends because the next value reads a device beyond its table (see
+   *  OutsideTable): those reads, just past the lower or the upper edge. The window ends where the
+   *  table ends there, not where a requirement fails — `below`/`above` is then empty, and nothing
+   *  is known about the knob past that edge. Absent where no read past the edge was beyond a
+   *  table. */
+  belowOutside?: OutsideTable[];
+  aboveOutside?: OutsideTable[];
 }
 
 /**
@@ -1980,6 +2035,11 @@ export interface SheetSweep {
    * consumer comparing samples never mistakes that for a design that merely misses a spec.
    */
   stands: boolean[];
+  /** Each sample's reads beyond a table (see OutsideTable, outsideIn), parallel to `x`: empty where
+   *  every device was read on its table. A sample with any is the mark of a point the table does
+   *  not answer for — its device is not sized, the margins that read it are null, and it is never
+   *  part of a passing stretch. */
+  outside: OutsideTable[][];
 }
 
 /**
@@ -2000,4 +2060,7 @@ export interface SheetSweep2 {
   y: number[];
   feasible: boolean[][];
   binding: (string | null)[][];
+  /** Each cell's reads beyond a table (see SheetSweep.outside): empty where every device was read
+   *  on its table. A cell with any is infeasible with no check to name (`binding` null). */
+  outside: OutsideTable[][][];
 }

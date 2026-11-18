@@ -34,7 +34,7 @@
 // Pure; zero DOM. Corner is categorical: nothing here interpolates, resamples, clips, or
 // merges tables across corners.
 
-import type { DeviceTable, QAWarning, TableId } from '../types';
+import type { DeviceTable, OutsideTable, QAWarning, TableId } from '../types';
 import { DEFAULT_TEMP_C } from '../constants';
 import type {
   CheckKind,
@@ -62,6 +62,7 @@ import {
   inheritedPolarityWarnings,
   limitingCheck,
   namedBindings,
+  outsideIn,
   resolvedSheet,
   stands,
   sweepOf,
@@ -517,6 +518,10 @@ export interface CompliancePoint {
    *  message, the table's reach. Absent where the point's checks were measured — a point that
    *  does not comply because a check fails names the check in its run's result instead. */
   readonly error?: string;
+  /** The devices this point read beyond their tables (see OutsideTable): the same records the
+   *  run's result carries, so a reader decides from the fields and never from `error`. Absent
+   *  where every device was read on its table. Such a point is `no-answer`. */
+  readonly outside?: readonly OutsideTable[];
 }
 
 export type ConditionRun =
@@ -946,15 +951,20 @@ function runPrepared(
   // reason); a held design is read like a range end; the sized design answers for itself — it
   // complies where it is feasible.
   const outcome = evaluated.point;
-  const centre: CompliancePoint = outcome
-    ? { state: outcome.state, ...(outcome.error === undefined ? {} : { error: outcome.error }) }
-    : { state: 'no-answer', error: runtimeIssues(result)[0].message };
+  const outside = outsideIn(evaluated);
+  const centre: CompliancePoint = {
+    ...(outcome
+      ? { state: outcome.state, ...(outcome.error === undefined ? {} : { error: outcome.error }) }
+      : { state: 'no-answer' as const, error: runtimeIssues(result)[0].message }),
+    ...(outside.length ? { outside } : {}),
+  };
   const points: CompliancePoint[] = [
     centre,
     ...(result.rangeEnds ?? []).map((e): CompliancePoint => ({
       rangeEnd: e.name,
       state: e.state,
       ...(e.error === undefined ? {} : { error: e.error }),
+      ...(e.outside ? { outside: e.outside } : {}),
     })),
   ];
 

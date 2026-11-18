@@ -2078,13 +2078,21 @@ describe('bias declared in the givens (vds/vsb)', () => {
     expect(res.warnings.some((w) => /as-is/.test(w.message))).toBe(false);
   });
 
-  it('an out-of-hull declaration is clamped with a warning, mirroring the L policy', () => {
+  it('an out-of-hull declaration is a read beyond the table: the device is not sized', () => {
     const doc = boundDoc({
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
     });
     const res = evaluateSheet(doc, dev3);
-    expect(res.sizing?.ok).toBe(true);
-    expect(res.warnings.some((w) => /outside the table's vds range/.test(w.message))).toBe(true);
+    expect(res.sizing?.ok).toBe(false);
+    const vds = dev3.grid.axes.find((a) => a.name === 'vds')!.values;
+    expect(res.sizing?.outside).toEqual([
+      { device: 'givens', quantity: 'vds', asked: 5, held: [vds[0], vds[vds.length - 1]] },
+    ]);
+    expect(res.feasible).toBe(false);
+    expect(res.warnings.filter((w) => w.severity === 'error').map((w) => w.message)).toEqual([
+      res.sizing?.error,
+    ]);
+    expect(res.sizing?.error).toMatch(/^vds = 5 is above what the table holds for this device/);
   });
 
   it('a child fails closed on its own undeclared bias — the parent never lends it one', () => {
@@ -2243,15 +2251,15 @@ describe('a device is sized only on a table that carries what its givens use', (
       expect(res.sizing?.vgs).toBe(ref.vgs);
     });
 
-    it('still clamps a value past the swept range with a warning — a clamp, not a refusal', () => {
+    it('does not size a device at a value past the swept range: one record, one error', () => {
       const res = evaluateSheet(given({ vds: '0.6', vsb: '0.9' }), bothSwept);
-      expect(res.sizing?.ok).toBe(true);
-      expect(res.sizing?.bias).toEqual({ vds: 0.6, vsb: 0.6 });
-      expect(res.sizing?.clamped).toEqual(['vsb']);
-      expect(errorsOf(res)).toEqual([]);
-      expect(res.warnings).toHaveLength(1);
-      expect(res.warnings[0].severity).toBe('warning');
-      expect(res.warnings[0].message).toMatch(/given vsb 0\.9 is outside the table's vsb range/);
+      expect(res.sizing?.ok).toBe(false);
+      expect(res.sizing?.bias).toBeUndefined();
+      expect(res.sizing?.outside).toEqual([
+        { device: 'givens', quantity: 'vsb', asked: 0.9, held: [0, 0.6] },
+      ]);
+      expect(errorsOf(res)).toEqual([res.sizing?.error]);
+      expect(res.sizing?.error).toMatch(/^vsb = 0\.9 is above what the table holds/);
     });
   });
 
@@ -2464,22 +2472,21 @@ describe('a device is sized only on a table that carries what its givens use', (
       );
     });
 
-    it('on a table that sweeps length: a length past the range is still clamped with a warning', () => {
+    it('on a table that sweeps length: a length past the range is not sized', () => {
       const res = evaluateSheet(
         boundDoc({
           params: boundDoc().params.map((p) => (p.name === 'L' ? { ...p, value: 5e-6 } : p)),
         }),
         dev,
       );
-      expect(res.sizing?.ok).toBe(true);
-      expect(res.sizing?.clamped).toEqual(['l']);
-      expect(errorsOf(res)).toEqual([]);
-      expect(res.warnings.some((w) => /outside the table's L range/.test(w.message))).toBe(true);
+      expect(res.sizing?.ok).toBe(false);
+      expect(res.sizing?.outside?.map((r) => [r.quantity, r.asked])).toEqual([['l', 5e-6]]);
+      expect(errorsOf(res)).toEqual([res.sizing?.error]);
     });
 
     it('sizes on the length nodes it reads, and judges and quotes the length against them all', () => {
       // The engine cuts a table to the one or two length nodes a length reads before it slices
-      // the bias axes. The warning about a length off the table still names the table's whole
+      // the bias axes. A length off the table is judged and quoted against the table's whole
       // range — not the single node the cut kept — and the numbers are the uncut table's.
       const lengths = dev.grid.axes.find((a) => a.name === 'l')!.values;
       expect(lengths.length).toBeGreaterThan(2);
@@ -2496,18 +2503,18 @@ describe('a device is sized only on a table that carries what its givens use', (
         sizeDevice({ table: devAt, L, gm: 2 * Math.PI * 10e6 * 2e-12, gm_id: 12 });
       for (const L of [hi * 2.5, lo / 2]) {
         const res = at(L);
-        expect(res.sizing?.clamped).toEqual(['l']);
-        const said = res.warnings.filter((w) => /outside the table's L range/.test(w.message));
-        expect(said.map((w) => w.message)).toEqual([
-          `requested L ${L} m is outside the table's L range [${lo}, ${hi}] m; clamped to the nearest characterized length`,
+        expect(res.sizing?.outside).toEqual([
+          { device: 'givens', quantity: 'l', asked: L, held: [lo, hi] },
         ]);
-        expect(direct(L).warnings).toContain(said[0].message);
-        expect(res.sizing?.W).toBe(direct(L).W);
+        // The sizer, which still reads it at the edge, records the same read in the same shape.
+        expect(direct(L).outside).toEqual([
+          { device: '', quantity: 'l', asked: L, held: [lo, hi] },
+        ]);
       }
-      // Between two nodes, and on one: no warning, and the uncut table's numbers to the bit.
+      // Between two nodes, and on one: no record, and the uncut table's numbers to the bit.
       for (const L of [0.77e-6, 0.5e-6]) {
         const res = at(L);
-        expect(res.sizing?.clamped).toBeUndefined();
+        expect(res.sizing?.outside).toBeUndefined();
         expect(res.warnings.some((w) => /L range/.test(w.message))).toBe(false);
         expect(res.sizing?.W).toBe(direct(L).W);
         expect(res.sizing?.vgs).toBe(direct(L).vgs);
@@ -2731,9 +2738,9 @@ describe('a device is sized only on a table that carries what its givens use', (
 
     it('gives no answer at a range end with a refused device, whatever else failed there', () => {
       // At `both` the pair is refused AND the load, held at its width, is asked for a thousand
-      // times its current — more than its table reaches. Alone, that second failure is a verdict
-      // on the design. Beside a device that was never sized it is not, and which of the two the
-      // run reports last depends only on the order the blocks are written in.
+      // times its current — more than its table reaches. Alone, that second failure is a read
+      // beyond the table, itself no answer. Beside a device that was never sized the refusal is
+      // what the run reports, whichever order the blocks are written in.
       const [pair, load] = composed().blocks!;
       const driven = { ...load, params: { I: 'I_load' } };
       const doc = (blocks: NonNullable<SheetDoc['blocks']>): SheetDoc =>
@@ -2755,11 +2762,11 @@ describe('a device is sized only on a table that carries what its givens use', (
         const res = runSheet(doc(blocks), vdsSwept);
         expect(errorsOf(res)).toEqual([]);
         const [loadOnly, both] = res.rangeEnds!;
-        expect(loadOnly.state).toBe('does-not-comply');
-        expect(loadOnly.error).toMatch(/cannot carry its current/);
+        expect(loadOnly.state).toBe('no-answer');
+        expect(loadOnly.error).toMatch(/^block "load": id = \S+ is above what the table holds/);
         expect(both.state).toBe('no-answer');
         expect(both.error).toMatch(/^block "pair": given vsb = 0\.3 asks/);
-        expect(both.error).not.toMatch(/cannot carry its current/);
+        expect(both.error).not.toMatch(/above what the table holds/);
       }
     });
   });
@@ -3183,15 +3190,21 @@ describe('override and bias reporting fail closed (adversarial review regression
     ).toBe(true);
   });
 
-  it('an out-of-range given bias reports the APPLIED clamped coordinate, not the request', () => {
+  it('an out-of-range given bias reports what was asked and what the table holds, no bias', () => {
     const dev3 = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
     const doc = boundDoc({
       givens: { L: 'L', gm: '2*pi*GBW_target*CL', gm_id: 'gm_id', vds: '5' },
     });
     const res = evaluateSheet(doc, dev3);
-    expect(res.sizing?.ok).toBe(true);
-    expect(res.sizing?.bias).toEqual({ vds: 1.2, vsb: 0 }); // the slice actually used
-    expect(res.warnings.some((w) => /vds 5 is outside/.test(w.message))).toBe(true);
+    expect(res.sizing?.ok).toBe(false);
+    // Nothing was sized at the table's edge, so no slice coordinate is reported as used.
+    expect(res.sizing?.bias).toBeUndefined();
+    expect(res.sizing?.outside).toEqual([
+      { device: 'givens', quantity: 'vds', asked: 5, held: [0, 1.2] },
+    ]);
+    // Nothing the device would have published is in scope.
+    expect(res.values.W).toBeUndefined();
+    expect(res.withheld?.W).toBe('givens');
   });
 });
 
@@ -3269,9 +3282,9 @@ describe('diode-connected givens', () => {
     expect(diodeGrid(covered).clamped).toBe(false);
   });
 
-  it('warns of the clamped diagonal only for a device that settles off the vds axis', () => {
+  it('refuses a diode only where the device settles off the characterized diagonal', () => {
     // A table whose vds axis starts at 0.1 V while its vgs sweep starts lower: the diagonal is
-    // clamped below 0.1 V, and only a diode whose drop lands there is read from the edge.
+    // clamped below 0.1 V, and only a diode whose drop lands there is read beyond the table.
     const late = generateDemoDevice({
       vds: { min: 0.1, max: 1.2, step: 0.05 },
       vsb: { min: 0, max: 0.9, step: 0.05 },
@@ -3279,22 +3292,18 @@ describe('diode-connected givens', () => {
     expect(diodeGrid(late.grid).clamped).toBe(true);
     const at = (v: number): SheetResult =>
       runSheet(diodeDoc({ gm_id: undefined, vgs: String(v), id: '1e-9' }) as SheetDoc, late);
-    const clampWarnings = (r: SheetResult) =>
-      r.warnings.filter((w) => /diode connection: the device settles at/.test(w.message));
-
     const inside = at(0.5);
     expect(inside.sizing?.ok).toBe(true);
-    expect(clampWarnings(inside)).toHaveLength(0);
-    expect(inside.sizing?.clamped ?? []).not.toContain('vds');
+    expect(inside.sizing?.outside).toBeUndefined();
 
     const below = at(0.05);
-    expect(below.sizing?.ok).toBe(true);
-    expect(below.sizing?.clamped).toContain('vds');
-    const said = clampWarnings(below);
-    expect(said).toHaveLength(1);
-    expect(said[0].severity).toBe('warning');
-    expect(said[0].message).toMatch(/vgs = 0\.05 V/);
-    expect(said[0].message).toMatch(/\[0\.1 V, 1\.2 V\]/);
+    expect(below.sizing?.ok).toBe(false);
+    const [rec] = below.sizing!.outside!;
+    expect(rec.quantity).toBe('vds');
+    expect(rec.asked).toBeCloseTo(0.05, 12);
+    expect(rec.held[0]).toBeCloseTo(0.1, 12);
+    expect(rec.held[1]).toBeCloseTo(1.2, 12);
+    expect(below.point?.state).toBe('no-answer');
   });
 
   it('refuses givens that declare both the connection and a vds', () => {
@@ -4415,19 +4424,20 @@ describe('givens region — the saturation or triode check a device declares', (
     expect(device('saturation', '0.6').checks).toEqual([]);
   });
 
-  it('fails a drain-source voltage that points against the table’s vds axis, in either region', () => {
+  it('does not size a device whose drain voltage points against the table’s vds axis', () => {
     // A table whose vds axis starts above zero, as a coarse export's does: a drain stated below the
-    // source is read at the axis's first value with a warning, and its magnitude clearing vdsat
-    // says nothing about saturation — the device is reverse-biased.
+    // source lies beyond what the table holds — the device is reverse-biased, drain and source the
+    // other way round, which the table does not characterize. It is not sized, in either region,
+    // and the point has no answer.
     const above = generateDemoDevice({ vds: { min: 0.05, max: 1.2, step: 0.05 } });
     for (const which of ['saturation', 'triode']) {
       const res = runSheet(device(which, '-0.5'), above);
-      const r = region(res);
-      expect([which, r?.status]).toEqual([which, 'fail']);
-      expect(r?.margin).toBe(-0.5);
-      expect(r?.lhsValue).toBe(-0.5);
-      expect(r?.detail).toMatch(/points against this table's vds axis/);
-      expect(res.feasible).toBe(false);
+      expect([which, res.sizing?.outside?.map((r) => [r.quantity, r.asked])]).toEqual([
+        which,
+        [['vds', -0.5]],
+      ]);
+      expect(region(res)?.status).toBe('na');
+      expect(res.point?.state).toBe('no-answer');
     }
     // The same magnitude the right way round is the ordinary comparison.
     expect(region(runSheet(device('saturation', '0.5'), above))?.status).toBe('pass');
@@ -4437,9 +4447,9 @@ describe('givens region — the saturation or triode check a device declares', (
     expect(
       region(runSheet(device('saturation', '-0.5', '12', { polarity: 'p' }), signed))?.status,
     ).toBe('pass');
-    expect(
-      region(runSheet(device('saturation', '0.5', '12', { polarity: 'p' }), signed))?.status,
-    ).toBe('fail');
+    const reversed = runSheet(device('saturation', '0.5', '12', { polarity: 'p' }), signed);
+    expect(reversed.sizing?.outside?.map((r) => r.quantity)).toEqual(['vds']);
+    expect(reversed.point?.state).toBe('no-answer');
   });
 
   it('fails, and the design with it, where the given drain voltage pushes the device out of saturation', () => {
@@ -4463,18 +4473,17 @@ describe('givens region — the saturation or triode check a device declares', (
     expect(region(runSheet(device('saturation', '0.05', '4'), dev))?.status).toBe('fail');
   });
 
-  it('compares the drain voltage the givens state, not the one a short table was read at', () => {
-    // This table's vds axis starts at 0.3 V, so a stated 0.05 V is read at 0.3 V and the clamp is
-    // reported. Judged at 0.3 V the device would pass; at the 0.05 V the design asks for it is out
-    // of saturation, and that is what the check says.
+  it('gives no verdict on a drain voltage a short table does not hold', () => {
+    // This table's vds axis starts at 0.3 V. Read at 0.3 V the device would pass; at the 0.05 V
+    // the design asks for, the table says nothing. The device is not sized and the region check
+    // reads na — neither the pass the edge would give nor a failure nobody measured.
     const short = generateDemoDevice({ vds: { min: 0.3, max: 1.2, step: 0.3 } });
     const res = runSheet(device('saturation', '0.05'), short);
-    expect(res.sizing?.clamped).toContain('vds');
-    expect(res.sizing?.bias?.vds).toBe(0.3);
-    const r = region(res);
-    expect(r?.lhsValue).toBe(0.05);
-    expect(r?.status).toBe('fail');
-    expect(0.3 >= (r?.rhsValue ?? Infinity)).toBe(true); // the clamped value would have passed
+    expect(res.sizing?.outside).toEqual([
+      { device: 'givens', quantity: 'vds', asked: 0.05, held: [0.3, 1.2] },
+    ]);
+    expect(region(res)?.status).toBe('na');
+    expect(res.point?.state).toBe('no-answer');
   });
 
   it('reads the magnitude of a signed drain voltage', () => {
@@ -5258,12 +5267,10 @@ describe('a given gate-source voltage in a sheet', () => {
     expect(expected).toBeGreaterThan(1.04); // the check is not vacuous: a real 4%+ correction
   });
 
-  it('reports a clamped gate voltage as the one it read AT, and says that it clamped', () => {
-    // The hazard the clamp is written against is a result whose vgs disagrees with the point
-    // every quantity beside it came from. The demo sweeps vgs to 1.2 V, so a request for 1.5 V
-    // must come back as 1.2 V everywhere it is reported — the sizing report, the merged scope, and
-    // an equation reading it — with the request surviving only in the warning. And the sheet must
-    // still size: a clamp is a note about where the data ends, not an infeasibility.
+  it('does not size a bound gate voltage past the table, and withholds what reads it', () => {
+    // The demo sweeps vgs to 1.2 V. A request for 1.5 V is a read beyond the table: the device is
+    // not sized at the edge, no vgs is reported as if it were the one asked for, and an equation
+    // that reads the device is withheld with the device as its cause.
     const doc = notACircuit({
       title: 'c',
       polarity: 'n',
@@ -5277,15 +5284,13 @@ describe('a given gate-source voltage in a sheet', () => {
     });
     const res = runSheet(doc, dev);
 
-    expect(res.sizing?.ok).toBe(true);
-    expect(res.sizing!.vgs).toBeCloseTo(1.2, 12);
-    expect(res.values.vgs).toBeCloseTo(1.2, 12);
-    expect(res.values.v_read).toBeCloseTo(1.2, 12);
-
-    const clamps = res.warnings.filter((w) => /vgs 1\.5 .*clamped/.test(w.message));
-    expect(clamps).toHaveLength(1);
-    expect(clamps[0].severity).toBe('warning');
-    expect(res.warnings.filter((w) => w.severity === 'error')).toEqual([]);
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.sizing?.outside?.map((r) => [r.quantity, r.asked])).toEqual([['vgs', 1.5]]);
+    expect(res.sizing!.outside![0].held[1]).toBeCloseTo(1.2, 12);
+    expect(res.values.vgs).toBeUndefined();
+    expect(res.values.v_read).toBeUndefined();
+    expect(res.withheld?.v_read).toBe('givens');
+    expect(res.point?.state).toBe('no-answer');
   });
 
   it('refuses a gate voltage paired with another operating-point quantity', () => {

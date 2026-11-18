@@ -2108,10 +2108,48 @@ test('design sheet: a solved param whose search fails shows no number, nor does 
   await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
   await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
   await expect(sheet.locator('.srules tr.st-na')).toHaveCount(1);
-  // The solved field shows no number, and neither do the equations that read it.
+  // The solved field shows no number, and neither do the equations that read it: they read
+  // "withheld", which the result decides (SheetResult.withheld).
   await expect(sheet.locator('[data-param="x"] input.num')).toHaveValue('—');
   const rows = sheet.locator('.srows .srow .sval');
-  await expect(rows).toHaveText(['—', '—', /^\d/]);
+  await expect(rows).toHaveText(['withheld', 'withheld', /^\d/]);
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a drain voltage beyond the table is not sized, and says what the table holds', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.bind')).toContainText('W=');
+
+  // The demo table sweeps the drain to 1.2 V; ask for 1.5 V. The device is not sized there: the
+  // panel says what was asked and what the table holds, read from the result's record, and the
+  // point has no answer rather than a verdict read at the table's edge.
+  const vds = sp.locator('.svar[data-param="V_ds"]').locator('.num');
+  await vds.fill('1.5');
+  await vds.blur();
+  await expect(sp.locator('.feasb')).toHaveText('no answer');
+  await expect(sp.locator('.shead .bind')).toHaveCount(0);
+  const beyond = sp.locator('.shead .perr.beyond');
+  await expect(beyond).toHaveCount(1);
+  await expect(beyond).toContainText('beyond the table');
+  await expect(beyond).toContainText('1.2');
+  // What reads the device is shown as withheld, not as a number from another bias.
+  await expect(sp.locator('.sval.withheld').first()).toBeVisible();
+
+  // Back on the table, the device sizes again.
+  await vds.fill('0.6');
+  await vds.blur();
+  await expect(sp.locator('.shead .bind')).toContainText('W=');
+  await expect(sp.locator('.perr.beyond')).toHaveCount(0);
 
   expect(errors).toEqual([]);
 });

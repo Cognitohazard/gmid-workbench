@@ -30,6 +30,7 @@ import {
   formatOf,
   measurable,
   noiseSourcesIn,
+  outsideIn,
   PATH_SEP,
   placementsOf,
   refusedIn,
@@ -844,8 +845,8 @@ function byAxis(
  * temperature their table did not declare (SizingReport.noise and fallbacks, in the noise line's
  * words, grouped by what they say); bias axes left at their defaults (SizingReport.assumed) —
  * except a body bias the wiring of `doc`, the document the run evaluated, ties to zero; the DC
- * inputs the design was sized under (SheetResult.assumptions); coordinates a device was read at
- * the edge of its table instead of where it was asked (SizingReport.clamped); devices sized on a
+ * inputs the design was sized under (SheetResult.assumptions); reads a device was asked beyond its
+ * table and so was not sized (SizingReport.outside); devices sized on a
  * table of the other polarity, or read as n-channel because their sheet's polarity cannot be read
  * (the run's `sheet-polarity` warnings). Empty when the run
  * rests on none of them. A device whose noise is its table's own, by its definition, owes no
@@ -874,11 +875,9 @@ export function runCaveats(res: SheetResult, doc?: SheetDoc): RunCaveats {
     sentences.push(`sized under assumed DC inputs: ${res.assumptions.join(', ')}`);
     items += res.assumptions.length;
   }
-  const clamped = devicesIn(res, (s, at) => (s.clamped ?? []).map((axis) => [at, axis] as const));
-  sentences.push(
-    ...byAxis(clamped, (axis) => `${axis} read at the edge of the table instead of where asked`),
-  );
-  items += clamped.length;
+  const outside = outsideIn(res).map((r) => [r.device, r.quantity] as const);
+  sentences.push(...byAxis(outside, (axis) => `${axis} asked beyond the table, not sized`));
+  items += outside.length;
   // A device read as a channel type no one stated: sized on a table of the other polarity (a block
   // naming no device inherits its parent's table), or a sheet whose polarity cannot be read, read
   // as n. The run says each as a `sheet-polarity` warning; an information finding (a sheet that

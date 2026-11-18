@@ -8,9 +8,11 @@
 // analytic model of the sheet: the derivative is finite differences over the same evaluation
 // the badge shows. Pure, deterministic, never throws.
 
-import type { DeviceTable } from '../types';
+import type { DeviceTable, OutsideTable } from '../types';
 import {
   choiceKnobs,
+  outsideIn,
+  outsideMessage,
   RANGE_END_SEP,
   rangeEndBroke,
   engineSolved,
@@ -187,6 +189,14 @@ export function sheetSensitivities(
     (res.rangeEnds ?? []).some((e) => e.name === end && rangeEndBroke(e));
   const whole = (res: SheetResult): boolean => stands(res) && !endBroke(res);
   const base = at({});
+  const baseOutside = outsideIn(base);
+  if (baseOutside.length) {
+    return dead(
+      `the sheet reads a device beyond its table at its own values (` +
+        `${baseOutside.map(outsideMessage).join('; ')}), so there is no point to differentiate ` +
+        `around`,
+    );
+  }
   if (!stands(base)) {
     return dead(
       'the sheet does not evaluate at its own values, so there is no point to differentiate ' +
@@ -230,12 +240,47 @@ export function sheetSensitivities(
     }
 
     const errors: string[] = [];
-    const probes = offsets.map((dx) => {
+    const beyond: OutsideTable[] = [];
+    /** One probe: its outcomes where it completed, else why it is not used — a probe that read a
+     *  device beyond its table is never used, since its numbers would come from another bias. */
+    const probe = (
+      dx: number,
+    ): { checks?: Map<string, CheckResult>; why?: string; beyond: boolean } => {
       const res = at({ [p.name]: p.value + dx });
-      if (whole(res)) return treeCheckResults(res);
-      errors.push(`the evaluation at ${p.name} = ${p.value + dx} did not stand`);
-      return undefined;
-    });
+      const outside = outsideIn(res);
+      beyond.push(...outside);
+      if (outside.length)
+        return {
+          why:
+            `the evaluation at ${p.name} = ${p.value + dx} reads a device beyond its table ` +
+            `(${outside.map(outsideMessage).join('; ')}), so it is not used`,
+          beyond: true,
+        };
+      if (whole(res)) return { checks: treeCheckResults(res), beyond: false };
+      return { why: `the evaluation at ${p.name} = ${p.value + dx} did not stand`, beyond: false };
+    };
+    let taken = offsets.map(probe);
+    // A central difference whose one side reads beyond the table becomes a one-sided difference on
+    // the other side, where that fits inside the range and both of its probes stay on the table.
+    if (offsets[1] === -offsets[0]) {
+      const lost = taken.findIndex((t) => t.beyond);
+      const kept = 1 - lost;
+      const other = offsets[kept];
+      if (lost >= 0 && !taken[kept].beyond && taken[kept].checks) {
+        const far = 2 * other;
+        if (p.value + far >= lo && p.value + far <= hi) {
+          const second = probe(far);
+          if (second.checks) {
+            errors.push(`${taken[lost].why} — differenced on the other side instead`);
+            offsets = [other, far];
+            taken = [taken[kept], second];
+          }
+        }
+      }
+    }
+    for (const t of taken)
+      if (t.why && !errors.some((e) => e.startsWith(t.why as string))) errors.push(t.why);
+    const probes = taken.map((t) => t.checks);
     /** The raw margin of `id` at probe `i`, or NaN where that probe or that check is absent. */
     const raw = (i: number, id: string): number => probes[i]?.get(id)?.rawMargin ?? NaN;
 
@@ -247,6 +292,7 @@ export function sheetSensitivities(
       step: h,
       checks,
       ...(errors.length ? { error: errors.join('; ') } : {}),
+      ...(beyond.length ? { outside: beyond } : {}),
     };
   });
 }

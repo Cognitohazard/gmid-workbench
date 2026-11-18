@@ -44,8 +44,8 @@ first answer; `complies` and the per-range-end `state` carry the second.
 | outcome | meaning |
 |---|---|
 | `complies` | the held design was measured at that point and every hard check holds |
-| `does-not-comply` | it was measured there and a hard check fails — or a device held at its width cannot carry its current there at all, or a solved wire finds no crossing anywhere the wiring lets it go (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)) |
-| `no-answer` | the question was asked and could not be answered: a solve did not land in a range that is the author's alone, or with an end it could not read, or did not settle, the table does not reach the bias the design sits at, or the design rests on a voltage classed `assumed` |
+| `does-not-comply` | it was measured there and a hard check fails — or a solved wire finds no crossing anywhere the wiring lets it go (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)) |
+| `no-answer` | the question was asked and could not be answered: a solve did not land in a range that is the author's alone, or with an end it could not read, or did not settle, a device was asked for a point its table does not hold (see [A read beyond the table](#a-read-beyond-the-table)), or the design rests on a voltage classed `assumed` |
 | `not-run` | the question was never asked: there is no design to hold, or no table loaded at that condition |
 
 `no-answer` and `not-run` are never shown as a pass and never as a failure. A summary over many
@@ -216,10 +216,9 @@ and it understates the mirror's own systematic error when it does. `vgs` is **si
 table's axis convention**, so on a signed PMOS export it is negative — the same convention
 `vds` and `vsb` use, and the one place a bound quantity may be zero or negative.
 
-A gate voltage outside the table's swept range is **clamped to the nearest characterized node
-and warned about**, the same treatment an out-of-range `L` gets: an axis coordinate has a real
-node to fall back to. (An unreachable `ft` or `gm/ID` throws instead — an inversion past the
-data has no answer to fall back to.)
+A gate voltage outside the table's swept range is **a read beyond the table**, the same as an
+out-of-range `L`, and so is an `ft` or `gm/ID` the inversion cannot reach on the slice: the device
+is not sized (see [A read beyond the table](#a-read-beyond-the-table)).
 
 So legal givens are:
 
@@ -273,7 +272,47 @@ drain voltage**: as `vds`, or as a diode connection (`diode: true`), which fixes
 the gate. Validation reports givens that state neither, and on any table — one that sweeps
 `vds`, one taken at a single drain voltage, one with no `vds` column — leaving it out fails the
 sizing with guidance to declare it. A declared value always wins, and a declared value outside
-the table's range is clamped to the nearest edge with a warning.
+the table's range is a read beyond the table: the device is not sized there.
+
+#### A read beyond the table
+
+A device is never sized on data from somewhere other than the point its sheet asks for. Where the
+givens ask a device's table for something beyond what it holds — a `vds` or `vsb` past its sweep, a
+length past its lengths, a bound `vgs` past its gate sweep, a diode connection that settles where
+the `vds = vgs` diagonal leaves the characterized drain range, or a `gm/ID`, `ft`, current or
+transconductance the inverse lookup cannot reach on the slice — the outcome is one and the same,
+wherever the device is read:
+
+- **The device is not sized.** Its sizing report has `ok: false` and an `outside` list with one
+  record per read: `{ device, quantity, asked, held: [lo, hi] }` — the device (`givens` for the
+  sheet's own, the block path for a block's), what was asked (`vds`, `vsb`, `l`, `vgs`, `gm_id`,
+  `id`, `gm`, …), the value asked, and the two ends of what the table holds. The run's error is
+  generated from the record. A reader decides from the record, never from the message.
+- **What reads the device is withheld**, with the device as the cause (`withheld`, a finding's
+  `cause`: `givens` for the sheet's own device, the block's path one level up). Everything that does
+  not read it is still evaluated and shown.
+- **The point has no answer** (`point.state: "no-answer"`), with the records' words as its error:
+  never `complies`, never feasible, never `does-not-comply`. The same holds at a range end, which
+  carries the records as its own `outside`, at a process condition, whose compliance points carry
+  them too, and for a held device whose fixed width would need a gate voltage past either end of
+  the swept range to carry its current: the table does not show that the hardware fails there,
+  only that it does not reach.
+- **In a sweep**, a sample with a read beyond the table carries its records (`outside[i]`); the
+  margins that read the device are `null` there, the sample is never part of a passing window, and a
+  window that ends at such a sample says so (`belowOutside` / `aboveOutside`) instead of naming a
+  failing check. A 2-D sweep marks each cell the same way.
+- **In a sensitivity**, a probe that reads beyond the table is not used; the entry says so in
+  `error` and carries the records in `outside`. Where one side of a central difference is beyond
+  the table, the knob is differenced on the other side if both of its probes stay on the table. A
+  slope is never computed from a probe read at the table's edge.
+- **In a search**, a probe that reads beyond the table has no value. An end of the range that
+  does is stepped inward to the nearest point that evaluates (`inwardSteps` halvings). A root found
+  on the table is a valid answer; finding no crossing in what is left proves nothing about the
+  stretch stepped past, so the search is no answer (`endsRead: false`), never a failure of the
+  design.
+
+A forward `lookup` called directly — a chart, a script reading one point — still reads a coordinate
+past the table at its edge and reports that in its own `clamped` and `warnings`: it sizes nothing.
 
 **The table has to carry what the givens use.** A device is sized only from a table that can
 answer for every value its givens state: one that sweeps that axis, or one that was taken at
@@ -331,14 +370,14 @@ A device that must stay in saturation — or a switch that must stay in triode �
 `region` is `"saturation"` or `"triode"`, a word rather than an expression. It adds one check to
 the device's own results, with the id `region` and the kind `physical`: `abs(vds) >= vdsat` in
 saturation and `abs(vds) <= vdsat` in triode, where `vds` is the drain-source voltage the givens
-state — not the value a table that does not reach it was read at; that clamp is reported on its
-own — and `vdsat` is the sizing's own. It gates feasibility, has a margin, can be the binding or limiting
+state — a value the table holds, since a device asked beyond its table is not sized and the check
+reads `na` — and `vdsat` is the sizing's own. It gates feasibility, has a margin, can be the binding or limiting
 check, rides sweeps, and is asked again at every range end and process condition, exactly as an
-authored physical check would. The magnitude is compared only where the stated voltage points the
-way the table's own `vds` axis does: a negative `vds` on a table whose axis holds no negative
-value, or a positive one on a signed-PMOS export, is the device with drain and source the other way
-round. The table characterizes no such point, so the check fails, in either region, with a margin
-of `-abs(vds)` and the reason. On a table with no `vdsat` column it reads `na`, which a hard check
+authored physical check would. A stated voltage that points against the table's own `vds` axis —
+a negative `vds` on a table whose axis holds no negative value, or a positive one on a signed-PMOS
+export — is the device with drain and source the other way round, which the table does not
+characterize: it is a read beyond the table, the device is not sized, and the check reads `na`
+with the point unanswered. On a table with no `vdsat` column it reads `na`, which a hard check
 fails closed on: the design reads infeasible until the table carries the column. Validation
 refuses any other word, a `region` beside `diode: true` (the drain is the gate, so the question
 does not arise), and an authored check with the id `region` on a device that declares one.
@@ -536,10 +575,9 @@ Between nodes those two routes differ — by around 0.1% for a ratio on a 10 mV 
 sized device sits that far from the target, well inside the data's own resolution but not at
 it exactly. If that margin matters for your design, characterize on a finer `VGS` step.
 
-A bound `vgs` is the exception: it is read back as the coordinate the table was actually read
-at, which is the value you asked for unless it fell outside the swept range and was clamped —
-and then the clamped value is the honest one, since it is the point every other quantity beside
-it came from. There is no inversion residual to repair, because there was no inversion.
+A bound `vgs` is the exception: it is read back as the coordinate the table was read at, which is
+the value you asked for (one outside the swept range is a read beyond the table, and nothing is
+sized). There is no inversion residual to repair, because there was no inversion.
 
 The lesson is to **test a derived quantity, not the input the givens fixed.** Binding `gm` from a
 target GBW and then checking `GBW >= GBW_target` is a tautology that always reads amber. Instead,
@@ -1030,8 +1068,8 @@ check the same way.
 wiring in a composed tree — a child that runs its own check included — is read once the whole tree
 has settled, never at a solver's intermediate probe. And the check reads a sized design, so where a
 point has none it does not run: a run that did not stand (a solve that did not land, a device that
-did not size), or a range end or another process condition whose held run read a device off its
-table's hull or did not complete (see [The operating range](#the-operating-range-operatingrange)) —
+did not size, a device read beyond its table), or a range end or another process condition whose
+held run read a device beyond its table or did not complete (see [The operating range](#the-operating-range-operatingrange)) —
 the same reason a block that did not size is skipped. Its report, and the report of every child in
 the tree that would have run its own check, is `not-evaluated`, with no levels and no findings:
 neither clean nor with findings, and nothing it would have read is reported as a wiring problem. A
@@ -1435,12 +1473,11 @@ fraction of the author's span, wherever the root is found.
 
 **What no crossing means.** A search over the whole wiring range that finds no crossing is a finding
 about the design — the circuit can put the wire nowhere the search did not look — only where both
-ends of that search read the design: each end is an end of the range, or was stepped in from one
-past a stretch where a device cannot carry its current (the design failing there itself), and
-neither end read a device off its table or had one refused. An end stepped in for any other reason —
-a gap in the data, a block's own solve finding nothing — leaves the stretch beyond it unread, and an
-end read off the table rests on data that is not the point asked about; either way the failure is no
-answer, and the message says why. The outcome carries this as `endsRead`.
+ends of that search read the design: each end is an end of the range itself, and neither end read a
+device beyond its table or had one refused. An end stepped in past a stretch that does not evaluate —
+a device read beyond its table there, a gap in the data, a block's own solve finding nothing — leaves
+the stretch beyond it unread; the failure is then no answer, and the message says why. The outcome
+carries this as `endsRead`.
 
 **The note.** Every result — and every range end's report — carries `ranges`: each solved
 parameter's range, `from`, the author's range, the wires whose level it is, the wiring's range with
@@ -1527,9 +1564,8 @@ A range the wiring reads holds every level the circuit can put the wire at, so f
 anywhere in it, with both ends of the search read, is the design not reaching its target there: a
 finding, said as one. A range of the author's own may simply be in the wrong place, and a set's
 member that found nothing did so where the other members happened to stand, so neither says anything
-about the design. A search with an end read off the table, or a device refused, at either end — or
-stepped in past a stretch that does not evaluate for a reason other than the design failing there —
-has no answer whatever the range (see [What no crossing means](#the-range-a-wire-is-searched-in)).
+about the design. A search with an end that read a device beyond its table, or had a device refused,
+— or stepped in past a stretch that does not evaluate — has no answer whatever the range (see [What no crossing means](#the-range-a-wire-is-searched-in)).
 Validation adds:
 
 | situation | result |
@@ -1764,14 +1800,10 @@ result (validation refuses them).
 
 - `complies` — the held design was measured there and every hard check holds.
 - `does-not-comply` — it was measured there and a hard check fails; the failing checks are in
-  the end's own `checks`. One failure leaves no check outcomes: a device held at its width whose
-  required current density runs past the top of the swept `vgs` range cannot carry its current
-  there at all ("this device cannot carry its current here" — or, for a device bound by its
-  transconductance, "cannot reach its transconductance here"), with the lookup's own message
-  and reach numbers kept behind it in `error`. Another leaves none either: a solved wire whose
-  search finds no crossing anywhere in the range the wiring puts it in, with both ends of the
-  search read — no level the circuit can put the node at produces `CM_lo` — with the solver's
-  message in `error` (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)).
+  the end's own `checks`. One failure leaves no check outcomes: a solved wire whose search finds
+  no crossing anywhere in the range the wiring puts it in, with both ends of the search read — no
+  level the circuit can put the node at produces `CM_lo` — with the solver's message in `error`
+  (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)).
 - `no-answer` — the question was asked and could not be answered, and `error` says why:
   - a solve found no solution in a range that is the author's alone, or with an end it could not
     read, or did not settle — no tail-node position inside the range its author typed produces
@@ -1779,13 +1811,14 @@ result (validation refuses them).
     that read each other did not settle. Nothing was measured, so this is not a failure of the
     design; widen the range, or read it as the tool's limit rather than the circuit's;
   - a `set` expression did not resolve to a number;
-  - the table does not reach the bias the held design sits at. A `vds`, `vsb`, length or
-    supplied gate voltage off the table's hull is read at the nearest characterized value, and
-    a diode-connected device whose gate voltage lies past the characterized `vds` range is read
-    at that range's edge — an advisory at the design's own operating point, but at a range end
-    an answer read somewhere else is no answer, however its checks came out and even when the
-    lookup then failed on the clamped data. (Float rounding is not a clamp: a value within
-    10⁻⁹ of the axis span of an end node reads that node.)
+  - a device was asked for a point its table does not hold: a `vds`, `vsb`, length or supplied
+    gate voltage past the table, a diode-connected device whose gate voltage lies past the
+    characterized `vds` range, or a device held at its width whose current, or
+    transconductance, would need a gate voltage past either end of the swept `vgs` range. The
+    device is not sized, the end carries the records in `outside` and their words in `error` (see
+    [A read beyond the table](#a-read-beyond-the-table)), the same as at the design's own
+    operating point. (Float rounding is not a read beyond the table: a value within 10⁻⁹ of the
+    axis span of an end node reads that node.)
   - the table has no sweep for a bias the held design sits at there, and was not taken at that
     bias — a range end that lifts a source above its body on a table with no `vsb` sweep. The
     device is refused (see [The operating point](#the-operating-point-vds-vsb)), and `error`
@@ -1919,8 +1952,8 @@ exactly — an author reading a green chip should know what it is and is not a s
   information.** For the same reason its `gm` drifts low, its operating point is read out of the
   table rather than requested, so `gm/ID` is at or below the data ceiling by construction — that
   data-trust signal, one of the things that gates an ordinary sizing, is structurally absent there.
-  The run's other diagnostics (bias clamps, an inverse lookup that runs out of table) are what carry
-  the trust question instead, which is why they ride the report verbatim. Width-first givens keep
+  The run's other diagnostics (a read beyond the table, which leaves the point unanswered) are what
+  carry the trust question instead, which is why they ride the report verbatim. Width-first givens keep
   their authored operating-point spec, so the ceiling still gates them at a range end — unless that
   spec is a bound `vgs`, which reads the point out of the table exactly as rewritten givens do and
   is under the ceiling by construction for the same reason. Do not author a ceiling check on a
