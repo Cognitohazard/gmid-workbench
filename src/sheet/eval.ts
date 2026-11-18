@@ -32,6 +32,7 @@ import {
   outsideMessage,
   OWN_DEVICE,
   PATH_SEP,
+  pinnedIn,
   solvedValuesIn,
   causeInParent,
   engineSolved,
@@ -898,6 +899,7 @@ function runSizing(
     noise: noiseSource(table.grid),
   };
   if (res.fallbacks.length) report.fallbacks = res.fallbacks;
+  if (res.perturbed) report.perturbed = res.perturbed;
   if (read.length) report.passthrough = read;
   if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
   // The drain voltage the region check compares: the one the givens STATE, which the table holds
@@ -1356,6 +1358,7 @@ function evalBlocks(
       ...(res.held ? { held: res.held } : {}),
       ...(res.solve ? { solve: res.solve } : {}),
       ...solvedOf(childDoc, res),
+      ...(res.pinned ? { pinned: res.pinned } : {}),
     };
     PENDING_WIRING.set(report, { doc: childDoc, res, table: childTable, mode });
     reports.push(report);
@@ -1452,6 +1455,28 @@ function held(
     ...(Object.keys(own).length ? { pinned: own } : {}),
     ...(perturb && device !== undefined ? { perturb: { ...perturb, device } } : {}),
   };
+}
+
+/** The one warning a run that held solved params at given values carries (see
+ *  EvaluateOptions.pinned): which they are, and that their relations were not checked. None where
+ *  nothing was held. */
+function pinnedWarnings(res: SheetResult): QAWarning[] {
+  const held = pinnedIn(res);
+  if (!held.length) return [];
+  const names =
+    held.length > 1 ? `${held.slice(0, -1).join(', ')} and ${held[held.length - 1]}` : held[0];
+  const were = held.length > 1 ? 'were' : 'was';
+  return [
+    {
+      rule: 'sheet-pinned',
+      severity: 'warning',
+      message:
+        `${names} ${were} held at given values instead of solved. The relations that solve ` +
+        `${held.length > 1 ? 'them' : 'it'} were not checked, so the verdict of this run does not ` +
+        `show that the design holds.`,
+      location: 'params',
+    },
+  ];
 }
 
 /** The values a sheet's own solved params came out at in `res`, as a block report carries them;
@@ -2142,7 +2167,7 @@ function evaluateNode(
   const settings = opts.settings ?? DEFAULT_SETTINGS;
   const found =
     opts.found ?? (depth === 0 ? rangesOfTree(doc, { table, resolveDevice }) : undefined);
-  const solved = withHeld(
+  const solvedRun = withHeld(
     doc,
     solveNode({
       doc,
@@ -2156,11 +2181,18 @@ function evaluateNode(
       ...(opts.perturb ? { perturb: opts.perturb } : {}),
     }),
   );
+  // A solved param held at a given value is named on the result: its relation was not read.
+  const held = doc.params
+    .filter((p) => engineSolved(p) && opts.pinned !== undefined && p.name in opts.pinned)
+    .map((p) => p.name);
+  const solved = held.length ? { ...solvedRun, pinned: held } : solvedRun;
   if (depth > 0) return solved;
   const heldGates = opts.held ? heldGateWarnings(doc) : [];
-  const res = heldGates.length
-    ? { ...solved, warnings: [...solved.warnings, ...heldGates] }
-    : solved;
+  const pinnedNote = pinnedWarnings(solved);
+  const res =
+    heldGates.length || pinnedNote.length
+      ? { ...solved, warnings: [...solved.warnings, ...heldGates, ...pinnedNote] }
+      : solved;
   const point = pointOutcome(res, opts.held === true, opts.assumed);
   const keepPoint = opts.operatingPoint === true;
   if (!point.sized) {

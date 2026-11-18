@@ -84,7 +84,9 @@
     This view reads the sheet’s formulas. It does not size or solve the circuit again, so it is not
     what the hardware does when a property changes: a real change of gds moves the operating point,
     and that is not in these numbers. Each cell gives how many percent a result moves when that one
-    property of that one device is 1 % larger; a dot marks a formula that does not read it.
+    property of that one device is 1 % larger; a dot marks a formula that does not read it. A
+    requirement’s cell is for its left side, and a cell marked R is for its right side, where only
+    that side moves.
   </p>
   {#if view.error}
     <p class="snote">{view.error}</p>
@@ -126,14 +128,14 @@
             {/each}
             {#each view.rows.checks as id}
               <tr>
-                <th>left side of {id}</th>
+                <th>{id}</th>
                 {#each read as c}
-                  {@const x = cell(
-                    c,
-                    c.checks.find((r) => r.id === id),
-                    `The left side of ${id}`,
-                  )}
-                  <td class:none={!x.text} class:zero={x.zero} title={x.why}>{x.text}</td>
+                  {@const k = c.checks.find((r) => r.id === id)}
+                  {@const right = k?.side === 'right'}
+                  {@const x = cell(c, k, `The ${right ? 'right' : 'left'} side of ${id}`)}
+                  <td class:none={!x.text} class:zero={x.zero} title={x.why}
+                    >{x.text}{#if right && x.text}<sup>R</sup>{/if}</td
+                  >
                 {/each}
               </tr>
             {/each}

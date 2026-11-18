@@ -1089,6 +1089,9 @@ export interface SheetBlockReport {
   /** The values the block's own solved params came out at, by name; absent where it solves none
    *  (see solvedValuesIn). */
   solved?: Record<string, number>;
+  /** The block's own solved params held at given values instead of solved (see
+   *  SheetResult.pinned). */
+  pinned?: string[];
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
@@ -1440,6 +1443,9 @@ export interface SizingReport {
    *  Like `noise`, a fact about the table, carried on the sizing so a result says which of its
    *  rows rest on a lesser form. Present on a sizing that succeeded and fell back somewhere. */
   fallbacks?: FallbackNote[];
+  /** The small-signal property this sizing took larger for a sensitivity reading (see
+   *  EvaluateOptions.perturb): present only where it was applied. */
+  perturbed?: { key: string; factor: number };
   /** The table's pass-through columns (see passthroughKeys) this sizing put in the sheet's scope,
    *  under the names the sheet reads them by: their own, or `table__<column>` where the sheet or
    *  the engine already means something by their own (a `sheet-passthrough` warning names each).
@@ -1521,6 +1527,10 @@ export interface SheetResult {
    *  not sized, a block whose override reads one is not evaluated, and a check that reads one is
    *  `na`. Absent where nothing was. */
   withheld?: Record<string, string>;
+  /** This sheet's own solved params that the evaluation held at given values instead of solving
+   *  (see EvaluateOptions.pinned), by name; a block's are on its report. Their relations were not
+   *  checked, so the verdict of such a run does not show that they hold. Absent where none was. */
+  pinned?: string[];
 }
 
 /**
@@ -1795,6 +1805,21 @@ export function solvedValuesIn(
     for (const b of blocks ?? []) {
       const at = childPath(path, b.name);
       for (const [k, v] of Object.entries(b.solved ?? {})) out[childPath(at, k)] = v;
+      walk(b.blocks, at);
+    }
+  };
+  walk(res.blocks, '');
+  return out;
+}
+
+/** Every solved param held at a given value anywhere in one evaluation's tree (see
+ *  SheetResult.pinned), by path as EvaluateOptions.pinned keys it. */
+export function pinnedIn(res: Pick<SheetResult, 'pinned' | 'blocks'>): string[] {
+  const out = [...(res.pinned ?? [])];
+  const walk = (blocks: readonly SheetBlockReport[] | undefined, path: string): void => {
+    for (const b of blocks ?? []) {
+      const at = childPath(path, b.name);
+      for (const n of b.pinned ?? []) out.push(childPath(at, n));
       walk(b.blocks, at);
     }
   };

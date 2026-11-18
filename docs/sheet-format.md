@@ -2036,7 +2036,12 @@ Two evaluation options carry this, and are open to other uses: `pinned` holds so
 given values, by name for the top sheet and by block path below it (`amp.V_x`), so an evaluation
 is one pass with no search (`solvedValuesIn(doc, result)` lists every solved value of a result in
 that form); `perturb` takes one property of one device, named by its block path, a factor larger.
-With both unset, an evaluation is unchanged.
+With both unset, an evaluation is unchanged. A pinned run names what it held (`pinned` on the
+result and on each block's report) and carries one `sheet-pinned` warning saying the relations
+that solve those values were not checked: its verdict is not to be relied on. A sizing that a
+`perturb` reached says so in `perturbed`; a path that names no device, or a property the device
+does not hold, moves nothing, and the view refuses that column. A requirement's cell is for its
+left side, or for its right side (`side: 'right'`) where only that side moves.
 
 ## The author's contract
 

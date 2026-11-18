@@ -116,6 +116,9 @@ export interface SizeResult {
    * answer reads this field: the sheet engine does not size such a device at all.
    */
   outside: OutsideTable[];
+  /** The property SizeQuery.perturb moved, as asked: present only where it was applied, so a
+   *  caller can tell a property the device does not hold from one that moved nothing. */
+  perturbed?: { key: string; factor: number };
 }
 
 /**
@@ -489,6 +492,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     }
     quantities[key] *= factor;
   }
+  const perturbed = q.perturb && has(q.perturb.key) ? { ...q.perturb } : undefined;
 
   return {
     gm,
@@ -503,6 +507,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     warnings,
     fallbacks,
     outside,
+    ...(perturbed ? { perturbed } : {}),
   };
 }
 

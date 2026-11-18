@@ -15,6 +15,7 @@ import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
 import {
   childPath,
+  devicesIn,
   engineSolved,
   OWN_DEVICE,
   outsideIn,
@@ -57,7 +58,9 @@ export interface PropertyColumn {
    *  the column cannot answer for one side of the pair. */
   placements?: number;
   results: ({ name: string } & PropertyCell)[];
-  checks: ({ id: string } & PropertyCell)[];
+  /** A requirement's cell is for its left side, or for its right side (`side: 'right'`) where only
+   *  that side moves with the property. */
+  checks: ({ id: string; side?: 'right' } & PropertyCell)[];
   error?: string;
 }
 
@@ -166,6 +169,22 @@ export function devicePropertySensitivities(
         });
         continue;
       }
+      // A perturbation that did not reach the device would read as "does not read" everywhere:
+      // the column is taken only where both runs' sizing of this device says it moved this key.
+      const movedIn = (res: SheetResult): boolean =>
+        devicesIn(res, (z, d) => (d === device && z.perturbed?.key === key ? [true] : [])).length >
+        0;
+      if (!movedIn(up) || !movedIn(down)) {
+        columns.push({
+          device,
+          key,
+          ...placed,
+          results: [],
+          checks: [],
+          error: `${key} of ${deviceWords(device)} could not be moved, so this column is not read.`,
+        });
+        continue;
+      }
       const cell = (v0: number, v1?: number, v2?: number, what = ''): PropertyCell => {
         if (v1 === undefined || v2 === undefined)
           return { why: `${what} has no value with ${key} of ${deviceWords(device)} moved.` };
@@ -198,10 +217,22 @@ export function devicePropertySensitivities(
         const c2 = downChecks.get(id);
         if (c1 && c2 && (c1.lhsValue !== c0.lhsValue || c1.rhsValue !== c0.rhsValue)) moved.add(id);
         if (c1 && c2 && (c2.lhsValue !== c0.lhsValue || c2.rhsValue !== c0.rhsValue)) moved.add(id);
-        col.checks.push({
-          id,
-          ...cell(c0.lhsValue, c1?.lhsValue, c2?.lhsValue, `The left side of ${id}`),
-        });
+        // The side that moves: the left, as everywhere else, unless only the right one does.
+        const rightOnly =
+          c1 !== undefined &&
+          c2 !== undefined &&
+          c1.lhsValue === c0.lhsValue &&
+          c2.lhsValue === c0.lhsValue &&
+          (c1.rhsValue !== c0.rhsValue || c2.rhsValue !== c0.rhsValue);
+        col.checks.push(
+          rightOnly
+            ? {
+                id,
+                side: 'right',
+                ...cell(c0.rhsValue, c1.rhsValue, c2.rhsValue, `The right side of ${id}`),
+              }
+            : { id, ...cell(c0.lhsValue, c1?.lhsValue, c2?.lhsValue, `The left side of ${id}`) },
+        );
       }
       columns.push(col);
     }

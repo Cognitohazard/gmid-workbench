@@ -228,17 +228,47 @@ describe('pinning the solved values', () => {
     expect(pinned.V_out).toBe(base.values.V_out);
   });
 
-  it('takes a pinned value as given and searches nothing', () => {
+  it('takes a pinned value as given, searches nothing, and says that it held it', () => {
     // Pinned off its root, the value stays where it is put: a search would have moved it back.
     const off = base.values.V_out + 0.05;
     const res = evaluateSheet(withoutRange(doc), table, undefined, { pinned: { V_out: off } });
     expect(res.values.V_out).toBe(off);
     expect(res.solve).toBeUndefined();
+    // The run names what it held, and says once that its relation was not checked: its verdict is
+    // not to be relied on.
+    expect(res.pinned).toEqual(['V_out']);
+    expect(res.warnings.filter((w) => w.rule === 'sheet-pinned').map((w) => w.message)).toEqual([
+      'V_out was held at given values instead of solved. The relations that solve it were not ' +
+        'checked, so the verdict of this run does not show that the design holds.',
+    ]);
+    // A run with nothing pinned has neither.
+    expect(base.pinned).toBeUndefined();
+    expect(base.warnings.some((w) => w.rule === 'sheet-pinned')).toBe(false);
     // Pinned at the root, the design is the base design.
     const same = evaluateSheet(withoutRange(doc), table, undefined, {
       pinned: solvedValuesIn(doc, base),
     });
     expect(same.values).toEqual(base.values);
+  });
+
+  it('names a block’s held value by its path, on the block’s report and in the warning', () => {
+    const parent: SheetDoc = {
+      title: 'parent',
+      polarity: 'n',
+      params: [],
+      blocks: [{ name: 'amp', doc: { ...doc, provides: ['V_out'] } }],
+      equations: [],
+      checks: [],
+    };
+    const solvedRun = evaluateSheet(parent, table);
+    const pins = solvedValuesIn(parent, solvedRun);
+    expect(Object.keys(pins)).toContain('amp.V_out');
+    const res = evaluateSheet(parent, table, undefined, { pinned: pins });
+    expect(res.pinned).toBeUndefined();
+    expect(res.blocks?.[0].pinned).toEqual(['V_out']);
+    expect(res.warnings.find((w) => w.rule === 'sheet-pinned')?.message).toMatch(
+      /^amp\.V_out was held at given values instead of solved\./,
+    );
   });
 
   it('marks a sheet where a solved value reads a small-signal property', () => {
@@ -300,5 +330,54 @@ describe('the device-property view on a composed sheet', () => {
     expect(view.error).toBeUndefined();
     expect(view.solvedReads).toEqual(['L']);
     expect(view.refused.map((x) => x.name)).toContain('L');
+  });
+});
+
+describe('the device-property view, said where it does not apply', () => {
+  it('records on the sizing that a property was moved, and nothing where it was not', () => {
+    const moved = evaluateSheet(reader(), dev, undefined, {
+      perturb: { device: 'givens', key: 'gds', factor: 1.01 },
+    });
+    expect(moved.sizing?.perturbed).toEqual({ key: 'gds', factor: 1.01 });
+    // A device path that does not exist, and a property the device does not hold, move nothing
+    // and say so by the record's absence; the view refuses such a column rather than read zeros.
+    for (const perturb of [
+      { device: 'nope', key: 'gds', factor: 1.01 },
+      { device: 'givens', key: 'cjd', factor: 1.01 },
+    ]) {
+      const r = evaluateSheet(reader(), dev, undefined, { perturb });
+      expect(r.sizing?.perturbed).toBeUndefined();
+      expect(r.values).toEqual(evaluateSheet(reader(), dev).values);
+    }
+  });
+
+  it('gives a requirement’s right side where only that side reads the property', () => {
+    const doc: SheetDoc = {
+      ...reader(),
+      checks: [{ id: 'ro-floor', kind: 'spec', lhs: '1k', op: '<=', rhs: 'r_out' }],
+    };
+    const view = devicePropertySensitivities(doc, dev);
+    const gds = view.columns.find((c) => c.device === 'givens' && c.key === 'gds')!;
+    expect(gds.checks).toEqual([
+      { id: 'ro-floor', side: 'right', relPerPct: expect.closeTo(-1, 9) },
+    ]);
+  });
+
+  it('moves a bound selector other than gm/ID with the property it reads', () => {
+    // av0 is bound: the sizing restores it to its target, and a 1 % larger gds still moves it by
+    // the exact ratio, -1 %, as gm moves it +1 %.
+    const doc: SheetDoc = {
+      ...reader(),
+      givens: { L: '0.5u', av0: '30', id: '20u', vds: 'VD', vsb: '0' },
+      checks: [],
+    };
+    const view = devicePropertySensitivities(doc, dev);
+    expect(view.error).toBeUndefined();
+    const at = (key: string) =>
+      view.columns
+        .find((c) => c.device === 'givens' && c.key === key)!
+        .results.find((r) => r.name === 'a0')!.relPerPct;
+    expect(at('gds')).toBeCloseTo(-1, 9);
+    expect(at('gm')).toBeCloseTo(1, 9);
   });
 });
