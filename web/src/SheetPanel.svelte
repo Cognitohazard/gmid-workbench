@@ -85,6 +85,7 @@
   import { copyText, download } from './export';
   import { SheetEvaluator, type Answered, type JobOf } from './sheetEvaluator.svelte';
   import type { JobKind, JobResults } from './sheetjobs';
+  import { viridis } from './colormap';
 
   let {
     device,
@@ -948,6 +949,12 @@
   /** The swept parameter's unit — the caption's only use of it. */
   const sweptUnit = $derived(swept?.unit ?? '');
 
+  // What the sweep draws: every check's margin (''), or one of the sheet's equations, by name.
+  let plotPick = $state('');
+  const plotted = $derived(cfg.equations.some((e) => e.name === plotPick) ? plotPick : '');
+  /** The plotted equation's curve on the sweep shown. */
+  const curve = $derived(plotted ? swept?.values.find((c) => c.name === plotted) : undefined);
+
   // ── 2-D feasibility map: a second (×) param turns the 1-D margin chart into a design-plane
   // heatmap (feasible region vs the two params). Choices are the sweepable params minus the first.
   // One design plane belongs to one condition the design is sized at: with several selected, or
@@ -973,13 +980,16 @@
             at: refKey,
             points: SWEEP2_POINTS,
             settings: solver,
+            ...(plotted ? { value: plotted } : {}),
           }
         : undefined,
       (r) => (swept2Answer = r && { answered: r.answered, map: r.result }),
     );
   });
   const swept2 = $derived(
-    swept2Answer?.answered.job.param === active && swept2Answer.answered.job.param2 === active2
+    swept2Answer?.answered.job.param === active &&
+      swept2Answer.answered.job.param2 === active2 &&
+      (swept2Answer.answered.job.value ?? '') === plotted
       ? swept2Answer.map
       : null,
   );
@@ -1005,6 +1015,8 @@
   const MARGIN_CLIP = 100;
   const chartData = $derived.by((): ChartData | null => {
     if (!swept || swept.x.length === 0) return null;
+    // One named result: its own scale, a gap wherever a sample does not determine it.
+    if (plotted) return curve ? { x: swept.x, lines: [curve.y], lineLabels: [curve.name] } : null;
     return {
       x: swept.x,
       lines: swept.checks.map((r) => r.marginPct.map((m) => (m == null ? null : m * 100))),
@@ -1478,10 +1490,26 @@
       1 -
       Math.min(s.y.length - 1, Math.floor((e.offsetY / c.clientHeight) * s.y.length));
     const beyond = s.outside[yi]?.[xi] ?? [];
+    const v = s.value?.z[yi]?.[xi];
+    if (s.value && v != null && !beyond.length)
+      return `${s.value.name} is ${formatQuantity(v, s.value.unit)} here.`;
     return beyond.length
       ? `no answer: beyond the table: ${beyond.map((r) => `${r.device === OWN_DEVICE ? '' : `"${r.device}": `}${beyondText(r)}`).join('; ')}`
       : '';
   }
+  /** The lowest and highest determined value of a map's named result; null where it has none. */
+  function valueSpan(z: readonly (readonly (number | null)[])[]): [number, number] | null {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const row of z)
+      for (const v of row)
+        if (v != null) {
+          lo = Math.min(lo, v);
+          hi = Math.max(hi, v);
+        }
+    return lo <= hi ? [lo, hi] : null;
+  }
+  const mapSpan = $derived(swept2?.value ? valueSpan(swept2.value.z) : null);
   function drawMap(canvas: HTMLCanvasElement, s: SheetSweep2): void {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1502,20 +1530,35 @@
     if (nx === 0 || ny === 0) return;
     const cw = w / nx;
     const ch = h / ny;
+    // A named result asked for: each cell coloured by its value, lowest dark, highest bright, and a
+    // cell that does not determine it in the grid's own colour.
+    const span = s.value ? valueSpan(s.value.z) : null;
+    if (s.value && span)
+      for (let yi = 0; yi < ny; yi++) {
+        const py = (ny - 1 - yi) * ch;
+        for (let xi = 0; xi < nx; xi++) {
+          const v = s.value.z[yi]?.[xi];
+          const t = span[1] > span[0] && v != null ? (v - span[0]) / (span[1] - span[0]) : 0.5;
+          ctx.fillStyle = v == null ? grid : viridis(t);
+          ctx.globalAlpha = v == null ? 0.12 : 0.85;
+          ctx.fillRect(xi * cw, py, cw + 1, ch + 1);
+        }
+      }
     // Feasible = green-ish, infeasible = red-ish (the status tokens, softened). paramY min sits at
     // the BOTTOM (yi = 0 → last drawn row), the usual design-plane orientation.
-    for (let yi = 0; yi < ny; yi++) {
-      const py = (ny - 1 - yi) * ch;
-      for (let xi = 0; xi < nx; xi++) {
-        const feas = s.feasible[yi][xi];
-        // A cell read beyond a device's table has no answer: neither colour, the grid's own.
-        const beyond = (s.outside[yi]?.[xi]?.length ?? 0) > 0;
-        ctx.fillStyle = beyond ? grid : feas ? ok : err;
-        ctx.globalAlpha = beyond ? 0.12 : feas ? 0.55 : 0.4;
-        // +1 hides the seam between adjacent same-colour cells under sub-pixel rounding.
-        ctx.fillRect(xi * cw, py, cw + 1, ch + 1);
+    else
+      for (let yi = 0; yi < ny; yi++) {
+        const py = (ny - 1 - yi) * ch;
+        for (let xi = 0; xi < nx; xi++) {
+          const feas = s.feasible[yi][xi];
+          // A cell read beyond a device's table has no answer: neither colour, the grid's own.
+          const beyond = (s.outside[yi]?.[xi]?.length ?? 0) > 0;
+          ctx.fillStyle = beyond ? grid : feas ? ok : err;
+          ctx.globalAlpha = beyond ? 0.12 : feas ? 0.55 : 0.4;
+          // +1 hides the seam between adjacent same-colour cells under sub-pixel rounding.
+          ctx.fillRect(xi * cw, py, cw + 1, ch + 1);
+        }
       }
-    }
     // A faint reference grid (quintiles) + border, light enough that the cells stay dominant.
     ctx.globalAlpha = 0.14;
     ctx.strokeStyle = grid;
@@ -1942,6 +1985,19 @@
           </select>
         </label>
       {/if}
+      {#if active && cfg.equations.length}
+        <label class="swplot" title={CONTROL_HELP.sweepPlot}>
+          plot
+          <select
+            data-plot
+            value={plotted}
+            onchange={(e) => (plotPick = (e.currentTarget as HTMLSelectElement).value)}
+          >
+            <option value="">margins</option>
+            {#each cfg.equations as eq (eq.name)}<option value={eq.name}>{eq.name}</option>{/each}
+          </select>
+        </label>
+      {/if}
       {#if active && sweepable2.length}
         <label
           class="swsel2"
@@ -2326,10 +2382,25 @@
     {/if}
 
     {#if twoD && swept2 && swept2.x.length}
-      <div class="scap">
-        feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check{#if swept2.outside.some( (row) => row.some((c) => c.length) )},
-          grey has no answer (a device read beyond its table){/if} (X → right, Y ↑)
-      </div>
+      {#if swept2.value}
+        <div class="scap" data-map-value={swept2.value.name}>
+          {#if mapSpan}
+            The colour of each cell is <b>{swept2.value.name}</b> across <b>{active}</b> ×
+            <b>{active2}</b>, from {formatQuantity(mapSpan[0], swept2.value.unit)} (dark) to
+            {formatQuantity(mapSpan[1], swept2.value.unit)} (bright).
+          {:else}
+            No cell of this plane determines <b>{swept2.value.name}</b>.
+          {/if}
+          A grey cell does not determine it: a device is read beyond its table there, or the solve did
+          not find a value.
+        </div>
+      {:else}
+        <div class="scap">
+          feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard
+          check{#if swept2.outside.some((row) => row.some((c) => c.length))}, grey has no answer (a
+            device read beyond its table){/if} (X → right, Y ↑)
+        </div>
+      {/if}
       <div class="smap">
         <div class="smy">
           {active2}
@@ -2358,28 +2429,46 @@
       {@const at = condLabel(swept.key)}
       <!-- Which of the two curves this is: the design sized at the chart's condition at every
          sample, or the nominal design held there. -->
-      <div class="scap" data-sweep-caption data-sweep-design={swept.design}>
-        margin (%) vs <b>{active}</b>{#if sweptUnit}
-          ({sweptUnit}){/if} at <b>{at}</b> —
-        {#if swept.design === 'held'}
-          the nominal design held there: each sample sizes the design at {condLabel(swept.base)} with
-          {active} at that value and holds it at {at} — widths, lengths, currents and gate biases fixed
-          — so the curves are that design’s margins at {at}{#if (cfg.operatingRange ?? []).length},
-            its own range ends included{/if}.
-        {:else}
-          sized there: each sample re-sizes the design at {at} with {active} at that value{#if (cfg.operatingRange ?? []).length}
-            · each sample holds its OWN design at the range ends, so the range-end curves move with
-            the sweep and never change what is feasible{/if}.
-        {/if}
-        The 0 line is where a check sits exactly on its limit; dashed = advisory; clipped at ±{MARGIN_CLIP}%.
-      </div>
+      {#if curve}
+        <div
+          class="scap"
+          data-sweep-caption
+          data-sweep-design={swept.design}
+          data-plot-curve={curve.name}
+        >
+          The curve is <b>{curve.name}</b>{#if curve.unit}&nbsp;in {curve.unit}{/if} against
+          <b>{active}</b>{#if sweptUnit}&nbsp;in {sweptUnit}{/if} at <b>{at}</b>, {swept.design ===
+          'held'
+            ? 'with the nominal design held there'
+            : 'with the design sized at each sample'}. A gap is a sample that does not determine it:
+          a device is read beyond its table there, or the solve did not find a value.
+        </div>
+      {:else}
+        <div class="scap" data-sweep-caption data-sweep-design={swept.design}>
+          margin (%) vs <b>{active}</b>{#if sweptUnit}
+            ({sweptUnit}){/if} at <b>{at}</b> —
+          {#if swept.design === 'held'}
+            the nominal design held there: each sample sizes the design at {condLabel(swept.base)} with
+            {active} at that value and holds it at {at} — widths, lengths, currents and gate biases fixed
+            — so the curves are that design’s margins at {at}{#if (cfg.operatingRange ?? []).length},
+              its own range ends included{/if}.
+          {:else}
+            sized there: each sample re-sizes the design at {at} with {active} at that value{#if (cfg.operatingRange ?? []).length}
+              · each sample holds its OWN design at the range ends, so the range-end curves move
+              with the sweep and never change what is feasible{/if}.
+          {/if}
+          The 0 line is where a check sits exactly on its limit; dashed = advisory; clipped at ±{MARGIN_CLIP}%.
+        </div>
+      {/if}
       <div class="pchart" bind:this={el}></div>
       <!-- Colour key: ten unlabelled lines are unreadable, and this panel has no shared footer
          legend the way a data panel does. Index order matches what ChartAdapter strokes. An
          advisory check is dashed on the chart and tagged here, since an inline-styled swatch cannot
          carry the dash. -->
       <div class="skey">
-        {#each swept.checks as r, i}
+        {#if curve}<span class="kitem"><i style="background:{PALETTE[0]}"></i>{curve.name}</span
+          >{/if}
+        {#each curve ? [] : swept.checks as r, i}
           <span class="kitem"
             ><i style="background:{PALETTE[i % PALETTE.length]}"></i>{checkLabel(
               r,
@@ -2681,7 +2770,8 @@
     opacity: 0.85;
   }
   /* The 2-D map's × param select — same look as .swsel but no auto-margin (it trails the first). */
-  .swsel2 {
+  .swsel2,
+  .swplot {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;

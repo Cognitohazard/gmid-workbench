@@ -2050,6 +2050,20 @@ export interface SheetSweep {
    *  not answer for — its device is not sized, the margins that read it are null, and it is never
    *  part of a passing stretch. */
   outside: OutsideTable[][];
+  /** Each of the sheet's own equations across the sweep, in document order, parallel to `x` (see
+   *  SweepCurve). */
+  values: SweepCurve[];
+}
+
+/**
+ * One named result of a sheet across a sweep: its value at each sample, or null where the sample
+ * does not determine it — a device read beyond its table anywhere in the tree (the sample is not
+ * a point the tables answer for), a value the evaluation withheld, or one that is not finite.
+ */
+export interface SweepCurve {
+  name: string;
+  unit: string;
+  y: (number | null)[];
 }
 
 /**
@@ -2073,4 +2087,8 @@ export interface SheetSweep2 {
   /** Each cell's reads beyond a table (see SheetSweep.outside): empty where every device was read
    *  on its table. A cell with any is infeasible with no check to name (`binding` null). */
   outside: OutsideTable[][][];
+  /** The one named result asked for (Sweep2Options.value), at each cell, `[yi][xi]`, null where
+   *  the cell does not determine it (see SweepCurve). Absent where none was asked for, or the name
+   *  is none of the sheet's own equations. */
+  value?: { name: string; unit: string; z: (number | null)[][] };
 }

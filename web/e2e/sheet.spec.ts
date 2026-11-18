@@ -2275,3 +2275,51 @@ test('design sheet: each device’s operating point, the current at each held wi
 
   expect(errors).toEqual([]);
 });
+
+test('design sheet: a sweep plots a named result of the sheet, as a curve and across the map', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // Margins by default; one of the sheet's equations on request, as one curve on its own scale.
+  await sp.locator('.swsel select').selectOption('gm_id');
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  await expect(sp.locator('[data-plot]')).toHaveValue('');
+  await sp.locator('[data-plot]').selectOption('GBW');
+  const caption = sp.locator('[data-plot-curve="GBW"]');
+  await expect(caption).toContainText(/^The curve is GBW\sin Hz against gm_id\sin 1\/V at tt, /);
+  await expect(sp.locator('.skey .kitem')).toHaveCount(1);
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  // The chart is rebuilt for the result's own scale, and still fills its box.
+  await expect
+    .poll(() =>
+      sp
+        .locator('.pchart')
+        .evaluate(
+          (e) => (e.querySelector('canvas') as HTMLCanvasElement).clientHeight - e.clientHeight,
+        ),
+    )
+    .toBe(0);
+  await sp.locator('.pchart').screenshot({ path: `${SCREENS}/sweep-named-result.png` });
+
+  // With a second param, each cell of the map is coloured by the same result.
+  await sp.locator('.swsel2 select').selectOption('L');
+  const mapCaption = sp.locator('[data-map-value="GBW"]');
+  await expect(mapCaption).toContainText(/^The colour of each cell is GBW across gm_id × L, from /);
+  await expect(sp.locator('.smapc')).toBeVisible();
+  await sp.locator('.smap').screenshot({ path: `${SCREENS}/map-named-result.png` });
+
+  // Back to margins: the feasibility map returns.
+  await sp.locator('[data-plot]').selectOption('');
+  await expect(sp.locator('[data-map-value]')).toHaveCount(0);
+  await expect(sp.locator('.scap').first()).toContainText('feasibility');
+
+  expect(errors).toEqual([]);
+});
