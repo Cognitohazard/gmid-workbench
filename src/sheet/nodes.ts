@@ -2333,17 +2333,19 @@ function currentBalance(
     const residual = branches.reduce((sum, b) => sum + b.current, 0);
     // A wire a level or a voltage element holds: what does not balance is what its source supplies.
     const isHeld = held.heldWires.has(w) || held.sourced.has(w);
-    // A held wire where currents both arrive and leave is an output the application holds; one a
-    // voltage element sets carries that element's current. Any other held wire is a rail: every
-    // current flows the same way, and what does not balance is the supply current.
+    // At a held wire where every current flows the same way, what does not balance is the current
+    // the source holding the wire delivers: a supply's or ground's, or an output's the application
+    // holds with one device on it — the netlist does not say which. Where currents both arrive and
+    // leave, a sum is an imbalance the source hides (raised below); a wire a voltage element sets
+    // carries that element's current.
     const mixed = branches.some((b) => b.current > 0) && branches.some((b) => b.current < 0);
-    const rail = isHeld && !held.sourced.has(w) && !mixed;
+    const delivers = isHeld && !held.sourced.has(w) && !mixed;
     balance.push({
       wire: w,
       residual,
       held: isHeld,
       branches,
-      ...(rail ? { supply: -residual } : {}),
+      ...(delivers ? { delivered: -residual } : {}),
     });
     const largest = Math.max(...branches.map((b) => Math.abs(b.current)));
     if (!(Math.abs(residual) > tolRel * largest)) continue;

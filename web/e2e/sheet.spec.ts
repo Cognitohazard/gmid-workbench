@@ -2222,7 +2222,7 @@ test('design sheet: a drain voltage beyond the table is not sized, and says what
   expect(errors).toEqual([]);
 });
 
-test('design sheet: each device’s operating point, the supply current, the wire voltages and where each solved value was searched', async ({
+test('design sheet: each device’s operating point, the current at each held wire, the wire voltages and where each solved value was searched', async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -2250,10 +2250,12 @@ test('design sheet: each device’s operating point, the supply current, the wir
   await pair.locator('summary').click();
   await expect(pair.locator('.sopv').first()).toBeVisible();
 
-  // The supply current at each rail, read from the current balance: the same current enters at
-  // vdd and leaves at ground.
-  const supply = sp.locator('[data-supply]');
-  await expect(supply).toContainText(/^supply current: .*gnd -[\d.]+ µA.*vdd [\d.]+ µA/);
+  // The current the source at each held wire delivers, read from the current balance: what
+  // enters at vdd leaves at ground. Listed per wire, not added up.
+  const delivered = sp.locator('[data-delivered]');
+  await expect(delivered).toContainText(
+    /^current delivered at each held wire: .*gnd -[\d.]+ µA.*vdd [\d.]+ µA/,
+  );
 
   // Every wire's voltage and how it was found: a held wire, or the devices it was reached through.
   const wires = sp.locator('[data-wires]');
@@ -2269,7 +2271,7 @@ test('design sheet: each device’s operating point, the supply current, the wir
     /^searched .* to .*: between gnd and \S+, your range .* first/,
   );
   await sp.locator('[data-param="V_tail"]').screenshot({ path: `${SCREENS}/search-range.png` });
-  await supply.screenshot({ path: `${SCREENS}/supply-current.png` });
+  await delivered.screenshot({ path: `${SCREENS}/delivered-current.png` });
 
   expect(errors).toEqual([]);
 });

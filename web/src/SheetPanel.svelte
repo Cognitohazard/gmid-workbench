@@ -1276,8 +1276,8 @@
   const withheldFrom = (cause: string): string =>
     cause === OWN_DEVICE ? 'this sheet’s device' : `"${cause}"`;
 
-  // ── What the engine computed beside the verdict: each device's operating point, the supply
-  // current at each rail, the voltage of each wire, and where each solved value was searched.
+  // ── What the engine computed beside the verdict: each device's operating point, the current
+  // delivered at each held wire, the voltage of each wire, and where each solved value was searched.
   /** A namespace unit as a reader writes it: Ω, √Hz, squares, and a ratio of like units as none. */
   const unitText = (u: string): string =>
     u === 'V/V' || u === '1'
@@ -1299,10 +1299,12 @@
         const unit = QUANTITY_UNIT.get(k);
         return [k, unit ? formatQuantity(v, unit) : String(Number(v.toPrecision(4)))];
       });
-  /** The supply current at each rail of the run shown (NodesReport balance `supply`). */
-  const supplies = $derived(
+  /** The current the source holding each held wire delivers, in the run shown (NodesReport
+   *  balance `delivered`). Listed per wire, never summed: the netlist does not say which is a
+   *  supply. */
+  const delivered = $derived(
     (result?.nodes?.balance ?? []).flatMap((b) =>
-      b.supply === undefined ? [] : [{ wire: b.wire, current: b.supply }],
+      b.delivered === undefined ? [] : [{ wire: b.wire, current: b.delivered }],
     ),
   );
   const PAIR_LABEL: Readonly<Record<string, string>> = {
@@ -2285,9 +2287,9 @@
         </div>
       {/if}
 
-      {#if supplies.length}
-        <p class="ssupply" title={CONTROL_HELP.supplyCurrent} data-supply>
-          supply current: {supplies
+      {#if delivered.length}
+        <p class="sdelivered" title={CONTROL_HELP.deliveredCurrent} data-delivered>
+          current delivered at each held wire: {delivered
             .map((x) => `${x.wire} ${formatQuantity(x.current, 'A')}`)
             .join(' · ')}
         </p>
@@ -2737,7 +2739,7 @@
     white-space: nowrap;
   }
   .scap,
-  .ssupply {
+  .sdelivered {
     font-size: calc(0.76rem * var(--text-scale));
     opacity: 0.7;
   }

@@ -1187,11 +1187,12 @@ export interface NodesReport {
     residual: number;
     held: boolean;
     branches: { terminal: string; current: number }[];
-    /** At a rail — a held wire, not one a voltage element sets, where every current flows the
-     *  same way — the supply current: what the source holding the wire delivers into it, the
-     *  negative of `residual` (positive at a supply such as vdd, negative at ground). Absent at
-     *  every other wire. */
-    supply?: number;
+    /** At a held wire, not one a voltage element sets, where every current flows the same way:
+     *  the current the source holding the wire delivers into it, the negative of `residual`
+     *  (positive where current leaves the source, as at a supply; negative where it returns, as at
+     *  ground). Such a wire may be a supply, ground, or an output the application holds — the
+     *  netlist does not say which. Absent at every other wire. */
+    delivered?: number;
   }[];
   /** Each device placed more than once: whether its placements share one operating point. */
   placements: { device: string; shared: boolean; reason?: string }[];

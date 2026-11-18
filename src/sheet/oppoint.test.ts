@@ -1,8 +1,9 @@
 // What a run keeps beside its verdict for a reader: each sized device's full operating point
-// (kept only by the run that asks for it) and the supply current at each rail.
+// (kept only by the run that asks for it) and the current the source holding each held wire
+// delivers.
 import { describe, it, expect } from 'vitest';
 import { groupDevices, runConditions } from '../corners';
-import { runSheet, operatingPointOf } from './index';
+import { runSheet, operatingPointOf, withParams } from './index';
 import { loadLibrary, table, REFS } from './library.fixtures';
 
 const fiveT = loadLibrary().find((s) => s.file === 'otas/five-transistor-ota.json')!.doc;
@@ -41,6 +42,26 @@ describe('the operating point of each device', () => {
     expect(Object.keys(pt)).not.toContain('ceiling');
   });
 
+  it('is kept by a device that sized and by none that reads a value the solve did not find', () => {
+    // Asked for a common mode the pair cannot pass, the tail voltage is not found: every device
+    // whose givens read it is not sized and has no point. The bias reference reads nothing that
+    // failed, and keeps both.
+    const res = runSheet(withParams(fiveT, { CM_dc: 1.75 }), table, undefined, REFS, {
+      operatingPoint: true,
+    });
+    expect(res.solve?.kind).not.toBe('settled');
+    expect(res.withheld?.V_tail).toBe('V_tail');
+    for (const b of res.blocks ?? []) {
+      if (b.name === 'bias') {
+        expect(b.sizing?.ok).toBe(true);
+        expect(b.point?.id).toBeCloseTo(b.sizing!.id, 15);
+      } else {
+        expect(b.sizing, b.name).toBeUndefined();
+        expect(b.point, b.name).toBeUndefined();
+      }
+    }
+  });
+
   it('is kept by the condition where the design is sized, and not where it is held', () => {
     const tt = { ...table, id: { ...table.id, corner: 'tt', temp: 27 } };
     const ss = { ...table, id: { ...table.id, corner: 'ss', temp: 27 } };
@@ -65,24 +86,37 @@ describe('the operating point of each device', () => {
   });
 });
 
-describe('the supply current at each rail', () => {
-  it('is what the source holding the rail delivers, and only rails carry it', () => {
+describe('the current delivered at each held wire', () => {
+  it('is what the source holding the wire delivers, at a held wire every current leaves or enters', () => {
     const res = runSheet(fiveT, table, undefined, REFS);
     const balance = res.nodes?.balance ?? [];
     const at = (w: string) => balance.find((b) => b.wire === w)!;
     // The current drawn from vdd returns through ground.
-    expect(at('vdd').supply).toBeGreaterThan(0);
-    expect(at('gnd').supply).toBeLessThan(0);
-    expect(at('vdd').supply! + at('gnd').supply!).toBeCloseTo(0, 12);
+    expect(at('vdd').delivered).toBeGreaterThan(0);
+    expect(at('gnd').delivered).toBeLessThan(0);
     for (const b of balance) {
       const mixed = b.branches.some((x) => x.current > 0) && b.branches.some((x) => x.current < 0);
-      if (b.supply !== undefined) {
+      if (b.delivered !== undefined) {
         expect(b.held && !mixed, b.wire).toBe(true);
-        expect(b.supply).toBe(-b.residual);
+        expect(b.delivered).toBe(-b.residual);
       } else expect(b.held && !mixed, b.wire).toBe(false);
     }
     // What vdd delivers is the tail current through the pair and the bias reference's current.
     const id = (name: string) => res.blocks!.find((b) => b.name === name)!.sizing!.id;
-    expect(at('vdd').supply!).toBeCloseTo(id('tail') + id('bias'), 12);
+    expect(at('vdd').delivered!).toBeCloseTo(id('tail') + id('bias'), 12);
+  });
+
+  it('sums to zero over the held wires of a sheet whose wires all balance', () => {
+    // The gain-boosted cascode holds vdd, ground and the booster's output `bo`; every current
+    // the sources deliver returns through one of them.
+    const doc = loadLibrary().find((s) => s.file === 'otas/gain-boosted-cascode-ota.json')!.doc;
+    const balance = runSheet(doc, table, undefined, REFS).nodes?.balance ?? [];
+    const delivered = balance.filter((b) => b.delivered !== undefined);
+    expect(delivered.map((b) => b.wire).sort()).toEqual(['bo', 'gnd', 'vdd']);
+    for (const b of balance) if (b.delivered === undefined) expect(b.residual, b.wire).toBe(0);
+    const sum = delivered.reduce((t, b) => t + b.delivered!, 0);
+    expect(Math.abs(sum)).toBeLessThan(
+      1e-12 * Math.max(...delivered.map((b) => Math.abs(b.delivered!))),
+    );
   });
 });
