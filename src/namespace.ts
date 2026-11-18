@@ -62,6 +62,16 @@ export const BASE_QUANTITIES: readonly BaseQuantity[] = [
 
 export const BASE_KEYS: ReadonlySet<string> = new Set(BASE_QUANTITIES.map((q) => q.key));
 
+/**
+ * The small-signal properties of a device: its transconductances, output conductance, every
+ * capacitance and the two current-noise densities — what a formula reads to describe how the device
+ * responds about its operating point. The operating point itself (id, vgs, vds, vth, vdsat) is not
+ * among them, nor are the charges and the gate leakage.
+ */
+export const SMALL_SIGNAL_KEYS: readonly string[] = BASE_QUANTITIES.filter(
+  (q) => q.unit === 'S' || q.unit === 'F' || q.key === 'sth' || q.key === 'sfl',
+).map((q) => q.key);
+
 /** Base keys that scale with device width (see BaseQuantity.perWidth). */
 export const PER_WIDTH_KEYS: ReadonlySet<string> = new Set(
   BASE_QUANTITIES.filter((q) => q.perWidth).map((q) => q.key),

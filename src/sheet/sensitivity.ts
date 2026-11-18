@@ -16,6 +16,7 @@ import {
   RANGE_END_SEP,
   rangeEndBroke,
   engineSolved,
+  OWN_DEVICE,
   stands,
   sweepable,
   treeCheckResults,
@@ -28,6 +29,7 @@ import type {
   SheetResult,
   SheetSensitivity,
   SheetSensitivityCheck,
+  SheetSensitivityResult,
   SheetVar,
 } from './types';
 import { evaluateSheet, type DeviceResolver } from './eval';
@@ -156,6 +158,7 @@ export function sheetSensitivities(
     value,
     step: NaN,
     checks: [],
+    results: [],
     error,
   });
   /** Every entry unavailable for one shared reason (a per-knob reason still wins). */
@@ -210,6 +213,7 @@ export function sheetSensitivities(
     );
   }
   const baseChecks = treeCheckResults(base);
+  const named = namedResults(r.doc, base);
 
   return picked.map((s) => {
     const p = s.param;
@@ -245,7 +249,13 @@ export function sheetSensitivities(
      *  device beyond its table is never used, since its numbers would come from another bias. */
     const probe = (
       dx: number,
-    ): { checks?: Map<string, CheckResult>; why?: string; beyond: boolean } => {
+    ): {
+      checks?: Map<string, CheckResult>;
+      values?: SheetResult['values'];
+      withheld?: SheetResult['withheld'];
+      why?: string;
+      beyond: boolean;
+    } => {
       const res = at({ [p.name]: p.value + dx });
       const outside = outsideIn(res);
       beyond.push(...outside);
@@ -256,7 +266,13 @@ export function sheetSensitivities(
             `(${outside.map(outsideMessage).join('; ')}), so it is not used`,
           beyond: true,
         };
-      if (whole(res)) return { checks: treeCheckResults(res), beyond: false };
+      if (whole(res))
+        return {
+          checks: treeCheckResults(res),
+          values: res.values,
+          withheld: res.withheld,
+          beyond: false,
+        };
       return { why: `the evaluation at ${p.name} = ${p.value + dx} did not stand`, beyond: false };
     };
     let taken = offsets.map(probe);
@@ -284,17 +300,116 @@ export function sheetSensitivities(
     /** The raw margin of `id` at probe `i`, or NaN where that probe or that check is absent. */
     const raw = (i: number, id: string): number => probes[i]?.get(id)?.rawMargin ?? NaN;
 
+    /** A check's left side at probe `i`, or NaN where that probe or that check is absent. */
+    const lhs = (i: number, id: string): number => probes[i]?.get(id)?.lhsValue ?? NaN;
+
     const checks: SheetSensitivityCheck[] = [];
-    for (const [id, rr] of baseChecks) checks.push(record(id, rr, offsets, raw));
+    for (const [id, rr] of baseChecks) {
+      const c = record(id, rr, offsets, raw);
+      // The left side's relative move, beside the margin's absolute one.
+      const [slope] = differences(rr.lhsValue, lhs(0, id), lhs(1, id), offsets);
+      const rel = relative(slope, rr.lhsValue, p.value, `the left side of ${id}`, p.name);
+      checks.push(typeof rel === 'number' ? { ...c, relPerPct: rel } : c);
+    }
+    const results = named.map(({ name, unit }) => result(name, unit, base, taken, offsets, p));
     return {
       param: p.name,
       value: p.value,
       step: h,
       checks,
+      results,
       ...(errors.length ? { error: errors.join('; ') } : {}),
       ...(beyond.length ? { outside: beyond } : {}),
     };
   });
+}
+
+/** The slope and the two one-step changes of a quantity from its base value `v0` and its values
+ *  at the two probes, at the signed offsets they were taken at: a central difference when the
+ *  second probe mirrors the first, else the second-order one-sided one. */
+function differences(
+  v0: number,
+  v1: number,
+  v2: number,
+  [step, far]: [number, number],
+): [slope: number, deltaPlus: number, deltaMinus: number] {
+  const central = far === -step;
+  const slope = central ? (v1 - v2) / (2 * step) : (-3 * v0 + 4 * v1 - v2) / (2 * step);
+  const near = v1 - v0;
+  return [slope, step > 0 ? near : NaN, step < 0 ? near : central ? v2 - v0 : NaN];
+}
+
+/** A slope of `what` as a relative change per relative change of the knob `knobName` — 1 meaning
+ *  1 % for 1 % — or the reason there is none, as a sentence. */
+function relative(
+  slope: number,
+  base: number,
+  knob: number,
+  what: string,
+  knobName: string,
+): number | string {
+  if (!Number.isFinite(base) || base === 0)
+    return `${what} is ${Number.isFinite(base) ? 'zero' : 'not finite'} at the design, so it has no relative change.`;
+  if (knob === 0) return `${knobName} is zero, so a change of it has no relative size.`;
+  if (!Number.isFinite(slope)) return `${what} has no slope against ${knobName}.`;
+  return (slope * knob) / base;
+}
+
+/** The named results of a sheet, in the order it writes them: its equations, its solved params,
+ *  then each composed block's provided values as the parent reads them (`amp__gain`). */
+export function namedResults(doc: SheetDoc, base: SheetResult): { name: string; unit?: string }[] {
+  const out: { name: string; unit?: string }[] = [];
+  for (const e of doc.equations ?? []) out.push({ name: e.name, unit: e.unit });
+  for (const p of doc.params) if (engineSolved(p)) out.push({ name: p.name, unit: p.unit });
+  const seen = new Set(out.map((o) => o.name));
+  for (const b of doc.blocks ?? [])
+    for (const key of Object.keys(base.values))
+      if (key.startsWith(`${b.name}__`) && !seen.has(key)) {
+        seen.add(key);
+        out.push({ name: key });
+      }
+  return out;
+}
+
+/** One named result's record from the base run and the probes taken (see SheetSensitivityResult). */
+function result(
+  name: string,
+  unit: string | undefined,
+  base: SheetResult,
+  taken: readonly { values?: SheetResult['values']; withheld?: SheetResult['withheld'] }[],
+  offsets: [number, number],
+  knob: SheetVar,
+): SheetSensitivityResult {
+  const v0 = base.values[name];
+  const head = { name, ...(unit ? { unit } : {}) };
+  const blank = { base: v0 ?? NaN, dPerUnit: NaN, deltaPlus: NaN, deltaMinus: NaN };
+  const cause = base.withheld?.[name];
+  if (cause !== undefined || v0 === undefined)
+    return {
+      ...head,
+      ...blank,
+      why:
+        cause !== undefined
+          ? `${name} is withheld at the design, because it follows from ${cause === OWN_DEVICE ? 'the sheet’s own device' : cause}.`
+          : `${name} has no value at the design.`,
+    };
+  const at = taken.map((t) => (t.withheld?.[name] !== undefined ? undefined : t.values?.[name]));
+  if (at.some((v) => v === undefined))
+    return {
+      ...head,
+      ...blank,
+      why: `${name} has no value at a probe of ${knob.name}, so no slope is taken.`,
+    };
+  const [dPerUnit, deltaPlus, deltaMinus] = differences(v0, at[0]!, at[1]!, offsets);
+  const rel = relative(dPerUnit, v0, knob.value, name, knob.name);
+  return {
+    ...head,
+    base: v0,
+    dPerUnit,
+    deltaPlus,
+    deltaMinus,
+    ...(typeof rel === 'number' ? { relPerPct: rel } : { why: rel }),
+  };
 }
 
 /** One check's record from the base outcome and the two probes, at the signed offsets they were
@@ -309,20 +424,15 @@ function record(
   [step, far]: [number, number],
   raw: (i: number, id: string) => number,
 ): SheetSensitivityCheck {
-  const central = far === -step;
   const m0 = rr.rawMargin;
-  const m1 = raw(0, id);
-  const m2 = raw(1, id);
-  const slope =
-    rr.op === '==' ? NaN : central ? (m1 - m2) / (2 * step) : (-3 * m0 + 4 * m1 - m2) / (2 * step);
-  const near = m1 - m0;
+  const [slope, deltaPlus, deltaMinus] = differences(m0, raw(0, id), raw(1, id), [step, far]);
   return {
     id,
     kind: rr.kind,
     baseStatus: rr.status,
     baseMargin: m0,
-    dMarginPerUnit: slope,
-    deltaPlus: step > 0 ? near : NaN,
-    deltaMinus: step < 0 ? near : central ? m2 - m0 : NaN,
+    dMarginPerUnit: rr.op === '==' ? NaN : slope,
+    deltaPlus,
+    deltaMinus,
   };
 }

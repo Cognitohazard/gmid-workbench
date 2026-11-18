@@ -31,6 +31,8 @@ import {
   outsideIn,
   outsideMessage,
   OWN_DEVICE,
+  PATH_SEP,
+  solvedValuesIn,
   causeInParent,
   engineSolved,
   holds,
@@ -743,6 +745,7 @@ function runSizing(
   equations: ReadonlySet<string>,
   warn: (w: QAWarning) => void,
   causeOf: (src: unknown) => string | undefined,
+  perturb?: SizeQuery['perturb'],
 ): { report: SizingReport; point: RegionPoint } {
   // Every sizing failure surfaces an error warning AND an ok:false report, so the feasibility
   // aggregate fails closed no matter which path failed (no silent unsized "feasible" design). A
@@ -825,7 +828,12 @@ function runSizing(
 
   // The sized table holds only the lengths L reads; the table's own range is the one an off-hull
   // length is judged and reported against.
-  const q: SizeQuery = { table: sliced.table, L, ...(lAxis ? { lengths: lAxis.values } : {}) };
+  const q: SizeQuery = {
+    table: sliced.table,
+    L,
+    ...(lAxis ? { lengths: lAxis.values } : {}),
+    ...(perturb ? { perturb } : {}),
+  };
   for (const k of supplied) {
     const v = evalFinite(b[k] as string, values, scope, warn, `given ${k}`);
     if (v === undefined) return fail(`given ${k} did not resolve to a finite number`, {}, b[k]);
@@ -1198,7 +1206,7 @@ function childWarning(name: string, res: SheetResult, w: QAWarning): QAWarning {
  * it traces back to, so what this node then cannot compute from it says where it comes from.
  */
 function evalBlocks(
-  { doc: parent, table, resolveDevice, depth, budget, settings, found }: NodeRef,
+  { doc: parent, table, resolveDevice, depth, budget, settings, found, pinned, perturb }: NodeRef,
   values: Record<string, number>,
   scope: Scope,
   warn: (w: QAWarning) => void,
@@ -1308,6 +1316,7 @@ function evalBlocks(
       budget,
       settings,
       found?.blocks.get(block.name),
+      held(block.name, pinned, perturb),
     );
 
     // Roll up child warnings, attributed to the block (so a child error fails the
@@ -1346,6 +1355,7 @@ function evalBlocks(
       ...(res.blocks ? { blocks: res.blocks } : {}),
       ...(res.held ? { held: res.held } : {}),
       ...(res.solve ? { solve: res.solve } : {}),
+      ...solvedOf(childDoc, res),
     };
     PENDING_WIRING.set(report, { doc: childDoc, res, table: childTable, mode });
     reports.push(report);
@@ -1421,6 +1431,36 @@ function inheritedPolarityMismatch(
   };
 }
 
+/** The share of a node's pinned values and perturbation that falls to its block `name`, its names
+ *  unqualified (see EvaluateOptions.pinned, .perturb). */
+function held(
+  name: string,
+  pinned: NodeRef['pinned'],
+  perturb: NodeRef['perturb'],
+): Pick<NodeRef, 'pinned' | 'perturb'> {
+  const prefix = `${name}${PATH_SEP}`;
+  const own: Record<string, number> = {};
+  for (const [k, v] of Object.entries(pinned ?? {}))
+    if (k.startsWith(prefix)) own[k.slice(prefix.length)] = v;
+  const device =
+    perturb?.device === name
+      ? OWN_DEVICE
+      : perturb?.device.startsWith(prefix)
+        ? perturb.device.slice(prefix.length)
+        : undefined;
+  return {
+    ...(Object.keys(own).length ? { pinned: own } : {}),
+    ...(perturb && device !== undefined ? { perturb: { ...perturb, device } } : {}),
+  };
+}
+
+/** The values a sheet's own solved params came out at in `res`, as a block report carries them;
+ *  nothing where it solves none. */
+function solvedOf(doc: SheetDoc, res: SheetResult): Pick<SheetBlockReport, 'solved'> {
+  const out = solvedValuesIn(doc, { values: res.values });
+  return Object.keys(out).length ? { solved: out } : {};
+}
+
 /** A number for each object that keys a child's evaluation (a document, a table), so the key can
  *  be a string. Weak, so it holds nothing alive. */
 const OBJECT_IDS = new WeakMap<object, number>();
@@ -1458,24 +1498,28 @@ function evaluateChild(
   budget: SolveBudget,
   settings: Settings,
   found?: FoundNode,
+  hold: Pick<NodeRef, 'pinned' | 'perturb'> = {},
 ): SheetResult {
   const values = doc.params.map((p) => p.value);
   if (!values.every((v) => typeof v === 'number'))
-    return evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found });
+    return evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found, ...hold });
   // String(v) tells every two numbers apart but the two zeros, which are kept apart here. The
   // ranges read for this child's params that state none depend on where in the tree it sits, so
   // a child that has any is keyed by them too.
   const key =
     `${objectId(src)}|${table ? objectId(table) : 0}|${depth}|` +
     values.map((v) => (Object.is(v, -0) ? '-0' : String(v))).join(',') +
-    (found?.key ? `|${found.key}` : '');
+    (found?.key ? `|${found.key}` : '') +
+    (hold.pinned || hold.perturb
+      ? `|${JSON.stringify([hold.pinned ?? {}, hold.perturb ?? {}])}`
+      : '');
   const known = budget.children.get(key);
   if (known && budget.left > known.cost) {
     budget.counted += known.cost;
     return known.res;
   }
   const counted = budget.counted;
-  const res = evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found });
+  const res = evaluateNode(doc, table, resolveDevice, depth, { budget, settings, found, ...hold });
   if (budget.left > 0) budget.children.set(key, { res, cost: budget.counted - counted });
   return res;
 }
@@ -1598,6 +1642,9 @@ interface NodeRef {
   /** The ranges read at the top of the tree for this node's params that state none, and its
    *  blocks' (see rangesOfTree). */
   found?: FoundNode;
+  /** This node's share of EvaluateOptions.pinned and .perturb, its own names unqualified. */
+  pinned?: Readonly<Record<string, number>>;
+  perturb?: Readonly<{ device: string; key: string; factor: number }>;
 }
 
 /** A range read for a param that states none: the physical one its wiring gives a node, or the
@@ -1707,7 +1754,7 @@ function evaluateOnce(
   //    param takes the value the search is probing in place of its stored one.
   for (const p of doc.params) {
     if (unfound?.has(p.name)) continue;
-    const v = solved?.[p.name] ?? p.value;
+    const v = solved?.[p.name] ?? node.pinned?.[p.name] ?? p.value;
     if (Number.isFinite(v)) values[p.name] = v;
   }
   const scope = scalarScope(values); // closes over the mutated `values`
@@ -1730,6 +1777,9 @@ function evaluateOnce(
         new Set(doc.equations.map((e) => e.name)),
         warn,
         causeOf,
+        node.perturb?.device === OWN_DEVICE
+          ? { key: node.perturb.key, factor: node.perturb.factor }
+          : undefined,
       )
     : undefined;
   const sizing = sized?.report;
@@ -2050,6 +2100,16 @@ export interface EvaluateOptions {
    *  for by the run a designer reads, the design where it is sized; left off by sweeps, held
    *  conditions and range ends, which would otherwise hold one point per device per evaluation. */
   operatingPoint?: boolean;
+  /** Solved params held at given values, so the evaluation is one pass with no search: by name for
+   *  the top sheet's own, by block path for a block's (`amp.V_x`, see childPath). A pinned param is
+   *  not an unknown; it takes the value as an authored one would. Pinning every solved value of a
+   *  result (see solvedValuesIn) holds that design while something else is moved. */
+  pinned?: Readonly<Record<string, number>>;
+  /** One small-signal property of one device taken `factor` times larger, everything else about
+   *  that device held (see SizeQuery.perturb): `device` is OWN_DEVICE for the top sheet's own and a
+   *  block path for a block's, as findings name it (see devicesIn). For reading how hard the
+   *  sheet's formulas lean on a property; it never describes the hardware. */
+  perturb?: Readonly<{ device: string; key: string; factor: number }>;
 }
 
 /** How one node of a tree is evaluated (see evaluateNode): the tree's evaluation budget, and, at
@@ -2092,6 +2152,8 @@ function evaluateNode(
       budget: opts.budget ?? { left: settings.solveEvaluations, counted: 0, children: new Map() },
       settings,
       ...(found ? { found } : {}),
+      ...(opts.pinned ? { pinned: opts.pinned } : {}),
+      ...(opts.perturb ? { perturb: opts.perturb } : {}),
     }),
   );
   if (depth > 0) return solved;
@@ -3465,7 +3527,7 @@ function solveNode(node: NodeRef): SheetResult {
     });
   }
   const unknowns = doc.params
-    .filter((p) => engineSolved(p) && !unfound.has(p.name))
+    .filter((p) => engineSolved(p) && !unfound.has(p.name) && !(p.name in (node.pinned ?? {})))
     .map((p) => unknownOf(p, foundOf(p)));
   if (unknowns.length === 0 && !failed.length) return evaluateOnce(node);
   // The range each may be searched in: its author's, and the wiring's where that can be read.
