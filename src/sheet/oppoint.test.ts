@@ -62,6 +62,20 @@ describe('the operating point of each device', () => {
     }
   });
 
+  it('is not kept by a device read beyond its table', () => {
+    // At gm/ID 12 the inverter's input sits where its PMOS is asked for a gate voltage past the
+    // table: the PMOS is refused, with the read recorded, and has no point. The NMOS sized.
+    const doc = loadLibrary().find((s) => s.file === 'stages/cmos-inverter-amp.json')!.doc;
+    const res = runSheet(withParams(doc, { gm_id_n: 12 }), table, undefined, REFS, {
+      operatingPoint: true,
+    });
+    const at = (name: string) => res.blocks!.find((b) => b.name === name)!;
+    expect(at('p').sizing?.ok).toBe(false);
+    expect(at('p').sizing?.outside?.[0]?.quantity).toBe('vgs');
+    expect(at('p').point).toBeUndefined();
+    expect(at('n').sizing?.ok).toBe(true);
+  });
+
   it('is kept by the condition where the design is sized, and not where it is held', () => {
     const tt = { ...table, id: { ...table.id, corner: 'tt', temp: 27 } };
     const ss = { ...table, id: { ...table.id, corner: 'ss', temp: 27 } };
