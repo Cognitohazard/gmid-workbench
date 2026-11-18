@@ -4,7 +4,7 @@
 // these in one place (describe.ts), never written by the code that produces them.
 
 import type { OutsideTable } from '../types';
-import type { CheckKind, SolveRange } from './types';
+import type { CheckKind, CheckOp, SolveRange } from './types';
 
 /** What an item is: the sheet itself (always the first item of a result), a value (a param or an
  *  equation), a device, a search (one solved param), or a requirement (a check). */
@@ -59,6 +59,8 @@ export interface RelationData {
   readonly rhs: string;
   readonly field: RelationField;
   readonly reads: { readonly lhs: readonly string[]; readonly rhs: readonly string[] };
+  /** The unit both sides are in, where the code that writes the record knows it. */
+  readonly unit?: string;
 }
 
 /** One end of a stretch a search read: the unknown there and each side of the relation, and,
@@ -209,6 +211,8 @@ export interface StatementFalseData {
 
 /** A requirement that does not hold: its two sides, the margin, and whether it is hard. */
 export interface FailsData {
+  /** The two sides as the sheet writes them, and how they compare. */
+  readonly text: { readonly lhs: string; readonly op: CheckOp; readonly rhs: string };
   readonly lhs: number;
   readonly rhs: number;
   readonly margin: number;
@@ -305,9 +309,12 @@ export type Attributes =
 export type Status =
   | { readonly status: 'ok'; readonly attributes?: Attributes }
   | { readonly status: 'failed'; readonly cause: Cause }
-  | { readonly status: 'withheld'; readonly on: readonly ItemRef[] };
+  | { readonly status: 'withheld'; readonly on: readonly WithheldOn[] };
 
 export type Item = ItemRef & Status;
+
+/** A failed item a withheld one depends on, with the kind of its cause. */
+export type WithheldOn = ItemRef & { readonly cause: CauseName };
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
 
@@ -422,6 +429,7 @@ export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
  *  hold is failed all the same, with `hard: false`, and decides nothing (verdictOf rule 2). */
 export const failsCause = (r: {
   kind: CheckKind;
+  text: { lhs: string; op: CheckOp; rhs: string };
   lhsValue: number;
   rhsValue: number;
   margin: number;
@@ -429,6 +437,7 @@ export const failsCause = (r: {
 }): Cause => ({
   kind: 'fails',
   data: {
+    text: r.text,
     lhs: r.lhsValue,
     rhs: r.rhsValue,
     margin: r.margin,

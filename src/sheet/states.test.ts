@@ -20,7 +20,7 @@ import {
   type SearchData,
   type NoSolutionRead,
 } from './states';
-import { CAUSE_NAMES, causeMessage, describe, rangeSource } from './describe';
+import { CAUSE_NAMES, causeMessage, describe, notAskedText, rangeSource, textOf } from './describe';
 import type { SheetDoc, SolveRange } from './types';
 
 const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
@@ -71,6 +71,7 @@ const proved: Cause = {
 };
 const hardFail = failsCause({
   kind: 'spec',
+  text: { lhs: 'gain', op: '>=', rhs: 'gain_min' },
   lhsValue: 2,
   rhsValue: 1,
   margin: -1,
@@ -78,6 +79,7 @@ const hardFail = failsCause({
 });
 const softFail = failsCause({
   kind: 'advisory',
+  text: { lhs: 'a', op: '<=', rhs: '1' },
   lhsValue: 2,
   rhsValue: 1,
   margin: -1,
@@ -125,7 +127,7 @@ group('the verdict, by four rules in order', () => {
         path: [],
         name: 'w',
         status: 'withheld',
-        on: [{ kind: 'value', path: [], name: 'z' }],
+        on: [{ kind: 'value', path: [], name: 'z', cause: 'cannot-evaluate' }],
       },
       failed('requirement', 'c', hardFail),
     ]);
@@ -367,8 +369,8 @@ group('the text module builds today’s messages from the data', () => {
 
   it('describes an item by its cause’s short name and message, and a withheld one by what it depends on', () => {
     expect(describe(failed('value', 'z', notEvaluated))).toEqual({
-      name: 'cannot be evaluated',
-      lines: ['"z" is not defined'],
+      name: 'cannot be calculated',
+      lines: ['z gives no number.', 'z is not defined.'],
     });
     expect(
       describe({
@@ -376,8 +378,115 @@ group('the text module builds today’s messages from the data', () => {
         path: ['amp'],
         name: 'w',
         status: 'withheld',
-        on: [{ kind: 'search', path: ['amp'], name: 'x' }],
+        on: [{ kind: 'search', path: ['amp'], name: 'x', cause: 'no-crossing' }],
       }),
-    ).toEqual({ name: 'withheld', lines: ['depends on amp.x'] });
+    ).toEqual({
+      name: 'not calculated',
+      lines: ['Depends on amp.x: no solution found (not proved).'],
+    });
+  });
+});
+
+group('the texts a reader sees, by the message standard', () => {
+  const wiring: SolveRange = {
+    param: 'V_tail',
+    range: [0, 0.9],
+    from: 'wiring',
+    wiring: { range: [0, 0.9], below: 'gnd', above: 'tail' },
+    wires: ['tail'],
+    note: '',
+  };
+  const tail = (over: Partial<SearchData> = {}): SearchData =>
+    search({
+      unknown: 'V_tail',
+      unit: 'V',
+      relation: {
+        lhs: 'CM_in',
+        rhs: 'CM_dc',
+        field: 'designConstraint',
+        reads: { lhs: ['CM_in'], rhs: ['CM_dc'] },
+        unit: 'V',
+      },
+      range: wiring,
+      searched: [0, 0.9],
+      given: [{ name: 'out_share', value: 0.518 }],
+      ...over,
+    });
+
+  it('a search over the circuit range with no solution found, and no proof', () => {
+    const c = noSolutionCause({ ...tail(), ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]) }, true);
+    expect(textOf(c)).toEqual({
+      name: 'no solution found (not proved)',
+      lines: [
+        'No V_tail gives CM_in = CM_dc.',
+        'Searched: 0 V to 900 mV, the full range that the circuit permits.',
+        'CM_in at the two ends: 562 mV and 1.64 V. CM_dc is 1.75 V.',
+        'Not proved: the engine did not show that CM_in only rises with V_tail.',
+        'out_share was 0.518 during this search.',
+      ],
+    });
+  });
+
+  it('names the block an unknown belongs to in front of it', () => {
+    const c = noSolutionCause(
+      { ...tail({ path: ['bias'], given: [] }), ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]) },
+      true,
+    );
+    expect(textOf(c).lines[0]).toBe('No in block bias: V_tail gives CM_in = CM_dc.');
+  });
+
+  it('a search with no solution in the range the sheet states, with the action', () => {
+    const c = noSolutionCause(
+      {
+        ...tail({ range: authorRange('V_tail', 0.1, 0.5), searched: [0.1, 0.5], given: [] }),
+        ...read([0.1, 0.6, 1.75], [0.5, 1.2, 1.75]),
+      },
+      true,
+    );
+    expect(textOf(c)).toEqual({
+      name: 'no solution in the stated range',
+      lines: [
+        'No V_tail gives CM_in = CM_dc.',
+        'The engine did not search outside the search range on the sheet.',
+        'Searched: 100 mV to 500 mV, the search range on the sheet.',
+        'CM_in at the two ends: 600 mV and 1.2 V. CM_dc is 1.75 V.',
+        'Widen the search range of V_tail.',
+      ],
+    });
+  });
+
+  it('a read outside the table, and a requirement that fails', () => {
+    expect(
+      textOf({
+        kind: 'outside-table',
+        data: { device: 'in', quantity: 'l', asked: 5e-6, held: [180e-9, 2e-6] },
+      }),
+    ).toEqual({
+      name: 'outside the table',
+      lines: ['Part in: L = 5 µm.', 'The table holds 180 nm to 2 µm.'],
+    });
+    expect(textOf(hardFail).lines).toEqual(['gain = 2. Required: at least 1.', 'Margin: −100 %.']);
+  });
+
+  it('keeps every detail line within twenty words', () => {
+    const causes: Cause[] = [
+      noSolutionCause({ ...tail(), ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]) }, true),
+      proved,
+      hardFail,
+      notEvaluated,
+      {
+        kind: 'limit',
+        data: { members: [tail()], limit: 'evaluations', count: 2000 },
+      },
+    ];
+    for (const c of causes)
+      for (const line of textOf(c).lines) expect(line.split(/\s+/).length).toBeLessThanOrEqual(20);
+  });
+
+  it('says what a held point that was not run reads', () => {
+    expect(notAskedText('range end')).toEqual({
+      name: 'not run',
+      lines: ['The design point has no design, so the engine did not run this range end.'],
+    });
   });
 });
