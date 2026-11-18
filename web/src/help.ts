@@ -219,7 +219,7 @@ export const SOLVER_HELP: Readonly<
   inwardSteps: {
     label: 'steps in from a range edge',
     unit: '',
-    text: 'How many times a search halves its way in from an end of its range where nothing can be evaluated, looking for the nearest point that can.',
+    text: 'The most times a search halves its way in from an end of its range where nothing can be evaluated, looking for the nearest point that can. It stops sooner, once that point is placed to within the search tolerance.',
   },
   kclTolRel: {
     label: 'current-balance tolerance',

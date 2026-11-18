@@ -306,7 +306,8 @@ wherever the device is read:
   the table, the knob is differenced on the other side if both of its probes stay on the table. A
   slope is never computed from a probe read at the table's edge.
 - **In a search**, a probe that reads beyond the table has no value. An end of the range that
-  does is stepped inward to the nearest point that evaluates (`inwardSteps` halvings). A root found
+  does is stepped inward to the nearest point that evaluates, halving until that point is placed
+  to within the search's tolerance (`solveTolRel` of the range; `inwardSteps` caps the count). A root found
   on the table is a valid answer; finding no crossing in what is left proves nothing about the
   stretch stepped past, so the search is no answer (`endsRead: false`), never a failure of the
   design.
@@ -1312,7 +1313,7 @@ sheet panel marks its header whenever any differs from its default.
 | `solveTolRel` | `1e-6` | `1e-12`–`1e-2` | How close a solved parameter must land to its root, as a fraction of its stated range (its `min`–`max` span, wherever the root is found). |
 | `solveSweeps` | `6` | `1`–`20` | How many sweeps a set of solved parameters that read each other gets before the solve reports that they did not settle. |
 | `solveEvaluations` | `10000` | `100`–`1000000` | How many evaluations one composed tree may spend on its searches before it stops and says the budget ran out. |
-| `inwardSteps` | `8` | `0`–`30` | How many times a search halves its way in from an end of its range where the relation does not evaluate. |
+| `inwardSteps` | `50` | `0`–`100` | The most times a search halves its way in from an end of its range where the relation does not evaluate; it stops sooner once the point found is within the search's tolerance (about twenty halvings at the default). |
 | `kclTolRel` | `1e-3` | `0`–`1` | How large a wire's current sum may be, as a fraction of the largest current there, before the wiring check raises it. |
 | `closureTol` | `0.01` V | `0`–`1` V | How far apart two statements of one voltage may be — around a loop, or between two placements of one sizing — before the wiring check says they disagree. |
 | `nearMiss` | `0.05` | `0`–`1` | The relative margin below which a passing check reads `amber`. |

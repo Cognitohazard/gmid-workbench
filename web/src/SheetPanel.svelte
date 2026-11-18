@@ -50,6 +50,7 @@
     type SheetCheck,
     type SheetBlock,
     type SheetSweep2,
+    OWN_DEVICE,
     type SweepWindow,
     type SheetSensitivity,
     type SheetBlockReport,
@@ -1027,7 +1028,14 @@
               ? `${side} it ${ids.join(', ')} ${ids.length > 1 ? 'fail' : 'fails'}`
               : `${side} it the design does not stand`,
           ];
-    const closers = [...past('below', w.below), ...past('above', w.above)];
+    // An edge past which a device was read beyond its table ends where the table ends, not where a
+    // requirement fails (SweepWindow.belowOutside/aboveOutside).
+    const tableEnds = (side: string, r: readonly OutsideTable[] | undefined): string[] =>
+      r?.length ? [`${side} it ends where the table ends (${r.map(beyondText).join('; ')})`] : [];
+    const closers = [
+      ...(w.belowOutside?.length ? tableEnds('below', w.belowOutside) : past('below', w.below)),
+      ...(w.aboveOutside?.length ? tableEnds('above', w.aboveOutside) : past('above', w.above)),
+    ];
     return `${fmt(w.lo)}…${fmt(w.hi)}${sweptUnit}${closers.length ? ` (${closers.join('; ')})` : ''}`;
   };
 
@@ -1247,7 +1255,7 @@
     new Set((report?.outside ?? []).map((r) => r.quantity));
   /** What a withheld value follows from, in words: the sheet's own device, or a block's path. */
   const withheldFrom = (cause: string): string =>
-    cause === 'givens' ? 'this sheet’s device' : `"${cause}"`;
+    cause === OWN_DEVICE ? 'this sheet’s device' : `"${cause}"`;
   /** A signed change, for the sensitivity readout: an explicit '+' so the direction reads at a
    *  glance, and '—' wherever a probe produced no number — never a stand-in zero. */
   const signedFmt = (v: number): string =>
@@ -1375,6 +1383,22 @@
   // ── The 2-D map is imperative (uPlot draws XY lines only): paint it by hand on a canvas,
   // reading --ok/--err/grid colours from CSS at draw time so it tracks the light/dark theme.
   let mapEl: HTMLCanvasElement | undefined = $state();
+  /** The map cell under the pointer, in words where it has no answer: its reads beyond a table. */
+  let mapTip = $state('');
+  function cellTip(e: MouseEvent): string {
+    const s = swept2;
+    const c = e.currentTarget as HTMLCanvasElement;
+    if (!s || !s.x.length || !s.y.length || !c.clientWidth || !c.clientHeight) return '';
+    const xi = Math.min(s.x.length - 1, Math.floor((e.offsetX / c.clientWidth) * s.x.length));
+    const yi =
+      s.y.length -
+      1 -
+      Math.min(s.y.length - 1, Math.floor((e.offsetY / c.clientHeight) * s.y.length));
+    const beyond = s.outside[yi]?.[xi] ?? [];
+    return beyond.length
+      ? `no answer: beyond the table: ${beyond.map((r) => `${r.device === OWN_DEVICE ? '' : `"${r.device}": `}${beyondText(r)}`).join('; ')}`
+      : '';
+  }
   function drawMap(canvas: HTMLCanvasElement, s: SheetSweep2): void {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1401,8 +1425,10 @@
       const py = (ny - 1 - yi) * ch;
       for (let xi = 0; xi < nx; xi++) {
         const feas = s.feasible[yi][xi];
-        ctx.fillStyle = feas ? ok : err;
-        ctx.globalAlpha = feas ? 0.55 : 0.4;
+        // A cell read beyond a device's table has no answer: neither colour, the grid's own.
+        const beyond = (s.outside[yi]?.[xi]?.length ?? 0) > 0;
+        ctx.fillStyle = beyond ? grid : feas ? ok : err;
+        ctx.globalAlpha = beyond ? 0.12 : feas ? 0.55 : 0.4;
         // +1 hides the seam between adjacent same-colour cells under sub-pixel rounding.
         ctx.fillRect(xi * cw, py, cw + 1, ch + 1);
       }
@@ -2148,15 +2174,21 @@
 
     {#if twoD && swept2 && swept2.x.length}
       <div class="scap">
-        feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check (X
-        → right, Y ↑)
+        feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check{#if swept2.outside.some( (row) => row.some((c) => c.length) )},
+          grey has no answer (a device read beyond its table){/if} (X → right, Y ↑)
       </div>
       <div class="smap">
         <div class="smy">
           {active2}
           {fmt(swept2.y[0])}…{fmt(swept2.y[swept2.y.length - 1])}{swept2.unitY}
         </div>
-        <canvas class="smapc" bind:this={mapEl}></canvas>
+        <canvas
+          class="smapc"
+          bind:this={mapEl}
+          title={mapTip}
+          onmousemove={(e) => (mapTip = cellTip(e))}
+          onmouseleave={() => (mapTip = '')}
+        ></canvas>
         <div class="smx">
           {active}
           {fmt(swept2.x[0])}…{fmt(swept2.x[swept2.x.length - 1])}{swept2.unitX}

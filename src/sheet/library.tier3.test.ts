@@ -152,11 +152,9 @@ const itDrawsItsTail = (
     const vdsat = vdsatDemo(vgsRef, L);
     // On the current-mirror OTA the mirror node's search runs into the table's 1.2 V of drain
     // voltage: below V_nmir = 0.6 V its PMOS is read beyond the table, and the root lies a few
-    // millivolts above that edge. The default eight inward steps stop 7 mV short of the edge and
-    // leave the root unbracketed; ten steps (a 1.8 mV resolution) bracket it on the table.
-    const claimed = runSheet(withParams(doc, { CM_lo: cmTooLow }), table, undefined, REFS, {
-      settings: { ...DEFAULT_SETTINGS, inwardSteps: 10 },
-    });
+    // millivolts above that edge. The search steps in from that end to within its own tolerance,
+    // so the root is bracketed on the table at the default settings.
+    const claimed = runSheet(withParams(doc, { CM_lo: cmTooLow }), table, undefined, REFS);
     expect(claimed.feasible).toBe(res.feasible);
     const lo = claimed.rangeEnds!.find((e) => e.name === 'cm-lo')!;
     expect(lo.error).toBeUndefined();

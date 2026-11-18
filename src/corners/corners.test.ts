@@ -1154,7 +1154,7 @@ describe('runCondition', () => {
     expect(ss.state).toBe('not-evaluated');
     expect(ss.points).toHaveLength(1);
     expect(ss.points[0].state).toBe('no-answer');
-    expect(ss.points[0].error).toMatch(/^id = 0\.00002 is above what the table holds/);
+    expect(ss.points[0].error).toMatch(/^id = 20 µA is above what the table holds/);
     expect(ss.points[0].outside?.map((r) => [r.device, r.quantity])).toEqual([['givens', 'id']]);
     expect(aggregateConditionRuns([tt, ss]).compliance).toEqual({
       complies: 1,
@@ -1292,7 +1292,7 @@ describe('runCondition', () => {
       { device: 'givens', quantity: 'vds', asked: 1, held: [0, expect.closeTo(0.8, 12)] },
     ]);
     expect(ss.points[0].error).toMatch(
-      /^vds = 1 is above what the table holds .*\(vds from 0 to 0\.8\)/,
+      /^vds = 1 V is above what the table holds .*\(vds from 0 V? ?to 800 mV\)/,
     );
     const agg = aggregateConditionRuns(runs);
     expect(agg.compliance).toEqual({

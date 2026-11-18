@@ -53,13 +53,14 @@ export interface Settings {
    */
   readonly solveEvaluations: number;
   /**
-   * How many times a search halves its way in from an end of the stated range where the relation
+   * The most times a search halves its way in from an end of the stated range where the relation
    * does not evaluate — a device with no headroom there, a lookup out of range, a refused device —
    * toward a point where it does. Such an end says the circuit has no operating point there, not
    * that the search failed, so the search moves to the nearest point that evaluates and searches
-   * what is left. Eight halvings place that point within 1/256 of the range of the edge — a few
-   * millivolts on a volt-scale node, finer than any author states a range to — for at most eight
-   * evaluations per end.
+   * what is left. It halves until that point is placed to within the search's own tolerance
+   * (`solveTolRel` of the range), as finely as a root would be — about twenty halvings at the
+   * default tolerance. This is only a cap on that count; the default never binds at a tolerance
+   * down to 1e-12.
    */
   readonly inwardSteps: number;
   /**
@@ -89,7 +90,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
   solveTolRel: 1e-6,
   solveSweeps: 6,
   solveEvaluations: 10000,
-  inwardSteps: 8,
+  inwardSteps: 50,
   kclTolRel: 1e-3,
   closureTol: 0.01,
   nearMiss: 0.05,
@@ -118,7 +119,7 @@ export const SETTINGS_LIMITS: Readonly<
   solveTolRel: { min: 1e-12, max: 1e-2, integer: false },
   solveSweeps: { min: 1, max: 20, integer: true },
   solveEvaluations: { min: 100, max: 1_000_000, integer: true },
-  inwardSteps: { min: 0, max: 30, integer: true },
+  inwardSteps: { min: 0, max: 100, integer: true },
   kclTolRel: { min: 0, max: 1, integer: false },
   closureTol: { min: 0, max: 1, integer: false },
   nearMiss: { min: 0, max: 1, integer: false },

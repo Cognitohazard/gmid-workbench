@@ -167,7 +167,7 @@ describe('a search one end of whose range is beyond the table', () => {
     const short = runSheet(doc, demoTable, undefined, REFS);
     expect(short.point?.state).toBe('no-answer');
     expect(short.solve).toMatchObject({ kind: 'not-settled' });
-    expect(short.point?.error).toMatch(/vds = 1\.2\d* is above what the table holds/);
+    expect(short.point?.error).toMatch(/vds = 1\.2\d* V is above what the table holds/);
     const full = runSheet(doc, ekvTable(), undefined, REFS);
     expect(full.solve).toEqual({ kind: 'settled' });
     expect(outsideIn(full)).toEqual([]);

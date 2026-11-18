@@ -2092,7 +2092,7 @@ describe('bias declared in the givens (vds/vsb)', () => {
     expect(res.warnings.filter((w) => w.severity === 'error').map((w) => w.message)).toEqual([
       res.sizing?.error,
     ]);
-    expect(res.sizing?.error).toMatch(/^vds = 5 is above what the table holds for this device/);
+    expect(res.sizing?.error).toMatch(/^vds = 5 V is above what the table holds for this device/);
   });
 
   it('a child fails closed on its own undeclared bias — the parent never lends it one', () => {
@@ -2259,7 +2259,7 @@ describe('a device is sized only on a table that carries what its givens use', (
         { device: 'givens', quantity: 'vsb', asked: 0.9, held: [0, 0.6] },
       ]);
       expect(errorsOf(res)).toEqual([res.sizing?.error]);
-      expect(res.sizing?.error).toMatch(/^vsb = 0\.9 is above what the table holds/);
+      expect(res.sizing?.error).toMatch(/^vsb = 900 mV is above what the table holds/);
     });
   });
 
@@ -2728,7 +2728,7 @@ describe('a device is sized only on a table that carries what its givens use', (
       const solve = end.warnings.filter((w) => w.rule === 'sheet-solve' && w.severity === 'error');
       expect(solve.map((w) => w.message)).toEqual([
         expect.stringMatching(
-          /^held param "X" in \[0, 0\.4\] V did not settle: nothing of the range but X = 0 V could be evaluated, and X \+ vgs - \(\S+\) reads \S+ there — the relation does not evaluate above X = 0 V: given vsb = 0\.0015625 asks for a body bias the table cannot give/,
+          /^held param "X" in \[0, 0\.4\] V did not settle: nothing of the range but X = 0 V could be evaluated, and X \+ vgs - \(\S+\) reads \S+ there — the relation does not evaluate above X = 0 V: given vsb = \S+ asks for a body bias the table cannot give/,
         ),
       ]);
       expect(end.error).toBe(solve[0].message);
@@ -2763,7 +2763,7 @@ describe('a device is sized only on a table that carries what its givens use', (
         expect(errorsOf(res)).toEqual([]);
         const [loadOnly, both] = res.rangeEnds!;
         expect(loadOnly.state).toBe('no-answer');
-        expect(loadOnly.error).toMatch(/^block "load": id = \S+ is above what the table holds/);
+        expect(loadOnly.error).toMatch(/^block "load": id = \S+ \S+ is above what the table holds/);
         expect(both.state).toBe('no-answer');
         expect(both.error).toMatch(/^block "pair": given vsb = 0\.3 asks/);
         expect(both.error).not.toMatch(/above what the table holds/);
@@ -3436,15 +3436,16 @@ describe('constrained params — a one-unknown search inside the stated range', 
   });
 
   it('reports the range it actually searched, and why an end moved', () => {
-    // No x in [0, 10] gives sqrt(x - 1) = 5. Eight halvings from 0 toward 10 find the nearest
-    // point that evaluates on a grid of 10/2^8: 1.015625, the first point of it above 1. The
-    // message quotes that range and the reason the low end moved.
+    // No x in [0, 10] gives sqrt(x - 1) = 5. Halving from 0 toward 10 until the step is within
+    // the search's tolerance (1e-6 of the range) finds the nearest point that evaluates on a grid
+    // of 10/2^22: 1.0000038147, the first point of it above 1. The message quotes that range and
+    // the reason the low end moved.
     const res = evaluateSheet(mk('sqrt(x - 1)', { lhs: 'y', rhs: '5' }), dev);
     expect(res.feasible).toBe(false);
     expect(res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message)).toEqual([
-      'solved param "x" found no solution in the searched range [1.015625, 10] (the relation ' +
-        'does not evaluate below x = 1.015625: equation "y" evaluated to a non-finite number from ' +
-        'resolved inputs): y - (5) does not change sign across it (-4.875e+0 at 1.015625, ' +
+      'solved param "x" found no solution in the searched range [1.0000038147, 10] (the relation ' +
+        'does not evaluate below x = 1.0000038147: equation "y" evaluated to a non-finite number from ' +
+        'resolved inputs): y - (5) does not change sign across it (-4.998e+0 at 1.0000038147, ' +
         '-2.000e+0 at 10) — none, or an even number, of roots there. Move or widen min/max to ' +
         'bracket one, or the relation does not reach its target on this table',
     ]);

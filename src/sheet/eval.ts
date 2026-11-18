@@ -540,7 +540,7 @@ function applyGivensBias(
       slice(axis, live, v);
       if (offHull(live.values, v))
         outside.push({
-          device: 'givens',
+          device: OWN_DEVICE,
           quantity: axis,
           asked: v,
           held: [live.values[0], live.values[live.values.length - 1]],
@@ -778,7 +778,7 @@ function runSizing(
     outside: readonly OutsideTable[],
   ): { report: SizingReport; point: RegionPoint } => {
     const refused = fail(outside.map(outsideTableMessage).join('; '), {
-      outside: outside.map((r) => ({ ...r, device: 'givens' })),
+      outside: outside.map((r) => ({ ...r, device: OWN_DEVICE })),
     });
     const axis = table ? axisDirection(table, 'vgs') : undefined;
     if (axis !== undefined) refused.report.vgsAxis = axis;
@@ -813,7 +813,7 @@ function runSizing(
   const outside: OutsideTable[] = [];
   if (lAxis && lAxis.values.length > 1 && offHull(lAxis.values, L))
     outside.push({
-      device: 'givens',
+      device: OWN_DEVICE,
       quantity: 'l',
       asked: L,
       held: [lAxis.values[0], lAxis.values[lAxis.values.length - 1]],
@@ -838,7 +838,9 @@ function runSizing(
     // current or transconductance the density sweep does not hold at this width — is a read
     // beyond the table like any other: the record of what was asked and what the slice reaches.
     if (e instanceof LookupRangeError)
-      return beyond([{ device: 'givens', quantity: e.key, asked: e.target, held: [e.min, e.max] }]);
+      return beyond([
+        { device: OWN_DEVICE, quantity: e.key, asked: e.target, held: [e.min, e.max] },
+      ]);
     let m = msg(e);
     // The lookup's "extra non-degenerate axis" error is accurate but not actionable in
     // sheet vocabulary — point the author at the fix.
@@ -861,7 +863,7 @@ function runSizing(
     Math.abs(vdsRead - res.vgs) > HULL_SNAP * Math.max(1, Math.abs(res.vgs))
   )
     return beyond([
-      { device: 'givens', quantity: 'vds', asked: res.vgs, held: sliced.diode.range },
+      { device: OWN_DEVICE, quantity: 'vds', asked: res.vgs, held: sliced.diode.range },
     ]);
 
   const read = mergeSized(values, res.quantities, res.passthrough, table, equations, warn);
@@ -2732,7 +2734,8 @@ const outOfBudget = (f: SolveFailure): boolean => f.kind === 'not-settled' && f.
  *  - not settled: nothing of the range could be evaluated, the sign changes across a stretch
  *    inside the bracket that does not evaluate, the shared budget ran out (here or in a child a
  *    probe evaluated), or the probe backstop was hit.
- * An end where the relation does not evaluate is stepped inward (Settings.inwardSteps) before any
+ * An end where the relation does not evaluate is stepped inward, to within the search's tolerance
+ * (at most Settings.inwardSteps halvings), before any
  * of that, and a point inside the bracket that does not evaluate is stepped round the same way,
  * silently; a failure's message quotes the range actually searched. `also` are the other members
  * of a set searched together; a message says where they stood, because an answer about this
@@ -2980,8 +2983,10 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
     probe,
     probes: () => probes,
     inward(bad, good) {
-      // Each midpoint becomes the new `good` when it evaluates and the new `bad` when it does not.
-      for (let k = 0; k < inwardSteps; k++) {
+      // Each midpoint becomes the new `good` when it evaluates and the new `bad` when it does not,
+      // until the two are no further apart than the search's own tolerance: the edge of what
+      // evaluates is then placed as finely as a root would be. `inwardSteps` only caps the count.
+      for (let k = 0; k < inwardSteps && Math.abs(bad.x - good.x) > tol; k++) {
         const m = probe((bad.x + good.x) / 2);
         if (!m) return undefined;
         if (m.g === undefined) bad = m;
@@ -3192,7 +3197,7 @@ function acceptClosed(
  *
  * A sign change across the bracket is evidence of a root, so a point inside it that does not
  * evaluate is a hole to step around, never a verdict. Halve from it toward each end of the bracket
- * to the nearest point that evaluates (Settings.inwardSteps each way), and go on in a half that
+ * to the nearest point that evaluates (to within the search's tolerance, each way), and go on in a half that
  * still changes sign — b's first. When neither does, the sign changes somewhere between the two
  * points found, and halving may have stepped over a stretch that evaluates (one stretch that does
  * not, then another): search between them once more, narrower than before. Only when a later probe

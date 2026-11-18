@@ -1093,7 +1093,7 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
     expect(res.sizing?.ok).toBe(true); // the center sized; it is the range end that cannot
     const e = res.rangeEnds?.[0];
     expect(e?.state).toBe('no-answer');
-    expect(e?.error).toMatch(/^id = 0\.00002 is above what the table holds for this device/);
+    expect(e?.error).toMatch(/^id = 20 µA is above what the table holds for this device/);
     expect(outsideIn(e!).map((r) => [r.device, r.quantity, r.asked])).toEqual([
       ['givens', 'id', expect.closeTo(20e-6, 18)],
     ]);
@@ -1118,7 +1118,7 @@ describe('range-end runs re-bias the design instead of re-sizing it', () => {
     };
     const e = runSheet(doc, dev).rangeEnds?.[0];
     expect(e?.state).toBe('no-answer');
-    expect(e?.error).toMatch(/^gm = 0\.008 is above what the table holds for this device/);
+    expect(e?.error).toMatch(/^gm = 8 mS is above what the table holds for this device/);
     expect(outsideIn(e!).map((r) => r.quantity)).toEqual(['gm']);
   });
 });
@@ -1275,7 +1275,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     // the end is no answer rather than a failure, and no check of it is named.
     expect(e.state).toBe('no-answer');
     expect(e.error).toMatch(
-      /^vds = 1\.5 is above what the table holds for this device \(vds from 0 to 1\.2\)/,
+      /^vds = 1\.5 V is above what the table holds for this device \(vds from 0 V to 1\.2 V\)/,
     );
     expect(e.solved).toEqual({});
     expect(outsideIn(e)).toEqual([
@@ -1297,7 +1297,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     expect(res.sizing?.bias).toBeUndefined();
     expect(res.feasible).toBe(false);
     expect(res.point?.state).toBe('no-answer');
-    expect(res.point?.error).toMatch(/^vds = 1\.3 is above what the table holds/);
+    expect(res.point?.error).toMatch(/^vds = 1\.3 V is above what the table holds/);
     expect(outsideIn(res).map((r) => [r.device, r.quantity, r.asked])).toEqual([
       ['givens', 'vds', 1.3],
     ]);
@@ -1322,7 +1322,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     expect(outsideIn(res).map((r) => [r.device, r.quantity, r.asked])).toEqual([
       ['load', 'vds', 1.3],
     ]);
-    expect(res.point?.error).toMatch(/^block "load": vds = 1\.3 is above what the table holds/);
+    expect(res.point?.error).toMatch(/^block "load": vds = 1\.3 V is above what the table holds/);
   });
 
   it('declines a range end read beyond the table on any coordinate, not only vds', () => {
@@ -1357,7 +1357,9 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { VB: 'VB_hi' },
     );
     expect(vsb.state).toBe('no-answer');
-    expect(vsb.error).toMatch(/^vsb = 0\.6 is above what the table holds .*\(vsb from 0 to 0\.4\)/);
+    expect(vsb.error).toMatch(
+      /^vsb = 600 mV is above what the table holds .*\(vsb from 0 V to 400 mV\)/,
+    );
     // Width-first givens keep their length as an authored expression, so an end can move it:
     // 5 µm against a table that stops at 2 µm.
     const len = end(
@@ -1369,7 +1371,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { Lp: 'Lp_hi' },
     );
     expect(len.state).toBe('no-answer');
-    expect(len.error).toMatch(/^l = 0\.000005 is above what the table holds/);
+    expect(len.error).toMatch(/^l = 5 µm is above what the table holds/);
     // A supplied gate voltage of 1.5 V against a sweep that ends at 1.2 V.
     const vgs = end(
       { L: '0.5u', W: '10u', vgs: 'VG', vds: '0.6', vsb: '0' },
@@ -1380,7 +1382,9 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
       { VG: 'VG_hi' },
     );
     expect(vgs.state).toBe('no-answer');
-    expect(vgs.error).toMatch(/^vgs = 1\.5 is above what the table holds .*\(vgs from 0 to 1\.2\)/);
+    expect(vgs.error).toMatch(
+      /^vgs = 1\.5 V is above what the table holds .*\(vgs from 0 V to 1\.2 V\)/,
+    );
   });
 
   it('does not call it a failure when the bias the device is asked for is beyond the table', () => {
@@ -1421,7 +1425,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     const narrowEnd = evaluateSheet(doc, dev).rangeEnds![0];
     expect(narrowEnd.state).toBe('no-answer');
     expect(outsideIn(narrowEnd).map((r) => r.quantity)).toEqual(['vds']);
-    expect(narrowEnd.error).toMatch(/^vds = 1\.5 is above what the table holds/);
+    expect(narrowEnd.error).toMatch(/^vds = 1\.5 V is above what the table holds/);
     expect(evaluateSheet(doc, wide).rangeEnds![0].state).toBe('complies');
   });
 
@@ -1449,7 +1453,7 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     expect(short.sizing?.outside).toBeUndefined();
     expect(short.rangeEnds![0].state).toBe('no-answer');
     expect(short.rangeEnds![0].error).toMatch(
-      /^vds = 0\.9\d+ is above what the table holds .*\(vds from 0 to 0\.6\)/,
+      /^vds = \d+(\.\d+)? mV is above what the table holds .*\(vds from 0 V to 600 mV\)/,
     );
   });
 
@@ -1499,9 +1503,9 @@ describe('no answer — a range end the data or the sheet cannot speak for', () 
     };
     const [lo, hi] = evaluateSheet(doc, dev).rangeEnds!;
     expect(lo.state).toBe('no-answer');
-    expect(lo.error).toMatch(/^id = 1e-15 is below what the table holds for this device/);
+    expect(lo.error).toMatch(/^id = 1 fA is below what the table holds for this device/);
     expect(hi.state).toBe('no-answer');
-    expect(hi.error).toMatch(/^id = 1 is above what the table holds for this device/);
+    expect(hi.error).toMatch(/^id = 1 A is above what the table holds for this device/);
     expect(outsideIn(hi).map((r) => r.quantity)).toEqual(['id']);
   });
 
@@ -1574,7 +1578,7 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
         held: [1e-9, 1e-3],
       }),
     });
-    expect(out.error).toMatch(/^id = 0\.002 is above what the table holds/);
+    expect(out.error).toMatch(/^id = 2 mA is above what the table holds/);
   });
 
   it('calls a current below the BOTTOM of the swept range no answer, the same way', () => {
@@ -1582,7 +1586,7 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
     // anything characterized. It may well work there; the data cannot say.
     const out = heldOutcome(beyond(1e-12));
     expect(out.state).toBe('no-answer');
-    expect(out.error).toMatch(/^id = 1e-12 is below what the table holds/);
+    expect(out.error).toMatch(/^id = 1 pA is below what the table holds/);
   });
 
   it('decides by the record, never by the words of an error', () => {
