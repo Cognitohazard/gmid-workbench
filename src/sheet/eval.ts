@@ -13,6 +13,8 @@ import { CONSTANTS } from '../constants';
 import { compileExpr, fallbackMessage, metaScalars, noiseSource, tableFallbacks } from '../derive';
 import {
   AXIS_DEFAULT_BIAS,
+  BASE_QUANTITIES,
+  DERIVED_QUANTITIES,
   affixedColumn,
   engineNameReason,
   passthroughKeys,
@@ -1491,6 +1493,29 @@ interface PendingWiring {
 }
 const PENDING_WIRING = new WeakMap<SheetBlockReport, PendingWiring>();
 
+/** Every quantity a device's table gives at its point, base and derived, in the namespace's order. */
+const POINT_KEYS: readonly string[] = [
+  ...new Set([...BASE_QUANTITIES.map((q) => q.key), ...DERIVED_QUANTITIES.map((q) => q.key)]),
+];
+
+/**
+ * A sized device's full operating point, read from the values of the evaluation that sized it:
+ * every namespace quantity, base and derived, and every pass-through column the sizing read (see
+ * SizingReport.passthrough), that has a finite value. The quantities are the ones the sizing put in
+ * scope (mergeSized), so the point is exactly what the sheet's equations read.
+ */
+export function operatingPointOf(
+  values: Readonly<Record<string, number>>,
+  sizing: Pick<SizingReport, 'passthrough'>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const k of [...POINT_KEYS, ...(sizing.passthrough ?? [])]) {
+    const v = values[k];
+    if (v !== undefined && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
 /**
  * The wiring of every child in a settled tree, read once: the child's device point and held
  * levels where its parent's walk reads them, and the selector check of a child that states no
@@ -1500,7 +1525,12 @@ const PENDING_WIRING = new WeakMap<SheetBlockReport, PendingWiring>();
  * (see unwalkedReport). A child's findings are attributed to its block path and follow the tree's
  * own warnings; an error among them fails the child, every block above it, and the tree closed.
  */
-function finishWiring(res: SheetResult, sized: boolean, settings: Settings): SheetResult {
+function finishWiring(
+  res: SheetResult,
+  sized: boolean,
+  settings: Settings,
+  keepPoint = false,
+): SheetResult {
   if (!res.blocks?.length) return res;
   const extra: QAWarning[] = [];
   const visit = (
@@ -1513,6 +1543,10 @@ function finishWiring(res: SheetResult, sized: boolean, settings: Settings): She
       let out: SheetBlockReport = below ? { ...report, blocks: below.blocks } : report;
       let bad = below?.failed ?? false;
       const pending = PENDING_WIRING.get(report);
+      // A child whose own solve failed holds its last probe's numbers, which the parent already
+      // withholds from its outputs: its point is withheld the same way.
+      if (keepPoint && pending && out.sizing?.ok && !solveFailedIn(pending.res))
+        out = { ...out, point: operatingPointOf(pending.res.values, out.sizing) };
       // The report the check would have written, saying it did not run: none where the parent's
       // walk covers the child, or where the child is read only for its device point.
       if (pending && !sized) out = withoutWalk(pending.doc, out, pending.mode);
@@ -2012,6 +2046,10 @@ export interface EvaluateOptions {
   assumed?: readonly string[];
   /** The tolerances and caps to evaluate under (see Settings). Absent: DEFAULT_SETTINGS. */
   settings?: Settings;
+  /** Keep each sized block's full operating point on its report (SheetBlockReport.point). Asked
+   *  for by the run a designer reads, the design where it is sized; left off by sweeps, held
+   *  conditions and range ends, which would otherwise hold one point per device per evaluation. */
+  operatingPoint?: boolean;
 }
 
 /** How one node of a tree is evaluated (see evaluateNode): the tree's evaluation budget, and, at
@@ -2062,11 +2100,12 @@ function evaluateNode(
     ? { ...solved, warnings: [...solved.warnings, ...heldGates] }
     : solved;
   const point = pointOutcome(res, opts.held === true, opts.assumed);
+  const keepPoint = opts.operatingPoint === true;
   if (!point.sized) {
     // No walk, but a declared axis-sign selector is still held to the table of a device that was
     // refused for reading beyond it: the wrong sign is the likeliest reason it did (see
     // selectorsBeyondTable).
-    const unwalked = withoutWalk(doc, finishWiring(res, false, settings));
+    const unwalked = withoutWalk(doc, finishWiring(res, false, settings, keepPoint));
     const selectors = selectorsBeyondTable(doc, res);
     if (!selectors.length) return { ...unwalked, point };
     return {
@@ -2079,7 +2118,13 @@ function evaluateNode(
       point,
     };
   }
-  const out = withNodes(doc, finishWiring(res, true, settings), table, STANDALONE, settings);
+  const out = withNodes(
+    doc,
+    finishWiring(res, true, settings, keepPoint),
+    table,
+    STANDALONE,
+    settings,
+  );
   // The point was classified before the wiring was read; a selector the table contradicts then
   // leaves the run infeasible, so a centre that complied does not.
   const raised = out.warnings.slice(res.warnings.length).find((w) => w.severity === 'error');

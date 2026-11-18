@@ -98,7 +98,11 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
   const { settings } = job;
   switch (job.kind) {
     case 'run':
-      return runConditions(job.doc, primary, job.keys, deviceOf, refs, job.base, { settings });
+      // The design's own run keeps every device's full operating point, for the panel to show.
+      return runConditions(job.doc, primary, job.keys, deviceOf, refs, job.base, {
+        settings,
+        operatingPoint: true,
+      });
     case 'sweep': {
       const t = at(job.at);
       if (!t) return null;

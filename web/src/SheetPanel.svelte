@@ -32,6 +32,10 @@
     unreadFormat,
     formatEng,
     formatSI,
+    formatQuantity,
+    operatingPointOf,
+    BASE_QUANTITIES,
+    DERIVED_QUANTITIES,
     fallbackSentences,
     noiseLabel,
     noiseSourcesIn,
@@ -54,6 +58,7 @@
     type SweepWindow,
     type SheetSensitivity,
     type SheetBlockReport,
+    type SolveRange,
     type RangeEndReport,
     type PointState,
     type QAWarning,
@@ -1270,6 +1275,70 @@
   /** What a withheld value follows from, in words: the sheet's own device, or a block's path. */
   const withheldFrom = (cause: string): string =>
     cause === OWN_DEVICE ? 'this sheet’s device' : `"${cause}"`;
+
+  // ── What the engine computed beside the verdict: each device's operating point, the current
+  // delivered at each held wire, the voltage of each wire, and where each solved value was searched.
+  /** A namespace unit as a reader writes it: Ω, √Hz, squares, and a ratio of like units as none. */
+  const unitText = (u: string): string =>
+    u === 'V/V' || u === '1'
+      ? ''
+      : u.replace('ohm', 'Ω').replace('sqrt(Hz)', '√Hz').replace('^2', '²').replace('1/V', 'V⁻¹');
+  /** Each quantity's unit, base and derived; a pass-through column has none. */
+  const QUANTITY_UNIT: ReadonlyMap<string, string> = new Map([
+    ...BASE_QUANTITIES.map((q): [string, string] => [q.key, unitText(q.unit)]),
+    ...DERIVED_QUANTITIES.map((q): [string, string] => [q.key, unitText(q.unit)]),
+  ]);
+  /** Rows that repeat another under the same name: the gain twice, and the noise densities the
+   *  table's own data gives where the rows read in the sheet (`_m`) carry the same figures. */
+  const POINT_HIDDEN = new Set(['av0', 'svth', 'vnth']);
+  const pointRows = (pt: Record<string, number>): [string, string][] =>
+    Object.entries(pt)
+      .filter(([k]) => !POINT_HIDDEN.has(k))
+      .map(([k, v]) => {
+        // A ratio reads as a plain number: an SI prefix on one (`200m`) reads as a length.
+        const unit = QUANTITY_UNIT.get(k);
+        return [k, unit ? formatQuantity(v, unit) : String(Number(v.toPrecision(4)))];
+      });
+  /** The current the source holding each held wire delivers, in the run shown (NodesReport
+   *  balance `delivered`). Listed per wire, never summed: the netlist does not say which is a
+   *  supply. */
+  const delivered = $derived(
+    (result?.nodes?.balance ?? []).flatMap((b) =>
+      b.delivered === undefined ? [] : [{ wire: b.wire, current: b.delivered }],
+    ),
+  );
+  const PAIR_LABEL: Readonly<Record<string, string>> = {
+    gs: 'V<sub>GS</sub>',
+    ds: 'V<sub>DS</sub>',
+    bs: 'V<sub>BS</sub>',
+  };
+  /** One relation a wire's level was derived along, in a designer's words: a device's gate,
+   *  drain or body voltage above its source (`tail V_GS`), else the relation's own name. Safe
+   *  for {@html}: every part is escaped or fixed markup. */
+  const relationHtml = (label: string): string => {
+    const m = /^(.+?)(\[\d+\])?\.(gs|ds|bs)$/.exec(label);
+    return m ? `${qLabel(m[1])}${m[2] ?? ''} ${PAIR_LABEL[m[3]]}` : qLabel(label);
+  };
+  /** Every wire the run's wiring check gave a level, lowest first. */
+  const wireRows = $derived(
+    Object.entries(result?.nodes?.levels ?? {}).sort(([, a], [, b]) => a.level - b.level),
+  );
+  /** Where a solved param was searched, in a few words; the engine's own sentence is its title. */
+  const searchText = (r: SolveRange, unit: string | undefined): string => {
+    const q = (v: number): string => formatQuantity(v, unit);
+    const span = `searched ${q(r.range[0])} to ${q(r.range[1])}`;
+    const mine = r.author ? `your range ${q(r.author[0])} to ${q(r.author[1])} first` : '';
+    const where =
+      r.from === 'wiring' && r.wiring
+        ? `between ${r.wiring.below} and ${r.wiring.above}${mine ? `, ${mine}` : ''}`
+        : r.from === 'table'
+          ? 'the lengths the table holds'
+          : 'your range';
+    const out = r.outside !== undefined ? ' · found outside your range' : '';
+    return `${span}: ${where}${out}`;
+  };
+  const searchOf = (name: string): SolveRange | undefined =>
+    result?.ranges?.find((r) => r.param === name);
   /** A signed change, for the sensitivity readout: an explicit '+' so the direction reads at a
    *  glance, and '—' wherever a probe produced no number — never a stand-in zero. */
   const signedFmt = (v: number): string =>
@@ -1519,7 +1588,30 @@
         oninput={(e) => setParam(p.name, +(e.currentTarget as HTMLInputElement).value)}
       />
     {/if}
+    {#if engineSolved(p)}
+      {@const r = searchOf(p.name)}
+      {#if r}
+        <span
+          class="ssearch"
+          class:outside={r.outside !== undefined}
+          title={r.note}
+          data-search={p.name}>{searchText(r, p.unit)}</span
+        >
+      {/if}
+    {/if}
   </label>
+{/snippet}
+
+<!-- A sized device's full operating point, collapsed: every table quantity at its point. -->
+{#snippet opPoint(pt: Record<string, number>, name: string)}
+  <details class="sop" data-op-point={name}>
+    <summary title={CONTROL_HELP.operatingPoint}>operating point</summary>
+    <div class="sopgrid">
+      {#each pointRows(pt) as [k, v] (k)}<span class="sopq">{@html qLabel(k)}</span><span
+          class="sopv">{v}</span
+        >{/each}
+    </div>
+  </details>
 {/snippet}
 
 <!-- Per-block operating point: one editable field per live bias axis, writing into THIS block's
@@ -1654,6 +1746,7 @@
     {:else if c?.sizing}
       <div class="perr" title={c.sizing.error}>sizing: {c.sizing.error}</div>
     {/if}
+    {#if c?.point}{@render opPoint(c.point, c.name)}{/if}
     <!-- A referenced block's givens belong to the library sheet — no in-place bias editor
          (the applied operating point still shows in the sizing line; params remain the
          customization channel, and detach makes the internals local). -->
@@ -2110,6 +2203,10 @@
 
     {#if result}
       {@const res = result}
+      <!-- The sheet's own device, where the design is sized: its full operating point. -->
+      {#if res.sizing?.ok && refRun?.design === 'sized'}
+        {@render opPoint(operatingPointOf(res.values, res.sizing), '')}
+      {/if}
       {#if cfg.equations.length}
         <div class="srows">
           {#each cfg.equations as eq}
@@ -2188,6 +2285,43 @@
             </span>
           {/each}
         </div>
+      {/if}
+
+      {#if delivered.length}
+        <p class="sdelivered" title={CONTROL_HELP.deliveredCurrent} data-delivered>
+          current delivered at each held wire: {delivered
+            .map((x) => `${x.wire} ${formatQuantity(x.current, 'A')}`)
+            .join(' · ')}
+        </p>
+      {/if}
+      {#if wireRows.length}
+        <details class="swires" data-wires>
+          <summary title={CONTROL_HELP.wireLevels}>wire voltages</summary>
+          <table>
+            <tbody>
+              {#each wireRows as [w, l] (w)}
+                <tr data-wire={w}>
+                  <td class="wname">{w}</td>
+                  <td class="wlevel">{formatQuantity(l.level, 'V')}</td>
+                  <td class="wvia"
+                    >{#if l.seed}{w === 'gnd' ? 'ground' : 'held by the sheet'}{:else}from {@html l.via
+                        .map(relationHtml)
+                        .join(', ')}{/if}</td
+                  >
+                </tr>
+              {/each}
+              {#each res.nodes?.floating ?? [] as group, i (i)}
+                <tr class="wfloat">
+                  <td class="wname">{group.join(', ')}</td>
+                  <td class="wlevel">—</td>
+                  <td class="wvia"
+                    >not determined: no held level reaches {group.length === 1 ? 'it' : 'them'}</td
+                  >
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </details>
       {/if}
     {/if}
 
@@ -2604,7 +2738,8 @@
     opacity: 0.7;
     white-space: nowrap;
   }
-  .scap {
+  .scap,
+  .sdelivered {
     font-size: calc(0.76rem * var(--text-scale));
     opacity: 0.7;
   }
@@ -2641,6 +2776,45 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     gap: 0.25rem 0.8rem;
+  }
+  .ssearch {
+    grid-column: 1 / -1;
+    font-size: 0.85em;
+    opacity: 0.8;
+  }
+  .ssearch.outside {
+    color: var(--warn, #b8860b);
+    opacity: 1;
+  }
+  .sop {
+    font-size: 0.85em;
+  }
+  .sop summary,
+  .swires summary {
+    cursor: pointer;
+  }
+  .sopgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 5rem 6.5rem);
+    column-gap: 0.4rem;
+    row-gap: 0.1rem;
+  }
+  .sopv {
+    font-family: ui-monospace, monospace;
+  }
+  .swires {
+    font-size: 0.85em;
+  }
+  .swires td {
+    padding: 0 0.5rem 0 0;
+  }
+  .swires .wname,
+  .swires .wlevel {
+    font-family: ui-monospace, monospace;
+    white-space: nowrap;
+  }
+  .swires .wfloat {
+    opacity: 0.7;
   }
   .svar {
     display: grid;

@@ -90,6 +90,9 @@ export * from './spice';
 export interface RunOptions {
   /** The tolerances and caps to evaluate under (see Settings). Absent: DEFAULT_SETTINGS. */
   readonly settings?: Settings;
+  /** Keep each sized block's full operating point on its report (see
+   *  EvaluateOptions.operatingPoint). */
+  readonly operatingPoint?: boolean;
 }
 
 /** What a one-parameter sweep takes besides a run's options. */
@@ -124,6 +127,7 @@ export function runSheet(
   const res = evaluateSheet(r.doc, table, resolveDevice, {
     assumed: assumptions,
     settings: opts.settings,
+    ...(opts.operatingPoint ? { operatingPoint: true } : {}),
   });
   // A block sized on a table of the other polarity is a fact of the document and its binding,
   // said once for the run rather than by every evaluation inside it (see inheritedPolarityWarnings).

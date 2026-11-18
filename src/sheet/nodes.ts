@@ -2333,7 +2333,20 @@ function currentBalance(
     const residual = branches.reduce((sum, b) => sum + b.current, 0);
     // A wire a level or a voltage element holds: what does not balance is what its source supplies.
     const isHeld = held.heldWires.has(w) || held.sourced.has(w);
-    balance.push({ wire: w, residual, held: isHeld, branches });
+    // At a held wire where every current flows the same way, what does not balance is the current
+    // the source holding the wire delivers: a supply's or ground's, or an output's the application
+    // holds with one device on it — the netlist does not say which. Where currents both arrive and
+    // leave, a sum is an imbalance the source hides (raised below); a wire a voltage element sets
+    // carries that element's current.
+    const mixed = branches.some((b) => b.current > 0) && branches.some((b) => b.current < 0);
+    const delivers = isHeld && !held.sourced.has(w) && !mixed;
+    balance.push({
+      wire: w,
+      residual,
+      held: isHeld,
+      branches,
+      ...(delivers ? { delivered: -residual } : {}),
+    });
     const largest = Math.max(...branches.map((b) => Math.abs(b.current)));
     if (!(Math.abs(residual) > tolRel * largest)) continue;
     const listed = branches.map((b) => `${b.terminal} ${amps(b.current)}`).join(', ');
@@ -2348,11 +2361,7 @@ function currentBalance(
     // imbalance in the source holding it. A rail, where every current flows the same way, is the
     // supply current, and a wire a voltage element sets is that element's current: both are
     // reported above and not raised.
-    else if (
-      !held.sourced.has(w) &&
-      branches.some((b) => b.current > 0) &&
-      branches.some((b) => b.current < 0)
-    )
+    else if (!held.sourced.has(w) && mixed)
       messages.push(
         `wire "${w}" is held, and the currents its devices meet there do not balance: an ideal source ` +
           `supplies ${amps(-residual)} (${listed}; ${share}) — the source holding ` +

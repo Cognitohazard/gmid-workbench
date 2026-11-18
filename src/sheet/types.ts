@@ -1067,6 +1067,10 @@ export interface SheetBlockReport {
    *  composed view can show each block's sizing, not just the scalars it exposes upward.
    *  Absent for a child that has no givens or died before sizing. */
   sizing?: SizingReport;
+  /** The device's full operating point where it was sized: every table quantity, base and
+   *  derived, at its point, scaled to its width (see operatingPointOf). Present only on a run
+   *  that asks for it (EvaluateOptions.operatingPoint), and only where the block sized. */
+  point?: Record<string, number>;
   provides: Record<string, number>;
   checks: CheckResult[];
   blocks?: SheetBlockReport[];
@@ -1183,6 +1187,12 @@ export interface NodesReport {
     residual: number;
     held: boolean;
     branches: { terminal: string; current: number }[];
+    /** At a held wire, not one a voltage element sets, where every current flows the same way:
+     *  the current the source holding the wire delivers into it, the negative of `residual`
+     *  (positive where current leaves the source, as at a supply; negative where it returns, as at
+     *  ground). Such a wire may be a supply, ground, or an output the application holds — the
+     *  netlist does not say which. Absent at every other wire. */
+    delivered?: number;
   }[];
   /** Each device placed more than once: whether its placements share one operating point. */
   placements: { device: string; shared: boolean; reason?: string }[];

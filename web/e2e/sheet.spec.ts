@@ -2221,3 +2221,57 @@ test('design sheet: a drain voltage beyond the table is not sized, and says what
 
   expect(errors).toEqual([]);
 });
+
+test('design sheet: each device’s operating point, the current at each held wire, the wire voltages and where each solved value was searched', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+
+  // A sheet that sizes one device of its own: its full operating point, collapsed until opened.
+  await pickSheet(sp, 'Single NMOS gm/ID sizing');
+  const own = sp.locator('[data-op-point=""]');
+  await expect(own).toHaveCount(1);
+  await own.locator('summary').click();
+  await expect(own.locator('.sopgrid')).toContainText('S');
+  await expect(own.locator('.sopq', { hasText: /^gds$/ })).toHaveCount(1);
+  await own.screenshot({ path: `${SCREENS}/operating-point.png` });
+
+  // A composed sheet: every block that sized carries its own point.
+  await pickSheet(sp, '5T OTA');
+  await expect(sp.locator('.suse [data-op-point]')).toHaveCount(6);
+  const pair = sp.locator('.suse [data-op-point]').first();
+  await pair.locator('summary').click();
+  await expect(pair.locator('.sopv').first()).toBeVisible();
+
+  // The current the source at each held wire delivers, read from the current balance: what
+  // enters at vdd leaves at ground. Listed per wire, not added up.
+  const delivered = sp.locator('[data-delivered]');
+  await expect(delivered).toContainText(
+    /^current delivered at each held wire: .*gnd -[\d.]+ µA.*vdd [\d.]+ µA/,
+  );
+
+  // Every wire's voltage and how it was found: a held wire, or the devices it was reached through.
+  const wires = sp.locator('[data-wires]');
+  await wires.locator('summary').click();
+  await expect(wires.locator('[data-wire="gnd"]')).toContainText('ground');
+  await expect(wires.locator('[data-wire="tail"] .wvia')).toContainText(/^from /);
+  await expect(wires.locator('[data-wire="tail"] .wlevel')).toContainText(/ m?V$/);
+  await wires.screenshot({ path: `${SCREENS}/wire-voltages.png` });
+
+  // A solved value says where it was searched: the tail voltage between the wires around it.
+  const search = sp.locator('[data-search="V_tail"]');
+  await expect(search).toContainText(
+    /^searched .* to .*: between gnd and \S+, your range .* first/,
+  );
+  await sp.locator('[data-param="V_tail"]').screenshot({ path: `${SCREENS}/search-range.png` });
+  await delivered.screenshot({ path: `${SCREENS}/delivered-current.png` });
+
+  expect(errors).toEqual([]);
+});
