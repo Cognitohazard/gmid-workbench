@@ -1,8 +1,5 @@
 // The shared spine: canonical types every module builds against. Zero DOM imports.
 
-import { BASE_QUANTITIES, DERIVED_QUANTITIES } from './namespace';
-import { formatSI } from './units';
-
 /** A scalar or a flat numeric column (one value per grid sample). */
 export type Value = number | Float64Array;
 
@@ -296,28 +293,4 @@ export interface OutsideTable {
   readonly quantity: string;
   readonly asked: number;
   readonly held: readonly [number, number];
-}
-
-/** One read beyond the table in words, from its fields alone. It names the quantity, not the
- *  device: a finding is attributed to its device where it is listed (a block's findings carry the
- *  block's name). */
-export function outsideTableMessage(r: OutsideTable): string {
-  const [lo, hi] = r.held;
-  const side = r.asked > hi ? 'above' : 'below';
-  // In engineering notation with the quantity's unit, to ten significant digits: an axis end built
-  // by repeated addition reads 1.2 V, not 1.2000000000000002 V, and nothing a table resolves is
-  // lost.
-  const key = r.quantity.toLowerCase();
-  const unit = [...BASE_QUANTITIES, ...DERIVED_QUANTITIES].find((q) => q.key === key)?.unit;
-  const n = (v: number): string => {
-    const t = formatSI(v, 10);
-    if (!unit || unit === '1') return t;
-    const m = /^(-?[\d.]+)(\D*)$/.exec(t);
-    return m ? `${m[1]} ${m[2]}${unit}` : `${t} ${unit}`;
-  };
-  return (
-    `${r.quantity} = ${n(r.asked)} is ${side} what the table holds for this device ` +
-    `(${r.quantity} from ${n(lo)} to ${n(hi)}), so the device is not sized: no data answers for ` +
-    `that point, and a value read at the table's edge would come from a different one`
-  );
 }

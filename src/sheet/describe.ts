@@ -2,11 +2,12 @@
 // code that produces a result writes data, never these sentences, so the app and a script read the
 // same words, and a change of wording is a change here alone.
 
-import { outsideTableMessage } from '../types';
+import type { OutsideTable } from '../types';
+import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
 import { formatQuantity } from '../units';
-import { andList, type SolveRange } from './types';
+import { andList, blockMessage, type SolveRange } from './types';
 import type {
   Cause,
   CauseName,
@@ -62,12 +63,26 @@ const stepText = (d: SearchData, s: SearchStep): string =>
   `the relation does not evaluate ${s.side} ${d.unknown} = ${valueOf(d, s.x)}: ${s.reason}`;
 
 /** The ends of a stretch that were stepped in, low end first. */
-const stepsOf = (ends: readonly [SearchEnd, SearchEnd]): SearchStep[] => [
+export const stepsOf = (ends: readonly [SearchEnd, SearchEnd]): SearchStep[] => [
   ...(ends[0].stepped !== undefined
-    ? [{ side: 'below' as const, x: ends[0].x, reason: ends[0].stepped }]
+    ? [
+        {
+          side: 'below' as const,
+          x: ends[0].x,
+          reason: ends[0].stepped,
+          ...(ends[0].steppedBy ? { by: ends[0].steppedBy } : {}),
+        },
+      ]
     : []),
   ...(ends[1].stepped !== undefined
-    ? [{ side: 'above' as const, x: ends[1].x, reason: ends[1].stepped }]
+    ? [
+        {
+          side: 'above' as const,
+          x: ends[1].x,
+          reason: ends[1].stepped,
+          ...(ends[1].steppedBy ? { by: ends[1].steppedBy } : {}),
+        },
+      ]
     : []),
 ];
 
@@ -115,6 +130,32 @@ export function noCrossingAdvice(from: SolveRange['from'], endsRead: boolean): s
         `its table, had a device refused, or was stepped in past a stretch that does not evaluate ` +
         `— so this is not shown to be the design's failure`;
 }
+
+/** One read beyond the table in words, from its fields alone. It names the quantity, not the
+ *  device: a finding is attributed to its device where it is listed (a block's findings carry the
+ *  block's name). */
+export function outsideTableMessage(r: OutsideTable): string {
+  const [lo, hi] = r.held;
+  const side = r.asked > hi ? 'above' : 'below';
+  // In engineering notation with the quantity's unit, to ten significant digits: an axis end built
+  // by repeated addition reads 1.2 V, not 1.2000000000000002 V, and nothing a table resolves is
+  // lost.
+  const key = r.quantity.toLowerCase();
+  const unit = [...BASE_QUANTITIES, ...DERIVED_QUANTITIES].find((q) => q.key === key)?.unit;
+  const n = (v: number): string => formatQuantity(v, unit, 10);
+  return (
+    `${r.quantity} = ${n(r.asked)} is ${side} what the table holds for this device ` +
+    `(${r.quantity} from ${n(lo)} to ${n(hi)}), so the device is not sized: no data answers for ` +
+    `that point, and a value read at the table's edge would come from a different one`
+  );
+}
+
+/** One read beyond a table as a finding names it: the block it belongs to, then the record's own
+ *  words (outsideTableMessage). */
+export const outsideMessage = (r: OutsideTable): string =>
+  r.device === 'givens' || r.device === ''
+    ? outsideTableMessage(r)
+    : blockMessage(r.device, outsideTableMessage(r));
 
 // ── Today's messages, from the data ───────────────────────────────────────────────────────────
 
@@ -245,7 +286,7 @@ function limitMessage(d: LimitData): string {
         `because the design's shared evaluation budget (${d.count} evaluations) ran out — spent ` +
         `by the solves each of its probes re-runs, or by an expensive sibling elsewhere in the ` +
         `tree. It was not shown to be unsolvable`;
-  return d.inSet ? `solved params ${nameList(d.members)} did not settle: ${inner}` : inner;
+  return d.set ? `solved params ${nameList(d.set)} did not settle: ${inner}` : inner;
 }
 
 /** The message of a `hold` that does not hold where the design is sized. */

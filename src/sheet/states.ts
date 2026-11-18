@@ -36,7 +36,7 @@ export interface NotReadData {
 /** A sheet whose decisions do not determine one design: one missing, one made twice, or a level
  *  it marks as assumed. `names` are the params or wires involved. */
 export interface NotDeterminedData {
-  readonly why: 'decision-missing' | 'decision-twice' | 'assumed-level';
+  readonly why: 'decision-missing' | 'decision-twice' | 'assumed-level' | 'range-outside';
   readonly names: readonly string[];
   readonly message: string;
 }
@@ -192,8 +192,9 @@ export interface LimitData {
   readonly members: readonly SearchData[];
   readonly limit: 'evaluations' | 'probes';
   readonly count: number;
-  /** For a member of a set: the search was the set's (its message names the set). */
-  readonly inSet?: boolean;
+  /** For a member of a set: the set it was searched in, which its message names. `members[0]` is
+   *  the member whose search the limit stopped. */
+  readonly set?: readonly SearchData[];
   /** For the probe limit: the ends of the stretch the search had bracketed. */
   readonly ends?: readonly [SearchEnd, SearchEnd];
 }

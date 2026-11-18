@@ -5,7 +5,7 @@
 // identities, which the engine checks for DC consistency after sizing and never solves — no
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
-import { outsideTableMessage, type OutsideTable, type QAWarning } from '../types';
+import type { OutsideTable, QAWarning } from '../types';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
@@ -865,7 +865,7 @@ export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
 }
 
 /** A child's message as its parent reports it: attributed to the block. */
-const blockMessage = (blockName: string, message: string): string =>
+export const blockMessage = (blockName: string, message: string): string =>
   `block "${blockName}": ${message}`;
 
 /** A warning raised at the block path `segments` (top first), as the top of the tree reports it:
@@ -1767,13 +1767,6 @@ export const outsideIn = (
   res.outside
     ? [...res.outside]
     : devicesIn(res, (s, device) => (s.outside ?? []).map((r) => ({ ...r, device })));
-
-/** One read beyond a table as a finding names it: the block it belongs to, then the record's own
- *  words (outsideTableMessage). */
-export const outsideMessage = (r: OutsideTable): string =>
-  r.device === 'givens' || r.device === ''
-    ? outsideTableMessage(r)
-    : blockMessage(r.device, outsideTableMessage(r));
 
 /** One evaluation's tree as the walks over its sizings read it. */
 type TreeSizings = { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] };

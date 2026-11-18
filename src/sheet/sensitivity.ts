@@ -12,7 +12,6 @@ import type { DeviceTable, OutsideTable } from '../types';
 import {
   choiceKnobs,
   outsideIn,
-  outsideMessage,
   RANGE_END_SEP,
   rangeEndBroke,
   engineSolved,
@@ -36,6 +35,7 @@ import { evaluateSheet, type DeviceResolver } from './eval';
 import type { Settings } from './settings';
 import { validateSheet } from './validate';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
+import { outsideMessage } from './describe';
 
 /**
  * Default perturbation, as a FRACTION of the knob's own value. A fraction rather than an
