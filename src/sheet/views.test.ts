@@ -97,6 +97,7 @@ describe('the decisions view: how each result moves with each knob', () => {
     expect(knob.dPerUnit).toBeCloseTo(1, 12);
     expect(knob.relPerPct).toBeUndefined();
     expect(row('off').checks[0].relPerPct).toBeUndefined();
+    expect(row('off').checks[0].why).toBe('off is zero, so a change of it has no relative size.');
   });
 
   it('takes the difference on the side that stays on the table, and says so', () => {

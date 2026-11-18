@@ -2323,3 +2323,51 @@ test('design sheet: a sweep plots a named result of the sheet, as a curve and ac
 
   expect(errors).toEqual([]);
 });
+
+test('design sheet: results by decision and by device property, each taken on request', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.bind')).toContainText('W=');
+
+  // Neither view is computed until it is asked for.
+  await expect(sp.locator('[data-decisions-view]')).toHaveCount(0);
+  await expect(sp.locator('[data-properties-view]')).toHaveCount(0);
+
+  // The decisions view: a row per result, a column per decision, each cell a signed number with
+  // the sentence behind it under the pointer.
+  await sp.getByRole('button', { name: 'sensitivities' }).click();
+  const decisions = sp.locator('[data-decisions-view]');
+  await expect(decisions).toBeVisible();
+  await expect(decisions.locator('thead th', { hasText: 'gm_id' })).toBeVisible();
+  const filled = decisions.locator('td:not(.none)').first();
+  await expect(filled).toHaveText(/^[+-]?\d/);
+  await expect(filled).toHaveAttribute('title', /moves [+-]?[\d.]+\S* % for 1 % of \S+\.$/);
+
+  // The device-property view says what it is, beside the table, not only under the pointer.
+  await sp.locator('[data-properties-button]').click();
+  const props = sp.locator('[data-properties-view]');
+  await expect(props).toBeVisible();
+  await expect(props.locator('[data-properties-statement]')).toContainText(
+    'It does not size or solve the circuit again, so it is not what the hardware does when a property changes',
+  );
+  await expect(props.locator('thead th', { hasText: 'gm' }).first()).toBeVisible();
+  await expect(props.locator('td:not(.none):not(.zero)').first()).toHaveText(/^[+-]?\d/);
+  await page.screenshot({ path: `${SCREENS}/sheet-sensitivity-views.png`, fullPage: true });
+
+  // A change to the design retires both readouts.
+  const gm = sp.locator('.svar[data-param="gm_id"]').locator('.num');
+  await gm.fill('13');
+  await gm.blur();
+  await expect(sp.locator('[data-decisions-view]')).toHaveCount(0);
+  await expect(sp.locator('[data-properties-view]')).toHaveCount(0);
+
+  expect(errors).toEqual([]);
+});

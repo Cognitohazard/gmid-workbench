@@ -1990,6 +1990,8 @@ export interface SheetSensitivityCheck {
    *  1 meaning 1 % for 1 %. Not the margin's: a margin near zero has no relative form. Absent where
    *  the left side is zero or not finite at the base, the knob is zero, or no slope was taken. */
   relPerPct?: number;
+  /** Why `relPerPct` is absent, as a sentence. */
+  why?: string;
 }
 
 /**

@@ -175,3 +175,8 @@ export const baseUnit: ReadonlyMap<string, string> = new Map(
 );
 /** Unit string for a base-quantity key, '' if unknown. */
 export const axisUnit = (name: string): string => baseUnit.get(name) ?? '';
+
+/** A pure number — a relative change per relative change — to three significant figures with its
+ *  sign, in plain decimals: an SI prefix on a ratio would read as a unit (`7.12m` as milli). */
+export const signedRatio = (v: number): string =>
+  `${v > 0 ? '+' : ''}${String(Number(v.toPrecision(3)))}`;

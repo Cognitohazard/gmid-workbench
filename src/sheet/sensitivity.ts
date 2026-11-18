@@ -309,7 +309,7 @@ export function sheetSensitivities(
       // The left side's relative move, beside the margin's absolute one.
       const [slope] = differences(rr.lhsValue, lhs(0, id), lhs(1, id), offsets);
       const rel = relative(slope, rr.lhsValue, p.value, `the left side of ${id}`, p.name);
-      checks.push(typeof rel === 'number' ? { ...c, relPerPct: rel } : c);
+      checks.push(typeof rel === 'number' ? { ...c, relPerPct: rel } : { ...c, why: rel });
     }
     const results = named.map(({ name, unit }) => result(name, unit, base, taken, offsets, p));
     return {

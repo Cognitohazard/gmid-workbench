@@ -6,6 +6,7 @@
 // No DOM and no Svelte: the worker bundle imports this file.
 
 import {
+  devicePropertySensitivities,
   projectingResolver,
   runConditions,
   sameCondition,
@@ -26,6 +27,7 @@ import {
   type SheetRefIndex,
   type SheetSensitivity,
   type SheetSweep2,
+  type PropertySensitivities,
 } from '@gmid/mostab-core';
 
 /**
@@ -34,7 +36,10 @@ import {
  *  - `sweep`: the 1-D margin chart at one condition — the design sized there at every sample, or,
  *    given a different `base`, sized at `base` and held there (`sweepAtCondition`);
  *  - `sweep2`: the 2-D feasibility map at one condition;
- *  - `sens`: the sensitivity readout at one condition.
+ *  - `sens`: the sensitivity readout at one condition — how each check and each result moves with
+ *    each decision of the designer;
+ *  - `props`: how each result leans on each small-signal property of each device, at one
+ *    condition, with the design held.
  * A condition is always read off the primary device, and every other binding is projected to it.
  * Every job carries the solver settings it runs under, so a changed setting is a different job.
  */
@@ -60,7 +65,8 @@ export type SheetJob =
       /** One of the sheet's equations to keep at every cell (Sweep2Options.value). */
       value?: string;
     }
-  | { kind: 'sens'; doc: SheetDoc; at: ConditionKey; check?: string; settings: Settings };
+  | { kind: 'sens'; doc: SheetDoc; at: ConditionKey; check?: string; settings: Settings }
+  | { kind: 'props'; doc: SheetDoc; at: ConditionKey; settings: Settings };
 
 export type JobKind = SheetJob['kind'];
 
@@ -74,6 +80,7 @@ export function jobConditions(job: SheetJob): ConditionKey[] {
       return job.base ? [job.at, job.base] : [job.at];
     case 'sweep2':
     case 'sens':
+    case 'props':
       return [job.at];
   }
 }
@@ -84,6 +91,7 @@ export interface JobResults {
   sweep: ConditionSweep | null;
   sweep2: SheetSweep2 | null;
   sens: SheetSensitivity[] | null;
+  props: PropertySensitivities | null;
 }
 
 /** Everything a job reads besides itself: the device the panel belongs to, how a sheet's device
@@ -144,6 +152,15 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
             refs,
             settings,
             ...(job.check !== undefined ? { check: job.check } : {}),
+          })
+        : null;
+    }
+    case 'props': {
+      const t = at(job.at);
+      return t
+        ? devicePropertySensitivities(job.doc, t, projectingResolver(deviceOf, job.at), {
+            refs,
+            settings,
           })
         : null;
     }

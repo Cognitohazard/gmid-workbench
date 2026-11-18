@@ -54,6 +54,7 @@
     type SheetCheck,
     type SheetBlock,
     type SheetSweep2,
+    type PropertySensitivities,
     OWN_DEVICE,
     type SweepWindow,
     type SheetSensitivity,
@@ -79,6 +80,8 @@
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
   import { CONTROL_HELP, SOLVER_HELP } from './help';
+  import DecisionsView from './DecisionsView.svelte';
+  import PropertiesView from './PropertiesView.svelte';
   import { changedSolverSettings, settingText, solverSettings } from './solver.svelte';
   import { commitEng, pct } from './eng';
   import { sheetMenu, sheetRefIndex, withheldSheet } from './sheetlib.svelte';
@@ -422,6 +425,7 @@
   const busyText = $derived.by(() => {
     if (evaluator.busy('run')) return runs.length ? 'updating…' : '';
     if (sweeping) return 'sweeping…';
+    if (evaluator.busy('props')) return 'reading device properties…';
     return evaluator.busy('sens') ? 'computing sensitivities…' : '';
   });
   // Two questions, answered apart: is the design feasible where it is sized, and at how many of
@@ -835,6 +839,56 @@
       },
       (e) => {
         sensFor = null;
+        failed(e);
+      },
+    );
+  }
+
+  // ── Device-property readout: which small-signal property of which device each formula leans on,
+  // with the design held. A snapshot like the sensitivities: taken on click, against the doc and
+  // device it was taken at, shown only while those are the ones on screen.
+  let propsSnap = $state.raw<{
+    doc: SheetDoc;
+    dev: DeviceTable;
+    view: PropertySensitivities;
+  } | null>(null);
+  const propsShot = $derived(
+    oneSized && propsSnap && propsSnap.doc === cfg && propsSnap.dev === refTable ? propsSnap : null,
+  );
+  $effect(() => {
+    if (propsSnap && propsSnap !== propsShot) propsSnap = null;
+  });
+  let propsFor = $state.raw<{ doc: SheetDoc; dev: DeviceTable } | null>(null);
+  const propsBusy = $derived(propsFor !== null);
+  function stopProps(): void {
+    evaluator.cancel('props');
+    propsFor = null;
+  }
+  $effect(() => {
+    if (propsFor && (propsFor.doc !== cfg || propsFor.dev !== refTable)) stopProps();
+  });
+  function toggleProps(): void {
+    if (propsShot) {
+      propsSnap = null;
+      return;
+    }
+    if (propsBusy) {
+      stopProps();
+      return;
+    }
+    if (!sensReady || !refTable || !refKey || !primary) return;
+    const doc = cfg;
+    const dev = refTable;
+    propsFor = { doc, dev };
+    evaluator.request(
+      { kind: 'props', doc, at: refKey, settings: solver },
+      { bench, primary, refs, about: { doc, dev } },
+      (view, answered) => {
+        propsFor = null;
+        if (view) propsSnap = { ...answered.about, view };
+      },
+      (e) => {
+        propsFor = null;
         failed(e);
       },
     );
@@ -1936,6 +1990,14 @@
         title={oneSized ? CONTROL_HELP.sensitivity : CONTROL_HELP.cornerOneAtATime}
         onclick={toggleSens}>{sensBusy ? 'sensitivities…' : 'sensitivities'}</button
       >
+      <button
+        class="propb"
+        class:on={propsShot !== null || propsBusy}
+        disabled={!sensReady && !propsShot && !propsBusy}
+        title={oneSized ? CONTROL_HELP.devicePropertiesButton : CONTROL_HELP.cornerOneAtATime}
+        data-properties-button
+        onclick={toggleProps}>{propsBusy ? 'device properties…' : 'device properties'}</button
+      >
       {#if result?.sizing && !multi}
         {#if result.sizing.ok}
           <span class="bind"
@@ -2200,6 +2262,12 @@
           <div class="skline dead">no hard check reports a finite margin to rank knobs against</div>
         {/if}
       </div>
+    {/if}
+    {#if sens}
+      <DecisionsView rows={sens} />
+    {/if}
+    {#if propsShot}
+      <PropertiesView view={propsShot.view} />
     {/if}
 
     {#if cfg.description}
@@ -3094,6 +3162,7 @@
   }
   .detach,
   .sensb,
+  .propb,
   .sexp button {
     font: inherit;
     font-size: calc(0.68rem * var(--text-scale));
@@ -3108,12 +3177,14 @@
   }
   .detach:hover,
   .sensb:hover,
+  .propb:hover,
   .sexp button:hover {
     opacity: 1;
   }
   /* The toggle stays lit while its snapshot is on screen, so it reads as a mode rather than a
      one-shot action — and goes dark by itself when a design edit retires the snapshot. */
-  .sensb.on {
+  .sensb.on,
+  .propb.on {
     opacity: 1;
     border-color: currentColor;
   }
