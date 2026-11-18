@@ -53,6 +53,7 @@ const search = (over: Partial<SearchData> = {}): SearchData => ({
   },
   range: authorRange('x', 0, 10),
   searched: [0, 10],
+  stage: 'sheet',
   ...over,
 });
 
@@ -193,7 +194,11 @@ group('whether a failed search is proved, decided in one place', () => {
     note: '',
   };
   const over = (range: SolveRange, ended: NoSolutionRead['ended'] = { kind: 'sign' }) => ({
-    ...search({ range, searched: range.range }),
+    ...search({
+      range,
+      searched: range.range,
+      stage: range.from === 'wiring' ? 'physical' : 'sheet',
+    }),
     ...read([0, 1, 2], [1.8, 1.5, 2]),
     ended,
   });
@@ -417,6 +422,7 @@ group('the texts a reader sees, by the message standard', () => {
       },
       range: wiring,
       searched: [0, 0.9],
+      stage: 'physical',
       given: [{ name: 'out_share', value: 0.518 }],
       ...over,
     });
@@ -446,7 +452,12 @@ group('the texts a reader sees, by the message standard', () => {
   it('a search with no solution in the range the sheet states, with the action', () => {
     const c = noSolutionCause(
       {
-        ...tail({ range: authorRange('V_tail', 0.1, 0.5), searched: [0.1, 0.5], given: [] }),
+        ...tail({
+          range: authorRange('V_tail', 0.1, 0.5),
+          searched: [0.1, 0.5],
+          stage: 'sheet',
+          given: [],
+        }),
         ...read([0.1, 0.6, 1.75], [0.5, 1.2, 1.75]),
       },
       true,

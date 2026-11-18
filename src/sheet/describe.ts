@@ -425,7 +425,7 @@ function searchLines(
   const searched = [`Searched: ${spanText(lo.x, hi.x, d.unit)}, ${where}.`];
   const a = d.range.author;
   const w = d.range.wiring?.range;
-  if (a && w && d.range.from === 'wiring' && d.searched[0] === w[0] && d.searched[1] === w[1])
+  if (d.stage === 'physical' && a && w && (a[0] !== w[0] || a[1] !== w[1]))
     searched.unshift(
       `The search range on the sheet, ${spanText(a[0], a[1], d.unit)}, holds no solution.`,
       `The engine then searched the physical range.`,
@@ -450,9 +450,9 @@ function searchLines(
 
 /** Where a failed search's stretch lies, in the words of its source. */
 const whereText = (d: SearchData): string =>
-  d.range.from === 'wiring'
+  d.stage === 'physical'
     ? 'the full range that the circuit permits'
-    : d.range.from === 'table'
+    : d.stage === 'table'
       ? 'the lengths the table holds'
       : 'the search range on the sheet';
 

@@ -2868,6 +2868,13 @@ function sidesUnit(doc: SheetDoc, rhs: string): string | undefined {
   return p?.unit;
 }
 
+/** Which range a search's stretch is (SearchData.stage). */
+function stageOf(u: Unknown): SearchData['stage'] {
+  if (u.range.from === 'table') return 'table';
+  const w = u.range.wiring?.range;
+  return u.range.from === 'wiring' && w && u.lo === w[0] && u.hi === w[1] ? 'physical' : 'sheet';
+}
+
 /** One unknown as a failed search reports it (SearchData): its relation, its range, the stretch
  *  searched, and where each other member of its set stood (`also`, at `ctx.at`). */
 function searchDataOf(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): SearchData {
@@ -2886,6 +2893,7 @@ function searchDataOf(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): 
     },
     range: u.range,
     searched: [u.lo, u.hi],
+    stage: stageOf(u),
     ...(also.length
       ? {
           given: also.map((o) => ({

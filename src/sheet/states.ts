@@ -90,6 +90,10 @@ export interface SearchData {
   readonly relation: RelationData;
   readonly range: SolveRange;
   readonly searched: readonly [number, number];
+  /** Which range the stretch searched is: the search range the sheet states (`sheet`), the range
+   *  the circuit allows a wire's level, searched after the sheet's held no root (`physical`), or
+   *  the lengths a device's table holds (`table`). */
+  readonly stage: 'sheet' | 'physical' | 'table';
   readonly given?: readonly {
     readonly name: string;
     readonly value: number;
