@@ -690,7 +690,13 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): string[] {
       return [sized, `The two quantities bound on it do not determine its size.`];
     return [sized];
   }
-  const head = `${subject} gives no number.`;
+  // A check names the side that gave no number.
+  const head =
+    d.side === 'both'
+      ? `Neither side of ${subject} gives a number.`
+      : d.side
+        ? `The ${d.side === 'lhs' ? 'left' : 'right'} side of ${subject} gives no number.`
+        : `${subject} gives no number.`;
   switch (d.why) {
     case 'not-defined':
       return ref && ref.name !== d.name

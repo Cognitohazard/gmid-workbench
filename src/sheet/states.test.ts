@@ -484,6 +484,18 @@ group('the texts a reader sees, by the message standard', () => {
     });
   });
 
+  it('names the side of a check that gave no number', () => {
+    expect(
+      textOf(
+        {
+          kind: 'cannot-evaluate',
+          data: { why: 'not-finite', name: 'gain-spec', reason: '', side: 'lhs' },
+        },
+        { kind: 'requirement', path: [], name: 'gain-spec' },
+      ).lines[0],
+    ).toBe('The left side of gain-spec gives no number.');
+  });
+
   it('a read outside the table, and a requirement that fails', () => {
     expect(
       textOf({
@@ -567,6 +579,10 @@ group('the texts a reader sees, by the message standard', () => {
           [c, ref('value', 'gain')],
           [c, ref('device', 'in')],
           [c, ref('device', 'givens', [])],
+          ...(['lhs', 'rhs', 'both'] as const).map((side): [Cause, ItemRef] => [
+            { kind: 'cannot-evaluate', data: { ...c.data, side } },
+            ref('requirement', 'gain-spec'),
+          ]),
         ];
       }),
       [{ kind: 'outside-table', data: outside }],
