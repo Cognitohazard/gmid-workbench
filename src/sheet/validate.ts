@@ -38,7 +38,8 @@ import {
   holds,
   constrained,
   torn,
-  constraintProblem,
+  constraintIssue,
+  declarationWhy,
   drainProblem,
   PARAM_CLASSES,
   PROVIDE_SEP,
@@ -1237,6 +1238,7 @@ function dcInputProblems(doc: SheetDoc): QAWarning[] {
         `sheet's own parts determine it, but it types a value for now instead of deriving it)`,
       location: param,
       symbol: param,
+      decision: { kind: 'missing', names: [param] },
     })),
     ...cycles.map(({ device, via }): QAWarning => ({
       rule: 'sheet-dc-inputs',
@@ -1246,6 +1248,7 @@ function dcInputProblems(doc: SheetDoc): QAWarning[] {
         `(${via.join(' → ')}) and nothing solves the loop — name the estimate as a param and ` +
         `close it with solveFor`,
       location: device,
+      decision: { kind: 'loop', names: [device] },
     })),
   ];
 }
@@ -1797,6 +1800,7 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
         severity: 'error',
         message: `param "${p.name}" solves for itself — name the value it is an estimate of`,
         location: p.name,
+        decision: { kind: 'missing', names: [p.name] },
       });
     }
     // `held` marks the constraint a held run generates from a hold (holdAsConstraint). Written in
@@ -1828,6 +1832,7 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
             `param "${p.name}": its relation ${rel.lhs} - (${rel.rhs}) does not read ${p.name}, so ` +
             `it cannot single ${p.name} out — write the relation in terms of the param it solves`,
           location: p.name,
+          decision: { kind: 'missing', names: [p.name] },
         });
     }
   }
@@ -1837,15 +1842,19 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
   // catches a half-written constraint ({lhs} only), which the constrained() shape guard rejects and
   // which would otherwise freeze the param: neither swept nor solved, with the sheet still reading
   // feasible.
-  const constraintIssue = constraintProblem(doc.params, (p) =>
+  const issue = constraintIssue(doc.params, (p) =>
     open?.params.has(p.name) ? { ok: true } : { ok: false },
   );
-  if (constraintIssue) {
+  if (issue) {
     out.push({
       rule: 'sheet-param',
       severity: 'error',
-      message: constraintIssue,
+      message: issue.message,
       location: 'params',
+      decision: {
+        kind: declarationWhy(doc, issue.params) === 'decision-twice' ? 'twice' : 'missing',
+        names: issue.params,
+      },
     });
   }
   return out;

@@ -458,11 +458,6 @@ function typedSetter(doc: SheetDoc, quantity: string): string | undefined {
   return p && !engineSolved(p) && !p.hold ? p.name : undefined;
 }
 
-/** Rules whose errors already have their item, written where the error was raised: a failed
- *  search (sheet-solve), an equation that gives no number (sheet-nonfinite), a block whose
- *  values from its parent did not resolve (sheet-block-param). */
-const COVERED = new Set(['sheet-solve', 'sheet-nonfinite', 'sheet-block-param']);
-
 /** The item a finding's `location` names: a path of block names through `doc`, then an entry of
  *  the sheet it reaches — a param, an equation, a check, its device (`givens`) — or the sheet. */
 function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRef {
@@ -490,29 +485,120 @@ function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRe
   return { kind: 'sheet', path, name: '' };
 }
 
-/** The cause an error finding gives the item it is about, by its rule. A finding of the netlist
- *  check (`sheet-nodes`) is about the sheet's wiring; one of declared assumed levels is about the
- *  sheet; anything else is a field of the entry it names that is not well formed. */
+/** How the table below reads a finding: the cause it gives, or why a rule never reaches it. */
+type FindingRead =
+  | ((w: QAWarning, ref: ItemRef, stage: { stage?: 'validation' }) => Cause)
+  | 'covered'
+  | 'never-an-error';
+
+/** A field of an entry that is not well formed: the entry's item cannot be read. On the sheet
+ *  itself, which is still evaluated, the sheet's statements leave its design undetermined. */
+const entryNotWellFormed =
+  (onSheet: 'entry' | 'operating-range') =>
+  (w: QAWarning, ref: ItemRef, stage: { stage?: 'validation' }): Cause =>
+    ref.kind === 'sheet' && ref.path.length === 0
+      ? {
+          kind: 'not-determined',
+          data: {
+            why: onSheet,
+            names: w.location ? [w.location] : [],
+            message: w.message,
+            ...stage,
+          },
+        }
+      : {
+          kind: 'not-read',
+          data: { why: 'field', where: w.location ?? '', message: w.message, ...stage },
+        };
+
+/** A finding that the sheet's statements leave a value without one decision, or with two. */
+const decisionCause = (
+  w: QAWarning,
+  d: NonNullable<QAWarning['decision']>,
+  stage: { stage?: 'validation' },
+): Cause => ({
+  kind: 'not-determined',
+  data: {
+    why: d.kind === 'twice' ? 'decision-twice' : d.kind === 'loop' ? 'loop' : 'decision-missing',
+    names: d.names,
+    message: w.message,
+    ...stage,
+  },
+});
+
+/**
+ * The cause each rule's error finding gives the item it is about. One entry for every rule the
+ * sheet's validation and evaluation raise, and no default: a rule added without an entry fails
+ * the test that reads the rules from the source. A rule whose findings are only warnings or notes
+ * never reaches here; a rule whose errors already have their item is covered where it is raised.
+ */
+export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
+  'sheet-format': (w, _ref, stage) => ({
+    kind: 'not-read',
+    data: { why: 'format', where: w.location ?? '', message: w.message, ...stage },
+  }),
+  'sheet-ref': (w, _ref, stage) => ({
+    kind: 'not-read',
+    data: { why: 'reference', where: w.location ?? '', message: w.message, ...stage },
+  }),
+  'sheet-parse': (w, ref, stage) =>
+    ref.kind === 'value' || ref.kind === 'requirement'
+      ? { kind: 'cannot-evaluate', data: { why: 'syntax', name: ref.name, reason: w.message } }
+      : entryNotWellFormed('entry')(w, ref, stage),
+  'sheet-param': (w, ref, stage) =>
+    w.decision ? decisionCause(w, w.decision, stage) : entryNotWellFormed('entry')(w, ref, stage),
+  'sheet-dc-inputs': (w, ref, stage) =>
+    w.decision
+      ? decisionCause(w, w.decision, stage)
+      : ref.kind === 'sheet' && ref.path.length === 0
+        ? {
+            kind: 'not-determined',
+            data: {
+              why: 'assumed-level',
+              names: w.location ? [w.location] : [],
+              message: w.message,
+              ...stage,
+            },
+          }
+        : entryNotWellFormed('entry')(w, ref, stage),
+  'sheet-nodes': (w, _ref, stage) => ({
+    kind: 'not-determined',
+    data: { why: 'netlist', names: w.location ? [w.location] : [], message: w.message, ...stage },
+  }),
+  'sheet-range': entryNotWellFormed('operating-range'),
+  'sheet-block': entryNotWellFormed('entry'),
+  'sheet-check': entryNotWellFormed('entry'),
+  'sheet-tol': entryNotWellFormed('entry'),
+  'sheet-givens': entryNotWellFormed('entry'),
+  // Errors that already have their item, written where they were raised: a failed search, an
+  // equation that gives no number, a block whose values from its parent did not resolve.
+  'sheet-solve': 'covered',
+  'sheet-nonfinite': 'covered',
+  'sheet-block-param': 'covered',
+  'sheet-array': 'never-an-error',
+  'sheet-assumption': 'never-an-error',
+  'sheet-collision': 'never-an-error',
+  'sheet-eval': 'never-an-error',
+  'sheet-follow-on': 'never-an-error',
+  'sheet-held-current': 'never-an-error',
+  'sheet-held-gate': 'never-an-error',
+  'sheet-noise-form': 'never-an-error',
+  'sheet-passthrough': 'never-an-error',
+  'sheet-pinned': 'never-an-error',
+  'sheet-polarity': 'never-an-error',
+  'sheet-provide': 'never-an-error',
+  'sheet-provide-coverage': 'never-an-error',
+  'sheet-table-temperature': 'never-an-error',
+  'sheet-undeclared': 'never-an-error',
+};
+
+/** The cause an error finding gives the item it is about, by its rule (FINDING_CAUSES). */
 function findingCause(w: QAWarning, ref: ItemRef, mode: 'evaluation' | 'validation'): Cause {
   const stage = mode === 'validation' ? { stage: 'validation' as const } : {};
-  const names = w.location ? [w.location] : [];
-  if (ref.kind === 'sheet' && (w.rule === 'sheet-dc-inputs' || w.rule === 'sheet-nodes'))
-    return {
-      kind: 'not-determined',
-      data: {
-        why: w.rule === 'sheet-nodes' ? 'netlist' : 'assumed-level',
-        names,
-        message: w.message,
-        ...stage,
-      },
-    };
-  const why =
-    w.rule === 'sheet-format' || w.rule === 'sheet-parse'
-      ? 'format'
-      : w.rule === 'sheet-ref'
-        ? 'reference'
-        : 'field';
-  return { kind: 'not-read', data: { why, where: w.location ?? '', message: w.message, ...stage } };
+  const read = FINDING_CAUSES[w.rule];
+  if (typeof read !== 'function')
+    throw new Error(`an error of rule ${w.rule} has no cause in the finding table`);
+  return read(w, ref, stage);
 }
 
 /**
@@ -530,7 +616,8 @@ export function withFindings(
 ): Item[] {
   const out = [...items];
   for (const w of warnings) {
-    if (w.severity !== 'error' || COVERED.has(w.rule) || w.cause !== undefined) continue;
+    if (w.severity !== 'error' || FINDING_CAUSES[w.rule] === 'covered' || w.cause !== undefined)
+      continue;
     const ref = locate(doc, w.location);
     // A block's own findings are on its own items, under its name.
     if (mode === 'evaluation' && ref.path.length) continue;

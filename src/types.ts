@@ -102,6 +102,12 @@ export interface QAWarning {
    *  param of that sheet whose search did not land, which withholds what reads it (see the sheet
    *  result's `withheld`). Absent for a finding that stands on its own. */
   readonly cause?: string;
+  /** For a finding that the sheet's statements leave a value without one decision, or with two:
+   *  which, and the names it is about. Absent for any other finding. */
+  readonly decision?: {
+    readonly kind: 'missing' | 'twice' | 'loop';
+    readonly names: readonly string[];
+  };
 }
 
 export interface ImportError {

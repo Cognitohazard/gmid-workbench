@@ -46,7 +46,14 @@ export type OutsideTableData = OutsideTable & { readonly set?: string };
 
 export interface NotDeterminedData {
   readonly why:
-    'decision-missing' | 'decision-twice' | 'assumed-level' | 'range-outside' | 'netlist';
+    | 'decision-missing'
+    | 'decision-twice'
+    | 'assumed-level'
+    | 'range-outside'
+    | 'netlist'
+    | 'loop'
+    | 'operating-range'
+    | 'entry';
   readonly names: readonly string[];
   readonly message: string;
   /** For a search range outside the range its wires permit: each range, and the wires'. */

@@ -291,6 +291,22 @@ export const andList = (q: readonly string[]): string =>
 /** The quoted names of `ps`, joined for a message: `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
 const quotedNames = (ps: readonly SheetVar[]): string => andList(ps.map((p) => `"${p.name}"`));
 
+/** Whether the params a constraint problem names lack a decision or carry two: a param with
+ *  more than one of a design constraint, a solveFor and a hold carries two. */
+export function declarationWhy(
+  doc: SheetDoc,
+  names: readonly string[],
+): 'decision-missing' | 'decision-twice' {
+  const twice = doc.params.some(
+    (p) =>
+      names.includes(p.name) &&
+      [p.designConstraint !== undefined, p.solveFor !== undefined, p.hold !== undefined].filter(
+        Boolean,
+      ).length > 1,
+  );
+  return twice ? 'decision-twice' : 'decision-missing';
+}
+
 /** constraintProblem with the params it is about — what a failed solve names as its unknowns. A
  *  problem that every one of several params shares is said once, naming them all, so an author
  *  fixes the document in one pass rather than one param per run. */

@@ -882,6 +882,28 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
             ])
           : each((n) => t`The search range of ${n} lies outside the range that its wires permit.`)),
       ];
+    case 'loop':
+      return [
+        head,
+        ...d.names.map(
+          (n) =>
+            t`The sizing of ${partName(n)} depends on its own operating point, and no statement solves that loop.`,
+        ),
+      ];
+    case 'operating-range':
+      return [
+        head,
+        d.names.length
+          ? t`The operating range entry ${nm(d.names[0])} holds a value that is not valid.`
+          : t`The operating range holds an entry that is not valid.`,
+      ];
+    case 'entry':
+      return [
+        head,
+        d.names.length
+          ? t`The entry ${nm(d.names[0].replace(/"/g, ''))} holds a value that is not valid.`
+          : t`An entry of the sheet holds a value that is not valid.`,
+      ];
     case 'netlist':
       return [
         head,

@@ -8,6 +8,9 @@ import { evaluateSheet, runSheet, withParams } from './index';
 import { legacyFeasible, legacyPointState } from './derived';
 import { causeFits, type Item } from './states';
 import { describe as describeItem, standardProblems } from './describe';
+import { FINDING_CAUSES } from './items';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   sweepable,
   type CheckResult,
@@ -365,6 +368,35 @@ describe('a search that stopped at the edge of a table', () => {
     if (k?.status !== 'failed') return;
     expect(k.cause).toMatchObject({ kind: 'no-crossing', data: { notProof: 'end-not-read' } });
     if (k.cause.kind === 'no-crossing') expect(k.cause.data.searched).toEqual([0, 2]);
+    expectSame(res);
+  });
+});
+
+describe('the table from a finding’s rule to its cause', () => {
+  it('has an entry for every rule the sheet’s validation and evaluation raise', () => {
+    const dir = join(__dirname);
+    const rules = new Set<string>();
+    for (const f of readdirSync(dir))
+      if (f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.endsWith('.fixtures.ts'))
+        for (const m of readFileSync(join(dir, f), 'utf8').matchAll(/rule: '(sheet-[a-z-]+)'/g))
+          rules.add(m[1]);
+    expect(rules.size).toBeGreaterThanOrEqual(18);
+    expect([...rules].filter((r) => !(r in FINDING_CAUSES)).sort()).toEqual([]);
+  });
+
+  it('reads a missing decision as a design not determined, never as an entry not read', () => {
+    const d = sheet('otas/five-transistor-ota.json');
+    const p = d.params.find((x) => x.name === 'V_tail') as { designConstraint?: unknown };
+    delete p.designConstraint;
+    const res = runSheet(d, table, undefined, REFS);
+    const v = res.items?.find((i) => i.path.length === 0 && i.name === 'V_tail');
+    expect(v).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'not-determined', data: { why: 'decision-missing', names: ['V_tail'] } },
+    });
+    for (const i of res.items ?? [])
+      if (i.kind === 'sheet' && i.path.length === 0 && i.status === 'failed')
+        expect(i.cause.kind).not.toBe('not-read');
     expectSame(res);
   });
 });

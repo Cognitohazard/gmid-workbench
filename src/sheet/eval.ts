@@ -55,6 +55,7 @@ import {
   failedParams,
   solveFailedIn,
   unfoundIn,
+  declarationWhy,
   unitOfSides,
   stands,
   unfinishedBecause,
@@ -2922,19 +2923,6 @@ function relationAt(
 /** What is wrong with the declarations of `names` that cannot be solved as written: a param that
  *  carries two relations is a decision made twice; anything else (a half-written constraint, a
  *  range that is missing) is a decision missing. */
-function declarationWhy(
-  doc: SheetDoc,
-  names: readonly string[],
-): 'decision-missing' | 'decision-twice' {
-  const twice = doc.params.some(
-    (p) =>
-      names.includes(p.name) &&
-      [p.designConstraint !== undefined, p.solveFor !== undefined, p.hold !== undefined].filter(
-        Boolean,
-      ).length > 1,
-  );
-  return twice ? 'decision-twice' : 'decision-missing';
-}
 
 /** Each side of an unknown's relation at an evaluated probe, where it gives a finite number. */
 function relationSides(u: Unknown, res: SheetResult): { lhs?: number; rhs?: number } {
