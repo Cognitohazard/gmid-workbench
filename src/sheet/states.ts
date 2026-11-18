@@ -379,10 +379,12 @@ export const OPEN_RULINGS: { readonly equationOnly: DesignVerdict } = { equation
  * fields still read it as the design failing, by one stated rule (legacyDesignFailure).
  */
 export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boolean): Cause {
-  if (data.range.from !== 'wiring' && data.ended.kind === 'sign')
+  // In a stated range, no solution there only where both its ends were read: a search that
+  // stopped short of an end did not look at what lies between.
+  if (data.range.from !== 'wiring' && data.ended.kind === 'sign' && endsRead)
     return { kind: 'none-in-range', data: { ...data, endsRead } };
-  // Over the circuit's own range with no proof, or a step across the target, or a relation that
-  // singles out no value, in a range of any source: no crossing, and nothing proved.
+  // Over the circuit's own range with no proof, an end not read, a step across the target, or a
+  // relation that singles out no value, in a range of any source: no crossing, and nothing proved.
   return {
     kind: 'no-crossing',
     data: { ...data, endsRead, notProof: endsRead ? 'not-monotonic' : 'end-not-read' },

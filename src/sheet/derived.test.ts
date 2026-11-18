@@ -353,3 +353,18 @@ describe('an item that gives no number', () => {
     expectSame(res);
   });
 });
+
+describe('a search that stopped at the edge of a table', () => {
+  it('reads not proved, with its stated range, never no solution in that range', () => {
+    const d = withParams(sheet('mirrors-bias/cascode-current-mirror.json'), { V_out: 0.05 });
+    const res = runSheet(d, table, undefined, REFS);
+    const k = res.items?.find(
+      (i) => i.kind === 'search' && i.path.length === 0 && i.name === 'k_x',
+    );
+    expect(k?.status).toBe('failed');
+    if (k?.status !== 'failed') return;
+    expect(k.cause).toMatchObject({ kind: 'no-crossing', data: { notProof: 'end-not-read' } });
+    if (k.cause.kind === 'no-crossing') expect(k.cause.data.searched).toEqual([0, 2]);
+    expectSame(res);
+  });
+});

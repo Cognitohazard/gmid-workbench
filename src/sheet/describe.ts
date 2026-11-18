@@ -738,7 +738,8 @@ function noSolutionText(
   if (c.kind === 'no-solution') lines.push(t`${monotonicText(d)}, so no solution exists.`);
   else if (c.kind === 'no-crossing') {
     lines.push(t`This is not a proof.`);
-    if (e.kind === 'sign') lines.push(t`The engine did not show that ${monotonicText(d)}.`);
+    if (e.kind === 'sign' && c.data.notProof === 'not-monotonic')
+      lines.push(t`The engine did not show that ${monotonicText(d)}.`);
   } else if (d.range.from === 'table')
     lines.push(t`Load a table that holds a wider range of lengths.`);
   else if (d.stage === 'sheet') lines.push(t`Widen the search range of ${U}.`);
