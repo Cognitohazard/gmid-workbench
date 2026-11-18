@@ -60,7 +60,7 @@ const KFLICKER = 3e-25;
  * drop or duplicate the endpoint; values themselves are reconstructed as
  * min + i*step to stay on a clean lattice.
  */
-function sweepValues(spec: { min: number; max: number; step: number }): Float64Array {
+export function sweepValues(spec: { min: number; max: number; step: number }): Float64Array {
   const { min, max, step } = spec;
   if (!(step > 0)) throw new Error('demo: vgs.step must be > 0');
   if (!(max >= min)) throw new Error('demo: vgs.max must be >= vgs.min');
