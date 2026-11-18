@@ -83,6 +83,8 @@ export {
   wiringRefusal,
 } from './nodes';
 export * from './resolve';
+export * from './states';
+export * from './describe';
 export * from './sensitivity';
 export * from './properties';
 export * from './examples';

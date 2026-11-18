@@ -1,0 +1,406 @@
+// The outcome of one evaluation as a list of items, each with one status: ok, failed with exactly
+// one cause from a closed list, or withheld because it depends on items that failed. The verdict is
+// read from the list by four rules. Pure data and pure functions: what a reader sees is built from
+// these in one place (describe.ts), never written by the code that produces them.
+
+import type { OutsideTable } from '../types';
+import type { CheckKind, SolveRange } from './types';
+
+/** What an item is: the sheet itself (always the first item of a result), a value (a param or an
+ *  equation), a device, a search (one solved param), or a requirement (a check). */
+export type ItemKind = 'sheet' | 'value' | 'device' | 'search' | 'requirement';
+
+/** Where an item is: the names of the blocks from the top sheet down to the sheet that owns it
+ *  (empty for the top sheet's own), and its name there — a param's or an equation's name, a
+ *  check's id, a solved param's name, `givens` for a sheet's own device, empty for the sheet. */
+export interface ItemRef {
+  readonly kind: ItemKind;
+  readonly path: readonly string[];
+  readonly name: string;
+}
+
+// ── The causes ────────────────────────────────────────────────────────────────────────────────
+//
+// Each cause is an identifier with typed data. A cause carries no sentence of its own beyond the
+// evaluation's own findings it quotes (`reason` fields, the words another part of the evaluation
+// used for why something did not evaluate).
+
+/** A sheet that could not be read: an unknown format, a reference that does not resolve, a field
+ *  that is malformed. `message` is the reading code's own sentence (see describe.ts). */
+export interface NotReadData {
+  readonly why: 'format' | 'reference' | 'field';
+  readonly where: string;
+  readonly message: string;
+}
+
+/** A sheet whose decisions do not determine one design: one missing, one made twice, or a level
+ *  it marks as assumed. `names` are the params or wires involved. */
+export interface NotDeterminedData {
+  readonly why: 'decision-missing' | 'decision-twice' | 'assumed-level';
+  readonly names: readonly string[];
+  readonly message: string;
+}
+
+/** Something that gives no number: the table lacks a sweep or a column, the two bound quantities
+ *  are not a legal pair, or an expression gives no finite number. `name` is the quantity, column or
+ *  expression; `reason` is the evaluation's own words for it. */
+export interface CannotEvaluateData {
+  readonly why: 'no-sweep' | 'no-column' | 'illegal-pair' | 'not-finite' | 'not-defined';
+  readonly name: string;
+  readonly reason: string;
+}
+
+/** Which field of a param holds the relation a search solves. */
+export type RelationField = 'designConstraint' | 'solveFor' | 'hold';
+
+/** The relation a search drives to zero, `lhs - (rhs)`, and the names each side reads directly. */
+export interface RelationData {
+  readonly lhs: string;
+  readonly rhs: string;
+  readonly field: RelationField;
+  readonly reads: { readonly lhs: readonly string[]; readonly rhs: readonly string[] };
+}
+
+/** One end of a stretch a search read: the unknown there and each side of the relation, and,
+ *  where the end was stepped in from the end of the range because the relation does not evaluate
+ *  beyond it, the evaluation's own words for why. */
+export interface SearchEnd {
+  readonly x: number;
+  readonly lhs: number;
+  readonly rhs: number;
+  readonly stepped?: string;
+}
+
+/** One solved param as a failed search reports it: where it is, whether it is a held param, the
+ *  unit its values are quoted in, its relation, the range it may be searched in (SolveRange, with
+ *  where it came from), and the stretch this search ran over (`searched`: the author's range, or a
+ *  stage of it). Where other members of its set stood while it was searched, `given` names them
+ *  with their values. */
+export interface SearchData {
+  readonly path: readonly string[];
+  readonly unknown: string;
+  readonly held: boolean;
+  readonly unit?: string;
+  readonly relation: RelationData;
+  readonly range: SolveRange;
+  readonly searched: readonly [number, number];
+  readonly given?: readonly {
+    readonly name: string;
+    readonly value: number;
+    readonly unit?: string;
+  }[];
+}
+
+/** What a search that found no solution read: the two ends of the stretch it searched, and how it
+ *  ended — no sign change across the stretch (`sign`); a bracket that closed `at` a point where
+ *  the relation still reads `lhs - rhs` far beyond the `band` its slope allows (`step`); a held
+ *  relation that moves by `moves` where its own param accounts for `own` (`held-flat`); or a
+ *  relation that reads the same at both ends and the middle (`flat`). */
+export interface NoSolutionRead {
+  readonly ends: readonly [SearchEnd, SearchEnd];
+  readonly ended:
+    | { readonly kind: 'sign' }
+    | { readonly kind: 'step'; readonly at: SearchEnd; readonly band: number }
+    | { readonly kind: 'held-flat'; readonly moves: number; readonly own: number }
+    | { readonly kind: 'flat' };
+}
+
+/** A search over the range the circuit allows, with no crossing there. How it was shown: today
+ *  only that both ends read the design; a check that the relation is monotonic in the unknown is
+ *  not built yet (see noSolutionCause). */
+export interface NoSolutionData extends SearchData, NoSolutionRead {
+  readonly shown: 'ends-read';
+}
+
+/** A search that found no crossing and proved nothing: why it is not a proof. */
+export interface NoCrossingData extends SearchData, NoSolutionRead {
+  readonly notProof: 'not-monotonic' | 'end-not-read';
+  readonly endsRead: boolean;
+}
+
+/** A search in a range the author stated (or the lengths a table holds) with no root in it. */
+export interface NoneInRangeData extends SearchData, NoSolutionRead {
+  readonly endsRead: boolean;
+}
+
+/**
+ * Searches that did not settle, and why:
+ *  - `unevaluable`: nothing of the stretch evaluates (`reason`: why at its low end); or only one
+ *    point of it does (`only`, with the ends stepped in from); or the sign changes across it but
+ *    the crossing lies `between` two points where the points tried do not evaluate;
+ *  - `member`: a member of a set failed where the others stood (`failure`: its own cause);
+ *  - `sweeps`: the set still moved after `sweeps` sweeps, the last by `moved`;
+ *  - `verification`: read from the final evaluation, the relations of `off` were outside their
+ *    tolerance (`tolRel` of each one's range, by its slope).
+ */
+export interface DidNotSettleData {
+  readonly members: readonly SearchData[];
+  readonly simplifications: readonly string[];
+  readonly why:
+    | {
+        readonly kind: 'unevaluable';
+        readonly at:
+          | { readonly where: 'nowhere'; readonly reason: string }
+          | {
+              readonly where: 'one-point';
+              readonly end: SearchEnd;
+              readonly stepped: readonly SearchStep[];
+            }
+          | {
+              readonly where: 'crossing';
+              readonly ends: readonly [SearchEnd, SearchEnd];
+              readonly between: readonly [number, number];
+              readonly reason: string;
+            };
+      }
+    | { readonly kind: 'member'; readonly failure: Cause }
+    | {
+        readonly kind: 'sweeps';
+        readonly sweeps: number;
+        readonly moved: { readonly name: string; readonly by: number };
+      }
+    | {
+        readonly kind: 'verification';
+        readonly tolRel: number;
+        readonly off: readonly {
+          readonly name: string;
+          readonly lhs?: number;
+          readonly rhs?: number;
+          readonly tolerance: number;
+        }[];
+      };
+}
+
+/** An end of a search stepped in from the end of the range, for why. */
+export interface SearchStep {
+  readonly side: 'below' | 'above';
+  readonly x: number;
+  readonly reason: string;
+}
+
+/** A search stopped by a limit: the evaluations the whole tree may spend, or the probes one search
+ *  may take. */
+export interface LimitData {
+  readonly members: readonly SearchData[];
+  readonly limit: 'evaluations' | 'probes';
+  readonly count: number;
+  /** For a member of a set: the search was the set's (its message names the set). */
+  readonly inSet?: boolean;
+  /** For the probe limit: the ends of the stretch the search had bracketed. */
+  readonly ends?: readonly [SearchEnd, SearchEnd];
+}
+
+/** A `hold` that does not hold where the design is sized: it gives no number, or a current balance
+ *  that does not read zero. */
+export interface StatementFalseData {
+  readonly path: readonly string[];
+  readonly param: string;
+  readonly statement: string;
+  /** For a current balance that does not read zero: what it reads, and the tolerance. Absent where
+   *  the statement gives no number. */
+  readonly balance?: { readonly reads: number; readonly tolerance: number };
+}
+
+/** A requirement that does not hold: its two sides, the margin, and whether it is hard. */
+export interface FailsData {
+  readonly lhs: number;
+  readonly rhs: number;
+  readonly margin: number;
+  readonly marginPct: number;
+  readonly hard: boolean;
+}
+
+/** The closed list of causes, each with its data. */
+export type Cause =
+  | { readonly cause: 'not-read'; readonly data: NotReadData }
+  | { readonly cause: 'not-determined'; readonly data: NotDeterminedData }
+  | { readonly cause: 'outside-table'; readonly data: OutsideTable }
+  | { readonly cause: 'cannot-evaluate'; readonly data: CannotEvaluateData }
+  | { readonly cause: 'no-solution'; readonly data: NoSolutionData }
+  | { readonly cause: 'no-crossing'; readonly data: NoCrossingData }
+  | { readonly cause: 'none-in-range'; readonly data: NoneInRangeData }
+  | { readonly cause: 'did-not-settle'; readonly data: DidNotSettleData }
+  | { readonly cause: 'limit'; readonly data: LimitData }
+  | { readonly cause: 'statement-false'; readonly data: StatementFalseData }
+  | { readonly cause: 'fails'; readonly data: FailsData };
+
+export type CauseName = Cause['cause'];
+
+/** Every cause, in the order the definition lists them. */
+export const CAUSES: readonly CauseName[] = [
+  'not-read',
+  'not-determined',
+  'outside-table',
+  'cannot-evaluate',
+  'no-solution',
+  'no-crossing',
+  'none-in-range',
+  'did-not-settle',
+  'limit',
+  'statement-false',
+  'fails',
+];
+
+/** The kinds of item each cause may occur on. A cause on any other kind is a defect in the code
+ *  that produced it (see causeFits). */
+export const OCCURS_ON: { readonly [C in CauseName]: readonly ItemKind[] } = {
+  'not-read': ['sheet'],
+  'not-determined': ['sheet'],
+  'outside-table': ['device'],
+  'cannot-evaluate': ['value', 'device', 'requirement', 'search'],
+  'no-solution': ['search'],
+  'no-crossing': ['search'],
+  'none-in-range': ['search'],
+  'did-not-settle': ['search'],
+  limit: ['search'],
+  'statement-false': ['search'],
+  fails: ['requirement'],
+};
+
+/** Whether a cause may occur on an item of this kind (OCCURS_ON). */
+export const causeFits = (kind: ItemKind, c: Cause): boolean => OCCURS_ON[c.cause].includes(kind);
+
+// ── Items ─────────────────────────────────────────────────────────────────────────────────────
+
+/** A quantity computed by a fallback definition: the quantity, the column the table lacks, and the
+ *  form that was used. */
+export interface Fallback {
+  readonly quantity: string;
+  readonly missing: string;
+  readonly form: string;
+}
+
+/** What an item that is ok carries. A value or a device: the quantities computed by a fallback. A
+ *  search: where it landed, the range and where it came from, whether the root lay in the range
+ *  searched first, and whether it was found by repeated searches and verified. A requirement: its
+ *  sides, its margin, whether the margin is narrow, and whether it sits exactly on its limit. */
+export type Attributes =
+  | { readonly kind: 'sheet' }
+  | { readonly kind: 'value' | 'device'; readonly fallbacks?: readonly Fallback[] }
+  | {
+      readonly kind: 'search';
+      readonly value: number;
+      readonly range: SolveRange;
+      readonly inFirstRange: boolean;
+      readonly settledInSet: boolean;
+    }
+  | {
+      readonly kind: 'requirement';
+      readonly lhs: number;
+      readonly rhs: number;
+      readonly margin: number;
+      readonly marginPct: number;
+      readonly narrow: boolean;
+      readonly onLimit: boolean;
+      readonly hard: boolean;
+    };
+
+/** One item's status. A withheld item names the failed items it depends on, nearest first. */
+export type Status =
+  | { readonly status: 'ok'; readonly attributes?: Attributes }
+  | { readonly status: 'failed'; readonly cause: Cause }
+  | { readonly status: 'withheld'; readonly on: readonly ItemRef[] };
+
+export type Item = ItemRef & Status;
+
+// ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
+
+/** Whether a search over the circuit's own range, both ends read, that found no crossing is taken
+ *  as proved. Kept true for now: it keeps today's verdict (see the decision recorded where this
+ *  build was ruled). Setting it false maps such a search to "no crossing, not proved", whose
+ *  verdict is undetermined, and changes nothing else. */
+export const NO_CROSSING_OVER_WIRING_IS_PROOF = true;
+
+/**
+ * The cause of a search that found no solution in what it searched, from its data — where its
+ * range came from (`range.from`) and how the search ended — and whether both ends of the stretch
+ * read the design. The one place that decides whether a failed search is proved (see
+ * NO_CROSSING_OVER_WIRING_IS_PROOF).
+ */
+export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boolean): Cause {
+  const sign = data.ended.kind === 'sign';
+  if (data.range.from === 'wiring' && sign && endsRead && NO_CROSSING_OVER_WIRING_IS_PROOF)
+    return { cause: 'no-solution', data: { ...data, shown: 'ends-read' } };
+  if (data.range.from !== 'wiring' && sign)
+    return { cause: 'none-in-range', data: { ...data, endsRead } };
+  // Over the circuit's own range without a proof, or a step across the target, or a relation that
+  // singles out no value, in a range of any source: no crossing, and nothing proved.
+  return {
+    cause: 'no-crossing',
+    data: { ...data, endsRead, notProof: endsRead ? 'not-monotonic' : 'end-not-read' },
+  };
+}
+
+// ── The verdict ───────────────────────────────────────────────────────────────────────────────
+
+/** The verdict at the design point. */
+export type DesignVerdict = 'infeasible' | 'non-compliant' | 'feasible' | 'undetermined';
+/** The verdict at a held point (a range end, another process condition). */
+export type HeldVerdict = 'no-operating-point' | 'non-compliant' | 'compliant' | 'undetermined';
+
+/** A verdict, with the failed items it rests on: for an infeasible or non-compliant one, the items
+ *  that decide it; for an undetermined one, every failed item. */
+export interface Verdict<V extends string = DesignVerdict> {
+  readonly verdict: V;
+  readonly failed: readonly (ItemRef & { readonly cause: Cause })[];
+}
+
+const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
+  items.flatMap((i) =>
+    i.status === 'failed' ? [{ kind: i.kind, path: i.path, name: i.name, cause: i.cause }] : [],
+  );
+
+/**
+ * The verdict of one result, by four rules, the first that applies:
+ *  1. a search failed with "no solution (proved)": infeasible (at a held point, no operating point);
+ *  2. a hard requirement failed with "fails": non-compliant;
+ *  3. every item is ok: feasible (at a held point, compliant) — an advisory requirement that does
+ *     not hold is failed, and does not stop this rule, as it gates nothing today;
+ *  4. otherwise: undetermined, with each failed item and its cause.
+ * Rule 2 before rule 3 is three-valued logic: one requirement that fails decides, whatever else is
+ * not known. The sheet is an item, so a sheet that was not read cannot reach rule 3. Withheld items
+ * follow from failed ones, which the list already holds.
+ */
+export function verdictOf(items: readonly Item[]): Verdict {
+  const failed = failedItems(items);
+  const proved = failed.filter((f) => f.cause.cause === 'no-solution');
+  if (proved.length) return { verdict: 'infeasible', failed: proved };
+  const fails = failed.filter((f) => f.cause.cause === 'fails' && f.cause.data.hard);
+  if (fails.length) return { verdict: 'non-compliant', failed: fails };
+  // An advisory requirement that does not hold decides nothing (see failsCause).
+  const blocking = failed.filter((f) => !(f.cause.cause === 'fails' && !f.cause.data.hard));
+  if (blocking.length === 0 && items.every((i) => i.status !== 'withheld'))
+    return { verdict: 'feasible', failed: [] };
+  return { verdict: 'undetermined', failed: blocking };
+}
+
+/** The verdict of a held point: verdictOf, in the words a held design is asked in. */
+export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
+  const v = verdictOf(items);
+  const word: Record<DesignVerdict, HeldVerdict> = {
+    infeasible: 'no-operating-point',
+    'non-compliant': 'non-compliant',
+    feasible: 'compliant',
+    undetermined: 'undetermined',
+  };
+  return { verdict: word[v.verdict], failed: v.failed };
+}
+
+/** A hard requirement's cause, where it does not hold. A requirement that is advisory and does not
+ *  hold is failed all the same, with `hard: false`, and decides nothing (verdictOf rule 2). */
+export const failsCause = (r: {
+  kind: CheckKind;
+  lhsValue: number;
+  rhsValue: number;
+  margin: number;
+  marginPct: number;
+}): Cause => ({
+  cause: 'fails',
+  data: {
+    lhs: r.lhsValue,
+    rhs: r.rhsValue,
+    margin: r.margin,
+    marginPct: r.marginPct,
+    hard: r.kind === 'physical' || r.kind === 'spec',
+  },
+});
