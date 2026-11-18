@@ -3,7 +3,7 @@
 // reads them.
 
 import { causeMessage } from './describe';
-import type { Cause, NoSolutionRead } from './states';
+import { legacyDesignFailure, type Cause, type Item, type NoSolutionRead } from './states';
 import type { NoSolutionWhy, SolveFailure } from './types';
 
 /** How a search that found no solution ended, in today's words (NoSolutionWhy). */
@@ -68,4 +68,49 @@ function legacyFailure(c: Cause): SolveFailure {
     default:
       throw new Error(`a ${c.kind} cause is not the outcome of a search`);
   }
+}
+
+/**
+ * Today's yes-or-no feasibility of one evaluation, from its items: every item ok, except a
+ * requirement that is advisory, which gates nothing. A requirement that could not be calculated
+ * counts as failing ("fails closed"), as it does today, though its verdict is undetermined.
+ * `advisory` names the requirements that are advisory, by their path in the list.
+ */
+export function legacyFeasible(items: readonly Item[], advisory: ReadonlySet<string>): boolean {
+  return items.every(
+    (i) =>
+      i.status === 'ok' ||
+      (i.kind === 'requirement' && advisory.has([...i.path, i.name].join('.'))),
+  );
+}
+
+/**
+ * Today's reading of one run as a point of the compliance question (PointOutcome.state), from its
+ * items: a search over the circuit's own range with no crossing, both ends read, is the design
+ * failing (legacyDesignFailure); any other item that failed or was withheld, a requirement that
+ * fails aside, leaves no answer; a design that rests on an assumed level (`assumed`) has none
+ * either; otherwise it complies where it is feasible.
+ */
+export function legacyPointState(
+  items: readonly Item[],
+  advisory: ReadonlySet<string>,
+  assumed = false,
+): 'complies' | 'does-not-comply' | 'no-answer' {
+  const answer = ((): 'complies' | 'does-not-comply' | 'no-answer' => {
+    if (items.some((i) => i.status === 'failed' && legacyDesignFailure(i.cause)))
+      return 'does-not-comply';
+    const unanswered = items.some(
+      (i) =>
+        i.status !== 'ok' &&
+        !(
+          i.kind === 'requirement' &&
+          (i.status === 'failed' && i.cause.kind === 'fails'
+            ? true
+            : advisory.has([...i.path, i.name].join('.')))
+        ),
+    );
+    if (unanswered) return 'no-answer';
+    return legacyFeasible(items, advisory) ? 'complies' : 'does-not-comply';
+  })();
+  return assumed ? 'no-answer' : answer;
 }

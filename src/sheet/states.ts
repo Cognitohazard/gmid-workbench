@@ -277,7 +277,7 @@ export const causeFits = (kind: ItemKind, c: Cause): boolean => OCCURS_ON[c.kind
  *  form that was used. */
 export interface Fallback {
   readonly quantity: string;
-  readonly missing: string;
+  readonly missing: readonly string[];
   readonly form: string;
 }
 

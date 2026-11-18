@@ -77,6 +77,7 @@ import {
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
   noSolutionCause,
+  verdictOf,
   type Cause,
   type ItemRef,
   type RelationField,
@@ -85,6 +86,7 @@ import {
 } from './states';
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { causeOfFailure, solveFailureOf } from './derived';
+import { itemsOf, searchItems } from './items';
 import {
   axisDirection,
   blockWires,
@@ -1306,6 +1308,39 @@ function evalBlocks(
         feasible: false,
         provides: {},
         checks: [],
+        // Not evaluated: what it would have read was withheld, or a value its parent sets for it
+        // gave no number.
+        items: [
+          cause
+            ? {
+                kind: 'sheet',
+                path: [],
+                name: '',
+                status: 'withheld',
+                on: [
+                  {
+                    kind: 'sheet',
+                    path: cause.split(PATH_SEP),
+                    name: '',
+                    cause: 'cannot-evaluate',
+                  },
+                ],
+              }
+            : {
+                kind: 'sheet',
+                path: [],
+                name: '',
+                status: 'failed',
+                cause: {
+                  kind: 'cannot-evaluate',
+                  data: {
+                    why: 'not-defined',
+                    name: block.name,
+                    reason: `block "${block.name}": a value its parent sets for it did not resolve`,
+                  },
+                },
+              },
+        ],
       };
       for (const key of srcDoc.provides ?? []) withhold(key, cause ?? block.name);
       PENDING_WIRING.set(report, { doc: childDoc, res: NOT_EVALUATED, table: childTable, mode });
@@ -1364,6 +1399,7 @@ function evalBlocks(
       ...(res.solve ? { solve: res.solve } : {}),
       ...solvedOf(childDoc, res),
       ...(res.pinned ? { pinned: res.pinned } : {}),
+      ...(res.items ? { items: res.items } : {}),
     };
     PENDING_WIRING.set(report, { doc: childDoc, res, table: childTable, mode });
     reports.push(report);
@@ -1982,15 +2018,15 @@ function withUnfound(
   unfound: ReadonlyMap<string, string>,
   at?: Readonly<Record<string, number>>,
 ): SheetResult {
-  const raise = (res: SheetResult): SheetResult => {
+  const raise = (res: SheetResult, notFound: ReadonlyMap<string, string>): SheetResult => {
     let out = res;
     for (const f of failed)
       out = failedWith(out, f.failure, solveCause(node.doc, f.probe, f.failure));
     const outcome =
       failed.find((f) => designFailure(f.failure))?.failure ?? failed[failed.length - 1].failure;
-    return { ...out, solve: outcome };
+    return { ...out, solve: outcome, items: searchItems(failed, notFound) };
   };
-  if (!unfound.size) return raise(failed[failed.length - 1].probe);
+  if (!unfound.size) return raise(failed[failed.length - 1].probe, unfound);
   const budget: SolveBudget = {
     left: node.settings.solveEvaluations,
     counted: 0,
@@ -2008,7 +2044,7 @@ function withUnfound(
     if (!more.size) break;
     for (const [n, c] of more) all.set(n, c);
   }
-  const res = raise(evaluated);
+  const res = raise(evaluated, all);
   // The findings that follow from the params not found come after the failures they follow from,
   // so the solve's own message stays the first error a reader meets, as on the probe.
   const follows = (w: QAWarning): boolean => w.cause !== undefined && causes.has(w.cause);
@@ -2172,19 +2208,22 @@ function evaluateNode(
   const settings = opts.settings ?? DEFAULT_SETTINGS;
   const found =
     opts.found ?? (depth === 0 ? rangesOfTree(doc, { table, resolveDevice }) : undefined);
-  const solvedRun = withHeld(
+  const solvedRun = withItems(
     doc,
-    solveNode({
+    withHeld(
       doc,
-      table,
-      resolveDevice,
-      depth,
-      budget: opts.budget ?? { left: settings.solveEvaluations, counted: 0, children: new Map() },
-      settings,
-      ...(found ? { found } : {}),
-      ...(opts.pinned ? { pinned: opts.pinned } : {}),
-      ...(opts.perturb ? { perturb: opts.perturb } : {}),
-    }),
+      solveNode({
+        doc,
+        table,
+        resolveDevice,
+        depth,
+        budget: opts.budget ?? { left: settings.solveEvaluations, counted: 0, children: new Map() },
+        settings,
+        ...(found ? { found } : {}),
+        ...(opts.pinned ? { pinned: opts.pinned } : {}),
+        ...(opts.perturb ? { perturb: opts.perturb } : {}),
+      }),
+    ),
   );
   // A solved param held at a given value is named on the result: its relation was not read.
   const held = doc.params
@@ -2236,6 +2275,12 @@ function evaluateNode(
   };
 }
 
+/** The evaluation with its item list and the verdict the list gives (SheetResult.items). */
+const withItems = (doc: SheetDoc, res: SheetResult): SheetResult => {
+  const items = itemsOf(doc, res);
+  return { ...res, items, verdict: verdictOf(items) };
+};
+
 /**
  * How far from zero a current balance may read where the design is sized, as a fraction of its
  * param's own magnitude. The balance is zero by construction — the device was sized to carry the
@@ -2264,14 +2309,20 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
   for (const p of params) {
     if (withheld && unfound?.has(causeIn(withheld, p.hold, res.values) ?? '')) continue;
     const v = evalFinite(p.hold, res.values, scope, NO_WARN, `hold ${p.name}`);
-    const falseHere = (balance?: { reads: number; tolerance: number }): SheetResult =>
-      solveFailed(
-        out,
-        solveFailureOf({
-          kind: 'statement-false',
-          data: { path: [], param: p.name, statement: p.hold, ...(balance ? { balance } : {}) },
-        }),
-      );
+    const falseHere = (balance?: { reads: number; tolerance: number }): SheetResult => {
+      const cause: Cause = {
+        kind: 'statement-false',
+        data: { path: [], param: p.name, statement: p.hold, ...(balance ? { balance } : {}) },
+      };
+      const failed = solveFailed(out, solveFailureOf(cause));
+      return {
+        ...failed,
+        items: [
+          ...(failed.items ?? []),
+          { kind: 'search', path: [], name: p.name, status: 'failed', cause },
+        ],
+      };
+    };
     if (v === undefined) {
       out = falseHere();
       continue;
@@ -3985,6 +4036,7 @@ function runRangeEnd(
     solved,
     ...(res.ranges ? { ranges: res.ranges } : {}),
     warnings: res.warnings,
+    ...(res.items ? { items: res.items } : {}),
     ...(err !== undefined ? { error: err } : {}),
     ...(outside.length ? { outside } : {}),
     ...(res.nodes ? { nodes: res.nodes } : {}),

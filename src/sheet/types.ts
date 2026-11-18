@@ -6,6 +6,7 @@
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
 import type { OutsideTable, QAWarning } from '../types';
+import type { Item, Verdict } from './states';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
@@ -1092,6 +1093,8 @@ export interface SheetBlockReport {
   /** The block's own solved params held at given values instead of solved (see
    *  SheetResult.pinned). */
   pinned?: string[];
+  /** This block's items with their statuses (SheetResult.items), named within the block. */
+  items?: Item[];
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
@@ -1265,6 +1268,8 @@ export interface RangeEndReport {
    *  child). Reported rather than warned, like SizingReport.assumed: it is a property of what
    *  the author wrote down, and the fix is to author the current explicitly. */
   assumedSource?: string[];
+  /** The run's items with their statuses (SheetResult.items); absent where nothing was run. */
+  items?: Item[];
 }
 
 /** A range end's outcome — one compliance point's. `not-run` and `no-answer` are first-class
@@ -1531,6 +1536,12 @@ export interface SheetResult {
    *  (see EvaluateOptions.pinned), by name; a block's are on its report. Their relations were not
    *  checked, so the verdict of such a run does not show that they hold. Absent where none was. */
   pinned?: string[];
+  /** Every item of this evaluation with its status — the sheet first, then its values, its
+   *  searches, its device, its equations and checks, and each block's items under its name (see
+   *  states.ts) — and the verdict they give. The fields above are today's readings of the same
+   *  outcome; nothing reads these yet. */
+  items?: Item[];
+  verdict?: Verdict;
 }
 
 /**
