@@ -7,8 +7,8 @@
 // checked against the finished result (nodes.ts) and never feeds back into it. Pure,
 // deterministic, never throws. Zero DOM.
 
-import { LOOKUP_RANGE_MESSAGE } from '../types';
-import type { DeviceTable, QAWarning, Scope, Value } from '../types';
+import { LookupRangeError, outsideTableMessage } from '../types';
+import type { DeviceTable, OutsideTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, fallbackMessage, metaScalars, noiseSource, tableFallbacks } from '../derive';
 import {
@@ -19,14 +19,17 @@ import {
   passthroughName,
 } from '../namespace';
 import { additiveCoefficient, createEngine, scalarScope } from '../expr';
-import { BINDABLE, bindProblem, sizeDevice, type SizeQuery } from '../device';
+import { BINDABLE, bindProblem, sizeDevice, type SizeQuery, type SizeResult } from '../device';
 import { fixTable } from '../series';
 import { bracketGrid, diodeGrid, offHull } from '../grid';
 import {
   BIAS_AXES,
   MAX_BLOCK_DEPTH,
   balancedBy,
-  clampedIn,
+  outsideIn,
+  outsideMessage,
+  OWN_DEVICE,
+  causeInParent,
   engineSolved,
   holds,
   isHardCheck,
@@ -43,7 +46,6 @@ import {
   lastSolveFailure,
   namesOf,
   andList,
-  childPath,
   DEVICE_NAMES,
   ranged,
   refusedIn,
@@ -85,7 +87,7 @@ import {
   STANDALONE,
   structuralDiodes,
   unwalkedReport,
-  volts,
+  selectorsBeyondTable,
   withNodes,
   withoutWalk,
   type SolvedWire,
@@ -340,7 +342,7 @@ function diodeFolded(t: DeviceTable): { table: DeviceTable; clamped: boolean } {
  *  - no axis at all says nothing — except body bias, where a table with no `vsb` column is taken
  *    as characterized with the source tied to the body (the namespace default, vsb = 0).
  *
- * Anything else is REFUSED rather than read off the table as it stands: the numbers would belong
+ * Anything else is REFUSED rather than read from the table as it stands: the numbers would belong
  * to a different operating point than the one written down, and a warning beside them does not
  * make them right.
  */
@@ -458,7 +460,8 @@ function applyGivensBias(
       /** Each declared axis value as the givens state it, before any clamp to the table. */
       stated: Record<string, number>;
       assumed: string[];
-      clamped: string[];
+      /** Declared bias values beyond what the table holds: the device is not sized on them. */
+      outside: OutsideTable[];
       /** A diode connection folded the vds axis; `clamped` when the vgs sweep leaves the
        *  characterized vds range somewhere, so part of the diagonal reads the table's edge, and
        *  `range` that vds range. */
@@ -472,7 +475,7 @@ function applyGivensBias(
   /** Of `needs`, the axes the table holds at one value away from the default — in words. */
   const taken: string[] = [];
   const assumed: string[] = [];
-  const clamped: string[] = [];
+  const outside: OutsideTable[] = [];
   let diode: { clamped: boolean; range: [number, number] } | undefined;
   // The slices are taken once every axis has been read (atBias), in the order they are found
   // here; slicing one bias axis leaves the others as they were, so each is read off `t` the same.
@@ -530,21 +533,18 @@ function applyGivensBias(
         if (refused) lacking.push(refused);
         continue;
       }
-      // sliceGrid clamps to the hull; apply the clamp HERE so the report and the slice
-      // agree — recording the requested value would show an operating point the sizing
-      // never used. The requested value survives in the warning only.
-      const applied = slice(axis, live, v);
-      // Beyond float rounding only: an expression landing a few ULP outside the axis reads the
-      // end node it was aiming at, which is not a clamp.
-      if (offHull(live.values, v)) {
-        clamped.push(axis);
-        warn({
-          rule: 'sheet-givens',
-          severity: 'warning',
-          message: `given ${axis} ${v} is outside the table's ${axis} range [${live.values[0]}, ${live.values[live.values.length - 1]}]; clamped to ${applied}`,
-          location: 'givens',
+      // sliceGrid clamps to the hull, so a value past it would be read at the table's edge: the
+      // device is not sized there at all (runSizing refuses it on `outside`). Beyond float
+      // rounding only: an expression landing a few ULP outside the axis reads the end node it
+      // was aiming at, which is no read beyond the table.
+      slice(axis, live, v);
+      if (offHull(live.values, v))
+        outside.push({
+          device: OWN_DEVICE,
+          quantity: axis,
+          asked: v,
+          held: [live.values[0], live.values[live.values.length - 1]],
         });
-      }
     } else if (live) {
       // Undeclared, but the table has this axis live. An axis the namespace gives a safe default
       // (vsb = 0, body-grounded) takes it — but ONLY when the table characterizes that point: if
@@ -587,7 +587,7 @@ function applyGivensBias(
       bias,
       stated,
       assumed,
-      clamped,
+      outside,
       ...(diode ? { diode } : {}),
     }
   );
@@ -643,9 +643,6 @@ function biasRefusal(
 interface RegionPoint {
   vds?: number;
   vdsat?: number;
-  /** The direction of the table's own vds axis: +1 where it holds no negative value, −1 where it
-   *  holds no positive one (a signed PMOS export), undefined where it spans both or is absent. */
-  axis?: 1 | -1;
 }
 
 /**
@@ -751,7 +748,7 @@ function runSizing(
   // and says so (`from`, the given's source).
   const fail = (
     error: string,
-    why: Pick<SizingReport, 'needs' | 'clamped' | 'unswept'> = {},
+    why: Pick<SizingReport, 'needs' | 'outside' | 'unswept'> = {},
     from?: unknown,
   ): { report: SizingReport; point: RegionPoint } => {
     const cause = from === undefined ? undefined : causeOf(from);
@@ -770,10 +767,22 @@ function runSizing(
       id: NaN,
       error,
       ...(why.needs?.length ? { needs: why.needs } : {}),
-      ...(why.clamped?.length ? { clamped: why.clamped } : {}),
+      ...(why.outside?.length ? { outside: why.outside } : {}),
       ...(why.unswept?.length ? { unswept: why.unswept } : {}),
     };
     return { report, point: {} };
+  };
+  // A device the givens read beyond its table is not sized: one error naming each read, generated
+  // from its record, and the records themselves on the report (SizingReport.outside).
+  const beyond = (
+    outside: readonly OutsideTable[],
+  ): { report: SizingReport; point: RegionPoint } => {
+    const refused = fail(outside.map(outsideTableMessage).join('; '), {
+      outside: outside.map((r) => ({ ...r, device: OWN_DEVICE })),
+    });
+    const axis = table ? axisDirection(table, 'vgs') : undefined;
+    if (axis !== undefined) refused.report.vgsAxis = axis;
+    return refused;
   };
 
   if (!table) return fail('no device to size against');
@@ -799,6 +808,19 @@ function runSizing(
   const sliced = applyGivensBias(b, atLength(table, L), values, scope, warn, lacking);
   if ('error' in sliced) return fail(sliced.error, sliced, sliced.from);
 
+  // A length beyond the ones the table holds, or a stated bias beyond its sweep, is a read beyond
+  // the table: refused before anything is sized on the table's edge.
+  const outside: OutsideTable[] = [];
+  if (lAxis && lAxis.values.length > 1 && offHull(lAxis.values, L))
+    outside.push({
+      device: OWN_DEVICE,
+      quantity: 'l',
+      asked: L,
+      held: [lAxis.values[0], lAxis.values[lAxis.values.length - 1]],
+    });
+  outside.push(...sliced.outside);
+  if (outside.length) return beyond(outside);
+
   // The sized table holds only the lengths L reads; the table's own range is the one an off-hull
   // length is judged and reported against.
   const q: SizeQuery = { table: sliced.table, L, ...(lAxis ? { lengths: lAxis.values } : {}) };
@@ -808,88 +830,75 @@ function runSizing(
     q[k] = v;
   }
 
+  let res: SizeResult;
   try {
-    const res = sizeDevice(q);
-    const read = mergeSized(values, res.quantities, res.passthrough, table, equations, warn);
-    // Not in the quantities bag; named in SIZING_SCALARS, which tells validation they are written.
-    values.ceiling = res.ceiling;
-    values.feasible = res.feasible ? 1 : 0;
-    // Surface the sizer's own engineering notes (e.g. an L clamped onto the table's
-    // hull) as advisory sheet warnings — same pattern children use at evalBlocks.
-    // Severity 'warning', not 'error', so a clamp does not flip feasibility closed. The notes
-    // about fallback forms are a fact about the table, like `noise`, so they are carried beside
-    // it on the report instead, once per device rather than once per warning list.
-    const fellBack = new Set(res.fallbacks.map(fallbackMessage));
-    for (const m of res.warnings) {
-      if (fellBack.has(m)) continue;
-      warn({ rule: 'sheet-givens', severity: 'warning', message: m, location: 'givens' });
-    }
-    const report: SizingReport = {
-      ok: true,
-      W: res.W,
-      L,
-      vgs: res.vgs,
-      id: res.id,
-      noise: noiseSource(table.grid),
-    };
-    if (res.fallbacks.length) report.fallbacks = res.fallbacks;
-    if (read.length) report.passthrough = read;
-    if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
-    // The drain voltage the region check compares: the one the givens STATE, not the one a
-    // table that does not reach it was read at. A clamp is reported where it happens (`clamped`
-    // and its warning), and comparing the clamped value would let a drain stated below the
-    // table's lowest vds pass a saturation check it fails. On a diode diagonal the folded table's
-    // own column is the drain voltage.
-    const point: RegionPoint = {
-      vds: sliced.stated.vds ?? (sliced.diode ? res.quantities.vds : undefined),
-      vdsat: res.quantities.vdsat,
-      axis: axisDirection(table, 'vds'),
-    };
-    if (sliced.assumed.length) report.assumed = sliced.assumed;
-    const clamped = [...sliced.clamped, ...res.clamped];
-    // A diode connection is read on the vds = vgs diagonal. Where the gate voltage this device
-    // landed on lies past the characterized vds range, the fold read the table's edge instead:
-    // the folded table's own `vds` column says which drain voltage the point was taken at. Said
-    // out loud for this device's point alone — a table whose vgs sweep merely starts below its
-    // first vds value says nothing about a diode that settles well inside the range.
-    const vdsRead = res.quantities.vds;
-    if (
-      sliced.diode?.clamped &&
-      Number.isFinite(vdsRead) &&
-      Math.abs(vdsRead - res.vgs) > HULL_SNAP * Math.max(1, Math.abs(res.vgs))
-    ) {
-      clamped.push('vds');
-      const [lo, hi] = sliced.diode.range;
-      warn({
-        rule: 'sheet-givens',
-        severity: 'warning',
-        message:
-          `diode connection: the device settles at vgs = ${volts(res.vgs)}, outside the ` +
-          `characterized vds range [${volts(lo)}, ${volts(hi)}], so its point is read at the ` +
-          `table's edge, vds = ${volts(vdsRead)}, not on the vds = vgs diagonal — from data taken ` +
-          `at a different drain voltage`,
-        location: 'givens',
-      });
-    }
-    if (clamped.length) report.clamped = clamped;
-    return { report, point };
+    res = sizeDevice(q);
   } catch (e) {
+    // A target the inverse lookup cannot reach on this slice — a gm/ID past the ceiling, a
+    // current or transconductance the density sweep does not hold at this width — is a read
+    // beyond the table like any other: the record of what was asked and what the slice reaches.
+    if (e instanceof LookupRangeError)
+      return beyond([
+        { device: OWN_DEVICE, quantity: e.key, asked: e.target, held: [e.min, e.max] },
+      ]);
     let m = msg(e);
     // The lookup's "extra non-degenerate axis" error is accurate but not actionable in
     // sheet vocabulary — point the author at the fix.
     if (m.includes('non-degenerate axis'))
       m += ' — declare the operating point in the givens to collapse the axis';
-    // What the failed sizing was read from still matters to whoever asks what the failure
-    // means: a lookup that ran out of range on a table slice taken at its hull — a clamped
-    // bias axis, a length off the hull, a diode diagonal that leaves the vds range — failed on
-    // data from somewhere else, and says nothing certain about the point that was asked for.
-    const off = [
-      ...sliced.clamped,
-      ...(lAxis && lAxis.values.length > 0 && offHull(lAxis.values, L) ? ['l'] : []),
-      ...(sliced.diode?.clamped ? ['vds'] : []),
-    ];
-    return fail(`sizing failed: ${m}`, { clamped: off });
+    return fail(`sizing failed: ${m}`);
   }
+  // A gate voltage the givens bind past the table's vgs sweep is read at its edge by the sizer,
+  // which says so (SizeResult.outside); the sheet does not keep such a sizing.
+  if (res.outside.length) return beyond(res.outside);
+  // A diode connection is read on the vds = vgs diagonal. Where the gate voltage this device
+  // landed on lies past the characterized vds range, the fold read the table's edge instead: the
+  // folded table's own `vds` column says which drain voltage the point was taken at. Judged for
+  // this device's point alone — a table whose vgs sweep merely starts below its first vds value
+  // says nothing about a diode that settles well inside the range.
+  const vdsRead = res.quantities.vds;
+  if (
+    sliced.diode?.clamped &&
+    Number.isFinite(vdsRead) &&
+    Math.abs(vdsRead - res.vgs) > HULL_SNAP * Math.max(1, Math.abs(res.vgs))
+  )
+    return beyond([
+      { device: OWN_DEVICE, quantity: 'vds', asked: res.vgs, held: sliced.diode.range },
+    ]);
+
+  const read = mergeSized(values, res.quantities, res.passthrough, table, equations, warn);
+  // Not in the quantities bag; named in SIZING_SCALARS, which tells validation they are written.
+  values.ceiling = res.ceiling;
+  values.feasible = res.feasible ? 1 : 0;
+  // Surface the sizer's own engineering notes as advisory sheet warnings — same pattern children
+  // use at evalBlocks. The notes about fallback forms are a fact about the table, like `noise`, so
+  // they are carried beside it on the report instead, once per device rather than once per
+  // warning list.
+  const fellBack = new Set(res.fallbacks.map(fallbackMessage));
+  for (const m of res.warnings) {
+    if (fellBack.has(m)) continue;
+    warn({ rule: 'sheet-givens', severity: 'warning', message: m, location: 'givens' });
+  }
+  const report: SizingReport = {
+    ok: true,
+    W: res.W,
+    L,
+    vgs: res.vgs,
+    id: res.id,
+    noise: noiseSource(table.grid),
+  };
+  if (res.fallbacks.length) report.fallbacks = res.fallbacks;
+  if (read.length) report.passthrough = read;
+  if (Object.keys(sliced.bias).length) report.bias = sliced.bias;
+  // The drain voltage the region check compares: the one the givens STATE, which the table holds
+  // (a stated drain voltage it does not hold was refused above). On a diode diagonal the folded
+  // table's own column is the drain voltage.
+  const point: RegionPoint = {
+    vds: sliced.stated.vds ?? (sliced.diode ? res.quantities.vds : undefined),
+    vdsat: res.quantities.vdsat,
+  };
+  if (sliced.assumed.length) report.assumed = sliced.assumed;
+  return { report, point };
 }
 
 /** Evaluate one check's two sides and classify into a signed-margin CheckResult; `nearMiss` is
@@ -1020,24 +1029,9 @@ function regionCheck(
     return na('the drain-source voltage the givens state is not known');
   if (point.vdsat === undefined || !Number.isFinite(point.vdsat))
     return na('the table has no vdsat column');
-  // Float rounding about zero is a drain at the source, not a reversed one (HULL_SNAP_V).
-  if (point.axis !== undefined && point.vds * point.axis < -HULL_SNAP_V) {
-    // Read the other way round, the drain sits |vds| on the wrong side of the source: a margin of
-    // that size below zero, whichever region was declared.
-    const margin = -Math.abs(point.vds);
-    return {
-      ...classify(check, Math.abs(point.vds), point.vdsat, nearMiss),
-      lhsValue: point.vds * point.axis,
-      margin,
-      rawMargin: margin,
-      marginPct: margin / Math.max(Math.abs(point.vdsat), TINY),
-      status: 'fail',
-      detail:
-        `the stated drain-source voltage ${shown(point.vds)} V points against this table's vds ` +
-        `axis, so the device is reverse-biased — drain and source the other way round — which ` +
-        `the table does not characterize`,
-    };
-  }
+  // A stated drain voltage the table does not hold — beyond its sweep, or pointing against its vds
+  // axis (a reversed device, drain and source the other way round) — never gets here: the device
+  // is not sized on it (SizingReport.outside).
   return classify(check, Math.abs(point.vds), point.vdsat, nearMiss);
 }
 
@@ -1178,7 +1172,7 @@ function applyBlockParams(
  *  the child that the child's own record names for it (SheetResult.withheld), or the child itself. */
 function childCause(name: string, res: SheetResult, key: string): string {
   const inner = res.withheld?.[key];
-  return inner === undefined || unfoundIn(res).has(inner) ? name : childPath(name, inner);
+  return inner === undefined || unfoundIn(res).has(inner) ? name : causeInParent(name, inner);
 }
 
 /** A child's warning as its parent lists it (prefixBlockWarning). One that follows from the child's
@@ -1708,10 +1702,13 @@ function evaluateOnce(
   // A device that did not size because a given read a withheld name publishes nothing, and what
   // reads its quantities follows from the same block. Only the sizing's own failure is read: the
   // children's warnings, rolled up before it, carry causes of their own.
+  // One read beyond its table is the device's own failure: what reads it follows from the device.
   if (sizing && !sizing.ok) {
-    const cause = warnings
-      .slice(beforeSizing)
-      .find((w) => w.rule === 'sheet-givens' && w.severity === 'error')?.cause;
+    const cause = sizing.outside?.length
+      ? OWN_DEVICE
+      : warnings
+          .slice(beforeSizing)
+          .find((w) => w.rule === 'sheet-givens' && w.severity === 'error')?.cause;
     if (cause !== undefined)
       for (const n of DEVICE_NAMES) if (!(n in values)) withheld.set(n, cause);
   }
@@ -2065,7 +2062,23 @@ function evaluateNode(
     ? { ...solved, warnings: [...solved.warnings, ...heldGates] }
     : solved;
   const point = pointOutcome(res, opts.held === true, opts.assumed);
-  if (!point.sized) return { ...withoutWalk(doc, finishWiring(res, false, settings)), point };
+  if (!point.sized) {
+    // No walk, but a declared axis-sign selector is still held to the table of a device that was
+    // refused for reading beyond it: the wrong sign is the likeliest reason it did (see
+    // selectorsBeyondTable).
+    const unwalked = withoutWalk(doc, finishWiring(res, false, settings));
+    const selectors = selectorsBeyondTable(doc, res);
+    if (!selectors.length) return { ...unwalked, point };
+    return {
+      ...unwalked,
+      warnings: [...unwalked.warnings, ...selectors],
+      feasible: false,
+      ...(unwalked.nodes
+        ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
+        : {}),
+      point,
+    };
+  }
   const out = withNodes(doc, finishWiring(res, true, settings), table, STANDALONE, settings);
   // The point was classified before the wiring was read; a selector the table contradicts then
   // leaves the run infeasible, so a centre that complied does not.
@@ -2561,9 +2574,9 @@ function noCrossingAdvice(u: Unknown, endsRead: boolean): string {
     );
   return endsRead
     ? `The circuit can put the wire nowhere else, so the design does not reach its target here`
-    : `The circuit can put the wire nowhere else, but an end of the search was read off the ` +
-        `table, had a device refused, or was stepped in past a stretch that does not evaluate for ` +
-        `a reason of its own — so this is not shown to be the design's failure`;
+    : `The circuit can put the wire nowhere else, but an end of the search read a device beyond ` +
+        `its table, had a device refused, or was stepped in past a stretch that does not evaluate ` +
+        `— so this is not shown to be the design's failure`;
 }
 
 /** A solved node's result with the range each of its solved params may be searched in
@@ -2721,7 +2734,8 @@ const outOfBudget = (f: SolveFailure): boolean => f.kind === 'not-settled' && f.
  *  - not settled: nothing of the range could be evaluated, the sign changes across a stretch
  *    inside the bracket that does not evaluate, the shared budget ran out (here or in a child a
  *    probe evaluated), or the probe backstop was hit.
- * An end where the relation does not evaluate is stepped inward (Settings.inwardSteps) before any
+ * An end where the relation does not evaluate is stepped inward, to within the search's tolerance
+ * (at most Settings.inwardSteps halvings), before any
  * of that, and a point inside the bracket that does not evaluate is stepped round the same way,
  * silently; a failure's message quotes the range actually searched. `also` are the other members
  * of a set searched together; a message says where they stood, because an answer about this
@@ -2733,7 +2747,7 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
 
   const found = ends(s);
   if ('ok' in found) return found;
-  const { lo, hi, moved, forDesign } = found;
+  const { lo, hi, moved } = found;
   const gLo = lo.g as number;
   const gHi = hi.g as number;
   // Stepping in from one end can come all the way back to the other: as far as halving can tell,
@@ -2780,10 +2794,11 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
       if (root) return root;
     }
     // Both ends must read the design for no crossing to be a finding about it: each the range's
-    // own, or stepped in past a stretch where the design itself fails, and neither read off the
-    // table or with a device refused.
+    // own end (none stepped past a stretch that was not read), and neither with a device read
+    // beyond its table or refused.
     const endsRead =
-      forDesign && [lo, hi].every((e) => !clampedIn(e.res).length && !refusedIn(e.res).length);
+      moved.length === 0 &&
+      [lo, hi].every((e) => !outsideIn(e.res).length && !refusedIn(e.res).length);
     return s.none(
       lo,
       hi,
@@ -2968,8 +2983,10 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
     probe,
     probes: () => probes,
     inward(bad, good) {
-      // Each midpoint becomes the new `good` when it evaluates and the new `bad` when it does not.
-      for (let k = 0; k < inwardSteps; k++) {
+      // Each midpoint becomes the new `good` when it evaluates and the new `bad` when it does not,
+      // until the two are no further apart than the search's own tolerance: the edge of what
+      // evaluates is then placed as finely as a root would be. `inwardSteps` only caps the count.
+      for (let k = 0; k < inwardSteps && Math.abs(bad.x - good.x) > tol; k++) {
         const m = probe((bad.x + good.x) / 2);
         if (!m) return undefined;
         if (m.g === undefined) bad = m;
@@ -3009,39 +3026,19 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
   };
 }
 
-/**
- * Whether an evaluation failed only because the design fails there itself: every error it raised
- * is a device that cannot carry its current, or reach its transconductance, past the top of its
- * table's reach (as heldOutcome reads it), with no device refused and none read off its table. A
- * search that stepped inward past such a stretch has not skipped anything the circuit could do.
- * Any other reason — a gap in the data, a block's own solve finding nothing — leaves the stretch
- * unread.
- */
-function failsForDesign(res: SheetResult): boolean {
-  if (refusedIn(res).length || clampedIn(res).length) return false;
-  const errors = res.warnings.filter((w) => w.severity === 'error');
-  return (
-    errors.length > 0 &&
-    errors.every((w) => {
-      const reach = LOOKUP_RANGE_MESSAGE.exec(w.message);
-      return reach !== null && Number(reach[2]) > Number(reach[4]);
-    })
-  );
-}
-
 /** The two ends a search brackets between: the ends of the stated range, each stepped inward to
  *  the nearest point that evaluates where the relation does not evaluate there, with what each
- *  inward step found (`moved`) and whether every step was taken past a stretch where the design
- *  itself fails (`forDesign`, see failsForDesign). A failure when nothing of the range evaluates,
- *  or the budget runs out. */
-function ends(s: Searcher): { lo: Probe; hi: Probe; moved: string[]; forDesign: boolean } | Found {
+ *  inward step found (`moved`). A failure when nothing of the range evaluates, or the budget runs
+ *  out. A stretch stepped past was not read — a device there was read beyond its table, refused,
+ *  or its block's own solve found nothing — so a search whose end moved has not read the range
+ *  the circuit allows, and finding no crossing in what is left proves nothing about it. */
+function ends(s: Searcher): { lo: Probe; hi: Probe; moved: string[] } | Found {
   const { u, name, rel, given } = s;
   let lo = s.probe(u.lo);
   if (!lo) return s.exhausted();
   let hi = s.probe(u.hi);
   if (!hi) return s.exhausted();
   const moved: string[] = [];
-  let forDesign = true;
   if (lo.g === undefined || hi.g === undefined) {
     let mid: Probe | undefined;
     if (lo.g === undefined && hi.g === undefined) {
@@ -3062,18 +3059,16 @@ function ends(s: Searcher): { lo: Probe; hi: Probe; moved: string[]; forDesign: 
       const step = s.inward(lo, mid ?? hi);
       if (!step) return s.exhausted();
       lo = step.at;
-      forDesign &&= failsForDesign(step.bad.res);
       moved.push(`the relation does not evaluate below ${name} = ${valueOf(u, lo.x)}: ${step.why}`);
     }
     if (hi.g === undefined) {
       const step = s.inward(hi, mid ?? lo);
       if (!step) return s.exhausted();
       hi = step.at;
-      forDesign &&= failsForDesign(step.bad.res);
       moved.push(`the relation does not evaluate above ${name} = ${valueOf(u, hi.x)}: ${step.why}`);
     }
   }
-  return { lo, hi, moved, forDesign };
+  return { lo, hi, moved };
 }
 
 /** A relation that singles out no value of its unknown across `lo`..`hi` (quoted as `range`): a
@@ -3202,7 +3197,7 @@ function acceptClosed(
  *
  * A sign change across the bracket is evidence of a root, so a point inside it that does not
  * evaluate is a hole to step around, never a verdict. Halve from it toward each end of the bracket
- * to the nearest point that evaluates (Settings.inwardSteps each way), and go on in a half that
+ * to the nearest point that evaluates (to within the search's tolerance, each way), and go on in a half that
  * still changes sign — b's first. When neither does, the sign changes somewhere between the two
  * points found, and halving may have stepped over a stretch that evaluates (one stretch that does
  * not, then another): search between them once more, narrower than before. Only when a later probe
@@ -3603,13 +3598,15 @@ const unrunEnd = (
  * the classification every compliance point shares, whether "here" is a range end or another
  * process condition.
  *
- * - it completed, every device read where it was asked for: `complies` when every hard check
- *   holds, else `does-not-comply` (the failures are in the run's checks);
- * - a device held at its width cannot carry its current here: `does-not-comply`, with `error`;
+ * - it completed, every device read on its table: `complies` when every hard check holds, else
+ *   `does-not-comply` (the failures are in the run's checks);
  * - a solved param found no crossing anywhere the wiring lets its wire go (designFailure):
  *   `does-not-comply`, with the solver's message as `error`;
- * - it did not complete for any other reason, or completed on data read off the table's hull:
- *   `no-answer`, with `error` — the solver's message verbatim where there is one.
+ * - a device was read beyond its table (outsideIn) — a bias, a length, a gate voltage, or a current
+ *   its fixed width would need a gate voltage past the swept range for: `no-answer`, with the
+ *   records' own words as `error`;
+ * - it did not complete for any other reason: `no-answer`, with `error` — the solver's message
+ *   verbatim where there is one.
  *
  * An `error` means the run's check outcomes are not findings about this point.
  */
@@ -3631,7 +3628,7 @@ export function heldOutcome(res: SheetResult): {
   // A solve of this sheet's own that failed is answered from its own record, which says what the
   // search read at the ends of the stretch it searched (designFailure, `endsRead`) — never from the
   // result, where what the failure did not find is withheld (see withUnfound), so a device that
-  // depends on it is no longer there to have been refused or read off its table. One that found no
+  // depends on it is no longer there to have been refused or read beyond its table. One that found no
   // crossing anywhere the wiring lets its wire go, both ends read, is the design failing here;
   // every other solve failure is no answer, said below in the words that fit it best.
   if (designFailure(res.solve)) return { state: 'does-not-comply', error: res.solve.message };
@@ -3643,43 +3640,21 @@ export function heldOutcome(res: SheetResult): {
   const refused = refusedIn(res);
   if (refused.length) return { state: 'no-answer', error: refused.join('; ') };
 
-  // Then: was every device read where it was asked for? A bias clamp fires
-  // exactly at a claim's extreme, and no verdict — green, red, or "this device cannot carry its
-  // current" — may rest on data taken at the table's edge instead. That holds for a run that
-  // completed and for one whose lookup then ran out of range on the clamped slice.
-  const off = clampedIn(res);
-  if (off.length)
-    return {
-      state: 'no-answer',
-      error:
-        `the table does not reach this point (${off.join(', ')}) — it was read at the nearest ` +
-        `characterized point, which is not the point asked about` +
-        (err === undefined ? '' : `; the run then stopped: ${err}`),
-    };
+  // Then: was every device read on its table? A device asked for a point its table does not
+  // hold is not sized (SizingReport.outside), so whatever the run did next rests on a device that
+  // is not there. That includes a device held at a fixed width whose current, or transconductance,
+  // would need a gate voltage past either end of the swept range here: it is not shown that the
+  // hardware fails there, only that the table does not say — whether the table's gate range covers
+  // all the wiring permits, and whether the current rises with gate voltage along the slice, are
+  // not checked — so it is no answer, like any other read beyond the data.
+  const outside = outsideIn(res);
+  if (outside.length) return { state: 'no-answer', error: outside.map(outsideMessage).join('; ') };
   // Any other solve that found no solution in its range, or did not settle, is no answer. Its
   // message may quote the device failure that bounded the search (the relation not evaluating
   // past some point), and that quote is the reason for the range searched, not this point's
   // verdict.
   if (solveErr !== undefined) return { state: 'no-answer', error: solveErr };
-  if (err !== undefined) {
-    // A device held at a fixed width can run out of table: the bias here moves the density its
-    // current (or transconductance) needs outside the swept vgs range, and the inverse lookup
-    // says so in its own accurate but width-domain words. Past the TOP of that range the device
-    // cannot carry what the design asks of it — a failure of the design, and the one way a run
-    // that did not complete is still a verdict. Lead with what it means for the question being
-    // asked and keep the lookup's message behind it, where its reach numbers stay quotable.
-    // Below the bottom of the range the device would simply sit at a gate voltage nobody
-    // characterized, which is no answer like any other gap in the data.
-    const reach = LOOKUP_RANGE_MESSAGE.exec(err);
-    if (reach && Number(reach[2]) > Number(reach[4]))
-      return {
-        state: 'does-not-comply',
-        error:
-          `this device cannot ${reach[1] === 'id' ? 'carry its current' : 'reach its transconductance'}` +
-          ` here — ${err}`,
-      };
-    return { state: 'no-answer', error: err };
-  }
+  if (err !== undefined) return { state: 'no-answer', error: err };
   return { state: res.feasible ? 'complies' : 'does-not-comply' };
 }
 
@@ -3687,11 +3662,13 @@ export function heldOutcome(res: SheetResult): {
  * One run as a point of the compliance question (see PointOutcome), classified once: the wiring
  * walk's gate reads `sized`, and a range end and a process condition read the answer. A held
  * design (`held`) is read as heldOutcome reads it: sized where it raised no error and read no
- * device off its table. A design sized here is sized where it stands (see stands), and answers for
- * itself: it complies where it is feasible. One whose sheet found no crossing anywhere the wiring
+ * device beyond its table. A design sized here is sized where it stands (see stands) and read every
+ * device on its table, and answers for itself: it complies where it is feasible. One that read a
+ * device beyond its table (outsideIn) has no answer, and is never feasible, compliant or failing.
+ * One whose sheet found no crossing anywhere the wiring
  * lets a solved wire go (designFailure) is not sized and does not comply — infeasible, with the
  * solver's message. That is read from the solve's own record, whose `endsRead` already says that
- * no end of the search read a device off its table or had one refused — never from the result,
+ * no end of the search read a device beyond its table or had one refused — never from the result,
  * where what the failure did not find is withheld (see withUnfound). A design resting on an assumed level (`assumed`) is
  * still sized, and gives no answer.
  */
@@ -3706,12 +3683,17 @@ export function pointOutcome(
     answer = heldOutcome(res);
     sized = answer.error === undefined;
   } else {
-    sized = stands(res);
-    answer = sized
-      ? { state: res.feasible ? 'complies' : 'does-not-comply' }
-      : designFailure(res.solve)
-        ? { state: 'does-not-comply', error: res.solve.message }
-        : { state: 'no-answer', error: unfinishedBecause(res)[0] };
+    // A device read beyond its table is not sized, and the point has no answer whatever else the
+    // run did: never complies, never infeasible, never a failure the design is shown to have.
+    const outside = outsideIn(res);
+    sized = stands(res) && !outside.length;
+    answer = outside.length
+      ? { state: 'no-answer', error: outside.map(outsideMessage).join('; ') }
+      : sized
+        ? { state: res.feasible ? 'complies' : 'does-not-comply' }
+        : designFailure(res.solve)
+          ? { state: 'does-not-comply', error: res.solve.message }
+          : { state: 'no-answer', error: unfinishedBecause(res)[0] };
   }
   if (assumed.length) answer = { state: 'no-answer', error: assumedLevelRefusal(assumed) };
   return { sized, ...answer };
@@ -3722,13 +3704,14 @@ export function pointOutcome(
  *  recurse into range ends), and classify the outcome (see RangeEndReport.state):
  *
  *  - every hard check holds: `complies`. One fails: `does-not-comply`, the failures in `checks`.
- *  - a device held at its width cannot carry its current here: `does-not-comply`, with `error`.
  *  - a solved wire finds no crossing anywhere the wiring lets it go, both ends read
  *    (designFailure): `does-not-comply`, with the solver's message in `error`.
+ *  - a device was read beyond its table — a bias, a length, a gate voltage, or a current its held
+ *    width would need a gate voltage past the swept range for: `no-answer`, the records in
+ *    `outside` and their words in `error`.
  *  - the run could not be completed — a `set` that does not resolve, any other solve that does
- *    not land — or it completed on data read off the table's hull: `no-answer`, the underlying
- *    message VERBATIM in `error`, so a shared-budget starvation stays distinguishable from
- *    "nothing in the range reaches it". */
+ *    not land: `no-answer`, the underlying message VERBATIM in `error`, so a shared-budget
+ *    starvation stays distinguishable from "nothing in the range reaches it". */
 function runRangeEnd(
   rangeEnd: SheetRangeEnd,
   held: HeldHardware,
@@ -3777,6 +3760,7 @@ function runRangeEnd(
     settings,
   });
   const { state, error: err } = res.point as PointOutcome;
+  const outside = outsideIn(res);
   // The solved map is "where the range end LANDED" — a run with an `error` (a solve that never
   // landed, data read somewhere else) leaves values that must not be reported as a landing.
   const solved: Record<string, number> = {};
@@ -3796,6 +3780,7 @@ function runRangeEnd(
     ...(res.ranges ? { ranges: res.ranges } : {}),
     warnings: res.warnings,
     ...(err !== undefined ? { error: err } : {}),
+    ...(outside.length ? { outside } : {}),
     ...(res.nodes ? { nodes: res.nodes } : {}),
     ...assumed,
   };

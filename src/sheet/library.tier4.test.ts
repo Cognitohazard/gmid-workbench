@@ -26,6 +26,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { BODY_FACTOR, scaleQuantities } from '../demo';
+import { ekvTable } from '../demo/ekv.fixtures';
 import type { DeviceTable } from '../types';
 import { runSheet } from './index';
 import { resolveSheetRefs } from './resolve';
@@ -827,7 +828,9 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     // The tail, the second stage's load, the second stage, the mirror's output device, both input
     // devices and both cascodes. The diode-side cascode is held at the 0.25 V the sheet states,
     // 15 mV above its saturation voltage on this table; 0.2 V takes it out, and its declaration
-    // says so.
+    // says so. That is read on the full-range device: on this table any V_casc low enough to fail
+    // the check also puts a cascode's source past the 0.9 V of body bias the table sweeps, where
+    // the device is not sized and there is no verdict to read.
     expect(declaredSaturated(resolveSheetRefs(doc, REFS).doc)).toEqual([
       'tail',
       'ld2',
@@ -842,7 +845,8 @@ describe('tier4 goldens: Two-stage OTA, cascode compensation', () => {
     expect(regionOf(res, 'casco').lhsValue).toBe(v.V_casco);
     for (const name of ['casc', 'casco', 'tail'])
       expect([name, regionOf(res, name).status]).toEqual([name, 'pass']);
-    const starved = runSheet(withParams(doc, { V_casc: 0.2 }), table, undefined, REFS);
+    const starved = runSheet(withParams(doc, { V_casc: 0.2 }), ekvTable(), undefined, REFS);
+    expect(starved.point?.state).toBe('does-not-comply');
     expect(hardFailsIn(starved)).toContain('casc.region');
   });
 

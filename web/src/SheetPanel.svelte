@@ -50,6 +50,7 @@
     type SheetCheck,
     type SheetBlock,
     type SheetSweep2,
+    OWN_DEVICE,
     type SweepWindow,
     type SheetSensitivity,
     type SheetBlockReport,
@@ -57,6 +58,7 @@
     type PointState,
     type QAWarning,
     type SizingReport,
+    type OutsideTable,
     type CheckResult,
     type CheckStatus,
     type SheetResult,
@@ -1040,7 +1042,14 @@
               ? `${side} it ${ids.join(', ')} ${ids.length > 1 ? 'fail' : 'fails'}`
               : `${side} it the design does not stand`,
           ];
-    const closers = [...past('below', w.below), ...past('above', w.above)];
+    // An edge past which a device was read beyond its table ends where the table ends, not where a
+    // requirement fails (SweepWindow.belowOutside/aboveOutside).
+    const tableEnds = (side: string, r: readonly OutsideTable[] | undefined): string[] =>
+      r?.length ? [`${side} it ends where the table ends (${r.map(beyondText).join('; ')})`] : [];
+    const closers = [
+      ...(w.belowOutside?.length ? tableEnds('below', w.belowOutside) : past('below', w.below)),
+      ...(w.aboveOutside?.length ? tableEnds('above', w.aboveOutside) : past('above', w.above)),
+    ];
     return `${fmt(w.lo)}…${fmt(w.hi)}${sweptUnit}${closers.length ? ` (${closers.join('; ')})` : ''}`;
   };
 
@@ -1207,7 +1216,7 @@
    *  them — the verdict and the condition it was asked at, what the run rests on that the document
    *  did not state (runCaveats: a noise source other than the table's own and every fallback, a
    *  corner or temperature a table filled in, a bias left at its default, an assumed DC input, a
-   *  coordinate read at the table's edge), the numbers read at the characterization width, and
+   *  read beyond a device's table, which is not sized), the numbers read at the characterization width, and
    *  every warning and note. A pasted number then carries its caveats with it. */
   function copyResults(): void {
     if (!result || restoreLost?.length) return; // the button is disabled in both states
@@ -1250,6 +1259,17 @@
   };
   const fmt = (v: number | undefined): string =>
     v == null || !Number.isFinite(v) ? '—' : formatSI(v);
+  /** One read beyond a device's table, from its record (SizingReport.outside): what was asked and
+   *  what the table holds. Decided by the typed field, never from the error's wording. */
+  const beyondText = (r: OutsideTable): string =>
+    `${r.quantity} = ${fmt(r.asked)}${axisUnit(r.quantity)} asked — the table holds ` +
+    `${fmt(r.held[0])} … ${fmt(r.held[1])}${axisUnit(r.quantity)}`;
+  /** The bias axes a device's givens asked beyond its table, which its bias fields mark. */
+  const beyondAxes = (report: SizingReport | undefined): Set<string> =>
+    new Set((report?.outside ?? []).map((r) => r.quantity));
+  /** What a withheld value follows from, in words: the sheet's own device, or a block's path. */
+  const withheldFrom = (cause: string): string =>
+    cause === OWN_DEVICE ? 'this sheet’s device' : `"${cause}"`;
   /** A signed change, for the sensitivity readout: an explicit '+' so the direction reads at a
    *  glance, and '—' wherever a probe produced no number — never a stand-in zero. */
   const signedFmt = (v: number): string =>
@@ -1276,8 +1296,8 @@
     return b ? `${b.id} ${pct(b.marginPct)}` : POINT_TEXT[e.state];
   };
   const rangeEndNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
-  /** The run's own non-info diagnostics — a bias clamp fires exactly at a claim's extreme,
-   *  and a green chip must not hide that it rests on clamped data. */
+  /** The run's own non-info diagnostics — a device read beyond its table is not sized there, and
+   *  the chip must show why the point has no answer. */
   const rangeEndWarns = (e: RangeEndReport): QAWarning[] =>
     e.warnings.filter((w) => w.severity !== 'info');
   // The tooltip carries WHICH point was checked (the resolved overrides), the authored note,
@@ -1377,6 +1397,22 @@
   // ── The 2-D map is imperative (uPlot draws XY lines only): paint it by hand on a canvas,
   // reading --ok/--err/grid colours from CSS at draw time so it tracks the light/dark theme.
   let mapEl: HTMLCanvasElement | undefined = $state();
+  /** The map cell under the pointer, in words where it has no answer: its reads beyond a table. */
+  let mapTip = $state('');
+  function cellTip(e: MouseEvent): string {
+    const s = swept2;
+    const c = e.currentTarget as HTMLCanvasElement;
+    if (!s || !s.x.length || !s.y.length || !c.clientWidth || !c.clientHeight) return '';
+    const xi = Math.min(s.x.length - 1, Math.floor((e.offsetX / c.clientWidth) * s.x.length));
+    const yi =
+      s.y.length -
+      1 -
+      Math.min(s.y.length - 1, Math.floor((e.offsetY / c.clientHeight) * s.y.length));
+    const beyond = s.outside[yi]?.[xi] ?? [];
+    return beyond.length
+      ? `no answer: beyond the table: ${beyond.map((r) => `${r.device === OWN_DEVICE ? '' : `"${r.device}": `}${beyondText(r)}`).join('; ')}`
+      : '';
+  }
   function drawMap(canvas: HTMLCanvasElement, s: SheetSweep2): void {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1403,8 +1439,10 @@
       const py = (ny - 1 - yi) * ch;
       for (let xi = 0; xi < nx; xi++) {
         const feas = s.feasible[yi][xi];
-        ctx.fillStyle = feas ? ok : err;
-        ctx.globalAlpha = feas ? 0.55 : 0.4;
+        // A cell read beyond a device's table has no answer: neither colour, the grid's own.
+        const beyond = (s.outside[yi]?.[xi]?.length ?? 0) > 0;
+        ctx.fillStyle = beyond ? grid : feas ? ok : err;
+        ctx.globalAlpha = beyond ? 0.12 : feas ? 0.55 : 0.4;
         // +1 hides the seam between adjacent same-colour cells under sub-pixel rounding.
         ctx.fillRect(xi * cw, py, cw + 1, ch + 1);
       }
@@ -1498,11 +1536,16 @@
       {#each axes as ax}
         {@const decl = biasField(givens, ax)}
         {@const need = report?.needs?.includes(ax) ?? false}
+        {@const beyond = beyondAxes(report).has(ax)}
         {#if isLiteral(decl)}
           <label
             class="bx"
-            class:need
-            title={need ? CONTROL_HELP.givensNeeds : CONTROL_HELP.givensBias}
+            class:need={need || beyond}
+            title={need
+              ? CONTROL_HELP.givensNeeds
+              : beyond
+                ? CONTROL_HELP.givensBeyond
+                : CONTROL_HELP.givensBias}
           >
             <span>{@html qLabel(ax)}</span>
             <input
@@ -1602,6 +1645,12 @@
             >@ {biasStr(c.sizing.bias, c.sizing.assumed)}</span
           >{/if}
       </div>
+    {:else if c?.sizing?.outside?.length}
+      {#each c.sizing.outside as r}
+        <div class="perr beyond" title={CONTROL_HELP.beyondTable}>
+          beyond the table: {beyondText(r)} — not sized
+        </div>
+      {/each}
     {:else if c?.sizing}
       <div class="perr" title={c.sizing.error}>sizing: {c.sizing.error}</div>
     {/if}
@@ -1760,6 +1809,12 @@
           {#if biasText}
             <span class="sbias" title={biasHelp(result.sizing?.assumed)}>@ {biasText}</span>
           {/if}
+        {:else if result.sizing.outside?.length}
+          {#each result.sizing.outside as r}
+            <span class="perr beyond" title={CONTROL_HELP.beyondTable}
+              >beyond the table: {beyondText(r)} — not sized</span
+            >
+          {/each}
         {:else}
           <span class="perr" title={result.sizing.error}>sizing: {result.sizing.error}</span>
         {/if}
@@ -2061,7 +2116,15 @@
             <div class="srow">
               <span class="seq"
                 ><b>{@html qLabel(eq.name)}</b> = {@html qFormula(eq.expr)} =
-                <span class="sval">{fmt(res.values[eq.name])}{eq.unit ?? ''}</span></span
+                {#if withheldIn(res, eq.name)}
+                  <span
+                    class="sval withheld"
+                    title={`withheld: it follows from ${withheldFrom(res.withheld?.[eq.name] ?? '')}, which did not give an answer`}
+                    >withheld</span
+                  >
+                {:else}
+                  <span class="sval">{fmt(res.values[eq.name])}{eq.unit ?? ''}</span>
+                {/if}</span
               >
               {#if eq.note}<span class="snote">{@html mathText(eq.note)}</span>{/if}
             </div>
@@ -2130,15 +2193,21 @@
 
     {#if twoD && swept2 && swept2.x.length}
       <div class="scap">
-        feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check (X
-        → right, Y ↑)
+        feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard check{#if swept2.outside.some( (row) => row.some((c) => c.length) )},
+          grey has no answer (a device read beyond its table){/if} (X → right, Y ↑)
       </div>
       <div class="smap">
         <div class="smy">
           {active2}
           {fmt(swept2.y[0])}…{fmt(swept2.y[swept2.y.length - 1])}{swept2.unitY}
         </div>
-        <canvas class="smapc" bind:this={mapEl}></canvas>
+        <canvas
+          class="smapc"
+          bind:this={mapEl}
+          title={mapTip}
+          onmousemove={(e) => (mapTip = cellTip(e))}
+          onmouseleave={() => (mapTip = '')}
+        ></canvas>
         <div class="smx">
           {active}
           {fmt(swept2.x[0])}…{fmt(swept2.x[swept2.x.length - 1])}{swept2.unitX}
@@ -2865,6 +2934,10 @@
   }
   .bx.need .num {
     border-color: var(--err);
+  }
+  .sval.withheld {
+    font-style: italic;
+    opacity: 0.7;
   }
   .prov {
     display: flex;

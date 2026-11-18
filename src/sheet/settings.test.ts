@@ -3,6 +3,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { loadLibrary, REFS, sheet, table } from './library.fixtures';
+import { signedMirrorDemo } from '../demo';
+import type { SheetDoc } from './types';
 import {
   changedSettings,
   DEFAULT_SETTINGS,
@@ -13,7 +15,6 @@ import {
   sheetSensitivities,
   sweepable,
   sweepSheet,
-  withParams,
   type Settings,
 } from './index';
 
@@ -109,12 +110,50 @@ describe('evaluating under settings', () => {
   });
 
   it('reads the wiring check’s two tolerances from the settings', () => {
-    // The CMOS inverter at gm/ID 12 reads its PMOS off the table's edge, and the loop through the
-    // two gates misses by some 33 mV: past the 10 mV default, inside a 50 mV tolerance.
-    const doc = withParams(sheet('stages/cmos-inverter-amp.json'), { gm_id_n: 12 });
-    const strict = runSheet(doc, table);
+    // A p cascode whose stated body bias is 30 mV short of the held wires it sits between, read on
+    // its table: the loop through its body misses by 30 mV, past the 10 mV default and inside a
+    // 50 mV tolerance.
+    const p = signedMirrorDemo(table);
+    const doc: SheetDoc = {
+      title: 'p cascode',
+      polarity: 'n',
+      formatVersion: 2,
+      params: [
+        { name: 'VDD', value: 1.8, unit: 'V', class: 'independent' },
+        { name: 'V_b', value: 1.4, unit: 'V', class: 'independent' },
+        { name: 'V_out', value: 0.9, unit: 'V', class: 'independent' },
+        { name: 'sp', value: -1, convention: 'axis-sign' },
+      ],
+      blocks: [
+        {
+          name: 'c',
+          device: 'p',
+          doc: {
+            title: 'p device',
+            polarity: 'p',
+            params: [
+              { name: 'vd', value: -0.5 },
+              { name: 'vs', value: 0.4 },
+            ],
+            givens: { L: '0.5e-6', id: '10e-6', gm_id: '10', vds: 'vd', vsb: 'vs' },
+            equations: [],
+            checks: [],
+            provides: ['vgs', 'id', 'gm', 'gds', 'W'],
+          },
+          params: { vd: 'sp*(V_b - V_out)', vs: 'VDD - V_b - 0.03' },
+          nodes: { d: 'out', g: 'g', s: 'b', b: 'vdd' },
+        },
+      ],
+      levels: { vdd: 'VDD', b: 'V_b', out: 'V_out' },
+      ports: ['g'],
+      equations: [],
+      checks: [],
+    };
+    const on = (id: string) => (id === 'p' ? p : undefined);
+    const strict = runSheet(doc, table, on);
     expect(strict.nodes!.disputes).toHaveLength(1);
-    const lax = runSheet(doc, table, undefined, undefined, with_({ closureTol: 0.05 }));
+    expect(strict.nodes!.closureError).toBeCloseTo(0.03, 9);
+    const lax = runSheet(doc, table, on, undefined, with_({ closureTol: 0.05 }));
     expect(lax.nodes!.disputes).toEqual([]);
     expect(lax.warnings.some((w) => w.message.startsWith('the wiring does not close'))).toBe(false);
     // A current-balance tolerance of zero raises the rounding residual the 0.1 % default leaves
@@ -129,8 +168,10 @@ describe('evaluating under settings', () => {
   });
 
   it('reaches the sweeps and the sensitivity readout too', () => {
+    // The tail current: both ends of its range keep every device on the present table, so the
+    // sweep reads the settings, not the table's edge.
     const doc = sheet('otas/folded-cascode-ota.json');
-    const knob = doc.params.find((p) => sweepable(p))!.name;
+    const knob = doc.params.find((p) => sweepable(p) && p.name === 'I_tail')!.name;
     expect(sweepSheet(doc, knob, table, 2, undefined, REFS).stands).toEqual([true, true]);
     const swept = sweepSheet(doc, knob, table, 2, undefined, REFS, with_({ solveSweeps: 1 }));
     expect(swept.stands).toEqual([false, false]);

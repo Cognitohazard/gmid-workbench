@@ -2108,10 +2108,116 @@ test('design sheet: a solved param whose search fails shows no number, nor does 
   await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
   await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
   await expect(sheet.locator('.srules tr.st-na')).toHaveCount(1);
-  // The solved field shows no number, and neither do the equations that read it.
+  // The solved field shows no number, and neither do the equations that read it: they read
+  // "withheld", which the result decides (SheetResult.withheld).
   await expect(sheet.locator('[data-param="x"] input.num')).toHaveValue('—');
   const rows = sheet.locator('.srows .srow .sval');
-  await expect(rows).toHaveText(['—', '—', /^\d/]);
+  await expect(rows).toHaveText(['withheld', 'withheld', /^\d/]);
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a sweep across the end of the table says where the table ends, on the line and on the map', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  // One device whose drain voltage is a knob ranging past the demo table's 1.2 V (it holds 0.3 V
+  // to 1.2 V).
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'edge.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Edge',
+        polarity: 'n',
+        formatVersion: 2,
+        nodes: 'none',
+        params: [
+          {
+            name: 'VD',
+            value: 0.6,
+            unit: 'V',
+            min: 0.4,
+            max: 1.5,
+            role: 'choice',
+            class: 'independent',
+          },
+          { name: 'gm_id', value: 12, min: 6, max: 18, role: 'choice' },
+        ],
+        givens: { L: '0.5u', gm_id: 'gm_id', id: '20u', vds: 'VD', vsb: '0' },
+        equations: [{ name: 'gain', expr: 'gm/gds' }],
+        checks: [{ id: 'gain-spec', kind: 'spec', lhs: 'gain', op: '>=', rhs: '10' }],
+      }),
+    ),
+  });
+  await expect(page.locator('.usheets .dev', { hasText: 'edge' })).toBeVisible();
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  const sel = sp.locator('.shead select.rm');
+  const edge = await sel
+    .locator('option', { hasText: 'Edge' })
+    .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+  await sel.selectOption(edge[0]);
+  await expect(sp.locator('.feasb')).toHaveText('feasible');
+
+  // The stretch that passes up to the table's end ends there — not where a requirement fails —
+  // and the line under the chart says so.
+  await sp.locator('.swsel select').selectOption('VD');
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+  await expect(sp.locator('[data-sweep-window]')).toContainText('ends where the table ends');
+
+  // On the map, the cells past the table's end have no answer, and say why under the pointer.
+  await sp.locator('.swsel2 select').selectOption('gm_id');
+  const canvas = sp.locator('.smapc');
+  await expect(canvas).toBeVisible();
+  await expect(sp.locator('.scap')).toContainText('grey has no answer');
+  const box = (await canvas.boundingBox())!;
+  await canvas.hover({ position: { x: box.width - 3, y: box.height / 2 } });
+  await expect(canvas).toHaveAttribute('title', /^no answer: beyond the table: vds = /);
+  await canvas.hover({ position: { x: 3, y: box.height / 2 } });
+  await expect(canvas).toHaveAttribute('title', '');
+
+  expect(errors).toEqual([]);
+});
+
+test('design sheet: a drain voltage beyond the table is not sized, and says what the table holds', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await expect(sp.locator('.bind')).toContainText('W=');
+
+  // The demo table sweeps the drain to 1.2 V; ask for 1.5 V. The device is not sized there: the
+  // panel says what was asked and what the table holds, read from the result's record, and the
+  // point has no answer rather than a verdict read at the table's edge.
+  const vds = sp.locator('.svar[data-param="V_ds"]').locator('.num');
+  await vds.fill('1.5');
+  await vds.blur();
+  await expect(sp.locator('.feasb')).toHaveText('no answer');
+  await expect(sp.locator('.shead .bind')).toHaveCount(0);
+  const beyond = sp.locator('.shead .perr.beyond');
+  await expect(beyond).toHaveCount(1);
+  await expect(beyond).toContainText('beyond the table');
+  await expect(beyond).toContainText('1.2');
+  // What reads the device is shown as withheld, not as a number from another bias.
+  await expect(sp.locator('.sval.withheld').first()).toBeVisible();
+
+  // Back on the table, the device sizes again.
+  await vds.fill('0.6');
+  await vds.blur();
+  await expect(sp.locator('.shead .bind')).toContainText('W=');
+  await expect(sp.locator('.perr.beyond')).toHaveCount(0);
 
   expect(errors).toEqual([]);
 });

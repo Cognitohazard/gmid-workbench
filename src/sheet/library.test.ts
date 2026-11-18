@@ -25,7 +25,8 @@ import { runSheet, validateSheet, withParams } from './index';
 import { NODE_TOL, placementsOf, wiringRefusal } from './nodes';
 import { resolveSheetRefs } from './resolve';
 import {
-  clampedIn,
+  outsideIn,
+  outsideMessage,
   docExpressions,
   isHardCheck,
   type SizingReport,
@@ -123,8 +124,7 @@ describe('sheet library: generic contract', () => {
     // or with a warning on the givens and the coordinate listed as clamped, so the shared table
     // is held to it here: at every sheet's defaults and at every end of its operating range, no
     // device asks for a sweep the table lacks or is read off its hull.
-    const elsewhere =
-      /it has no \w+ sweep|is outside the table's \w+ range|does not reach this point/;
+    const elsewhere = /it has no \w+ sweep|is (above|below) what the table holds/;
     const off: string[] = [];
     const bodyBiased = new Set<string>();
     const walk = (
@@ -138,16 +138,16 @@ describe('sheet library: generic contract', () => {
       if (!res) continue; // an evaluation that threw already fails its own contract test
       walk(file, res);
       const runs = [
-        { at: 'defaults', said: res.warnings.map((w) => w.message), clamped: clampedIn(res) },
+        { at: 'defaults', said: res.warnings.map((w) => w.message), outside: outsideIn(res) },
         ...(res.rangeEnds ?? []).map((e) => ({
           at: e.name,
           said: [...e.warnings.map((w) => w.message), ...(e.error ? [e.error] : [])],
-          clamped: clampedIn(e),
+          outside: outsideIn(e),
         })),
       ];
-      for (const { at, said, clamped } of runs) {
+      for (const { at, said, outside } of runs) {
         for (const m of said) if (elsewhere.test(m)) off.push(`${file} @ ${at}: ${m}`);
-        for (const c of clamped) off.push(`${file} @ ${at}: read at the table's edge (${c})`);
+        for (const r of outside) off.push(`${file} @ ${at}: ${outsideMessage(r)}`);
       }
     }
     expect(off).toEqual([]);
@@ -364,15 +364,17 @@ describe('sheet library: vetting lints', () => {
   it('a held current balance balances where the design is held, not only where it is sized', () => {
     // The two inverter sheets type their bias current into the NMOS and hand it to the PMOS, which
     // also takes the gate voltage the supply leaves above the input. At the design point the
-    // balance reads zero by construction. Held on a second characterization — half the current
-    // and half the transconductance at every gate voltage — each device keeps its width, the PMOS
+    // balance reads zero by construction. Held on a second characterization — 70 % of the current
+    // and of the transconductance at every gate voltage — each device keeps its width, the PMOS
     // keeps that gate voltage, and the bias current is solved again: the two devices carry one
-    // current and their two gate-source voltages still add up to the supply.
+    // current and their two gate-source voltages still add up to the supply. (A weaker one, half
+    // the current, would put the PMOS's gate past the 1.2 V this table sweeps, where it is not
+    // sized; 70 % keeps every device on the table.)
     const at = (t: DeviceTable, corner: string, temp: number): DeviceTable => ({
       ...t,
       id: { ...t.id, corner, temp },
     });
-    const weak = scaleQuantities(table, { id: 0.5, gm: 0.5 });
+    const weak = scaleQuantities(table, { id: 0.7, gm: 0.7 });
     const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
     const tt = { corner: 'tt', temp: 27 };
     for (const file of ['otas/inverter-based-ota.json', 'stages/cmos-inverter-amp.json']) {
@@ -1528,7 +1530,7 @@ describe('exemplar goldens: 5T OTA', () => {
       ...t,
       id: { ...t.id, corner, temp },
     });
-    const weak = scaleQuantities(table, { id: 0.5, gm: 0.5 });
+    const weak = scaleQuantities(table, { id: 0.7, gm: 0.7 });
     const [device] = groupDevices([at(table, 'tt', 27), at(weak, 'ss', -40)]);
     const tt = { corner: 'tt', temp: 27 };
     const [sized, held] = runConditions(
@@ -1712,7 +1714,7 @@ describe('sheet library: the netlist', () => {
 // and the PMOS is handed the gate-source voltage the supply leaves above it, so the loop through
 // the two gates and the two rails closes by construction — until the PMOS is read somewhere else.
 describe('what the wiring check reports on the library at its shipped defaults', () => {
-  it('the CMOS inverter ties its two gates, and reports only a gate read off the table', () => {
+  it('the CMOS inverter ties its two gates, and reports a gate beyond the table as no answer', () => {
     const doc = sheet('stages/cmos-inverter-amp.json');
     const res = runSheet(doc, table);
     // The NMOS is sized for gm/ID 7, so its gate-source voltage is the input level; on the demo
@@ -1744,15 +1746,16 @@ describe('what the wiring check reports on the library at its shipped defaults',
       res.checks.filter((c) => isHardCheck(c.kind) && c.status === 'fail').map((c) => c.id),
     ).toEqual(['gain-spec']);
     // At gm/ID 12 the input level falls to vgs(12) and the PMOS would need 1.8 − 0.567 = 1.233 V,
-    // past the 1.2 V the table sweeps. It is read at the table's edge, so the loop through the two
-    // gates misses by the difference between the input level and 1.8 − 1.2 V, and the check says so.
+    // past the 1.2 V the table sweeps. The PMOS is not sized there, so the point has no answer and
+    // the wiring is not walked: no loop is reported as missing on a number the table never held.
     const strong = runSheet(withParams(doc, { gm_id_n: 12 }), table);
     expect(relErr(strong.values.V_in, VGS_GMID12_L05)).toBeLessThan(1e-3);
-    expect(strong.nodes!.state).toBe('checked-with-findings');
-    const [dispute] = strong.nodes!.disputes;
-    expect(relErr(dispute.closureError, 1.8 - 1.2 - strong.values.V_in)).toBeLessThan(1e-6);
-    expect(dispute.closureError).toBeGreaterThan(NODE_TOL);
-    expect(dispute.relations).toEqual(expect.arrayContaining(['n.gs', 'p.gs']));
+    expect(strong.point?.state).toBe('no-answer');
+    expect(strong.nodes!.state).toBe('not-evaluated');
+    const [beyond] = outsideIn(strong);
+    expect([beyond.device, beyond.quantity]).toEqual(['p', 'vgs']);
+    expect(relErr(beyond.asked, 1.8 - strong.values.V_in)).toBeLessThan(1e-9);
+    expect(beyond.held[1]).toBeCloseTo(1.2, 12);
   });
 
   it('the flipped voltage follower derives its internal node instead of declaring one', () => {

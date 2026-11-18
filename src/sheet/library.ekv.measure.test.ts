@@ -14,12 +14,12 @@ import { ekvTable } from '../demo/ekv.fixtures';
 import type { DeviceTable } from '../types';
 import { runSheet } from './index';
 import { loadLibrary, REFS, table as demoTable } from './library.fixtures';
-import { clampedIn, isHardCheck, type SheetBlockReport, type SheetResult } from './types';
+import { outsideIn, isHardCheck, type SheetBlockReport, type SheetResult } from './types';
 
 const MEASURE = process.env.GMID_MEASURE;
 
 /** A message that says a device was read somewhere other than where it was asked for. */
-const ELSEWHERE = /it has no \w+ sweep|is outside the table's \w+ range|does not reach this point/;
+const ELSEWHERE = /it has no \w+ sweep|is (above|below) what the table holds/;
 
 const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
@@ -44,8 +44,10 @@ function ending(res: SheetResult | undefined, error: string | undefined): string
   for (const e of res.rangeEnds ?? [])
     out.push(`range end ${e.name}: ${e.state}${e.error ? ` — ${e.error}` : ''}`);
   const off = [
-    ...clampedIn(res).map((c) => `defaults: ${c}`),
-    ...(res.rangeEnds ?? []).flatMap((e) => clampedIn(e).map((c) => `${e.name}: ${c}`)),
+    ...outsideIn(res).map((c) => `defaults: ${c.device} ${c.quantity}`),
+    ...(res.rangeEnds ?? []).flatMap((e) =>
+      outsideIn(e).map((c) => `${e.name}: ${c.device} ${c.quantity}`),
+    ),
   ];
   if (off.length) out.push(`read off the table: ${off.join('; ')}`);
   const said = new Set<string>();

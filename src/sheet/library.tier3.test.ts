@@ -21,7 +21,8 @@ import { describe, it, expect } from 'vitest';
 import { PHYS } from '../constants';
 import { BODY_FACTOR, scaleQuantities } from '../demo';
 import type { DeviceTable } from '../types';
-import { runSheet, withParams } from './index';
+import { DEFAULT_SETTINGS } from './settings';
+import { runSheet, SOLVE_TOL_REL, withParams } from './index';
 import { isHardCheck, type SheetDoc, type SheetResult } from './types';
 import {
   table,
@@ -149,6 +150,10 @@ const itDrawsItsTail = (
     // as the low end changes nothing where the design is sized, and at that range end the tail's
     // saturation check is the one hard check that fails.
     const vdsat = vdsatDemo(vgsRef, L);
+    // On the current-mirror OTA the mirror node's search runs into the table's 1.2 V of drain
+    // voltage: below V_nmir = 0.6 V its PMOS is read beyond the table, and the root lies a few
+    // millivolts above that edge. The search steps in from that end to within its own tolerance,
+    // so the root is bracketed on the table at the default settings.
     const claimed = runSheet(withParams(doc, { CM_lo: cmTooLow }), table, undefined, REFS);
     expect(claimed.feasible).toBe(res.feasible);
     const lo = claimed.rangeEnds!.find((e) => e.name === 'cm-lo')!;
@@ -1681,7 +1686,11 @@ describe('tier-3 goldens: current-mirror OTA', () => {
     // settles below the output-driving PMOS diode's drop, carrying less than where the design was
     // sized.
     expect(h.values.V_nmir).toBeGreaterThan(s.values.V_nmir);
-    expect(h.values.V_nmir).toBeLessThan(block(h, 'mload').vgs);
+    // Below, to the tolerance the node is solved to (SOLVE_TOL_REL of its 1.8 V range): solved
+    // far tighter (1e-10), the node lands within 2e-11 V of the PMOS diode's drop, so the two
+    // agree to the model's precision and which side the default search lands on depends only on
+    // the order of its probes.
+    expect(h.values.V_nmir).toBeLessThan(block(h, 'mload').vgs + SOLVE_TOL_REL * 1.8);
     expect(h.values.mfold__id).toBeLessThan(s.values.mfold__id);
     expect(h.values.mfold__id).toBeGreaterThan(s.values.mfold__id / 2);
 
@@ -1835,12 +1844,11 @@ describe('tier-3 goldens: inverter-based OTA', () => {
 
   it('the two gate-source voltages add up to the supply', () => {
     // The fact the sheet is drawn from. The NMOS is sized for its gm/ID and its gate-source
-    // voltage is the input level; the PMOS is read at what is left of the supply above it. A
-    // given gate voltage is reported as the coordinate the table was read at, so the sum is the
-    // supply to rounding, and that coordinate has to lie on the table for it to be the one asked
-    // for: here it does, 10 mV inside the 1.2 V the table sweeps to.
+    // voltage is the input level; the PMOS is read at what is left of the supply above it, so the
+    // sum is the supply to rounding. That gate voltage has to lie on the table for the PMOS to be
+    // sized at all: here it does, 10 mV inside the 1.2 V the table sweeps to.
     expect(relErr(block(res, 'n').vgs + block(res, 'p').vgs, 1.8)).toBeLessThan(1e-12);
-    expect(block(res, 'p').clamped).toBeUndefined();
+    expect(block(res, 'p').outside).toBeUndefined();
     expect(res.values.V_in).toBe(block(res, 'n').vgs);
     expect(relErr(res.values.V_in, vIn)).toBeLessThan(1e-5);
     // One current: typed into the NMOS, read from the NMOS by the PMOS.
@@ -1992,6 +2000,7 @@ describe('tier-3 goldens: inverter-based OTA', () => {
       () => undefined,
       REFS,
       tt,
+      { settings: { ...DEFAULT_SETTINGS, solveTolRel: 1e-9 } },
     );
     expect([sized.design, held.design]).toEqual(['sized', 'held']);
     expect([sized.state, held.state]).toEqual(['evaluated', 'evaluated']);

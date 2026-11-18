@@ -37,6 +37,7 @@ import {
   proposeWiring,
   resolvedSheet,
   runSheet,
+  outsideIn,
   structuralDiodes,
   validateSheet,
   withParams,
@@ -954,10 +955,12 @@ describe('a point with no answer is not walked', () => {
     expect(asHeld.nodes?.state).toBe('not-evaluated');
     expect(wiring(asHeld)).toEqual([]);
     expect(asHeld.nodes?.levels).toEqual({});
-    // Read as a sized run it completes (a clamp is a warning), so it is walked.
+    // Read as a sized run, a device read beyond its table is not sized either, so it is not
+    // walked: the point has no answer whichever way it is asked.
     const asSized = evaluateSheet(far, t);
-    expect(asSized.nodes?.state).toBe('checked-clean');
-    expect(Object.keys(asSized.nodes!.levels).sort()).toEqual(['gnd', 'in', 'out']);
+    expect(asSized.point?.state).toBe('no-answer');
+    expect(asSized.nodes?.state).toBe('not-evaluated');
+    expect(wiring(asSized)).toEqual([]);
   });
 
   it('reports a sized run that did not stand as not evaluated', () => {
@@ -1210,8 +1213,9 @@ describe('edges the tests above leave open', () => {
     expect(wiring(r).some((w) => w.message.includes('float'))).toBe(false);
   });
 
-  it('leaves a selector the table contradicts unnormalized: its loop is a term the count cannot read', () => {
-    // p_sign = -1 on an N-style table: replacing it by -1 would invent a proven constraint.
+  it('names a selector the table contradicts, whose device it puts beyond its table', () => {
+    // p_sign = -1 on an N-style table: the p device's stated drain voltage is then negative, past
+    // what the table holds.
     const doc: SheetDoc = {
       title: 'inv',
       polarity: 'n',
@@ -1246,7 +1250,13 @@ describe('edges the tests above leave open', () => {
       equations: [],
       checks: [],
     };
-    expect(evaluateSheet(doc, t).nodes!.dof).toMatchObject({ proven: 2, bound: 3 });
+    // The contradicted selector puts the p device's drain voltage past its table, so the device
+    // is not sized and nothing is walked or counted: the selector is named instead.
+    const r = evaluateSheet(doc, t);
+    expect(r.nodes!.state).toBe('not-evaluated');
+    expect(
+      r.warnings.filter((w) => w.message.includes('"p_sign" is an axis-sign selector')),
+    ).toHaveLength(1);
   });
 });
 
@@ -2091,14 +2101,15 @@ describe('the range a solved wire is searched in is the circuit’s own where th
     expect(held.rangeEnds?.[0].error).toContain('found no solution in [0, 1.8] V');
   });
 
-  it('gives no answer where an end of that search was read off the table', () => {
-    // On `t` the body bias stops at 0.9 V, so at the top of the wiring's range `m` is read off
-    // the table: the search's verdict there rests on data that is not the point asked about.
+  it('gives no answer where an end of that search reads a device beyond its table', () => {
+    // On `t` the body bias stops at 0.9 V, so at the top of the wiring's range `m` is asked
+    // beyond the table: it is not sized there, the search steps in, and finding no crossing in
+    // what is left says nothing about the stretch it could not read.
     const r = runSheet(follower([-0.5, 0.8], { VG: 0.4 }), t);
     expect(r.solve).toMatchObject({ kind: 'no-solution', from: 'wiring', endsRead: false });
-    expect(errors(r)[0]).toContain('an end of the search was read off the table');
+    expect(errors(r)[0]).toContain('an end of the search read a device beyond its table');
     expect(r.point).toMatchObject({ sized: false, state: 'no-answer' });
-    // The other end too: a table whose drain sweep stops at 1.2 V reads `m` off it at V_x = 0.
+    // The other end too: a table whose drain sweep stops at 1.2 V has no `m` at V_x = 0.
     const short = generateDemoDevice({
       vds: { min: 0, max: 1.2, step: 0.05 },
       vsb: { min: 0, max: 1.8, step: 0.05 },
@@ -2106,6 +2117,17 @@ describe('the range a solved wire is searched in is the circuit’s own where th
     const lo = runSheet(follower([-0.5, 0.8], { VG: 0.4 }), short);
     expect(lo.solve).toMatchObject({ kind: 'no-solution', endsRead: false });
     expect(lo.point).toMatchObject({ state: 'no-answer' });
+  });
+
+  it('keeps a root it finds on the table, though an end of the range is beyond it', () => {
+    // The same follower with its gate at 1.2 V: the top of the wiring's range still asks `m` for a
+    // body bias past the table's 0.9 V, and the root, near V_x = 0.5 V, lies on the table. The
+    // search steps in from that end and lands on the root, which is a valid answer.
+    const r = runSheet(follower([-0.5, 0.8], { VG: 1.2 }), t);
+    expect(r.solve).toEqual({ kind: 'settled' });
+    expect(outsideIn(r)).toEqual([]);
+    expect(r.point?.state).not.toBe('no-answer');
+    expect(r.values.V_x + r.values.m__vgs).toBeCloseTo(1.2, 5);
   });
 
   it('gives no answer where the search stepped past a stretch a block’s own solve fails in', () => {
