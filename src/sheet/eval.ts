@@ -56,6 +56,7 @@ import {
   solveFailedIn,
   unfoundIn,
   declarationWhy,
+  PROVIDE_SEP,
   unitOfSides,
   stands,
   unfinishedBecause,
@@ -2420,7 +2421,26 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
       };
     };
     if (v === undefined) {
-      out = falseHere();
+      // No number where the design is sized: not a false statement, but one that cannot be read,
+      // and what the engine found giving none.
+      const cause: Cause = {
+        kind: 'cannot-evaluate',
+        data: {
+          why: 'not-finite',
+          name: p.name,
+          reason: '',
+          hold: { path: [], param: p.name, statement: p.hold },
+          ...holdNoNumberBy(doc, out, p.hold),
+        },
+      };
+      const failed = solveFailed(out, solveFailureOf(cause));
+      out = {
+        ...failed,
+        items: [
+          ...(failed.items ?? []),
+          { kind: 'search', path: [], name: p.name, status: 'failed', cause },
+        ],
+      };
       continue;
     }
     const tol = BALANCE_TOL_REL * Math.abs(res.values[p.name] ?? p.value);
@@ -2431,6 +2451,36 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
     held[p.name] = v;
   }
   return { ...out, held };
+}
+
+/** What a hold that gives no number reads that has none: the first name it reads with no value,
+ *  as the item it is, with the record of a device read beyond its table where that is why. */
+function holdNoNumberBy(
+  doc: SheetDoc,
+  res: SheetResult,
+  expr: string,
+): { by?: ItemRef; outside?: OutsideTable } {
+  for (const n of namesOf(expr)) {
+    if (n in res.values || Object.prototype.hasOwnProperty.call(CONSTANTS, n)) continue;
+    const [b, key] = n.split(PROVIDE_SEP);
+    const report = key !== undefined ? res.blocks?.find((r) => r.name === b) : undefined;
+    if (report) {
+      const o = report.sizing?.outside?.[0];
+      return o
+        ? { by: { kind: 'device', path: [b], name: OWN_DEVICE }, outside: o }
+        : { by: { kind: 'sheet', path: [b], name: '' } };
+    }
+    if (doc.givens && DEVICE_NAMES.has(n)) {
+      const o = res.sizing?.outside?.[0];
+      return { by: { kind: 'device', path: [], name: OWN_DEVICE }, ...(o ? { outside: o } : {}) };
+    }
+    const p = doc.params.find((q) => q.name === n);
+    if (p)
+      return { by: { kind: engineSolved(p) || p.hold ? 'search' : 'value', path: [], name: n } };
+    if (doc.equations.some((e) => e.name === n))
+      return { by: { kind: 'value', path: [], name: n } };
+  }
+  return {};
 }
 
 /** One solved param as a search reads it: its relation (`lhs - rhs` reads zero at the answer), the

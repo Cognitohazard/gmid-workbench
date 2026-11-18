@@ -78,6 +78,17 @@ export interface CannotEvaluateData {
   readonly side?: 'lhs' | 'rhs' | 'both';
   /** For a check: the name each side reads that no entry declares. */
   readonly sides?: { readonly lhs?: string; readonly rhs?: string };
+  /** For a hold that gives no number where the design is sized: the param it sets and its
+   *  statement, as the sheet writes it. */
+  readonly hold?: {
+    readonly path: readonly string[];
+    readonly param: string;
+    readonly statement: string;
+  };
+  /** The item found giving no number where the engine read it, and its record where it was read
+   *  beyond its table. */
+  readonly by?: ItemRef;
+  readonly outside?: OutsideTable;
   /** For the check a declared region adds: the device it tests, and what gave no number: the
    *  device, which is not sized, or its drain-source voltage or vdsat. */
   readonly region?: { readonly device: string; readonly missing: 'device' | 'vds' | 'vdsat' };

@@ -317,7 +317,8 @@ export function causeMessage(c: Cause): string {
     case 'outside-table':
       return outsideTableMessage(c.data);
     case 'cannot-evaluate':
-      return c.data.reason;
+      // A hold that gives no number keeps the words today's fields carry for it.
+      return c.data.hold ? statementFalseMessage(c.data.hold) : c.data.reason;
     case 'no-solution':
       return noSolutionMessage(c.data, true);
     case 'no-crossing':
@@ -916,6 +917,13 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
 
 const SIDE_WORD = { lhs: 'left', rhs: 'right' } as const;
 
+/** What gave no number where the engine read it: a part read beyond its table, with the record,
+ *  or another item. */
+function byLines(d: CannotEvaluateData): Line[] {
+  if (d.outside) return outsideTableText(d.outside).slice(0, 2);
+  return d.by ? [t`${itemName(d.by)} gives no number.`] : [];
+}
+
 function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
   const subject: Line = ref ? itemName(ref) : [nm(d.name)];
   if (ref?.kind === 'device') {
@@ -926,6 +934,13 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       return [sized, t`The two quantities bound on it do not determine its size.`];
     return [sized];
   }
+  // A hold that gives no number where the design is sized, and what gave none there.
+  if (d.hold)
+    return [
+      t`The sheet sets ${inBlock(d.hold.param, d.hold.path)} by the statement that ${ex(d.hold.statement)} is zero.`,
+      t`At the design point, ${ex(d.hold.statement)} gives no number.`,
+      ...byLines(d),
+    ];
   // A region check: the engine wrote its two sides from the region the device declares.
   if (d.region) {
     const device = ref?.path.length ? partName(ref.path.join('.')) : partName(d.region.device);

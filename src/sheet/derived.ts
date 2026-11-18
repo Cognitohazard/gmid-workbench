@@ -65,6 +65,10 @@ function legacyFailure(c: Cause): SolveFailure {
       };
     case 'statement-false':
       return { kind: 'declaration-false', param: c.data.param, message };
+    case 'cannot-evaluate':
+      // A hold that gives no number where the design is sized: today, a false declaration.
+      if (c.data.hold) return { kind: 'declaration-false', param: c.data.hold.param, message };
+      throw new Error('a cause that gives no number is not the outcome of a search here');
     default:
       throw new Error(`a ${c.kind} cause is not the outcome of a search`);
   }

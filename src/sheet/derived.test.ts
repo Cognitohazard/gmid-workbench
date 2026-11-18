@@ -400,3 +400,23 @@ describe('the table from a finding’s rule to its cause', () => {
     expectSame(res);
   });
 });
+
+describe('a current balance that gives no number', () => {
+  it('is a search that cannot be calculated, naming the part read beyond its table', () => {
+    const d = withParams(sheet('otas/inverter-based-ota.json'), { gm_id_n: 18 });
+    const res = runSheet(d, table, undefined, REFS);
+    const s = res.items?.find(
+      (i) => i.kind === 'search' && i.path.length === 0 && i.name === 'I_bias',
+    );
+    expect(s).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: { hold: { param: 'I_bias' }, by: { kind: 'device', path: ['p'] } },
+      },
+    });
+    // Today's fields read it as they did: a false declaration of I_bias.
+    expect(res.solve).toMatchObject({ kind: 'declaration-false', param: 'I_bias' });
+    expectSame(res);
+  });
+});
