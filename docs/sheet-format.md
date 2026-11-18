@@ -1489,25 +1489,30 @@ failure carries its `message`, the same words as the error. `solve` is absent on
 to solve. Beside it, `ranges` lists each of the sheet's own solved parameters with the range it was
 searched in and where that came from (below).
 
-A failed solve of the top-level sheet leaves no number for what it did not find. Each solved
-parameter the failure names, each one after it that was never searched because the solve stopped
-first, and everything that reads one of them — directly or through other values — is absent from
-`values` and listed in `withheld`, the same record that carries a composed block's withheld
-outputs: a parameter the failure names is its own cause, and everything else names the parameter
-it traces back to. A device whose givens read one is not sized, a block whose override reads one is
-not evaluated, and a check that reads one is `na`, neither pass nor fail. A finding that follows
-from one carries it as `cause`, and the `sheet-follow-on` line counts those findings under it. The
-parameters found before the failure, and what reads only them, keep their values; what reads none
-of the parameters not found is evaluated as it would be without the search. Which parameters are
-not found, by outcome: `no-solution` — the parameter searched; `not-settled` with `malformed` —
-every solved parameter, since nothing was searched; any other `not-settled` — the parameters it
-names (the whole set for `member` and `sweeps`, only those read out of tolerance for
-`verification`); for each of these, also the parameters after them in the order the solve takes,
-and any solved parameter whose relation reads one not found, since it landed on that one's trial
-value.
-`declaration-false` withholds nothing: no search failed, and every value was found; a `hold` that
-reads a parameter not found records no held value. A failed solve inside a block is handled by its
-parent, which withholds the block's outputs.
+A failed solve leaves no number for what it did not find. Each solved parameter a failure names,
+and everything that reads one of them — directly or through other values — is absent from `values`
+and listed in `withheld`, the same record that carries a composed block's withheld outputs: a
+parameter a failure names is its own cause, and everything else names the parameter it traces back
+to. A device whose givens read one is not sized, a block whose override reads one is not evaluated,
+and a check that reads one is `na`, neither pass nor fail. A finding that follows from one carries
+it as `cause`, and the `sheet-follow-on` line counts those findings under it. The same holds inside
+a composed block: its report withholds what its own failed search did not find, and its parent
+withholds what it reads from the block, as following from the block.
+
+Which parameters a failure names, by outcome: `no-solution` — the parameter searched;
+`not-settled` with `malformed` — the parameters whose declaration cannot be solved as written, or
+whose author's range lies outside the wiring's; any other `not-settled` — the parameters it names
+(the whole set for `member` and `sweeps`, only those read out of tolerance for `verification`).
+`declaration-false` names none: no search failed, and every value was found; a `hold` that reads a
+parameter not found records no held value.
+
+A failure does not stop the solve. Each set of parameters after it in the order the solve takes is
+still searched where its relations read nothing not found, and where one does, the set is not
+found either, with the parameter it reads as its cause; a parameter found that landed by reading
+one not found is not found either. So the parameters found, and what reads only them, keep their
+values, and what reads none of the parameters not found is evaluated as it would be without them.
+Each failure is its own `sheet-solve` error; `solve` is the first of them that is a finding about
+the design (below) where there is one, and else the last.
 
 What a failure means for the point depends on where the range came from:
 
