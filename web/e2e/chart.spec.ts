@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loadDemo, loadDemoNoVsb, pickQuantity } from './helpers';
+import { loadDemo, loadDemoNoVsb, pickQuantity, storedTables } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
 
@@ -828,6 +828,8 @@ test('persistence: loaded devices survive a reload and can be forgotten', async 
   await loadDemo(page);
   await page.locator('.load input[type=file]').setInputFiles('e2e/fixtures/sample.mostab.csv');
   await expect(page.locator('.devices .dev')).toHaveCount(2);
+  // Both tables are written to the browser's store before the reload asks for them back.
+  await storedTables(page, 2);
 
   // Reload: both tables come back from local storage, no re-import needed.
   await page.reload();

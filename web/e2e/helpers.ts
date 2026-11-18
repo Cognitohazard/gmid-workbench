@@ -50,3 +50,29 @@ export async function pickQuantity(picker: Locator, value: string) {
   if (value === '__custom__') await picker.locator('.qcustom').click();
   else await picker.locator(`.qopt[data-value="${value}"]`).click();
 }
+
+/**
+ * Wait until the browser's table store holds `n` stored tables. A loaded table's chip appears at
+ * once, while its data is written to IndexedDB in the background; a reload before that write
+ * commits does not bring the table back. A test that reloads right after an import waits here.
+ */
+export async function storedTables(page: Page, n: number) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          new Promise<number>((resolve) => {
+            const open = indexedDB.open('gmid');
+            open.onerror = () => resolve(-1);
+            open.onsuccess = () => {
+              const db = open.result;
+              if (!db.objectStoreNames.contains('tables')) return (db.close(), resolve(0));
+              const count = db.transaction('tables').objectStore('tables').count();
+              count.onsuccess = () => (db.close(), resolve(count.result));
+              count.onerror = () => (db.close(), resolve(-1));
+            };
+          }),
+      ),
+    )
+    .toBe(n);
+}
