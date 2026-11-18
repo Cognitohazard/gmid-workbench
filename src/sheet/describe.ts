@@ -5,7 +5,7 @@
 import { outsideTableMessage } from '../types';
 import { amps } from './nodes';
 import { shown } from './linear';
-import { formatSI } from '../units';
+import { formatQuantity } from '../units';
 import { andList, type SolveRange } from './types';
 import type {
   Cause,
@@ -335,10 +335,7 @@ export const quantityText = (x: number, unit?: string): string => {
   const a = Math.abs(x);
   if ((!unit || unit === '1') && (a === 0 || (a >= 1e-3 && a < 1e4)))
     return String(Number(x.toPrecision(3)));
-  const s = formatSI(x, 3);
-  if (!unit || unit === '1') return s;
-  const m = /^(-?[\d.]+)(\D*)$/.exec(s);
-  return m ? `${m[1]} ${m[2]}${unit}` : `${s} ${unit}`;
+  return formatQuantity(x, unit, 3);
 };
 
 /** A range as a reader reads one: "0 V to 0.9 V". */
