@@ -93,8 +93,22 @@ const expectSame = (res: SheetResult): void => {
   walk(res.blocks);
   for (const e of res.rangeEnds ?? []) all.push(...(e.items ?? []));
   expect(
-    all.flatMap((i) => describeItem(i).lines.filter((l) => standardProblems(l).length)),
+    all.flatMap((i) =>
+      describeItem(i)
+        .segments.filter((l) => standardProblems(l).length)
+        .map((l) => l.map((x) => x.text).join('')),
+    ),
   ).toEqual([]);
+  // Every margin line of a bound gives the margin as a percentage: 100 × |left − right| / |right|.
+  // An equality's margin is measured from its tolerance band, which the cause does not hold.
+  for (const i of all)
+    if (i.status === 'failed' && i.cause.kind === 'fails' && i.cause.data.text.op !== '==') {
+      const { lhs, rhs } = i.cause.data;
+      const line = describeItem(i).lines.find((l) => l.startsWith('The margin is'));
+      const shown = Number(/([\d.]+)(k?) %/.exec(line ?? '')?.[1]);
+      const want = (100 * Math.abs(lhs - rhs)) / Math.max(Math.abs(rhs), 1e-30);
+      if (want >= 1e-3 && want < 1e4) expect(shown).toBeCloseTo(Number(want.toPrecision(3)), 6);
+    }
   // Every withheld item depends on an item of the list that failed, with that item's cause: read
   // on each full list, where a block's own sheet item finds its parent's items.
   for (const list of [res.items ?? [], ...(res.rangeEnds ?? []).map((e) => e.items ?? [])])

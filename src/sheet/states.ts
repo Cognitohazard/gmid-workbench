@@ -31,6 +31,8 @@ export interface NotReadData {
   readonly why: 'format' | 'reference' | 'field';
   readonly where: string;
   readonly message: string;
+  /** For a format this app does not read: the version the document declares. */
+  readonly declared?: unknown;
   /** Set where the finding came from validating the document before it was evaluated, rather
    *  than from the evaluation. */
   readonly stage?: 'validation';
@@ -38,11 +40,22 @@ export interface NotReadData {
 
 /** A sheet whose decisions do not determine one design: one missing, one made twice, or a level
  *  it marks as assumed. `names` are the params or wires involved. */
+/** A read beyond a device's table, with the value on the sheet that sets the quantity it asked
+ *  for, where that is one value the designer types. */
+export type OutsideTableData = OutsideTable & { readonly set?: string };
+
 export interface NotDeterminedData {
   readonly why:
     'decision-missing' | 'decision-twice' | 'assumed-level' | 'range-outside' | 'netlist';
   readonly names: readonly string[];
   readonly message: string;
+  /** For a search range outside the range its wires permit: each range, and the wires'. */
+  readonly ranges?: readonly {
+    readonly name: string;
+    readonly unit?: string;
+    readonly search: readonly [number, number];
+    readonly wires: readonly [number, number];
+  }[];
   /** As NotReadData.stage. */
   readonly stage?: 'validation';
 }
@@ -56,6 +69,11 @@ export interface CannotEvaluateData {
   readonly reason: string;
   /** For a requirement: which side gave no number. */
   readonly side?: 'lhs' | 'rhs' | 'both';
+  /** For a check: the name each side reads that no entry declares. */
+  readonly sides?: { readonly lhs?: string; readonly rhs?: string };
+  /** For the check a declared region adds: the device it tests, and what gave no number: the
+   *  device, which is not sized, or its drain-source voltage or vdsat. */
+  readonly region?: { readonly device: string; readonly missing: 'device' | 'vds' | 'vdsat' };
 }
 
 /** Which field of a param holds the relation a search solves. */
@@ -245,7 +263,7 @@ export interface FailsData {
 export type Cause =
   | { readonly kind: 'not-read'; readonly data: NotReadData }
   | { readonly kind: 'not-determined'; readonly data: NotDeterminedData }
-  | { readonly kind: 'outside-table'; readonly data: OutsideTable }
+  | { readonly kind: 'outside-table'; readonly data: OutsideTableData }
   | { readonly kind: 'cannot-evaluate'; readonly data: CannotEvaluateData }
   | { readonly kind: 'no-solution'; readonly data: NoSolutionData }
   | { readonly kind: 'no-crossing'; readonly data: NoCrossingData }

@@ -8,6 +8,7 @@ import {
   isHardCheck,
   namesOf,
   OWN_DEVICE,
+  REGION_CHECK_ID,
   unfoundIn,
   unitOfSides,
   type SheetDoc,
@@ -163,7 +164,7 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
               path: [],
               name: 'givens',
               status: 'failed',
-              cause: deviceCause(s),
+              cause: deviceCause(s, doc),
             };
     out.push(item);
   }
@@ -230,7 +231,7 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
             path: [],
             name: r.id,
             status: 'failed',
-            cause: requirementCause(r, res.warnings),
+            cause: requirementCause(r, res.warnings, doc, res.sizing?.ok === true),
           },
     );
   }
@@ -319,6 +320,8 @@ function equationCause(name: string, warnings: readonly QAWarning[]): Cause {
 function requirementCause(
   r: { id: string; lhsValue: number; rhsValue: number; detail?: string },
   warnings: readonly QAWarning[],
+  doc: SheetDoc,
+  sized: boolean,
 ): Cause {
   const l = Number.isFinite(r.lhsValue);
   const rr = Number.isFinite(r.rhsValue);
@@ -326,6 +329,20 @@ function requirementCause(
   const undeclared = warnings.find(
     (w) => w.rule === 'sheet-undeclared' && (w.location ?? '').startsWith(`check "${r.id}" `),
   );
+  // The undeclared name each side reads, by the side its warning names.
+  const sideName = (s: 'lhs' | 'rhs'): string | undefined =>
+    warnings.find(
+      (w) => w.rule === 'sheet-undeclared' && w.location === `check "${r.id}" ${s}` && w.symbol,
+    )?.symbol;
+  const sides = { lhs: sideName('lhs'), rhs: sideName('rhs') };
+  // The check a declared region adds: what left it without two numbers.
+  const region =
+    r.id === REGION_CHECK_ID && doc.givens?.region !== undefined
+      ? {
+          device: OWN_DEVICE,
+          missing: !sized ? ('device' as const) : !l ? ('vds' as const) : ('vdsat' as const),
+        }
+      : undefined;
   return {
     kind: 'cannot-evaluate',
     data: {
@@ -333,6 +350,15 @@ function requirementCause(
       name: undeclared?.symbol ?? r.id,
       reason: undeclared?.message ?? r.detail ?? '',
       ...(side ? { side } : {}),
+      ...(sides.lhs || sides.rhs
+        ? {
+            sides: {
+              ...(sides.lhs ? { lhs: sides.lhs } : {}),
+              ...(sides.rhs ? { rhs: sides.rhs } : {}),
+            },
+          }
+        : {}),
+      ...(region ? { region } : {}),
     },
   };
 }
@@ -342,8 +368,12 @@ const namesIn = (expr: string): string[] => [...namesOf(expr)];
 
 /** Why a device did not size: read beyond its table, a table that lacks what it needs, or
  *  anything else the sizer said. */
-function deviceCause(s: SizingReport | undefined): Cause {
-  if (s?.outside?.length) return { kind: 'outside-table', data: s.outside[0] };
+function deviceCause(s: SizingReport | undefined, doc: SheetDoc): Cause {
+  if (s?.outside?.length) {
+    const o = s.outside[0];
+    const set = typedSetter(doc, o.quantity);
+    return { kind: 'outside-table', data: set ? { ...o, set } : o };
+  }
   if (s?.needs?.length)
     return {
       kind: 'cannot-evaluate',
@@ -353,6 +383,16 @@ function deviceCause(s: SizingReport | undefined): Cause {
     kind: 'cannot-evaluate',
     data: { why: 'not-finite', name: 'givens', reason: s?.error ?? 'the device was not sized' },
   };
+}
+
+/** The value on the sheet that sets the quantity a device was sized at, where the given is that
+ *  one name and the designer types its value: a param that is neither solved nor held. */
+function typedSetter(doc: SheetDoc, quantity: string): string | undefined {
+  const key = quantity === 'l' ? 'L' : quantity;
+  const given = (doc.givens as Record<string, string | undefined> | undefined)?.[key]?.trim();
+  if (!given) return undefined;
+  const p = doc.params.find((q) => q.name === given);
+  return p && !engineSolved(p) && !p.hold ? p.name : undefined;
 }
 
 /** Rules whose errors already have their item, written where the error was raised: a failed

@@ -2169,11 +2169,25 @@ export function evaluateSheet(
   // keys this engine does not know would report on a design nobody wrote.
   if (formatOf(authored) === 'unknown') {
     const warnings = formatProblems(authored);
+    // The version the document declares, beside the finding the format check raised.
     const items = withFindings(
       [{ kind: 'sheet', path: [], name: '', status: 'ok' }],
       warnings,
       undefined,
       'evaluation',
+    ).map((i) =>
+      i.status === 'failed' && i.cause.kind === 'not-read' && i.cause.data.why === 'format'
+        ? {
+            ...i,
+            cause: {
+              ...i.cause,
+              data: {
+                ...i.cause.data,
+                declared: (authored as { formatVersion?: unknown }).formatVersion,
+              },
+            },
+          }
+        : i,
     );
     return { values: {}, checks: [], feasible: false, warnings, items, verdict: verdictOf(items) };
   }
@@ -3805,6 +3819,18 @@ function solveNode(node: NodeRef): SheetResult {
           why: 'range-outside',
           names: refused,
           message: outside.map((o) => o.message).join('; '),
+          ranges: outside.flatMap((o) =>
+            o.u.range.author && o.u.range.wiring
+              ? [
+                  {
+                    name: o.u.p.name,
+                    ...(o.u.p.unit !== undefined ? { unit: o.u.p.unit } : {}),
+                    search: o.u.range.author,
+                    wires: o.u.range.wiring.range,
+                  },
+                ]
+              : [],
+          ),
         },
       }),
     });

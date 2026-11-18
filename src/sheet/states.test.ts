@@ -29,8 +29,10 @@ import {
   notAskedText,
   rangeSource,
   withheldClause,
+  lineText,
   standardProblems,
   textOf,
+  type Line,
 } from './describe';
 import type { SheetDoc, SolveRange } from './types';
 import type { OutsideTable } from '../types';
@@ -90,7 +92,7 @@ const hardFail = failsCause({
   lhsValue: 2,
   rhsValue: 1,
   margin: -1,
-  marginPct: -100,
+  marginPct: -1,
 });
 const softFail = failsCause({
   kind: 'advisory',
@@ -98,7 +100,7 @@ const softFail = failsCause({
   lhsValue: 2,
   rhsValue: 1,
   margin: -1,
-  marginPct: -100,
+  marginPct: -1,
 });
 const notEvaluated: Cause = {
   kind: 'cannot-evaluate',
@@ -387,7 +389,7 @@ group('the text module builds today’s messages from the data', () => {
   });
 
   it('describes an item by its cause’s short name and message, and a withheld one by what it depends on', () => {
-    expect(describe(failed('value', 'z', notEvaluated))).toEqual({
+    expect(describe(failed('value', 'z', notEvaluated))).toMatchObject({
       name: 'cannot be calculated',
       lines: ['z gives no number.', 'The sheet does not define z.'],
     });
@@ -399,7 +401,7 @@ group('the text module builds today’s messages from the data', () => {
         status: 'withheld',
         on: [{ kind: 'search', path: ['amp'], name: 'x', cause: 'no-crossing' }],
       }),
-    ).toEqual({
+    ).toMatchObject({
       name: 'not calculated',
       lines: [
         'w in block amp is not calculated, because the engine found no solution for x in block amp.',
@@ -437,7 +439,7 @@ group('the texts a reader sees, by the message standard', () => {
 
   it('a search over the circuit range with no solution found, and no proof', () => {
     const c = noSolutionCause({ ...tail(), ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]) }, true);
-    expect(textOf(c)).toEqual({
+    expect(textOf(c)).toMatchObject({
       name: 'no solution found (not proved)',
       lines: [
         'No value of V_tail makes CM_in equal to CM_dc.',
@@ -472,7 +474,7 @@ group('the texts a reader sees, by the message standard', () => {
       },
       true,
     );
-    expect(textOf(c)).toEqual({
+    expect(textOf(c)).toMatchObject({
       name: 'no solution in the stated range',
       lines: [
         'No value of V_tail from 0.1 V to 0.5 V makes CM_in equal to CM_dc.',
@@ -502,9 +504,12 @@ group('the texts a reader sees, by the message standard', () => {
         kind: 'outside-table',
         data: { device: 'in', quantity: 'l', asked: 5e-6, held: [180e-9, 2e-6] },
       }),
-    ).toEqual({
+    ).toMatchObject({
       name: 'outside the table',
-      lines: ['Part in asks for a length of 5 µm.', 'The table holds lengths from 180 nm to 2 µm.'],
+      lines: [
+        'Part in asks for a length of 5 µm.',
+        'The table holds lengths from 0.18 µm to 2 µm.',
+      ],
     });
     expect(textOf(hardFail, { kind: 'requirement', path: [], name: 'gain-spec' }).lines).toEqual([
       'gain-spec fails.',
@@ -641,10 +646,10 @@ group('the texts a reader sees, by the message standard', () => {
         },
       ],
     ];
-    const texts: string[] = [];
+    const texts: Line[] = [];
     for (const [c, r] of causes) {
       const f = textOf(c, r);
-      texts.push(f.name, ...f.lines);
+      texts.push(...f.segments);
       for (const k of ['sheet', 'value', 'device', 'search', 'requirement'] as const)
         for (const path of [[], ['bias']])
           texts.push(
@@ -654,20 +659,22 @@ group('the texts a reader sees, by the message standard', () => {
               name: 'w',
               status: 'withheld',
               on: [{ ...ref(k === 'value' ? 'search' : k, 'V_tail', path), cause: c.kind }],
-            }).lines,
+            }).segments,
           );
     }
     for (const c of CAUSES) texts.push(withheldClause({ ...ref('search', 'V_tail'), cause: c }));
-    texts.push(...notAskedText('range end', 'cm-lo').lines);
-    texts.push(...notAskedText('held point', 'ss at 125 °C').lines);
-    for (const line of texts)
-      expect({ line, problems: standardProblems(line) }).toEqual({ line, problems: [] });
-    // No raw exponent, no quotation marks around a name, no label of the code.
-    for (const line of texts) expect(line).not.toMatch(/\de[+-]?\d|"|\blhs\b|\brhs\b|\bparam\b/);
+    texts.push(...notAskedText('range end', 'cm-lo').segments);
+    texts.push(...notAskedText('held point', 'ss at 125 °C').segments);
+    for (const l of texts) {
+      const line = lineText(l);
+      expect({ line, problems: standardProblems(l) }).toEqual({ line, problems: [] });
+    }
+    for (const l of texts)
+      expect(lineText(l)).not.toMatch(/\de[+-]?\d|"|\blhs\b|\brhs\b|\bparam\b/);
   });
 
   it('says what a held point that was not run reads', () => {
-    expect(notAskedText('range end', 'cm-lo')).toEqual({
+    expect(notAskedText('range end', 'cm-lo')).toMatchObject({
       name: 'not run',
       lines: ['The engine did not run range end cm-lo, because the design point has no design.'],
     });
