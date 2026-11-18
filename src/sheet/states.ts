@@ -343,8 +343,13 @@ export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boo
  * The one compatibility rule that keeps today's result fields where the cause has changed its
  * reading: a search over the circuit's own range that found no sign change, both ends read, is
  * read by today's fields (the solve outcome's design failure, a point's does-not-comply) as the
- * design failing, though its cause is "not proved" and its verdict undetermined. It goes with
- * those fields.
+ * design failing, though its cause is "not proved".
+ *
+ * So for these cases one result holds two readings while this rule stands: the old fields say the
+ * design does not comply, and the verdict derived from the items (verdictOf) says undetermined. No
+ * reader may take the derived verdict until the readers move to it; when they do, this rule and
+ * the design-failure test it serves are deleted together, and the tests that force such a search
+ * change with them.
  */
 export const legacyDesignFailure = (c: Cause): boolean =>
   c.kind === 'no-crossing' &&
