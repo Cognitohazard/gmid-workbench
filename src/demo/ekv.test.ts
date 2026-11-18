@@ -325,3 +325,112 @@ describe('the full-range EKV device', () => {
     }
   });
 });
+
+describe('the full-range EKV device at a second condition', () => {
+  // A smaller grid of the same model for the comparisons, which read node against node.
+  const GRID: EkvOptions = {
+    vds: { min: 0, max: 1.8, step: 0.15 },
+    vsb: { min: 0, max: 0.9, step: 0.3 },
+  };
+  const make = (o: EkvOptions = {}) => generateEkvDevice({ ...GRID, ...o });
+
+  it('is the nominal table exactly when the condition is given at its defaults', () => {
+    const a = make();
+    const b = make({ vtShift: 0, ispecFactor: 1, tempC: 27, corner: 'tt' });
+    for (const [k, c] of a.grid.quantities) {
+      const d = col(b.grid, k);
+      let differ = 0;
+      for (let i = 0; i < c.length; i++) if (!Object.is(c[i], d[i])) differ++;
+      expect(differ, k).toBe(0);
+    }
+    expect(b.id).toEqual({ device: 'nmos_ekv', corner: 'tt', temp: 27 });
+  });
+
+  it('records the condition in the table identity', () => {
+    const t = make({ corner: 'ss', vtShift: 0.05, ispecFactor: 0.85, tempC: 125 });
+    expect(t.id).toEqual({ device: 'nmos_ekv', corner: 'ss', temp: 125 });
+    expect(t.meta.temp).toBe(125);
+  });
+
+  it('lowers id at every conducting node with a positive threshold shift, and moves gm/ID along vgs', () => {
+    // 50 mV is five vgs steps, so the shifted gm/ID curve at node j + 5 is the nominal one at j.
+    const nom = make();
+    const up = make({ vtShift: 0.05 });
+    const [idN, idU] = [col(nom.grid, 'id'), col(up.grid, 'id')];
+    const [gmN, gmU] = [col(nom.grid, 'gm'), col(up.grid, 'gm')];
+    let notLower = 0;
+    for (let i = 0; i < idN.length; i++) {
+      if (idN[i] === 0) continue; // vds = 0: no current at either condition
+      if (!(idU[i] < idN[i])) notLower++;
+    }
+    expect(notLower).toBe(0);
+    const d = nom.grid.axes.findIndex((a) => a.name === 'vgs');
+    let worst = 0;
+    for (const ln of lines(nom.grid, d)) {
+      if (idN[ln.start + ln.stride] === 0) continue;
+      for (let j = 0; j + 5 < ln.n; j++) {
+        const a = gmN[ln.start + j * ln.stride] / idN[ln.start + j * ln.stride];
+        const b = gmU[ln.start + (j + 5) * ln.stride] / idU[ln.start + (j + 5) * ln.stride];
+        worst = Math.max(worst, Math.abs(b - a) / a);
+      }
+    }
+    expect(worst).toBeLessThan(1e-9);
+  });
+
+  it('scales id, gm and gds together with the current factor and leaves gm/ID unchanged', () => {
+    const nom = make();
+    const fast = make({ ispecFactor: 1.2 });
+    let worst = 0;
+    for (const k of ['id', 'gm', 'gds']) {
+      const [a, b] = [col(nom.grid, k), col(fast.grid, k)];
+      for (let i = 0; i < a.length; i++)
+        if (a[i] !== 0) worst = Math.max(worst, Math.abs(b[i] / a[i] - 1.2));
+    }
+    expect(worst).toBeLessThan(1e-12);
+    const [idN, gmN, idF, gmF] = [
+      col(nom.grid, 'id'),
+      col(nom.grid, 'gm'),
+      col(fast.grid, 'id'),
+      col(fast.grid, 'gm'),
+    ];
+    let gmId = 0;
+    for (let i = 0; i < idN.length; i++)
+      if (idN[i] !== 0) gmId = Math.max(gmId, Math.abs(gmF[i] / idF[i] - gmN[i] / idN[i]));
+    expect(gmId).toBeLessThan(1e-9);
+  });
+
+  it('carries less current hot in strong inversion and more in weak, so the curves cross', () => {
+    // L = 0.5 µm, vds = 1.2 V, body grounded: one vgs sweep at 27 °C and at 125 °C.
+    const nom = make();
+    const hot = make({ tempC: 125 });
+    const [nL, nVds, nVsb, nVgs] = nom.grid.shape;
+    expect(nL).toBe(4);
+    const di = Math.round(1.2 / 0.15);
+    const base = ((1 * nVds + di) * nVsb + 0) * nVgs;
+    const idN = col(nom.grid, 'id').subarray(base, base + nVgs);
+    const idH = col(hot.grid, 'id').subarray(base, base + nVgs);
+    expect(idH[30]).toBeGreaterThan(idN[30]); // vgs = 0.3 V, weak inversion
+    expect(idH[nVgs - 1]).toBeLessThan(idN[nVgs - 1]); // vgs = 1.8 V, strong inversion
+    let crossings = 0;
+    for (let j = 1; j < nVgs; j++)
+      if (Math.sign(idH[j] - idN[j]) !== Math.sign(idH[j - 1] - idN[j - 1])) crossings++;
+    expect(crossings).toBe(1);
+  });
+
+  it('validates with no errors and no warnings at slow-hot and fast-cold, on both polarities', () => {
+    for (const o of [
+      { corner: 'ss', vtShift: 0.05, ispecFactor: 0.85, tempC: 125 },
+      { corner: 'ff', vtShift: -0.05, ispecFactor: 1.15, tempC: -40 },
+    ]) {
+      const n = generateEkvDevice(o);
+      for (const t of [n, signedMirrorDemo(n)]) {
+        const qa = validate(t);
+        expect(
+          qa.filter((w) => w.severity !== 'info'),
+          o.corner,
+        ).toEqual([]);
+        expect(qa.filter((w) => w.rule === 'no-saturation')).toEqual([]);
+      }
+    }
+  });
+});

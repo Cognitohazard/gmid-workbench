@@ -6,12 +6,30 @@
 // gate and the drain. Pure and deterministic; zero DOM imports.
 
 import type { Axis, DeviceTable } from '../types';
-import { UT, PHYS } from '../constants';
+import { UT, PHYS, DEFAULT_TEMP_C, DEFAULT_CORNER } from '../constants';
 import { makeGrid } from '../grid';
 import { COX, sweepValues } from './index';
 
+/**
+ * The process and temperature condition a table is made at. Every field defaults to the nominal
+ * device, so an empty condition is the nominal table exactly. A second condition made this way
+ * moves the physics (a threshold, a mobility, a thermal voltage), which scaling a nominal table's
+ * columns after the fact cannot do.
+ */
+export interface EkvCondition {
+  /** Threshold shift [V] added to VT0(L) at every length. Default 0. */
+  vtShift?: number;
+  /** Factor on the specific current, standing for a mobility spread. Default 1. */
+  ispecFactor?: number;
+  /** Temperature [°C]. Sets the thermal voltage, and through EKV_MU_TEMP_EXP and EKV_VT_TEMPCO
+   *  lowers mobility and threshold as it rises. Default 27 °C. */
+  tempC?: number;
+}
+
 /** Options for the generator; every field has a default. */
-export interface EkvOptions {
+export interface EkvOptions extends EkvCondition {
+  /** The corner name the table's identity records. Default 'tt'. */
+  corner?: string;
   /** Channel lengths [m]. Default: 0.18 µm, 0.5 µm, 1 µm, 2 µm. */
   lengths?: number[];
   /** Gate-source sweep [V], inclusive. Default 0 to 1.8 V in 10 mV steps. */
@@ -47,7 +65,41 @@ export const EKV_VA_PER_L = 5e6;
 /** Flicker coefficient, the same area-domain form as the simpler device. */
 const KFLICKER = 3e-25;
 
-/** Threshold at vds = 0, vsb = 0 [V] for length L. */
+/** Mobility falls with temperature as (T/T0)^−EKV_MU_TEMP_EXP. */
+export const EKV_MU_TEMP_EXP = 1.5;
+/** Threshold temperature coefficient [V/K]: VT0 falls this much per kelvin above 27 °C. */
+export const EKV_VT_TEMPCO = 1e-3;
+
+interface ResolvedCondition {
+  T: number;
+  ut: number;
+  vtShift: number;
+  ispecScale: number;
+}
+
+/**
+ * A condition as the model reads it. The specific current is 2·n·µ·Cox·UT²·(W/L) in EKV, so it
+ * moves with the mobility factor and the temperature exponent through µ, and with UT² through the
+ * thermal voltage. In strong inversion the UT² cancels and the current goes as µ·(overdrive)², so
+ * a hotter device carries less current there while its lower threshold lets it carry more in weak
+ * inversion. At the nominal condition every term is exactly its nominal value.
+ */
+function resolveCondition(c: EkvCondition): ResolvedCondition {
+  const tempC = c.tempC ?? DEFAULT_TEMP_C;
+  const T = tempC + 273.15;
+  const nominalT = tempC === DEFAULT_TEMP_C;
+  const ut = nominalT ? UT : (PHYS.k * T) / PHYS.q;
+  const mu = nominalT ? 1 : Math.pow(T / PHYS.T, -EKV_MU_TEMP_EXP);
+  const utSq = nominalT ? 1 : (ut / UT) ** 2;
+  return {
+    T: nominalT ? PHYS.T : T,
+    ut,
+    vtShift: (c.vtShift ?? 0) - (nominalT ? 0 : EKV_VT_TEMPCO * (T - PHYS.T)),
+    ispecScale: (c.ispecFactor ?? 1) * mu * utSq,
+  };
+}
+
+/** Threshold at vds = 0, vsb = 0 [V] for length L, at the nominal condition. */
 export const ekvVt0 = (L: number): number => VT0_REF + 0.02 * Math.log(L / L_REF + 1);
 /** Barrier-lowering coefficient [V/V] for length L: falls as 1/L. */
 export const ekvSigma = (L: number): number => SIGMA_REF * (L_REF / L);
@@ -82,15 +134,24 @@ export interface EkvPoint {
  *
  * gm, gmb and gds are its analytic partial derivatives (gmb = ∂id/∂vbs = −∂id/∂vsb).
  */
-export function ekvPoint(L: number, W: number, vgs: number, vds: number, vsb: number): EkvPoint {
+export function ekvPoint(
+  L: number,
+  W: number,
+  vgs: number,
+  vds: number,
+  vsb: number,
+  condition: EkvCondition = {},
+): EkvPoint {
+  const c = resolveCondition(condition);
+  const ut = c.ut;
   const n = EKV_N;
-  const ispec = EKV_ISPEC * (W / L);
+  const ispec = EKV_ISPEC * c.ispecScale * (W / L);
   const sigma = ekvSigma(L);
   const VA = ekvVa(L);
-  const VT = ekvVt0(L) - sigma * vds;
+  const VT = ekvVt0(L) + c.vtShift - sigma * vds;
   const vp = (vgs + vsb - VT) / n;
-  const xf = (vp - vsb) / (2 * UT);
-  const xr = (vp - vsb - vds) / (2 * UT);
+  const xf = (vp - vsb) / (2 * ut);
+  const xr = (vp - vsb - vds) / (2 * ut);
   const sf = softplus(xf);
   const sr = softplus(xr);
   const iF = sf * sf;
@@ -99,7 +160,7 @@ export function ekvPoint(L: number, W: number, vgs: number, vds: number, vsb: nu
   // derivative times UT: the normalized source-side and drain-side conductances.
   const qf = sf * sigmoid(xf);
   const qr = sr * sigmoid(xr);
-  const dF = (qf - qr) / UT;
+  const dF = (qf - qr) / ut;
   const clm = 1 + vds / VA;
   const diff = iF - iR;
   const id = ispec * diff * clm;
@@ -110,7 +171,7 @@ export function ekvPoint(L: number, W: number, vgs: number, vds: number, vsb: nu
   const gmb = ispec * clm * dF * (1 - 1 / n);
   // ∂(vp − vsb)/∂vds = σ/n (barrier lowering); ∂(vp − vsb − vds)/∂vds = σ/n − 1; and the
   // channel-length-modulation factor contributes diff/VA.
-  const gds = ispec * ((clm * ((qf * sigma) / n - qr * (sigma / n - 1))) / UT + diff / VA);
+  const gds = ispec * ((clm * ((qf * sigma) / n - qr * (sigma / n - 1))) / ut + diff / VA);
 
   // Threshold: the gate-source voltage at which the pinch-off voltage equals the source voltage,
   // vp = vsb, i.e. vgs = VT + (n − 1)·vsb — barrier lowering through VT, the body effect
@@ -119,7 +180,7 @@ export function ekvPoint(L: number, W: number, vgs: number, vds: number, vsb: nu
   // Saturation voltage: the EKV interpolation 2·UT·sqrt(iF + 1/4) + 3·UT. In strong inversion
   // 2·UT·sqrt(iF) tends to vp − vsb, the pinch-off voltage above the source; in weak inversion
   // it tends to 4·UT, where the reverse current has fallen to e⁻⁴ of the forward one.
-  const vdsat = 2 * UT * Math.sqrt(iF + 0.25) + 3 * UT;
+  const vdsat = 2 * ut * Math.sqrt(iF + 0.25) + 3 * ut;
 
   // Channel thermal noise. Integrating the channel's local conductance noise along a charge-based
   // channel (normalized current i = q² + q, with q the normalized inversion charge) gives
@@ -130,13 +191,13 @@ export function ekvPoint(L: number, W: number, vgs: number, vds: number, vsb: nu
   // is exactly 4kT·gds: the thermal noise of the channel's conductance, never zero. It carries
   // the channel-length-modulation factor like every other current-like quantity.
   const N = ((2 / 3) * (qf * qf + qf * qr + qr * qr) + (qf + qr) / 2) / (qf + qr + 1);
-  const sth = 4 * PHYS.k * PHYS.T * (ispec / UT) * N * clm;
+  const sth = 4 * PHYS.k * c.T * (ispec / ut) * N * clm;
   // The stored γ is the noise factor against the whole channel conductance seen from the source,
   // gms = gm + gmb + gds: 1 at vds = 0, 1/2 in weak-inversion saturation, 2/3 in strong. That is
   // finite everywhere, including vds = 0 where gm and gmb are zero and the namespace's form
   // sth/(4kT·(gm + gmb)) is 0/0, and in saturation it differs from that form only by
   // 1 + gds/(gm + gmb).
-  const gamma = sth / (4 * PHYS.k * PHYS.T * (gm + gmb + gds));
+  const gamma = sth / (4 * PHYS.k * c.T * (gm + gmb + gds));
 
   return { id, gm, gmb, gds, iF, iR, clm, vth, vdsat, sth, gamma };
 }
@@ -153,6 +214,17 @@ export function generateEkvDevice(opts: EkvOptions = {}): DeviceTable {
   if (lengths.length === 0) throw new Error('ekv: lengths must be non-empty');
   for (const L of lengths) if (!(L > 0)) throw new Error('ekv: every length must be > 0');
   if (!(W > 0)) throw new Error('ekv: W must be > 0');
+
+  const condition: EkvCondition = {
+    vtShift: opts.vtShift,
+    ispecFactor: opts.ispecFactor,
+    tempC: opts.tempC,
+  };
+  if (opts.ispecFactor !== undefined && !(opts.ispecFactor > 0))
+    throw new Error('ekv: ispecFactor must be > 0');
+  const tempC = opts.tempC ?? DEFAULT_TEMP_C;
+  if (!(tempC > -273.15)) throw new Error('ekv: tempC must be above absolute zero');
+  const corner = opts.corner ?? DEFAULT_CORNER;
 
   const lVals = Float64Array.from(lengths).sort();
   const vdsVals = sweepValues(opts.vds ?? EKV_DEFAULT_VDS);
@@ -177,7 +249,7 @@ export function generateEkvDevice(opts: EkvOptions = {}): DeviceTable {
     for (let di = 0; di < nVds; di++) {
       for (let si = 0; si < nVsb; si++) {
         for (let vi = 0; vi < nVgs; vi++, flat++) {
-          const p = ekvPoint(L, W, vgsVals[vi], vdsVals[di], vsbVals[si]);
+          const p = ekvPoint(L, W, vgsVals[vi], vdsVals[di], vsbVals[si], condition);
           cols.id[flat] = p.id;
           cols.gm[flat] = p.gm;
           cols.gmb[flat] = p.gmb;
@@ -204,11 +276,11 @@ export function generateEkvDevice(opts: EkvOptions = {}): DeviceTable {
   ];
   const grid = makeGrid(axes, new Map(names.map((k) => [k, cols[k]])));
   return {
-    id: { device: 'nmos_ekv', corner: 'tt', temp: 27 },
+    id: { device: 'nmos_ekv', corner, temp: tempC },
     grid,
     meta: {
       W,
-      temp: 27,
+      temp: tempC,
       simulator: 'demo-ekv-full',
       polarity: { device: 'n', signedInput: false },
     },
