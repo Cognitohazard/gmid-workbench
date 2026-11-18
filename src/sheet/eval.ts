@@ -2452,6 +2452,15 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
   return { ...out, held };
 }
 
+/** Whether an expression reads only values the designer types and constants: it is the same at
+ *  every value of a solved param. */
+const fixedIn = (doc: SheetDoc, expr: string): boolean =>
+  namesOf(expr).every(
+    (n) =>
+      Object.prototype.hasOwnProperty.call(CONSTANTS, n) ||
+      doc.params.some((p) => p.name === n && !engineSolved(p) && !p.hold),
+  );
+
 /** What a hold that gives no number reads that has none: the first name it reads with no value,
  *  as the item it is, with the record of a device read beyond its table where that is why. */
 function holdNoNumberBy(
@@ -3020,6 +3029,7 @@ function searchDataOf(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): 
       field: fieldOf(u),
       reads: { lhs: [...namesOf(u.lhs)], rhs: [...namesOf(u.rhs)] },
       ...(unit !== undefined ? { unit } : {}),
+      ...(fixedIn(ctx.doc, u.rhs) ? { rhsFixed: true as const } : {}),
     },
     range: u.range,
     searched: [u.lo, u.hi],

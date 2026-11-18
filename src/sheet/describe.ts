@@ -356,13 +356,19 @@ export function causeMessage(c: Cause): string {
 export interface Segment {
   readonly kind: 'text' | 'name' | 'expr';
   readonly text: string;
+  /** For a name that names an item of the result: that item, so a reader can link to it. */
+  readonly ref?: ItemRef;
 }
 
 /** A detail line, as segments. */
 export type Line = readonly Segment[];
 
 /** A name from the sheet, as a segment. */
-const nm = (text: string): Segment => ({ kind: 'name', text });
+const nm = (text: string, ref?: ItemRef): Segment => ({
+  kind: 'name',
+  text,
+  ...(ref ? { ref } : {}),
+});
 /** An expression from the sheet, as a segment. */
 const ex = (text: string): Segment => ({ kind: 'expr', text: text.trim() });
 
@@ -531,12 +537,18 @@ const spanText = (lo: number, hi: number, unit?: string): string => {
   return `from ${num(lo)} ${prefix}${unit} to ${num(hi)} ${prefix}${unit}`;
 };
 
-/** A name with the blocks it belongs to after it: "V_ref in block bias". */
-const inBlock = (name: string, path: readonly string[]): Line =>
-  path.length ? t`${nm(name)} in block ${nm(path.join('.'))}` : [nm(name)];
+/** A block by its path, naming its sheet item. */
+const blockSegment = (path: readonly string[]): Segment =>
+  nm(path.join('.'), { kind: 'sheet', path, name: '' });
+
+/** A name with the blocks it belongs to after it: "V_ref in block bias". The name links to the
+ *  item it is, where the caller knows which. */
+const inBlock = (name: string, path: readonly string[], ref?: ItemRef): Line =>
+  path.length ? t`${nm(name, ref)} in block ${blockSegment(path)}` : [nm(name, ref)];
 
 /** An unknown as a reader reads it. */
-const unknownName = (d: Pick<SearchData, 'path' | 'unknown'>): Line => inBlock(d.unknown, d.path);
+const unknownName = (d: Pick<SearchData, 'path' | 'unknown'>): Line =>
+  inBlock(d.unknown, d.path, { kind: 'search', path: d.path, name: d.unknown });
 
 /** The plain words and the unit for each quantity a table is read at or a device is sized by:
  *  one table, so a sentence can say "a length of 5 µm" and "the table holds lengths". */
@@ -573,16 +585,18 @@ export const nameText = (n: string): Line => {
 /** A device as a reader reads it, by the path a record names it with: the sheet's own, or the
  *  part a block is. */
 const partName = (device: string): Line =>
-  device === '' || device === 'givens' ? t`the device of this sheet` : t`part ${nm(device)}`;
+  device === '' || device === 'givens'
+    ? t`the device of this sheet`
+    : t`part ${nm(device, { kind: 'device', path: device.split('.'), name: 'givens' })}`;
 
 /** Any item as the subject of a sentence names it. */
 const itemName = (r: ItemRef): Line => {
-  if (r.kind === 'sheet') return r.path.length ? t`block ${nm(r.path.join('.'))}` : t`the sheet`;
+  if (r.kind === 'sheet') return r.path.length ? t`block ${blockSegment(r.path)}` : t`the sheet`;
   if (r.kind === 'device') {
     const own = r.name === '' || r.name === 'givens';
     return own && r.path.length ? partName(r.path.join('.')) : partName(r.name);
   }
-  return inBlock(r.name, r.path);
+  return inBlock(r.name, r.path, { kind: r.kind, path: r.path, name: r.name });
 };
 
 /** The first letter of a sentence made capital where the engine's own word opens it ("Part in",
@@ -609,15 +623,16 @@ const sidesOf = (r: { lhs: string; rhs: string }): { lhs: Line; rhs: Line } =>
 
 /** What a monotonic relation would mean, in the words of its two sides: the right side changes
  *  more slowly than the unknown where the left side is the unknown itself; the left side only
- *  rises or falls where the right is constant; otherwise the gap between them only grows or only
- *  shrinks. The way is read from the left side minus the right. */
+ *  rises or falls where the right reads only typed values, so it is the same everywhere; otherwise
+ *  the gap between them only grows or only shrinks. The way is read from the left side minus the
+ *  right. Two equal end values do not make a side constant. */
 function monotonicText(d: SearchData & NoSolutionRead): Line {
   const { lhs, rhs } = sidesOf(d.relation);
   const U = unknownName(d);
   const [lo, hi] = d.ends;
   const rises = hi.lhs - hi.rhs >= lo.lhs - lo.rhs;
   if (d.relation.lhs.trim() === d.unknown) return t`${rhs} changes more slowly than ${U}`;
-  if (lo.rhs === hi.rhs) return t`${lhs} ${rises ? 'only rises' : 'only falls'} with ${U}`;
+  if (d.relation.rhsFixed) return t`${lhs} ${rises ? 'only rises' : 'only falls'} with ${U}`;
   return t`the gap between the two sides only ${rises ? 'grows' : 'shrinks'} with ${U}`;
 }
 
@@ -697,9 +712,11 @@ function searchLines(
       t`${lhs} is ${quantityText(lo.lhs, unit)} at the low end and ${quantityText(hi.lhs, unit)} at the high end.`,
     );
   lines.push(
-    lo.rhs === hi.rhs
+    d.relation.rhsFixed
       ? t`${rhs} is ${quantityText(lo.rhs, unit)}.`
-      : t`${rhs} is ${quantityText(lo.rhs, unit)} at the low end and ${quantityText(hi.rhs, unit)} at the high end.`,
+      : lo.rhs === hi.rhs
+        ? t`${rhs} is ${quantityText(lo.rhs, unit)} at both ends.`
+        : t`${rhs} is ${quantityText(lo.rhs, unit)} at the low end and ${quantityText(hi.rhs, unit)} at the high end.`,
   );
   return lines;
 }

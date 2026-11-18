@@ -105,6 +105,9 @@ export interface RelationData {
   readonly reads: { readonly lhs: readonly string[]; readonly rhs: readonly string[] };
   /** The unit both sides are in, where the code that writes the record knows it. */
   readonly unit?: string;
+  /** That the right side reads only values the designer types, and so stays the same at every
+   *  value of the unknown. Absent where it may move with it. */
+  readonly rhsFixed?: true;
 }
 
 /** One end of a stretch a search read: the unknown there and each side of the relation, and,

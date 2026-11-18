@@ -429,6 +429,7 @@ group('the texts a reader sees, by the message standard', () => {
         field: 'designConstraint',
         reads: { lhs: ['CM_in'], rhs: ['CM_dc'] },
         unit: 'V',
+        rhsFixed: true,
       },
       range: wiring,
       searched: [0, 0.9],
@@ -451,6 +452,43 @@ group('the texts a reader sees, by the message standard', () => {
         'The engine held out_share at 0.518 during this search.',
       ],
     });
+  });
+
+  it('links each name that is an item to that item', () => {
+    const c = noSolutionCause(
+      { ...tail({ path: ['bias'], given: [] }), ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]) },
+      true,
+    );
+    const names = textOf(c)
+      .segments.flat()
+      .filter((g) => g.kind === 'name');
+    expect(names.find((g) => g.text === 'V_tail')?.ref).toEqual({
+      kind: 'search',
+      path: ['bias'],
+      name: 'V_tail',
+    });
+    expect(names.find((g) => g.text === 'bias')?.ref).toEqual({
+      kind: 'sheet',
+      path: ['bias'],
+      name: '',
+    });
+  });
+
+  it('claims no more of a right side that is equal at the two ends than those two points', () => {
+    const t = tail({ given: [] });
+    const c = noSolutionCause(
+      {
+        ...t,
+        relation: { ...t.relation, rhsFixed: undefined },
+        ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]),
+      },
+      true,
+    );
+    const lines = textOf(c).lines;
+    expect(lines).toContain('CM_dc is 1.75 V at both ends.');
+    expect(lines).toContain(
+      'The engine did not show that the gap between the two sides only grows with V_tail.',
+    );
   });
 
   it('names the block an unknown belongs to in front of it', () => {
