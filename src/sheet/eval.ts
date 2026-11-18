@@ -1337,13 +1337,12 @@ function evalBlocks(
                 path: [],
                 name: '',
                 status: 'withheld',
+                // In the parent's terms: a block of the parent, or a search of the parent's
+                // that it did not find.
                 on: [
-                  {
-                    kind: 'sheet',
-                    path: cause.split(PATH_SEP),
-                    name: '',
-                    cause: 'cannot-evaluate',
-                  },
+                  parent.blocks?.some((b) => b.name === cause.split(PATH_SEP)[0])
+                    ? { kind: 'sheet', path: cause.split(PATH_SEP), name: '', frame: 'parent' }
+                    : { kind: 'search', path: [], name: cause, frame: 'parent' },
                 ],
               }
             : {

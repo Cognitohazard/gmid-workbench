@@ -1046,6 +1046,7 @@ function linesOf(c: Cause, ref?: ItemRef): Line[] {
 /** The clause a withheld item's sentence gives for the failed item it depends on: one for each
  *  cause, so the not-proved cause never reads as a proof. */
 export function withheldClause(r: WithheldOn): Line {
+  if (r.frame === 'parent') return t`the sheet that uses it gave it no value`;
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':

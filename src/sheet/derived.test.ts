@@ -420,3 +420,27 @@ describe('a current balance that gives no number', () => {
     expectSame(res);
   });
 });
+
+describe('a block that is not evaluated', () => {
+  it('names what it waits on in its parent’s terms, and the parent resolves it', () => {
+    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const res = runSheet(d, table, undefined, REFS);
+    const report = res.blocks?.find((b) => b.name === 'tail');
+    const own = report?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+    expect(own).toMatchObject({
+      status: 'withheld',
+      on: [{ kind: 'search', path: [], name: 'V_tail', frame: 'parent' }],
+    });
+    if (own?.status === 'withheld') expect(own.on[0].cause).toBeUndefined();
+    const inParent = res.items?.find((i) => i.kind === 'sheet' && i.path.join('.') === 'tail');
+    expect(inParent).toMatchObject({
+      status: 'withheld',
+      on: [{ kind: 'search', name: 'V_tail' }],
+    });
+    if (inParent?.status === 'withheld') {
+      expect(inParent.on[0].frame).toBeUndefined();
+      expect(inParent.on[0].cause).toBeDefined();
+    }
+    expectSame(res);
+  });
+});

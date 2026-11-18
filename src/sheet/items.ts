@@ -353,7 +353,7 @@ function resolveOn(items: readonly Item[], o: WithheldOn): WithheldOn {
     if (inside && inside.status === 'failed')
       return { kind: inside.kind, path: inside.path, name: inside.name, cause: inside.cause.kind };
   }
-  return { ...ref, cause: o.cause };
+  return o.frame === 'parent' ? o : { ...ref, cause: o.cause };
 }
 
 /** A check's two sides as the sheet writes them, read back from its text. */

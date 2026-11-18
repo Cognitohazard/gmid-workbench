@@ -375,7 +375,12 @@ export type Status =
 export type Item = ItemRef & Status;
 
 /** A failed item a withheld one depends on, with the kind of its cause. */
-export type WithheldOn = ItemRef & { readonly cause: CauseName };
+export type WithheldOn =
+  | (ItemRef & { readonly cause: CauseName; readonly frame?: undefined })
+  /** An item of the parent sheet, named as the parent names it: a block that is not evaluated
+   *  waits on what its parent did not give it. Its cause is read in the parent's list, which
+   *  resolves the reference; the block's own list carries none. */
+  | (ItemRef & { readonly frame: 'parent'; readonly cause?: undefined });
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
 
