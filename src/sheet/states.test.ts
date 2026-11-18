@@ -8,7 +8,7 @@ import { evaluateSheet } from './index';
 import {
   CAUSES,
   OCCURS_ON,
-  NO_CROSSING_OVER_WIRING_IS_PROOF,
+  OPEN_RULINGS,
   causeFits,
   failsCause,
   heldVerdictOf,
@@ -137,6 +137,11 @@ group('the verdict, by four rules in order', () => {
     expect(verdictOf([sheet, failed('requirement', 'adv', softFail)]).verdict).toBe('feasible');
   });
 
+  it('gives a sheet with no device and no search the word the open ruling holds', () => {
+    expect(verdictOf([sheet, ok('value', 'a')]).verdict).toBe(OPEN_RULINGS.equationOnly);
+    expect(verdictOf([sheet, ok('device', 'givens')]).verdict).toBe('feasible');
+  });
+
   it('reads anything else as undetermined, listing each failed item', () => {
     const v = verdictOf([sheet, failed('value', 'z', notEvaluated), ok('requirement', 'c')]);
     expect(v.verdict).toBe('undetermined');
@@ -183,7 +188,7 @@ group('whether a failed search is proved, decided in one place', () => {
   });
 
   it('takes no crossing over the circuit range, both ends read, as proved', () => {
-    expect(NO_CROSSING_OVER_WIRING_IS_PROOF).toBe(true);
+    expect(OPEN_RULINGS.noCrossingOverWiringIsProof).toBe(true);
     expect(noSolutionCause(over(wiring), true).cause).toBe('no-solution');
   });
 

@@ -69,6 +69,8 @@ export interface SearchEnd {
   readonly lhs: number;
   readonly rhs: number;
   readonly stepped?: string;
+  /** The item `stepped` is about, where the evaluation names it (a device not sized there). */
+  readonly steppedBy?: ItemRef;
 }
 
 /** One solved param as a failed search reports it: where it is, whether it is a held param, the
@@ -140,7 +142,7 @@ export interface DidNotSettleData {
     | {
         readonly kind: 'unevaluable';
         readonly at:
-          | { readonly where: 'nowhere'; readonly reason: string }
+          | { readonly where: 'nowhere'; readonly reason: string; readonly by?: ItemRef }
           | {
               readonly where: 'one-point';
               readonly end: SearchEnd;
@@ -151,6 +153,7 @@ export interface DidNotSettleData {
               readonly ends: readonly [SearchEnd, SearchEnd];
               readonly between: readonly [number, number];
               readonly reason: string;
+              readonly by?: ItemRef;
             };
       }
     | { readonly kind: 'member'; readonly failure: Cause }
@@ -176,6 +179,7 @@ export interface SearchStep {
   readonly side: 'below' | 'above';
   readonly x: number;
   readonly reason: string;
+  readonly by?: ItemRef;
 }
 
 /** A search stopped by a limit: the evaluations the whole tree may spend, or the probes one search
@@ -305,21 +309,28 @@ export type Item = ItemRef & Status;
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
 
-/** Whether a search over the circuit's own range, both ends read, that found no crossing is taken
- *  as proved. Kept true for now: it keeps today's verdict (see the decision recorded where this
- *  build was ruled). Setting it false maps such a search to "no crossing, not proved", whose
- *  verdict is undetermined, and changes nothing else. */
-export const NO_CROSSING_OVER_WIRING_IS_PROOF = true;
+/**
+ * The choices not yet ruled on, in one place, so that each is a change here alone:
+ *  - `noCrossingOverWiringIsProof`: whether a search over the circuit's own range, both ends read,
+ *    that found no crossing is taken as proved. True keeps today's verdict; false maps such a
+ *    search to "no crossing, not proved", whose verdict is undetermined, and changes nothing else.
+ *  - `equationOnly`: the verdict of a sheet that sizes no device and solves nothing, where every
+ *    item is ok. It has no design to be feasible; "feasible" stands until its word is ruled.
+ */
+export const OPEN_RULINGS: {
+  readonly noCrossingOverWiringIsProof: boolean;
+  readonly equationOnly: DesignVerdict;
+} = { noCrossingOverWiringIsProof: true, equationOnly: 'feasible' };
 
 /**
  * The cause of a search that found no solution in what it searched, from its data — where its
  * range came from (`range.from`) and how the search ended — and whether both ends of the stretch
  * read the design. The one place that decides whether a failed search is proved (see
- * NO_CROSSING_OVER_WIRING_IS_PROOF).
+ * OPEN_RULINGS).
  */
 export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boolean): Cause {
   const sign = data.ended.kind === 'sign';
-  if (data.range.from === 'wiring' && sign && endsRead && NO_CROSSING_OVER_WIRING_IS_PROOF)
+  if (data.range.from === 'wiring' && sign && endsRead && OPEN_RULINGS.noCrossingOverWiringIsProof)
     return { cause: 'no-solution', data: { ...data, shown: 'ends-read' } };
   if (data.range.from !== 'wiring' && sign)
     return { cause: 'none-in-range', data: { ...data, endsRead } };
@@ -355,7 +366,8 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
  *  1. a search failed with "no solution (proved)": infeasible (at a held point, no operating point);
  *  2. a hard requirement failed with "fails": non-compliant;
  *  3. every item is ok: feasible (at a held point, compliant) — an advisory requirement that does
- *     not hold is failed, and does not stop this rule, as it gates nothing today;
+ *     not hold is failed, and does not stop this rule, as it gates nothing today; a sheet with no
+ *     device and no search reads OPEN_RULINGS.equationOnly;
  *  4. otherwise: undetermined, with each failed item and its cause.
  * Rule 2 before rule 3 is three-valued logic: one requirement that fails decides, whatever else is
  * not known. The sheet is an item, so a sheet that was not read cannot reach rule 3. Withheld items
@@ -370,7 +382,12 @@ export function verdictOf(items: readonly Item[]): Verdict {
   // An advisory requirement that does not hold decides nothing (see failsCause).
   const blocking = failed.filter((f) => !(f.cause.cause === 'fails' && !f.cause.data.hard));
   if (blocking.length === 0 && items.every((i) => i.status !== 'withheld'))
-    return { verdict: 'feasible', failed: [] };
+    return {
+      verdict: items.some((i) => i.kind === 'device' || i.kind === 'search')
+        ? 'feasible'
+        : OPEN_RULINGS.equationOnly,
+      failed: [],
+    };
   return { verdict: 'undetermined', failed: blocking };
 }
 
