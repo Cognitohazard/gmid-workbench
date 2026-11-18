@@ -2391,8 +2391,8 @@
           {:else}
             No cell of this plane determines <b>{swept2.value.name}</b>.
           {/if}
-          A grey cell does not determine it: a device is read beyond its table there, or the solve did
-          not find a value.
+          A cell is grey where the result reads a device that is read beyond its table there, or a value
+          the solve did not find.
         </div>
       {:else}
         <div class="scap">
@@ -2440,8 +2440,8 @@
           <b>{active}</b>{#if sweptUnit}&nbsp;in {sweptUnit}{/if} at <b>{at}</b>, {swept.design ===
           'held'
             ? 'with the nominal design held there'
-            : 'with the design sized at each sample'}. A gap is a sample that does not determine it:
-          a device is read beyond its table there, or the solve did not find a value.
+            : 'with the design sized at each sample'}. The curve has a gap where it reads a device
+          that is read beyond its table, or a value the solve did not find.
         </div>
       {:else}
         <div class="scap" data-sweep-caption data-sweep-design={swept.design}>

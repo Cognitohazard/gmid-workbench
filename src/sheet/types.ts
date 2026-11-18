@@ -2057,8 +2057,9 @@ export interface SheetSweep {
 
 /**
  * One named result of a sheet across a sweep: its value at each sample, or null where the sample
- * does not determine it — a device read beyond its table anywhere in the tree (the sample is not
- * a point the tables answer for), a value the evaluation withheld, or one that is not finite.
+ * does not determine it — a value the evaluation withheld (it reads a device read beyond its
+ * table, or a value a solve did not find; see SheetResult.withheld), or one that is not finite. A
+ * result the problem does not touch keeps its value, as the margins do.
  */
 export interface SweepCurve {
   name: string;

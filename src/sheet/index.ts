@@ -112,9 +112,9 @@ export interface Sweep2Options extends RunOptions {
 }
 
 /** A named result at one evaluated sample, or null where the sample does not determine it (see
- *  SweepCurve): any device of the tree read beyond its table, a withheld value, a non-finite one. */
+ *  SweepCurve): a value the evaluation withheld, or one that is not finite. */
 function sampleValue(res: SheetResult | undefined, name: string): number | null {
-  if (!res || outsideIn(res).length || res.withheld?.[name] !== undefined) return null;
+  if (!res || res.withheld?.[name] !== undefined) return null;
   const v = res.values[name];
   return v !== undefined && Number.isFinite(v) ? v : null;
 }

@@ -1,6 +1,6 @@
 // The curves of a sheet's named results across a sweep: each equation's value at every sample of a
 // one-parameter sweep, and one asked-for equation at every cell of a two-parameter map — a gap
-// wherever the sample does not determine it.
+// wherever the sample withholds it, and its value wherever the sample's problem does not touch it.
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { runSheet, sweepSheet, sweepSheet2, withParams } from './index';
@@ -44,28 +44,43 @@ describe('a one-parameter sweep', () => {
 
   it('reads at each sample what the sheet evaluated there alone reads', () => {
     sw.x.forEach((x, i) => {
-      if (sw.outside[i].length) return;
       const res = runSheet(withParams(device, { VD: x }), dev);
-      expect(sw.values[0].y[i]).toBe(res.values.gain);
       expect(sw.values[1].y[i]).toBe(res.values.room);
+      if (!sw.outside[i].length) expect(sw.values[0].y[i]).toBe(res.values.gain);
     });
   });
 
-  it('leaves a gap in every curve at a sample read beyond the table, and only there', () => {
+  it('leaves a gap where a sample withholds the result, and keeps one the problem does not touch', () => {
     const beyond = sw.x.map((_, i) => sw.outside[i].length > 0);
     expect(beyond).toContain(true);
     expect(beyond).toContain(false);
+    const [gain, room] = sw.values;
     sw.x.forEach((x, i) => {
-      for (const c of sw.values) {
-        if (beyond[i]) expect(c.y[i], `${c.name} at ${x}`).toBeNull();
-        else expect(Number.isFinite(c.y[i]), `${c.name} at ${x}`).toBe(true);
-      }
+      // `gain` reads the device: withheld where the device is read beyond its table.
+      if (beyond[i]) expect(gain.y[i], `gain at ${x}`).toBeNull();
+      else expect(Number.isFinite(gain.y[i]), `gain at ${x}`).toBe(true);
+      // `room` reads only params, so the device's problem does not touch it.
+      expect(room.y[i], `room at ${x}`).toBeCloseTo(1.8 - x, 12);
     });
   });
 });
 
 describe('a two-parameter map', () => {
-  it('keeps the one equation asked for at every cell, with a gap beyond the table', () => {
+  it('keeps a result the problem does not touch at a cell beyond the table', () => {
+    const map = sweepSheet2(device, 'gm_id', 'VD', dev, 5, undefined, undefined, {
+      value: 'room',
+    });
+    let beyond = 0;
+    map.y.forEach((vd, yi) =>
+      map.x.forEach((_, xi) => {
+        if (map.outside[yi][xi].length) beyond++;
+        expect(map.value!.z[yi][xi]).toBeCloseTo(1.8 - vd, 12);
+      }),
+    );
+    expect(beyond).toBeGreaterThan(0);
+  });
+
+  it('keeps the one equation asked for at every cell, with a gap where it reads the device beyond the table', () => {
     const map = sweepSheet2(device, 'gm_id', 'VD', dev, 5, undefined, undefined, {
       value: 'gain',
     });
