@@ -10,12 +10,11 @@ import { createEngine } from '../expr';
 import { DERIVED_FORMS } from '../derive';
 import { SMALL_SIGNAL_KEYS } from '../namespace';
 import type { DeviceTable } from '../types';
-import { evaluateSheet, type DeviceResolver } from './eval';
+import { evaluateSheet, operatingPointOf, type DeviceResolver } from './eval';
 import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
 import {
   childPath,
-  devicesIn,
   engineSolved,
   OWN_DEVICE,
   outsideIn,
@@ -25,6 +24,7 @@ import {
   treeCheckResults,
   withoutRange,
   type SheetDoc,
+  type SheetBlockReport,
   type SheetResult,
 } from './types';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
@@ -105,7 +105,7 @@ export function devicePropertySensitivities(
     return empty('The sheet does not validate, so it has no formulas to read.');
   const probeDoc = withoutRange(r.doc);
   const settings = opts.settings;
-  const base = evaluateSheet(probeDoc, table, resolveDevice, { settings });
+  const base = evaluateSheet(probeDoc, table, resolveDevice, { settings, operatingPoint: true });
   const baseOutside = outsideIn(base);
   if (baseOutside.length)
     return empty(
@@ -132,10 +132,10 @@ export function devicePropertySensitivities(
 
   const columns: PropertyColumn[] = [];
   const moved = new Set<string>();
-  for (const { device, table: t, placements } of sizedDevices(r.doc, base, table, resolveDevice)) {
+  for (const { device, point, placements } of sizedDevices(r.doc, base)) {
     const placed = placements > 1 ? { placements } : {};
     for (const key of SMALL_SIGNAL_KEYS) {
-      if (!t?.grid.quantities.has(key)) {
+      if (!(key in point)) {
         columns.push({
           device,
           key,
@@ -179,9 +179,7 @@ export function devicePropertySensitivities(
         device,
         key,
         ...placed,
-        ...(device === OWN_DEVICE && Number.isFinite(base.values[key])
-          ? { base: base.values[key] }
-          : {}),
+        ...(Number.isFinite(point[key]) ? { base: point[key] } : {}),
         results: results.map((name) => {
           if (base.withheld?.[name] !== undefined || base.values[name] === undefined)
             return { name, why: `${name} is withheld at the design.` };
@@ -227,37 +225,38 @@ export function devicePropertySensitivities(
 export const deviceWords = (device: string): string =>
   device === OWN_DEVICE ? 'the sheet’s own device' : device;
 
-/** Every device the base run sized, by path as findings name it, with the table it is sized on:
- *  a block's own device binding where it names one, else its parent's table. */
+/** Every device the base run sized, by path as findings name it, with its operating point (the
+ *  quantities its table gave, see operatingPointOf) and how many places its block puts it. */
 function sizedDevices(
   doc: SheetDoc,
   base: SheetResult,
-  table: DeviceTable | undefined,
-  resolveDevice: DeviceResolver | undefined,
-): { device: string; table: DeviceTable | undefined; placements: number }[] {
-  const found = new Map<string, { table: DeviceTable | undefined; placements: number }>();
+): { device: string; point: Record<string, number>; placements: number }[] {
+  const out: { device: string; point: Record<string, number>; placements: number }[] = [];
+  if (base.sizing?.ok)
+    out.push({
+      device: OWN_DEVICE,
+      point: operatingPointOf(base.values, base.sizing),
+      placements: 1,
+    });
   const walk = (
-    d: SheetDoc,
-    t: DeviceTable | undefined,
+    d: SheetDoc | undefined,
+    reports: readonly SheetBlockReport[] | undefined,
     path: string,
-    placements: number,
   ): void => {
-    found.set(path || OWN_DEVICE, { table: t, placements });
-    for (const b of d.blocks ?? []) {
-      if (!b.doc) continue;
-      walk(
-        b.doc,
-        b.device !== undefined ? resolveDevice?.(b.device) : t,
-        childPath(path, b.name),
-        Array.isArray(b.nodes) ? b.nodes.length : 1,
-      );
+    for (const rep of reports ?? []) {
+      const block = d?.blocks?.find((b) => b.name === rep.name);
+      const at = childPath(path, rep.name);
+      if (rep.sizing?.ok && rep.point)
+        out.push({
+          device: at,
+          point: rep.point,
+          placements: Array.isArray(block?.nodes) ? block.nodes.length : 1,
+        });
+      walk(block?.doc, rep.blocks, at);
     }
   };
-  walk(doc, table, '', 1);
-  return devicesIn(base, (s, device) => {
-    const f = found.get(device);
-    return s.ok ? [{ device, table: f?.table, placements: f?.placements ?? 1 }] : [];
-  });
+  walk(doc, base.blocks, '');
+  return out;
 }
 
 /** An engine with no constants, for the names an expression reads. */
