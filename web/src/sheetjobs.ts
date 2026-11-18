@@ -57,6 +57,8 @@ export type SheetJob =
       at: ConditionKey;
       points: number;
       settings: Settings;
+      /** One of the sheet's equations to keep at every cell (Sweep2Options.value). */
+      value?: string;
     }
   | { kind: 'sens'; doc: SheetDoc; at: ConditionKey; check?: string; settings: Settings };
 
@@ -131,7 +133,7 @@ export function runJob(job: SheetJob, { primary, deviceOf, refs }: JobBench): Jo
             job.points,
             projectingResolver(deviceOf, job.at),
             undefined,
-            { settings },
+            { settings, ...(job.value ? { value: job.value } : {}) },
           )
         : null;
     }

@@ -28,6 +28,7 @@ import type {
   SheetSweep,
   SheetSweep2,
   SheetSweepCheck,
+  SweepCurve,
   SweepWindow,
 } from './types';
 import { dcInputs, validateSheet } from './validate';
@@ -101,6 +102,21 @@ export interface SweepOptions extends RunOptions {
    *  few more evaluations per edge, so asked for by a caller that shows the answer, and left off
    *  by one that scans many knobs. */
   readonly windows?: boolean;
+}
+
+/** What a two-parameter sweep takes besides a run's options. */
+export interface Sweep2Options extends RunOptions {
+  /** One of the sheet's own equations to keep at every cell (SheetSweep2.value). One only: the
+   *  map holds n² cells, and a result kept for each would hold n² values per equation. */
+  readonly value?: string;
+}
+
+/** A named result at one evaluated sample, or null where the sample does not determine it (see
+ *  SweepCurve): a value the evaluation withheld, or one that is not finite. */
+function sampleValue(res: SheetResult | undefined, name: string): number | null {
+  if (!res || res.withheld?.[name] !== undefined) return null;
+  const v = res.values[name];
+  return v !== undefined && Number.isFinite(v) ? v : null;
 }
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
@@ -335,6 +351,7 @@ export function sweepOf(
       feasible: [],
       stands: [],
       outside: [],
+      values: [],
     };
   }
 
@@ -370,6 +387,11 @@ export function sweepOf(
   const feasible: boolean[] = [];
   const stood: boolean[] = [];
   const beyond: OutsideTable[][] = [];
+  const values: SweepCurve[] = (r.doc.equations ?? []).map((e) => ({
+    name: e.name,
+    unit: e.unit ?? '',
+    y: [],
+  }));
   /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry. */
   const failingIn = (byPath: ReadonlyMap<string, CheckResult>): string[] =>
     checks.flatMap((c) => {
@@ -385,6 +407,7 @@ export function sweepOf(
     const { res, feasible: ok, stands: done } = sample(withParams(r.doc, { [param]: t }));
     feasible.push(!blocked && ok);
     beyond.push(res ? outsideIn(res) : []);
+    for (const c of values) c.y.push(sampleValue(res, c.name));
     const byPath = new Map<string, CheckResult>();
     if (res) indexTreeResults(res.checks, res.blocks, '', byPath);
     if (probe) failedAt.push(failingIn(byPath));
@@ -410,6 +433,7 @@ export function sweepOf(
     feasible,
     stands: stood,
     outside: beyond,
+    values,
   };
   if (!probe) return out;
   const at = (t: number): { ok: boolean; failing: string[]; outside: OutsideTable[] } => {
@@ -545,7 +569,7 @@ export function sweepSheet2(
   n = SWEEP2_POINTS,
   resolveDevice?: DeviceResolver,
   refs?: SheetRefIndex,
-  opts: RunOptions = {},
+  opts: Sweep2Options = {},
 ): SheetSweep2 {
   const px = doc.params.find((p) => p.name === paramX);
   const py = doc.params.find((p) => p.name === paramY);
@@ -580,11 +604,15 @@ export function sweepSheet2(
   const feasible: boolean[][] = [];
   const binding: (string | null)[][] = [];
   const beyond: OutsideTable[][][] = [];
+  const eq =
+    opts.value === undefined ? undefined : r.doc.equations?.find((e) => e.name === opts.value);
+  const z: (number | null)[][] = [];
 
   for (let yi = 0; yi < pts; yi++) {
     const frow: boolean[] = [];
     const brow: (string | null)[] = [];
     const orow: OutsideTable[][] = [];
+    const zrow: (number | null)[] = [];
     for (let xi = 0; xi < pts; xi++) {
       const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice, {
         settings: opts.settings,
@@ -595,12 +623,22 @@ export function sweepSheet2(
       // structural error), which bindingCheck reports as "no check to name".
       brow.push(res.feasible ? null : (bindingCheck(res)?.id ?? null));
       orow.push(outsideIn(res));
+      if (eq) zrow.push(sampleValue(res, eq.name));
     }
     feasible.push(frow);
     binding.push(brow);
     beyond.push(orow);
+    if (eq) z.push(zrow);
   }
-  return { ...empty, x, y, feasible, binding, outside: beyond };
+  return {
+    ...empty,
+    x,
+    y,
+    feasible,
+    binding,
+    outside: beyond,
+    ...(eq ? { value: { name: eq.name, unit: eq.unit ?? '', z } } : {}),
+  };
 }
 
 // The structural analysis: read-only, table-free, and read by nothing an evaluation does.

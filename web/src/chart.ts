@@ -152,8 +152,7 @@ export class ChartAdapter {
     ) {
       this.u.setData(aligned(data)); // resetScales: true — refit to the new quantity's range
     } else {
-      this.u.destroy();
-      this.u = this.build(data);
+      this.rebuild(data);
     }
     // Only report when the effective scale moved — the flags rarely change, but setData runs on
     // every bias-drag frame, and a fresh object would re-trigger the UI's tag/tooltip each time.
@@ -163,9 +162,19 @@ export class ChartAdapter {
   /** Rebuild from the retained data to pick up a theme/colour or tick-font change. uPlot fixes
    *  axis font + stroke at construction (like series colour/dash), so a restyle needs a rebuild. */
   restyle(): void {
-    this.u.destroy();
-    this.u = this.build(this.lastData);
+    this.rebuild(this.lastData);
     this.emitScale();
+  }
+
+  /** Build a fresh uPlot in place of the live one, and size it to the container: a rebuild can
+   *  read the container before layout (0 high, so the 360 px fallback), and the resize observer
+   *  answers only a change of size — observing again delivers the container's current size, as
+   *  it does after the first build. */
+  private rebuild(data: ChartData): void {
+    this.u.destroy();
+    this.u = this.build(data);
+    this.ro.unobserve(this.el);
+    this.ro.observe(this.el);
   }
 
   /** Surface the effective (post-downgrade) log flags to the UI. */
