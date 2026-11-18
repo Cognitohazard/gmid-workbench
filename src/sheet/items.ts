@@ -2,12 +2,15 @@
 // the evaluation's own records: the causes its searches wrote, its device's sizing, its equations
 // and the names it withheld, its checks, and its blocks' own lists under their names.
 
+import { CONSTANTS } from '../constants';
 import {
+  DEVICE_NAMES,
   engineSolved,
   failedParams,
   isHardCheck,
   namesOf,
   OWN_DEVICE,
+  PROVIDE_SEP,
   REGION_CHECK_ID,
   unfoundIn,
   unitOfSides,
@@ -169,21 +172,21 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
     out.push(item);
   }
 
-  // The equations.
+  // The blocks' items, under their names: what an equation or a check of this sheet reads of a
+  // block is found among them.
+  const blockItems = (res.blocks ?? []).flatMap((b) => under(b.name, b.items ?? []));
+  const reading = readerOf(doc, res, out, blockItems);
+
+  // The equations, in document order, so what one reads of another is already listed.
   for (const e of doc.equations) {
-    const on = withheldOn(e.name);
+    if (Number.isFinite(res.values[e.name])) {
+      out.push({ kind: 'value', path: [], name: e.name, status: 'ok' });
+      continue;
+    }
     out.push(
-      Number.isFinite(res.values[e.name])
-        ? { kind: 'value', path: [], name: e.name, status: 'ok' }
-        : on
-          ? { kind: 'value', path: [], name: e.name, status: 'withheld', on }
-          : {
-              kind: 'value',
-              path: [],
-              name: e.name,
-              status: 'failed',
-              cause: equationCause(e.name, res.warnings),
-            },
+      reading.noNumber({ kind: 'value', path: [], name: e.name }, [e.expr], () =>
+        equationCause(e.name, res.warnings, reading.undeclared(e.expr)),
+      ),
     );
   }
 
@@ -219,26 +222,98 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
       });
       continue;
     }
-    // A check that gave no number: withheld where what it reads was withheld, else failed.
+    // A check that gave no number. The check a declared region adds reads the device.
     const check = doc.checks.find((c) => c.id === r.id);
-    const reads = check ? [check.lhs, check.rhs] : [];
-    const on = reads.flatMap((x) => namesIn(x).flatMap((n) => withheldOn(n) ?? []));
+    const region = r.id === REGION_CHECK_ID && doc.givens?.region !== undefined;
+    const ref: ItemRef = { kind: 'requirement', path: [], name: r.id };
     out.push(
-      on.length
-        ? { kind: 'requirement', path: [], name: r.id, status: 'withheld', on: [on[0]] }
-        : {
-            kind: 'requirement',
-            path: [],
-            name: r.id,
-            status: 'failed',
-            cause: requirementCause(r, res.warnings, doc, res.sizing?.ok === true),
-          },
+      region
+        ? reading.onDevice(ref, () => requirementCause(r, doc, res.sizing?.ok === true, reading))
+        : reading.noNumber(ref, check ? [check.lhs, check.rhs] : [], () =>
+            requirementCause(r, doc, res.sizing?.ok === true, reading),
+          ),
     );
   }
 
-  // The blocks, each under its name.
-  for (const b of res.blocks ?? []) out.push(...under(b.name, b.items ?? []));
+  out.push(...blockItems);
   return out;
+}
+
+/**
+ * The rule for an item that gives no number, over the names its expressions read: failed as not
+ * defined where a name it reads is declared by no entry of the sheet; else withheld on the items it
+ * reads that are not ok; else failed with the cause its own evaluation gives.
+ */
+function readerOf(
+  doc: SheetDoc,
+  res: SheetResult,
+  own: readonly Item[],
+  blocks: readonly Item[],
+): {
+  undeclared: (expr: string) => string | undefined;
+  noNumber: (ref: ItemRef, exprs: readonly string[], cause: () => Cause) => Item;
+  onDevice: (ref: ItemRef, cause: () => Cause) => Item;
+} {
+  const params = new Map(doc.params.map((p) => [p.name, p]));
+  const equations = new Set(doc.equations.map((e) => e.name));
+  const declared = (n: string): boolean =>
+    Object.prototype.hasOwnProperty.call(CONSTANTS, n) ||
+    params.has(n) ||
+    equations.has(n) ||
+    (doc.givens !== undefined && DEVICE_NAMES.has(n)) ||
+    Object.prototype.hasOwnProperty.call(res.values, n) ||
+    Object.prototype.hasOwnProperty.call(res.withheld ?? {}, n);
+  const find = (ref: ItemRef): Item | undefined =>
+    [...own, ...blocks].find(
+      (i) => i.kind === ref.kind && i.name === ref.name && i.path.join('.') === ref.path.join('.'),
+    );
+  /** The item a name of this sheet's scope is. */
+  const itemOfName = (n: string): Item | undefined => {
+    const p = params.get(n);
+    if (p) return find({ kind: engineSolved(p) || p.hold ? 'search' : 'value', path: [], name: n });
+    if (equations.has(n)) return find({ kind: 'value', path: [], name: n });
+    if (doc.givens !== undefined && DEVICE_NAMES.has(n))
+      return find({ kind: 'device', path: [], name: OWN_DEVICE });
+    const parts = n.split(PROVIDE_SEP);
+    if (parts.length === 2 && doc.blocks?.some((b) => b.name === parts[0])) {
+      const [b, key] = parts;
+      return (
+        blocks.find((i) => i.path.length === 1 && i.path[0] === b && i.name === key) ??
+        blocks.find((i) => i.kind === 'sheet' && i.path.length === 1 && i.path[0] === b)
+      );
+    }
+    return undefined;
+  };
+  const dependency = (i: Item): WithheldOn =>
+    i.status === 'failed'
+      ? { kind: i.kind, path: i.path, name: i.name, cause: i.cause.kind }
+      : i.status === 'withheld' && i.on[0]
+        ? i.on[0]
+        : { kind: i.kind, path: i.path, name: i.name, cause: 'cannot-evaluate' };
+  const undeclared = (expr: string): string | undefined => namesIn(expr).find((n) => !declared(n));
+  return {
+    undeclared,
+    noNumber: (ref, exprs, cause) => {
+      if (exprs.some((x) => undeclared(x) !== undefined))
+        return { ...ref, status: 'failed', cause: cause() };
+      const on: WithheldOn[] = [];
+      for (const x of exprs)
+        for (const n of namesIn(x)) {
+          const i = itemOfName(n);
+          if (i && i.status !== 'ok' && !on.some((o) => o.name === i.name && o.kind === i.kind))
+            on.push(dependency(i));
+        }
+      return on.length
+        ? { ...ref, status: 'withheld', on }
+        : { ...ref, status: 'failed', cause: cause() };
+    },
+    onDevice: (ref, cause) => {
+      const d = find({ kind: 'device', path: [], name: OWN_DEVICE });
+      return d && d.status !== 'ok'
+        ? { ...ref, status: 'withheld', on: [dependency(d)] }
+        : { ...ref, status: 'failed', cause: cause() };
+    },
+  };
 }
 
 /** The list with each of this sheet's withheld items, and each of its blocks' own sheet items,
@@ -290,51 +365,39 @@ function splitCheckText(
   return i < 0 ? [text, op, ''] : [text.slice(0, i), op, text.slice(i + op.length + 2)];
 }
 
-/** Why an equation gives no number, from what its evaluation found: a number that is not finite
- *  from inputs that all resolved, or a name it reads that is not defined (that name, as data). */
-function equationCause(name: string, warnings: readonly QAWarning[]): Cause {
-  const nonFinite = warnings.find((w) => w.rule === 'sheet-nonfinite' && w.location === name);
-  if (nonFinite)
-    return {
-      kind: 'cannot-evaluate',
-      data: { why: 'not-finite', name, reason: nonFinite.message },
-    };
+/** Why an equation gives no number, from what its evaluation found: a syntax error, a name it
+ *  reads that no entry declares (that name, as data), or a number that is not finite. */
+function equationCause(name: string, warnings: readonly QAWarning[], undeclared?: string): Cause {
   const parse = warnings.find((w) => w.severity === 'error' && w.location === `equation "${name}"`);
   if (parse)
     return { kind: 'cannot-evaluate', data: { why: 'syntax', name, reason: parse.message } };
-  const undeclared = warnings.find(
-    (w) => w.rule === 'sheet-undeclared' && w.location === `equation "${name}"`,
-  );
+  if (undeclared !== undefined)
+    return { kind: 'cannot-evaluate', data: { why: 'not-defined', name: undeclared, reason: '' } };
+  const nonFinite = warnings.find((w) => w.rule === 'sheet-nonfinite' && w.location === name);
   return {
     kind: 'cannot-evaluate',
-    data: {
-      why: 'not-defined',
-      name: undeclared?.symbol ?? name,
-      reason: undeclared?.message ?? '',
-    },
+    data: { why: 'not-finite', name, reason: nonFinite?.message ?? '' },
   };
 }
 
-/** Why a check gives no number: which side gave none, and, where a side reads a name that is
- *  not defined, that name. */
+/** Why a check gives no number: which side gave none; where a side reads a name that no entry
+ *  declares, that name; and for the check a declared region adds, what left it without two
+ *  numbers. */
 function requirementCause(
   r: { id: string; lhsValue: number; rhsValue: number; detail?: string },
-  warnings: readonly QAWarning[],
   doc: SheetDoc,
   sized: boolean,
+  reading: { undeclared: (expr: string) => string | undefined },
 ): Cause {
   const l = Number.isFinite(r.lhsValue);
   const rr = Number.isFinite(r.rhsValue);
   const side = !l && !rr ? 'both' : !l ? 'lhs' : !rr ? 'rhs' : undefined;
-  const undeclared = warnings.find(
-    (w) => w.rule === 'sheet-undeclared' && (w.location ?? '').startsWith(`check "${r.id}" `),
-  );
-  // The undeclared name each side reads, by the side its warning names.
-  const sideName = (s: 'lhs' | 'rhs'): string | undefined =>
-    warnings.find(
-      (w) => w.rule === 'sheet-undeclared' && w.location === `check "${r.id}" ${s}` && w.symbol,
-    )?.symbol;
-  const sides = { lhs: sideName('lhs'), rhs: sideName('rhs') };
+  const check = doc.checks.find((c) => c.id === r.id);
+  const sides = {
+    lhs: check ? reading.undeclared(check.lhs) : undefined,
+    rhs: check ? reading.undeclared(check.rhs) : undefined,
+  };
+  const undeclared = sides.lhs ?? sides.rhs;
   // The check a declared region adds: what left it without two numbers.
   const region =
     r.id === REGION_CHECK_ID && doc.givens?.region !== undefined
@@ -346,9 +409,9 @@ function requirementCause(
   return {
     kind: 'cannot-evaluate',
     data: {
-      why: undeclared ? 'not-defined' : 'not-finite',
-      name: undeclared?.symbol ?? r.id,
-      reason: undeclared?.message ?? r.detail ?? '',
+      why: undeclared !== undefined ? 'not-defined' : 'not-finite',
+      name: undeclared ?? r.id,
+      reason: r.detail ?? '',
       ...(side ? { side } : {}),
       ...(sides.lhs || sides.rhs
         ? {

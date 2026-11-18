@@ -77,10 +77,11 @@ function legacyFailure(c: Cause): SolveFailure {
  * `advisory` names the requirements that are advisory, by their path in the list.
  */
 export function legacyFeasible(items: readonly Item[], advisory: ReadonlySet<string>): boolean {
+  const quiet = quietIn(items);
   return items.every(
     (i) =>
       i.status === 'ok' ||
-      quietToday(i) ||
+      quiet(i) ||
       (i.kind === 'requirement' && advisory.has([...i.path, i.name].join('.'))),
   );
 }
@@ -97,6 +98,21 @@ const quietToday = (i: Item): boolean =>
     (i.cause.kind === 'not-determined' &&
       i.cause.data.why === 'assumed-level' &&
       i.cause.data.stage === undefined));
+
+/** quietToday over a list: also a value withheld only on items that are quiet, as an equation
+ *  that reads another whose name is not defined gave no number today without failing anything. */
+const quietIn =
+  (items: readonly Item[]) =>
+  (i: Item): boolean => {
+    if (quietToday(i)) return true;
+    if (i.status !== 'withheld' || i.kind !== 'value') return false;
+    return i.on.every((o) => {
+      const t = items.find(
+        (x) => x.kind === o.kind && x.name === o.name && x.path.join('.') === o.path.join('.'),
+      );
+      return t !== undefined && quietToday(t);
+    });
+  };
 
 /** A finding that validating the document raised before it was evaluated. */
 const fromValidation = (i: Item): boolean =>
@@ -137,7 +153,7 @@ export function legacyPointState(
       return 'does-not-comply';
     // A requirement that fails or gives no number is read by feasibility, which fails closed.
     const unanswered = design.some(
-      (i) => i.status !== 'ok' && i.kind !== 'requirement' && !quietToday(i),
+      (i) => i.status !== 'ok' && i.kind !== 'requirement' && !quietIn(design)(i),
     );
     if (unanswered) return 'no-answer';
     return legacyFeasible(design, advisory) ? 'complies' : 'does-not-comply';

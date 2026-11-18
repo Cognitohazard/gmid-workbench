@@ -15,7 +15,7 @@ import {
   type SheetDoc,
   type SheetResult,
 } from './types';
-import { loadLibrary, table, REFS } from './library.fixtures';
+import { loadLibrary, sheet, table, REFS } from './library.fixtures';
 
 const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
 
@@ -291,5 +291,65 @@ describe('today’s fields equal what the items give', () => {
     // Today's fields read the design as failing; the items read it as not proved.
     expect(res.point?.state).toBe('does-not-comply');
     expect(res.verdict?.verdict).toBe('undetermined');
+  });
+});
+
+describe('an item that gives no number', () => {
+  const declaredIn = (doc: SheetDoc, res: SheetResult, n: string): boolean =>
+    doc.params.some((p) => p.name === n) ||
+    doc.equations.some((e) => e.name === n) ||
+    n in res.values ||
+    n in (res.withheld ?? {});
+
+  it('is not defined only where no entry of the sheet declares the name it reads', () => {
+    for (const { doc } of loadLibrary()) {
+      const cases: Record<string, number>[] = [{}];
+      for (const p of doc.params)
+        if (sweepable(p)) cases.push({ [p.name]: p.min }, { [p.name]: p.max });
+      for (const over of cases) {
+        const d = withParams(doc, over);
+        const res = runSheet(d, table, undefined, REFS);
+        for (const i of res.items ?? [])
+          if (
+            i.path.length === 0 &&
+            i.status === 'failed' &&
+            i.cause.kind === 'cannot-evaluate' &&
+            i.cause.data.why === 'not-defined'
+          )
+            expect({ item: i.name, declared: declaredIn(d, res, i.cause.data.name) }).toEqual({
+              item: i.name,
+              declared: false,
+            });
+      }
+    }
+  }, 600_000);
+
+  it('is withheld on a name it reads whose own item is not ok, not called undefined', () => {
+    const d = withParams(sheet('multistage/two-stage-cascode-comp-ota.json'), { gm_id_casc: 4 });
+    const res = runSheet(d, table, undefined, REFS);
+    const item = (name: string): Item | undefined =>
+      res.items?.find((i) => i.path.length === 0 && i.name === name);
+    expect(item('PM')?.status).toBe('withheld');
+    expect(item('pm-spec')?.status).toBe('withheld');
+    for (const name of ['PM', 'pm-spec']) {
+      const i = item(name);
+      if (i?.status === 'withheld') expect(i.on.map((o) => o.name)).toContain('wu');
+    }
+    expectSame(res);
+  });
+
+  it('withholds the region requirement of a device that was not sized on that device', () => {
+    const d = withParams(sheet('applications/gm-c-filter-pole.json'), { gm_id: 12 * 0.2 });
+    const res = runSheet(d, table, undefined, REFS);
+    const device = res.items?.find((i) => i.kind === 'device' && i.path.length === 0);
+    expect(device?.status).toBe('failed');
+    const region = res.items?.find((i) => i.kind === 'requirement' && i.name === 'region');
+    expect(region).toMatchObject({
+      status: 'withheld',
+      on: [{ kind: 'device', path: [], name: 'givens' }],
+    });
+    // One cause, one failed item.
+    expect(res.items?.filter((i) => i.status === 'failed').map((i) => i.kind)).toEqual(['device']);
+    expectSame(res);
   });
 });
