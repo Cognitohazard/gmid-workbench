@@ -1060,7 +1060,8 @@ contradicts — are errors.
 The result carries the check as `nodes`: `state` (`checked-clean`, `checked-with-findings`,
 `not-applicable` for `"nodes": "none"`, or `not-evaluated`, below), every derived level with its
 path, the tainted and floating wires, each block that did not close with its residuals, the rank
-counts and their constraints, every current sum, and the placement verdicts. A composed child whose
+counts and their constraints, every current sum (at a rail, with its supply current as `supply`),
+and the placement verdicts. A composed child whose
 wiring joins its parent's is covered by the parent's report; one that runs its own check (its parent
 names no wiring) carries it on its block's report. Each range end's report carries its own run's
 check the same way.

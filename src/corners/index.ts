@@ -694,7 +694,15 @@ export function runCondition(
   refs?: SheetRefIndex,
   opts: RunOptions = {},
 ): ConditionRun {
-  return runPrepared(prepareRun(doc, refs), primaryDevice, key, deviceOf, undefined, opts.settings);
+  return runPrepared(
+    prepareRun(doc, refs),
+    primaryDevice,
+    key,
+    deviceOf,
+    undefined,
+    opts.settings,
+    opts.operatingPoint === true,
+  );
 }
 
 /**
@@ -727,7 +735,15 @@ export function runConditions(
   base?: ConditionKey,
   opts: RunOptions = {},
 ): ConditionRun[] {
-  return runSet(prepareRun(doc, refs), primaryDevice, keys, deviceOf, base, opts.settings);
+  return runSet(
+    prepareRun(doc, refs),
+    primaryDevice,
+    keys,
+    deviceOf,
+    base,
+    opts.settings,
+    opts.operatingPoint === true,
+  );
 }
 
 /** runConditions on a sheet already prepared — the one place a design is sized at one condition
@@ -739,6 +755,7 @@ function runSet(
   deviceOf: DeviceLookup,
   base: ConditionKey | undefined,
   settings: Settings | undefined,
+  operatingPoint = false,
 ): ConditionRun[] {
   if (keys.length === 0) return [];
   /** A condition that cannot be asked about the held design: what is wrong with THIS condition
@@ -767,7 +784,17 @@ function runSet(
       }),
     );
 
-  const sized = runPrepared(prepared, primaryDevice, at, deviceOf, undefined, settings);
+  // The design's own run alone keeps each device's full operating point (see
+  // RunOptions.operatingPoint): a held condition reads the same devices elsewhere.
+  const sized = runPrepared(
+    prepared,
+    primaryDevice,
+    at,
+    deviceOf,
+    undefined,
+    settings,
+    operatingPoint,
+  );
   const asked = keys.some((k) => sameCondition(k, at)) ? keys : [at, ...keys];
   if (asked.length === 1) return [sized];
 
@@ -912,6 +939,7 @@ function runPrepared(
   deviceOf: DeviceLookup,
   held?: HeldHardware,
   settings?: Settings,
+  operatingPoint = false,
 ): ConditionRun {
   const design = held ? 'held' : 'sized';
   if (prepared.blockers.length) return refused(prepared, key, design, 'not-run', prepared.blockers);
@@ -937,6 +965,7 @@ function runPrepared(
     held: held !== undefined,
     assumed: prepared.assumptions,
     settings,
+    ...(operatingPoint ? { operatingPoint: true } : {}),
   });
   // As runSheet does: a block sized on a table of the other polarity is said once for this run,
   // with the tables this condition binds (see inheritedPolarityWarnings).
