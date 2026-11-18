@@ -5,6 +5,7 @@ import { signedMirrorDemo, toMostabCsv } from './index';
 import { validate } from '../qa';
 import { importMostab } from '../import';
 import { strides } from '../grid';
+import { metaScalars, tableScope } from '../derive';
 import type { DeviceTable, Grid } from '../types';
 
 function col(grid: Grid, key: string): Float64Array {
@@ -42,7 +43,7 @@ function coords(grid: Grid, flat: number): Record<string, number> {
 }
 
 describe('the full-range EKV device', () => {
-  it('has the documented grid and the ten value columns', () => {
+  it('has the documented grid and the nine value columns', () => {
     const t = ekvTable();
     expect(t.grid.axes.map((a) => a.name)).toEqual(['l', 'vds', 'vsb', 'vgs']);
     expect(t.grid.shape).toEqual([4, 37, 21, 181]);
@@ -55,7 +56,7 @@ describe('the full-range EKV device', () => {
       (k) => !['l', 'vds', 'vsb', 'vgs'].includes(k),
     );
     expect(values.sort()).toEqual(
-      ['cgg', 'gamma', 'gds', 'gm', 'gmb', 'id', 'sfl', 'sth', 'vdsat', 'vth'].sort(),
+      ['cgg', 'gds', 'gm', 'gmb', 'id', 'sfl', 'sth', 'vdsat', 'vth'].sort(),
     );
   });
 
@@ -71,9 +72,7 @@ describe('the full-range EKV device', () => {
 
   it('holds id and gm at exactly 0 at vds = 0, gds positive, and thermal noise of the conductance', () => {
     const t = ekvTable();
-    const [id, gm, gmb, gds, sth, gamma] = ['id', 'gm', 'gmb', 'gds', 'sth', 'gamma'].map((k) =>
-      col(t.grid, k),
-    );
+    const [id, gm, gmb, gds, sth] = ['id', 'gm', 'gmb', 'gds', 'sth'].map((k) => col(t.grid, k));
     const kT4 = 4 * 1.380649e-23 * 300.15;
     let seen = 0;
     for (let i = 0; i < id.length; i++) {
@@ -85,9 +84,37 @@ describe('the full-range EKV device', () => {
       expect(gds[i]).toBeGreaterThan(0);
       // The channel's thermal noise at vds = 0 is that of its conductance.
       expect(sth[i] / (kT4 * gds[i])).toBeCloseTo(1, 12);
-      expect(gamma[i]).toBeCloseTo(1, 12);
     }
     expect(seen).toBe(4 * 21 * 181);
+  });
+
+  it('gives sheets the stored thermal noise, in saturation and in triode', () => {
+    // The table stores no gamma column, so the namespace reads γ back from sth and the γ-model
+    // figures a sheet reads (svth_m, vnth_m) are the stored noise itself wherever gm is nonzero.
+    const t = ekvTable();
+    const scope = tableScope(t.grid, metaScalars(t.meta));
+    const svth = scope.resolve('svth_m') as Float64Array;
+    const vnth = scope.resolve('vnth_m') as Float64Array;
+    const sth = col(t.grid, 'sth');
+    const gm = col(t.grid, 'gm');
+    const vdsat = col(t.grid, 'vdsat');
+    let worst = 0;
+    let triode = 0;
+    let saturated = 0;
+    for (let i = 0; i < sth.length; i++) {
+      if (gm[i] === 0) continue;
+      const vds = coords(t.grid, i).vds;
+      if (vds < vdsat[i]) triode++;
+      else saturated++;
+      worst = Math.max(
+        worst,
+        Math.abs(svth[i] / (sth[i] / gm[i] ** 2) - 1),
+        Math.abs(vnth[i] / (Math.sqrt(sth[i]) / gm[i]) - 1),
+      );
+    }
+    expect(triode).toBeGreaterThan(1000);
+    expect(saturated).toBeGreaterThan(1000);
+    expect(worst).toBeLessThan(1e-12);
   });
 
   // Fine-grid tables, each fine along the axis the derivative is taken in. A central difference

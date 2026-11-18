@@ -58,10 +58,14 @@ export const EKV_ISPEC = 1e-6;
 /** Long-channel threshold at vds = 0 and vsb = 0 [V]; it rises slightly with length. */
 const VT0_REF = 0.4;
 /** Drain-induced barrier lowering at the reference length: VT falls this much per volt of vds. */
-const SIGMA_REF = 0.05;
+const SIGMA_REF = 0.06;
+/** Barrier lowering falls as (L_REF/L)^SIGMA_EXP, faster than 1/L, as a short-channel effect
+ *  does. With the Early voltage below, the intrinsic gain gm/gds at gm/ID = 10 and vds = 0.9 V is
+ *  about 11 at 0.18 µm, 45 at 0.5 µm, 100 at 1 µm and 200 at 2 µm. */
+const SIGMA_EXP = 2;
 const L_REF = 0.18e-6;
 /** Early voltage per metre of length: VA = EKV_VA_PER_L·L. */
-export const EKV_VA_PER_L = 5e6;
+export const EKV_VA_PER_L = 12e6;
 /** Flicker coefficient, the same area-domain form as the simpler device. */
 const KFLICKER = 3e-25;
 
@@ -101,8 +105,8 @@ function resolveCondition(c: EkvCondition): ResolvedCondition {
 
 /** Threshold at vds = 0, vsb = 0 [V] for length L, at the nominal condition. */
 export const ekvVt0 = (L: number): number => VT0_REF + 0.02 * Math.log(L / L_REF + 1);
-/** Barrier-lowering coefficient [V/V] for length L: falls as 1/L. */
-export const ekvSigma = (L: number): number => SIGMA_REF * (L_REF / L);
+/** Barrier-lowering coefficient [V/V] for length L: falls as 1/L². */
+export const ekvSigma = (L: number): number => SIGMA_REF * (L_REF / L) ** SIGMA_EXP;
 /** Early voltage [V] for length L. */
 export const ekvVa = (L: number): number => EKV_VA_PER_L * L;
 
@@ -123,7 +127,6 @@ export interface EkvPoint {
   vth: number;
   vdsat: number;
   sth: number;
-  gamma: number;
 }
 
 /**
@@ -192,14 +195,11 @@ export function ekvPoint(
   // the channel-length-modulation factor like every other current-like quantity.
   const N = ((2 / 3) * (qf * qf + qf * qr + qr * qr) + (qf + qr) / 2) / (qf + qr + 1);
   const sth = 4 * PHYS.k * c.T * (ispec / ut) * N * clm;
-  // The stored γ is the noise factor against the whole channel conductance seen from the source,
-  // gms = gm + gmb + gds: 1 at vds = 0, 1/2 in weak-inversion saturation, 2/3 in strong. That is
-  // finite everywhere, including vds = 0 where gm and gmb are zero and the namespace's form
-  // sth/(4kT·(gm + gmb)) is 0/0, and in saturation it differs from that form only by
-  // 1 + gds/(gm + gmb).
-  const gamma = sth / (4 * PHYS.k * c.T * (gm + gmb + gds));
+  // No γ column is stored: the namespace reads γ back from sth as sth/(4kT·(gm + gmb)), so every
+  // noise figure a sheet reads is this sth. Where gm and gmb are 0 (vds = 0) that γ is 0/0, which
+  // is the honest reading of a channel that carries no current.
 
-  return { id, gm, gmb, gds, iF, iR, clm, vth, vdsat, sth, gamma };
+  return { id, gm, gmb, gds, iF, iR, clm, vth, vdsat, sth };
 }
 
 /**
@@ -236,7 +236,7 @@ export function generateEkvDevice(opts: EkvOptions = {}): DeviceTable {
   const nVgs = vgsVals.length;
   const size = nL * nVds * nVsb * nVgs;
 
-  const names = ['id', 'gm', 'gmb', 'gds', 'cgg', 'vth', 'vdsat', 'gamma', 'sth', 'sfl'] as const;
+  const names = ['id', 'gm', 'gmb', 'gds', 'cgg', 'vth', 'vdsat', 'sth', 'sfl'] as const;
   const cols = Object.fromEntries(names.map((k) => [k, new Float64Array(size)])) as Record<
     (typeof names)[number],
     Float64Array
@@ -257,7 +257,6 @@ export function generateEkvDevice(opts: EkvOptions = {}): DeviceTable {
           cols.cgg[flat] = cggL;
           cols.vth[flat] = p.vth;
           cols.vdsat[flat] = p.vdsat;
-          cols.gamma[flat] = p.gamma;
           cols.sth[flat] = p.sth;
           // Flicker drain PSD at 1 Hz: the input-referred area-domain form KFLICKER/(W·L·Cox)
           // times gm². Exactly 0 where gm is, at vds = 0, as a simulator writes it where no
