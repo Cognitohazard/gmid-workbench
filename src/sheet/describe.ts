@@ -261,7 +261,7 @@ function statementFalseMessage(d: StatementFalseData): string {
 
 /** One cause in today's words: the message a result carries for it. */
 export function causeMessage(c: Cause): string {
-  switch (c.cause) {
+  switch (c.kind) {
     case 'not-read':
     case 'not-determined':
       return c.data.message;
@@ -288,15 +288,15 @@ export function causeMessage(c: Cause): string {
 
 // ── Names and detail lines ────────────────────────────────────────────────────────────────────
 
-/** The short name of each cause. Placeholders until the plain names are settled: one table, so
- *  the change is here alone. */
+/** The short name of each cause. Placeholders where the plain names are not yet settled: one
+ *  table, so the change is here alone. */
 export const CAUSE_NAMES: { readonly [C in CauseName]: string } = {
   'not-read': 'not read',
   'not-determined': 'not determined',
   'outside-table': 'outside the table',
   'cannot-evaluate': 'cannot be evaluated',
   'no-solution': 'no solution (proved)',
-  'no-crossing': 'no crossing, not proved',
+  'no-crossing': 'no solution found (not proved)',
   'none-in-range': 'none in the stated range',
   'did-not-settle': 'did not settle',
   limit: 'limit used up',
@@ -304,14 +304,30 @@ export const CAUSE_NAMES: { readonly [C in CauseName]: string } = {
   fails: 'fails',
 };
 
-/** What a reader is shown for one item: a short name, and the detail lines under it. An item that
- *  is ok has no name; a withheld one names the failed items it depends on. */
-export function describe(item: Item): { name: string; lines: string[] } {
+/** A finding as this module reads it: a kind and its data. The causes are the first family; a
+ *  later family joins this union and the table in textOf, and nothing else changes. */
+export type Finding = Cause;
+
+/** What a reader is shown for a finding: a short name, and the detail lines under it. */
+export interface FindingText {
+  readonly name: string;
+  readonly lines: readonly string[];
+}
+
+/** Every text a reader sees for one finding, from its kind and data alone. */
+export function textOf(f: Finding): FindingText {
+  const message = causeMessage(f);
+  return { name: CAUSE_NAMES[f.kind], lines: message ? [message] : [] };
+}
+
+/** What a reader is shown for one item: nothing for an item that is ok; for a failed one, its
+ *  cause's text; for a withheld one, the failed items it depends on. */
+export function describe(item: Item): FindingText {
   if (item.status === 'ok') return { name: '', lines: [] };
   if (item.status === 'withheld')
     return {
       name: 'withheld',
       lines: item.on.map((r) => `depends on ${[...r.path, r.name].filter(Boolean).join('.')}`),
     };
-  return { name: CAUSE_NAMES[item.cause.cause], lines: [causeMessage(item.cause)] };
+  return textOf(item.cause);
 }

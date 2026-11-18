@@ -13,6 +13,7 @@ import {
   failsCause,
   heldVerdictOf,
   noSolutionCause,
+  legacyDesignFailure,
   verdictOf,
   type Cause,
   type Item,
@@ -65,8 +66,8 @@ const failed = (kind: Item['kind'], name: string, cause: Cause): Item => ({
 });
 
 const proved: Cause = {
-  cause: 'no-solution',
-  data: { ...search(), ...read([0, 1, 50], [10, 21, 50]), shown: 'ends-read' },
+  kind: 'no-solution',
+  data: { ...search(), ...read([0, 1, 50], [10, 21, 50]), shown: 'monotonic' },
 };
 const hardFail = failsCause({
   kind: 'spec',
@@ -83,7 +84,7 @@ const softFail = failsCause({
   marginPct: -100,
 });
 const notEvaluated: Cause = {
-  cause: 'cannot-evaluate',
+  kind: 'cannot-evaluate',
   data: { why: 'not-defined', name: 'z', reason: '"z" is not defined' },
 };
 
@@ -153,7 +154,7 @@ group('the verdict, by four rules in order', () => {
     ).toBe('undetermined');
     // A sheet that was not read cannot reach rule 3.
     const unread = failed('sheet', '', {
-      cause: 'not-read',
+      kind: 'not-read',
       data: { why: 'format', where: '', message: 'unknown format' },
     });
     expect(verdictOf([unread]).verdict).toBe('undetermined');
@@ -187,23 +188,29 @@ group('whether a failed search is proved, decided in one place', () => {
     ended,
   });
 
-  it('takes no crossing over the circuit range, both ends read, as proved', () => {
-    expect(OPEN_RULINGS.noCrossingOverWiringIsProof).toBe(true);
-    expect(noSolutionCause(over(wiring), true).cause).toBe('no-solution');
+  it('takes no crossing over the circuit range, both ends read, as not proved', () => {
+    const c = noSolutionCause(over(wiring), true);
+    expect(c).toMatchObject({ kind: 'no-crossing', data: { notProof: 'not-monotonic' } });
+    // Today's fields still read it as the design failing, by the one compatibility rule.
+    expect(legacyDesignFailure(c)).toBe(true);
+    expect(
+      verdictOf([{ kind: 'search', path: [], name: 'x', status: 'failed', cause: c }]).verdict,
+    ).toBe('undetermined');
   });
 
   it('takes it as not proved where an end was not read', () => {
     const c = noSolutionCause(over(wiring), false);
-    expect(c).toMatchObject({ cause: 'no-crossing', data: { notProof: 'end-not-read' } });
+    expect(c).toMatchObject({ kind: 'no-crossing', data: { notProof: 'end-not-read' } });
+    expect(legacyDesignFailure(c)).toBe(false);
   });
 
   it('reads a range the author stated as none in that range', () => {
-    expect(noSolutionCause(over(authorRange('x', 0, 1)), true).cause).toBe('none-in-range');
+    expect(noSolutionCause(over(authorRange('x', 0, 1)), true).kind).toBe('none-in-range');
   });
 
   it('never takes a step or a relation that singles nothing out as proved', () => {
     const step = noSolutionCause(over(wiring, { kind: 'flat' }), true);
-    expect(step.cause).toBe('no-crossing');
+    expect(step.kind).toBe('no-crossing');
   });
 });
 
@@ -238,7 +245,7 @@ group('the text module builds today’s messages from the data', () => {
       { ...search({ unit: 'V' }), ...read([0, 1, 50], [10, 21, 50]) },
       true,
     );
-    expect(c.cause).toBe('none-in-range');
+    expect(c.kind).toBe('none-in-range');
     expect(causeMessage(c)).toBe(res.solve?.kind === 'no-solution' ? res.solve.message : '');
   });
 
@@ -298,7 +305,7 @@ group('the text module builds today’s messages from the data', () => {
       given: [{ name: 'a', value: 10 }],
     });
     const c: Cause = {
-      cause: 'did-not-settle',
+      kind: 'did-not-settle',
       data: {
         members: [a, b],
         simplifications: [],
@@ -319,7 +326,7 @@ group('the text module builds today’s messages from the data', () => {
       dev,
     );
     const c: Cause = {
-      cause: 'did-not-settle',
+      kind: 'did-not-settle',
       data: {
         members: [
           search({

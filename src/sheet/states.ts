@@ -71,6 +71,8 @@ export interface SearchEnd {
   readonly stepped?: string;
   /** The item `stepped` is about, where the evaluation names it (a device not sized there). */
   readonly steppedBy?: ItemRef;
+  /** Where the end was stepped in because a device was read beyond its table: that read. */
+  readonly steppedOutside?: OutsideTable;
 }
 
 /** One solved param as a failed search reports it: where it is, whether it is a held param, the
@@ -107,11 +109,11 @@ export interface NoSolutionRead {
     | { readonly kind: 'flat' };
 }
 
-/** A search over the range the circuit allows, with no crossing there. How it was shown: today
- *  only that both ends read the design; a check that the relation is monotonic in the unknown is
- *  not built yet (see noSolutionCause). */
+/** A search over the range the circuit allows, with no crossing there, where the relation was
+ *  shown to be monotonic in the unknown across it — the only way a search proves there is none. No
+ *  check shows that yet (see noSolutionCause). */
 export interface NoSolutionData extends SearchData, NoSolutionRead {
-  readonly shown: 'ends-read';
+  readonly shown: 'monotonic';
 }
 
 /** A search that found no crossing and proved nothing: why it is not a proof. */
@@ -216,19 +218,19 @@ export interface FailsData {
 
 /** The closed list of causes, each with its data. */
 export type Cause =
-  | { readonly cause: 'not-read'; readonly data: NotReadData }
-  | { readonly cause: 'not-determined'; readonly data: NotDeterminedData }
-  | { readonly cause: 'outside-table'; readonly data: OutsideTable }
-  | { readonly cause: 'cannot-evaluate'; readonly data: CannotEvaluateData }
-  | { readonly cause: 'no-solution'; readonly data: NoSolutionData }
-  | { readonly cause: 'no-crossing'; readonly data: NoCrossingData }
-  | { readonly cause: 'none-in-range'; readonly data: NoneInRangeData }
-  | { readonly cause: 'did-not-settle'; readonly data: DidNotSettleData }
-  | { readonly cause: 'limit'; readonly data: LimitData }
-  | { readonly cause: 'statement-false'; readonly data: StatementFalseData }
-  | { readonly cause: 'fails'; readonly data: FailsData };
+  | { readonly kind: 'not-read'; readonly data: NotReadData }
+  | { readonly kind: 'not-determined'; readonly data: NotDeterminedData }
+  | { readonly kind: 'outside-table'; readonly data: OutsideTable }
+  | { readonly kind: 'cannot-evaluate'; readonly data: CannotEvaluateData }
+  | { readonly kind: 'no-solution'; readonly data: NoSolutionData }
+  | { readonly kind: 'no-crossing'; readonly data: NoCrossingData }
+  | { readonly kind: 'none-in-range'; readonly data: NoneInRangeData }
+  | { readonly kind: 'did-not-settle'; readonly data: DidNotSettleData }
+  | { readonly kind: 'limit'; readonly data: LimitData }
+  | { readonly kind: 'statement-false'; readonly data: StatementFalseData }
+  | { readonly kind: 'fails'; readonly data: FailsData };
 
-export type CauseName = Cause['cause'];
+export type CauseName = Cause['kind'];
 
 /** Every cause, in the order the definition lists them. */
 export const CAUSES: readonly CauseName[] = [
@@ -262,7 +264,7 @@ export const OCCURS_ON: { readonly [C in CauseName]: readonly ItemKind[] } = {
 };
 
 /** Whether a cause may occur on an item of this kind (OCCURS_ON). */
-export const causeFits = (kind: ItemKind, c: Cause): boolean => OCCURS_ON[c.cause].includes(kind);
+export const causeFits = (kind: ItemKind, c: Cause): boolean => OCCURS_ON[c.kind].includes(kind);
 
 // ── Items ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -311,36 +313,44 @@ export type Item = ItemRef & Status;
 
 /**
  * The choices not yet ruled on, in one place, so that each is a change here alone:
- *  - `noCrossingOverWiringIsProof`: whether a search over the circuit's own range, both ends read,
- *    that found no crossing is taken as proved. True keeps today's verdict; false maps such a
- *    search to "no crossing, not proved", whose verdict is undetermined, and changes nothing else.
  *  - `equationOnly`: the verdict of a sheet that sizes no device and solves nothing, where every
  *    item is ok. It has no design to be feasible; "feasible" stands until its word is ruled.
  */
-export const OPEN_RULINGS: {
-  readonly noCrossingOverWiringIsProof: boolean;
-  readonly equationOnly: DesignVerdict;
-} = { noCrossingOverWiringIsProof: true, equationOnly: 'feasible' };
+export const OPEN_RULINGS: { readonly equationOnly: DesignVerdict } = { equationOnly: 'feasible' };
 
 /**
  * The cause of a search that found no solution in what it searched, from its data — where its
  * range came from (`range.from`) and how the search ended — and whether both ends of the stretch
- * read the design. The one place that decides whether a failed search is proved (see
- * OPEN_RULINGS).
+ * read the design. The one place that decides whether a failed search is proved.
+ *
+ * "No solution (proved)" needs the relation shown to be monotonic in the unknown across the range,
+ * and no check does that yet, so no search maps to it: a search over the circuit's own range with
+ * no crossing, both ends read, is "no solution found (not proved)", undetermined. Today's result
+ * fields still read it as the design failing, by one stated rule (legacyDesignFailure).
  */
 export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boolean): Cause {
-  const sign = data.ended.kind === 'sign';
-  if (data.range.from === 'wiring' && sign && endsRead && OPEN_RULINGS.noCrossingOverWiringIsProof)
-    return { cause: 'no-solution', data: { ...data, shown: 'ends-read' } };
-  if (data.range.from !== 'wiring' && sign)
-    return { cause: 'none-in-range', data: { ...data, endsRead } };
-  // Over the circuit's own range without a proof, or a step across the target, or a relation that
+  if (data.range.from !== 'wiring' && data.ended.kind === 'sign')
+    return { kind: 'none-in-range', data: { ...data, endsRead } };
+  // Over the circuit's own range with no proof, or a step across the target, or a relation that
   // singles out no value, in a range of any source: no crossing, and nothing proved.
   return {
-    cause: 'no-crossing',
+    kind: 'no-crossing',
     data: { ...data, endsRead, notProof: endsRead ? 'not-monotonic' : 'end-not-read' },
   };
 }
+
+/**
+ * The one compatibility rule that keeps today's result fields where the cause has changed its
+ * reading: a search over the circuit's own range that found no sign change, both ends read, is
+ * read by today's fields (the solve outcome's design failure, a point's does-not-comply) as the
+ * design failing, though its cause is "not proved" and its verdict undetermined. It goes with
+ * those fields.
+ */
+export const legacyDesignFailure = (c: Cause): boolean =>
+  c.kind === 'no-crossing' &&
+  c.data.range.from === 'wiring' &&
+  c.data.ended.kind === 'sign' &&
+  c.data.endsRead;
 
 // ── The verdict ───────────────────────────────────────────────────────────────────────────────
 
@@ -375,12 +385,12 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
  */
 export function verdictOf(items: readonly Item[]): Verdict {
   const failed = failedItems(items);
-  const proved = failed.filter((f) => f.cause.cause === 'no-solution');
+  const proved = failed.filter((f) => f.cause.kind === 'no-solution');
   if (proved.length) return { verdict: 'infeasible', failed: proved };
-  const fails = failed.filter((f) => f.cause.cause === 'fails' && f.cause.data.hard);
+  const fails = failed.filter((f) => f.cause.kind === 'fails' && f.cause.data.hard);
   if (fails.length) return { verdict: 'non-compliant', failed: fails };
   // An advisory requirement that does not hold decides nothing (see failsCause).
-  const blocking = failed.filter((f) => !(f.cause.cause === 'fails' && !f.cause.data.hard));
+  const blocking = failed.filter((f) => !(f.cause.kind === 'fails' && !f.cause.data.hard));
   if (blocking.length === 0 && items.every((i) => i.status !== 'withheld'))
     return {
       verdict: items.some((i) => i.kind === 'device' || i.kind === 'search')
@@ -412,7 +422,7 @@ export const failsCause = (r: {
   margin: number;
   marginPct: number;
 }): Cause => ({
-  cause: 'fails',
+  kind: 'fails',
   data: {
     lhs: r.lhsValue,
     rhs: r.rhsValue,
