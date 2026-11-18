@@ -85,6 +85,13 @@ export interface CannotEvaluateData {
     readonly param: string;
     readonly statement: string;
   };
+  /** For a search whose relation gives no number across its stretch, at one point only, or across
+   *  its crossing: the search and where; and, for a member of a set, the set. */
+  readonly unevaluable?: {
+    readonly member: SearchData;
+    readonly at: UnevaluableAt;
+    readonly set?: readonly SearchData[];
+  };
   /** The item found giving no number where the engine read it, and its record where it was read
    *  beyond its table. */
   readonly by?: ItemRef;
@@ -144,6 +151,9 @@ export interface SearchData {
    *  the circuit allows a wire's level, searched after the sheet's held no root (`physical`), or
    *  the lengths a device's table holds (`table`). */
   readonly stage: 'sheet' | 'physical' | 'table';
+  /** For a member of a set of searches that read each other, which failed where the engine held
+   *  the others (`given`): every member of the set. Its failure shows nothing about the set. */
+  readonly set?: readonly SearchData[];
   readonly given?: readonly {
     readonly name: string;
     readonly value: number;
@@ -183,8 +193,28 @@ export interface NoneInRangeData extends SearchData, NoSolutionRead {
   readonly endsRead: boolean;
 }
 
+/** Where a search found its relation giving no number: nowhere in its stretch (`reason`: why at
+ *  its low end); at one point only (with the ends stepped in from); or across the crossing, which
+ *  lies `between` two points where the points tried do not evaluate. */
+export type UnevaluableAt =
+  | { readonly where: 'nowhere'; readonly reason: string; readonly by?: ItemRef }
+  | {
+      readonly where: 'one-point';
+      readonly end: SearchEnd;
+      readonly stepped: readonly SearchStep[];
+    }
+  | {
+      readonly where: 'crossing';
+      readonly ends: readonly [SearchEnd, SearchEnd];
+      readonly between: readonly [number, number];
+      readonly reason: string;
+      readonly by?: ItemRef;
+    };
+
 /**
- * Searches that did not settle, and why:
+ * Searches that did not settle, and why. A search records only the last two: its set still moved
+ * after the fixed passes, or the final check found a relation off. The first two are kept for the
+ * words today's fields carry, which the old message builders write from them:
  *  - `unevaluable`: nothing of the stretch evaluates (`reason`: why at its low end); or only one
  *    point of it does (`only`, with the ends stepped in from); or the sign changes across it but
  *    the crossing lies `between` two points where the points tried do not evaluate;
@@ -197,23 +227,7 @@ export interface DidNotSettleData {
   readonly members: readonly SearchData[];
   readonly simplifications: readonly string[];
   readonly why:
-    | {
-        readonly kind: 'unevaluable';
-        readonly at:
-          | { readonly where: 'nowhere'; readonly reason: string; readonly by?: ItemRef }
-          | {
-              readonly where: 'one-point';
-              readonly end: SearchEnd;
-              readonly stepped: readonly SearchStep[];
-            }
-          | {
-              readonly where: 'crossing';
-              readonly ends: readonly [SearchEnd, SearchEnd];
-              readonly between: readonly [number, number];
-              readonly reason: string;
-              readonly by?: ItemRef;
-            };
-      }
+    | { readonly kind: 'unevaluable'; readonly at: UnevaluableAt }
     | { readonly kind: 'member'; readonly failure: Cause }
     | {
         readonly kind: 'sweeps';
@@ -431,9 +445,87 @@ export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boo
  */
 export const legacyDesignFailure = (c: Cause): boolean =>
   c.kind === 'no-crossing' &&
+  c.data.set === undefined &&
   c.data.range.from === 'wiring' &&
   c.data.ended.kind === 'sign' &&
   c.data.endsRead;
+
+/** The set a failed member of a set of searches was one of, where its cause records one. A limit
+ *  of the calculations carries its set too, but as the set's own failure, not a member's. */
+export function setOf(c: Cause): readonly SearchData[] | undefined {
+  switch (c.kind) {
+    case 'no-solution':
+    case 'no-crossing':
+    case 'none-in-range':
+      return c.data.set;
+    case 'cannot-evaluate':
+      return c.data.unevaluable?.set;
+    case 'limit':
+      return c.data.limit === 'probes' ? c.data.set : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** The search a failed member's cause is about. */
+export function memberOf(c: Cause): string | undefined {
+  switch (c.kind) {
+    case 'no-solution':
+    case 'no-crossing':
+    case 'none-in-range':
+      return c.data.unknown;
+    case 'cannot-evaluate':
+      return c.data.unevaluable?.member.unknown;
+    case 'limit':
+      return c.data.members[0]?.unknown;
+    default:
+      return undefined;
+  }
+}
+
+/** A member's own cause with its set recorded, where the cause can carry one. */
+export function withSet(c: Cause, set: readonly SearchData[]): Cause | undefined {
+  switch (c.kind) {
+    case 'no-solution':
+      return { kind: c.kind, data: { ...c.data, set } };
+    case 'no-crossing':
+      return { kind: c.kind, data: { ...c.data, set } };
+    case 'none-in-range':
+      return { kind: c.kind, data: { ...c.data, set } };
+    case 'cannot-evaluate':
+      return c.data.unevaluable
+        ? { kind: c.kind, data: { ...c.data, unevaluable: { ...c.data.unevaluable, set } } }
+        : undefined;
+    case 'limit':
+      return c.data.limit === 'probes' ? { kind: c.kind, data: { ...c.data, set } } : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** A member's own cause without its set: the cause as the member's search alone wrote it. */
+export function withoutSet(c: Cause): Cause {
+  switch (c.kind) {
+    case 'no-solution':
+    case 'no-crossing':
+    case 'none-in-range': {
+      const { set: _set, ...data } = c.data;
+      return { kind: c.kind, data } as Cause;
+    }
+    case 'cannot-evaluate': {
+      if (!c.data.unevaluable) return c;
+      const { set: _set, ...unevaluable } = c.data.unevaluable;
+      return { kind: c.kind, data: { ...c.data, unevaluable } };
+    }
+    case 'limit': {
+      if (c.data.limit !== 'probes') return c;
+      const { set: _set, ...data } = c.data;
+      return { kind: c.kind, data };
+    }
+    default:
+      return c;
+  }
+}
 
 // ── The verdict ───────────────────────────────────────────────────────────────────────────────
 
@@ -468,7 +560,9 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
  */
 export function verdictOf(items: readonly Item[]): Verdict {
   const failed = failedItems(items);
-  const proved = failed.filter((f) => f.cause.kind === 'no-solution');
+  // A search with the others of its set held where they stood says nothing about the set, even
+  // proved.
+  const proved = failed.filter((f) => f.cause.kind === 'no-solution' && !setOf(f.cause));
   if (proved.length) return { verdict: 'infeasible', failed: proved };
   const fails = failed.filter((f) => f.cause.kind === 'fails' && f.cause.data.hard);
   if (fails.length) return { verdict: 'non-compliant', failed: fails };

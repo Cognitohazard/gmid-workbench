@@ -25,6 +25,7 @@ import type {
   SearchEnd,
   SearchStep,
   StatementFalseData,
+  UnevaluableAt,
   WithheldOn,
 } from './states';
 
@@ -318,7 +319,16 @@ export function causeMessage(c: Cause): string {
       return outsideTableMessage(c.data);
     case 'cannot-evaluate':
       // A hold that gives no number keeps the words today's fields carry for it.
-      return c.data.hold ? statementFalseMessage(c.data.hold) : c.data.reason;
+      if (c.data.hold) return statementFalseMessage(c.data.hold);
+      // A relation that gives no number across the stretch keeps the words it had as a search that
+      // did not settle.
+      if (c.data.unevaluable)
+        return didNotSettleMessage({
+          members: [c.data.unevaluable.member],
+          simplifications: [],
+          why: { kind: 'unevaluable', at: c.data.unevaluable.at },
+        });
+      return c.data.reason;
     case 'no-solution':
       return noSolutionMessage(c.data, true);
     case 'no-crossing':
@@ -721,6 +731,10 @@ function searchLines(
   return lines;
 }
 
+/** For a member of a set that failed where the others were held: that they read each other. */
+const setLines = (d: SearchData): Line[] =>
+  d.set && d.set.length > 1 ? [t`${andLines(d.set.map(unknownName))} depend on each other.`] : [];
+
 /** The other members of a set, where the engine held each during the search. */
 const givenLines = (d: SearchData): Line[] =>
   (d.given ?? []).map(
@@ -761,7 +775,7 @@ function noSolutionText(
   } else if (d.range.from === 'table')
     lines.push(t`Load a table that holds a wider range of lengths.`);
   else if (d.stage === 'sheet') lines.push(t`Widen the search range of ${U}.`);
-  return [...lines, ...givenLines(d)];
+  return [...lines, ...setLines(d), ...givenLines(d)];
 }
 
 /** The simplifications that would separate a set, as one sentence. */
@@ -806,8 +820,11 @@ function didNotSettleText(d: DidNotSettleData): Line[] {
         return t`When the engine checked the solution, the two sides for ${unknownName(m)} differed${gap}.`;
       }),
     ];
-  const m = d.members[0];
-  const at = why.at;
+  return unevaluableLines(d.members[0], why.at);
+}
+
+/** Where a search found its relation giving no number, and what it searched. */
+function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
   const { lhs, rhs } = sidesOf(m.relation);
   const span = spanText(m.searched[0], m.searched[1], m.unit);
   if (at.where === 'nowhere')
@@ -841,6 +858,7 @@ function limitText(d: LimitData): Line[] {
     : [
         t`The search for ${unknownName(m)} stopped after ${String(d.count)} trial values, because it reached its limit.`,
         t`Narrow the search range of ${unknownName(m)}.`,
+        ...setLines({ ...m, set: d.set }),
       ];
 }
 
@@ -950,6 +968,21 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     if (d.why === 'illegal-pair')
       return [sized, t`The two quantities bound on it do not determine its size.`];
     return [sized];
+  }
+  // A search whose relation gives no number where it searched, and what gave none there.
+  if (d.unevaluable) {
+    const m = d.unevaluable.member;
+    const at = d.unevaluable.at;
+    const lines = unevaluableLines(
+      m,
+      at.where === 'nowhere' && d.outside ? { ...at, by: undefined } : at,
+    );
+    return [
+      ...lines,
+      ...(d.outside ? outsideTableText(d.outside).slice(0, 2) : []),
+      ...setLines({ ...m, set: d.unevaluable.set }),
+      ...givenLines(m),
+    ];
   }
   // A hold that gives no number where the design is sized, and what gave none there.
   if (d.hold)

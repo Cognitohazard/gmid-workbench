@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { legacyFeasible, legacyPointState } from './derived';
-import { causeFits, type Item } from './states';
+import { causeFits, legacyDesignFailure, setOf, verdictOf, type Cause, type Item } from './states';
 import { describe as describeItem, standardProblems } from './describe';
 import { FINDING_CAUSES } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -441,6 +441,67 @@ describe('a block that is not evaluated', () => {
       expect(inParent.on[0].frame).toBeUndefined();
       expect(inParent.on[0].cause).toBeDefined();
     }
+    expectSame(res);
+  });
+});
+
+describe('a member of a set whose search failed where the others were held', () => {
+  it('fails with its own cause and its set, and the others of the set wait on it', () => {
+    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const res = runSheet(d, table, undefined, REFS);
+    const search = (n: string): Item | undefined =>
+      res.items?.find((i) => i.kind === 'search' && i.path.length === 0 && i.name === n);
+    const tail = search('V_tail');
+    expect(tail?.status).toBe('failed');
+    if (tail?.status !== 'failed') return;
+    expect(tail.cause.kind).not.toBe('did-not-settle');
+    expect(setOf(tail.cause)?.map((m) => m.unknown)).toEqual(['V_tail', 'out_share']);
+    expect(search('out_share')).toMatchObject({
+      status: 'withheld',
+      on: [{ kind: 'search', name: 'V_tail', cause: tail.cause.kind }],
+    });
+    const lines = describeItem(tail).lines;
+    expect(lines).toContain('V_tail and out_share depend on each other.');
+    expect(
+      lines.some((l) => /^The engine held out_share at .* during this search\.$/.test(l)),
+    ).toBe(true);
+    // Today's fields read it as the set not settling.
+    expect(res.solve).toMatchObject({ kind: 'not-settled', why: 'member' });
+    expect(res.verdict?.verdict).toBe('undetermined');
+    expectSame(res);
+  });
+
+  it('is never read as proof that the design has none', () => {
+    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const res = runSheet(d, table, undefined, REFS);
+    const tail = res.items?.find((i) => i.name === 'V_tail' && i.status === 'failed');
+    if (tail?.status !== 'failed' || tail.cause.kind !== 'no-crossing') return;
+    const proved: Cause = {
+      kind: 'no-solution',
+      data: { ...tail.cause.data, shown: 'monotonic' },
+    };
+    expect(verdictOf([{ ...tail, cause: proved }]).verdict).toBe('undetermined');
+    expect(legacyDesignFailure(tail.cause)).toBe(false);
+  });
+});
+
+describe('a search whose relation gives no number where it searched', () => {
+  it('cannot be calculated, and names the part read beyond its table', () => {
+    const d = withParams(sheet('otas/five-transistor-ota.json'), { L_in: 5e-6 });
+    const res = runSheet(d, table, undefined, REFS);
+    const failed = (res.items ?? []).filter(
+      (i) => i.kind === 'search' && i.path.length === 0 && i.status === 'failed',
+    );
+    expect(failed.length).toBeGreaterThan(0);
+    for (const f of failed) {
+      if (f.status !== 'failed') continue;
+      const c = f.cause.kind === 'cannot-evaluate' ? f.cause : undefined;
+      expect(c?.data.unevaluable).toBeDefined();
+      expect(c?.data.outside?.quantity).toBe('l');
+    }
+    for (const i of res.items ?? [])
+      if (i.status === 'failed') expect(i.cause.kind).not.toBe('did-not-settle');
+    expect(res.solve).toMatchObject({ kind: 'not-settled' });
     expectSame(res);
   });
 });

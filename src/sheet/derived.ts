@@ -3,7 +3,14 @@
 // reads them.
 
 import { causeMessage } from './describe';
-import { legacyDesignFailure, type Cause, type Item, type NoSolutionRead } from './states';
+import {
+  legacyDesignFailure,
+  setOf,
+  withoutSet,
+  type Cause,
+  type Item,
+  type NoSolutionRead,
+} from './states';
 import type { NoSolutionWhy, SolveFailure } from './types';
 
 /** How a search that found no solution ended, in today's words (NoSolutionWhy). */
@@ -25,6 +32,23 @@ export function solveFailureOf(c: Cause): SolveFailure {
 }
 
 function legacyFailure(c: Cause): SolveFailure {
+  // A member of a set that failed where the others were held: today, the set did not settle, in
+  // the words of the member's own cause.
+  const set = setOf(c);
+  if (set)
+    return {
+      kind: 'not-settled',
+      unknowns: set.map((m) => m.unknown),
+      why: 'member',
+      message: causeMessage({
+        kind: 'did-not-settle',
+        data: {
+          members: set,
+          simplifications: [],
+          why: { kind: 'member', failure: withoutSet(c) },
+        },
+      }),
+    };
   const message = causeMessage(c);
   switch (c.kind) {
     case 'no-solution':
@@ -68,6 +92,14 @@ function legacyFailure(c: Cause): SolveFailure {
     case 'cannot-evaluate':
       // A hold that gives no number where the design is sized: today, a false declaration.
       if (c.data.hold) return { kind: 'declaration-false', param: c.data.hold.param, message };
+      // A relation that gives no number across the stretch: today, a search that did not settle.
+      if (c.data.unevaluable)
+        return {
+          kind: 'not-settled',
+          unknowns: [c.data.unevaluable.member.unknown],
+          why: 'unevaluable',
+          message,
+        };
       throw new Error('a cause that gives no number is not the outcome of a search here');
     default:
       throw new Error(`a ${c.kind} cause is not the outcome of a search`);

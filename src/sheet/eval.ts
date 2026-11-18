@@ -87,6 +87,8 @@ import {
   type RelationField,
   type SearchData,
   type SearchEnd,
+  type UnevaluableAt,
+  withSet,
 } from './states';
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { causeOfFailure, solveFailureOf } from './derived';
@@ -2452,6 +2454,28 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
   return { ...out, held };
 }
 
+/** A search whose relation gives no number across its stretch, at one point only, or across its
+ *  crossing: it cannot be calculated, with where, and what the engine found giving no number. */
+function unevaluableCause(
+  member: SearchData,
+  at: UnevaluableAt,
+  reason: string,
+  outside: OutsideTable | undefined,
+): Cause {
+  const by = 'by' in at ? at.by : undefined;
+  return {
+    kind: 'cannot-evaluate',
+    data: {
+      why: 'not-finite',
+      name: member.unknown,
+      reason,
+      unevaluable: { member, at },
+      ...(by ? { by } : {}),
+      ...(outside ? { outside } : {}),
+    },
+  };
+}
+
 /** Whether an expression reads only values the designer types and constants: it is the same at
  *  every value of a solved param. */
 const fixedIn = (doc: SheetDoc, expr: string): boolean =>
@@ -3130,17 +3154,12 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
     return gLo === 0
       ? { ok: true, res: lo.res, x: lo.x, slope: 0 }
       : s.fail(
-          {
-            kind: 'did-not-settle',
-            data: {
-              members: [s.data()],
-              simplifications: [],
-              why: {
-                kind: 'unevaluable',
-                at: { where: 'one-point', end: stretch[0], stepped: stepsOf(stretch) },
-              },
-            },
-          },
+          unevaluableCause(
+            s.data(),
+            { where: 'one-point', end: stretch[0], stepped: stepsOf(stretch) },
+            '',
+            undefined,
+          ),
           lo,
         );
   const unsingled = degenerate(s, lo, hi, stretch);
@@ -3436,21 +3455,16 @@ function ends(
       if (mid.g === undefined) {
         const outside = outsideIn(lo.res)[0];
         return s.fail(
-          {
-            kind: 'did-not-settle',
-            data: {
-              members: [s.data()],
-              simplifications: [],
-              why: {
-                kind: 'unevaluable',
-                at: {
-                  where: 'nowhere',
-                  reason: lo.why as string,
-                  ...(outside ? { by: deviceRef(outside.device) } : {}),
-                },
-              },
+          unevaluableCause(
+            s.data(),
+            {
+              where: 'nowhere',
+              reason: lo.why as string,
+              ...(outside ? { by: deviceRef(outside.device) } : {}),
             },
-          },
+            lo.why as string,
+            outside,
+          ),
           lo,
         );
       }
@@ -3627,23 +3641,18 @@ function stepAround(
     return { half: [pb, pc], stuck: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)] };
   const outside = outsideIn(nearB.bad.res)[0];
   return s.fail(
-    {
-      kind: 'did-not-settle',
-      data: {
-        members: [s.data()],
-        simplifications: [],
-        why: {
-          kind: 'unevaluable',
-          at: {
-            where: 'crossing',
-            ends: stretch,
-            between: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)],
-            reason: nearB.why,
-            ...(outside ? { by: deviceRef(outside.device) } : {}),
-          },
-        },
+    unevaluableCause(
+      s.data(),
+      {
+        where: 'crossing',
+        ends: stretch,
+        between: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)],
+        reason: nearB.why,
+        ...(outside ? { by: deviceRef(outside.device) } : {}),
       },
-    },
+      nearB.why,
+      outside,
+    ),
     next,
   );
 }
@@ -3731,13 +3740,15 @@ function settle(
         return {
           ok: false,
           res: found.res,
+          // The member that failed keeps its own cause, with the set it was one of; a budget
+          // that ran out is the set's own failure.
           failure: solveFailureOf(
             inner.kind === 'limit' && outOfBudget(found.failure)
               ? { kind: 'limit', data: { ...inner.data, set: members } }
-              : {
+              : (withSet(inner, members) ?? {
                   kind: 'did-not-settle',
                   data: { members, simplifications: [], why: { kind: 'member', failure: inner } },
-                },
+                }),
           ),
         };
       }

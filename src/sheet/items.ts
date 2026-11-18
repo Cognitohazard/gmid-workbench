@@ -21,7 +21,15 @@ import {
 } from './types';
 import type { QAWarning } from '../types';
 import { causeOfFailure } from './derived';
-import { failsCause, type Cause, type Item, type ItemRef, type WithheldOn } from './states';
+import {
+  failsCause,
+  memberOf,
+  setOf,
+  type Cause,
+  type Item,
+  type ItemRef,
+  type WithheldOn,
+} from './states';
 
 /** The item a withheld name traces back to (SheetResult.withheld): a solved param of this sheet
  *  whose search did not find it, or a block's sheet. */
@@ -53,6 +61,26 @@ export function searchItems(
     if (!cause) continue;
     if (cause.kind === 'not-determined') {
       out.push({ kind: 'sheet', path: [], name: '', status: 'failed', cause });
+      continue;
+    }
+    // A member of a set that failed where the others were held: the member fails with its own
+    // cause, and the others of the set are withheld on it.
+    const set = setOf(cause);
+    const member = set ? memberOf(cause) : undefined;
+    if (set && member !== undefined) {
+      named.add(member);
+      out.push({ kind: 'search', path: [], name: member, status: 'failed', cause });
+      for (const m of set)
+        if (m.unknown !== member) {
+          named.add(m.unknown);
+          out.push({
+            kind: 'search',
+            path: [],
+            name: m.unknown,
+            status: 'withheld',
+            on: [{ kind: 'search', path: [], name: member, cause: cause.kind }],
+          });
+        }
       continue;
     }
     for (const n of failedParams(failure)) {
