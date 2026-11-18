@@ -2129,8 +2129,9 @@ export interface SheetSweep {
    *  not answer for — its device is not sized, the margins that read it are null, and it is never
    *  part of a passing stretch. */
   outside: OutsideTable[][];
-  /** Each of the sheet's own equations across the sweep, in document order, parallel to `x` (see
-   *  SweepCurve). */
+  /** Each named result of the sheet across the sweep (namedResults: its equations, its solved
+   *  values, then the values its blocks provide), parallel to `x` (see SweepCurve). A value a block
+   *  provides joins from the first sample that holds it, a gap at every sample before. */
   values: SweepCurve[];
 }
 
@@ -2168,7 +2169,10 @@ export interface SheetSweep2 {
    *  on its table. A cell with any is infeasible with no check to name (`binding` null). */
   outside: OutsideTable[][][];
   /** The one named result asked for (Sweep2Options.value), at each cell, `[yi][xi]`, null where
-   *  the cell does not determine it (see SweepCurve). Absent where none was asked for, or the name
-   *  is none of the sheet's own equations. */
+   *  the cell does not determine it (see SweepCurve). Absent where none was asked for, or where
+   *  no cell names it (then `valueNotNamed` says so). */
   value?: { name: string; unit: string; z: (number | null)[][] };
+  /** The name asked for (Sweep2Options.value) where no cell of the map has it among its named
+   *  results (namedResults), with a sentence that says so. */
+  valueNotNamed?: { name: string; message: string };
 }
