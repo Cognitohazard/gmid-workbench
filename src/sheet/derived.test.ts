@@ -29,27 +29,33 @@ function advisoryOf(
   return out;
 }
 
-/** Every reading today's fields give, against what the items give. */
-function readings(res: SheetResult): { field: unknown; derived: unknown }[] {
+/** Every reading today's fields give, against what the items give: the result's feasibility and
+ *  point state, every block report's feasibility at any depth, and each range end's state. */
+function readings(res: SheetResult): { at: string; field: unknown; derived: unknown }[] {
   const items = res.items ?? [];
   const advisory = advisoryOf(res);
-  const out: { field: unknown; derived: unknown }[] = [
-    { field: res.feasible, derived: legacyFeasible(items, advisory) },
+  const out: { at: string; field: unknown; derived: unknown }[] = [
+    { at: 'feasible', field: res.feasible, derived: legacyFeasible(items, advisory) },
   ];
   if (res.point)
-    out.push({
-      field: res.point.state,
-      derived: legacyPointState(items, advisory, (res.assumptions ?? []).length > 0),
-    });
+    out.push({ at: 'point', field: res.point.state, derived: legacyPointState(items, advisory) });
+  const blocks = (reports: readonly SheetBlockReport[] | undefined, path: string): void => {
+    for (const b of reports ?? []) {
+      out.push({
+        at: `block ${path}${b.name}`,
+        field: b.feasible,
+        derived: legacyFeasible(b.items ?? [], advisoryOf(b)),
+      });
+      blocks(b.blocks, `${path}${b.name}.`);
+    }
+  };
+  blocks(res.blocks, '');
   for (const e of res.rangeEnds ?? [])
     if (e.items)
       out.push({
+        at: `range end ${e.name}`,
         field: e.state,
-        derived: legacyPointState(
-          e.items,
-          advisoryOf({ checks: e.checks, blocks: e.blocks }),
-          false,
-        ),
+        derived: legacyPointState(e.items, advisoryOf({ checks: e.checks, blocks: e.blocks })),
       });
   return out;
 }
@@ -58,7 +64,8 @@ const expectSame = (res: SheetResult): void => {
   expect(res.items?.[0]).toMatchObject({ kind: 'sheet', path: [] });
   for (const i of res.items ?? [])
     if (i.status === 'failed') expect(causeFits(i.kind, i.cause)).toBe(true);
-  for (const r of readings(res)) expect(r.derived).toBe(r.field);
+  for (const r of readings(res))
+    expect({ at: r.at, value: r.derived }).toEqual({ at: r.at, value: r.field });
 };
 
 describe('today’s fields equal what the items give', () => {
@@ -148,6 +155,86 @@ describe('today’s fields equal what the items give', () => {
       const res = evaluateSheet(d, dev);
       expectSame(res);
       expect(res.verdict?.verdict).not.toBe('feasible');
+    });
+
+  const wideDev = generateDemoDevice({
+    vds: { min: 0, max: 1.2, step: 0.05 },
+    vsb: { min: 0, max: 0.4, step: 0.05 },
+  });
+  /** A sheet's own device in the current format, with an axis-sign selector `s` (its sign is
+   *  wrong for this table at -1), its drain at `vds` and its body at `vsb`. */
+  const own = (sign: number, vds: string, vsb: string, rest: Partial<SheetDoc> = {}): SheetDoc => ({
+    title: 'own device',
+    polarity: 'n',
+    formatVersion: 2,
+    nodes: 'none',
+    params: [
+      { name: 's', value: sign, convention: 'axis-sign' },
+      { name: 'I', value: 2e-5 },
+      { name: 'VD', value: 0.6, unit: 'V' },
+    ],
+    givens: { L: '0.5u', gm_id: '12', id: 'I', vds, vsb },
+    equations: [],
+    checks: [],
+    ...rest,
+  });
+
+  /** Each place that writes today's feasibility, with a case that reaches it. */
+  const sites: Record<string, () => SheetResult> = {
+    'the fold of one evaluation, and a check that gives no number': () =>
+      evaluateSheet(forced['a check that fails and one that gives no number'], dev),
+    'a failed solve': () => evaluateSheet(forced['no root in the stated range'], dev),
+    'a document in a format this app does not read': () =>
+      runSheet({ ...own(1, '0.6', '0'), formatVersion: 99 } as unknown as SheetDoc, wideDev),
+    'validation errors on a sheet that is still evaluated (a duplicate check id)': () =>
+      runSheet(
+        own(1, '0.6', 's*0', {
+          checks: [
+            { id: 'a', kind: 'spec', lhs: 'I', op: '>=', rhs: '0' },
+            { id: 'a', kind: 'spec', lhs: 'I', op: '>=', rhs: '0' },
+          ],
+        }),
+        wideDev,
+      ),
+    'a block that is not evaluated: a value its parent sets gives no number': () =>
+      evaluateSheet(
+        doc([], {
+          blocks: [
+            { name: 'c', doc: forced['a declaration with no range'], params: { a: 'nothing' } },
+          ],
+        }),
+        dev,
+      ),
+    'a block that is not evaluated: a reference that is not resolved': () =>
+      evaluateSheet(doc([], { blocks: [{ name: 'c', ref: 'no/such' }] }), dev),
+    'a block report that copies its child': () =>
+      evaluateSheet(forced['a block whose search fails'], dev),
+    'a netlist finding at the top of a walked design': () =>
+      evaluateSheet(own(-1, '0.6', 's*0'), wideDev),
+    'a netlist finding in a block': () =>
+      evaluateSheet(
+        {
+          ...own(1, '0.6', '0'),
+          givens: undefined,
+          blocks: [{ name: 'c', doc: own(-1, '0.6', 's*0') }],
+        },
+        wideDev,
+      ),
+    'a selector held to a device read beyond its table, on a design not walked': () =>
+      evaluateSheet(own(-1, 's*0.6', '0'), wideDev),
+    'a device read beyond its table in a held run': () =>
+      evaluateSheet(
+        own(1, 'VD', '0', { operatingRange: [{ name: 'hi', set: { VD: '1.3' } }] }),
+        wideDev,
+      ),
+  };
+
+  for (const [name, run] of Object.entries(sites))
+    it(`at each place that writes it: ${name}`, () => {
+      const res = run();
+      expectSame(res);
+      // Each case is a failure there: the design's, or the held run's at its range end.
+      expect(res.feasible === false || res.rangeEnds?.[0]?.state === 'no-answer').toBe(true);
     });
 
   it('over the tail pair at a common mode its tail node cannot reach', () => {

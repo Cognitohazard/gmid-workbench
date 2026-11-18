@@ -31,23 +31,31 @@ export interface NotReadData {
   readonly why: 'format' | 'reference' | 'field';
   readonly where: string;
   readonly message: string;
+  /** Set where the finding came from validating the document before it was evaluated, rather
+   *  than from the evaluation. */
+  readonly stage?: 'validation';
 }
 
 /** A sheet whose decisions do not determine one design: one missing, one made twice, or a level
  *  it marks as assumed. `names` are the params or wires involved. */
 export interface NotDeterminedData {
-  readonly why: 'decision-missing' | 'decision-twice' | 'assumed-level' | 'range-outside';
+  readonly why:
+    'decision-missing' | 'decision-twice' | 'assumed-level' | 'range-outside' | 'netlist';
   readonly names: readonly string[];
   readonly message: string;
+  /** As NotReadData.stage. */
+  readonly stage?: 'validation';
 }
 
 /** Something that gives no number: the table lacks a sweep or a column, the two bound quantities
  *  are not a legal pair, or an expression gives no finite number. `name` is the quantity, column or
  *  expression; `reason` is the evaluation's own words for it. */
 export interface CannotEvaluateData {
-  readonly why: 'no-sweep' | 'no-column' | 'illegal-pair' | 'not-finite' | 'not-defined';
+  readonly why: 'no-sweep' | 'no-column' | 'illegal-pair' | 'not-finite' | 'not-defined' | 'syntax';
   readonly name: string;
   readonly reason: string;
+  /** For a requirement: which side gave no number. */
+  readonly side?: 'lhs' | 'rhs' | 'both';
 }
 
 /** Which field of a param holds the relation a search solves. */
@@ -75,6 +83,9 @@ export interface SearchEnd {
   readonly steppedBy?: ItemRef;
   /** Where the end was stepped in because a device was read beyond its table: that read. */
   readonly steppedOutside?: OutsideTable;
+  /** Where it was stepped in for anything else: the first item that failed at the point that did
+   *  not evaluate, with its cause. */
+  readonly steppedCause?: Cause;
 }
 
 /** One solved param as a failed search reports it: where it is, whether it is a held param, the
@@ -168,7 +179,10 @@ export interface DidNotSettleData {
     | {
         readonly kind: 'sweeps';
         readonly sweeps: number;
+        /** The member that moved most in the last sweep, relative to its own range. */
         readonly moved: { readonly name: string; readonly by: number };
+        /** How far every member moved in the last sweep, in document order. */
+        readonly moves: readonly { readonly name: string; readonly by: number }[];
       }
     | {
         readonly kind: 'verification';
@@ -259,10 +273,14 @@ export const CAUSES: readonly CauseName[] = [
 /** The kinds of item each cause may occur on. A cause on any other kind is a defect in the code
  *  that produced it (see causeFits). */
 export const OCCURS_ON: { readonly [C in CauseName]: readonly ItemKind[] } = {
-  'not-read': ['sheet'],
-  'not-determined': ['sheet'],
+  // A sheet that is not read at all, or one entry whose field is malformed on a sheet that is
+  // still read and evaluated (the entry named by the finding).
+  'not-read': ['sheet', 'value', 'device', 'search', 'requirement'],
+  // On the sheet, or on a value the sheet marks as assumed that the design rests on.
+  'not-determined': ['sheet', 'value'],
   'outside-table': ['device'],
-  'cannot-evaluate': ['value', 'device', 'requirement', 'search'],
+  // A block's sheet that is not evaluated because a value its parent sets gives no number.
+  'cannot-evaluate': ['sheet', 'value', 'device', 'requirement', 'search'],
   'no-solution': ['search'],
   'no-crossing': ['search'],
   'none-in-range': ['search'],

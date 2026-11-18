@@ -79,6 +79,7 @@ import {
   noSolutionCause,
   verdictOf,
   type Cause,
+  type Item,
   type ItemRef,
   type RelationField,
   type SearchData,
@@ -86,7 +87,7 @@ import {
 } from './states';
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { causeOfFailure, solveFailureOf } from './derived';
-import { itemsOf, searchItems } from './items';
+import { itemsOf, searchItems, under, withFindings } from './items';
 import {
   axisDirection,
   blockWires,
@@ -1236,6 +1237,22 @@ function evalBlocks(
         feasible: false,
         provides: {},
         checks: [],
+        items: [
+          {
+            kind: 'sheet',
+            path: [],
+            name: '',
+            status: 'failed',
+            cause: {
+              kind: 'not-read',
+              data: {
+                why: block.ref !== undefined && !block.doc ? 'reference' : 'field',
+                where: block.name,
+                message,
+              },
+            },
+          },
+        ],
       });
     };
     if (!block.name.trim()) {
@@ -1652,6 +1669,8 @@ function finishWiring(
       const below = report.blocks ? visit(report.blocks, [...path, report.name]) : undefined;
       let out: SheetBlockReport = below ? { ...report, blocks: below.blocks } : report;
       let bad = below?.failed ?? false;
+      /** The findings this block's own wiring check raised. */
+      let found: readonly QAWarning[] = [];
       const pending = PENDING_WIRING.get(report);
       // A child whose own solve failed holds its last probe's numbers, which the parent already
       // withholds from its outputs: its point is withheld the same way.
@@ -1671,6 +1690,7 @@ function finishWiring(
         const at = [...path, report.name];
         for (const w of walked.warnings) extra.push(prefixBlockPath(at, w));
         if (walked.warnings.some((w) => w.severity === 'error')) bad = true;
+        found = walked.warnings;
         out = {
           ...out,
           ...(walked.terminals ? { terminals: walked.terminals } : {}),
@@ -1678,6 +1698,21 @@ function finishWiring(
           ...(walked.wiringValues ? { wiringValues: walked.wiringValues } : {}),
         };
       }
+      // The block's items: its own, with what its wiring check found, and each block below it as
+      // that block now reads.
+      if (out.items && (below || found.length))
+        out = {
+          ...out,
+          items: withFindings(
+            [
+              ...out.items.filter((i) => i.path.length === 0),
+              ...(out.blocks ?? []).flatMap((b) => under(b.name, b.items ?? [])),
+            ],
+            found,
+            pending?.doc,
+            'evaluation',
+          ),
+        };
       if (bad) {
         out = { ...out, feasible: false };
         failed = true;
@@ -2129,8 +2164,16 @@ export function evaluateSheet(
 ): SheetResult {
   // A document in a format this app does not read is not evaluated: rebuilding its meaning from
   // keys this engine does not know would report on a design nobody wrote.
-  if (formatOf(authored) === 'unknown')
-    return { values: {}, checks: [], feasible: false, warnings: formatProblems(authored) };
+  if (formatOf(authored) === 'unknown') {
+    const warnings = formatProblems(authored);
+    const items = withFindings(
+      [{ kind: 'sheet', path: [], name: '', status: 'ok' }],
+      warnings,
+      undefined,
+      'evaluation',
+    );
+    return { values: {}, checks: [], feasible: false, warnings, items, verdict: verdictOf(items) };
+  }
   // A device whose wires put its gate on its drain is diode-connected, and is sized on the
   // diode diagonal like one that says so (see structuralDiodes) — stated before anything sizes.
   const doc = structuralDiodes(authored);
@@ -2245,16 +2288,20 @@ function evaluateNode(
     // selectorsBeyondTable).
     const unwalked = withoutWalk(doc, finishWiring(res, false, settings, keepPoint));
     const selectors = selectorsBeyondTable(doc, res);
-    if (!selectors.length) return { ...unwalked, point };
-    return {
-      ...unwalked,
-      warnings: [...unwalked.warnings, ...selectors],
-      feasible: false,
-      ...(unwalked.nodes
-        ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
-        : {}),
-      point,
-    };
+    if (!selectors.length) return withItems(doc, { ...unwalked, point }, opts.assumed);
+    return withItems(
+      doc,
+      {
+        ...unwalked,
+        warnings: [...unwalked.warnings, ...selectors],
+        feasible: false,
+        ...(unwalked.nodes
+          ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
+          : {}),
+        point,
+      },
+      opts.assumed,
+    );
   }
   const out = withNodes(
     doc,
@@ -2266,18 +2313,48 @@ function evaluateNode(
   // The point was classified before the wiring was read; a selector the table contradicts then
   // leaves the run infeasible, so a centre that complied does not.
   const raised = out.warnings.slice(res.warnings.length).find((w) => w.severity === 'error');
-  return {
-    ...out,
-    point:
-      raised && point.state === 'complies'
-        ? { ...point, state: 'does-not-comply', error: raised.message }
-        : point,
-  };
+  return withItems(
+    doc,
+    {
+      ...out,
+      point:
+        raised && point.state === 'complies'
+          ? { ...point, state: 'does-not-comply', error: raised.message }
+          : point,
+    },
+    opts.assumed,
+  );
 }
 
 /** The evaluation with its item list and the verdict the list gives (SheetResult.items). */
-const withItems = (doc: SheetDoc, res: SheetResult): SheetResult => {
-  const items = itemsOf(doc, res);
+const withItems = (
+  doc: SheetDoc,
+  res: SheetResult,
+  assumed: readonly string[] = [],
+): SheetResult => {
+  const items = withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation');
+  // A design that rests on a level the sheet marks as assumed is not determined by its sheet: each
+  // assumed value says so, by its path.
+  for (const a of assumed) {
+    const parts = a.split(PATH_SEP);
+    const ref = { kind: 'value' as const, path: parts.slice(0, -1), name: parts[parts.length - 1] };
+    const at = items.findIndex(
+      (i) =>
+        i.kind === 'value' &&
+        i.name === ref.name &&
+        i.path.join(PATH_SEP) === ref.path.join(PATH_SEP),
+    );
+    const failed: Item = {
+      ...ref,
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: { why: 'assumed-level', names: [a], message: assumedLevelRefusal(assumed) },
+      },
+    };
+    if (at < 0) items.push(failed);
+    else if (items[at].status === 'ok') items[at] = failed;
+  }
   return { ...res, items, verdict: verdictOf(items) };
 };
 
@@ -3139,6 +3216,8 @@ const NARROW_STEPS = 4;
  *  and the ways a probe is taken and a failure is said. */
 interface Searcher {
   u: Unknown;
+  /** The document the search is of. */
+  doc: SheetDoc;
   name: string;
   tol: number;
   /** The node evaluated with the unknown at `x`; undefined when the budget ran out. */
@@ -3166,6 +3245,8 @@ interface Searcher {
 interface Step {
   reason: string;
   outside?: OutsideTable;
+  /** The first item that failed at the point, where no read beyond a table explains it. */
+  failed?: { ref: ItemRef; cause: Cause };
 }
 
 function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Searcher {
@@ -3197,6 +3278,7 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
   };
   return {
     u,
+    doc: ctx.doc,
     name,
     tol,
     probe,
@@ -3231,7 +3313,9 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
             stepped: step.reason,
             ...(step.outside
               ? { steppedOutside: step.outside, steppedBy: deviceRef(step.outside.device) }
-              : {}),
+              : step.failed
+                ? { steppedBy: step.failed.ref, steppedCause: step.failed.cause }
+                : {}),
           }
         : {}),
     }),
@@ -3263,7 +3347,21 @@ function ends(
    *  there, where there was one. */
   const stepOf = (why: string, bad: Probe): Step => {
     const outside = outsideIn(bad.res)[0];
-    return { reason: why, ...(outside ? { outside } : {}) };
+    if (outside) return { reason: why, outside };
+    const first = withFindings(itemsOf(s.doc, bad.res), bad.res.warnings, s.doc, 'evaluation').find(
+      (i) => i.status === 'failed',
+    );
+    return {
+      reason: why,
+      ...(first?.status === 'failed'
+        ? {
+            failed: {
+              ref: { kind: first.kind, path: first.path, name: first.name },
+              cause: first.cause,
+            },
+          }
+        : {}),
+    };
   };
   if (lo.g === undefined || hi.g === undefined) {
     let mid: Probe | undefined;
@@ -3607,6 +3705,7 @@ function settle(
           kind: 'sweeps',
           sweeps: solveSweeps,
           moved: { name: set[worst].p.name, by: moves[worst] },
+          moves: set.map((o, i) => ({ name: o.p.name, by: moves[i] })),
         },
       },
     }),

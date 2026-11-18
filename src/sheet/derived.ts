@@ -80,37 +80,68 @@ export function legacyFeasible(items: readonly Item[], advisory: ReadonlySet<str
   return items.every(
     (i) =>
       i.status === 'ok' ||
+      quietToday(i) ||
       (i.kind === 'requirement' && advisory.has([...i.path, i.name].join('.'))),
   );
 }
 
+/** What gates nothing in today's fields though its item is not ok: an equation that gives no
+ *  number because it reads a name that is not defined (a warning today, so a sheet can carry an
+ *  equation for a column only some tables have), and a design that rests on a level the sheet
+ *  marks as assumed (the point has no answer, but feasibility is read on the design as sized). */
+const quietToday = (i: Item): boolean =>
+  i.status === 'failed' &&
+  ((i.kind === 'value' &&
+    i.cause.kind === 'cannot-evaluate' &&
+    i.cause.data.why === 'not-defined') ||
+    (i.cause.kind === 'not-determined' &&
+      i.cause.data.why === 'assumed-level' &&
+      i.cause.data.stage === undefined));
+
+/** A finding that validating the document raised before it was evaluated. */
+const fromValidation = (i: Item): boolean =>
+  i.status === 'failed' &&
+  (i.cause.kind === 'not-read' || i.cause.kind === 'not-determined') &&
+  i.cause.data.stage === 'validation';
+
+/** A finding of the netlist check, made on the evaluated design. */
+const netlistFinding = (i: Item): boolean =>
+  i.status === 'failed' &&
+  i.cause.kind === 'not-determined' &&
+  i.cause.data.why === 'netlist' &&
+  i.cause.data.stage === undefined;
+
 /**
  * Today's reading of one run as a point of the compliance question (PointOutcome.state), from its
- * items: a search over the circuit's own range with no crossing, both ends read, is the design
+ * items. The point is read from the evaluation alone, so a finding of validation does not enter
+ * it. A search over the circuit's own range with no crossing, both ends read, is the design
  * failing (legacyDesignFailure); any other item that failed or was withheld, a requirement that
- * fails aside, leaves no answer; a design that rests on an assumed level (`assumed`) has none
- * either; otherwise it complies where it is feasible.
+ * fails aside, leaves no answer; a design that rests on a level the sheet marks as assumed has
+ * none either; otherwise it complies where it is feasible. The netlist is checked once the point is
+ * read, and a finding of it turns a point that complied into one that does not.
  */
 export function legacyPointState(
-  items: readonly Item[],
+  all: readonly Item[],
   advisory: ReadonlySet<string>,
-  assumed = false,
 ): 'complies' | 'does-not-comply' | 'no-answer' {
-  const answer = ((): 'complies' | 'does-not-comply' | 'no-answer' => {
-    if (items.some((i) => i.status === 'failed' && legacyDesignFailure(i.cause)))
+  const items = all.filter((i) => !fromValidation(i));
+  const design = items.filter((i) => !netlistFinding(i));
+  const assumed = design.some(
+    (i) =>
+      i.status === 'failed' &&
+      i.cause.kind === 'not-determined' &&
+      i.cause.data.why === 'assumed-level',
+  );
+  const base = ((): 'complies' | 'does-not-comply' | 'no-answer' => {
+    if (design.some((i) => i.status === 'failed' && legacyDesignFailure(i.cause)))
       return 'does-not-comply';
-    const unanswered = items.some(
-      (i) =>
-        i.status !== 'ok' &&
-        !(
-          i.kind === 'requirement' &&
-          (i.status === 'failed' && i.cause.kind === 'fails'
-            ? true
-            : advisory.has([...i.path, i.name].join('.')))
-        ),
+    // A requirement that fails or gives no number is read by feasibility, which fails closed.
+    const unanswered = design.some(
+      (i) => i.status !== 'ok' && i.kind !== 'requirement' && !quietToday(i),
     );
     if (unanswered) return 'no-answer';
-    return legacyFeasible(items, advisory) ? 'complies' : 'does-not-comply';
+    return legacyFeasible(design, advisory) ? 'complies' : 'does-not-comply';
   })();
-  return assumed ? 'no-answer' : answer;
+  if (assumed) return 'no-answer';
+  return base === 'complies' && items.some(netlistFinding) ? 'does-not-comply' : base;
 }

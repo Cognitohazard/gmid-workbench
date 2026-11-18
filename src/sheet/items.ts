@@ -13,6 +13,7 @@ import {
   type SizingReport,
   type SolveFailure,
 } from './types';
+import type { QAWarning } from '../types';
 import { causeOfFailure } from './derived';
 import { failsCause, type Cause, type Item, type ItemRef, type WithheldOn } from './states';
 
@@ -67,7 +68,7 @@ export function searchItems(
 }
 
 /** A child's items as its parent lists them: under the block's name. */
-const under = (block: string, items: readonly Item[]): Item[] =>
+export const under = (block: string, items: readonly Item[]): Item[] =>
   items.map((i) =>
     i.status === 'withheld'
       ? {
@@ -97,7 +98,7 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
       out.push({ kind: 'value', path: [], name: p.name, status: 'ok' });
       continue;
     }
-    const w = written.find((i) => i.kind === 'search' && i.name === p.name);
+    const w = written.find((i) => i.kind === 'search' && i.path.length === 0 && i.name === p.name);
     if (w) out.push(w);
     else if (engineSolved(p)) {
       const range = res.ranges?.find((r) => r.param === p.name);
@@ -171,17 +172,7 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
               path: [],
               name: e.name,
               status: 'failed',
-              cause: {
-                kind: 'cannot-evaluate',
-                data: {
-                  why: e.name in res.values ? 'not-finite' : 'not-defined',
-                  name: e.name,
-                  reason:
-                    e.name in res.values
-                      ? `equation "${e.name}" evaluated to a non-finite number from resolved inputs`
-                      : `equation "${e.name}" did not resolve`,
-                },
-              },
+              cause: equationCause(e.name, res.warnings),
             },
     );
   }
@@ -230,10 +221,7 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
             path: [],
             name: r.id,
             status: 'failed',
-            cause: {
-              kind: 'cannot-evaluate',
-              data: { why: 'not-finite', name: r.id, reason: r.detail ?? '' },
-            },
+            cause: requirementCause(r, res.warnings),
           },
     );
   }
@@ -252,6 +240,54 @@ function splitCheckText(
   return i < 0 ? [text, op, ''] : [text.slice(0, i), op, text.slice(i + op.length + 2)];
 }
 
+/** Why an equation gives no number, from what its evaluation found: a number that is not finite
+ *  from inputs that all resolved, or a name it reads that is not defined (that name, as data). */
+function equationCause(name: string, warnings: readonly QAWarning[]): Cause {
+  const nonFinite = warnings.find((w) => w.rule === 'sheet-nonfinite' && w.location === name);
+  if (nonFinite)
+    return {
+      kind: 'cannot-evaluate',
+      data: { why: 'not-finite', name, reason: nonFinite.message },
+    };
+  const parse = warnings.find((w) => w.severity === 'error' && w.location === `equation "${name}"`);
+  if (parse)
+    return { kind: 'cannot-evaluate', data: { why: 'syntax', name, reason: parse.message } };
+  const undeclared = warnings.find(
+    (w) => w.rule === 'sheet-undeclared' && w.location === `equation "${name}"`,
+  );
+  return {
+    kind: 'cannot-evaluate',
+    data: {
+      why: 'not-defined',
+      name: undeclared?.symbol ?? name,
+      reason: undeclared?.message ?? '',
+    },
+  };
+}
+
+/** Why a check gives no number: which side gave none, and, where a side reads a name that is
+ *  not defined, that name. */
+function requirementCause(
+  r: { id: string; lhsValue: number; rhsValue: number; detail?: string },
+  warnings: readonly QAWarning[],
+): Cause {
+  const l = Number.isFinite(r.lhsValue);
+  const rr = Number.isFinite(r.rhsValue);
+  const side = !l && !rr ? 'both' : !l ? 'lhs' : !rr ? 'rhs' : undefined;
+  const undeclared = warnings.find(
+    (w) => w.rule === 'sheet-undeclared' && (w.location ?? '').startsWith(`check "${r.id}" `),
+  );
+  return {
+    kind: 'cannot-evaluate',
+    data: {
+      why: undeclared ? 'not-defined' : 'not-finite',
+      name: undeclared?.symbol ?? r.id,
+      reason: undeclared?.message ?? r.detail ?? '',
+      ...(side ? { side } : {}),
+    },
+  };
+}
+
 /** The names an expression reads. */
 const namesIn = (expr: string): string[] => [...namesOf(expr)];
 
@@ -268,4 +304,97 @@ function deviceCause(s: SizingReport | undefined): Cause {
     kind: 'cannot-evaluate',
     data: { why: 'not-finite', name: 'givens', reason: s?.error ?? 'the device was not sized' },
   };
+}
+
+/** Rules whose errors already have their item, written where the error was raised: a failed
+ *  search (sheet-solve), an equation that gives no number (sheet-nonfinite), a block whose
+ *  values from its parent did not resolve (sheet-block-param). */
+const COVERED = new Set(['sheet-solve', 'sheet-nonfinite', 'sheet-block-param']);
+
+/** The item a finding's `location` names: a path of block names through `doc`, then an entry of
+ *  the sheet it reaches — a param, an equation, a check, its device (`givens`) — or the sheet. */
+function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRef {
+  // Where an expression is named as the evaluation names it: `equation "x"`, `check "c" lhs`,
+  // `given vds`.
+  const quoted = /^(equation|check) "([^"]+)"/.exec(location ?? '');
+  if (quoted)
+    return { kind: quoted[1] === 'check' ? 'requirement' : 'value', path: [], name: quoted[2] };
+  if (/^given /.test(location ?? '')) return { kind: 'device', path: [], name: 'givens' };
+  const parts = (location ?? '').split('.').filter(Boolean);
+  const path: string[] = [];
+  let d = doc;
+  while (parts.length && d?.blocks?.some((b) => b.name === parts[0])) {
+    const b = d.blocks.find((x) => x.name === parts[0]);
+    path.push(parts.shift() as string);
+    d = b?.doc;
+  }
+  const name = parts.join('.');
+  if (!name || !d) return { kind: 'sheet', path, name: '' };
+  if (name === 'givens') return { kind: 'device', path, name: 'givens' };
+  const p = d.params.find((x) => x.name === name);
+  if (p) return { kind: engineSolved(p) ? 'search' : 'value', path, name };
+  if (d.equations.some((e) => e.name === name)) return { kind: 'value', path, name };
+  if (d.checks.some((c) => c.id === name)) return { kind: 'requirement', path, name };
+  return { kind: 'sheet', path, name: '' };
+}
+
+/** The cause an error finding gives the item it is about, by its rule. A finding of the netlist
+ *  check (`sheet-nodes`) is about the sheet's wiring; one of declared assumed levels is about the
+ *  sheet; anything else is a field of the entry it names that is not well formed. */
+function findingCause(w: QAWarning, ref: ItemRef, mode: 'evaluation' | 'validation'): Cause {
+  const stage = mode === 'validation' ? { stage: 'validation' as const } : {};
+  const names = w.location ? [w.location] : [];
+  if (ref.kind === 'sheet' && (w.rule === 'sheet-dc-inputs' || w.rule === 'sheet-nodes'))
+    return {
+      kind: 'not-determined',
+      data: {
+        why: w.rule === 'sheet-nodes' ? 'netlist' : 'assumed-level',
+        names,
+        message: w.message,
+        ...stage,
+      },
+    };
+  const why =
+    w.rule === 'sheet-format' || w.rule === 'sheet-parse'
+      ? 'format'
+      : w.rule === 'sheet-ref'
+        ? 'reference'
+        : 'field';
+  return { kind: 'not-read', data: { why, where: w.location ?? '', message: w.message, ...stage } };
+}
+
+/**
+ * The item list with every error finding in `warnings` given to the item it is about: the entry
+ * its location names, failed with the cause its rule gives — the sheet where it names no entry.
+ * An item that already failed keeps its cause. `mode` says where the findings come from: an
+ * evaluation, whose findings from a block are already on the block's own items; or validation
+ * of the whole document, whose findings name entries at any depth.
+ */
+export function withFindings(
+  items: readonly Item[],
+  warnings: readonly QAWarning[],
+  doc: SheetDoc | undefined,
+  mode: 'evaluation' | 'validation',
+): Item[] {
+  const out = [...items];
+  for (const w of warnings) {
+    if (w.severity !== 'error' || COVERED.has(w.rule) || w.cause !== undefined) continue;
+    const ref = locate(doc, w.location);
+    // A block's own findings are on its own items, under its name.
+    if (mode === 'evaluation' && ref.path.length) continue;
+    const cause = findingCause(w, ref, mode);
+    const at = out.findIndex(
+      (i) => i.kind === ref.kind && i.name === ref.name && i.path.join('.') === ref.path.join('.'),
+    );
+    // An item keeps its first cause, except a design resting on an assumed level, which a finding
+    // about how the sheet is written takes the place of.
+    const prior = out[at];
+    const weaker =
+      prior?.status === 'failed' &&
+      prior.cause.kind === 'not-determined' &&
+      prior.cause.data.why === 'assumed-level';
+    if (at < 0) out.push({ ...ref, status: 'failed', cause });
+    else if (prior.status !== 'failed' || weaker) out[at] = { ...ref, status: 'failed', cause };
+  }
+  return out;
 }
