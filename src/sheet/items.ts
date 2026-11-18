@@ -7,7 +7,9 @@ import {
   failedParams,
   isHardCheck,
   namesOf,
+  OWN_DEVICE,
   unfoundIn,
+  unitOfSides,
   type SheetDoc,
   type SheetResult,
   type SizingReport,
@@ -67,6 +69,8 @@ export function searchItems(
   return out;
 }
 
+const ownSheet = (i: ItemRef): boolean => i.kind === 'sheet' && i.path.length === 0;
+
 /** A child's items as its parent lists them: under the block's name. */
 export const under = (block: string, items: readonly Item[]): Item[] =>
   items.map((i) =>
@@ -74,7 +78,9 @@ export const under = (block: string, items: readonly Item[]): Item[] =>
       ? {
           ...i,
           path: [block, ...i.path],
-          on: i.on.map((o) => ({ ...o, path: [block, ...o.path] })),
+          // A block's own sheet item is withheld on what its parent passes it: an item of the
+          // parent, named as the parent names it.
+          on: ownSheet(i) ? i.on : i.on.map((o) => ({ ...o, path: [block, ...o.path] })),
         }
       : { ...i, path: [block, ...i.path] },
   );
@@ -125,8 +131,11 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
   // The device.
   if (doc.givens) {
     const s = res.sizing;
+    // Withheld on what its givens read; a device withheld on itself (OWN_DEVICE) is its own
+    // failure, read beyond its table.
+    const from = res.withheld?.W;
     const on =
-      s && !s.ok ? (res.withheld?.W !== undefined ? withheldOn('W') : undefined) : undefined;
+      s && !s.ok && from !== undefined && from !== OWN_DEVICE ? withheldOn('W') : undefined;
     const item: Item =
       s?.ok && res.values.feasible !== 0
         ? {
@@ -205,7 +214,7 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
         path: [],
         name: r.id,
         status: 'failed',
-        cause: failsCause({ ...r, text: { lhs, op, rhs } }),
+        cause: failsCause({ ...r, text: { lhs, op, rhs }, unit: unitOfSides(doc, lhs, rhs) }),
       });
       continue;
     }
@@ -229,6 +238,46 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
   // The blocks, each under its name.
   for (const b of res.blocks ?? []) out.push(...under(b.name, b.items ?? []));
   return out;
+}
+
+/** The list with each of this sheet's withheld items, and each of its blocks' own sheet items,
+ *  pointing at the item its withheld name traces back to, once every item and finding is in the
+ *  list: a search, the device, or an item of a block. A block's other items were pointed when its
+ *  list was made. */
+export const resolveWithheld = (items: readonly Item[]): Item[] =>
+  items.map((i) =>
+    i.status === 'withheld' && (i.path.length === 0 || (i.kind === 'sheet' && i.path.length === 1))
+      ? { ...i, on: i.on.map((o) => resolveOn(items, o)) }
+      : i,
+  );
+
+/** The full name of an item: its blocks' path and its own name, joined by dots. */
+const fullName = (r: ItemRef): string => [...r.path, r.name].filter(Boolean).join('.');
+
+/** A dependency resolved against the full list: the item whose full name is the one the withheld
+ *  name traced back to, a failed one first, with its cause. Kept as it was where none is. */
+function resolveOn(items: readonly Item[], o: WithheldOn): WithheldOn {
+  const name = fullName(o);
+  const hits = items.filter((i) => fullName(i) === name);
+  const hit = hits.find((i) => i.status === 'failed') ?? hits[0];
+  if (!hit) return o;
+  const ref = { kind: hit.kind, path: hit.path, name: hit.name };
+  if (hit.status === 'failed') return { ...ref, cause: hit.cause.kind };
+  if (hit.status === 'withheld' && hit.on[0] && fullName(hit.on[0]) !== name) return hit.on[0];
+  // A block whose own sheet item is not failed: the first failed item inside it, other than a
+  // requirement that fails, which withholds nothing.
+  if (hit.kind === 'sheet') {
+    const inside = items.find(
+      (i) =>
+        i.status === 'failed' &&
+        i.cause.kind !== 'fails' &&
+        i.path.length >= hit.path.length &&
+        hit.path.every((p, k) => i.path[k] === p),
+    );
+    if (inside && inside.status === 'failed')
+      return { kind: inside.kind, path: inside.path, name: inside.name, cause: inside.cause.kind };
+  }
+  return { ...ref, cause: o.cause };
 }
 
 /** A check's two sides as the sheet writes them, read back from its text. */

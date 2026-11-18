@@ -237,6 +237,8 @@ export interface FailsData {
   readonly margin: number;
   readonly marginPct: number;
   readonly hard: boolean;
+  /** The unit of the two sides, where the sheet declares one for a name either side is. */
+  readonly unit?: string;
 }
 
 /** The closed list of causes, each with its data. */
@@ -457,10 +459,12 @@ export const failsCause = (r: {
   rhsValue: number;
   margin: number;
   marginPct: number;
+  unit?: string;
 }): Cause => ({
   kind: 'fails',
   data: {
     text: r.text,
+    ...(r.unit !== undefined ? { unit: r.unit } : {}),
     lhs: r.lhsValue,
     rhs: r.rhsValue,
     margin: r.margin,

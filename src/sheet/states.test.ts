@@ -16,7 +16,9 @@ import {
   legacyDesignFailure,
   verdictOf,
   type Cause,
+  type DidNotSettleData,
   type Item,
+  type ItemRef,
   type SearchData,
   type NoSolutionRead,
 } from './states';
@@ -26,10 +28,14 @@ import {
   describe,
   notAskedText,
   rangeSource,
+  withheldClause,
   standardProblems,
   textOf,
 } from './describe';
 import type { SheetDoc, SolveRange } from './types';
+import type { OutsideTable } from '../types';
+
+const outside: OutsideTable = { device: 'in', quantity: 'l', asked: 5e-6, held: [180e-9, 2e-6] };
 
 const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
 
@@ -383,7 +389,7 @@ group('the text module builds today’s messages from the data', () => {
   it('describes an item by its cause’s short name and message, and a withheld one by what it depends on', () => {
     expect(describe(failed('value', 'z', notEvaluated))).toEqual({
       name: 'cannot be calculated',
-      lines: ['z gives no number.', 'z is not defined.'],
+      lines: ['z gives no number.', 'The sheet does not define z.'],
     });
     expect(
       describe({
@@ -395,7 +401,9 @@ group('the text module builds today’s messages from the data', () => {
       }),
     ).toEqual({
       name: 'not calculated',
-      lines: ['Depends on amp.x: no solution found (not proved).'],
+      lines: [
+        'w in block amp is not calculated, because the engine found no solution for x in block amp.',
+      ],
     });
   });
 });
@@ -432,11 +440,13 @@ group('the texts a reader sees, by the message standard', () => {
     expect(textOf(c)).toEqual({
       name: 'no solution found (not proved)',
       lines: [
-        'No V_tail gives CM_in = CM_dc.',
-        'Searched: 0 V to 900 mV, the full range that the circuit permits.',
-        'CM_in at the two ends: 562 mV and 1.64 V. CM_dc is 1.75 V.',
-        'Not proved: the engine did not show that CM_in only rises with V_tail.',
-        'out_share was 0.518 during this search.',
+        'No value of V_tail makes CM_in equal to CM_dc.',
+        'The engine searched the full physical range of wire tail, from 0 V to 0.9 V.',
+        'CM_in is 0.562 V at the low end and 1.64 V at the high end.',
+        'CM_dc is 1.75 V.',
+        'This is not a proof.',
+        'The engine did not show that CM_in only rises with V_tail.',
+        'The engine held out_share at 0.518 during this search.',
       ],
     });
   });
@@ -446,7 +456,7 @@ group('the texts a reader sees, by the message standard', () => {
       { ...tail({ path: ['bias'], given: [] }), ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]) },
       true,
     );
-    expect(textOf(c).lines[0]).toBe('No in block bias: V_tail gives CM_in = CM_dc.');
+    expect(textOf(c).lines[0]).toBe('No value of V_tail in block bias makes CM_in equal to CM_dc.');
   });
 
   it('a search with no solution in the range the sheet states, with the action', () => {
@@ -465,10 +475,10 @@ group('the texts a reader sees, by the message standard', () => {
     expect(textOf(c)).toEqual({
       name: 'no solution in the stated range',
       lines: [
-        'No V_tail gives CM_in = CM_dc.',
-        'The engine did not search outside the search range on the sheet.',
-        'Searched: 100 mV to 500 mV, the search range on the sheet.',
-        'CM_in at the two ends: 600 mV and 1.2 V. CM_dc is 1.75 V.',
+        'No value of V_tail from 0.1 V to 0.5 V makes CM_in equal to CM_dc.',
+        'This range is the search range on the sheet, and the engine did not search outside it.',
+        'CM_in is 0.6 V at the low end and 1.2 V at the high end.',
+        'CM_dc is 1.75 V.',
         'Widen the search range of V_tail.',
       ],
     });
@@ -482,30 +492,168 @@ group('the texts a reader sees, by the message standard', () => {
       }),
     ).toEqual({
       name: 'outside the table',
-      lines: ['Part in: L = 5 µm.', 'The table holds 180 nm to 2 µm.'],
+      lines: ['Part in asks for a length of 5 µm.', 'The table holds lengths from 180 nm to 2 µm.'],
     });
-    expect(textOf(hardFail).lines).toEqual(['gain = 2. Required: at least 1.', 'Margin: −100 %.']);
+    expect(textOf(hardFail, { kind: 'requirement', path: [], name: 'gain-spec' }).lines).toEqual([
+      'gain-spec fails.',
+      'gain is 2, and gain-spec requires at least 1.',
+      'The margin is −100 %.',
+    ]);
   });
 
-  it('keeps every detail line within twenty words', () => {
-    const causes: Cause[] = [
-      noSolutionCause({ ...tail(), ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]) }, true),
-      proved,
-      hardFail,
-      notEvaluated,
-      {
-        kind: 'limit',
-        data: { members: [tail()], limit: 'evaluations', count: 2000 },
-      },
+  it('keeps the message standard in every text the module gives', () => {
+    const t = tail();
+    const ends = read([0, 0.562, 1.75], [0.9, 1.64, 1.75]);
+    const ref = (kind: Item['kind'], name: string, path: string[] = ['bias']) => ({
+      kind,
+      path,
+      name,
+    });
+    const causes: [Cause, ItemRef?][] = [
+      [noSolutionCause({ ...t, ...ends }, true)],
+      [
+        noSolutionCause(
+          { ...t, ...ends, ended: { kind: 'step', at: ends.ends[0], band: 1 } },
+          false,
+        ),
+      ],
+      [noSolutionCause({ ...t, ...ends, ended: { kind: 'flat' } }, true)],
+      [noSolutionCause({ ...t, ...ends, ended: { kind: 'held-flat', moves: 0, own: 0 } }, true)],
+      [
+        noSolutionCause(
+          {
+            ...t,
+            range: { ...wiring, author: [0.1, 0.5] },
+            ...read([0, 0.562, 1.75], [0.9, 1.64, 1.75]),
+            ends: [
+              { x: 0, lhs: 0.562, rhs: 1.75, stepped: 'x', steppedOutside: outside },
+              { x: 0.9, lhs: 1.64, rhs: 1.8, stepped: 'y' },
+            ],
+          },
+          true,
+        ),
+      ],
+      [
+        noSolutionCause(
+          {
+            ...tail({
+              range: authorRange('V_tail', 0.1, 0.5),
+              searched: [0.1, 0.5],
+              stage: 'sheet',
+            }),
+            ...ends,
+          },
+          true,
+        ),
+      ],
+      [
+        noSolutionCause(
+          { ...tail({ range: { ...wiring, from: 'table' }, stage: 'table' }), ...ends },
+          true,
+        ),
+      ],
+      [proved],
+      [hardFail],
+      [hardFail, ref('requirement', 'gain-spec')],
+      [softFail],
+      [notEvaluated],
+      [notEvaluated, ref('value', 'gain')],
+      ...(
+        ['no-sweep', 'no-column', 'illegal-pair', 'not-finite', 'not-defined', 'syntax'] as const
+      ).flatMap((why): [Cause, ItemRef?][] => {
+        const c: Cause = { kind: 'cannot-evaluate', data: { why, name: 'vgs', reason: '' } };
+        return [
+          [c],
+          [c, ref('value', 'gain')],
+          [c, ref('device', 'in')],
+          [c, ref('device', 'givens', [])],
+        ];
+      }),
+      [{ kind: 'outside-table', data: outside }],
+      [{ kind: 'outside-table', data: { ...outside, device: 'givens', quantity: 'vds' } }],
+      ...(['format', 'reference', 'field'] as const).flatMap((why): [Cause][] => [
+        [{ kind: 'not-read', data: { why, where: 'amp', message: '' } }],
+        [{ kind: 'not-read', data: { why, where: '', message: '' } }],
+      ]),
+      ...(
+        ['decision-missing', 'decision-twice', 'assumed-level', 'range-outside', 'netlist'] as const
+      ).flatMap((why): [Cause][] => [
+        [{ kind: 'not-determined', data: { why, names: ['V_a', 'V_b'], message: '' } }],
+        [{ kind: 'not-determined', data: { why, names: [], message: '' } }],
+      ]),
+      ...(
+        [
+          { kind: 'sweeps', sweeps: 8, moved: { name: 'V_tail', by: 0.01 }, moves: [] },
+          { kind: 'member', failure: proved },
+          {
+            kind: 'verification',
+            tolRel: 1e-6,
+            off: [{ name: 'V_tail', tolerance: 1e-6 }],
+          },
+          { kind: 'unevaluable', at: { where: 'nowhere', reason: '' } },
+          {
+            kind: 'unevaluable',
+            at: { where: 'one-point', end: ends.ends[0], stepped: [] },
+          },
+          {
+            kind: 'unevaluable',
+            at: { where: 'crossing', ends: ends.ends, between: [0.3, 0.4], reason: '' },
+          },
+        ] as DidNotSettleData['why'][]
+      ).map((why): [Cause] => [
+        {
+          kind: 'did-not-settle',
+          data: {
+            members: [t, tail({ unknown: 'V_out', path: ['bias'] })],
+            simplifications: ['ideal mirrors'],
+            why,
+          },
+        },
+      ]),
+      [{ kind: 'limit', data: { members: [t], limit: 'evaluations', count: 2000 } }],
+      [{ kind: 'limit', data: { members: [t], limit: 'probes', count: 200 } }],
+      [{ kind: 'statement-false', data: { path: [], param: 'V_x', statement: 'I_a - I_b' } }],
+      [
+        {
+          kind: 'statement-false',
+          data: {
+            path: ['bias'],
+            param: 'V_x',
+            statement: 'I_a - I_b',
+            balance: { reads: 3e-6, tolerance: 1e-9 },
+          },
+        },
+      ],
     ];
-    for (const c of causes)
-      for (const line of textOf(c).lines) expect(line.split(/\s+/).length).toBeLessThanOrEqual(20);
+    const texts: string[] = [];
+    for (const [c, r] of causes) {
+      const f = textOf(c, r);
+      texts.push(f.name, ...f.lines);
+      for (const k of ['sheet', 'value', 'device', 'search', 'requirement'] as const)
+        for (const path of [[], ['bias']])
+          texts.push(
+            ...describe({
+              kind: k,
+              path,
+              name: 'w',
+              status: 'withheld',
+              on: [{ ...ref(k === 'value' ? 'search' : k, 'V_tail', path), cause: c.kind }],
+            }).lines,
+          );
+    }
+    for (const c of CAUSES) texts.push(withheldClause({ ...ref('search', 'V_tail'), cause: c }));
+    texts.push(...notAskedText('range end', 'cm-lo').lines);
+    texts.push(...notAskedText('held point', 'ss at 125 °C').lines);
+    for (const line of texts)
+      expect({ line, problems: standardProblems(line) }).toEqual({ line, problems: [] });
+    // No raw exponent, no quotation marks around a name, no label of the code.
+    for (const line of texts) expect(line).not.toMatch(/\de[+-]?\d|"|\blhs\b|\brhs\b|\bparam\b/);
   });
 
   it('says what a held point that was not run reads', () => {
-    expect(notAskedText('range end')).toEqual({
+    expect(notAskedText('range end', 'cm-lo')).toEqual({
       name: 'not run',
-      lines: ['The design point has no design, so the engine did not run this range end.'],
+      lines: ['The engine did not run range end cm-lo, because the design point has no design.'],
     });
   });
 });

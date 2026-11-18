@@ -55,6 +55,7 @@ import {
   failedParams,
   solveFailedIn,
   unfoundIn,
+  unitOfSides,
   stands,
   unfinishedBecause,
   withParams,
@@ -87,7 +88,7 @@ import {
 } from './states';
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { causeOfFailure, solveFailureOf } from './derived';
-import { itemsOf, searchItems, under, withFindings } from './items';
+import { itemsOf, resolveWithheld, searchItems, under, withFindings } from './items';
 import {
   axisDirection,
   blockWires,
@@ -1703,14 +1704,16 @@ function finishWiring(
       if (out.items && (below || found.length))
         out = {
           ...out,
-          items: withFindings(
-            [
-              ...out.items.filter((i) => i.path.length === 0),
-              ...(out.blocks ?? []).flatMap((b) => under(b.name, b.items ?? [])),
-            ],
-            found,
-            pending?.doc,
-            'evaluation',
+          items: resolveWithheld(
+            withFindings(
+              [
+                ...out.items.filter((i) => i.path.length === 0),
+                ...(out.blocks ?? []).flatMap((b) => under(b.name, b.items ?? [])),
+              ],
+              found,
+              pending?.doc,
+              'evaluation',
+            ),
           ),
         };
       if (bad) {
@@ -2355,7 +2358,8 @@ const withItems = (
     if (at < 0) items.push(failed);
     else if (items[at].status === 'ok') items[at] = failed;
   }
-  return { ...res, items, verdict: verdictOf(items) };
+  const resolved = resolveWithheld(items);
+  return { ...res, items: resolved, verdict: verdictOf(resolved) };
 };
 
 /**
@@ -2940,10 +2944,8 @@ const fieldOf = (u: Unknown): RelationField =>
   u.held ? 'hold' : u.p.solveFor !== undefined ? 'solveFor' : 'designConstraint';
 
 /** The unit both sides of a relation are in, where its right side is a param with one. */
-function sidesUnit(doc: SheetDoc, rhs: string): string | undefined {
-  const p = doc.params.find((q) => q.name === rhs.trim());
-  return p?.unit;
-}
+const sidesUnit = (doc: SheetDoc, lhs: string, rhs: string): string | undefined =>
+  unitOfSides(doc, lhs, rhs);
 
 /** Which range a search's stretch is (SearchData.stage). */
 function stageOf(u: Unknown): SearchData['stage'] {
@@ -2955,7 +2957,7 @@ function stageOf(u: Unknown): SearchData['stage'] {
 /** One unknown as a failed search reports it (SearchData): its relation, its range, the stretch
  *  searched, and where each other member of its set stood (`also`, at `ctx.at`). */
 function searchDataOf(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): SearchData {
-  const unit = sidesUnit(ctx.doc, u.rhs);
+  const unit = sidesUnit(ctx.doc, u.lhs, u.rhs);
   return {
     path: [],
     unknown: u.p.name,

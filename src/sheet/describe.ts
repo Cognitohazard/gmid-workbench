@@ -7,18 +7,24 @@ import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
 import { formatQuantity } from '../units';
-import { andList, blockMessage, type SolveRange } from './types';
+import { andList, blockMessage, type CheckOp, type SolveRange } from './types';
 import type {
+  CannotEvaluateData,
   Cause,
   CauseName,
   DidNotSettleData,
+  FailsData,
   Item,
+  ItemRef,
   LimitData,
+  NotDeterminedData,
+  NotReadData,
   NoSolutionRead,
   SearchData,
   SearchEnd,
   SearchStep,
   StatementFalseData,
+  WithheldOn,
 } from './states';
 
 // ── Numbers, units and names as a message quotes them ────────────────────────────────────────
@@ -378,173 +384,230 @@ export interface FindingText {
   readonly lines: readonly string[];
 }
 
-/** A number with its unit, as a reader reads one: engineering notation, three significant
- *  digits, an SI prefix joined to the unit. */
+/** A number with its unit, as a reader reads one: three significant digits, and an SI prefix
+ *  joined to the unit. A value from a tenth up to one reads without a prefix (0.45 V, not
+ *  450 mV), a ratio of like units takes no prefix, and a pure number from a thousandth up to ten
+ *  thousand reads as itself. */
 export const quantityText = (x: number, unit?: string): string => {
-  // A pure number between a thousandth and ten thousand reads as itself: a share of 0.518, not
-  // 518m.
-  const a = Math.abs(x);
-  if ((!unit || unit === '1') && (a === 0 || (a >= 1e-3 && a < 1e4)))
-    return String(Number(x.toPrecision(3)));
+  const a = Math.abs(Number(x.toPrecision(3)));
+  const plain = String(Number(x.toPrecision(3)));
+  if (!unit || unit === '1') {
+    if (a === 0 || (a >= 1e-3 && a < 1e4)) return plain;
+    return formatQuantity(x, unit, 3);
+  }
+  // A ratio of like units (V/V, A/A) is a pure number with its unit after it: 8090 V/V.
+  if ((a >= 0.1 && a < 1) || /^(\w+)\/\1$/.test(unit)) return `${plain} ${unit}`;
   return formatQuantity(x, unit, 3);
 };
 
-/** A range as a reader reads one: "0 V to 0.9 V". */
+/** A range as a reader reads one: "from 0 V to 0.9 V". */
 const spanText = (lo: number, hi: number, unit?: string): string =>
-  `${quantityText(lo, unit)} to ${quantityText(hi, unit)}`;
+  `from ${quantityText(lo, unit)} to ${quantityText(hi, unit)}`;
 
-/** An unknown, with the blocks it belongs to in front: "in block bias: V_ref". */
-const unknownName = (d: Pick<SearchData, 'path' | 'unknown'>): string =>
-  d.path.length ? `in block ${d.path.join('.')}: ${d.unknown}` : d.unknown;
+/** A name with the blocks it belongs to after it: "V_ref in block bias". */
+const inBlock = (name: string, path: readonly string[]): string =>
+  path.length ? `${name} in block ${path.join('.')}` : name;
 
-/** The unit a table axis or a sized quantity is quoted in, and the symbol the panel shows. */
-const AXIS: Record<string, { symbol: string; unit?: string }> = {
-  vgs: { symbol: 'vgs', unit: 'V' },
-  vds: { symbol: 'vds', unit: 'V' },
-  vsb: { symbol: 'vsb', unit: 'V' },
-  l: { symbol: 'L', unit: 'm' },
-  id: { symbol: 'ID', unit: 'A' },
-  gm: { symbol: 'gm', unit: 'S' },
-  gm_id: { symbol: 'gm/ID', unit: '1/V' },
+/** An unknown as a reader reads it. */
+const unknownName = (d: Pick<SearchData, 'path' | 'unknown'>): string => inBlock(d.unknown, d.path);
+
+/** The plain words and the unit for each quantity a table is read at or a device is sized by:
+ *  one table, so a sentence can say "a length of 5 µm" and "the table holds lengths". */
+const QUANTITY_WORDS: Record<string, { one: string; many: string; unit?: string }> = {
+  vgs: { one: 'gate-source voltage', many: 'gate-source voltages', unit: 'V' },
+  vds: { one: 'drain-source voltage', many: 'drain-source voltages', unit: 'V' },
+  vsb: { one: 'source-bulk voltage', many: 'source-bulk voltages', unit: 'V' },
+  l: { one: 'length', many: 'lengths', unit: 'm' },
+  id: { one: 'drain current', many: 'drain currents', unit: 'A' },
+  gm: { one: 'transconductance', many: 'transconductances', unit: 'S' },
+  gm_id: { one: 'gm/ID', many: 'values of gm/ID', unit: '1/V' },
+};
+const quantityWords = (q: string): { one: string; many: string; unit?: string } =>
+  QUANTITY_WORDS[q] ?? { one: q, many: `values of ${q}` };
+
+/** A device as a reader reads it: the sheet's own, or a part. */
+const partName = (device: string): string =>
+  device === '' || device === 'givens' ? 'the device of this sheet' : `part ${device}`;
+
+/** Any item as the subject of a sentence names it. */
+const itemName = (r: ItemRef): string => {
+  if (r.kind === 'sheet') return r.path.length ? `block ${r.path.join('.')}` : 'the sheet';
+  if (r.kind === 'device') {
+    const own = r.name === '' || r.name === 'givens';
+    return own && r.path.length ? `the device of block ${r.path.join('.')}` : partName(r.name);
+  }
+  return inBlock(r.name, r.path);
 };
 
-/** A device as a reader reads it: the sheet's own, or a part of a block. */
-const partName = (device: string): string =>
-  device === '' || device === 'givens' ? 'The device of this sheet' : `Part ${device}`;
+/** The first letter of a sentence made capital where the engine's own word opens it ("Part in",
+ *  "The device"); a name from the sheet keeps the case the sheet writes it in. */
+const upperFirst = (t: string): string =>
+  /^(the|part|block) /.test(t) ? t.charAt(0).toUpperCase() + t.slice(1) : t;
 
-const lowerFirst = (t: string): string => t.charAt(0).toLowerCase() + t.slice(1);
+/** Whether a side is a single name, which a sentence can quote; a longer expression is named by
+ *  its place, so a line stays short. */
+const isName = (t: string): boolean => /^[A-Za-z_][\w.]*$/.test(t.trim());
 
-/** The lines a failed search's relation and its two ends give: what was asked, where the engine
- *  searched, and what the two sides read at the ends. */
-function searchLines(
-  d: SearchData & NoSolutionRead,
-  where: string,
-): { asked: string; searched: string[]; ends: string[] } {
-  const { lhs, rhs, unit } = d.relation;
-  const [lo, hi] = d.ends;
-  const searched = [`Searched: ${spanText(lo.x, hi.x, d.unit)}, ${where}.`];
-  const a = d.range.author;
-  const w = d.range.wiring?.range;
-  if (d.stage === 'physical' && a && w && (a[0] !== w[0] || a[1] !== w[1]))
-    searched.unshift(
-      `The search range on the sheet, ${spanText(a[0], a[1], d.unit)}, holds no solution.`,
-      `The engine then searched the physical range.`,
-    );
-  for (const e of d.ends)
-    if (e.stepped !== undefined)
-      searched.push(
-        e.steppedOutside
-          ? `The search stopped at ${quantityText(e.x, d.unit)}: ${lowerFirst(partName(e.steppedOutside.device))} is outside the table there.`
-          : `The search stopped at ${quantityText(e.x, d.unit)}: ${lhs} gives no number beyond it.`,
-      );
-  const rv = lo.rhs === hi.rhs ? `${rhs} is ${quantityText(lo.rhs, unit)}.` : '';
-  return {
-    asked: `No ${unknownName(d)} gives ${lhs} = ${rhs}.`,
-    searched,
-    ends: [
-      `${lhs} at the two ends: ${quantityText(lo.lhs, unit)} and ${quantityText(hi.lhs, unit)}.` +
-        (rv ? ` ${rv}` : ''),
-    ],
-  };
-}
-
-/** Where a failed search's stretch lies, in the words of its source. */
-const whereText = (d: SearchData): string =>
-  d.stage === 'physical'
-    ? 'the full range that the circuit permits'
-    : d.stage === 'table'
-      ? 'the lengths the table holds'
-      : 'the search range on the sheet';
-
-/** The other members of a set, where each stood during the search. */
-const givenLines = (d: SearchData): string[] =>
-  (d.given ?? []).map((o) => `${o.name} was ${quantityText(o.value, o.unit)} during this search.`);
+/** The two sides of a relation as a sentence names them: each by its name where it is one, and
+ *  both by their place where either is an expression. */
+const sidesOf = (r: { lhs: string; rhs: string }): { lhs: string; rhs: string } =>
+  isName(r.lhs) && isName(r.rhs)
+    ? { lhs: r.lhs.trim(), rhs: r.rhs.trim() }
+    : { lhs: 'the left side', rhs: 'the right side' };
 
 /** Which way the written side moved across the stretch. */
 const direction = (d: NoSolutionRead): string =>
   d.ends[1].lhs >= d.ends[0].lhs ? 'only rises' : 'only falls';
 
+/** The sentence a failed search gives for where the engine searched. */
+function searchedLine(d: SearchData & NoSolutionRead): string {
+  const span = spanText(d.ends[0].x, d.ends[1].x, d.unit);
+  const wire = d.range.wires?.[0];
+  if (d.stage === 'physical')
+    return wire
+      ? `The engine searched the full physical range of wire ${wire}, ${span}.`
+      : `The engine searched the full physical range of ${unknownName(d)}, ${span}.`;
+  if (d.stage === 'table') return `The engine searched the lengths that the table holds, ${span}.`;
+  return `The engine searched the search range on the sheet, ${span}.`;
+}
+
+/** The lines every failed search gives: what has no solution, where the engine searched, and
+ *  what the two sides read at the ends. */
+function searchLines(c: Extract<Cause, { kind: 'no-solution' | 'no-crossing' | 'none-in-range' }>) {
+  const d = c.data;
+  const { lhs, rhs } = sidesOf(d.relation);
+  const unit = d.relation.unit;
+  const [lo, hi] = d.ends;
+  const U = unknownName(d);
+  const lines: string[] = [];
+  if (c.kind === 'none-in-range' && d.stage === 'sheet') {
+    lines.push(
+      `No value of ${U} ${spanText(lo.x, hi.x, d.unit)} makes ${lhs} equal to ${rhs}.`,
+      `This range is the search range on the sheet, and the engine did not search outside it.`,
+    );
+  } else {
+    lines.push(`No value of ${U} makes ${lhs} equal to ${rhs}.`);
+    const a = d.range.author;
+    const w = d.range.wiring?.range;
+    if (d.stage === 'physical' && a && w && (a[0] !== w[0] || a[1] !== w[1]))
+      lines.push(
+        `The search range on the sheet, ${spanText(a[0], a[1], d.unit)}, holds no solution.`,
+        `The engine then searched the physical range.`,
+      );
+    lines.push(searchedLine(d));
+  }
+  for (const e of d.ends)
+    if (e.stepped !== undefined)
+      lines.push(
+        e.steppedOutside
+          ? `The search stopped at ${quantityText(e.x, d.unit)}, because ${partName(e.steppedOutside.device)} is outside its table beyond it.`
+          : `The search stopped at ${quantityText(e.x, d.unit)}, because ${lhs} gives no number beyond it.`,
+      );
+  lines.push(
+    `${lhs} is ${quantityText(lo.lhs, unit)} at the low end and ${quantityText(hi.lhs, unit)} at the high end.`,
+  );
+  lines.push(
+    lo.rhs === hi.rhs
+      ? `${rhs} is ${quantityText(lo.rhs, unit)}.`
+      : `${rhs} is ${quantityText(lo.rhs, unit)} at the low end and ${quantityText(hi.rhs, unit)} at the high end.`,
+  );
+  return lines;
+}
+
+/** The other members of a set, where the engine held each during the search. */
+const givenLines = (d: SearchData): string[] =>
+  (d.given ?? []).map(
+    (o) => `The engine held ${o.name} at ${quantityText(o.value, o.unit)} during this search.`,
+  );
+
 function noSolutionText(
   c: Extract<Cause, { kind: 'no-solution' | 'no-crossing' | 'none-in-range' }>,
 ): string[] {
   const d = c.data;
-  const { lhs, rhs } = d.relation;
+  const { lhs, rhs } = sidesOf(d.relation);
   const U = unknownName(d);
   const e = d.ended;
+  const span = spanText(d.ends[0].x, d.ends[1].x, d.unit);
   if (e.kind === 'flat')
     return [
       `${lhs} does not change with ${U}.`,
-      `${lhs} is ${quantityText(d.ends[0].lhs, d.relation.unit)} at both ends and the middle of ${spanText(d.ends[0].x, d.ends[1].x, d.unit)}.`,
+      `${lhs} is ${quantityText(d.ends[0].lhs, d.relation.unit)} at both ends and at the middle of the range ${span}.`,
       `Write a constraint on ${U} that reads ${U}.`,
     ];
   if (e.kind === 'held-flat')
-    return [
-      `${lhs} does not move with ${U} across ${spanText(d.ends[0].x, d.ends[1].x, d.unit)}.`,
-      `The hold on ${U} does not determine it.`,
-    ];
-  const s = searchLines(d, whereText(d));
-  const lines = [s.asked, ...s.searched, ...s.ends];
+    return [`${lhs} does not change with ${U} ${span}.`, `The hold on ${U} does not determine it.`];
+  const lines = searchLines(c);
   if (e.kind === 'step')
     lines.push(
-      `${lhs} jumps across ${rhs} at ${U} = ${quantityText(e.at.x, d.unit)}, without reaching it.`,
+      `${lhs} jumps past ${rhs} at ${U} = ${quantityText(e.at.x, d.unit)}, and never equals it.`,
     );
-  if (c.kind === 'no-solution') lines.push(`Proved: ${lhs} ${direction(d)} with ${U}.`);
-  else if (c.kind === 'no-crossing' && e.kind === 'sign')
-    lines.push(`Not proved: the engine did not show that ${lhs} ${direction(d)} with ${U}.`);
-  else if (c.kind === 'none-in-range') {
-    if (d.range.from === 'table') lines.push(`Use a table that holds a wider range of lengths.`);
-    else {
-      lines.splice(1, 0, `The engine did not search outside the search range on the sheet.`);
-      lines.push(`Widen the search range of ${U}.`);
-    }
-  }
+  if (c.kind === 'no-solution')
+    lines.push(`${lhs} ${direction(d)} with ${U}, so no solution exists.`);
+  else if (c.kind === 'no-crossing') {
+    lines.push(`This is not a proof.`);
+    if (e.kind === 'sign')
+      lines.push(`The engine did not show that ${lhs} ${direction(d)} with ${U}.`);
+  } else if (d.range.from === 'table')
+    lines.push(`Load a table that holds a wider range of lengths.`);
+  else if (d.stage === 'sheet') lines.push(`Widen the search range of ${U}.`);
   return [...lines, ...givenLines(d)];
 }
+
+/** The simplifications that would separate a set, as one sentence. */
+const simplificationLines = (d: DidNotSettleData): string[] =>
+  d.simplifications.length
+    ? [
+        `A declared simplification can separate them, for example ${d.simplifications.join(' or ')}.`,
+      ]
+    : [];
 
 function didNotSettleText(d: DidNotSettleData): string[] {
   const names = andList(d.members.map(unknownName));
   const why = d.why;
-  const simpl = d.simplifications.length
-    ? [`Declare a simplification to separate them: ${d.simplifications.join(', ')}.`]
-    : [];
+  const pair = d.members.length > 1 ? [`${names} depend on each other.`] : [];
   if (why.kind === 'sweeps') {
     const m = d.members.find((x) => x.unknown === why.moved.name) as SearchData;
     return [
-      `${names} read each other.`,
-      `The engine searched them in turn ${why.sweeps} times. They still moved.`,
+      ...pair,
+      `The engine searched them in turn ${why.sweeps} times, and they still moved.`,
       `In the last pass, ${unknownName(m)} moved by ${quantityText(why.moved.by, m.unit)}.`,
-      ...simpl,
+      ...simplificationLines(d),
     ];
   }
   if (why.kind === 'member') {
-    const inner = textOf(why.failure);
+    const inner = linesOf(why.failure);
     return [
-      `${names} read each other.`,
-      `One search found no solution while the others held their values.`,
-      ...inner.lines.slice(0, 1),
-      ...simpl,
+      ...pair,
+      `One search found no solution while the engine held the others.`,
+      ...inner.slice(0, 1),
+      ...simplificationLines(d),
     ];
   }
   if (why.kind === 'verification')
-    return why.off.map((o) => {
-      const m = d.members.find((x) => x.unknown === o.name) as SearchData;
-      return `The solution for ${unknownName(m)} moved after the engine found it.`;
-    });
+    return [
+      ...pair,
+      ...why.off.map((o) => {
+        const m = d.members.find((x) => x.unknown === o.name) as SearchData;
+        return `The value of ${unknownName(m)} moved when the engine checked the solution.`;
+      }),
+    ];
   const m = d.members[0];
   const at = why.at;
+  const { lhs, rhs } = sidesOf(m.relation);
+  const span = spanText(m.searched[0], m.searched[1], m.unit);
   if (at.where === 'nowhere')
     return [
-      `${m.relation.lhs} gives no number anywhere in ${spanText(m.searched[0], m.searched[1], m.unit)}.`,
-      `The engine searched ${unknownName(m)} there.`,
+      `${lhs} gives no number anywhere ${span}.`,
+      `The engine searched ${unknownName(m)} across that range.`,
     ];
   if (at.where === 'one-point')
     return [
-      `${m.relation.lhs} gives a number only at ${unknownName(m)} = ${quantityText(at.end.x, m.unit)}.`,
-      `The engine searched ${spanText(m.searched[0], m.searched[1], m.unit)}.`,
+      `${lhs} gives a number only at ${unknownName(m)} = ${quantityText(at.end.x, m.unit)}.`,
+      `The engine searched ${unknownName(m)} ${span}.`,
     ];
   return [
-    `${m.relation.lhs} crosses ${m.relation.rhs} between ${quantityText(at.between[0], m.unit)} and ${quantityText(at.between[1], m.unit)}.`,
-    `It gives no number at the values the engine tried there.`,
+    `${lhs} crosses ${rhs} between ${quantityText(at.between[0], m.unit)} and ${quantityText(at.between[1], m.unit)}.`,
+    `${lhs} gives no number at the values that the engine tried there.`,
   ];
 }
 
@@ -552,47 +615,141 @@ function limitText(d: LimitData): string[] {
   const m = d.members[0];
   return d.limit === 'evaluations'
     ? [
-        `The engine stopped at its limit of ${d.count} calculations.`,
+        `The engine stopped after ${d.count} calculations, because it reached its limit.`,
         `The last search was for ${unknownName(m)}.`,
-        `Raise the limit in the solver settings.`,
+        `Raise the calculation limit in the solver settings.`,
       ]
     : [
-        `The search for ${unknownName(m)} stopped at its limit of ${d.count} trial values.`,
+        `The search for ${unknownName(m)} stopped after ${d.count} trial values, because it reached its limit.`,
         `Narrow the search range of ${unknownName(m)}.`,
       ];
 }
 
 function statementFalseText(d: StatementFalseData): string[] {
   const at = d.balance
-    ? `At the design point: it reads ${quantityText(d.balance.reads, 'A')}, not zero.`
-    : `At the design point: it gives no number.`;
-  return [`The sheet states: ${d.param} holds ${d.statement}.`, at];
+    ? `At the design point, ${d.statement} is ${quantityText(d.balance.reads, 'A')} and not zero.`
+    : `At the design point, ${d.statement} gives no number.`;
+  return [
+    `The sheet sets ${inBlock(d.param, d.path)} by the statement that ${d.statement} is zero.`,
+    at,
+  ];
 }
 
-/** Every text a reader sees for one finding, from its kind and data alone. */
-export function textOf(f: Finding): FindingText {
-  return { name: CAUSE_NAMES[f.kind], lines: linesOf(f) };
+function notReadText(d: NotReadData): string[] {
+  const where = d.where.replace(/"/g, '');
+  const reason =
+    d.why === 'format'
+      ? `The file is not in a sheet format that this app reads.`
+      : d.why === 'reference'
+        ? where
+          ? `Block ${where} refers to a sheet, and the library holds no sheet of that name.`
+          : `The sheet refers to a sheet, and the library holds no sheet of that name.`
+        : where
+          ? `The entry ${where} holds a value that is not valid.`
+          : `An entry of the sheet holds a value that is not valid.`;
+  return [`The engine cannot read the sheet.`, reason];
 }
 
-function linesOf(c: Cause): string[] {
+function notDeterminedText(d: NotDeterminedData): string[] {
+  const head = `The statements of the sheet do not determine one design.`;
+  const each = (f: (n: string) => string): string[] => d.names.map(f);
+  switch (d.why) {
+    case 'decision-missing':
+      return [head, ...each((n) => `No statement sets ${n}.`)];
+    case 'decision-twice':
+      return [head, ...each((n) => `More than one statement sets ${n}.`)];
+    case 'assumed-level':
+      return [
+        head,
+        ...each(
+          (n) => `${n} is an assumed level, and the engine runs no condition on an assumed level.`,
+        ),
+      ];
+    case 'range-outside':
+      return [
+        head,
+        ...each((n) => `The search range of ${n} lies outside the range that its wires permit.`),
+      ];
+    case 'netlist':
+      return [
+        head,
+        d.names.length
+          ? `The netlist check reports a problem at ${d.names.join(', ').replace(/"/g, '')}.`
+          : `The netlist check reports a problem in the wiring of the sheet.`,
+      ];
+  }
+}
+
+function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): string[] {
+  const subject = ref ? upperFirst(itemName(ref)) : d.name;
+  if (ref?.kind === 'device') {
+    const sized = `${subject} cannot be sized.`;
+    if (d.why === 'no-column') return [sized, `The table holds no column for ${d.name}.`];
+    if (d.why === 'no-sweep') return [sized, `The table holds no sweep of ${d.name}.`];
+    if (d.why === 'illegal-pair')
+      return [sized, `The two quantities bound on it do not determine its size.`];
+    return [sized];
+  }
+  const head = `${subject} gives no number.`;
+  switch (d.why) {
+    case 'not-defined':
+      return ref && ref.name !== d.name
+        ? [head, `${subject} reads ${d.name}, and the sheet does not define ${d.name}.`]
+        : [head, `The sheet does not define ${d.name}.`];
+    case 'syntax':
+      return [head, `${subject} has a syntax error.`];
+    case 'no-column':
+      return [head, `The table holds no column for ${d.name}.`];
+    case 'no-sweep':
+      return [head, `The table holds no sweep of ${d.name}.`];
+    case 'illegal-pair':
+      return [head, `The two quantities bound on the device do not determine its size.`];
+    case 'not-finite':
+      return [head, `${subject} gives a value that is not a number.`];
+  }
+}
+
+function outsideTableText(d: OutsideTable): string[] {
+  const w = quantityWords(d.quantity);
+  const [lo, hi] = d.held;
+  return [
+    `${upperFirst(partName(d.device))} asks for a ${w.one} of ${quantityText(d.asked, w.unit)}.`,
+    `The table holds ${w.many} ${spanText(lo, hi, w.unit)}.`,
+  ];
+}
+
+const REQUIRES: Record<CheckOp, string> = {
+  '>=': 'at least',
+  '<=': 'at most',
+  '==': 'equal to',
+};
+
+function failsText(d: FailsData, ref?: ItemRef): string[] {
+  const check = ref ? itemName(ref) : 'the check';
+  const sign = d.marginPct >= 0 ? '+' : '−';
+  return [
+    `${upperFirst(check)} fails.`,
+    `${isName(d.text.lhs) ? d.text.lhs : `the left side of ${check}`} is ${quantityText(d.lhs, d.unit)}, and ${check} requires ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
+    `The margin is ${sign}${quantityText(Math.abs(d.marginPct))} %.`,
+  ];
+}
+
+/** Every text a reader sees for one finding, from its kind and data alone, and the item it is
+ *  about where the caller has it. */
+export function textOf(f: Finding, ref?: ItemRef): FindingText {
+  return { name: CAUSE_NAMES[f.kind], lines: linesOf(f, ref).map(upperFirst) };
+}
+
+function linesOf(c: Cause, ref?: ItemRef): string[] {
   switch (c.kind) {
     case 'not-read':
-      return [`The sheet cannot be read.`, c.data.message];
+      return notReadText(c.data);
     case 'not-determined':
-      return [`The statements do not determine one design.`, c.data.message];
-    case 'outside-table': {
-      const a = AXIS[c.data.quantity] ?? { symbol: c.data.quantity };
-      const [lo, hi] = c.data.held;
-      return [
-        `${partName(c.data.device)}: ${a.symbol} = ${quantityText(c.data.asked, a.unit)}.`,
-        `The table holds ${spanText(lo, hi, a.unit)}.`,
-      ];
-    }
+      return notDeterminedText(c.data);
+    case 'outside-table':
+      return outsideTableText(c.data);
     case 'cannot-evaluate':
-      return [
-        `${c.data.name} gives no number.`,
-        c.data.why === 'not-defined' ? `${c.data.name} is not defined.` : c.data.reason,
-      ];
+      return cannotEvaluateText(c.data, ref);
     case 'no-solution':
     case 'no-crossing':
     case 'none-in-range':
@@ -603,34 +760,65 @@ function linesOf(c: Cause): string[] {
       return limitText(c.data);
     case 'statement-false':
       return statementFalseText(c.data);
-    case 'fails': {
-      const t = c.data.text;
-      const required = t.op === '>=' ? 'at least' : t.op === '<=' ? 'at most' : 'equal to';
-      return [
-        `${t.lhs} = ${quantityText(c.data.lhs)}. Required: ${required} ${quantityText(c.data.rhs)}.`,
-        `Margin: ${c.data.marginPct >= 0 ? '+' : '−'}${quantityText(Math.abs(c.data.marginPct))} %.`,
-      ];
-    }
+    case 'fails':
+      return failsText(c.data, ref);
+  }
+}
+
+/** The clause a withheld item's sentence gives for the failed item it depends on: one for each
+ *  cause, so the not-proved cause never reads as a proof. */
+export function withheldClause(r: WithheldOn): string {
+  const n = itemName(r);
+  switch (r.cause) {
+    case 'not-read':
+      return r.path.length
+        ? `the engine cannot read block ${r.path.join('.')}`
+        : `the engine cannot read the sheet`;
+    case 'not-determined':
+      return r.kind === 'sheet'
+        ? `the statements of ${n} do not determine one design`
+        : `the statements do not determine ${n}`;
+    case 'cannot-evaluate':
+      return `${n} gives no number`;
+    case 'outside-table':
+      return `${n} is outside its table`;
+    case 'no-solution':
+      return `${n} has no solution`;
+    case 'no-crossing':
+      return `the engine found no solution for ${n}`;
+    case 'none-in-range':
+      return `${n} has no solution in its search range`;
+    case 'did-not-settle':
+      return `${n} did not converge`;
+    case 'limit':
+      return `the engine reached its calculation limit`;
+    case 'statement-false':
+      return `the statement on ${n} is false`;
+    case 'fails':
+      return `${n} fails`;
   }
 }
 
 /** What a reader is shown for one item: nothing for an item that is ok; for a failed one, its
- *  cause's text; for a withheld one, one line for each failed item it depends on. */
+ *  cause's text; for a withheld one, one sentence for each failed item it depends on. */
 export function describe(item: Item): FindingText {
   if (item.status === 'ok') return { name: '', lines: [] };
   if (item.status === 'withheld')
     return {
       name: WITHHELD_NAME,
       lines: item.on.map(
-        (r) =>
-          `Depends on ${[...r.path, r.name].filter(Boolean).join('.')}: ${CAUSE_NAMES[r.cause]}.`,
+        (r) => `${upperFirst(itemName(item))} is not calculated, because ${withheldClause(r)}.`,
       ),
     };
-  return textOf(item.cause);
+  return textOf(item.cause, item);
 }
 
 /** What a held point or range end that was not run is shown: its own word, and why. */
-export const notAskedText = (what: 'range end' | 'held point'): FindingText => ({
+export const notAskedText = (what: 'range end' | 'held point', name: string): FindingText => ({
   name: NOT_ASKED_NAME,
-  lines: [`The design point has no design, so the engine did not run this ${what}.`],
+  lines: [
+    what === 'range end'
+      ? `The engine did not run range end ${name}, because the design point has no design.`
+      : `The engine did not run the condition ${name}, because the design point has no design.`,
+  ],
 });

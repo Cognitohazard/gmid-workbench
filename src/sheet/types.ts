@@ -270,6 +270,21 @@ export function constraintProblem(params: readonly SheetVar[], open?: OpenRange)
 export type OpenRange = (p: SheetVar) => { ok: true } | { ok: false; why?: string };
 
 /** Items joined for a sentence: `a`, `a and b`, `a, b and c`. */
+/** The unit of a relation's or a check's two sides: that of the first side that is a single name
+ *  the sheet declares a unit for, a param or an equation. Absent where neither is. */
+export function unitOfSides(
+  doc: Pick<SheetDoc, 'params' | 'equations'>,
+  ...sides: readonly string[]
+): string | undefined {
+  for (const side of sides) {
+    const n = side.trim();
+    const unit =
+      doc.params.find((q) => q.name === n)?.unit ?? doc.equations.find((e) => e.name === n)?.unit;
+    if (unit !== undefined) return unit;
+  }
+  return undefined;
+}
+
 export const andList = (q: readonly string[]): string =>
   q.length > 1 ? `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}` : (q[0] ?? '');
 

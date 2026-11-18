@@ -6,7 +6,8 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { legacyFeasible, legacyPointState } from './derived';
-import { causeFits } from './states';
+import { causeFits, type Item } from './states';
+import { describe as describeItem, standardProblems } from './describe';
 import {
   sweepable,
   type CheckResult,
@@ -60,12 +61,44 @@ function readings(res: SheetResult): { at: string; field: unknown; derived: unkn
   return out;
 }
 
+/** The withheld items of a list whose dependency is not a failed item of the list with that
+ *  item's cause. */
+function danglingIn(items: readonly Item[]): string[] {
+  const key = (r: { kind: string; path: readonly string[]; name: string }): string =>
+    `${r.kind} ${[...r.path, r.name].filter(Boolean).join('.')}`;
+  const failedAt = new Map(
+    items.flatMap((i) => (i.status === 'failed' ? [[key(i), i.cause.kind] as const] : [])),
+  );
+  return items.flatMap((i) =>
+    i.status === 'withheld'
+      ? i.on.filter((o) => failedAt.get(key(o)) !== o.cause).map((o) => `${key(i)} -> ${key(o)}`)
+      : [],
+  );
+}
+
 const expectSame = (res: SheetResult): void => {
   expect(res.items?.[0]).toMatchObject({ kind: 'sheet', path: [] });
   for (const i of res.items ?? [])
     if (i.status === 'failed') expect(causeFits(i.kind, i.cause)).toBe(true);
   for (const r of readings(res))
     expect({ at: r.at, value: r.derived }).toEqual({ at: r.at, value: r.field });
+  // Every item reads to the message standard.
+  const all: Item[] = [...(res.items ?? [])];
+  const walk = (bs: readonly SheetBlockReport[] | undefined): void => {
+    for (const b of bs ?? []) {
+      all.push(...(b.items ?? []));
+      walk(b.blocks);
+    }
+  };
+  walk(res.blocks);
+  for (const e of res.rangeEnds ?? []) all.push(...(e.items ?? []));
+  expect(
+    all.flatMap((i) => describeItem(i).lines.filter((l) => standardProblems(l).length)),
+  ).toEqual([]);
+  // Every withheld item depends on an item of the list that failed, with that item's cause: read
+  // on each full list, where a block's own sheet item finds its parent's items.
+  for (const list of [res.items ?? [], ...(res.rangeEnds ?? []).map((e) => e.items ?? [])])
+    expect(danglingIn(list)).toEqual([]);
 };
 
 describe('today’s fields equal what the items give', () => {
