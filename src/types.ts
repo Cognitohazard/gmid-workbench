@@ -98,7 +98,9 @@ export interface QAWarning {
   /** For a finding that follows from another rather than standing on its own: the path of the
    *  composed block (`bias`, `amp.s1`) whose outputs were withheld — it did not settle, or was
    *  not evaluated — and that this finding traces back to. A reader fixes the block's own
-   *  findings and these go with them. Absent for a finding that stands on its own. */
+   *  findings and these go with them. At the top of a sheet tree it may instead name a solved
+   *  param of that sheet whose search did not land, which withholds what reads it (see the sheet
+   *  result's `withheld`). Absent for a finding that stands on its own. */
   readonly cause?: string;
 }
 

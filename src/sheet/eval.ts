@@ -47,6 +47,7 @@ import {
   DEVICE_NAMES,
   ranged,
   refusedIn,
+  failedParams,
   solveFailedIn,
   stands,
   unfinishedBecause,
@@ -1629,13 +1630,22 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> =>
  * One evaluation pass. `solved` overrides the seeded values of the params the engine solves (the
  * point a search is probing); everything else behaves as if the doc had those values. Every call
  * is one evaluation charged to the tree's budget, children's included.
+ *
+ * `unfound` names the params a failed solve of this node did not find, each with its cause (see
+ * withUnfound): they are not seeded, and enter `withheld` from the start, so whatever reads them —
+ * directly or through other values — is withheld in turn, exactly as a composed block's withheld
+ * outputs are.
  */
-function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResult {
+function evaluateOnce(
+  node: NodeRef,
+  solved?: Readonly<Record<string, number>>,
+  unfound?: ReadonlyMap<string, string>,
+): SheetResult {
   const { doc, table, budget } = node;
   budget.left--;
   budget.counted++;
   const warnings: QAWarning[] = [];
-  const withheld: Withheld = new Map();
+  const withheld: Withheld = new Map(unfound);
   // A name this node could not compute because a block withheld it makes the warning about it a
   // consequence: it carries that block as its cause. Only this node's own names are read so — a
   // child's warnings arrive already attributed (rollUp), in the child's own namespace.
@@ -1659,6 +1669,7 @@ function evaluateOnce(node: NodeRef, solved?: Record<string, number>): SheetResu
   // 1. Seed top-level scalar params (a parent supplies a child's via its block's params). A solved
   //    param takes the value the search is probing in place of its stored one.
   for (const p of doc.params) {
+    if (unfound?.has(p.name)) continue;
     const v = solved?.[p.name] ?? p.value;
     if (Number.isFinite(v)) values[p.name] = v;
   }
@@ -1815,7 +1826,92 @@ interface SolveBudget {
 /** The evaluation, marked infeasible, with the failure as its solve outcome and its message as one
  *  more error warning. */
 function solveFailed(res: SheetResult, failure: SolveFailure, doc?: SheetDoc): SheetResult {
-  const cause = doc && solveCause(doc, res, failure);
+  return failedWith(res, failure, doc && solveCause(doc, res, failure));
+}
+
+/**
+ * A failed solve of the top of a tree, with what it did not find withheld. `probe` is the
+ * evaluation the solve stopped on; its values for the params in `unfound` are trial values, not
+ * answers, and so is everything computed from them. The node is evaluated once more with those
+ * params not seeded (evaluateOnce), so each of them, and everything that reads one directly or
+ * through other values — an equation, a device whose givens read it, a block whose override reads
+ * it, a check — is withheld with its cause (SheetResult.withheld), and a check that reads one is
+ * `na`. What reads none of them is evaluated from the same inputs as in every probe, and reads the
+ * same. The params found before the failure keep the values they landed on (`at`), unless one
+ * landed by reading a param not found, which is then not found either.
+ *
+ * That evaluation runs on an allowance of its own, sharing the tree's record of the children it
+ * has evaluated: a child whose inputs do not change is read back from it, and the solve's own
+ * budget, often spent by now, does not starve a child the failure does not touch.
+ *
+ * Below the top a node's failure is its parent's to handle — the parent withholds the block's
+ * outputs (evalBlocks) — and re-evaluating there would spend the tree's budget on every probe
+ * that met a failing child, so the probe is returned as it is.
+ */
+function withUnfound(
+  node: NodeRef,
+  probe: SheetResult,
+  failure: SolveFailure,
+  unfound: ReadonlyMap<string, string>,
+  at?: Readonly<Record<string, number>>,
+): SheetResult {
+  const cause = solveCause(node.doc, probe, failure);
+  if (node.depth > 0 || !unfound.size) return failedWith(probe, failure, cause);
+  const budget: SolveBudget = {
+    left: node.settings.solveEvaluations,
+    counted: 0,
+    children: node.budget.children,
+  };
+  // A solved param kept is one that landed, but where its relation reads a param not found, it
+  // landed on that param's trial value, and is not found either. Each pass withholds at least one
+  // more param or ends, so this ends.
+  const causes = new Set(unfound.values());
+  const all = new Map(unfound);
+  let evaluated: SheetResult;
+  for (;;) {
+    evaluated = evaluateOnce({ ...node, budget }, at, all);
+    const withheld = new Map(Object.entries(evaluated.withheld ?? {}));
+    const values = evaluated.values;
+    let more = false;
+    for (const p of node.doc.params) {
+      if (all.has(p.name) || !engineSolved(p)) continue;
+      const rel = solvedRelation(p);
+      const c = rel && (causeIn(withheld, rel.lhs, values) ?? causeIn(withheld, rel.rhs, values));
+      if (c !== undefined && causes.has(c)) {
+        all.set(p.name, c);
+        more = true;
+      }
+    }
+    if (!more) break;
+  }
+  const res = failedWith(evaluated, failure, cause);
+  // The findings that follow from the params not found come after the failure they follow from,
+  // so the solve's own message stays the first error a reader meets, as on the probe.
+  const follows = (w: QAWarning): boolean => w.cause !== undefined && causes.has(w.cause);
+  return {
+    ...res,
+    warnings: [...res.warnings.filter((w) => !follows(w)), ...res.warnings.filter(follows)],
+  };
+}
+
+/**
+ * The params a failed solve leaves without an answer, each with the cause its withheld readers
+ * carry (SheetResult.withheld): each param the failure names (`failed`) is its own cause, and
+ * every other param in `unsearched` — not searched, because the solve stopped first — traces to the
+ * first of them.
+ */
+function unfoundOf(
+  failed: readonly string[],
+  unsearched: readonly string[] = [],
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const n of failed) out.set(n, n);
+  if (failed.length) for (const n of unsearched) if (!out.has(n)) out.set(n, failed[0]);
+  return out;
+}
+
+/** solveFailed, with the block the failure traces back to, where it has one, as its cause. */
+function failedWith(res: SheetResult, failure: SolveFailure, cause?: string): SheetResult {
   return {
     ...res,
     feasible: false,
@@ -1831,10 +1927,6 @@ function solveFailed(res: SheetResult, failure: SolveFailure, doc?: SheetDoc): S
     ],
   };
 }
-
-/** The params a failed solve names. */
-const failedParams = (f: SolveFailure): string[] =>
-  f.kind === 'no-solution' ? [f.unknown] : f.kind === 'not-settled' ? f.unknowns : [f.param];
 
 /** The block a failed solve of `doc` traces back to, where it has one: the relation of a param it
  *  names reads, in the evaluation it failed on, a name a composed block withheld (see Withheld).
@@ -1985,8 +2077,14 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
   if (params.length === 0) return res;
   const scope = scalarScope(res.values);
   const held: Record<string, number> = {};
+  // A hold that reads a param this sheet's own failed solve did not find (see withUnfound) has no
+  // value to record, and is no false declaration either: the failure is the finding.
+  const unfound =
+    res.solve && res.solve.kind !== 'settled' ? new Set(failedParams(res.solve)) : undefined;
+  const withheld = unfound && new Map(Object.entries(res.withheld ?? {}));
   let out = res;
   for (const p of params) {
+    if (withheld && unfound?.has(causeIn(withheld, p.hold, res.values) ?? '')) continue;
     const v = evalFinite(p.hold, res.values, scope, NO_WARN, `hold ${p.name}`);
     const falseHere = (message: string): SheetResult =>
       solveFailed(out, { kind: 'declaration-false', param: p.name, message });
@@ -3275,13 +3373,21 @@ function solveNode(node: NodeRef): SheetResult {
     const f = foundOf(p);
     return f && 'range' in f ? { ok: true } : f ? { ok: false, why: f.why } : { ok: false };
   });
+  const solvedNames = doc.params.filter(engineSolved).map((p) => p.name);
+  // Nothing is searched where the declarations cannot be solved as written: every solved param
+  // would read its stored value, which is never an answer.
   if (problem)
-    return solveFailed(evaluateOnce(node), {
-      kind: 'not-settled',
-      unknowns: problem.params,
-      why: 'malformed',
-      message: problem.message,
-    });
+    return withUnfound(
+      node,
+      evaluateOnce(node),
+      {
+        kind: 'not-settled',
+        unknowns: problem.params,
+        why: 'malformed',
+        message: problem.message,
+      },
+      unfoundOf(problem.params, solvedNames),
+    );
   const unknowns = doc.params.filter(engineSolved).map((p) => unknownOf(p, foundOf(p)));
   if (unknowns.length === 0) return evaluateOnce(node);
   // The range each may be searched in: its author's, and the wiring's where that can be read.
@@ -3293,15 +3399,22 @@ function solveNode(node: NodeRef): SheetResult {
       unknowns,
       outside.map((o) => o.u),
     );
-  if (outside.length)
+  if (outside.length) {
+    const refused = outside.map((o) => o.u.p.name);
     return ranged(
-      solveFailed(evaluateOnce(node), {
-        kind: 'not-settled',
-        unknowns: outside.map((o) => o.u.p.name),
-        why: 'malformed',
-        message: outside.map((o) => o.message).join('; '),
-      }),
+      withUnfound(
+        node,
+        evaluateOnce(node),
+        {
+          kind: 'not-settled',
+          unknowns: refused,
+          why: 'malformed',
+          message: outside.map((o) => o.message).join('; '),
+        },
+        unfoundOf(refused, solvedNames),
+      ),
     );
+  }
 
   const at: Record<string, number> = {};
   for (const u of unknowns) at[u.p.name] = (u.lo + u.hi) / 2;
@@ -3310,7 +3423,7 @@ function solveNode(node: NodeRef): SheetResult {
   const plan = unknowns.length === 1 ? [[unknowns[0].p.name]] : solvePlan(doc);
   const slope: Record<string, number> = {};
   let last: SheetResult | undefined;
-  for (const names of plan) {
+  for (const [k, names] of plan.entries()) {
     const set = names.map((n) => byName.get(n) as Unknown);
     let outcome: Outcome;
     if (set.length === 1) {
@@ -3321,7 +3434,18 @@ function solveNode(node: NodeRef): SheetResult {
       }
       outcome = found;
     } else outcome = settle(ctx, set, slope);
-    if (!outcome.ok) return ranged(solveFailed(outcome.res, outcome.failure, doc));
+    // The set that failed is not found, nor is any set after it, which was never searched; the
+    // sets before it landed, and keep where they landed.
+    if (!outcome.ok)
+      return ranged(
+        withUnfound(
+          node,
+          outcome.res,
+          outcome.failure,
+          unfoundOf(failedParams(outcome.failure), plan.slice(k).flat()),
+          at,
+        ),
+      );
     last = outcome.res;
   }
 
@@ -3348,7 +3472,9 @@ function solveNode(node: NodeRef): SheetResult {
           .join('; ') +
         ` — the values it was solved with moved after it landed`,
     };
-    return ranged(solveFailed(final, failure, doc));
+    // Only the params read off their tolerance are not found: every other one verified where it
+    // landed.
+    return ranged(withUnfound(node, final, failure, unfoundOf(off.map((o) => o.u.p.name)), at));
   }
   return ranged({ ...final, solve: { kind: 'settled' } });
 }
@@ -3366,8 +3492,8 @@ function solveNode(node: NodeRef): SheetResult {
  * touches it. `complies` is whether that design, HELD FIXED (see coverage.ts), still works at
  * every range end — conditional on there being a design at all. When the base run did not stand,
  * every end comes back `not-run` rather than carrying a verdict about hardware the engine never
- * landed on — a failed solve leaves its last probe in the result with every
- * sizing reading `ok`, so "the devices sized" is nowhere near enough to have produced an instance.
+ * landed on — a failed solve withholds what it did not find (withUnfound), and "the devices that
+ * do not read it sized" is nowhere near enough to have produced an instance.
  * Check FAILURES do not gate: a center that misses its spec is still a design, and whether it holds
  * across its claimed range is still a real question.
  */
@@ -3380,10 +3506,10 @@ function evaluateWithRange(
   const base = evaluateNode(doc, table, resolveDevice, 0, opts);
   const rangeEnds = doc.operatingRange ?? [];
   if (!stands(base)) {
-    // No `set`: the overrides resolve against the base VALUES, which here are wherever the
-    // failed solve stopped. Reporting the point that would have been asked about from those
-    // is reporting a phantom, the same reason a failed solve's probe is never reported as a
-    // landing.
+    // No `set`: the overrides resolve against the base VALUES, which here hold no design — what a
+    // failed solve did not find is withheld from them, and what is left was never landed on as a
+    // design. Reporting the point that would have been asked about from those is reporting a
+    // phantom, the same reason a failed solve's probe is never reported as a landing.
     return { ...base, rangeEnds: rangeEnds.map((e) => unrunEnd(e.name, 'not-run')) };
   }
   // A design resting on an assumed voltage has no answer at a range end: holding a typed guess

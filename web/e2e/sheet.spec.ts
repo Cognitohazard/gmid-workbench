@@ -2056,3 +2056,62 @@ test('copy results: the pasted numbers carry the verdict and what they rest on',
   expect(values.length).toBeGreaterThan(5);
   expect(values.every((l) => l.split('\t').length === 2)).toBe(true);
 });
+
+test('design sheet: a solved param whose search fails shows no number, nor does what reads it', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/');
+  await loadDemo(page);
+
+  // `x` is searched in [0, 1] for 2x + 1 to reach 50: there is no crossing. `y` and `z` read it,
+  // and so does the check `zcap`; `u` and the check `upos` read neither.
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'failed-search.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        title: 'Failed search',
+        polarity: 'n',
+        formatVersion: 2,
+        params: [
+          { name: 'L', value: 5e-7 },
+          { name: 'Ib', value: 1e-5 },
+          { name: 'goal', value: 50 },
+          { name: 'x', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'y', rhs: 'goal' } },
+        ],
+        givens: { L: 'L', id: 'Ib', gm_id: '10', vds: '0.9' },
+        nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+        levels: { out: '0.9' },
+        ports: ['in'],
+        equations: [
+          { name: 'y', expr: '2*x + 1' },
+          { name: 'z', expr: 'y*3' },
+          { name: 'u', expr: 'Ib*2' },
+        ],
+        checks: [
+          { id: 'zcap', kind: 'spec', lhs: 'z', op: '<=', rhs: '1000' },
+          { id: 'upos', kind: 'spec', lhs: 'u', op: '>=', rhs: '0' },
+        ],
+      }),
+    ),
+  });
+
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  await pickSheet(page, 'Failed search');
+  const sheet = page.locator('.sheet').first();
+  // The check that reads nothing withheld is evaluated; the one that reads z is neither pass nor
+  // fail.
+  await expect(sheet.locator('.srules tr.st-pass')).toHaveCount(1);
+  await expect(sheet.locator('.srules tr.st-fail')).toHaveCount(0);
+  await expect(sheet.locator('.srules tr.st-na')).toHaveCount(1);
+  // The solved field shows no number, and neither do the equations that read it.
+  await expect(sheet.locator('[data-param="x"] input.num')).toHaveValue('—');
+  const rows = sheet.locator('.srows .srow .sval');
+  await expect(rows).toHaveText(['—', '—', /^\d/]);
+
+  expect(errors).toEqual([]);
+});

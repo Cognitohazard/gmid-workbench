@@ -2023,9 +2023,14 @@ describe('the range a solved wire is searched in is the circuit’s own where th
       "circuit can put the wire at. Move min/max inside the wiring's range";
     expect(r.feasible).toBe(false);
     expect(r.solve).toEqual({ kind: 'not-settled', unknowns: ['V_x'], why: 'malformed', message });
-    expect(errors(r)).toEqual([message]);
+    // The blocks whose overrides read V_x are not evaluated, and say so as following from it.
+    expect(errors(r)[0]).toBe(message);
+    expect(r.warnings.filter((w) => w.severity === 'error' && w.cause === undefined)).toHaveLength(
+      1,
+    );
+    expect(r.withheld?.V_x).toBe('V_x');
     expect(notes(r)).toEqual([]);
-    expect(r.point).toMatchObject({ sized: false, state: 'no-answer' });
+    expect(r.point).toMatchObject({ sized: false, state: 'no-answer', error: message });
     // Touching it at one point leaves nothing of the author's range to search first: the search
     // runs over the wiring's range, and the landing is noted as outside the author's.
     const touching = runSheet(follower([1.8, 2.5]), tw);

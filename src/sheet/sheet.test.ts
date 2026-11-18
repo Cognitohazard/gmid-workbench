@@ -3879,7 +3879,11 @@ describe('solved params — what the search guarantees', () => {
       checks: [],
     };
     const res = evaluateSheet(doc, dev);
-    expect(res.values.A).toBe(0.5);
+    // A did not verify, so it has no answer to show: withheld, as its own cause. I verified where
+    // it landed, and keeps that value.
+    expect(res.values.A).toBeUndefined();
+    expect(res.withheld?.A).toBe('A');
+    expect(res.values.I).toBeCloseTo(2e-5, 9);
     expect(res.feasible).toBe(false);
     expect(res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message)).toEqual([
       expect.stringMatching(
@@ -4315,13 +4319,19 @@ describe('a solve reads only a child whose own solve landed', () => {
     };
     const res = evaluateSheet(level(0), dev);
     expect(res.feasible).toBe(false);
+    // The levels below each ran out inside the top's probes; the top's own X was not found, so the
+    // block that reads it is not evaluated in the result, and what its probes said of it is not
+    // reported — what is left is the top's failure, which says the budget.
     const solve = res.warnings.filter((w) => w.rule === 'sheet-solve').map((w) => w.message);
-    expect(solve).toHaveLength(4);
+    expect(solve).toHaveLength(1);
     for (const m of solve) {
       expect(m).toMatch(/shared evaluation budget \(\d+ evaluations\) ran out/);
       expect(m).toMatch(/It was not shown to be unsolvable$/);
       expect(m).not.toMatch(/found no solution|could not be followed/);
     }
+    expect(res.solve).toMatchObject({ kind: 'not-settled', why: 'budget' });
+    expect(res.withheld).toMatchObject({ X: 'X', c0__X: 'X' });
+    expect(res.blocks?.[0]).toMatchObject({ name: 'c0', provides: {}, checks: [] });
     expect(heldOutcome(res).state).toBe('no-answer');
   });
 
@@ -4955,7 +4965,8 @@ describe('limitingCheck — the check closest to breaking', () => {
     };
     const res = evaluateSheet(doc, dev);
     expect(res.rangeEnds![0].error).toMatch(/does not change sign/);
-    expect(res.rangeEnds![0].checks[0].marginPct).toBeLessThan(res.checks[0].marginPct);
+    // The check reads x, which the end's search did not find: it is not evaluated there.
+    expect(res.rangeEnds![0].checks[0].status).toBe('na');
     expect(limitingCheck(res)?.id).toBe('ceiling');
     expect(bindingCheck(res)).toBeUndefined();
     expect(rangeEndCheck(res)).toBeUndefined();
