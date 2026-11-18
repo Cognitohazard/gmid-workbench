@@ -16,6 +16,7 @@
     torn,
     constrained as isConstrained,
     engineSolved,
+    withheldIn,
     bindingCheck,
     limitingCheck,
     rangeEndCheck,
@@ -1336,20 +1337,16 @@
   const childFails = (c: SheetBlockReport | undefined): CheckResult[] =>
     c && !c.feasible ? c.checks.filter((r) => r.kind !== 'advisory' && r.status === 'fail') : [];
 
-  // A design constraint whose search never landed leaves `values[name]` at whatever its last probe
-  // tried, not a solved node — so the field must not present it as the value the design used.
-  // The solver marks that failure as an error warning naming the param (solveFailed in the core's
-  // eval).
-  const constraintFailed = (p: SheetVar): boolean =>
-    isConstrained(p) &&
-    result !== undefined &&
-    !result.feasible &&
-    result.warnings.some((w) => w.message.includes(`constrained param "${p.name}"`));
+  // A solved param whose search did not land has no value: the core withholds it, and everything
+  // that reads it, from the result (SheetResult.withheld). The field shows none, as a value
+  // withheld because of a block does — decided from the result, never from a message's wording.
+  const notFound = (p: SheetVar): boolean => engineSolved(p) && withheldIn(result, p.name);
   // The read-only field's tooltip: which mechanism owns the number, or that there is none.
   const solvedHelp = (p: SheetVar): string | undefined => {
+    if (notFound(p)) return CONTROL_HELP.constraintNotMet;
     if (torn(p)) return CONTROL_HELP.solvedParam;
     if (!isConstrained(p)) return undefined;
-    return constraintFailed(p) ? CONTROL_HELP.constraintNotMet : CONTROL_HELP.constrainedParam;
+    return CONTROL_HELP.constrainedParam;
   };
 
   // Params group by role when ANY carries one (spec = the requirement, choice = the design knobs);
@@ -1454,7 +1451,7 @@
       readonly={engineSolved(p)}
       tabindex={engineSolved(p) ? -1 : undefined}
       title={solvedHelp(p)}
-      value={constraintFailed(p)
+      value={notFound(p)
         ? '—'
         : formatEng(engineSolved(p) ? (result?.values[p.name] ?? p.value) : p.value)}
       onchange={(e) => commitEng(e.currentTarget, p.value, (v) => v != null && setParam(p.name, v))}

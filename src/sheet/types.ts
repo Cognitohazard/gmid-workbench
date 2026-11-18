@@ -1480,7 +1480,12 @@ export interface SheetResult {
   ranges?: SolveRange[];
   /** What this sheet could not compute because a composed block's outputs were withheld, or its
    *  own device did not size for that reason: each name, with the path of the block it traces back
-   *  to (see QAWarning.cause). Absent where nothing was. */
+   *  to (see QAWarning.cause). At the top of a tree, a solve of the sheet's own that failed adds
+   *  each solved param it did not find, and everything that reads one, directly or through other
+   *  values: each with the name of the solved param it traces back to (a param the failure names
+   *  is its own cause). Such a name holds no number in `values`; a device whose givens read one is
+   *  not sized, a block whose override reads one is not evaluated, and a check that reads one is
+   *  `na`. Absent where nothing was. */
   withheld?: Record<string, string>;
 }
 
@@ -1601,6 +1606,31 @@ export type NotSettledWhy =
 
 const isSolveFailure = (o: SolveOutcome | undefined): o is SolveFailure =>
   o !== undefined && o.kind !== 'settled';
+
+/** The params a failed solve names. */
+export const failedParams = (f: SolveFailure): string[] =>
+  f.kind === 'no-solution' ? [f.unknown] : f.kind === 'not-settled' ? f.unknowns : [f.param];
+
+/** The solved params of this sheet that its own failed solve did not find, which its withheld
+ *  record names as causes (see SheetResult.withheld). Empty where its solve did not fail. */
+export function unfoundIn(res: {
+  solve?: SolveOutcome;
+  withheld?: Readonly<Record<string, string>>;
+}): Set<string> {
+  if (!isSolveFailure(res.solve) || !res.withheld) return new Set();
+  const named = new Set(failedParams(res.solve));
+  return new Set(Object.values(res.withheld).filter((c) => named.has(c)));
+}
+
+/** Whether `name` holds no number in this evaluation because it was withheld (see
+ *  SheetResult.withheld): a solved param whose search did not land, or a value that reads one or a
+ *  composed block's withheld output. Read from the structured result, never from a message — a
+ *  display that blanks a field decides it here. */
+export const withheldIn = (
+  res: { withheld?: Readonly<Record<string, string>> } | undefined,
+  name: string,
+): boolean =>
+  res?.withheld !== undefined && Object.prototype.hasOwnProperty.call(res.withheld, name);
 
 /** Whether a solve failed anywhere in one evaluation's tree: its own, or a block's at any depth. */
 export function solveFailedIn(res: {
@@ -1740,24 +1770,48 @@ export function withoutRestated(
 /**
  * One line over the findings that follow from others (QAWarning.cause): how many, and the blocks
  * they trace back to, so a reader starts from those blocks and a display can fold the rest under
- * the line. Undefined where nothing follows from anything.
+ * the line. A cause in `unfound` is not a block but a solved param of the sheet whose search did
+ * not land (see SheetResult.withheld), and is counted apart under its own words. Undefined where
+ * nothing follows from anything.
  */
-export function followOnSummary(warnings: readonly QAWarning[]): QAWarning | undefined {
-  const by = new Map<string, number>();
-  for (const w of warnings) if (w.cause !== undefined) by.set(w.cause, (by.get(w.cause) ?? 0) + 1);
-  if (!by.size) return undefined;
-  let n = 0;
-  for (const k of by.values()) n += k;
-  const blocks = [...by].map(([cause, k]) => `"${cause}" (${k})`).join(', ');
-  return {
-    rule: 'sheet-follow-on',
-    severity: 'info',
-    message:
-      `${n} ${n > 1 ? 'findings follow' : 'finding follows'} from ${by.size > 1 ? 'blocks' : 'a block'} ` +
-      `whose outputs were withheld — ${blocks}: fix what ${by.size > 1 ? 'those blocks report' : 'that block reports'} ` +
-      `and ${n > 1 ? 'these go' : 'this goes'} with it`,
-    location: '',
+export function followOnSummary(
+  warnings: readonly QAWarning[],
+  unfound: ReadonlySet<string> = new Set(),
+): QAWarning | undefined {
+  const byBlock = new Map<string, number>();
+  const byParam = new Map<string, number>();
+  for (const w of warnings) {
+    if (w.cause === undefined) continue;
+    const by = unfound.has(w.cause) ? byParam : byBlock;
+    by.set(w.cause, (by.get(w.cause) ?? 0) + 1);
+  }
+  if (!byBlock.size && !byParam.size) return undefined;
+  const count = (by: ReadonlyMap<string, number>): number => {
+    let n = 0;
+    for (const k of by.values()) n += k;
+    return n;
   };
+  const list = (by: ReadonlyMap<string, number>): string =>
+    [...by].map(([cause, k]) => `"${cause}" (${k})`).join(', ');
+  const parts: string[] = [];
+  if (byBlock.size) {
+    const n = count(byBlock);
+    parts.push(
+      `${n} ${n > 1 ? 'findings follow' : 'finding follows'} from ${byBlock.size > 1 ? 'blocks' : 'a block'} ` +
+        `whose outputs were withheld — ${list(byBlock)}: fix what ${byBlock.size > 1 ? 'those blocks report' : 'that block reports'} ` +
+        `and ${n > 1 ? 'these go' : 'this goes'} with it`,
+    );
+  }
+  if (byParam.size) {
+    const n = count(byParam);
+    parts.push(
+      `${n} ${n > 1 ? 'findings follow' : 'finding follows'} from ` +
+        `${byParam.size > 1 ? 'solved params whose searches' : 'a solved param whose search'} ` +
+        `did not land — ${list(byParam)}: what reads ${byParam.size > 1 ? 'them' : 'it'} is withheld ` +
+        `until the search lands`,
+    );
+  }
+  return { rule: 'sheet-follow-on', severity: 'info', message: parts.join('; '), location: '' };
 }
 
 /**
@@ -1786,7 +1840,7 @@ export function withValidation(pre: readonly QAWarning[], res: SheetResult): She
   const warnings = [...withoutRestated(pre, res.warnings), ...res.warnings];
   // Ahead of everything: where most of a long list follows from a few blocks, that is the first
   // thing to read.
-  const summary = followOnSummary(warnings);
+  const summary = followOnSummary(warnings, unfoundIn(res));
   return {
     ...res,
     warnings: summary ? [summary, ...warnings] : warnings,

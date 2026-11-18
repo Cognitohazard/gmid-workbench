@@ -323,6 +323,11 @@ needs to know:
   that follows from a block whose outputs were withheld carries that block's path as `cause`, and a
   `sheet-follow-on` info line leads the list. A finding that validation and evaluation state in the
   same words is reported once.
+- **A failed search leaves no number.** When a solve of the top-level sheet fails, the solved
+  params it did not find, and everything that reads them, are absent from `values` and listed in
+  `withheld` with the param each traces back to; a check that reads one is `na`. A script that read
+  a failed search's last trial value from `values` now reads `undefined`. What the failure does not
+  touch is evaluated as before.
 - **A lookup returns what it read and where.** `lookup`, `lookupByQuantity` and `lookupByGmId`
   return `{ values, at, clamped, warnings }` instead of the bare quantities: read `r.values.gm_id`
   where a script read `r.gm_id` (which is now `undefined`). The point must name the table's axes

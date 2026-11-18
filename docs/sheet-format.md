@@ -1489,6 +1489,26 @@ failure carries its `message`, the same words as the error. `solve` is absent on
 to solve. Beside it, `ranges` lists each of the sheet's own solved parameters with the range it was
 searched in and where that came from (below).
 
+A failed solve of the top-level sheet leaves no number for what it did not find. Each solved
+parameter the failure names, each one after it that was never searched because the solve stopped
+first, and everything that reads one of them — directly or through other values — is absent from
+`values` and listed in `withheld`, the same record that carries a composed block's withheld
+outputs: a parameter the failure names is its own cause, and everything else names the parameter
+it traces back to. A device whose givens read one is not sized, a block whose override reads one is
+not evaluated, and a check that reads one is `na`, neither pass nor fail. A finding that follows
+from one carries it as `cause`, and the `sheet-follow-on` line counts those findings under it. The
+parameters found before the failure, and what reads only them, keep their values; what reads none
+of the parameters not found is evaluated as it would be without the search. Which parameters are
+not found, by outcome: `no-solution` — the parameter searched; `not-settled` with `malformed` —
+every solved parameter, since nothing was searched; any other `not-settled` — the parameters it
+names (the whole set for `member` and `sweeps`, only those read out of tolerance for
+`verification`); for each of these, also the parameters after them in the order the solve takes,
+and any solved parameter whose relation reads one not found, since it landed on that one's trial
+value.
+`declaration-false` withholds nothing: no search failed, and every value was found; a `hold` that
+reads a parameter not found records no held value. A failed solve inside a block is handled by its
+parent, which withholds the block's outputs.
+
 What a failure means for the point depends on where the range came from:
 
 | outcome | where the design is sized | where the design is held (a range end, another process condition) |
@@ -1777,10 +1797,9 @@ result (validation refuses them).
     being evaluated.
 - `not-run` — the question was never asked, because the base run produced no design to hold:
   it raised an error-severity warning — givens that did not size, a solve that never landed. The
-  distinction from a failure is load-bearing rather than cosmetic: a solve that fails leaves its
-  last probe behind in the result with every device's
-  sizing still reading `ok`, so a verdict computed from that point would describe hardware the
-  engine never landed on.
+  distinction from a failure is load-bearing rather than cosmetic: a solve that fails found no
+  design, and what it did not find is withheld from the result (see the solve outcomes above), so
+  there is no hardware to hold.
 
 A check FAILURE at the centre does not stop the range ends being run — a design that misses a
 spec is still a design, and whether it holds across its claimed range is still a real question.
