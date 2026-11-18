@@ -1931,6 +1931,27 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
   it('is null when nothing was measured anywhere', () => {
     expect(aggregateConditionRuns([refusedAt('tt', 'not-run', 1, 'sized')]).worst).toBeNull();
   });
+
+  it('reports a hard check on its limit beside the tightest margin it skips', () => {
+    // The slow corner's own operating point sits exactly on its limit (a snapped 0). `worst`
+    // skips a zero, so it names a larger margin elsewhere; the check on its limit is reported
+    // beside it, with the point where it sits there.
+    const agg = aggregateConditionRuns([
+      ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.3)]),
+      ran('ss', 'held', 'complies', 0, [end('lo', 'complies', 0.25)]),
+    ]);
+    expect(agg.worst).toEqual({ id: 'e', marginPct: 0.25, key: key('ss'), rangeEnd: 'lo' });
+    expect(agg.onLimit).toEqual([{ id: 'r', points: [{ key: key('ss') }] }]);
+  });
+
+  it('reports nothing on its limit when no check sits there', () => {
+    const agg = aggregateConditionRuns([
+      ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.05)]),
+      ran('ss', 'held', 'complies', 0.12, [end('lo', 'does-not-comply', -0.1)]),
+    ]);
+    expect(agg.worst).toEqual({ id: 'e', marginPct: -0.1, key: key('ss'), rangeEnd: 'lo' });
+    expect(agg.onLimit).toEqual([]);
+  });
 });
 
 describe('worstPointByCheck — where each check is tightest', () => {

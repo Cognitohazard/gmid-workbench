@@ -273,6 +273,12 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await expect(sp.locator('[data-worst-at="gain-spec"]')).toContainText(
     /^worst -\d+% at ss@-40, its own operating point$/,
   );
+  // The tightest margin over the set names its check; no hard check sits exactly on its limit
+  // here, so the line names none.
+  await expect(sp.locator('[data-worst]')).toContainText(
+    /^tightest hard check over every point measured: \S+\s+-\d+% at /,
+  );
+  await expect(sp.locator('[data-worst] [data-on-limit]')).toHaveCount(0);
   await sp.locator('.srules').screenshot({ path: `${SCREENS}/corner-worst-per-check.png` });
 
   // A child bound to a device that is not characterized at every condition: that condition is
