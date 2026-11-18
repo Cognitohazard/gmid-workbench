@@ -600,6 +600,20 @@
    *  operating point. */
   const pointName = (key: ConditionKey, rangeEnd: string | undefined): string =>
     `${condLabel(key)}, ${rangeEnd === undefined ? 'its own operating point' : endName(rangeEnd)}`;
+  /** The hard checks sitting exactly on their limit, each with every point where it sits there.
+   *  The tightest-margin line skips a zero, so these are named beside it. */
+  const onLimitText = $derived(
+    agg.onLimit
+      .map((c) => `${c.id} at ${c.points.map((p) => pointName(p.key, p.rangeEnd)).join('; ')}`)
+      .join(' · '),
+  );
+  /** Over which checks the tightest margin was taken: with a check on its limit and every other
+   *  margin positive, it is the tightest only among the checks off their limit. */
+  const worstScope = $derived(
+    agg.onLimit.length && (agg.worst?.marginPct ?? 0) > 0
+      ? 'off its limit over every point measured'
+      : 'over every point measured',
+  );
   /** A check id as shown: one qualified by a range end (`cm-lo@sr-spec`) names the end. */
   const checkIdText = (id: string): string => {
     const at = id.indexOf(RANGE_END_SEP);
@@ -1896,10 +1910,15 @@
       <!-- The tightest reading over the points that were MEASURED, labelled as such and naming
          where it was read: it is a display fold, and it must never be read as a margin over
          points that were not run or returned no answer. -->
-      {#if agg.worst}
+      {#if agg.worst || agg.onLimit.length}
         <p class="scap" title={CONTROL_HELP.compliance} data-worst>
-          tightest hard check over every point measured: {agg.worst.id}
-          {pct(agg.worst.marginPct)} at {pointName(agg.worst.key, agg.worst.rangeEnd)}
+          {#if agg.worst}
+            tightest hard check {worstScope}: {agg.worst.id}
+            {pct(agg.worst.marginPct)} at {pointName(agg.worst.key, agg.worst.rangeEnd)}
+          {/if}
+          {#if agg.onLimit.length}
+            <span data-on-limit>{agg.worst ? '· ' : ''}on its limit: {onLimitText}</span>
+          {/if}
         </p>
       {/if}
       <table class="scorntab">

@@ -73,6 +73,7 @@ import {
   withoutRange,
   validateSheet,
 } from '../sheet';
+import { isHardCheck } from '../sheet/types';
 import {
   assumedLevelRefusal,
   holdHardware,
@@ -1076,6 +1077,16 @@ export interface ConditionAggregate {
     readonly key: ConditionKey;
     readonly rangeEnd?: string;
   } | null;
+  /** The hard checks that sit exactly on their limit (a relative margin of exactly 0, which the
+   *  near-zero snap gives any margin within one part in 1e5 of the limit) at some measured point,
+   *  each with every such point, in run order and the centre before the range ends. `worst`
+   *  leaves these out (see `measurable`): it cannot tell a check that is on its limit by
+   *  construction from one the design really sits on, so they are reported here instead, and a
+   *  reader is never told that a larger margin elsewhere is the tightest without seeing them. */
+  readonly onLimit: readonly {
+    readonly id: string;
+    readonly points: readonly { readonly key: ConditionKey; readonly rangeEnd?: string }[];
+  }[];
 }
 
 /**
@@ -1116,19 +1127,31 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
       compliance.total++;
     }
   let worst: ConditionAggregate['worst'] = null;
+  const onLimit = new Map<string, { key: ConditionKey; rangeEnd?: string }[]>();
   for (const { run, point, at } of measuredPoints(unique)) {
+    const where = {
+      key: run.key,
+      ...(point.rangeEnd === undefined ? {} : { rangeEnd: point.rangeEnd }),
+    };
+    for (const [id, c] of treeCheckResults({ checks: at.checks, blocks: at.blocks }))
+      if (isHardCheck(c.kind) && c.marginPct === 0) {
+        const points = onLimit.get(id);
+        if (points) points.push(where);
+        else onLimit.set(id, [where]);
+      }
     const limiting = limitingCheck(at);
     if (!limiting) continue;
     const marginPct = clampMargin(limiting.marginPct);
     if (worst === null || marginPct < worst.marginPct)
-      worst = {
-        id: limiting.id,
-        marginPct,
-        key: run.key,
-        ...(point.rangeEnd === undefined ? {} : { rangeEnd: point.rangeEnd }),
-      };
+      worst = { id: limiting.id, marginPct, ...where };
   }
-  return { feasibility, ...(sized ? { base: sized.key } : {}), compliance, worst };
+  return {
+    feasibility,
+    ...(sized ? { base: sized.key } : {}),
+    compliance,
+    worst,
+    onLimit: [...onLimit].map(([id, points]) => ({ id, points })),
+  };
 }
 
 /** One run per condition: the denominator of every fold is unique conditions, so a caller that
