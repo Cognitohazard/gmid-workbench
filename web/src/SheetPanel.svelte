@@ -1003,10 +1003,16 @@
   /** The swept parameter's unit — the caption's only use of it. */
   const sweptUnit = $derived(swept?.unit ?? '');
 
-  // What the sweep draws: every check's margin (''), or one of the sheet's equations, by name.
+  // What the sweep draws: every check's margin (''), or one named result of the sheet, by name —
+  // the names the sweep carries a curve for (its equations, solved values and what its blocks
+  // provide), or the sheet's equations before a sweep has answered.
   let plotPick = $state('');
-  const plotted = $derived(cfg.equations.some((e) => e.name === plotPick) ? plotPick : '');
-  /** The plotted equation's curve on the sweep shown. */
+  const plotNames = $derived(
+    swept ? swept.values.map((c) => c.name) : cfg.equations.map((e) => e.name),
+  );
+  // A pick holds while a new sweep is on its way, so the map asked for alongside it keeps it too.
+  const plotted = $derived(!swept || plotNames.includes(plotPick) ? plotPick : '');
+  /** The plotted result's curve on the sweep shown. */
   const curve = $derived(plotted ? swept?.values.find((c) => c.name === plotted) : undefined);
 
   // ── 2-D feasibility map: a second (×) param turns the 1-D margin chart into a design-plane
@@ -2047,7 +2053,7 @@
           </select>
         </label>
       {/if}
-      {#if active && cfg.equations.length}
+      {#if active && plotNames.length}
         <label class="swplot" title={CONTROL_HELP.sweepPlot}>
           plot
           <select
@@ -2056,7 +2062,7 @@
             onchange={(e) => (plotPick = (e.currentTarget as HTMLSelectElement).value)}
           >
             <option value="">margins</option>
-            {#each cfg.equations as eq (eq.name)}<option value={eq.name}>{eq.name}</option>{/each}
+            {#each plotNames as name (name)}<option value={name}>{name}</option>{/each}
           </select>
         </label>
       {/if}
@@ -2450,6 +2456,11 @@
     {/if}
 
     {#if twoD && swept2 && swept2.x.length}
+      {#if swept2.valueNotNamed}
+        <div class="scap" data-map-not-named={swept2.valueNotNamed.name}>
+          {swept2.valueNotNamed.message}
+        </div>
+      {/if}
       {#if swept2.value}
         <div class="scap" data-map-value={swept2.value.name}>
           {#if mapSpan}

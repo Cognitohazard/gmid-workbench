@@ -35,6 +35,7 @@ import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
 import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
+import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
 
 export * from './types';
@@ -107,10 +108,14 @@ export interface SweepOptions extends RunOptions {
 
 /** What a two-parameter sweep takes besides a run's options. */
 export interface Sweep2Options extends RunOptions {
-  /** One of the sheet's own equations to keep at every cell (SheetSweep2.value). One only: the
-   *  map holds n² cells, and a result kept for each would hold n² values per equation. */
+  /** One named result of the sheet (namedResults) to keep at every cell (SheetSweep2.value). One
+   *  only: the map holds n² cells, and a result kept for each would hold n² values per result. */
   readonly value?: string;
 }
+
+/** A result with no values: what the names a sheet always has (its equations and solved values)
+ *  are read against before any sample is evaluated. */
+const NO_VALUES: SheetResult = { values: {}, checks: [], feasible: false, warnings: [] };
 
 /** A named result at one evaluated sample, or null where the sample does not determine it (see
  *  SweepCurve): a value the evaluation withheld, or one that is not finite. */
@@ -388,11 +393,15 @@ export function sweepOf(
   const feasible: boolean[] = [];
   const stood: boolean[] = [];
   const beyond: OutsideTable[][] = [];
-  const values: SweepCurve[] = (r.doc.equations ?? []).map((e) => ({
-    name: e.name,
-    unit: e.unit ?? '',
-    y: [],
-  }));
+  // One curve per named result (namedResults): the sheet's equations and solved values from the
+  // start, and each value a block provides from the first sample that holds it, a gap before.
+  const curves = new Map<string, SweepCurve>();
+  const addNamed = (res: SheetResult, filled: number): void => {
+    for (const { name, unit } of namedResults(r.doc, res))
+      if (!curves.has(name))
+        curves.set(name, { name, unit: unit ?? '', y: Array<number | null>(filled).fill(null) });
+  };
+  addNamed(NO_VALUES, 0);
   /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry. */
   const failingIn = (byPath: ReadonlyMap<string, CheckResult>): string[] =>
     checks.flatMap((c) => {
@@ -408,7 +417,8 @@ export function sweepOf(
     const { res, feasible: ok, stands: done } = sample(withParams(r.doc, { [param]: t }));
     feasible.push(!blocked && ok);
     beyond.push(res ? outsideIn(res) : []);
-    for (const c of values) c.y.push(sampleValue(res, c.name));
+    if (res) addNamed(res, i);
+    for (const c of curves.values()) c.y.push(sampleValue(res, c.name));
     const byPath = new Map<string, CheckResult>();
     if (res) indexTreeResults(res.checks, res.blocks, '', byPath);
     if (probe) failedAt.push(failingIn(byPath));
@@ -434,7 +444,7 @@ export function sweepOf(
     feasible,
     stands: stood,
     outside: beyond,
-    values,
+    values: [...curves.values()],
   };
   if (!probe) return out;
   const at = (t: number): { ok: boolean; failing: string[]; outside: OutsideTable[] } => {
@@ -605,9 +615,10 @@ export function sweepSheet2(
   const feasible: boolean[][] = [];
   const binding: (string | null)[][] = [];
   const beyond: OutsideTable[][][] = [];
-  const eq =
-    opts.value === undefined ? undefined : r.doc.equations?.find((e) => e.name === opts.value);
+  const asked = opts.value;
   const z: (number | null)[][] = [];
+  /** The asked name's entry among a cell's named results, from the first cell that names it. */
+  let named: { name: string; unit?: string } | undefined;
 
   for (let yi = 0; yi < pts; yi++) {
     const frow: boolean[] = [];
@@ -624,12 +635,15 @@ export function sweepSheet2(
       // structural error), which bindingCheck reports as "no check to name".
       brow.push(res.feasible ? null : (bindingCheck(res)?.id ?? null));
       orow.push(outsideIn(res));
-      if (eq) zrow.push(sampleValue(res, eq.name));
+      if (asked !== undefined) {
+        named ??= namedResults(r.doc, res).find((n) => n.name === asked);
+        zrow.push(sampleValue(res, asked));
+      }
     }
     feasible.push(frow);
     binding.push(brow);
     beyond.push(orow);
-    if (eq) z.push(zrow);
+    if (asked !== undefined) z.push(zrow);
   }
   return {
     ...empty,
@@ -638,7 +652,18 @@ export function sweepSheet2(
     feasible,
     binding,
     outside: beyond,
-    ...(eq ? { value: { name: eq.name, unit: eq.unit ?? '', z } } : {}),
+    ...(asked === undefined
+      ? {}
+      : named
+        ? { value: { name: asked, unit: named.unit ?? '', z } }
+        : {
+            valueNotNamed: {
+              name: asked,
+              message:
+                `${asked} is not a named result of this sheet. A named result is one of its ` +
+                `equations, a value it solves for, or a value one of its blocks provides.`,
+            },
+          }),
   };
 }
 

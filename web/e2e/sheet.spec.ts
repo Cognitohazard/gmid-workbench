@@ -2321,6 +2321,18 @@ test('design sheet: a sweep plots a named result of the sheet, as a curve and ac
   await expect(sp.locator('[data-map-value]')).toHaveCount(0);
   await expect(sp.locator('.scap').first()).toContainText('feasibility');
 
+  // A value the engine solves for is a named result too: the 5T OTA's tail voltage is a curve.
+  await sp.locator('.swsel2 select').selectOption('');
+  await pickSheet(sp, '5T OTA');
+  await sp.locator('.swsel select').selectOption('I_tail');
+  // The list follows the sweep's own names, so it carries the tail voltage once the sweep answers.
+  await expect(sp.locator('[data-plot] option[value="V_tail"]')).toHaveCount(1, {
+    timeout: 30_000,
+  });
+  await sp.locator('[data-plot]').selectOption('V_tail');
+  await expect(sp.locator('[data-plot-curve="V_tail"]')).toContainText(/^The curve is V_tail/);
+  await expect(sp.locator('.pchart canvas')).toBeVisible();
+
   expect(errors).toEqual([]);
 });
 
