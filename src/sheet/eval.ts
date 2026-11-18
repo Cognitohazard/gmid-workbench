@@ -49,6 +49,7 @@ import {
   refusedIn,
   failedParams,
   solveFailedIn,
+  unfoundIn,
   stands,
   unfinishedBecause,
   withParams,
@@ -1177,7 +1178,15 @@ function applyBlockParams(
  *  the child that the child's own record names for it (SheetResult.withheld), or the child itself. */
 function childCause(name: string, res: SheetResult, key: string): string {
   const inner = res.withheld?.[key];
-  return inner === undefined ? name : childPath(name, inner);
+  return inner === undefined || unfoundIn(res).has(inner) ? name : childPath(name, inner);
+}
+
+/** A child's warning as its parent lists it (prefixBlockWarning). One that follows from the child's
+ *  own failed search — its cause is a param of the child that search did not find (see
+ *  SheetResult.withheld) — follows, in the parent's terms, from the block itself. */
+function childWarning(name: string, res: SheetResult, w: QAWarning): QAWarning {
+  if (w.cause === undefined || !unfoundIn(res).has(w.cause)) return prefixBlockWarning(name, w);
+  return { ...prefixBlockWarning(name, { ...w, cause: undefined }), cause: name };
 }
 
 /**
@@ -1307,7 +1316,7 @@ function evalBlocks(
 
     // Roll up child warnings, attributed to the block (so a child error fails the
     // parent's closed feasibility, and the message points at the offending block).
-    for (const w of res.warnings) rollUp(prefixBlockWarning(block.name, w));
+    for (const w of res.warnings) rollUp(childWarning(block.name, res, w));
 
     // Expose the child's declared `provides` as flat parent scalars — but ONLY when the child's
     // own solve landed. After a solve that found nothing or did not settle, its numbers are
@@ -1829,63 +1838,67 @@ function solveFailed(res: SheetResult, failure: SolveFailure, doc?: SheetDoc): S
   return failedWith(res, failure, doc && solveCause(doc, res, failure));
 }
 
+/** One failure of a node's solve, with the evaluation it stopped on (see withUnfound). */
+interface Failed {
+  failure: SolveFailure;
+  probe: SheetResult;
+}
+
 /**
- * A failed solve of the top of a tree, with what it did not find withheld. `probe` is the
- * evaluation the solve stopped on; its values for the params in `unfound` are trial values, not
- * answers, and so is everything computed from them. The node is evaluated once more with those
- * params not seeded (evaluateOnce), so each of them, and everything that reads one directly or
- * through other values — an equation, a device whose givens read it, a block whose override reads
- * it, a check — is withheld with its cause (SheetResult.withheld), and a check that reads one is
- * `na`. What reads none of them is evaluated from the same inputs as in every probe, and reads the
- * same. The params found before the failure keep the values they landed on (`at`), unless one
- * landed by reading a param not found, which is then not found either.
+ * A failed solve, with what it did not find withheld. Each of `failed` is a failure the solve
+ * raised, with the evaluation it stopped on; its values for the params in `unfound` are trial
+ * values, not answers, and so is everything computed from them. The node is evaluated once more
+ * with those params not seeded (evaluateOnce), so each of them, and everything that reads one
+ * directly or through other values — an equation, a device whose givens read it, a block whose
+ * override reads it, a check — is withheld with its cause (SheetResult.withheld), and a check that
+ * reads one is `na`. What reads none of them is evaluated from the same inputs as in every probe,
+ * and reads the same. The params found keep the values they landed on (`at`), unless one landed
+ * by reading a param not found, which is then not found either.
  *
- * That evaluation runs on an allowance of its own, sharing the tree's record of the children it
- * has evaluated: a child whose inputs do not change is read back from it, and the solve's own
- * budget, often spent by now, does not starve a child the failure does not touch.
+ * That evaluation runs on an allowance of its own, with a copy of the tree's record of the
+ * children it has evaluated: a child whose inputs do not change is read back from it, the solve's
+ * own budget, often spent by now, does not starve a child the failure does not touch, and nothing
+ * the tree's own evaluations spend or read back changes with it. So it is made at every depth: a
+ * block's report withholds what its own failed search did not find, as the top's result does.
  *
- * Below the top a node's failure is its parent's to handle — the parent withholds the block's
- * outputs (evalBlocks) — and re-evaluating there would spend the tree's budget on every probe
- * that met a failing child, so the probe is returned as it is.
+ * Each failure is raised as an error, in the order the solve met them. The solve outcome is the
+ * first that is a finding about the design (designFailure) where there is one — one unknown with
+ * no root anywhere the circuit allows is enough for the design to have none — and else the last.
  */
 function withUnfound(
   node: NodeRef,
-  probe: SheetResult,
-  failure: SolveFailure,
+  failed: readonly Failed[],
   unfound: ReadonlyMap<string, string>,
   at?: Readonly<Record<string, number>>,
 ): SheetResult {
-  const cause = solveCause(node.doc, probe, failure);
-  if (node.depth > 0 || !unfound.size) return failedWith(probe, failure, cause);
+  const raise = (res: SheetResult): SheetResult => {
+    let out = res;
+    for (const f of failed)
+      out = failedWith(out, f.failure, solveCause(node.doc, f.probe, f.failure));
+    const outcome =
+      failed.find((f) => designFailure(f.failure))?.failure ?? failed[failed.length - 1].failure;
+    return { ...out, solve: outcome };
+  };
+  if (!unfound.size) return raise(failed[failed.length - 1].probe);
   const budget: SolveBudget = {
     left: node.settings.solveEvaluations,
     counted: 0,
-    children: node.budget.children,
+    children: new Map(node.budget.children),
   };
   // A solved param kept is one that landed, but where its relation reads a param not found, it
   // landed on that param's trial value, and is not found either. Each pass withholds at least one
   // more param or ends, so this ends.
-  const causes = new Set(unfound.values());
   const all = new Map(unfound);
+  const causes = new Set(unfound.values());
   let evaluated: SheetResult;
   for (;;) {
     evaluated = evaluateOnce({ ...node, budget }, at, all);
-    const withheld = new Map(Object.entries(evaluated.withheld ?? {}));
-    const values = evaluated.values;
-    let more = false;
-    for (const p of node.doc.params) {
-      if (all.has(p.name) || !engineSolved(p)) continue;
-      const rel = solvedRelation(p);
-      const c = rel && (causeIn(withheld, rel.lhs, values) ?? causeIn(withheld, rel.rhs, values));
-      if (c !== undefined && causes.has(c)) {
-        all.set(p.name, c);
-        more = true;
-      }
-    }
-    if (!more) break;
+    const more = readersOfUnfound(node.doc, evaluated, all, causes);
+    if (!more.size) break;
+    for (const [n, c] of more) all.set(n, c);
   }
-  const res = failedWith(evaluated, failure, cause);
-  // The findings that follow from the params not found come after the failure they follow from,
+  const res = raise(evaluated);
+  // The findings that follow from the params not found come after the failures they follow from,
   // so the solve's own message stays the first error a reader meets, as on the probe.
   const follows = (w: QAWarning): boolean => w.cause !== undefined && causes.has(w.cause);
   return {
@@ -1895,18 +1908,26 @@ function withUnfound(
 }
 
 /**
- * The params a failed solve leaves without an answer, each with the cause its withheld readers
- * carry (SheetResult.withheld): each param the failure names (`failed`) is its own cause, and
- * every other param in `unsearched` — not searched, because the solve stopped first — traces to the
- * first of them.
+ * The solved params of `doc` not yet in `unfound` whose relation, in `res` — evaluated with
+ * `unfound` withheld — reads a name withheld for one of `causes`, each with that cause. Such a param
+ * cannot be searched: its relation reads a value nobody found.
  */
-function unfoundOf(
-  failed: readonly string[],
-  unsearched: readonly string[] = [],
+function readersOfUnfound(
+  doc: SheetDoc,
+  res: SheetResult,
+  unfound: ReadonlyMap<string, string>,
+  causes: ReadonlySet<string>,
+  among?: ReadonlySet<string>,
 ): Map<string, string> {
   const out = new Map<string, string>();
-  for (const n of failed) out.set(n, n);
-  if (failed.length) for (const n of unsearched) if (!out.has(n)) out.set(n, failed[0]);
+  const withheld = new Map(Object.entries(res.withheld ?? {}));
+  for (const p of doc.params) {
+    if (unfound.has(p.name) || !engineSolved(p) || (among && !among.has(p.name))) continue;
+    const rel = solvedRelation(p);
+    const c =
+      rel && (causeIn(withheld, rel.lhs, res.values) ?? causeIn(withheld, rel.rhs, res.values));
+    if (c !== undefined && causes.has(c)) out.set(p.name, c);
+  }
   return out;
 }
 
@@ -2621,7 +2642,10 @@ const nameList = (us: readonly Unknown[]): string =>
 
 /** What the search reads at a node: the node, and the current value of every solved param of it,
  *  which each probe evaluates with. */
-type SolveContext = NodeRef & { at: Record<string, number> };
+/** A node as a search sees it: where each solved param stands (`at`), and the params a failed
+ *  search of this node has not found, withheld from every probe with their causes (see
+ *  withUnfound) — empty until one fails. */
+type SolveContext = NodeRef & { at: Record<string, number>; unfound?: ReadonlyMap<string, string> };
 
 /** `lhs - rhs` of an unknown's relation at an evaluated probe; undefined when either side does
  *  not resolve to a finite number. Diagnostics go to `warn`, swallowed by default: a relation
@@ -2916,13 +2940,13 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
   const failed = (failure: SolveFailure, at?: Probe): Found => {
     // Only the budget can stop a search before its first probe; the node is evaluated once even
     // then, so the failure still carries a result to read.
-    last ??= evaluateOnce(ctx, ctx.at);
+    last ??= evaluateOnce(ctx, ctx.at, ctx.unfound);
     return { ok: false, res: at?.res ?? last, failure };
   };
   const probe = (x: number): Probe | undefined => {
     if (ctx.budget.left <= 0) return undefined;
     probes++;
-    const res = evaluateOnce(ctx, { ...ctx.at, [name]: x });
+    const res = evaluateOnce(ctx, { ...ctx.at, [name]: x }, ctx.unfound);
     last = res;
     const g = relationAt(u, res);
     // A relation that did not evaluate because the budget ran out inside this probe — a child's
@@ -3373,23 +3397,37 @@ function solveNode(node: NodeRef): SheetResult {
     const f = foundOf(p);
     return f && 'range' in f ? { ok: true } : f ? { ok: false, why: f.why } : { ok: false };
   });
-  const solvedNames = doc.params.filter(engineSolved).map((p) => p.name);
-  // Nothing is searched where the declarations cannot be solved as written: every solved param
-  // would read its stored value, which is never an answer.
-  if (problem)
-    return withUnfound(
-      node,
-      evaluateOnce(node),
-      {
-        kind: 'not-settled',
-        unknowns: problem.params,
-        why: 'malformed',
-        message: problem.message,
-      },
-      unfoundOf(problem.params, solvedNames),
-    );
-  const unknowns = doc.params.filter(engineSolved).map((p) => unknownOf(p, foundOf(p)));
-  if (unknowns.length === 0) return evaluateOnce(node);
+  // A param whose declaration cannot be solved as written is not found, and is its own cause:
+  // the first such problem is the failure the solve reports, in validation's words, and a problem
+  // with the params left is looked for in turn, so that none of them is searched either. Every
+  // other solved param is searched where its relation reads none of them.
+  const failed: Failed[] = [];
+  const unfound = new Map<string, string>();
+  let unknownProbe: SheetResult | undefined;
+  const firstProbe = (): SheetResult => (unknownProbe ??= evaluateOnce(node));
+  for (let rest = doc.params, issue = problem; issue;) {
+    for (const n of issue.params) unfound.set(n, n);
+    if (!failed.length)
+      failed.push({
+        probe: firstProbe(),
+        failure: {
+          kind: 'not-settled',
+          unknowns: issue.params,
+          why: 'malformed',
+          message: issue.message,
+        },
+      });
+    const named = new Set(issue.params);
+    rest = rest.filter((p) => !named.has(p.name));
+    issue = constraintIssue(rest, (p) => {
+      const f = foundOf(p);
+      return f && 'range' in f ? { ok: true } : f ? { ok: false, why: f.why } : { ok: false };
+    });
+  }
+  const unknowns = doc.params
+    .filter((p) => engineSolved(p) && !unfound.has(p.name))
+    .map((p) => unknownOf(p, foundOf(p)));
+  if (unknowns.length === 0 && !failed.length) return evaluateOnce(node);
   // The range each may be searched in: its author's, and the wiring's where that can be read.
   const outside = searchRanges(node, unknowns);
   const ranged = (res: SheetResult): SheetResult =>
@@ -3399,31 +3437,55 @@ function solveNode(node: NodeRef): SheetResult {
       unknowns,
       outside.map((o) => o.u),
     );
+  // A param whose author's range lies wholly outside the wiring's is refused, and not found.
   if (outside.length) {
     const refused = outside.map((o) => o.u.p.name);
-    return ranged(
-      withUnfound(
-        node,
-        evaluateOnce(node),
-        {
-          kind: 'not-settled',
-          unknowns: refused,
-          why: 'malformed',
-          message: outside.map((o) => o.message).join('; '),
-        },
-        unfoundOf(refused, solvedNames),
-      ),
-    );
+    for (const n of refused) unfound.set(n, n);
+    failed.push({
+      probe: firstProbe(),
+      failure: {
+        kind: 'not-settled',
+        unknowns: refused,
+        why: 'malformed',
+        message: outside.map((o) => o.message).join('; '),
+      },
+    });
   }
 
   const at: Record<string, number> = {};
   for (const u of unknowns) at[u.p.name] = (u.lo + u.hi) / 2;
-  const ctx: SolveContext = { ...node, at };
+  const ctx: SolveContext = { ...node, at, unfound };
   const byName = new Map(unknowns.map((u) => [u.p.name, u]));
-  const plan = unknowns.length === 1 ? [[unknowns[0].p.name]] : solvePlan(doc);
+  const plan = (unknowns.length === 1 ? [[unknowns[0].p.name]] : solvePlan(doc))
+    .map((names) => names.filter((n) => byName.has(n) || unfound.has(n)))
+    .filter((names) => names.length);
   const slope: Record<string, number> = {};
   let last: SheetResult | undefined;
-  for (const [k, names] of plan.entries()) {
+  for (const names of plan) {
+    // Once something is not found, a set is searched only where its relations read none of it —
+    // what reads a value nobody found has nothing to steer by — and otherwise is not found either,
+    // as following from what it reads. A set that holds a param not found is not found whole: its
+    // members read each other.
+    if (unfound.size) {
+      const own = names.find((n) => unfound.has(n));
+      if (own !== undefined) {
+        for (const n of names) if (!unfound.has(n)) unfound.set(n, unfound.get(own) as string);
+        continue;
+      }
+      const check = evaluateOnce(ctx, at, unfound);
+      const reads = readersOfUnfound(
+        doc,
+        check,
+        unfound,
+        new Set(unfound.values()),
+        new Set(names),
+      );
+      if (reads.size) {
+        const cause = reads.values().next().value as string;
+        for (const n of names) unfound.set(n, reads.get(n) ?? cause);
+        continue;
+      }
+    }
     const set = names.map((n) => byName.get(n) as Unknown);
     let outcome: Outcome;
     if (set.length === 1) {
@@ -3434,20 +3496,17 @@ function solveNode(node: NodeRef): SheetResult {
       }
       outcome = found;
     } else outcome = settle(ctx, set, slope);
-    // The set that failed is not found, nor is any set after it, which was never searched; the
-    // sets before it landed, and keep where they landed.
-    if (!outcome.ok)
-      return ranged(
-        withUnfound(
-          node,
-          outcome.res,
-          outcome.failure,
-          unfoundOf(failedParams(outcome.failure), plan.slice(k).flat()),
-          at,
-        ),
-      );
+    // A set that failed is not found, each of its params its own cause; the search goes on with
+    // the sets after it, as above.
+    if (!outcome.ok) {
+      for (const n of failedParams(outcome.failure)) unfound.set(n, n);
+      for (const n of names) if (!unfound.has(n)) unfound.set(n, failedParams(outcome.failure)[0]);
+      failed.push({ probe: outcome.res, failure: outcome.failure });
+      continue;
+    }
     last = outcome.res;
   }
+  if (failed.length) return ranged(withUnfound(node, failed, unfound, at));
 
   const final = last as SheetResult;
   const { solveTolRel } = node.settings;
@@ -3473,8 +3532,9 @@ function solveNode(node: NodeRef): SheetResult {
         ` — the values it was solved with moved after it landed`,
     };
     // Only the params read off their tolerance are not found: every other one verified where it
-    // landed.
-    return ranged(withUnfound(node, final, failure, unfoundOf(off.map((o) => o.u.p.name)), at));
+    // landed, unless it landed by reading one of them (withUnfound).
+    const off_ = new Map(off.map((o) => [o.u.p.name, o.u.p.name]));
+    return ranged(withUnfound(node, [{ failure, probe: final }], off_, at));
   }
   return ranged({ ...final, solve: { kind: 'settled' } });
 }
@@ -3568,6 +3628,14 @@ export function heldOutcome(res: SheetResult): {
     if (res.warnings[i].severity === 'error') lastError = res.warnings[i].message;
   const err = solveErr ?? lastError;
 
+  // A solve of this sheet's own that failed is answered from its own record, which says what the
+  // search read at the ends of the stretch it searched (designFailure, `endsRead`) — never from the
+  // result, where what the failure did not find is withheld (see withUnfound), so a device that
+  // depends on it is no longer there to have been refused or read off its table. One that found no
+  // crossing anywhere the wiring lets its wire go, both ends read, is the design failing here;
+  // every other solve failure is no answer, said below in the words that fit it best.
+  if (designFailure(res.solve)) return { state: 'does-not-comply', error: res.solve.message };
+
   // First: did every device have a table that could answer for it? One that was refused leaves
   // the rest of the run evaluating a design with a device missing, so whatever stopped it next —
   // a solve that could not land, another device running out of table — is a consequence, and
@@ -3588,11 +3656,6 @@ export function heldOutcome(res: SheetResult): {
         `characterized point, which is not the point asked about` +
         (err === undefined ? '' : `; the run then stopped: ${err}`),
     };
-  // A held param that found no crossing anywhere the wiring lets its wire go — the range the
-  // wiring derived, or the author's inside it — is the design failing here (designFailure): the
-  // circuit has no operating point at this condition. Only the sheet's own solve can say so; a
-  // block's ranges are its author's.
-  if (designFailure(res.solve)) return { state: 'does-not-comply', error: res.solve.message };
   // Any other solve that found no solution in its range, or did not settle, is no answer. Its
   // message may quote the device failure that bounded the search (the relation not evaluating
   // past some point), and that quote is the reason for the range searched, not this point's
@@ -3627,8 +3690,9 @@ export function heldOutcome(res: SheetResult): {
  * device off its table. A design sized here is sized where it stands (see stands), and answers for
  * itself: it complies where it is feasible. One whose sheet found no crossing anywhere the wiring
  * lets a solved wire go (designFailure) is not sized and does not comply — infeasible, with the
- * solver's message — unless a device was refused or read off its table, which leaves the search's
- * verdict resting on data that is not there. A design resting on an assumed level (`assumed`) is
+ * solver's message. That is read from the solve's own record, whose `endsRead` already says that
+ * no end of the search read a device off its table or had one refused — never from the result,
+ * where what the failure did not find is withheld (see withUnfound). A design resting on an assumed level (`assumed`) is
  * still sized, and gives no answer.
  */
 export function pointOutcome(
@@ -3645,7 +3709,7 @@ export function pointOutcome(
     sized = stands(res);
     answer = sized
       ? { state: res.feasible ? 'complies' : 'does-not-comply' }
-      : designFailure(res.solve) && !refusedIn(res).length && !clampedIn(res).length
+      : designFailure(res.solve)
         ? { state: 'does-not-comply', error: res.solve.message }
         : { state: 'no-answer', error: unfinishedBecause(res)[0] };
   }

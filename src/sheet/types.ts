@@ -1501,7 +1501,9 @@ export interface SheetResult {
  *    not evaluate, or it is a current balance that does not read zero — so the run has nothing to
  *    hold it at. No search failed here: the declaration itself is false at the design point.
  * Absent on a run with no solved param to find whose holds, if any, all evaluated. Where several
- * failures are raised, it is the last of them, as the warnings list them.
+ * searches fail — a search goes on with the params that read nothing an earlier one did not find —
+ * it is the first of them that is a finding about the design (designFailure), and else the last,
+ * as the warnings list them; a false `hold`, raised after the searches, is then the last.
  */
 export type SolveOutcome =
   | { kind: 'settled' }

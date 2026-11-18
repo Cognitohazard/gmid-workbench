@@ -5,7 +5,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
-import { evaluateSheet, runSheet, followOnSummary, withheldIn } from './index';
+import {
+  evaluateSheet,
+  runSheet,
+  followOnSummary,
+  heldOutcome,
+  withheldIn,
+  withParams,
+} from './index';
+import { loadLibrary, table, REFS } from './library.fixtures';
 import type { SheetDoc, SheetResult, SheetVar } from './types';
 
 const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
@@ -230,5 +238,167 @@ describe('withheldIn — the structured guard a display blanks a field by', () =
     };
     expect(withheldIn(named, 'x')).toBe(false);
     expect(withheldIn(undefined, 'x')).toBe(false);
+  });
+});
+
+describe('what a failed search does not touch is still searched', () => {
+  const tail = loadLibrary().find((s) => s.file === 'otas/differential-pair-tail.json')!.doc;
+  const kk: SheetVar = {
+    name: 'kk',
+    value: 0,
+    min: 0,
+    max: 10,
+    designConstraint: { lhs: 'kk*2', rhs: '3' },
+  };
+  /** The tail pair at a common mode its tail node cannot reach, with kk declared before or after
+   *  V_tail. */
+  const withKk = (before: boolean): SheetDoc => {
+    const params = withParams(tail, { CM_dc: 1.75 }).params;
+    const i = params.findIndex((p) => p.name === 'V_tail');
+    return {
+      ...tail,
+      params: before
+        ? [...params.slice(0, i), kk, ...params.slice(i)]
+        : [...params.slice(0, i + 1), kk, ...params.slice(i + 1)],
+    };
+  };
+
+  it.each([true, false])(
+    'finds a param that reads nothing unfound, declared first: %s',
+    (first) => {
+      const res = runSheet(withKk(first), table, undefined, REFS);
+      expect(res.solve).toMatchObject({ kind: 'no-solution', unknown: 'V_tail' });
+      expect(res.withheld?.V_tail).toBe('V_tail');
+      expect(res.values.kk).toBeCloseTo(1.5, 6);
+      expect(withheldIn(res, 'kk')).toBe(false);
+    },
+  );
+
+  it('searches a later set that reads nothing unfound, and withholds one that does, by its cause', () => {
+    // c is found; p reads c and has no root; q reads only c; r reads p.
+    const doc: SheetDoc = {
+      title: 'plan',
+      polarity: 'n',
+      params: [
+        { name: 'c', value: 0, min: 0, max: 10, designConstraint: { lhs: 'c*2', rhs: '3' } },
+        { name: 'p', value: 0, min: 0, max: 1, designConstraint: { lhs: 'p', rhs: 'c + 5' } },
+        { name: 'q', value: 0, min: 0, max: 10, designConstraint: { lhs: 'q', rhs: 'c*2' } },
+        { name: 'r', value: 0, min: 0, max: 10, designConstraint: { lhs: 'r', rhs: 'p*2' } },
+      ],
+      equations: [],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.solve).toMatchObject({ kind: 'no-solution', unknown: 'p' });
+    expect(res.values.c).toBeCloseTo(1.5, 6);
+    expect(res.values.q).toBeCloseTo(3, 6);
+    expect(res.withheld).toEqual({ p: 'p', r: 'p' });
+    // One failure, one message: r was never searched, as following from p.
+    expect(res.warnings.filter((w) => w.rule === 'sheet-solve')).toHaveLength(1);
+  });
+
+  it('searches the rest where one declaration is malformed', () => {
+    // b states no range: it cannot be searched. a reads nothing of it.
+    const doc: SheetDoc = {
+      title: 'malformed',
+      polarity: 'n',
+      params: [
+        { name: 'a', value: 0, min: 0, max: 10, designConstraint: { lhs: 'a*2', rhs: '3' } },
+        { name: 'b', value: 0, designConstraint: { lhs: 'b', rhs: '2' } },
+        { name: 'd', value: 0, min: 0, max: 10, designConstraint: { lhs: 'd', rhs: 'b + 1' } },
+      ],
+      equations: [],
+      checks: [],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.solve).toMatchObject({ kind: 'not-settled', why: 'malformed', unknowns: ['b'] });
+    expect(res.values.a).toBeCloseTo(1.5, 6);
+    expect(res.withheld).toEqual({ b: 'b', d: 'b' });
+  });
+
+  it('searches the rest where one range lies outside the wiring', () => {
+    // The tail node's author's range lies above the supply: it is refused, and kk is still found.
+    const doc = withKk(false);
+    const refused: SheetDoc = {
+      ...doc,
+      params: doc.params.map((p) => (p.name === 'V_tail' ? { ...p, min: 2.5, max: 3 } : p)),
+    };
+    const res = runSheet(refused, table, undefined, REFS);
+    expect(res.solve).toMatchObject({
+      kind: 'not-settled',
+      why: 'malformed',
+      unknowns: ['V_tail'],
+    });
+    expect(res.withheld?.V_tail).toBe('V_tail');
+    expect(res.values.kk).toBeCloseTo(1.5, 6);
+  });
+});
+
+describe('a block whose own search fails withholds in its own report', () => {
+  /** A child whose x has no root; its device's current reads x, its check `xcap` reads x, and
+   *  `ipos` reads only I. */
+  const child: SheetDoc = {
+    title: 'failing child',
+    polarity: 'n',
+    params: [
+      { name: 'L', value: 0.5e-6 },
+      { name: 'I', value: 1e-5 },
+      { name: 'x', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'x', rhs: '5' } },
+    ],
+    givens: { L: 'L', id: 'x*1e-5', gm_id: '10', vds: '0.6' },
+    equations: [],
+    checks: [
+      { id: 'xcap', kind: 'spec', lhs: 'x', op: '<=', rhs: '10' },
+      { id: 'ipos', kind: 'spec', lhs: 'I', op: '>=', rhs: '0' },
+    ],
+    provides: ['x', 'I'],
+  };
+  const parent: SheetDoc = {
+    title: 'parent',
+    polarity: 'n',
+    params: [],
+    blocks: [{ name: 'c', doc: child }],
+    equations: [{ name: 'y', expr: 'c__x*2' }],
+    checks: [],
+  };
+
+  it('reports the child with no number for what its search did not find', () => {
+    const res = evaluateSheet(parent, dev);
+    const c = res.blocks![0];
+    expect(c.solve).toMatchObject({ kind: 'no-solution', unknown: 'x' });
+    // The device sized on x is not sized; the check that reads x is not evaluated; the one that
+    // reads only I still is.
+    expect(c.sizing?.ok).toBe(false);
+    expect(c.checks.find((r) => r.id === 'xcap')?.status).toBe('na');
+    expect(c.checks.find((r) => r.id === 'ipos')?.status).toBe('pass');
+    // The parent withholds what it reads from the child as following from the block itself.
+    expect(res.withheld).toMatchObject({ c__x: 'c', c__I: 'c', y: 'c' });
+    for (const w of res.warnings) if (w.cause !== undefined) expect(w.cause).toBe('c');
+  });
+});
+
+describe('the verdict after a failure comes from the failure', () => {
+  it('gives no answer for a set of several unknowns that did not settle, its device withheld', () => {
+    // a and b read each other with no common answer; the device's current reads a, so the result
+    // after withholding has no device that could have been refused or read off its table.
+    const doc: SheetDoc = {
+      title: 'set',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'a', value: 0, min: 0, max: 10, designConstraint: { lhs: 'a', rhs: 'b + 1' } },
+        { name: 'b', value: 0, min: 0, max: 10, designConstraint: { lhs: 'b', rhs: 'a + 1' } },
+      ],
+      givens: { L: 'L', id: 'a*1e-6', gm_id: '10', vds: '0.6' },
+      equations: [],
+      checks: [],
+      operatingRange: [{ name: 'lo', set: { L: '0.6e-6' } }],
+    };
+    const res = evaluateSheet(doc, dev);
+    expect(res.solve).toMatchObject({ kind: 'not-settled' });
+    expect(res.sizing?.ok).toBe(false);
+    expect(res.point).toMatchObject({ sized: false, state: 'no-answer' });
+    expect(heldOutcome(res).state).toBe('no-answer');
+    expect(res.rangeEnds?.[0].state).toBe('not-run');
   });
 });
