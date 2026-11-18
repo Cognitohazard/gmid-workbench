@@ -296,6 +296,16 @@ export function causeMessage(c: Cause): string {
 // gives the value of the quantity the designer wrote, not the difference the engine searches; the
 // last line is an action only where a specific one exists, and begins with a verb.
 
+/** What a detail line breaks of the message standard: more than 20 words, or a line that opens
+ *  with a label and a colon in place of a subject and a verb. Empty for a line that keeps it. The
+ *  tests read every text through this. */
+export function standardProblems(line: string): string[] {
+  const out: string[] = [];
+  if (line.trim().split(/\s+/).length > 20) out.push('more than 20 words');
+  if (/^[^\s:]+(?: [^\s:]+){0,3}:\s/.test(line)) out.push('opens with a label and a colon');
+  return out;
+}
+
 /** The short name of each cause: one table, so a change of wording is here alone. Two causes share
  *  "no convergence"; their first detail line tells them apart, and the data keep the two kinds. */
 export const CAUSE_NAMES: { readonly [C in CauseName]: string } = {

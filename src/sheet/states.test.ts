@@ -20,7 +20,15 @@ import {
   type SearchData,
   type NoSolutionRead,
 } from './states';
-import { CAUSE_NAMES, causeMessage, describe, notAskedText, rangeSource, textOf } from './describe';
+import {
+  CAUSE_NAMES,
+  causeMessage,
+  describe,
+  notAskedText,
+  rangeSource,
+  standardProblems,
+  textOf,
+} from './describe';
 import type { SheetDoc, SolveRange } from './types';
 
 const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
@@ -488,5 +496,25 @@ group('the texts a reader sees, by the message standard', () => {
       name: 'not run',
       lines: ['The design point has no design, so the engine did not run this range end.'],
     });
+  });
+});
+
+group('the message standard, as a test reads it', () => {
+  it('takes a full sentence with its subject first', () => {
+    expect(
+      standardProblems(
+        'The engine searched the full physical range of wire tail, from 0 V to 0.9 V.',
+      ),
+    ).toEqual([]);
+  });
+
+  it('refuses a line that opens with a label and a colon, or runs past 20 words', () => {
+    for (const line of [
+      'Searched: 0 V to 0.9 V.',
+      'Not proved: the engine did not show it.',
+      'Part in: L = 5 µm.',
+    ])
+      expect(standardProblems(line)).toContain('opens with a label and a colon');
+    expect(standardProblems(Array(21).fill('word').join(' '))).toContain('more than 20 words');
   });
 });
