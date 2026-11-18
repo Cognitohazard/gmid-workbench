@@ -1086,6 +1086,12 @@ export interface SheetBlockReport {
   wiringValues?: WiringValues;
   /** How the block's own solved params came out (see SheetResult.solve). */
   solve?: SolveOutcome;
+  /** The values the block's own solved params came out at, by name; absent where it solves none
+   *  (see solvedValuesIn). */
+  solved?: Record<string, number>;
+  /** The block's own solved params held at given values instead of solved (see
+   *  SheetResult.pinned). */
+  pinned?: string[];
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
@@ -1437,6 +1443,9 @@ export interface SizingReport {
    *  Like `noise`, a fact about the table, carried on the sizing so a result says which of its
    *  rows rest on a lesser form. Present on a sizing that succeeded and fell back somewhere. */
   fallbacks?: FallbackNote[];
+  /** The small-signal property this sizing took larger for a sensitivity reading (see
+   *  EvaluateOptions.perturb): present only where it was applied. */
+  perturbed?: { key: string; factor: number };
   /** The table's pass-through columns (see passthroughKeys) this sizing put in the sheet's scope,
    *  under the names the sheet reads them by: their own, or `table__<column>` where the sheet or
    *  the engine already means something by their own (a `sheet-passthrough` warning names each).
@@ -1518,6 +1527,10 @@ export interface SheetResult {
    *  not sized, a block whose override reads one is not evaluated, and a check that reads one is
    *  `na`. Absent where nothing was. */
   withheld?: Record<string, string>;
+  /** This sheet's own solved params that the evaluation held at given values instead of solving
+   *  (see EvaluateOptions.pinned), by name; a block's are on its report. Their relations were not
+   *  checked, so the verdict of such a run does not show that they hold. Absent where none was. */
+  pinned?: string[];
 }
 
 /**
@@ -1777,6 +1790,43 @@ export function devicesIn<T>(
   return out;
 }
 
+/** Every solved value of one evaluation's tree, keyed as EvaluateOptions.pinned reads them: the
+ *  top sheet's own by name, a block's by its path (`amp.V_x`). Pinning them all holds that design
+ *  while something else moves, with no search. Only the top sheet's own params are read from
+ *  `doc`; each block's come from its report (SheetBlockReport.solved). */
+export function solvedValuesIn(
+  doc: SheetDoc,
+  res: Pick<SheetResult, 'values' | 'blocks'>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of doc.params)
+    if (engineSolved(p) && Number.isFinite(res.values[p.name])) out[p.name] = res.values[p.name];
+  const walk = (blocks: readonly SheetBlockReport[] | undefined, path: string): void => {
+    for (const b of blocks ?? []) {
+      const at = childPath(path, b.name);
+      for (const [k, v] of Object.entries(b.solved ?? {})) out[childPath(at, k)] = v;
+      walk(b.blocks, at);
+    }
+  };
+  walk(res.blocks, '');
+  return out;
+}
+
+/** Every solved param held at a given value anywhere in one evaluation's tree (see
+ *  SheetResult.pinned), by path as EvaluateOptions.pinned keys it. */
+export function pinnedIn(res: Pick<SheetResult, 'pinned' | 'blocks'>): string[] {
+  const out = [...(res.pinned ?? [])];
+  const walk = (blocks: readonly SheetBlockReport[] | undefined, path: string): void => {
+    for (const b of blocks ?? []) {
+      const at = childPath(path, b.name);
+      for (const n of b.pinned ?? []) out.push(childPath(at, n));
+      walk(b.blocks, at);
+    }
+  };
+  walk(res.blocks, '');
+  return out;
+}
+
 /** Every device, anywhere in one evaluation's tree, that was refused because its table lacks a
  *  sweep its givens use (see SizingReport.unswept) — each in the words the run's own error
  *  carries it in, `block "pair": given vsb = 0.3 asks for …`. Empty when every device had the
@@ -1961,6 +2011,31 @@ export interface SheetSensitivityCheck {
   dMarginPerUnit: number;
   deltaPlus: number;
   deltaMinus: number;
+  /** How far the check's LEFT SIDE moves, in percent, for a 1 % move of the knob: a pure number,
+   *  1 meaning 1 % for 1 %. Not the margin's: a margin near zero has no relative form. Absent where
+   *  the left side is zero or not finite at the base, the knob is zero, or no slope was taken. */
+  relPerPct?: number;
+  /** Why `relPerPct` is absent, as a sentence. */
+  why?: string;
+}
+
+/**
+ * How one named result of the sheet moves with one knob: an equation, a solved param, or a
+ * composed block's provided value as the parent reads it (`amp__gain`). Each figure is a difference
+ * of two full evaluations, taken the same way as the checks' (see SheetSensitivity), so it is as
+ * right as the sheet is. `relPerPct` is the relative change of the result for a 1 % change of the
+ * knob — 1 means 1 % for 1 % — and is absent, with the reason in `why`, where the result is zero or
+ * not finite at the base, the knob is zero, the result is withheld, or a probe did not give it.
+ */
+export interface SheetSensitivityResult {
+  name: string;
+  unit?: string;
+  base: number;
+  dPerUnit: number;
+  deltaPlus: number;
+  deltaMinus: number;
+  relPerPct?: number;
+  why?: string;
 }
 
 /**
@@ -1977,6 +2052,10 @@ export interface SheetSensitivity {
   value: number;
   step: number;
   checks: SheetSensitivityCheck[];
+  /** How each named result moves with this knob (see SheetSensitivityResult), in the order the
+   *  sheet writes them: its equations, its solved params, then each block's provided values. Empty
+   *  where `checks` is. */
+  results: SheetSensitivityResult[];
   error?: string;
   /** What a probe of this knob read beyond a table (see OutsideTable): that probe is not used —
    *  its numbers would come from another bias — and `error` says so. Absent where every probe read

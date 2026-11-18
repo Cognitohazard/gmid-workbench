@@ -2008,7 +2008,40 @@ stretch narrower than the sample spacing between two failing samples is not seen
 A margin says how much room a check has but not which knob moves it, so the core also exports
 `sheetSensitivities(doc, table?, resolveDevice?, opts?)`: it re-evaluates the whole sheet a
 step either side of each `choice` param and reports, per check, how far that check's margin
-moved — the ranking a designer needs to know what to turn next.
+moved — the ranking a designer needs to know what to turn next. Each entry also carries
+`results`: how each named result moves with that knob — the sheet's equations, its solved
+values, and each block's provided values as the parent reads them (`amp__gain`). `relPerPct` on a
+result, and on a check for its left side, is the relative change for a 1 % change of the knob: a
+pure number, 1 meaning 1 % for 1 %. It is absent, with the reason in `why`, where the result is
+zero at the design, the knob is zero, the result is withheld, or a probe did not give it. Every
+figure is a difference of full evaluations, so it is as right as the sheet is.
+
+`devicePropertySensitivities(doc, table?, resolveDevice?, opts?)` answers a narrower question:
+which small-signal property of which device each formula leans on, and how hard. For each sized
+device and each property its table holds (gm, gmb, gds, every capacitance, `sth`, `sfl`), it
+takes that one property 1 % larger and smaller with everything else held — the sizing, every
+voltage and current, and every solved value, pinned so nothing is searched again — and reads
+each named result and each requirement's left side. It reads the sheet's formulas. It does not
+size or solve the circuit again, so it is not what the hardware does when a property changes: a
+real change of gds moves the operating point, and that is not in these numbers. A cell that is
+exactly 0 means the formula does not read the property. Solved values, and requirements that no
+property moves (requirements on voltages and regions), are refused as rows, with the reason. A
+property the table does not hold is refused as a column, by name. `solvedReads` lists each solved
+value whose own relation reads a small-signal property: held here, it would move with that
+property in the hardware, so on such a sheet every row is a reading of the formulas alone. One
+sizing that a block places several times is one device (`placements`): its property moves in
+every placement together.
+
+Two evaluation options carry this, and are open to other uses: `pinned` holds solved params at
+given values, by name for the top sheet and by block path below it (`amp.V_x`), so an evaluation
+is one pass with no search (`solvedValuesIn(doc, result)` lists every solved value of a result in
+that form); `perturb` takes one property of one device, named by its block path, a factor larger.
+With both unset, an evaluation is unchanged. A pinned run names what it held (`pinned` on the
+result and on each block's report) and carries one `sheet-pinned` warning saying the relations
+that solve those values were not checked: its verdict is not to be relied on. A sizing that a
+`perturb` reached says so in `perturbed`; a path that names no device, or a property the device
+does not hold, moves nothing, and the view refuses that column. A requirement's cell is for its
+left side, or for its right side (`side: 'right'`) where only that side moves.
 
 ## The author's contract
 

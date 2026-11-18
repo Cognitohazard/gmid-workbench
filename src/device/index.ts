@@ -61,6 +61,11 @@ export interface SizeQuery {
   /** The gate-source voltage itself, in the table's own axis convention (signed: a
    *  signed-export PMOS vgs is negative). See OP_SELECTORS for why it is a selector. */
   vgs?: number;
+  /** One small-signal property of the sized device taken `factor` times larger, with the operating
+   *  point, the width and every other property held: each reported quantity that reads it moves
+   *  with it, and nothing else does (see sizeDevice). For a sensitivity readout of the sheet's
+   *  formulas, never a model of hardware. Absent, the sizing is unchanged. */
+  perturb?: { key: string; factor: number };
 }
 
 /** A solved operating point with the sized width and feasibility against the slice ceiling. */
@@ -111,6 +116,9 @@ export interface SizeResult {
    * answer reads this field: the sheet engine does not size such a device at all.
    */
   outside: OutsideTable[];
+  /** The property SizeQuery.perturb moved, as asked: present only where it was applied, so a
+   *  caller can tell a property the device does not hold from one that moved nothing. */
+  perturbed?: { key: string; factor: number };
 }
 
 /**
@@ -467,6 +475,25 @@ export function sizeDevice(q: SizeQuery): SizeResult {
       : {}),
   });
 
+  // A property taken larger moves every quantity read from it by the ratio of the derived layer
+  // evaluated twice from the same scaled bases, with and without the change. It is applied after
+  // the bound targets are restored, so a restored gm, gm/ID or selector moves by that exact ratio:
+  // perturbing before the restore would let the restored value hide the change, and skipping the
+  // restore would put its inversion residual into the difference.
+  if (q.perturb && has(q.perturb.key)) {
+    const { key, factor } = q.perturb;
+    const movedScope = pointScope({ ...bases, [key]: bases[key] * factor });
+    for (const name of DERIVED_FORMS.keys()) {
+      if (!reportsDerived(name, has) || stored(name)) continue;
+      const before = scaledScope.resolve(name) as number;
+      const after = movedScope.resolve(name) as number;
+      if (before !== 0 && Number.isFinite(before)) quantities[name] *= after / before;
+      else quantities[name] = after;
+    }
+    quantities[key] *= factor;
+  }
+  const perturbed = q.perturb && has(q.perturb.key) ? { ...q.perturb } : undefined;
+
   return {
     gm,
     gm_id,
@@ -480,6 +507,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     warnings,
     fallbacks,
     outside,
+    ...(perturbed ? { perturbed } : {}),
   };
 }
 
