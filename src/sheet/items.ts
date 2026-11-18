@@ -351,8 +351,17 @@ function readerOf(
 export const resolveWithheld = (items: readonly Item[]): Item[] =>
   items.map((i) =>
     i.status === 'withheld' && (i.path.length === 0 || (i.kind === 'sheet' && i.path.length === 1))
-      ? { ...i, on: i.on.map((o) => resolveOn(items, o)) }
+      ? { ...i, on: distinct(i.on.map((o) => resolveOn(items, o))) }
       : i,
+  );
+
+/** Dependencies once each: several names an item reads can trace back to one failed item. */
+const distinct = (on: readonly WithheldOn[]): WithheldOn[] =>
+  on.filter(
+    (o, k) =>
+      on.findIndex(
+        (p) => p.kind === o.kind && p.name === o.name && p.path.join('.') === o.path.join('.'),
+      ) === k,
   );
 
 /** The full name of an item: its blocks' path and its own name, joined by dots. */
