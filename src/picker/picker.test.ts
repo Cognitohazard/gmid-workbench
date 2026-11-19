@@ -913,7 +913,7 @@ describe('reading the results', () => {
   });
 });
 
-describe('a sheet whose only error is on one requirement’s own entry', () => {
+describe('a sheet that does not validate as it will be searched', () => {
   // The five-transistor OTA with a tolerance that is not a number on its gain check: validation
   // raises an error on that requirement's entry and on nothing else. The picker refuses the sheet
   // before any search, at every spec: the answer is that one entry cannot be read, never a search
@@ -955,5 +955,41 @@ describe('a sheet whose only error is on one requirement’s own entry', () => {
       expect(c.bindingCheck).toBeUndefined();
       expect(c.worstMargin).toBeUndefined();
     }
+  });
+
+  // The OTA with its load capacitance written as text: validation raises an error on that param's
+  // entry. The picker validates the sheet as it will be searched, with the spec applied.
+  const badLoad: SheetDoc = {
+    ...doc0,
+    params: doc0.params.map((p) =>
+      p.name === 'CL' ? { ...p, value: 'abc' as unknown as number } : p,
+    ),
+  };
+  const withBadLoad = (spec: PickerSpec) =>
+    pickTopology(spec, { path: 'synthetic/bad-load', doc: badLoad }, table, undefined, {
+      refs: REFS,
+    });
+
+  it('searches a sheet whose only invalid entry the spec replaces, as if the entry were valid', () => {
+    // The relaxed spec supplies CL, so the sheet the search meets is valid: it closes as the
+    // shipped sheet does, with the same knobs and the same evaluations.
+    expect(relaxed.CL).toBeDefined();
+    const c = withBadLoad(relaxed);
+    const ref = plain(relaxed);
+    expect(c.verdict).toBe('closed');
+    expect(c.cause).toBeUndefined();
+    expect([c.knobs, c.evals, c.worstMargin]).toEqual([ref.knobs, ref.evals, ref.worstMargin]);
+  });
+
+  it('refuses a sheet whose invalid entry the spec leaves in place, with no search', () => {
+    const finding = validateSheet(badLoad).find((w) => w.severity === 'error');
+    expect(finding?.message).toContain('"CL"');
+    const c = withBadLoad({});
+    expect(c.verdict).toBe('could-not-be-searched');
+    expect(c.cause).toBe(finding?.message);
+    expect(c.evals).toBe(1);
+    expect(c.knobs).toEqual({});
+    expect(c.bindingCheck).toBeUndefined();
+    expect(c.worstMargin).toBeUndefined();
   });
 });

@@ -948,22 +948,23 @@ export function pickTopology(
   // Clone before overriding: a library doc is shared by every candidate in the run, and the
   // search must not leave a mark on it. The operating range is dropped: the picker answers
   // which design types are FEASIBLE on this spec, and whether a chosen design then holds across
-  // its range is a question for that design, on its own sheet. A sheet that does not validate is
-  // refused before any search, whole range included, so that a defect IN the range still stops
-  // the candidate the way it stops the sheet everywhere else, instead of vanishing with the part
-  // that carried it: one entry that cannot be read is the answer, not a search that cannot close.
+  // its range is a question for that design, on its own sheet. The sheet is validated as it will
+  // be searched, with the spec applied, and one that does not validate is refused before any
+  // search, whole range included: a defect IN the range still stops the candidate the way it
+  // stops the sheet everywhere else, instead of vanishing with the part that carried it, and an
+  // entry the spec replaces is not one the search would meet.
   const whole = cloneDoc(sheet.doc);
-  const invalid = validateSheet(resolvedSheet(whole, refs).doc)
-    .filter((w) => w.severity === 'error')
-    .map((w) => w.message);
-  const base = invalid.length ? whole : withoutRange(whole);
-  const { ignored, over } = applySpec(base, spec);
+  const { ignored, over } = applySpec(whole, spec);
   const applied = Object.keys(over);
   const supplied = SPEC_FIELDS.filter((f) => {
     const v = spec[f.name];
     return v !== undefined && Number.isFinite(v);
   }).length;
-  const start = withParams(base, over);
+  const specified = withParams(whole, over);
+  const invalid = validateSheet(resolvedSheet(specified, refs).doc)
+    .filter((w) => w.severity === 'error')
+    .map((w) => w.message);
+  const start = invalid.length ? specified : withoutRange(specified);
   const defaults = new Map(start.params.map((p) => [p.name, p.value]));
 
   const res0 = runSheet(start, table, resolveDevice, refs, { settings });
@@ -1005,7 +1006,9 @@ export function pickTopology(
     verdict = closes(res) ? 'closed' : 'did-not-close';
   }
 
-  if (closes(res) && !meter.exhausted) {
+  // A sheet refused for a validation error gets its one screening evaluation and nothing more,
+  // whatever that evaluation reads.
+  if (!invalid.length && closes(res) && !meter.exhausted) {
     const relaxed = backOff(doc, table, resolveDevice, refs, settings, meter);
     if (relaxed.res) {
       doc = relaxed.doc;
