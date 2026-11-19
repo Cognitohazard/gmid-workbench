@@ -1373,7 +1373,12 @@ function evalBlocks(
               kind: 'not-read',
               data:
                 block.ref !== undefined && !block.doc
-                  ? { why: 'reference', where: block.name, message }
+                  ? {
+                      why: 'reference',
+                      where: block.name,
+                      message,
+                      field: { name: 'ref', value: block.ref, problem: 'no-sheet' },
+                    }
                   : { why: 'field', where: block.name, message, entry: 'block' },
             },
           },
@@ -3535,10 +3540,11 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
 }
 
 /** The first item that failed in one evaluation of the node, with its cause: what a point that
- *  does not evaluate was stopped by. */
+ *  does not evaluate was stopped by. A requirement that fails and a statement that is false stop
+ *  nothing from evaluating, so neither is it. */
 function failedAt(doc: SheetDoc, res: SheetResult): { ref: ItemRef; cause: Cause } | undefined {
   const first = withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation').find(
-    (i) => i.status === 'failed',
+    (i) => i.status === 'failed' && i.cause.kind !== 'fails' && i.cause.kind !== 'statement-false',
   );
   return first?.status === 'failed'
     ? { ref: { kind: first.kind, path: first.path, name: first.name }, cause: first.cause }

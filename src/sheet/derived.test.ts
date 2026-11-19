@@ -106,6 +106,7 @@ function notFiniteFalse(doc: SheetDoc, res: SheetResult): string[] {
 }
 
 const expectSame = (res: SheetResult): void => {
+  expect(verdictProblems(res)).toEqual([]);
   expect(res.items?.[0]).toMatchObject({ kind: 'sheet', path: [] });
   for (const i of res.items ?? [])
     if (i.status === 'failed') expect(causeFits(i.kind, i.cause)).toBe(true);
@@ -167,6 +168,26 @@ const own = (sign: number, vds: string, vsb: string, rest: Partial<SheetDoc> = {
   ...rest,
 });
 
+/** What no run may give: an item withheld on a requirement that only fails, which stops nothing
+ *  from evaluating; and an undetermined verdict with neither a failed item nor a held one. */
+function verdictProblems(res: SheetResult): string[] {
+  const out: string[] = [];
+  const failsAt = new Set(
+    (res.items ?? []).flatMap((i) =>
+      i.status === 'failed' && i.cause.kind === 'fails' ? [[...i.path, i.name].join('.')] : [],
+    ),
+  );
+  for (const i of res.items ?? [])
+    if (i.status === 'withheld')
+      for (const o of i.on)
+        if (o.cause === 'fails' || failsAt.has([...o.path, o.name].join('.')))
+          out.push(`${i.kind} ${i.name} withheld on ${o.name}, which fails`);
+  const v = res.verdict;
+  if (v?.verdict === 'undetermined' && !v.failed?.length && !v.held?.length)
+    out.push('undetermined with no failed and no held item');
+  return out;
+}
+
 /** Every line of every item of a run, the blocks' and the range ends' lists included, that breaks
  *  the message standard, with the line. */
 function textProblems(res: SheetResult): string[] {
@@ -186,7 +207,7 @@ function textProblems(res: SheetResult): string[] {
   );
 }
 
-describe('every text the library gives on each device reads to the message standard', () => {
+describe('every text the library gives on each device reads to the message standard, and no verdict rests on a requirement that only fails', () => {
   // The library table, the EKV table and the simple test device read the sheets differently:
   // a search steps in at a different edge on each, so each gives texts the others do not.
   const devices: [string, DeviceTable][] = [
@@ -196,15 +217,20 @@ describe('every text the library gives on each device reads to the message stand
   for (const [name, device] of devices)
     it(`on ${name}, at the defaults and at each sweepable parameter’s ends`, () => {
       const found: string[] = [];
+      let runs = 0;
       for (const { file, doc } of loadLibrary()) {
         const cases: Record<string, number>[] = [{}];
         for (const p of doc.params)
           if (sweepable(p)) cases.push({ [p.name]: p.min }, { [p.name]: p.max });
-        for (const over of cases)
-          for (const p of textProblems(runSheet(withParams(doc, over), device, undefined, REFS)))
+        for (const over of cases) {
+          const res = runSheet(withParams(doc, over), device, undefined, REFS);
+          for (const p of [...textProblems(res), ...verdictProblems(res)])
             found.push(`${file} ${JSON.stringify(over)} ${p}`);
+          runs++;
+        }
       }
       expect([...new Set(found)]).toEqual([]);
+      expect(runs).toBeGreaterThan(500);
     }, 600_000);
 });
 
@@ -1142,5 +1168,47 @@ describe('the items of the second audit', () => {
       },
     });
     expectSame(ekv);
+  });
+});
+
+describe('a search that nothing evaluates, beside a requirement that only fails', () => {
+  it('keeps its own cause, and is never withheld on the requirement', () => {
+    const d = sheet('mirrors-bias/wide-swing-cascode-mirror.json');
+    const min = d.params.find((q) => q.name === 'V_out')!.min as number;
+    const res = runSheet(withParams(d, { V_out: min }), ekvTable(), undefined, REFS);
+    expect(res.items?.find((i) => i.name === 'k_x')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: {
+          unevaluable: {
+            at: {
+              by: { kind: 'device', path: ['out'] },
+              byCause: { data: { sizing: { quantity: 'gm' } } },
+            },
+          },
+        },
+      },
+    });
+    expect(res.verdict?.failed).toEqual([expect.objectContaining({ kind: 'search', name: 'k_x' })]);
+    expect(verdictProblems(res)).toEqual([]);
+  });
+
+  it('gives a reference to no sheet the same sentence in the block’s own list', () => {
+    const d = JSON.parse(JSON.stringify(sheet('otas/five-transistor-ota.json'))) as SheetDoc;
+    (d.blocks![0] as { ref?: string }).ref = 'nope/nope';
+    delete (d.blocks![0] as { doc?: unknown }).doc;
+    const res = runSheet(d, table, undefined, REFS);
+    const own = res.blocks?.find((b) => b.name === 'bias')?.items?.[0];
+    expect(own).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: { why: 'reference', field: { name: 'ref', value: 'nope/nope' } },
+      },
+    });
+    expect(describeItem(own!).lines).toEqual(
+      describeItem(res.items!.find((i) => i.kind === 'sheet' && i.path.join() === 'bias')!).lines,
+    );
   });
 });

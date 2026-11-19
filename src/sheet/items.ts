@@ -457,7 +457,8 @@ function onWhatStoppedIt(i: Item, list: readonly Item[]): Item {
     i.cause.data.unevaluable?.at.where !== 'one-point'
       ? i.cause.data.unevaluable?.at.by
       : undefined;
-  if (!by) return i;
+  // A requirement stops nothing from evaluating: a search is never withheld on one.
+  if (!by || by.kind === 'requirement') return i;
   const target = list.find(
     (x) => x.status === 'failed' && fullName(x) === fullName(by) && x.kind === by.kind,
   );
