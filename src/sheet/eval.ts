@@ -1355,7 +1355,11 @@ function evalBlocks(
   // the earlier sibling's provides — skip it, fail closed.
   const seenNames = new Set<string>();
   for (const block of parent.blocks ?? []) {
-    const dead = (message: string): void => {
+    // A block that is not evaluated, and why: a reference no sheet answers, a name used twice, a
+    // format this app does not read, composition nested too deep, or a device table that does not
+    // resolve. Its report holds one item, its own sheet item, failed as not read; a reference
+    // carries the sheet it names, so the block's own list and its parent's give one sentence.
+    const notEvaluated = (message: string): void => {
       warn({ rule: 'sheet-block', severity: 'error', message, location: block.name });
       reports.push({
         name: block.name,
@@ -1386,14 +1390,14 @@ function evalBlocks(
       });
     };
     if (!block.name.trim()) {
-      dead('a block has an empty name');
+      notEvaluated('a block has an empty name');
       continue;
     }
     // A ref that reached evaluation unmaterialized (the caller skipped resolveSheetRefs,
     // or resolution failed and already named why) must never size on nothing.
     const srcDoc = block.doc;
     if (!srcDoc) {
-      dead(
+      notEvaluated(
         block.ref !== undefined
           ? `block "${block.name}": unresolved reference "${block.ref}" — resolve against a sheet library before evaluation`
           : `block "${block.name}" has neither an embedded doc nor a ref`,
@@ -1401,17 +1405,19 @@ function evalBlocks(
       continue;
     }
     if (seenNames.has(block.name)) {
-      dead(`duplicate block name "${block.name}" — the block was skipped, not silently merged`);
+      notEvaluated(
+        `duplicate block name "${block.name}" — the block was skipped, not silently merged`,
+      );
       continue;
     }
     seenNames.add(block.name);
     // A child document in a format this app does not read is kept as stored, never evaluated.
     if (formatOf(srcDoc) === 'unknown') {
-      dead(`block "${block.name}": ${formatProblems(srcDoc)[0].message}`);
+      notEvaluated(`block "${block.name}": ${formatProblems(srcDoc)[0].message}`);
       continue;
     }
     if (depth >= MAX_BLOCK_DEPTH) {
-      dead(`block "${block.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
+      notEvaluated(`block "${block.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
       continue;
     }
     // A child names its own device id (else it inherits the parent table). A named device that the
@@ -1421,7 +1427,7 @@ function evalBlocks(
     if (block.device !== undefined) {
       childTable = resolveDevice?.(block.device);
       if (childTable === undefined) {
-        dead(`block "${block.name}": device "${block.device}" did not resolve`);
+        notEvaluated(`block "${block.name}": device "${block.device}" did not resolve`);
         continue;
       }
     }
