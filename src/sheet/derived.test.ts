@@ -7,7 +7,15 @@ import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { resolvedSheet } from './resolve';
 import { legacyFeasible, legacyPointState } from './derived';
-import { causeFits, heldVerdictOf, setOf, verdictOf, type Cause, type Item } from './states';
+import {
+  causeFits,
+  heldVerdictOf,
+  isComplete,
+  setOf,
+  verdictOf,
+  type Cause,
+  type Item,
+} from './states';
 import { describe as describeItem, standardProblems } from './describe';
 import { FINDING_CAUSES, notCalculated } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -74,7 +82,9 @@ function readings(res: SheetResult): { at: string; field: unknown; derived: unkn
         // An end that is not calculated was not run today, or ran on a sheet whose validation
         // found an error about the sheet as a whole (see the suite of a range end's list).
         derived: notCalculatedList(e.items)
-          ? e.state === 'not-run' || wholeSheetError(res) || restsOnAssumed(e.items)
+          ? e.state === 'not-run' ||
+            wholeSheetError(res) ||
+            restsOnAssumed(e.items, res.items ?? [])
             ? e.state
             : 'calculated'
           : legacyPointState(e.items, advisoryOf({ checks: e.checks, blocks: e.blocks })),
@@ -94,9 +104,21 @@ const notCalculatedList = (items: readonly Item[]): boolean =>
 
 /** Whether an end is not calculated because the design point rests on an assumed level, which
  *  today's state reads as no answer. */
-const restsOnAssumed = (items: readonly Item[]): boolean =>
+const restsOnAssumed = (items: readonly Item[], design: readonly Item[]): boolean =>
   items.every(
-    (i) => i.status === 'withheld' && i.on.every((o) => o.frame === 'design' && o.assumed),
+    (i) =>
+      i.status === 'withheld' &&
+      i.on.every((o) =>
+        design.some(
+          (d) =>
+            d.kind === o.kind &&
+            d.name === o.name &&
+            d.path.join('.') === o.path.join('.') &&
+            d.status === 'failed' &&
+            d.cause.kind === 'not-determined' &&
+            d.cause.data.why === 'assumed-level',
+        ),
+      ),
   );
 
 /** Whether validation found an error about the sheet as a whole: the design point's list holds a
@@ -1075,11 +1097,9 @@ describe('the items of the second audit', () => {
     const d = clone(tail);
     d.operatingRange![0].set = { NOPE: '1' };
     const res = lib(d);
-    // The design point's list holds it too, so the sheet's verdict is not feasible while it stands.
-    expect(top(res, 'sheet', '')).toMatchObject({
-      status: 'failed',
-      cause: { kind: 'not-read', data: { entry: 'range-end' } },
-    });
+    // The design point was calculated: its list holds no copy of the finding, and the sheet's
+    // verdict reads the end's list, so it is not feasible while the finding stands.
+    expect(top(res, 'sheet', '')?.status).toBe('ok');
     expect(res.verdict?.verdict).not.toBe('feasible');
     expect(res.rangeEnds?.[0].items?.[0]).toMatchObject({
       status: 'failed',
@@ -1428,7 +1448,6 @@ describe('a range end that is not calculated, in the design point’s terms', ()
               name: 'V_out_dc',
               frame: 'design',
               cause: 'not-determined',
-              assumed: true,
             },
           ],
         },
@@ -1452,5 +1471,49 @@ describe('a range end that is not calculated, in the design point’s terms', ()
         on: [{ kind: 'search', path: [], name: 'V_tail', frame: 'design', held: true }],
       },
     ]);
+  });
+});
+
+describe('the verdict of a sheet whose range end’s own entry failed', () => {
+  it('reads the end, names its item with the end’s name, and keeps no copy on the design point', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc: SheetDoc = {
+      ...ota,
+      checks: ota.checks.map((c) => ({ ...c, kind: 'advisory' })),
+      operatingRange: ota.operatingRange?.map((e, k) => (k ? e : { ...e, set: { CM_dc: '((' } })),
+    };
+    const res = runSheet(doc, table, undefined, REFS);
+    expect(res.feasible).toBe(false);
+    expect((res.items ?? []).filter((i) => i.status !== 'ok' && i.kind !== 'requirement')).toEqual(
+      [],
+    );
+    expect(isComplete(res)).toBe(true);
+    expect(res.verdict?.verdict).toBe('undetermined');
+    expect(res.verdict?.failed).toEqual([
+      expect.objectContaining({
+        kind: 'sheet',
+        path: [],
+        name: '',
+        end: 'cm-lo',
+        cause: expect.objectContaining({ kind: 'cannot-evaluate' }),
+      }),
+    ]);
+    expectSame(res);
+  });
+});
+
+describe('a part whose placement is not well formed', () => {
+  it('is that placement’s finding alone, not a part that names no wires', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      blocks: ota.blocks?.map((b) => (b.name === 'in' ? { ...b, nodes: 5 } : b)),
+    } as unknown as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const problems = res.warnings.flatMap((w) =>
+      w.about?.kind === 'netlist' ? [[w.about.problem, w.about.devices]] : [],
+    );
+    expect(problems).toEqual([['placement', ['in']]]);
+    expectSame(res);
   });
 });

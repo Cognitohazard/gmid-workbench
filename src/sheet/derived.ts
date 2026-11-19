@@ -120,8 +120,11 @@ export function legacyFeasible(
 ): boolean {
   const quiet = quietIn(items);
   // A finding of validation about one range end is on that end's own list, and blocks today's
-  // feasibility as every validation error does.
-  if (ends.some((list) => (list ?? []).some(fromValidation))) return false;
+  // feasibility as every validation error does: as a finding of validation, or as the end's own
+  // cause where it says the same (an expression of its `set` that does not parse, which validation
+  // also finds, and whose cause the end's list keeps as the more specific).
+  if (ends.some((list) => (list ?? []).some((i) => fromValidation(i) || setNotWellFormed(i))))
+    return false;
   return items.every(
     (i) =>
       i.status === 'ok' ||
@@ -161,6 +164,15 @@ const quietIn =
       return t !== undefined && quietToday(t);
     });
   };
+
+/** A range end's own sheet item, failed because an expression of its `set` does not parse. */
+const setNotWellFormed = (i: Item): boolean =>
+  i.kind === 'sheet' &&
+  i.path.length === 0 &&
+  i.status === 'failed' &&
+  i.cause.kind === 'cannot-evaluate' &&
+  i.cause.data.rangeEnd !== undefined &&
+  i.cause.data.why === 'syntax';
 
 /** A finding that validating the document raised before it was evaluated. */
 const fromValidation = (i: Item): boolean =>

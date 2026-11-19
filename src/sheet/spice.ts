@@ -107,6 +107,8 @@ export interface SizedNetlist {
   circuit: boolean;
   /** The verdict of the run the netlist is written from (SheetResult.verdict). */
   verdict: DesignVerdict;
+  /** The run's feasibility flag (SheetResult.feasible), still written beside the verdict. */
+  feasible: boolean;
   devices: NetlistDevice[];
   elements: NetlistElement[];
   levels: NetlistLevel[];
@@ -178,7 +180,7 @@ export function sizedNetlist(doc: SheetDoc, res: SheetResult): SizedNetlist {
     })),
   ];
   const verdict = res.verdict?.verdict ?? 'undetermined';
-  const base = { title: doc.title, verdict, params, figures, errors };
+  const base = { title: doc.title, verdict, feasible: res.feasible, params, figures, errors };
   if (formatOf(doc) !== 2 || doc.nodes === 'none' || !res.nodes)
     return {
       ...base,

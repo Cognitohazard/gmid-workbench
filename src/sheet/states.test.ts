@@ -1456,65 +1456,121 @@ group('a range end that is not calculated', () => {
     status: 'withheld',
     on,
   });
-  const check = (item: Item, name: string | undefined, want: string[]): void => {
-    expect(describe(item, [], name).lines).toEqual(want);
-    for (const l of describe(item, [], name).segments) expect(standardProblems(l)).toEqual([]);
+  const check = (
+    item: Item,
+    name: string | undefined,
+    design: Item[] | undefined,
+    want: string[],
+  ) => {
+    const said = describe(item, [], name, design);
+    expect(said.lines).toEqual(want);
+    for (const l of said.segments) expect(standardProblems(l)).toEqual([]);
+  };
+  const searchFailed = failed('search', 'V_tail', {
+    kind: 'cannot-evaluate',
+    data: { why: 'not-finite', name: 'V_tail', reason: '' },
+  });
+  const wiring: Item = {
+    kind: 'sheet',
+    path: ['in'],
+    name: '',
+    status: 'failed',
+    cause: {
+      kind: 'not-determined',
+      data: {
+        why: 'netlist',
+        names: ['in'],
+        message: '',
+        netlist: [
+          {
+            problem: 'placement',
+            devices: ['in'],
+            placement: { fault: 'unknown-key', key: 'x' },
+          },
+        ],
+      },
+    },
   };
 
-  it('names the end and says why, then gives each item of the design point it waits on', () => {
+  it('names the end, says why from the design point’s items, and gives what each one says', () => {
     check(
-      end([
-        { kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' },
-        { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'no-crossing' },
-      ]),
+      end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
       'cm-lo',
+      [wiring],
       [
-        'Range end cm-lo is not calculated, because the design point has no design.',
-        'At the design point, the statements of block tail do not determine one design.',
-        'At the design point, the engine found no solution for V_tail.',
+        'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+        'At the design point, the statements of the sheet do not determine one design.',
+        'The wiring of part in names x, which a placement does not have.',
+        'A placement names only the drain, gate, source and body wires.',
       ],
     );
   });
 
-  it('says the statements do not determine one design, where that is all that is wrong', () => {
-    check(
-      end([{ kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' }]),
+  it('says the design point has no design where an item it waits on failed', () => {
+    const said = describe(
+      end([
+        { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'cannot-evaluate' },
+      ]),
+      [],
       'cm-lo',
-      [
-        'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
-        'At the design point, the statements of block tail do not determine one design.',
-      ],
+      [searchFailed],
+    ).lines;
+    expect(said[0]).toBe(
+      'Range end cm-lo is not calculated, because the design point has no design.',
     );
+    expect(said[1]).toMatch(/^At the design point, /);
   });
 
   it('says the design point rests on an assumed level', () => {
+    const assumed = failed('value', 'V_out_dc', {
+      kind: 'not-determined',
+      data: { why: 'assumed-level', names: ['V_out_dc'], message: '' },
+    });
+    expect(
+      describe(
+        end([
+          { kind: 'value', path: [], name: 'V_out_dc', frame: 'design', cause: 'not-determined' },
+        ]),
+        [],
+        'cm-hi',
+        [assumed],
+      ).lines[0],
+    ).toBe(
+      'Range end cm-hi is not calculated, because the design point rests on an assumed level.',
+    );
+  });
+
+  it('says the design point holds a solved value', () => {
+    const held: Item = {
+      kind: 'search',
+      path: [],
+      name: 'V_x',
+      status: 'ok',
+      attributes: {
+        kind: 'held',
+        value: 0.4,
+        unit: 'V',
+        relation: { lhs: 'y', rhs: 'goal', field: 'designConstraint' },
+      },
+    };
     check(
-      end([
-        {
-          kind: 'value',
-          path: [],
-          name: 'V_out_dc',
-          frame: 'design',
-          cause: 'not-determined',
-          assumed: true,
-        },
-      ]),
-      'cm-hi',
+      end([{ kind: 'search', path: [], name: 'V_x', frame: 'design', held: true }]),
+      undefined,
+      [held],
       [
-        'Range end cm-hi is not calculated, because the design point rests on an assumed level.',
-        'At the design point, V_out_dc is an assumed level.',
+        'This range end is not calculated, because the design point holds a solved value instead of solving it.',
+        'At the design point, V_x is held at 0.4 V.',
+        'The engine did not check the constraint of V_x at this value.',
       ],
     );
   });
 
-  it('says the design point holds a solved value, and names this end where no name is given', () => {
+  it('names the item and states no fault, where the design point’s list is not given', () => {
     check(
-      end([{ kind: 'search', path: [], name: 'V_x', frame: 'design', held: true }]),
+      end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
+      'cm-lo',
       undefined,
-      [
-        'This range end is not calculated, because the design point holds a solved value instead of solving it.',
-        'At the design point, V_x is held and not solved.',
-      ],
+      ['Range end cm-lo is not calculated.', 'At the design point, block in has a problem.'],
     );
   });
 });

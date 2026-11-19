@@ -27,6 +27,8 @@ import {
   failsCause,
   heldVerdictOf,
   isHeld,
+  sheetVerdictOf,
+  type EndList,
   type HeldVerdict,
   type Verdict,
   type NotReadData,
@@ -1032,10 +1034,8 @@ export function aboutTheSheet(doc: SheetDoc | undefined, w: QAWarning): boolean 
 export function notCalculated(design: readonly Item[]): Item[] {
   const on: WithheldOn[] = design.flatMap((i): WithheldOn[] => {
     const ref = { kind: i.kind, path: i.path, name: i.name };
-    if (i.status === 'failed' && i.cause.kind !== 'fails') {
-      const assumed = i.cause.kind === 'not-determined' && i.cause.data.why === 'assumed-level';
-      return [{ ...ref, frame: 'design', cause: i.cause.kind, ...(assumed ? { assumed } : {}) }];
-    }
+    if (i.status === 'failed' && i.cause.kind !== 'fails')
+      return [{ ...ref, frame: 'design', cause: i.cause.kind }];
     return isHeld(i) ? [{ ...ref, frame: 'design', held: true }] : [];
   });
   return [{ kind: 'sheet', path: [], name: '', status: 'withheld', on }];
@@ -1123,9 +1123,18 @@ export const isNotCalculated = (items: readonly Item[]): boolean =>
  *  not resolve. */
 export function endVerdict(
   items: readonly Item[] | undefined,
-  unread?: ReadonlySet<string>,
+  doc: SheetDoc | undefined,
 ): Verdict<HeldVerdict> | undefined {
   if (!items?.length) return undefined;
   if (items.length === 1 && items[0].kind === 'sheet' && items[0].status !== 'ok') return undefined;
-  return heldVerdictOf(items, unread);
+  return heldVerdictOf(items, unreadValues(doc));
 }
+
+/** The verdict of a sheet (sheetVerdictOf) from its document, its design point's list and its range
+ *  ends' lists: the one place a verdict of a sheet is formed, so the values no requirement and no
+ *  output reads (unreadValues) are always the document's own. */
+export const designVerdict = (
+  doc: SheetDoc | undefined,
+  design: readonly Item[],
+  ends: readonly EndList[] = [],
+): Verdict => sheetVerdictOf(design, ends, unreadValues(doc));

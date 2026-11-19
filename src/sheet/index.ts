@@ -37,16 +37,15 @@ import { formatOf } from './nodes';
 import { evaluateSheet, inheritedPolarityWarnings, withVerdict, type DeviceResolver } from './eval';
 import {
   aboutTheSheet,
+  designVerdict,
   givesValue,
   isNotCalculated,
   notCalculated,
-  unreadValues,
   withFindings,
 } from './items';
 import {
   isComplete,
   marginReadable,
-  verdictOf,
   type DesignVerdict,
   type HeldVerdict,
   type Item,
@@ -150,7 +149,7 @@ const sampleVerdict = (
   res: SheetResult,
   findings: readonly QAWarning[],
   doc: SheetDoc,
-): DesignVerdict => verdictOf(sampleItems(res, findings, doc), unreadValues(doc)).verdict;
+): DesignVerdict => designVerdict(doc, sampleItems(res, findings, doc), res.rangeEnds).verdict;
 
 /** One sample's items with validation's findings on them, as runSheet puts them. */
 const sampleItems = (res: SheetResult, findings: readonly QAWarning[], doc: SheetDoc): Item[] =>
@@ -204,9 +203,14 @@ export function runSheet(
   );
   const onEnd = (w: QAWarning): boolean =>
     w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location);
-  // A finding about one range end is on the design point's list too: the sheet carries the end, and
-  // its verdict is not feasible while an entry of it is not well formed.
-  const items = withFindings(res.items ?? [], pre, r.doc, 'validation');
+  // A finding about one range end is on that end's list alone; the sheet's verdict reads the ends'
+  // lists (sheetVerdictOf), so it is not feasible while the end's entry is not well formed.
+  const items = withFindings(
+    res.items ?? [],
+    pre.filter((w) => !onEnd(w)),
+    r.doc,
+    'validation',
+  );
   // A range end's run evaluates the entries of the sheet, so its list takes validation's findings
   // about them the way the design point's list does. A finding about the sheet as a whole is read in
   // the design point's list; the end is then not calculated, as it is where the design point gives
@@ -235,7 +239,7 @@ export function runSheet(
     assumptions,
     ...(rangeEnds ? { rangeEnds } : {}),
     items,
-    verdict: verdictOf(items, unreadValues(r.doc)),
+    verdict: designVerdict(r.doc, items, rangeEnds),
   };
 }
 
@@ -650,7 +654,7 @@ export function sweepSheet(
       res,
       feasible: res.feasible,
       stands: stands(res),
-      verdict: verdictOf(items, unreadValues(d)).verdict,
+      verdict: designVerdict(d, items, res.rangeEnds).verdict,
       complete: isComplete({ items }),
     };
   };

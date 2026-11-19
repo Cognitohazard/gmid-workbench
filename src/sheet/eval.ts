@@ -79,7 +79,6 @@ import {
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
   noSolutionCause,
-  verdictOf,
   type Cause,
   type HeldVerdict,
   type Item,
@@ -95,13 +94,13 @@ import {
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { failOn, solveFailureOf } from './derived';
 import {
+  designVerdict,
   endVerdict,
   itemsOf,
   notCalculated,
   resolveWithheld,
   searchItems,
   under,
-  unreadValues,
   withFindings,
   withStatements,
 } from './items';
@@ -2304,7 +2303,14 @@ export function evaluateSheet(
           }
         : i,
     );
-    return { values: {}, checks: [], feasible: false, warnings, items, verdict: verdictOf(items) };
+    return {
+      values: {},
+      checks: [],
+      feasible: false,
+      warnings,
+      items,
+      verdict: designVerdict(undefined, items),
+    };
   }
   // A device whose wires put its gate on its drain is diode-connected, and is sized on the
   // diode diagonal like one that says so (see structuralDiodes) — stated before anything sizes.
@@ -2488,7 +2494,7 @@ const withItems = (
     else if (items[at].status === 'ok') items[at] = failed;
   }
   const resolved = resolveWithheld(items);
-  return { ...res, items: resolved, verdict: verdictOf(resolved, unreadValues(doc)) };
+  return { ...res, items: resolved, verdict: designVerdict(doc, resolved) };
 };
 
 /** The items of a run with each solved param it held at a given value marked so: the value it
@@ -2513,7 +2519,7 @@ function withHeldMarks(doc: SheetDoc, res: SheetResult, held: readonly string[])
       },
     };
   });
-  return { ...res, items, verdict: verdictOf(items, unreadValues(doc)) };
+  return { ...res, items, verdict: designVerdict(doc, items) };
 }
 
 /**
@@ -4188,7 +4194,12 @@ function evaluateWithRange(
   const held = holdHardware(doc, base);
   const settings = opts.settings ?? DEFAULT_SETTINGS;
   const reports = rangeEnds.map((e) => runRangeEnd(e, held, base, table, resolveDevice, settings));
-  return { ...base, rangeEnds: reports, complies: reports.every((r) => r.state === 'complies') };
+  return {
+    ...base,
+    rangeEnds: reports,
+    complies: reports.every((r) => r.state === 'complies'),
+    verdict: designVerdict(doc, base.items ?? [], reports),
+  };
 }
 
 /** A range end's verdict from its list (endVerdict), where the engine calculated the end. */
@@ -4196,7 +4207,7 @@ export const withVerdict = (
   items: readonly Item[] | undefined,
   doc: SheetDoc,
 ): { verdict?: Verdict<HeldVerdict> } => {
-  const verdict = endVerdict(items, unreadValues(doc));
+  const verdict = endVerdict(items, doc);
   return verdict ? { verdict } : {};
 };
 

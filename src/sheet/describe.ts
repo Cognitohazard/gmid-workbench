@@ -37,7 +37,7 @@ import type {
   Verdict,
   WithheldOn,
 } from './states';
-import { incompleteOn } from './states';
+import { incompleteOn, isHeld } from './states';
 
 // ── Numbers, units and names as a message quotes them ────────────────────────────────────────
 
@@ -1568,7 +1568,6 @@ export function withheldClause(r: WithheldOn): Line {
   if (r.frame === 'design') {
     const ref = { kind: r.kind, path: r.path, name: r.name };
     if (r.cause === undefined) return t`${itemName(ref)} is held and not solved`;
-    if (r.assumed) return t`${itemName(ref)} is an assumed level`;
     return withheldClause({ ...ref, cause: r.cause });
   }
   const n = itemName(r);
@@ -1604,23 +1603,84 @@ export function withheldClause(r: WithheldOn): Line {
   }
 }
 
-/** Why a range end is not calculated, from the design point's items it waits on: the design point
- *  has no design where one of them failed; else its statements do not determine one design; else
- *  it rests on an assumed level; else it holds a solved value instead of solving it. */
-function designReason(on: readonly WithheldOn[]): Line {
-  const design = on.filter((r) => r.frame === 'design');
-  if (design.some((r) => r.cause !== undefined && r.cause !== 'not-determined'))
+/** The item of the design point's list a pointer of a range end names. */
+const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
+  design.find(
+    (i) =>
+      i.kind === r.kind &&
+      i.name === r.name &&
+      i.path.length === r.path.length &&
+      i.path.every((p, k) => p === r.path[k]),
+  );
+
+/** Why a range end is not calculated, from the design point's items its pointers name: the design
+ *  point has no design where one of them failed; else its statements do not determine one design;
+ *  else it rests on an assumed level; else it holds a solved value instead of solving it. Undefined
+ *  where no pointer names an item of the list. */
+function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
+  const items = on.flatMap((r) => {
+    const i = r.frame === 'design' ? pointedAt(r, design) : undefined;
+    return i ? [i] : [];
+  });
+  const determined = (i: Item): boolean =>
+    i.status === 'failed' && i.cause.kind === 'not-determined';
+  const assumed = (i: Item): boolean =>
+    determined(i) &&
+    i.status === 'failed' &&
+    i.cause.kind === 'not-determined' &&
+    i.cause.data.why === 'assumed-level';
+  if (items.some((i) => i.status === 'failed' && !determined(i)))
     return t`the design point has no design`;
-  if (design.some((r) => r.cause === 'not-determined' && !r.assumed))
+  if (items.some((i) => determined(i) && !assumed(i)))
     return t`the statements of the sheet do not determine one design`;
-  if (design.some((r) => r.assumed)) return t`the design point rests on an assumed level`;
-  return t`the design point holds a solved value instead of solving it`;
+  if (items.some(assumed)) return t`the design point rests on an assumed level`;
+  if (items.some(isHeld)) return t`the design point holds a solved value instead of solving it`;
+  return undefined;
+}
+
+/** A line as the clause after "At the design point,": its first word in lower case where it opens
+ *  with plain text. */
+const lowerFirst = (l: Line): Line => {
+  const [first, ...rest] = l;
+  if (first?.kind !== 'text' || !/^(The|Part|Block) /.test(first.text)) return l;
+  return [
+    { kind: 'text', text: first.text.charAt(0).toLowerCase() + first.text.slice(1) },
+    ...rest,
+  ];
+};
+
+/** The lines of a range end the engine does not calculate. With the design point's list, each
+ *  pointer gives the sentences the design point's own item gives; without it, the item is named and
+ *  no fault is stated. */
+function notCalculatedText(
+  on: readonly WithheldOn[],
+  end: string | undefined,
+  design: readonly Item[] | undefined,
+): Line[] {
+  const who = end === undefined ? t`This range end` : t`Range end ${nm(end)}`;
+  const reason = design ? designReason(on, design) : undefined;
+  const head = reason
+    ? t`${who} is not calculated, because ${reason}.`
+    : t`${who} is not calculated.`;
+  const clauses = on.flatMap((r): Line[] => {
+    const ref = { kind: r.kind, path: r.path, name: r.name };
+    const own = design ? pointedAt(r, design) : undefined;
+    const said = own ? describe(own).segments : [];
+    if (!said.length) return [t`At the design point, ${itemName(ref)} has a problem.`];
+    return [t`At the design point, ${lowerFirst(said[0])}`, ...said.slice(1)];
+  });
+  return distinctLines([head, ...clauses]);
 }
 
 /** What a reader is shown for one item: nothing for an item that is ok; for a failed one, its
  *  cause's text; for a withheld one, one sentence for each failed item it depends on. `within`
  *  is the path of the block whose own list the item is read in, where it is one. */
-export function describe(item: Item, within: readonly string[] = [], end?: string): FindingText {
+export function describe(
+  item: Item,
+  within: readonly string[] = [],
+  end?: string,
+  design?: readonly Item[],
+): FindingText {
   if (item.status === 'ok')
     return item.attributes?.kind === 'held' ? heldText(item, item.attributes) : finding('', []);
   // A range end the engine does not calculate: the design point gives no design, and its items say
@@ -1631,13 +1691,7 @@ export function describe(item: Item, within: readonly string[] = [], end?: strin
     !item.path.length &&
     item.on.some((r) => r.frame === 'design')
   )
-    return finding(
-      WITHHELD_NAME,
-      distinctLines([
-        t`${end === undefined ? t`This range end` : t`Range end ${nm(end)}`} is not calculated, because ${designReason(item.on)}.`,
-        ...item.on.map((r) => t`At the design point, ${withheldClause(r)}.`),
-      ]),
-    );
+    return finding(WITHHELD_NAME, notCalculatedText(item.on, end, design));
   if (item.status === 'withheld' && !item.on.length)
     return finding(WITHHELD_NAME, [upperFirst(t`${itemName(item)} is not calculated.`)]);
   if (item.status === 'withheld')

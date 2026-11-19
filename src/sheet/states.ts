@@ -477,8 +477,6 @@ export type WithheldOn =
       readonly frame: 'design';
       readonly cause?: CauseName;
       readonly held?: true;
-      /** A value the design rests on as an assumed level (not-determined, `assumed-level`). */
-      readonly assumed?: true;
     });
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
@@ -606,7 +604,9 @@ export type HeldVerdict = 'no-operating-point' | 'non-compliant' | 'compliant' |
  *  that decide it; for an undetermined one, every failed item. */
 export interface Verdict<V extends string = DesignVerdict> {
   readonly verdict: V;
-  readonly failed: readonly (ItemRef & { readonly cause: Cause })[];
+  /** Each failed item the verdict rests on. One of a range end's own list carries the end's name
+   *  (`end`), as it is not in the design point's list. */
+  readonly failed: readonly (ItemRef & { readonly cause: Cause; readonly end?: string })[];
   /** The solved params the run held instead of solving, where any was: the reason the verdict is
    *  undetermined. */
   readonly held?: readonly ItemRef[];
@@ -742,6 +742,40 @@ const okRule: VerdictRule = (items, failed) =>
  *  held rule comes first: whether a held value or a failing hard requirement decides first is an
  *  open ruling, and this order is the one line that holds it. */
 const VERDICT_RULES: readonly VerdictRule[] = [heldRule, provedRule, failsRule, okRule];
+
+/** A range end's list, by the end's name (RangeEndReport). */
+export interface EndList {
+  readonly name: string;
+  readonly items?: readonly Item[];
+}
+
+/** Whether a range end was not calculated because its own entry failed: its list is its one sheet
+ *  item, failed. */
+const ownEntryFailed = (items: readonly Item[] | undefined): boolean =>
+  items?.length === 1 && items[0].kind === 'sheet' && items[0].status === 'failed';
+
+/**
+ * The verdict of a sheet, from the design point's list and its range ends' lists: verdictOf of the
+ * design point, then one rule after "a requirement fails": a range end whose own entry failed
+ * leaves the verdict undetermined, and `failed` names that end's sheet item with the end's name.
+ * The sheet carries the end, so it is not feasible while the end's entry is not well formed; the
+ * design point itself was calculated, so its list holds no copy of the finding.
+ */
+export function sheetVerdictOf(
+  design: readonly Item[],
+  ends: readonly EndList[],
+  unread: ReadonlySet<string> = NONE,
+): Verdict {
+  const v = verdictOf(design, unread);
+  if (v.verdict === 'infeasible' || v.verdict === 'non-compliant') return v;
+  const own = ends.flatMap((e) =>
+    ownEntryFailed(e.items) && e.items?.[0].status === 'failed'
+      ? [{ kind: 'sheet' as const, path: [], name: '', cause: e.items[0].cause, end: e.name }]
+      : [],
+  );
+  if (!own.length) return v;
+  return { ...v, verdict: 'undetermined', failed: [...v.failed, ...own] };
+}
 
 /** The verdict of a held point: verdictOf, in the words a held design is asked in. */
 export function heldVerdictOf(

@@ -1023,6 +1023,9 @@ interface TreeDevice {
   at: number[];
   /** The placements: the sizing sheet's own `nodes`, else the composing block's (see deviceWires). */
   placements?: DeviceNodes[];
+  /** Whether a `nodes` entry is written for the device, well formed or not: one that is not well
+   *  formed is that entry's own finding, not a device that names no wires. */
+  written: boolean;
   /** The block path of the sheet the placements are written in: the sizing sheet's own for its own
    *  `nodes`, the composing sheet's for a block's. For a device that names none, the sheet whose
    *  walk asks after it: its own where it is the top or joins its parent's walk, else its parent. */
@@ -1040,15 +1043,18 @@ function treeDevices(doc: SheetDoc): TreeDevice[] {
     const none = formatOf(d) === 2 && d.nodes === 'none';
     const path = chain.map((b) => b.name).join(PATH_SEP);
     const block = chain[chain.length - 1];
-    const byBlock = parent && block ? placementsOf(blockWires(parent, block)) : undefined;
+    const blockRaw = parent && block ? blockWires(parent, block) : undefined;
+    const byBlock = blockRaw !== undefined ? placementsOf(blockRaw) : undefined;
     if (d.givens && !(none && !byBlock)) {
       const own = formatOf(d) === 2 ? placementsOf(d.nodes) : undefined;
+      const written = (formatOf(d) === 2 && d.nodes !== undefined) || blockRaw !== undefined;
       const ownWalk = !parent || flattened(d);
       out.push({
         name: path || 'givens',
         givens: d.givens,
         chain,
         at,
+        written,
         ...((own ?? byBlock) ? { placements: own ?? byBlock } : {}),
         placedIn:
           own || (!byBlock && ownWalk)
@@ -1072,7 +1078,7 @@ function treeDevices(doc: SheetDoc): TreeDevice[] {
  *  own; see treeDevices). */
 export const unwiredDevices = (doc: SheetDoc): string[] =>
   treeDevices(doc)
-    .filter((d) => !d.placements)
+    .filter((d) => !d.placements && !d.written)
     .map((d) => d.name);
 
 /**
