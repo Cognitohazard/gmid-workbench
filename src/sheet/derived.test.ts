@@ -1641,4 +1641,87 @@ describe('a wiring fault of a part', () => {
       ]);
     expectSame(res);
   });
+
+  it('puts a short and a diode flag its wires contradict on the sheet that wires the part', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const run = (doc: SheetDoc) => {
+      const res = runSheet(doc, table, undefined, REFS);
+      const sheets = (res.items ?? []).filter((i) => i.kind === 'sheet' && i.status === 'failed');
+      return { res, sheets };
+    };
+    // Part in with its drain and source on one wire.
+    const short = run({
+      ...ota,
+      blocks: ota.blocks?.map((b) =>
+        b.name === 'in' ? { ...b, nodes: { ...(b.nodes as object), s: 'out' } } : b,
+      ),
+    } as SheetDoc);
+    expect(short.sheets).toEqual([
+      expect.objectContaining({
+        path: [],
+        cause: expect.objectContaining({
+          data: expect.objectContaining({
+            netlist: [{ problem: 'short', wires: ['out'], devices: ['in'] }],
+          }),
+        }),
+      }),
+    ]);
+    expect(describeItem(short.sheets[0]).lines).toEqual([
+      'The statements of the sheet do not determine one design.',
+      'Part in has its drain and its source on wire out, which shorts it.',
+    ]);
+    expectSame(short.res);
+    // The diode side of the load with its diode flag off, its wires a diode connection.
+    const flag = run({
+      ...ota,
+      blocks: ota.blocks?.map((b) =>
+        b.name === 'ldr' && b.doc
+          ? { ...b, doc: { ...b.doc, givens: { ...b.doc.givens, diode: false } } }
+          : b,
+      ),
+    } as SheetDoc);
+    expect(flag.sheets).toEqual([
+      expect.objectContaining({
+        path: [],
+        cause: expect.objectContaining({
+          data: expect.objectContaining({
+            netlist: [{ problem: 'diode-flag', devices: ['ldr'], diodeFlag: false }],
+          }),
+        }),
+      }),
+    ]);
+    expectSame(flag.res);
+  });
+});
+
+describe('a range end behind a level that cannot hold a wire', () => {
+  const endLines = (level: string, assumed = false): readonly string[] => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      levels: { ...(ota as { levels?: object }).levels, out: level },
+      params: ota.params.map((p) =>
+        assumed && p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p,
+      ),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const end = res.rangeEnds?.[0];
+    return end?.items?.[0] ? describeItem(end.items[0], [], end.name, res.items).lines : [];
+  };
+
+  it('carries the reason, or how many there are', () => {
+    expect(endLines('V_tail')).toEqual([
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+      'At the design point, the level V_tail cannot hold wire out, because the engine solves V_tail.',
+    ]);
+    expect(endLines('V_out_dc + nope + CM_in')).toEqual([
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+      'At the design point, the level V_out_dc + nope + CM_in cannot hold wire out, for 2 reasons.',
+    ]);
+    expect(endLines('V_out_dc', true)).toEqual([
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+      'At the design point, the level V_out_dc cannot hold wire out, because V_out_dc is marked assumed.',
+      'At the design point, V_out_dc is an assumed level.',
+    ]);
+  });
 });

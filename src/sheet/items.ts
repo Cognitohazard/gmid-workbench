@@ -692,15 +692,24 @@ function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRe
   return { kind: 'sheet', path, name: '' };
 }
 
+/** The problems the netlist check raises on one placement of a part. */
+const ON_A_PLACEMENT: ReadonlySet<NetlistAbout['problem']> = new Set([
+  'placement',
+  'short',
+  'diode-flag',
+]);
+
 /** The item a finding of the netlist check names by what it is about: the sheet's own device, or
  *  a selector param of the sheet. Undefined where it names neither. */
 function aboutRef(doc: SheetDoc | undefined, w: QAWarning): ItemRef | undefined {
   const a = netlistOf(w);
   if (!a || !doc) return undefined;
-  // A placement that is not well formed is a finding of the netlist of the sheet that writes it: on
-  // that sheet's own item, its location less the last segment (`nodes` for the sheet's own device,
-  // the block's name for a part it composes). The part's own item is not failed by it.
-  if (a.problem === 'placement')
+  // A finding the netlist check raises on a placement (a placement that is not well formed, a
+  // drain and source on one wire, a diode flag its wires contradict) is a finding of the netlist
+  // of the sheet that writes the placement: on that sheet's own item, its location less the last
+  // segment (`nodes` for the sheet's own device, the block's name for a part it composes). The
+  // part's own item is not failed by it.
+  if (ON_A_PLACEMENT.has(a.problem))
     return { kind: 'sheet', path: (w.location ?? '').split('.').slice(0, -1), name: '' };
   // A selector the table contradicts is on its own item; where its value is not +1 or -1 that item
   // holds the finding that its entry is not well formed, and the contradiction is on the sheet.

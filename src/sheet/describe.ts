@@ -1259,6 +1259,34 @@ function refusedLines(rs: readonly LevelRefusal[]): Line[] {
     : [...lines, t`Write the level as a number, or from values marked independent.`];
 }
 
+/** One reason a level cannot hold a wire, as the clause after "because". */
+function refusalClause(r: LevelRefusal): Line {
+  switch (r.reason) {
+    case 'class':
+      switch (r.cls) {
+        case 'assumed':
+          return t`${nm(r.name)} is marked assumed`;
+        case 'solved':
+          return t`the engine solves ${nm(r.name)}`;
+        case 'held':
+          return t`a hold solves ${nm(r.name)} again`;
+        case 'unclassified':
+          return t`${nm(r.name)} has no mark`;
+      }
+      break;
+    case 'unresolved':
+      return t`${nm(r.name)} names nothing on the sheet`;
+    case 'cycle':
+      return t`${andLines(r.via.map((v) => [nm(v)]))} read each other`;
+    case 'device':
+      return t`it reads a quantity of ${partName(r.device)}`;
+    case 'equation':
+      return t`it reads equation ${nm(r.name)}`;
+    case 'analysis':
+      return t`it reads analysis ${nm(r.name)}`;
+  }
+}
+
 /** The lines of one reason a level cannot hold a wire. */
 function refusalLines(r: LevelRefusal): Line[] {
   switch (r.reason) {
@@ -1715,6 +1743,14 @@ function designLine(i: Item): Line {
   if (i.status === 'failed' && i.cause.kind === 'not-determined') {
     if (i.cause.data.why === 'assumed-level')
       return t`At the design point, ${itemName(ref)} is an assumed level.`;
+    // A level that cannot hold a wire: the level and wire, with its reason, or how many it has.
+    const [first] = i.cause.data.netlist ?? [];
+    if (first?.problem === 'level-refused' && first.refused?.length) {
+      const head = t`the level ${ex(first.level ?? '')} cannot hold wire ${nm(first.wires?.[0] ?? '')}`;
+      return first.refused.length > 1
+        ? t`At the design point, ${head}, for ${String(first.refused.length)} reasons.`
+        : t`At the design point, ${head}, because ${refusalClause(first.refused[0])}.`;
+    }
     const specific = describe(i).segments[1];
     if (specific) return t`At the design point, ${lowerFirst(specific)}`;
   }

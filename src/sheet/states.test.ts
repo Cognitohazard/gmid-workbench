@@ -41,6 +41,7 @@ import {
   textOf,
   type Line,
 } from './describe';
+import type { LevelRefusal } from '../types';
 import type { SheetDoc, SolveRange } from './types';
 import type { NetlistAbout, OutsideTable } from '../types';
 
@@ -1518,6 +1519,60 @@ group('a range end that is not calculated', () => {
   const searchFailed = failed('search', 'V_tail', {
     kind: 'cannot-evaluate',
     data: { why: 'not-finite', name: 'V_tail', reason: '' },
+  });
+  it('carries the reason a level cannot hold a wire, or how many there are', () => {
+    const level = (refused: LevelRefusal[]): Item => ({
+      kind: 'sheet',
+      path: [],
+      name: '',
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          names: ['out'],
+          message: '',
+          netlist: [{ problem: 'level-refused', wires: ['out'], level: 'L', refused }],
+        },
+      },
+    });
+    const on: WithheldOn[] = [
+      { kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' },
+    ];
+    const head =
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.';
+    const cases: [LevelRefusal[], string][] = [
+      [
+        [{ reason: 'class', name: 'V_out_dc', cls: 'assumed' }],
+        'because V_out_dc is marked assumed',
+      ],
+      [[{ reason: 'class', name: 'V_tail', cls: 'solved' }], 'because the engine solves V_tail'],
+      [
+        [{ reason: 'class', name: 'V_s', cls: 'held', device: 'casc' }],
+        'because a hold solves V_s again',
+      ],
+      [[{ reason: 'class', name: 'k', cls: 'unclassified' }], 'because k has no mark'],
+      [[{ reason: 'unresolved', name: 'nope' }], 'because nope names nothing on the sheet'],
+      [[{ reason: 'cycle', via: ['qa', 'qb'] }], 'because qa and qb read each other'],
+      [[{ reason: 'device', device: 'in' }], 'because it reads a quantity of part in'],
+      [[{ reason: 'equation', name: 'gain' }], 'because it reads equation gain'],
+      [[{ reason: 'analysis', name: 'ac' }], 'because it reads analysis ac'],
+      [
+        [
+          { reason: 'unresolved', name: 'nope' },
+          { reason: 'equation', name: 'gain' },
+          { reason: 'device', device: 'in' },
+        ],
+        'for 3 reasons',
+      ],
+    ];
+    for (const [refused, why] of cases)
+      check(
+        end(on),
+        'cm-lo',
+        [level(refused)],
+        [head, `At the design point, the level L cannot hold wire out, ${why}.`],
+      );
   });
   const wiring: Item = {
     kind: 'sheet',
