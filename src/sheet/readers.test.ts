@@ -4,14 +4,14 @@
 // fields stay what they were beside the stricter reading.
 
 import { describe as group, it, expect } from 'vitest';
-import { evaluateSheet, runSheet } from './index';
+import { evaluateSheet, runSheet, sweepOf, sweepSheet, sweepSheet2 } from './index';
 import { resolvedSheet } from './resolve';
 import { sheetSensitivities } from './sensitivity';
 import { devicePropertySensitivities } from './properties';
 import { givesValue } from './items';
 import { givesDesign, verdictOf } from './states';
 import { noDesignText, standardProblems } from './describe';
-import { stands, unfinishedBecause, withoutRange, type SheetDoc } from './types';
+import { stands, unfinishedBecause, withoutRange, type SheetDoc, type SheetResult } from './types';
 import { sheet, table, REFS } from './library.fixtures';
 
 const ota = sheet('otas/five-transistor-ota.json');
@@ -105,5 +105,55 @@ group('a design that rests on an assumed level', () => {
     const res = evaluated(assumed);
     expect(stands(res)).toBe(true);
     expect(givesDesign(res)).toBe(false);
+  });
+});
+
+group('a sweep', () => {
+  it('passes where the sample reads feasible, beside today’s flag', () => {
+    const s = sweepSheet(ghost, 'gm_id_in', table, 5, undefined, REFS, { windows: true });
+    expect(s.feasible).toEqual([true, true, true, true, true]);
+    expect(s.verdicts).toEqual(Array(5).fill('undetermined'));
+    expect(s.windows).toEqual([]);
+    const plain = sweepSheet(soft(ota), 'gm_id_in', table, 5, undefined, REFS, { windows: true });
+    expect(plain.verdicts).toEqual(Array(5).fill('feasible'));
+    expect(plain.windows).toHaveLength(1);
+  });
+
+  it('gives each cell of a map its verdict, beside today’s flag', () => {
+    const m = sweepSheet2(ghost, 'gm_id_in', 'gm_id_ld', table, 3, undefined, REFS);
+    expect(m.feasible).toEqual(Array(3).fill(Array(3).fill(true)));
+    expect(m.verdicts).toEqual(Array(3).fill(Array(3).fill('undetermined')));
+  });
+
+  it('leaves a gap where a value’s item is not ok, though the withheld record holds none', () => {
+    // A sample whose result holds a number for a value its own item withholds.
+    const doc: SheetDoc = {
+      title: 't',
+      params: [{ name: 'k', value: 1, min: 0, max: 2 }],
+      equations: [{ name: 'y', expr: 'k * 2' }],
+      checks: [],
+    };
+    const res = (k: number): SheetResult => ({
+      values: { k, y: 2 * k },
+      checks: [],
+      feasible: true,
+      warnings: [],
+      items: [
+        { kind: 'sheet', path: [], name: '', status: 'ok' },
+        {
+          kind: 'value',
+          path: [],
+          name: 'y',
+          status: 'withheld',
+          on: [{ kind: 'value', path: [], name: 'k', cause: 'cannot-evaluate' }],
+        },
+      ],
+    });
+    const s = sweepOf(doc, 'k', 3, undefined, (d) => ({
+      res: res(d.params[0].value),
+      feasible: true,
+      stands: true,
+    }));
+    expect(s.values.find((c) => c.name === 'y')?.y).toEqual([null, null, null]);
   });
 });

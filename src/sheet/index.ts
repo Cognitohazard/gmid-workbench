@@ -34,8 +34,8 @@ import type {
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
 import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
-import { aboutTheSheet, notCalculated, withFindings } from './items';
-import { verdictOf } from './states';
+import { aboutTheSheet, givesValue, notCalculated, withFindings } from './items';
+import { verdictOf, type DesignVerdict } from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
@@ -124,10 +124,27 @@ const NO_VALUES: SheetResult = { values: {}, checks: [], feasible: false, warnin
 /** A named result at one evaluated sample, or null where the sample does not determine it (see
  *  SweepCurve): a value the evaluation withheld, or one that is not finite. */
 function sampleValue(res: SheetResult | undefined, name: string): number | null {
-  if (!res || res.withheld?.[name] !== undefined) return null;
+  if (!res || !givesValue(res, name)) return null;
   const v = res.values[name];
-  return v !== undefined && Number.isFinite(v) ? v : null;
+  return Number.isFinite(v) ? v : null;
 }
+
+/** The findings of validation the design point's list takes: all but those about one range end,
+ *  which that end's own list takes (see runSheet). */
+function designFindings(doc: SheetDoc, pre: readonly QAWarning[]): QAWarning[] {
+  const endNames = new Set((doc.operatingRange ?? []).map((e) => e?.name));
+  return pre.filter(
+    (w) => !(w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location)),
+  );
+}
+
+/** The verdict of one evaluated sample, with validation's findings on its items as runSheet puts
+ *  them: the verdict a script that runs the same values reads. */
+const sampleVerdict = (
+  res: SheetResult,
+  findings: readonly QAWarning[],
+  doc: SheetDoc,
+): DesignVerdict => verdictOf(withFindings(res.items ?? [], findings, doc, 'validation')).verdict;
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a block's
@@ -163,12 +180,7 @@ export function runSheet(
   const endNames = new Set((r.doc.operatingRange ?? []).map((e) => e?.name));
   const onEnd = (w: QAWarning): boolean =>
     w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location);
-  const items = withFindings(
-    res.items ?? [],
-    pre.filter((w) => !onEnd(w)),
-    r.doc,
-    'validation',
-  );
+  const items = withFindings(res.items ?? [], designFindings(r.doc, pre), r.doc, 'validation');
   // A range end's run evaluates the entries of the sheet, so its list takes validation's findings
   // about them the way the design point's list does. A finding about the sheet as a whole is read in
   // the design point's list; the end is then not calculated, as it is where the design point gives
@@ -365,6 +377,9 @@ export interface SweepSample {
   readonly res?: SheetResult;
   readonly feasible: boolean;
   readonly stands: boolean;
+  /** The sample's verdict (sampleVerdict), where the caller gives one: a pass window is where it
+   *  is feasible. A caller that gives none is read by `feasible`. */
+  readonly verdict?: DesignVerdict;
 }
 
 /**
@@ -383,8 +398,8 @@ export function sweepOf(
   param: string,
   n: number,
   refs: SheetRefIndex | undefined,
-  sample: (doc: SheetDoc) => SweepSample,
-  probe?: (doc: SheetDoc) => SweepSample,
+  sample: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
+  probe?: (doc: SheetDoc, findings: readonly QAWarning[]) => SweepSample,
 ): SheetSweep {
   const v = doc.params.find((p) => p.name === param);
   if (!sweepable(v)) {
@@ -408,9 +423,12 @@ export function sweepOf(
   // sample, so validating it (e.g. a NaN default with a finite [min,max]) would force
   // every sample infeasible for a value no sample ever uses. Any finite stand-in works
   // structurally; min is one.
-  const blocked =
-    r.warnings.some((w) => w.severity === 'error') ||
-    validateSheet(withParams(r.doc, { [param]: v.min })).some((w) => w.severity === 'error');
+  const pre = [...r.warnings, ...validateSheet(withParams(r.doc, { [param]: v.min }))];
+  const blocked = pre.some((w) => w.severity === 'error');
+  const findings = designFindings(r.doc, pre);
+  /** Whether a sample passes: its verdict is feasible, where the caller gives one. */
+  const passes = (s: SweepSample): boolean =>
+    s.verdict !== undefined ? s.verdict === 'feasible' : !blocked && s.feasible;
   const checks: SheetSweepCheck[] = [];
   collectTreeChecks(r.doc, '', checks);
   // Each range end rides the sweep as ONE aggregate curve: the held design's worst hard-check
@@ -430,6 +448,8 @@ export function sweepOf(
   }));
   const x: number[] = [];
   const feasible: boolean[] = [];
+  const passed: boolean[] = [];
+  const verdicts: DesignVerdict[] = [];
   const stood: boolean[] = [];
   const beyond: OutsideTable[][] = [];
   // One curve per named result (namedResults): the sheet's equations and solved values from the
@@ -453,8 +473,11 @@ export function sweepOf(
   for (let i = 0; i < pts; i++) {
     const t = v.min + ((v.max - v.min) * i) / (pts - 1);
     x.push(t);
-    const { res, feasible: ok, stands: done } = sample(withParams(r.doc, { [param]: t }));
+    const s = sample(withParams(r.doc, { [param]: t }), findings);
+    const { res, feasible: ok, stands: done } = s;
     feasible.push(!blocked && ok);
+    passed.push(passes(s));
+    if (s.verdict !== undefined) verdicts.push(s.verdict);
     beyond.push(res ? outsideIn(res) : []);
     if (res) addNamed(res, i);
     for (const c of curves.values()) c.y.push(sampleValue(res, c.name));
@@ -484,18 +507,19 @@ export function sweepOf(
     stands: stood,
     outside: beyond,
     values: [...curves.values()],
+    ...(verdicts.length === pts ? { verdicts } : {}),
   };
   if (!probe) return out;
   const at = (t: number): { ok: boolean; failing: string[]; outside: OutsideTable[] } => {
-    if (blocked) return { ok: false, failing: [], outside: [] };
-    const s = probe(withParams(r.doc, { [param]: t }));
+    const s = probe(withParams(r.doc, { [param]: t }), findings);
+    if (s.verdict === undefined && blocked) return { ok: false, failing: [], outside: [] };
     return {
-      ok: s.feasible,
+      ok: passes(s),
       failing: s.res ? failingIn(ownChecks(s.res)) : [],
       outside: s.res ? outsideIn(s.res) : [],
     };
   };
-  return { ...out, windows: windowsOf(x, feasible, failedAt, beyond, at) };
+  return { ...out, windows: windowsOf(x, passed, failedAt, beyond, at) };
 }
 
 /** Halvings that pin a window's edge between two samples: 2^-8 of their spacing, about a
@@ -568,9 +592,14 @@ export function sweepSheet(
   refs?: SheetRefIndex,
   opts: SweepOptions = {},
 ): SheetSweep {
-  const sample = (d: SheetDoc): SweepSample => {
+  const sample = (d: SheetDoc, findings: readonly QAWarning[]): SweepSample => {
     const res = evaluateSheet(d, table, resolveDevice, { settings: opts.settings });
-    return { res, feasible: res.feasible, stands: stands(res) };
+    return {
+      res,
+      feasible: res.feasible,
+      stands: stands(res),
+      verdict: sampleVerdict(res, findings, d),
+    };
   };
   // Feasibility never reads a range end, so an edge is pinned without them: one evaluation a probe.
   return sweepOf(
@@ -579,7 +608,7 @@ export function sweepSheet(
     n,
     refs,
     sample,
-    opts.windows ? (d) => sample(withoutRange(d)) : undefined,
+    opts.windows ? (d, findings) => sample(withoutRange(d), findings) : undefined,
   );
 }
 
@@ -631,6 +660,7 @@ export function sweepSheet2(
     x: [],
     y: [],
     feasible: [],
+    verdicts: [],
     binding: [],
     outside: [],
   };
@@ -643,15 +673,17 @@ export function sweepSheet2(
     withParams(swept, { [paramX]: vx, [paramY]: vy });
   // Validated WITH its range: the map does not evaluate the range ends, but a sheet whose range
   // is structurally broken is a broken sheet, and every other entry point refuses it.
-  const blocked =
-    r.warnings.some((w) => w.severity === 'error') ||
-    validateSheet(withParams(r.doc, { [paramX]: px.min, [paramY]: py.min })).some(
-      (w) => w.severity === 'error',
-    );
+  const pre = [
+    ...r.warnings,
+    ...validateSheet(withParams(r.doc, { [paramX]: px.min, [paramY]: py.min })),
+  ];
+  const blocked = pre.some((w) => w.severity === 'error');
+  const findings = designFindings(r.doc, pre);
 
   const x = Array.from({ length: pts }, (_, i) => px.min + ((px.max - px.min) * i) / (pts - 1));
   const y = Array.from({ length: pts }, (_, i) => py.min + ((py.max - py.min) * i) / (pts - 1));
   const feasible: boolean[][] = [];
+  const verdicts: DesignVerdict[][] = [];
   const binding: (string | null)[][] = [];
   const beyond: OutsideTable[][][] = [];
   const asked = opts.value;
@@ -661,6 +693,7 @@ export function sweepSheet2(
 
   for (let yi = 0; yi < pts; yi++) {
     const frow: boolean[] = [];
+    const vrow: DesignVerdict[] = [];
     const brow: (string | null)[] = [];
     const orow: OutsideTable[][] = [];
     const zrow: (number | null)[] = [];
@@ -668,11 +701,14 @@ export function sweepSheet2(
       const res = evaluateSheet(overrideTwo(x[xi], y[yi]), table, resolveDevice, {
         settings: opts.settings,
       });
+      const cell = overrideTwo(x[xi], y[yi]);
+      const verdict = sampleVerdict(res, findings, cell);
       frow.push(!blocked && res.feasible);
+      vrow.push(verdict);
       // Name the binding check — null when the cell is feasible, and also when
       // infeasibility came from something other than a failing check (sizing error, child
       // structural error), which bindingCheck reports as "no check to name".
-      brow.push(res.feasible ? null : (bindingCheck(res)?.id ?? null));
+      brow.push(verdict === 'feasible' ? null : (bindingCheck(res)?.id ?? null));
       orow.push(outsideIn(res));
       if (asked !== undefined) {
         named ??= namedResults(r.doc, res).find((n) => n.name === asked);
@@ -680,6 +716,7 @@ export function sweepSheet2(
       }
     }
     feasible.push(frow);
+    verdicts.push(vrow);
     binding.push(brow);
     beyond.push(orow);
     if (asked !== undefined) z.push(zrow);
@@ -689,6 +726,7 @@ export function sweepSheet2(
     x,
     y,
     feasible,
+    verdicts,
     binding,
     outside: beyond,
     ...(asked === undefined

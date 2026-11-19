@@ -6,7 +6,7 @@
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
 import type { OutsideTable, QAWarning } from '../types';
-import type { Item, Verdict } from './states';
+import type { DesignVerdict, Item, Verdict } from './states';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
@@ -2149,6 +2149,9 @@ export interface SheetSweep {
    * consumer comparing samples never mistakes that for a design that merely misses a spec.
    */
   stands: boolean[];
+  /** Each sample's verdict, parallel to `x`, where the sweep's sampler gives one (sweepSheet): the
+   *  verdict a run of the sheet at that value reads. A pass window is where it is feasible. */
+  verdicts?: DesignVerdict[];
   /** Each sample's reads beyond a table (see OutsideTable, outsideIn), parallel to `x`: empty where
    *  every device was read on its table. A sample with any is the mark of a point the table does
    *  not answer for — its device is not sized, the margins that read it are null, and it is never
@@ -2189,6 +2192,8 @@ export interface SheetSweep2 {
   x: number[];
   y: number[];
   feasible: boolean[][];
+  /** Each cell's verdict, `[yi][xi]`: the verdict a run of the sheet at those values reads. */
+  verdicts: DesignVerdict[][];
   binding: (string | null)[][];
   /** Each cell's reads beyond a table (see SheetSweep.outside): empty where every device was read
    *  on its table. A cell with any is infeasible with no check to name (`binding` null). */
