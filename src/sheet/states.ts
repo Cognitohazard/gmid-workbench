@@ -3,7 +3,7 @@
 // read from the list by four rules. Pure data and pure functions: what a reader sees is built from
 // these in one place (describe.ts), never written by the code that produces them.
 
-import type { NetlistAbout, OutsideTable } from '../types';
+import type { EntryProblem, NetlistAbout, OutsideTable } from '../types';
 import type { CheckKind, CheckOp, Region, SolveRange } from './types';
 
 /** What an item is: the sheet itself (always the first item of a result), a value (a param or an
@@ -38,6 +38,17 @@ export interface NotReadData {
   /** For a field that is not well formed: the kind of entry it is in, as its rule knows it. */
   readonly entry?:
     'param' | 'selector' | 'check' | 'tolerance' | 'device' | 'block' | 'expression' | 'range-end';
+  /** For a field that is not well formed: the field, its value as the sheet writes it (absent
+   *  where the field is missing), and for a field that maps names, the key. */
+  readonly field?: {
+    readonly name: string;
+    readonly value?: unknown;
+    readonly key?: string;
+    readonly problem: EntryProblem;
+  };
+  /** For a check whose operator the engine does not know: how the evaluation classified it all
+   *  the same, judged as an equality, which today's feasibility reads (legacyFeasible). */
+  readonly classified?: 'pass' | 'fail';
   /** Set where the finding came from validating the document before it was evaluated, rather
    *  than from the evaluation. */
   readonly stage?: 'validation';
@@ -57,8 +68,7 @@ export interface NotDeterminedData {
     | 'range-outside'
     | 'netlist'
     | 'loop'
-    | 'operating-range'
-    | 'entry';
+    | 'operating-range';
   readonly names: readonly string[];
   readonly message: string;
   /** For a search range outside the range its wires permit: each range, and the wires'. */
@@ -73,9 +83,10 @@ export interface NotDeterminedData {
     readonly name: string;
     readonly fields: readonly RelationField[];
   }[];
-  /** For a finding of the netlist check: which problem, and the wires and devices it is about
-   *  (devices by block path, `givens` for the sheet's own); for a selector, the param. */
-  readonly netlist?: NetlistAbout;
+  /** For findings of the netlist check: each finding, in the order raised, with its problem and
+   *  the wires and devices it is about (devices by block path, `givens` for the sheet's own); for
+   *  a selector, the param. */
+  readonly netlist?: readonly NetlistAbout[];
   /** For a range end that holds a value the design run did not record: the values. */
   readonly unheld?: readonly string[];
   /** As NotReadData.stage. */
@@ -120,6 +131,9 @@ export interface CannotEvaluateData {
   /** For a block that is not evaluated because a value its parent sets for it gives no number:
    *  the block's own params that value is for. */
   readonly inputs?: readonly string[];
+  /** For a device whose sizing derives a quantity that is not a positive finite number: which
+   *  quantity, and the value it came to. */
+  readonly sizing?: { readonly quantity: 'gm' | 'gm_id' | 'id' | 'W'; readonly value: number };
   /** For a syntax error: the expression as the sheet writes it, the character position (from 0)
    *  where the parser refuses it, where that is known, and the parser's words for why. */
   readonly syntax?: { readonly expression: string; readonly at?: number; readonly problem: string };
@@ -228,7 +242,12 @@ export interface NoneInRangeData extends SearchData, NoSolutionRead {
  *  its low end); at one point only (with the ends stepped in from); or across the crossing, which
  *  lies `between` two points where the points tried do not evaluate. */
 export type UnevaluableAt =
-  | { readonly where: 'nowhere'; readonly reason: string; readonly by?: ItemRef }
+  | {
+      readonly where: 'nowhere';
+      readonly reason: string;
+      readonly by?: ItemRef;
+      readonly byCause?: Cause;
+    }
   | {
       readonly where: 'one-point';
       readonly end: SearchEnd;
@@ -240,6 +259,7 @@ export type UnevaluableAt =
       readonly between: readonly [number, number];
       readonly reason: string;
       readonly by?: ItemRef;
+      readonly byCause?: Cause;
     };
 
 /**

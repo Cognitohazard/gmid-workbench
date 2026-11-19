@@ -5,7 +5,12 @@
 // the density target when W is bound). The gm/ID ceiling at the L-slice gates
 // feasibility. Pure, deterministic, zero DOM imports.
 
-import { type DeviceTable, type OutsideTable, LookupRangeError } from '../types';
+import {
+  type DeviceTable,
+  type OutsideTable,
+  LookupRangeError,
+  SizingQuantityError,
+} from '../types';
 import {
   gmIdCeiling,
   lookup,
@@ -393,7 +398,7 @@ export function sizeDevice(q: SizeQuery): SizeResult {
     ['W', W],
   ] as const) {
     if (!Number.isFinite(v) || !(v > 0)) {
-      throw new Error(`sizeDevice: derived ${k} is not a positive finite number (got ${v})`);
+      throw new SizingQuantityError(k, v);
     }
   }
 

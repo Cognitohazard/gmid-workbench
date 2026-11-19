@@ -21,7 +21,7 @@
 // Pure and deterministic; zero DOM. Every verdict is independent of the order relations are
 // declared in: relations are ordered by a total canonical key before anything reads them.
 
-import type { DeviceTable, NetlistAbout, QAWarning, Scope } from '../types';
+import type { DeviceTable, EntryAbout, NetlistAbout, QAWarning, Scope } from '../types';
 import { compileExpr } from '../derive';
 import { scalarScope } from '../expr';
 import { formatQuantity } from '../units';
@@ -497,6 +497,7 @@ interface LintContext {
     message: string,
     location: string,
     about?: NetlistAbout,
+    entry?: EntryAbout,
   ) => void;
   err: (message: string, location: string, about?: NetlistAbout) => void;
   /** Every wire named at this level, with what names it and how — the incidence rule counts
@@ -889,14 +890,23 @@ function selectorDeclProblems(ctx: LintContext): void {
     const c: unknown = p.convention;
     if (c === undefined) continue;
     if (typeof c !== 'string' || !PARAM_CONVENTIONS.has(c)) {
-      err(`param "${p.name}": convention must be "axis-sign", got ${JSON.stringify(c)}`, p.name);
+      ctx.say(
+        'error',
+        `param "${p.name}": convention must be "axis-sign", got ${JSON.stringify(c)}`,
+        p.name,
+        undefined,
+        { kind: 'entry', field: 'convention', value: c, problem: 'convention' },
+      );
       continue;
     }
     if (p.value !== 1 && p.value !== -1)
-      err(
+      ctx.say(
+        'error',
         `param "${p.name}" is an axis-sign selector, so its value is exactly +1 (an N-style table) or ` +
           `-1 (a signed p export), got ${p.value}`,
         p.name,
+        undefined,
+        { kind: 'entry', field: 'value', value: p.value, problem: 'sign' },
       );
     if (!read.has(p.name))
       err(
@@ -922,9 +932,17 @@ export function nodesProblems(doc: SheetDoc): QAWarning[] {
     message: string,
     location: string,
     about?: NetlistAbout,
+    entry?: EntryAbout,
   ): void => {
-    out.push({ rule: 'sheet-nodes', severity, message, location, ...(about ? { about } : {}) });
+    out.push({
+      rule: 'sheet-nodes',
+      severity,
+      message,
+      location,
+      ...(about ? { about: { kind: 'netlist', ...about } } : entry ? { about: entry } : {}),
+    });
   };
+
   const err = (message: string, location: string, about?: NetlistAbout): void =>
     say('error', message, location, about);
   const touches = new Map<string, { by: string; gate: boolean }[]>();
@@ -1055,7 +1073,7 @@ export function wiringRefusal(doc: SheetDoc): QAWarning[] {
         `circuit; ${MIGRATION_HINT}` +
         (formatOf(doc) === 'earlier' ? `; wiring needs "formatVersion": ${FORMAT_VERSION}` : ''),
       location: 'nodes',
-      about: { problem: 'unwired', devices: unwired },
+      about: { kind: 'netlist', problem: 'unwired', devices: unwired },
     },
   ];
 }
@@ -1805,11 +1823,9 @@ function selectorProblems(
           `and ${deviceName(dev.name)} is sized on a table whose vgs axis runs ` +
           `${pt.axis === 1 ? 'positive (+1)' : pt.axis === -1 ? 'negative (-1)' : 'both ways'}`,
         location: 'nodes',
-        // A value that is not +1 or -1 is the selector's own entry that is not well formed; only a
-        // value it may take is a mismatch with the table.
-        ...(v === 1 || v === -1
-          ? { about: { problem: 'selector', devices: [dev.name], param: r.name } as const }
-          : {}),
+        // A value that is not +1 or -1 is also the selector's own entry that is not well formed:
+        // that finding, from validation, takes the place of this one on the selector's item.
+        about: { kind: 'netlist', problem: 'selector', devices: [dev.name], param: r.name },
       });
     }
   }

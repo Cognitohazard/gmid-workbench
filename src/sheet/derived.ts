@@ -135,9 +135,13 @@ export function legacyFeasible(items: readonly Item[], advisory: ReadonlySet<str
  *  marks as assumed (the point has no answer, but feasibility is read on the design as sized). */
 const quietToday = (i: Item): boolean =>
   i.status === 'failed' &&
-  ((i.kind === 'value' &&
-    i.cause.kind === 'cannot-evaluate' &&
-    i.cause.data.why === 'not-defined') ||
+  // A check whose operator is not known, which today's result judged as an equality that passed.
+  ((i.kind === 'requirement' &&
+    i.cause.kind === 'not-read' &&
+    i.cause.data.classified === 'pass') ||
+    (i.kind === 'value' &&
+      i.cause.kind === 'cannot-evaluate' &&
+      i.cause.data.why === 'not-defined') ||
     (i.cause.kind === 'not-determined' &&
       i.cause.data.why === 'assumed-level' &&
       i.cause.data.stage === undefined));

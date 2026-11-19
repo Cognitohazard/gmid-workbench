@@ -920,6 +920,14 @@ function didNotSettleText(d: DidNotSettleData): Line[] {
     : [t`A relation of the search gives no number where the engine tried it.`];
 }
 
+/** What stopped the points a search tried: the first item that failed there, in its cause's own
+ *  first lines, or by name where the data hold no cause. */
+function stoppedBy(at: { by?: ItemRef; byCause?: Cause }): Line[] {
+  if (!at.by) return [];
+  if (at.byCause) return linesOf(at.byCause, at.by).slice(0, 2).map(upperFirst);
+  return [t`${itemName(at.by)} gives no number there.`];
+}
+
 /** Where a search found its relation giving no number, and what it searched. */
 function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
   const { lhs, rhs } = sidesOf(m.relation);
@@ -929,7 +937,7 @@ function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
       t`The engine searched ${unknownName(m)} ${span}.`,
       ...relationLine(m),
       t`${relationName(m)} gives no number at any value that the engine tried.`,
-      ...(at.by ? [t`${itemName(at.by)} gives no number there.`] : []),
+      ...stoppedBy(at),
     ];
   if (at.where === 'one-point')
     return [
@@ -941,6 +949,7 @@ function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
     t`${lhs} crosses ${rhs} between ${quantityText(at.between[0], m.unit)} and ${quantityText(at.between[1], m.unit)}.`,
     ...relationLine(m),
     t`${relationName(m)} gives no number at the values that the engine tried there.`,
+    ...stoppedBy(at),
   ];
 }
 
@@ -983,14 +992,17 @@ function notReadText(d: NotReadData): Line[] {
         ? t`The sheet declares format version ${JSON.stringify(d.declared)}.`
         : t`The file is not in a sheet format that this app reads.`
       : d.why === 'reference'
-        ? where
-          ? t`Block ${nm(where)} refers to a sheet, and the library holds no sheet of that name.`
-          : t`The sheet refers to a sheet, and the library holds no sheet of that name.`
+        ? where && d.field?.value !== undefined
+          ? t`Block ${nm(where)} refers to the sheet ${nm(writtenValue(d.field.value))}, and the library holds no sheet of that name.`
+          : where
+            ? t`Block ${nm(where)} refers to a sheet, and the library holds no sheet of that name.`
+            : t`The sheet refers to a sheet, and the library holds no sheet of that name.`
         : where
           ? t`The entry ${nm(where)} holds a value that is not valid.`
           : t`An entry of the sheet holds a value that is not valid.`;
   // A field of one entry that is not well formed: the entry, as its rule knows it.
-  if (d.why === 'field' && d.entry && where) return [entryLine(d.entry, where)];
+  if (d.why === 'field' && d.entry && where)
+    return [(d.field && fieldLine(d.entry, where, d.field)) || entryLine(d.entry, where)];
   const reads =
     d.why === 'format'
       ? [t`This app reads format version ${String(FORMAT_VERSION)} and sheets with no version.`]
@@ -1001,6 +1013,66 @@ function notReadText(d: NotReadData): Line[] {
 /** What is wrong with one entry of the sheet, as far as its rule's finding says. The finding does
  *  not hold the value it refused, so the line says what kind of entry is not well formed; the one
  *  rule that refuses only a value (a tolerance that is not a number of zero or more) says that. */
+/** A value the sheet wrote, as a sentence quotes it. */
+const writtenValue = (v: unknown): string =>
+  typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v));
+
+/** The words for a field a param holds. */
+const PARAM_FIELD: Readonly<Record<string, string>> = {
+  value: 'value',
+  min: 'minimum',
+  max: 'maximum',
+};
+
+/** What is wrong with one field of an entry, where the finding says which field and what it holds;
+ *  undefined where no sentence says this field's problem, so the entry's general line stands. */
+function fieldLine(
+  entry: NonNullable<NotReadData['entry']>,
+  where: string,
+  f: NonNullable<NotReadData['field']>,
+): Line | undefined {
+  const n = nm(where);
+  const has = f.value !== undefined;
+  const v = nm(writtenValue(f.value));
+  const key = nm(f.key ?? '');
+  switch (f.problem) {
+    case 'not-a-number':
+      if (entry === 'tolerance')
+        return has
+          ? t`The engine cannot read the tolerance of check ${n}, because ${v} is not a number of zero or more.`
+          : undefined;
+      if (entry === 'param')
+        return has
+          ? t`The engine cannot read ${n}, because its ${PARAM_FIELD[f.name] ?? f.name} ${v} is not a number.`
+          : t`The engine cannot read ${n}, because it has no ${PARAM_FIELD[f.name] ?? f.name}.`;
+      return undefined;
+    case 'sign':
+      return t`${n} is ${v}, and a sign convention must be +1 or −1.`;
+    case 'convention':
+      return t`The sign convention of ${n} is ${v}, and the only one known is axis-sign.`;
+    case 'unknown-name':
+      if (entry === 'range-end')
+        return t`Range end ${n} sets ${key}, which is not a value of this sheet.`;
+      if (entry === 'block')
+        return t`Block ${n} sets ${key}, and its sheet has no value of that name.`;
+      return undefined;
+    case 'solved':
+      return entry === 'range-end'
+        ? t`Range end ${n} sets ${key}, which the engine solves.`
+        : undefined;
+    case 'syntax':
+      return entry === 'range-end' && has
+        ? t`Range end ${n} sets ${key} to ${ex(writtenValue(f.value))}, which has a syntax error.`
+        : undefined;
+    case 'operator':
+      return entry === 'check' && has
+        ? t`The engine cannot read check ${n}, because ${ex(writtenValue(f.value))} is not an operator that it knows.`
+        : undefined;
+    case 'no-sheet':
+      return undefined;
+  }
+}
+
 function entryLine(entry: NonNullable<NotReadData['entry']>, where: string): Line {
   const n = nm(where);
   switch (entry) {
@@ -1077,15 +1149,9 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
           ? t`Range end ${nm(d.names[0])} holds a value that is not valid.`
           : t`The operating range holds an entry that is not valid.`,
       ];
-    case 'entry':
-      return [
-        head,
-        d.names.length
-          ? t`The entry ${nm(d.names[0].replace(/"/g, ''))} holds a value that is not valid.`
-          : t`An entry of the sheet holds a value that is not valid.`,
-      ];
     case 'netlist':
-      if (d.netlist) return [head, ...netlistLines(d.netlist)];
+      // Each finding of the netlist check gives its own lines, in the order raised.
+      if (d.netlist?.length) return [head, ...d.netlist.flatMap(netlistLines)];
       return [
         head,
         d.names.length
@@ -1128,12 +1194,32 @@ function netlistLines(n: NetlistAbout): Line[] {
           : [t`The wires of ${part} and its diode flag disagree.`];
     case 'placement':
       return [t`The wiring of ${part} is not well formed.`];
+    case 'level-refused':
+      return [
+        t`Wire ${wire} cannot be held at ${ex(n.level ?? '')}, because a level reads only numbers and values classed independent.`,
+      ];
+    case 'level-gate':
+      return [
+        t`Wire ${wire} cannot be held at ${ex(n.level ?? '')}, because that level holds only the gate of ${part}.`,
+      ];
+    case 'other':
+      return n.where
+        ? [t`The netlist check reports a problem at ${nm(n.where.replace(/"/g, ''))}.`]
+        : [t`The netlist check reports a problem in the wiring of the sheet.`];
     case 'selector':
       return [t`The axis-sign selector ${nm(n.param ?? '')} does not match the table of ${part}.`];
   }
 }
 
 const SIDE_WORD = { lhs: 'left', rhs: 'right' } as const;
+
+/** Each quantity a sizing derives, as a sentence names it. */
+const SIZING_WORD = {
+  gm: 'transconductance',
+  gm_id: 'gm/ID',
+  id: 'drain current',
+  W: 'width',
+} as const;
 
 /** The parser's reasons that a plain sentence says, by the start of its words. A reason with no
  *  entry gives no line. */
@@ -1171,6 +1257,14 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     if (d.why === 'no-sweep') return [sized, t`The table holds no sweep of ${nm(d.name)}.`];
     if (d.why === 'illegal-pair')
       return [sized, t`The two quantities bound on it do not determine its size.`];
+    if (d.sizing) {
+      const word = SIZING_WORD[d.sizing.quantity];
+      return [
+        Number.isFinite(d.sizing.value)
+          ? t`${subject} cannot be sized, because the ${word} its table gives there is not positive.`
+          : t`${subject} cannot be sized, because its table gives no ${word} there.`,
+      ];
+    }
     return [sized];
   }
   // A search whose relation gives no number where it searched, and what gave none there.
@@ -1196,8 +1290,19 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       ...byLines(d),
     ];
   // A block that is not evaluated, because a value its parent sets for it gives no number.
-  if (d.inputs?.length)
-    return [t`Block ${nm(d.name)} is not calculated, because ${parentGivesNo(d.inputs)}.`];
+  if (d.inputs?.length) {
+    // The block, by its path where the item has one, else by the name the data hold.
+    const block: Line =
+      ref?.kind === 'sheet' && ref.path.length
+        ? t`Block ${blockSegment(ref.path)}`
+        : d.why === 'not-finite'
+          ? t`Block ${nm(d.name)}`
+          : t`This block`;
+    return [
+      t`${block} is not calculated, because ${parentGivesNo(d.inputs)}.`,
+      ...(d.why === 'not-defined' ? [t`The parent sheet does not define ${nm(d.name)}.`] : []),
+    ];
+  }
   // A range end whose `set` gives no number against the design run.
   if (d.rangeEnd && d.why === 'not-defined')
     return [
@@ -1380,9 +1485,11 @@ export function withheldClause(r: WithheldOn): Line {
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':
-      return r.path.length
-        ? t`the engine cannot read block ${nm(r.path.join('.'))}`
-        : t`the engine cannot read the sheet`;
+      return r.kind !== 'sheet'
+        ? t`the engine cannot read ${n}`
+        : r.path.length
+          ? t`the engine cannot read block ${nm(r.path.join('.'))}`
+          : t`the engine cannot read the sheet`;
     case 'not-determined':
       return r.kind === 'sheet'
         ? t`the statements of ${n} do not determine one design`
@@ -1419,16 +1526,22 @@ export function describe(item: Item, within: readonly string[] = []): FindingTex
   if (item.status === 'withheld')
     return finding(
       WITHHELD_NAME,
-      item.on.map((r) =>
-        // A block's own sheet item, read in the block's own list, waits on its parent.
-        r.frame === 'parent' && item.kind === 'sheet' && item.path.length === 0
-          ? within.length
-            ? t`Block ${blockSegment(within)} is not calculated, because ${parentGivesNo(r.inputs)}.`
-            : t`This block is not calculated, because ${parentGivesNo(r.inputs)}.`
-          : upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
-      ),
+      item.on
+        .map((r) =>
+          // A block's own sheet item, read in the block's own list, waits on its parent.
+          r.frame === 'parent' && item.kind === 'sheet' && item.path.length === 0
+            ? within.length
+              ? t`Block ${blockSegment(within)} is not calculated, because ${parentGivesNo(r.inputs)}.`
+              : t`This block is not calculated, because ${parentGivesNo(r.inputs)}.`
+            : upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
+        )
+        .filter((l, k, all) => all.findIndex((m) => lineText(m) === lineText(l)) === k),
     );
-  return textOf(item.cause, item);
+  // A block's own sheet item, read in its own list, is named by the block's path there.
+  return textOf(
+    item.cause,
+    item.kind === 'sheet' && !item.path.length && within.length ? { ...item, path: within } : item,
+  );
 }
 
 /** What an item the run held at a given value instead of solving reads. */

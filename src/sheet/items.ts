@@ -4,6 +4,7 @@
 
 import { CONSTANTS } from '../constants';
 import {
+  CHECK_OPS,
   DEVICE_NAMES,
   engineSolved,
   failedParams,
@@ -20,7 +21,7 @@ import {
   type SizingReport,
   type SolveFailure,
 } from './types';
-import type { QAWarning } from '../types';
+import type { EntryAbout, FindingAbout, NetlistAbout, QAWarning } from '../types';
 import { syntaxAt } from '../expr';
 import {
   failsCause,
@@ -131,10 +132,25 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
     return c === undefined ? undefined : [onOf(written, refOfCause(res, c))];
   };
 
-  // The searches.
+  // The searches. A param whose value is not a finite number is failed here, as the list is
+  // built, so that what reads it is withheld on it; validation's finding about it, which names the
+  // field, takes its place (withFindings).
   for (const p of doc.params) {
     if (!engineSolved(p) && !p.hold) {
-      out.push({ kind: 'value', path: [], name: p.name, status: 'ok' });
+      out.push(
+        typeof p.value === 'number' && Number.isFinite(p.value)
+          ? { kind: 'value', path: [], name: p.name, status: 'ok' }
+          : {
+              kind: 'value',
+              path: [],
+              name: p.name,
+              status: 'failed',
+              cause: {
+                kind: 'not-read',
+                data: { why: 'field', where: p.name, message: '', entry: 'param' },
+              },
+            },
+      );
       continue;
     }
     const w = written.find((i) => i.kind === 'search' && i.path.length === 0 && i.name === p.name);
@@ -226,8 +242,33 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
     );
   }
 
-  // The requirements.
+  // The requirements: one item for each id, so a check written twice under one id is one item,
+  // which the finding that the id is doubled reaches.
   for (const r of res.checks) {
+    if (out.some((i) => i.kind === 'requirement' && i.path.length === 0 && i.name === r.id))
+      continue;
+    // An operator the engine does not know: the check is not read, whatever its sides give, since
+    // no meaning was written for it to be judged by.
+    if (!CHECK_OPS.has(r.op)) {
+      out.push({
+        kind: 'requirement',
+        path: [],
+        name: r.id,
+        status: 'failed',
+        cause: {
+          kind: 'not-read',
+          data: {
+            why: 'field',
+            where: r.id,
+            message: `check "${r.id}" has an operator the engine does not know`,
+            entry: 'check',
+            field: { name: 'op', value: r.op, problem: 'operator' },
+            classified: r.status === 'pass' || r.status === 'amber' ? 'pass' : 'fail',
+          },
+        },
+      });
+      continue;
+    }
     if (r.status === 'pass' || r.status === 'amber') {
       out.push({
         kind: 'requirement',
@@ -394,7 +435,35 @@ function readerOf(
  *  pointing at the item its withheld name traces back to, once every item and finding is in the
  *  list: a search, the device, or an item of a block. A block's other items were pointed when its
  *  list was made. */
-export const resolveWithheld = (items: readonly Item[]): Item[] =>
+export const resolveWithheld = (list: readonly Item[]): Item[] => {
+  const items = list.map((i) => onWhatStoppedIt(i, list));
+  return resolveIn(items);
+};
+
+/** A search that nothing of its range evaluates, stopped by an item that failed in the final
+ *  list, is withheld on that item: the failure is that item's, counted once. One stopped by an
+ *  item that is itself withheld stays failed, since that item may be waiting on this very search. */
+function onWhatStoppedIt(i: Item, list: readonly Item[]): Item {
+  if (i.kind !== 'search' || i.status !== 'failed' || i.cause.kind !== 'cannot-evaluate') return i;
+  const by =
+    i.cause.data.unevaluable?.at.where !== 'one-point'
+      ? i.cause.data.unevaluable?.at.by
+      : undefined;
+  if (!by) return i;
+  const target = list.find(
+    (x) => x.status === 'failed' && fullName(x) === fullName(by) && x.kind === by.kind,
+  );
+  if (!target || target.status !== 'failed' || fullName(target) === fullName(i)) return i;
+  return {
+    kind: i.kind,
+    path: i.path,
+    name: i.name,
+    status: 'withheld',
+    on: [{ kind: target.kind, path: target.path, name: target.name, cause: target.cause.kind }],
+  };
+}
+
+const resolveIn = (items: readonly Item[]): Item[] =>
   items.map((i) =>
     i.status === 'withheld' && (i.path.length === 0 || (i.kind === 'sheet' && i.path.length === 1))
       ? { ...i, on: distinct(i.on.map((o) => resolveOn(items, o))) }
@@ -415,14 +484,25 @@ const fullName = (r: ItemRef): string => [...r.path, r.name].filter(Boolean).joi
 
 /** A dependency resolved against the full list: the item whose full name is the one the withheld
  *  name traced back to, a failed one first, with its cause. Kept as it was where none is. */
-function resolveOn(items: readonly Item[], o: WithheldOn): WithheldOn {
+function resolveOn(items: readonly Item[], o: WithheldOn, depth = 0): WithheldOn {
   const name = fullName(o);
   const hits = items.filter((i) => fullName(i) === name);
   const hit = hits.find((i) => i.status === 'failed') ?? hits[0];
   if (!hit) return o;
   const ref = { kind: hit.kind, path: hit.path, name: hit.name };
   if (hit.status === 'failed') return { ...ref, cause: hit.cause.kind };
-  if (hit.status === 'withheld' && hit.on[0] && fullName(hit.on[0]) !== name) return hit.on[0];
+  // A withheld item: what it waits on, resolved in turn, as the parent names it. A chain is
+  // followed as far as the list goes, never round a loop.
+  if (hit.status === 'withheld' && hit.on[0] && fullName(hit.on[0]) !== name) {
+    const {
+      frame: _frame,
+      inputs: _inputs,
+      ...next
+    } = hit.on[0] as WithheldOn & {
+      inputs?: unknown;
+    };
+    return depth < items.length ? resolveOn(items, next as WithheldOn, depth + 1) : hit.on[0];
+  }
   // A block whose own sheet item is not failed: the first failed item inside it, other than a
   // requirement that fails, which withholds nothing.
   if (hit.kind === 'sheet') {
@@ -541,6 +621,16 @@ function deviceCause(s: SizingReport | undefined, doc: SheetDoc): Cause {
       kind: 'cannot-evaluate',
       data: { why: 'no-column', name: s.needs.join(', '), reason: s.error ?? '' },
     };
+  if (s?.notPositive)
+    return {
+      kind: 'cannot-evaluate',
+      data: {
+        why: 'not-finite',
+        name: s.notPositive.quantity,
+        reason: s.error ?? '',
+        sizing: s.notPositive,
+      },
+    };
   return {
     kind: 'cannot-evaluate',
     data: { why: 'not-finite', name: 'givens', reason: s?.error ?? 'the device was not sized' },
@@ -587,16 +677,31 @@ function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRe
 /** The item a finding of the netlist check names by what it is about: the sheet's own device, or
  *  a selector param of the sheet. Undefined where it names neither. */
 function aboutRef(doc: SheetDoc | undefined, w: QAWarning): ItemRef | undefined {
-  const a = w.about;
+  const a = netlistOf(w);
   if (!a || !doc) return undefined;
+  // A selector the table contradicts is on its own item; where its value is not +1 or -1 that item
+  // holds the finding that its entry is not well formed, and the contradiction is on the sheet.
   if (a.param) {
     const p = Array.isArray(doc.params) ? doc.params.find((q) => q.name === a.param) : undefined;
-    if (p) return { kind: engineSolved(p) ? 'search' : 'value', path: [], name: p.name };
+    if (p && (p.value === 1 || p.value === -1))
+      return { kind: engineSolved(p) ? 'search' : 'value', path: [], name: p.name };
+    if (p) return undefined;
   }
   if (a.devices?.length === 1 && a.devices[0] === 'givens' && doc.givens)
     return { kind: 'device', path: [], name: 'givens' };
   return undefined;
 }
+
+/** What a finding says it is about, by kind. */
+const netlistOf = (w: QAWarning): NetlistAbout | undefined => {
+  if (w.about?.kind !== 'netlist') return undefined;
+  const { kind: _kind, ...n } = w.about;
+  return n;
+};
+const decisionOf = (w: QAWarning): Extract<FindingAbout, { kind: 'decision' }> | undefined =>
+  w.about?.kind === 'decision' ? w.about : undefined;
+const entryOf = (w: QAWarning): EntryAbout | undefined =>
+  w.about?.kind === 'entry' ? w.about : undefined;
 
 /** How the table below reads a finding: the cause it gives, or why a rule never reaches it. */
 type FindingRead =
@@ -605,26 +710,29 @@ type FindingRead =
   | 'never-an-error';
 
 /** A field of an entry that is not well formed: the entry it names cannot be read, and the rule
- *  says what kind of entry it is. A finding that names no entry of its own, only a list of the
- *  sheet (`blocks`, `params`), stays on the sheet item, where the sheet's statements leave its
- *  design undetermined: the sheet itself was read and evaluated. */
+ *  says what kind of entry it is; the field and its value as written, where the finding holds
+ *  them. */
 const entryNotWellFormed =
-  (entry: NonNullable<NotReadData['entry']>, onSheet: 'entry' | 'operating-range' = 'entry') =>
-  (w: QAWarning, ref: ItemRef, stage: { stage?: 'validation' }): Cause =>
-    ref.kind === 'sheet' && ref.path.length === 0
-      ? {
-          kind: 'not-determined',
-          data: {
-            why: onSheet,
-            names: w.location ? [w.location] : [],
-            message: w.message,
-            ...stage,
-          },
-        }
-      : {
-          kind: 'not-read',
-          data: { why: 'field', where: w.location ?? '', message: w.message, entry, ...stage },
-        };
+  (entry: NonNullable<NotReadData['entry']>) =>
+  (w: QAWarning, _ref: ItemRef, stage: { stage?: 'validation' }): Cause => ({
+    kind: 'not-read',
+    data: {
+      why: 'field',
+      where: w.location ?? '',
+      message: w.message,
+      entry,
+      ...fieldOf(w),
+      ...stage,
+    },
+  });
+
+/** The field a finding says is not well formed, as an item's cause holds it. */
+const fieldOf = (w: QAWarning): { field?: NonNullable<NotReadData['field']> } => {
+  const e = entryOf(w);
+  if (!e) return {};
+  const { kind: _kind, field, ...rest } = e;
+  return { field: { name: field, ...rest } };
+};
 
 /** For each of `names` that more than one statement sets in `doc`: the fields that set it. */
 export function twiceStatements(
@@ -670,12 +778,17 @@ export function withStatements(cause: Cause, doc: SheetDoc | undefined): Cause {
 /** A finding that the sheet's statements leave a value without one decision, or with two. */
 const decisionCause = (
   w: QAWarning,
-  d: NonNullable<QAWarning['decision']>,
+  d: Extract<FindingAbout, { kind: 'decision' }>,
   stage: { stage?: 'validation' },
 ): Cause => ({
   kind: 'not-determined',
   data: {
-    why: d.kind === 'twice' ? 'decision-twice' : d.kind === 'loop' ? 'loop' : 'decision-missing',
+    why:
+      d.decision === 'twice'
+        ? 'decision-twice'
+        : d.decision === 'loop'
+          ? 'loop'
+          : 'decision-missing',
     names: d.names,
     message: w.message,
     ...stage,
@@ -695,17 +808,25 @@ export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
   }),
   'sheet-ref': (w, _ref, stage) => ({
     kind: 'not-read',
-    data: { why: 'reference', where: w.location ?? '', message: w.message, ...stage },
+    data: {
+      why: 'reference',
+      where: w.location ?? '',
+      message: w.message,
+      ...fieldOf(w),
+      ...stage,
+    },
   }),
   'sheet-parse': (w, ref, stage) =>
     ref.kind === 'value' || ref.kind === 'requirement'
       ? { kind: 'cannot-evaluate', data: { why: 'syntax', name: ref.name, reason: w.message } }
       : entryNotWellFormed('expression')(w, ref, stage),
-  'sheet-param': (w, ref, stage) =>
-    w.decision ? decisionCause(w, w.decision, stage) : entryNotWellFormed('param')(w, ref, stage),
+  'sheet-param': (w, ref, stage) => {
+    const d = decisionOf(w);
+    return d ? decisionCause(w, d, stage) : entryNotWellFormed('param')(w, ref, stage);
+  },
   'sheet-dc-inputs': (w, ref, stage) =>
-    w.decision
-      ? decisionCause(w, w.decision, stage)
+    decisionOf(w)
+      ? decisionCause(w, decisionOf(w)!, stage)
       : ref.kind === 'sheet' && ref.path.length === 0
         ? {
             kind: 'not-determined',
@@ -721,26 +842,26 @@ export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
   // is the sheet's own, or a selector the table contradicts; on the sheet otherwise, with the
   // wires in `names`. Without them, one located at a param is about the param's own entry: an
   // axis-sign selector whose value or convention is not one it may take.
-  'sheet-nodes': (w, ref, stage) =>
-    !w.about && (ref.kind === 'value' || ref.kind === 'search')
-      ? entryNotWellFormed('selector')(w, ref, stage)
-      : {
-          kind: 'not-determined',
-          data: {
-            why: 'netlist',
-            names: w.about?.wires?.length
-              ? w.about.wires
-              : w.about?.devices?.length
-                ? w.about.devices
-                : w.location
-                  ? [w.location]
-                  : [],
-            message: w.message,
-            ...(w.about ? { netlist: w.about } : {}),
-            ...stage,
-          },
-        },
-  'sheet-range': entryNotWellFormed('range-end', 'operating-range'),
+  'sheet-nodes': (w, ref, stage) => {
+    const n = netlistOf(w);
+    if (!n && (ref.kind === 'value' || ref.kind === 'search'))
+      return entryNotWellFormed('selector')(w, ref, stage);
+    const finding: NetlistAbout = n ?? {
+      problem: 'other',
+      ...(w.location ? { where: w.location } : {}),
+    };
+    return {
+      kind: 'not-determined',
+      data: {
+        why: 'netlist',
+        names: netlistNames([finding]),
+        message: w.message,
+        netlist: [finding],
+        ...stage,
+      },
+    };
+  },
+  'sheet-range': entryNotWellFormed('range-end'),
   'sheet-block': entryNotWellFormed('block'),
   'sheet-check': entryNotWellFormed('check'),
   'sheet-tol': entryNotWellFormed('tolerance'),
@@ -781,6 +902,55 @@ function findingCause(w: QAWarning, ref: ItemRef, mode: 'evaluation' | 'validati
   return read(w, ref, stage);
 }
 
+/** The names a list of netlist findings is about: each finding's wires, else its devices, else
+ *  where it is located; each name once, in the order raised. */
+function netlistNames(fs: readonly NetlistAbout[]): string[] {
+  const out: string[] = [];
+  for (const f of fs)
+    for (const n of f.wires?.length
+      ? f.wires
+      : f.param
+        ? [f.param]
+        : f.devices?.length
+          ? f.devices
+          : f.where
+            ? [f.where]
+            : [])
+      if (!out.includes(n)) out.push(n);
+  return out;
+}
+
+/** The cause an item takes when a finding reaches it that already failed: two findings of the
+ *  netlist check on one item are one cause listing both, in the order raised; validation's finding
+ *  that an entry is not well formed takes the place of a cause that came from evaluating that entry,
+ *  whose result cannot be trusted, and of a design resting on an assumed level. Otherwise the
+ *  item keeps its first cause. */
+function nextCause(prior: Cause, found: Cause): Cause {
+  if (
+    prior.kind === 'not-determined' &&
+    prior.data.why === 'netlist' &&
+    found.kind === 'not-determined' &&
+    found.data.why === 'netlist'
+  ) {
+    const netlist = [...(prior.data.netlist ?? []), ...(found.data.netlist ?? [])];
+    return {
+      kind: 'not-determined',
+      data: { ...prior.data, netlist, names: netlistNames(netlist) },
+    };
+  }
+  const assumed = prior.kind === 'not-determined' && prior.data.why === 'assumed-level';
+  const fromEvaluation =
+    !('stage' in prior.data) || (prior.data as { stage?: string }).stage !== 'validation';
+  if (
+    found.kind === 'not-read' &&
+    found.data.why === 'field' &&
+    found.data.stage === 'validation' &&
+    fromEvaluation
+  )
+    return found;
+  return assumed ? found : prior;
+}
+
 /**
  * The item list with every error finding in `warnings` given to the item it is about: the entry
  * its location names, failed with the cause its rule gives — the sheet where it names no entry.
@@ -805,15 +975,14 @@ export function withFindings(
     const at = out.findIndex(
       (i) => i.kind === ref.kind && i.name === ref.name && i.path.join('.') === ref.path.join('.'),
     );
-    // An item keeps its first cause, except a design resting on an assumed level, which a finding
-    // about how the sheet is written takes the place of.
     const prior = out[at];
-    const weaker =
-      prior?.status === 'failed' &&
-      prior.cause.kind === 'not-determined' &&
-      prior.cause.data.why === 'assumed-level';
     if (at < 0) out.push({ ...ref, status: 'failed', cause });
-    else if (prior.status !== 'failed' || weaker) out[at] = { ...ref, status: 'failed', cause };
+    else
+      out[at] = {
+        ...ref,
+        status: 'failed',
+        cause: prior.status === 'failed' ? nextCause(prior.cause, cause) : cause,
+      };
   }
   return out;
 }

@@ -102,17 +102,51 @@ export interface QAWarning {
    *  param of that sheet whose search did not land, which withholds what reads it (see the sheet
    *  result's `withheld`). Absent for a finding that stands on its own. */
   readonly cause?: string;
-  /** For a finding that the sheet's statements leave a value without one decision, or with two:
-   *  which, and the names it is about. Absent for any other finding. */
-  readonly decision?: {
-    readonly kind: 'missing' | 'twice' | 'loop';
-    readonly names: readonly string[];
-  };
-  /** For an error of the netlist check that names wires or devices: which problem it is, and the
-   *  wires and devices (by block path, `givens` for the sheet's own) it is about. Absent where the
-   *  finding names neither. */
-  readonly about?: NetlistAbout;
+  /** What the finding is about, as data, for the item it is given to (see FindingAbout). Absent
+   *  for a finding whose sentence is all that it says. */
+  readonly about?: FindingAbout;
 }
+
+/**
+ * What one error finding is about, by its kind:
+ *  - `decision`: the sheet's statements leave values without one decision (`missing`), with two
+ *    (`twice`), or in a loop no statement solves (`loop`); the names it is about.
+ *  - `netlist`: a problem of the netlist check, and the wires and devices it names.
+ *  - `entry`: one field of an entry that is not well formed: the field, the value as the sheet
+ *    writes it (absent where the field is missing), and for a field that maps names (a block's
+ *    params, a range end's set) the key.
+ */
+export type FindingAbout =
+  | {
+      readonly kind: 'decision';
+      readonly decision: 'missing' | 'twice' | 'loop';
+      readonly names: readonly string[];
+    }
+  | ({ readonly kind: 'netlist' } & NetlistAbout)
+  | EntryAbout;
+
+/** One field of an entry that is not well formed (FindingAbout `entry`): the field, the value as
+ *  the sheet writes it, the key for a field that maps names, and what is wrong with it. */
+export interface EntryAbout {
+  readonly kind: 'entry';
+  readonly field: string;
+  readonly value?: unknown;
+  readonly key?: string;
+  readonly problem: EntryProblem;
+}
+
+/** What is wrong with one field: not a number; a name that is not the entry it must name; a value
+ *  the engine solves, so the field cannot set it; an expression that does not parse; a sign that is
+ *  not +1 or -1; a convention not known; a reference to no sheet; an operator not known. */
+export type EntryProblem =
+  | 'not-a-number'
+  | 'unknown-name'
+  | 'solved'
+  | 'syntax'
+  | 'sign'
+  | 'convention'
+  | 'no-sheet'
+  | 'operator';
 
 /** The problems of the netlist check that name the wires or devices they are about. */
 export type NetlistProblem =
@@ -123,9 +157,12 @@ export type NetlistProblem =
   | 'unwired'
   | 'diode-flag'
   | 'placement'
-  | 'selector';
+  | 'selector'
+  | 'level-refused'
+  | 'level-gate'
+  | 'other';
 
-/** What one finding of the netlist check is about (QAWarning.about). */
+/** What one finding of the netlist check is about (FindingAbout `netlist`). */
 export interface NetlistAbout {
   readonly problem: NetlistProblem;
   readonly wires?: readonly string[];
@@ -134,6 +171,10 @@ export interface NetlistAbout {
   readonly param?: string;
   /** For a diode flag the wires contradict: the flag as the givens state it. */
   readonly diodeFlag?: boolean;
+  /** For a level the sheet gives a wire that cannot hold it: the level, as written. */
+  readonly level?: string;
+  /** For a problem that names no wire or device (`other`): where its finding is located. */
+  readonly where?: string;
 }
 
 export interface ImportError {
@@ -270,6 +311,21 @@ export class LookupError extends Error {
  * can answer the design question this raises — "out of reach here, so at which length IS it
  * reachable?" — and re-render the numbers in its own units, without parsing the message text.
  */
+/**
+ * A sizing whose derived quantity (gm, gm/ID, the drain current or the width) is not a positive
+ * finite number: the operating point the table gives there is degenerate. The quantity and the
+ * value it came to, as data; the message is the sizer's own words.
+ */
+export class SizingQuantityError extends Error {
+  override name = 'SizingQuantityError';
+  constructor(
+    readonly quantity: 'gm' | 'gm_id' | 'id' | 'W',
+    readonly value: number,
+  ) {
+    super(`sizeDevice: derived ${quantity} is not a positive finite number (got ${value})`);
+  }
+}
+
 export class LookupRangeError extends LookupError {
   override name = 'LookupRangeError';
   constructor(

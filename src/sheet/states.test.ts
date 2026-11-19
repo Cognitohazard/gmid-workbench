@@ -810,7 +810,7 @@ group('the texts of a finding with no item of its own', () => {
     status: 'failed',
     cause: {
       kind: 'not-determined',
-      data: { why: 'netlist', names: [...(netlist.wires ?? [])], message: '', netlist },
+      data: { why: 'netlist', names: [...(netlist.wires ?? [])], message: '', netlist: [netlist] },
     },
   });
   const lines = (i: Item): string[] => describe(i).lines.slice(1);
@@ -962,10 +962,20 @@ group('the texts of the data an item now carries', () => {
     check(
       failed('sheet', '', {
         kind: 'cannot-evaluate',
-        data: { why: 'not-defined', name: 'tail', reason: '', inputs: ['vds_t'] },
+        data: { why: 'not-finite', name: 'tail', reason: '', inputs: ['vds_t'] },
       }),
       ['Block tail is not calculated, because its parent sheet gives it no value for vds_t.'],
     );
+    // A name its parent's expression reads that no entry declares: the block, named by its path
+    // in its own list, and the name.
+    const undeclared = failed('sheet', '', {
+      kind: 'cannot-evaluate',
+      data: { why: 'not-defined', name: 'nope', reason: '', inputs: ['I_ref'] },
+    });
+    expect(describe(undeclared, ['bias']).lines).toEqual([
+      'Block bias is not calculated, because its parent sheet gives it no value for I_ref.',
+      'The parent sheet does not define nope.',
+    ]);
   });
 
   it('names the quantity on each side of a region check', () => {
@@ -1061,12 +1071,16 @@ group('a text for every item the types allow', () => {
           'netlist',
           'loop',
           'operating-range',
-          'entry',
         ] as const
       ).map((why): Cause => ({ kind: 'not-determined', data: { why, names: [], message: '' } })),
       {
         kind: 'not-determined',
-        data: { why: 'netlist', names: [], message: '', netlist: { problem: 'short' } },
+        data: {
+          why: 'netlist',
+          names: [],
+          message: '',
+          netlist: [{ problem: 'short' }, { problem: 'other' }],
+        },
       },
       {
         kind: 'outside-table',

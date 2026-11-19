@@ -61,11 +61,14 @@ export interface ResolveResult {
   warnings: QAWarning[];
 }
 
-const refError = (where: string, message: string): QAWarning => ({
+const refError = (where: string, message: string, ref?: string): QAWarning => ({
   rule: 'sheet-ref',
   severity: 'error',
   message: `${where}: ${message}`,
   location: where,
+  ...(ref !== undefined
+    ? { about: { kind: 'entry', field: 'ref', value: ref, problem: 'no-sheet' } as const }
+    : {}),
 });
 
 /**
@@ -124,7 +127,9 @@ function resolveDoc(
     if (block.ref === undefined) return block; // neither — validateSheet names this error
     const hit = refs.get(block.ref);
     if (hit === undefined) {
-      warnings.push(refError(at, `ref "${block.ref}" does not match any sheet in the library`));
+      warnings.push(
+        refError(at, `ref "${block.ref}" does not match any sheet in the library`, block.ref),
+      );
       return block;
     }
     if ('ambiguous' in hit) {

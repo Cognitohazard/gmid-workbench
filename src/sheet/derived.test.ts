@@ -723,7 +723,7 @@ describe('a finding with no item of its own', () => {
         kind: 'not-determined',
         data: {
           why: 'netlist',
-          netlist: { problem: 'selector', devices: ['givens'], param: 's' },
+          netlist: [{ problem: 'selector', devices: ['givens'], param: 's' }],
         },
       },
     });
@@ -737,7 +737,7 @@ describe('a finding with no item of its own', () => {
         data: {
           why: 'netlist',
           names: ['a.b'],
-          netlist: { problem: 'wire-name', wires: ['a.b'], devices: ['givens'] },
+          netlist: [{ problem: 'wire-name', wires: ['a.b'], devices: ['givens'] }],
         },
       },
     });
@@ -749,7 +749,7 @@ describe('a finding with no item of its own', () => {
       status: 'failed',
       cause: {
         kind: 'not-determined',
-        data: { why: 'netlist', names: ['lone'], netlist: { problem: 'one-terminal' } },
+        data: { why: 'netlist', names: ['lone'], netlist: [{ problem: 'one-terminal' }] },
       },
     });
     expectSame(lone);
