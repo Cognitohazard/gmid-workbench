@@ -2111,6 +2111,32 @@ describe('the range a solved wire is searched in is the circuit’s own where th
     expect(held.rangeEnds?.[0].error).toContain('found no solution in [0, 1.8] V');
   });
 
+  it('names the last of two failed searches as the solve outcome, whichever failed first', () => {
+    // V_x finds no crossing over the wiring's range, both ends read; Z, which reads nothing of
+    // V_x, finds none in its author's range. Neither is shown to have no solution, so the point
+    // has no answer and the verdict is undetermined, in either order; the outcome is the last.
+    const base = follower([-0.5, 0.8], { VG: 0.4 });
+    const z = param('Z', 0.5, { min: 0, max: 1, designConstraint: { lhs: 'Z*Z', rhs: '-1' } });
+    for (const [params, last, from] of [
+      [[...base.params, z], 'Z', 'author'],
+      [[z, ...base.params], 'V_x', 'wiring'],
+    ] as const) {
+      const r = runSheet({ ...base, params: [...params] }, tw);
+      expect(r.solve).toMatchObject({ kind: 'no-solution', unknown: last, from, endsRead: true });
+      const failed = (r.items ?? []).filter(
+        (i) => i.kind === 'search' && i.path.length === 0 && i.status === 'failed',
+      );
+      expect(failed.map((i) => [i.name, i.status === 'failed' ? i.cause.kind : '']).sort()).toEqual(
+        [
+          ['V_x', 'no-crossing'],
+          ['Z', 'none-in-range'],
+        ],
+      );
+      expect(r.point?.state).toBe('no-answer');
+      expect(r.verdict?.verdict).toBe('undetermined');
+    }
+  });
+
   it('gives no answer where an end of that search reads a device beyond its table', () => {
     // On `t` the body bias stops at 0.9 V, so at the top of the wiring's range `m` is asked
     // beyond the table: it is not sized there, the search steps in, and finding no crossing in
