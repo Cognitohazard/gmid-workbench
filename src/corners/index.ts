@@ -1278,9 +1278,17 @@ export interface ConditionAggregate {
   /** The held design over those same points (heldVerdictOver). Absent where the engine calculated
    *  none of them. */
   readonly heldVerdict?: HeldVerdictOver;
-  /** The points the margins below are read at (measuredPoints), and every point. They differ where
-   *  a point's verdict says nothing of the design there or its run is not complete. */
-  readonly marginPoints: { readonly read: number; readonly total: number };
+  /** The points the margins below are read at (measuredPoints), and every point, with what the
+   *  others are: never run (`notRun`), run and not calculated (`notCalculated`), or calculated
+   *  with no margin to read, because the verdict there says nothing of the design or the run is
+   *  not complete (`unreadable`). */
+  readonly marginPoints: {
+    readonly read: number;
+    readonly total: number;
+    readonly notRun: number;
+    readonly notCalculated: number;
+    readonly unreadable: number;
+  };
   /**
    * COMPLIANCE — a count over points, never a single word: `total` is conditions × (the centre
    * + every declared range end), and each point lands in exactly one bucket. Not-run and
@@ -1407,11 +1415,29 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
     ...(verdict ? { verdict } : {}),
     heldPoints,
     ...(heldVerdict ? { heldVerdict } : {}),
-    marginPoints: { read: measured.length, total: compliance.total },
+    marginPoints: unreadPoints(unique, measured),
     compliance,
     worst,
     onLimit: [...onLimit].map(([id, points]) => ({ id, points })),
   };
+}
+
+/** The aggregate's account of the points its margins are read at, and of the others. */
+function unreadPoints(
+  runs: readonly ConditionRun[],
+  measured: readonly { readonly point: CompliancePoint }[],
+): ConditionAggregate['marginPoints'] {
+  const read = new Set(measured.map((m) => m.point));
+  const out = { read: read.size, total: 0, notRun: 0, notCalculated: 0, unreadable: 0 };
+  for (const r of runs)
+    for (const p of r.points) {
+      out.total++;
+      if (read.has(p)) continue;
+      if (p.state === 'not-run') out.notRun++;
+      else if (!p.verdict) out.notCalculated++;
+      else out.unreadable++;
+    }
+  return out;
 }
 
 /** One run per condition: the denominator of every fold is unique conditions, so a caller that

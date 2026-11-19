@@ -1769,7 +1769,9 @@ const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
  *  point has no design where one of them is not complete (incompleteOn) for a reason other than
  *  the statements; else its statements do not determine one design; else it rests on an assumed
  *  level. Undefined where none of these is what the items say. */
-function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
+/** Why the engine did not calculate a range end, from the end's own item: the clause its pointers
+ *  into the design point's list give ("the design point has no design"). */
+export function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
   const items = on.flatMap((r) => {
     const i = r.frame === 'design' ? pointedAt(r, design) : undefined;
     return i ? [i] : [];

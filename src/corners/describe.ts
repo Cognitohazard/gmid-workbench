@@ -5,15 +5,22 @@
 // reason is never restated here: the "because" part is the sheet's own text for the item, and this
 // module adds the place.
 //
+// A condition is always named plainly ("tt 27 °C"). What its table's file did not declare is said
+// once, in a note (conditionNote), and every function whose sentences name a condition returns the
+// notes of the conditions it names beside its lines, so a reader that shows a sentence alone still
+// has the note with it.
+//
 // Pure; zero DOM.
 
 import type { SheetDoc } from '../sheet';
 import {
   andLines,
   describe,
+  designReason,
   incompleteText,
   lineText,
   nm,
+  standardProblems,
   t,
   verdictText,
   withheldClause,
@@ -21,7 +28,7 @@ import {
   type FindingText,
   type Line,
 } from '../sheet/describe';
-import type { HeldVerdict, Item, ItemRef, Verdict } from '../sheet/states';
+import type { DesignVerdict, HeldVerdict, Item, ItemRef, Verdict } from '../sheet/states';
 import {
   conditionKeyOf,
   sameCondition,
@@ -34,44 +41,84 @@ import {
   type ConditionRun,
 } from './index';
 
+/** Sentences, and the notes of the conditions they name (conditionNote), kept apart so a reader
+ *  can show each note once. */
+export interface Said {
+  readonly lines: readonly Line[];
+  readonly notes: readonly Line[];
+}
+
+/** Lines that keep their order, each once. */
+const distinct = (ls: readonly Line[]): Line[] =>
+  ls.filter((l, k, all) => all.findIndex((m) => lineText(m) === lineText(l)) === k);
+
 // --- the condition -------------------------------------------------------------------------
 
 /** A temperature as a reader reads it: the true minus sign, and the unit after a space. */
 const celsius = (temp: number): string => `${String(temp).replace('-', '−')} °C`;
 
+/** The member of `device` at `key`, whose table's record says what its file declared. */
+const memberAt = (
+  device: CharacterizedDevice | undefined,
+  key: { readonly corner: string; readonly temp: number },
+) => {
+  const at = conditionKeyOf(key);
+  return device?.conditions.find((m) => sameCondition(conditionKeyOf(m.id), at));
+};
+
 /**
  * A condition in words: the corner as the file spells it, a space, the temperature ("ss 125 °C",
  * "ss −40 °C"). A condition with no corner reads its temperature alone, and one with no finite
- * temperature its corner alone. A corner or temperature the file did not declare (the table's
- * record of what it filled in) reads as assumed, where it stands, so a default never reads as a
- * declaration: "tt at an assumed 27 °C", "an assumed tt at 125 °C", "an assumed tt at an assumed
- * 27 °C". Read from the same record as conditionLabelIn: the member of `device` at `key`, or the
- * bare key where no member answers to it.
+ * temperature its corner alone. What the file did not declare is not marked here: it is the
+ * condition's note (conditionNote), which every sentence naming the condition returns.
  */
 export function conditionWords(
   device: CharacterizedDevice | undefined,
   key: { readonly corner: string; readonly temp: number },
 ): Line {
-  const at = conditionKeyOf(key);
-  const member = device?.conditions.find((m) => sameCondition(conditionKeyOf(m.id), at));
+  const member = memberAt(device, key);
   const corner = (member?.id.corner ?? key.corner).trim();
   const temp = member?.id.temp ?? key.temp;
-  const filled = member?.meta.filled ?? [];
-  const noCorner = filled.includes('corner');
-  const noTemp = filled.includes('temp');
-  if (!noCorner && !noTemp) {
-    if (!corner) return t`${celsius(temp)}`;
-    if (!Number.isFinite(temp)) return [nm(corner)];
-    return t`${nm(corner)} ${celsius(temp)}`;
-  }
-  const c = noCorner ? t`an assumed ${nm(corner)}` : [nm(corner)];
-  const k = noTemp ? `an assumed ${celsius(temp)}` : celsius(temp);
-  return t`${c} at ${k}`;
+  if (!corner) return t`${celsius(temp)}`;
+  if (!Number.isFinite(temp)) return [nm(corner)];
+  return t`${nm(corner)} ${celsius(temp)}`;
 }
+
+/**
+ * What the engine assumes of a condition because its table's file did not state it, one sentence
+ * for each: "The engine assumes 27 °C, because the table of nmos_demo states no temperature." Read
+ * from the record conditionLabel marks its label from (TableMeta.filled), so the note and the
+ * label's mark agree. Empty for a condition its file declared in full, or one no table answers to.
+ */
+export function conditionNote(
+  device: CharacterizedDevice | undefined,
+  key: { readonly corner: string; readonly temp: number },
+): Line[] {
+  const member = memberAt(device, key);
+  if (!member) return [];
+  const filled = member.meta.filled ?? [];
+  const of = nm(member.id.device);
+  const out: Line[] = [];
+  if (filled.includes('temp'))
+    out.push(
+      t`The engine assumes ${celsius(member.id.temp)}, because the table of ${of} states no temperature.`,
+    );
+  if (filled.includes('corner'))
+    out.push(
+      t`The engine assumes the corner ${nm(member.id.corner.trim())}, because the table of ${of} states no corner.`,
+    );
+  return out;
+}
+
+/** The notes of every condition `keys` names, each once. */
+const notesOf = (
+  device: CharacterizedDevice | undefined,
+  keys: readonly { readonly corner: string; readonly temp: number }[],
+): Line[] => distinct(keys.flatMap((k) => conditionNote(device, k)));
 
 // --- counts --------------------------------------------------------------------------------
 
-/** "at 3 of 5", "at all 5", "at both". */
+/** "at 3 of 5 points", "at all 5 points", "at both points". */
 const ofAll = (n: number, total: number, what: string): string =>
   n === total
     ? total === 2
@@ -79,15 +126,12 @@ const ofAll = (n: number, total: number, what: string): string =>
       : `at all ${total} ${what}`
     : `at ${n} of ${total} ${what}`;
 
+type Counts = ConditionAggregate['heldPoints'];
+
 /** The held-point counts, read in one order: compliant, non-compliant, no operating point,
  *  undetermined. */
-const HELD_ORDER: readonly (keyof ConditionAggregate['heldPoints'] & string)[] = [
-  'compliant',
-  'nonCompliant',
-  'noOperatingPoint',
-  'undetermined',
-];
-const HELD_WORD: Record<string, HeldVerdict> = {
+const HELD_ORDER = ['compliant', 'nonCompliant', 'noOperatingPoint', 'undetermined'] as const;
+const HELD_WORD: Record<(typeof HELD_ORDER)[number], HeldVerdict> = {
   compliant: 'compliant',
   nonCompliant: 'non-compliant',
   noOperatingPoint: 'no-operating-point',
@@ -100,7 +144,7 @@ const heldClause = (v: HeldVerdict): { verb: 'is' | 'has'; word: string } =>
     ? { verb: 'has', word: VERDICT_WORDS[v] }
     : { verb: 'is', word: VERDICT_WORDS[v] };
 
-/** What one held-point count reads: its sentences, and a chip. */
+/** What one set of counts reads: its sentences, and a chip. */
 export interface CountText {
   readonly lines: readonly Line[];
   readonly chip: string;
@@ -111,13 +155,13 @@ export interface CountText {
  * the points the engine calculated, in the order compliant, non-compliant, no operating point,
  * undetermined, the first with its "of N points", zero counts left out; the points the engine did
  * not calculate in a sentence of their own. With one point in all there is no count to read: the
- * point's own sentence says it (pointText), and only the chip is given.
+ * point's own sentence says it (pointText), and only the chip is given. It names no condition.
  *
- * The chip names the worst word present with its count, in the order no operating point,
- * non-compliant, undetermined; where no point is any of those, how many are compliant, or that none
- * was calculated.
+ * The chip: with one point, its verdict word alone; otherwise the worst word present with its
+ * count, in the order no operating point, non-compliant, undetermined; where no point is any of
+ * those, how many are compliant, or that none was calculated.
  */
-export function heldPointsText(counts: ConditionAggregate['heldPoints']): CountText {
+export function heldPointsText(counts: Counts): CountText {
   const total = counts.total;
   const lines: Line[] = [];
   const present = HELD_ORDER.filter((k) => counts[k] > 0);
@@ -142,25 +186,29 @@ export function heldPointsText(counts: ConditionAggregate['heldPoints']): CountT
         t`The engine did not calculate the held design at any of the ${String(total)} points.`,
       );
   }
-  return { lines, chip: countChip(counts, total, 'points') };
+  return { lines, chip: countChip(counts, 'points') };
 }
 
 /** The chip of a set of verdict counts (heldPointsText, endCountText). */
-function countChip(counts: ConditionAggregate['heldPoints'], total: number, what: string): string {
+function countChip(counts: Counts, what: string): string {
+  const total = counts.total;
   if (total === 0) return '';
   const worse = (['noOperatingPoint', 'nonCompliant', 'undetermined'] as const).find(
     (k) => counts[k] > 0,
   );
-  const of = (n: number): string =>
-    total === 1 ? `at the ${what.replace(/s$/, '')}` : ofAll(n, total, what);
-  if (worse) return `${VERDICT_WORDS[HELD_WORD[worse]]} ${of(counts[worse])}`;
-  if (counts.compliant) return `${VERDICT_WORDS.compliant} ${of(counts.compliant)}`;
-  return `${VERDICT_WORDS['not-calculated']} ${of(counts.notCalculated)}`;
+  const word = worse
+    ? VERDICT_WORDS[HELD_WORD[worse]]
+    : counts.compliant
+      ? VERDICT_WORDS.compliant
+      : VERDICT_WORDS['not-calculated'];
+  if (total === 1) return word;
+  const n = worse ? counts[worse] : counts.compliant || counts.notCalculated;
+  return `${word} ${ofAll(n, total, what)}`;
 }
 
 /** The verdicts of one run's range ends as a fragment: "compliant at both range ends",
  *  "non-compliant at 1 of 2 range ends", "not calculated at all 4 range ends". Empty where the run
- *  has no range end. */
+ *  has no range end. It names no condition. */
 export function endCountText(run: ConditionRun): string {
   const ends = run.points.slice(1);
   const counts = {
@@ -173,15 +221,10 @@ export function endCountText(run: ConditionRun): string {
   };
   for (const p of ends) {
     const v = p.verdict?.verdict as HeldVerdict | undefined;
-    if (v === undefined) counts.notCalculated++;
-    else
-      counts[
-        (Object.keys(HELD_WORD) as (keyof typeof HELD_WORD)[]).find(
-          (k) => HELD_WORD[k] === v,
-        ) as 'compliant'
-      ]++;
+    const k = HELD_ORDER.find((h) => HELD_WORD[h] === v);
+    counts[k ?? 'notCalculated']++;
   }
-  return countChip(counts, ends.length, 'range ends');
+  return countChip(counts, 'range ends');
 }
 
 // --- one point -----------------------------------------------------------------------------
@@ -206,9 +249,11 @@ function failsClause(failed: Verdict<string>['failed']): Line {
  *  distinct, joined as a list. */
 const failedClauses = (failed: Verdict<string>['failed']): Line =>
   andLines(
-    failed
-      .map((f) => withheldClause({ kind: f.kind, path: f.path, name: f.name, cause: f.cause.kind }))
-      .filter((l, k, all) => all.findIndex((m) => lineText(m) === lineText(l)) === k),
+    distinct(
+      failed.map((f) =>
+        withheldClause({ kind: f.kind, path: f.path, name: f.name, cause: f.cause.kind }),
+      ),
+    ),
   );
 
 /** A failed item of a verdict as the item it is, for its own text. */
@@ -228,20 +273,29 @@ function setsText(set: Readonly<Record<string, number>>, doc?: SheetDoc): Line {
     const shown = `${String(Number(v.toPrecision(3))).replace('-', '−')}${u ? ` ${u}` : ''}`;
     return t`${nm(n)} to ${shown}`;
   });
-  return parts.length ? t`sets ${andLines(parts)}` : t`sets nothing`;
+  return t`sets ${andLines(parts)}`;
 }
 
-/** The held design's verdict at a place, with its reason, as one or two sentences. `where` is the
- *  place ("at ss 125 °C") for a centre, or "there" after a range end's own sentence. */
-function heldVerdictLines(v: Verdict<HeldVerdict>, where: Line): Line[] {
-  const { verb, word } = heldClause(v.verdict);
-  const head = t`The held design ${verb} ${word} ${where}`;
+/** A verdict of the design at a place, with its reason: the subject ("The held design", "The
+ *  design") and the place ("at ss 125 °C", "there"). */
+function verdictLines(
+  subject: string,
+  v: Verdict<HeldVerdict> | Verdict<DesignVerdict>,
+  where: Line,
+): Line[] {
+  const { verb, word } =
+    v.verdict === 'no-operating-point'
+      ? heldClause(v.verdict)
+      : { verb: 'is', word: VERDICT_WORDS[v.verdict] };
+  const head = t`${subject} ${verb} ${word} ${where}`;
   switch (v.verdict) {
     case 'compliant':
+    case 'feasible':
       return [t`${head}.`];
     case 'non-compliant':
       return [t`${head}, because ${failsClause(v.failed)}.`];
-    case 'no-operating-point': {
+    case 'no-operating-point':
+    case 'infeasible': {
       const first = v.failed[0];
       const line = first ? describe(asItem(first)).segments[0] : undefined;
       return line ? [t`${head}.`, line] : [t`${head}.`];
@@ -265,65 +319,81 @@ export interface PointPlace {
 }
 
 /**
- * One point in sentences: what the design is there, and why. At a centre the place is the
- * condition; at a range end, a first sentence says what the end sets, and the verdict follows
- * "there". The condition the design is sized at reads its design verdict, "where the engine sized
- * it". A point with no verdict reads that the engine did not calculate it, and why: a range end's
- * own text, or the reason the condition was not run.
+ * One point in sentences: what the design is there, and why, with the note of its condition.
+ * - The condition the design is sized at: "The engine sized the design at tt 27 °C." and the design
+ *   verdict "there".
+ * - A held centre: the held verdict at the condition.
+ * - A range end: what the end sets at the condition, and the held verdict "there"; a range end the
+ *   engine did not calculate, one sentence whose reason is the end's own item's.
+ * - A point with no verdict: that the engine did not calculate or run it, and why.
  */
-export function pointText(place: PointPlace): Line[] {
+export function pointText(place: PointPlace): Said {
   const { run, index, device, doc } = place;
   const point: CompliancePoint | undefined = run.points[index];
-  if (!point) return [];
+  const notes = notesOf(device, [run.key]);
+  if (!point) return { lines: [], notes: [] };
   const where = conditionWords(device, run.key);
-  const end = index > 0 ? run.result?.rangeEnds?.[index - 1] : undefined;
   const v = point.verdict;
+  const said = (lines: Line[]): Said => ({ lines: distinct(lines), notes });
 
   if (index === 0 && run.design === 'sized') {
     if (!v)
-      return [t`The engine did not calculate the design at ${where}.`, ...issueLines(run, device)];
-    return [t`The design is ${VERDICT_WORDS[v.verdict]} at ${where}, where the engine sized it.`];
+      return said([
+        t`The engine did not calculate the design at ${where}.`,
+        ...issueLines(run, device),
+      ]);
+    return said([
+      t`The engine sized the design at ${where}.`,
+      ...verdictLines('The design', v, t`there`),
+    ]);
   }
 
   if (index === 0) {
-    if (v) return heldVerdictLines(v as Verdict<HeldVerdict>, t`at ${where}`);
-    const noDesign =
-      run.state === 'not-evaluated' &&
-      run.issues.some((i) => i.kind === 'no-design' && i.reason === 'base-not-evaluated');
-    return noDesign
-      ? [
-          t`The engine did not calculate the held design at ${where}, because the design point has no design.`,
-        ]
-      : issueLines(run, device);
+    if (v) return said(verdictLines('The held design', v as Verdict<HeldVerdict>, t`at ${where}`));
+    return said(
+      noDesignToHold(run)
+        ? [
+            t`The engine did not calculate the held design at ${where}, because the design point has no design.`,
+          ]
+        : issueLines(run, device),
+    );
   }
 
   const name = point.rangeEnd ?? '';
+  const end = run.result?.rangeEnds?.[index - 1];
   if (v)
-    return [
+    return said([
       t`At ${where}, range end ${nm(name)} ${setsText(end?.set ?? {}, doc)}.`,
-      ...heldVerdictLines(v as Verdict<HeldVerdict>, t`there`),
-    ];
-  // Not calculated: the design point gives no design, or the end's own list says why.
+      ...verdictLines('The held design', v as Verdict<HeldVerdict>, t`there`),
+    ]);
+  // Not calculated: the reason is the end's own item's (designReason), or its list's text.
   const head = t`The engine did not calculate range end ${nm(name)} at ${where}`;
-  const designItems = run.result?.items;
   const own = end?.items;
-  if (own?.length === 1 && own[0].kind === 'sheet' && own[0].status === 'withheld')
-    return [t`${head}, because the design point has no design.`];
+  const design = run.result?.items;
+  const [only] = own ?? [];
+  const reason =
+    own?.length === 1 && only.status === 'withheld' && design
+      ? designReason(only.on, design)
+      : undefined;
+  if (reason) return said([t`${head}, because ${reason}.`]);
   if (own?.length)
-    return [
+    return said([
       t`${head}.`,
-      ...incompleteText(own, {
-        end: name,
-        ...(designItems ? { design: designItems } : {}),
-      }).flatMap((f) => f.segments),
-    ];
-  const noDesign =
-    run.state === 'not-evaluated' &&
-    run.issues.some((i) => i.kind === 'no-design' || i.kind === 'runtime-evaluation');
-  return noDesign
-    ? [t`${head}, because the design point has no design.`]
-    : [t`${head}.`, ...issueLines(run, device)];
+      ...incompleteText(own, { end: name, ...(design ? { design } : {}) }).flatMap(
+        (f) => f.segments,
+      ),
+    ]);
+  // A condition declined before anything ran: its range ends were never run.
+  const ran = t`The engine did not run range end ${nm(name)} at ${where}`;
+  return said(
+    noDesignToHold(run) ? [t`${ran}, because the design point has no design.`] : [t`${ran}.`],
+  );
 }
+
+/** Whether a condition was declined because the design was not evaluated where it is sized. */
+const noDesignToHold = (run: ConditionRun): boolean =>
+  run.state === 'not-evaluated' &&
+  run.issues.some((i) => i.kind === 'no-design' && i.reason === 'base-not-evaluated');
 
 // --- the margins ---------------------------------------------------------------------------
 
@@ -334,43 +404,78 @@ const percent = (marginPct: number): string => {
   return `${p < 0 ? '−' : ''}${shown} %`;
 };
 
+type At = { readonly key: ConditionKey; readonly rangeEnd?: string };
+
 /** A point's place: "at ss 125 °C", "at ss 125 °C, range end cm-lo". */
-const placeText = (
-  device: CharacterizedDevice | undefined,
-  at: { readonly key: ConditionKey; readonly rangeEnd?: string },
-): Line =>
+const placeText = (device: CharacterizedDevice | undefined, at: At): Line =>
   at.rangeEnd === undefined
     ? t`at ${conditionWords(device, at.key)}`
     : t`at ${conditionWords(device, at.key)}, range end ${nm(at.rangeEnd)}`;
 
 /** Several points as one place: the conditions joined under one range end where they share it
- *  ("at range end cm-lo of tt 27 °C, ss 125 °C and ff −40 °C"), else each point's place. */
-function placesText(
-  device: CharacterizedDevice | undefined,
-  points: readonly { readonly key: ConditionKey; readonly rangeEnd?: string }[],
-): Line {
+ *  ("at range end cm-lo in tt 27 °C, ss 125 °C and ff −40 °C"), else each point's place. */
+function placesText(device: CharacterizedDevice | undefined, points: readonly At[]): Line {
   const ends = new Set(points.map((p) => p.rangeEnd));
   const [only] = ends;
+  const conditions = andLines(points.map((p) => conditionWords(device, p.key)));
   if (points.length > 1 && ends.size === 1 && only !== undefined)
-    return t`at range end ${nm(only)} of ${andLines(points.map((p) => conditionWords(device, p.key)))}`;
-  if (points.length > 1 && ends.size === 1)
-    return t`at ${andLines(points.map((p) => conditionWords(device, p.key)))}`;
+    return t`at range end ${nm(only)} in ${conditions}`;
+  if (points.length > 1 && ends.size === 1) return t`at ${conditions}`;
   return andLines(points.map((p) => placeText(device, p)));
 }
 
+/** A sentence, or where it runs past the standard's length, its subject in one sentence and its
+ *  margin in the next ("Its margin is 5.8 % at tt 27 °C, range end cm-lo."). */
+function withMargin(subject: Line, margin: Line): Line[] {
+  const whole = t`${subject}, with a margin of ${margin}.`;
+  return standardProblems(whole).includes('more than 20 words')
+    ? [t`${subject}.`, t`Its margin is ${margin}.`]
+    : [whole];
+}
+
+/** What the points the margins were not read at are, after "The engine read margins at 6 of 9
+ *  points.": not calculated, never run, or calculated with no margin to read. */
+function unreadText(m: ConditionAggregate['marginPoints']): Line[] {
+  const rest = m.total - m.read;
+  if (rest <= 0) return [];
+  const others = rest === 1 ? 'the other point' : `the other ${rest} points`;
+  const kinds = [m.notRun, m.notCalculated, m.unreadable].filter((n) => n > 0).length;
+  // A mix: one sentence for each kind of point.
+  if (kinds > 1)
+    return [
+      ...(m.notRun ? [t`The engine did not run ${String(m.notRun)} of the other points.`] : []),
+      ...(m.notCalculated
+        ? [
+            t`${String(m.notCalculated)} of the other points ${m.notCalculated === 1 ? 'is' : 'are'} not calculated.`,
+          ]
+        : []),
+      ...(m.unreadable
+        ? [t`The engine read no margin at ${String(m.unreadable)} of the other points.`]
+        : []),
+    ];
+  if (m.notRun) return [t`The engine did not run ${others}.`];
+  if (m.notCalculated)
+    return [
+      rest === 1
+        ? t`The other point is not calculated.`
+        : t`The other ${String(rest)} points are not calculated.`,
+    ];
+  return [t`The engine read no margin at ${others}.`];
+}
+
 /**
- * The tightest hard requirement over every point, in sentences. The checks that sit on their limit
- * come first, grouped by the points they sit there at; then the tightest of the others, or the one
- * that fails worst. Where the margins were read at fewer points than there are, it says how many.
- * Where no hard requirement has a margin anywhere, it says why: the engine calculated no point, or
- * every hard requirement is not calculated.
+ * The tightest hard requirement over every point, in sentences, with the notes of the conditions
+ * they name. The checks that sit on their limit come first, grouped by the points they sit there
+ * at; then the tightest of the others, or the one that fails worst, its margin in a sentence of its
+ * own where one sentence would run past the standard's length. Where the margins were read at fewer
+ * points than there are, it says how many and what the others are. Where no hard requirement has a
+ * margin anywhere, it says why: the engine calculated no point, or every hard requirement is not
+ * calculated.
  */
-export function tightestText(agg: ConditionAggregate, device?: CharacterizedDevice): Line[] {
+export function tightestText(agg: ConditionAggregate, device?: CharacterizedDevice): Said {
   const lines: Line[] = [];
-  const groups = new Map<
-    string,
-    { ids: string[]; points: ConditionAggregate['onLimit'][number]['points'] }
-  >();
+  const named: ConditionKey[] = [];
+  const groups = new Map<string, { ids: string[]; points: readonly At[] }>();
   for (const c of agg.onLimit) {
     const k = JSON.stringify(c.points.map((p) => [p.key.corner, p.key.temp, p.rangeEnd ?? null]));
     const g = groups.get(k);
@@ -380,6 +485,7 @@ export function tightestText(agg: ConditionAggregate, device?: CharacterizedDevi
   for (const g of groups.values()) {
     const names = andLines(g.ids.map((id) => [nm(id)]));
     const places = placesText(device, g.points);
+    named.push(...g.points.map((p) => p.key));
     lines.push(
       g.ids.length > 1
         ? t`${names} sit on their limits ${places}.`
@@ -388,92 +494,103 @@ export function tightestText(agg: ConditionAggregate, device?: CharacterizedDevi
   }
   const w = agg.worst;
   if (w) {
-    const at = placeText(device, w);
+    named.push(w.key);
+    const margin = t`${percent(w.marginPct)} ${placeText(device, w)}`;
     const fails = w.status === 'fail';
-    const sentence = fails
-      ? t`${nm(w.id)} fails worst, with a margin of ${percent(w.marginPct)} ${at}.`
-      : t`${nm(w.id)} is the tightest, with a margin of ${percent(w.marginPct)} ${at}.`;
-    lines.push(
-      agg.onLimit.length
-        ? t`Of the other hard requirements, ${sentence}`
-        : fails
-          ? sentence
-          : t`The tightest hard requirement is ${nm(w.id)}, with a margin of ${percent(w.marginPct)} ${at}.`,
-    );
+    const subject = agg.onLimit.length
+      ? fails
+        ? t`Of the other hard requirements, ${nm(w.id)} fails worst`
+        : t`Of the other hard requirements, ${nm(w.id)} is the tightest`
+      : fails
+        ? t`${nm(w.id)} fails worst`
+        : t`The tightest hard requirement is ${nm(w.id)}`;
+    lines.push(...withMargin(subject, margin));
   }
+  const m = agg.marginPoints;
   if (!w && !agg.onLimit.length) {
-    const calculated = agg.heldPoints.total - agg.heldPoints.notCalculated + (agg.verdict ? 1 : 0);
+    const calculated = m.total - m.notRun - m.notCalculated;
     lines.push(
       calculated === 0
         ? t`No hard requirement has a margin at any point, because the engine calculated no point.`
         : t`No hard requirement has a margin at any point, because every hard requirement is not calculated.`,
     );
-  } else if (agg.marginPoints.read < agg.marginPoints.total)
+  } else if (m.read < m.total)
     lines.push(
-      t`The margins were read at ${String(agg.marginPoints.read)} of ${String(agg.marginPoints.total)} points.`,
+      t`The engine read margins at ${String(m.read)} of ${String(m.total)} points.`,
+      ...unreadText(m),
     );
-  return lines;
+  return { lines, notes: notesOf(device, named) };
 }
 
-/** One check's tightest point as a cell fragment: "−59 % at tt 27 °C", "−59 % at ss 125 °C,
- *  cm-lo". */
-export function worstAtText(w: CheckWorstPoint, device?: CharacterizedDevice): Line {
+/** One check's tightest point as a cell fragment, with the note of its condition: "−59 % at tt
+ *  27 °C", "−59 % at ss 125 °C, cm-lo". */
+export function worstAtText(
+  w: CheckWorstPoint,
+  device?: CharacterizedDevice,
+): { readonly line: Line; readonly notes: readonly Line[] } {
   const where = conditionWords(device, w.key);
-  return w.rangeEnd === undefined
-    ? t`${percent(w.marginPct)} at ${where}`
-    : t`${percent(w.marginPct)} at ${where}, ${nm(w.rangeEnd)}`;
+  return {
+    line:
+      w.rangeEnd === undefined
+        ? t`${percent(w.marginPct)} at ${where}`
+        : t`${percent(w.marginPct)} at ${where}, ${nm(w.rangeEnd)}`,
+    notes: notesOf(device, [w.key]),
+  };
 }
 
 // --- why a condition was not run -----------------------------------------------------------
 
 /**
- * Why a condition was not run, from the issue's data: a sentence, and the action line where the
- * designer can act. A run that did not complete and a sheet that does not validate write no
- * sentence here: their text is the items' own (issueFindings).
+ * Why a condition was not run, from the issue's data: its sentences, ending with the one action
+ * where the designer can act, and the note of the condition. A run that did not complete and a
+ * sheet that does not validate write no sentence here: their text is the items' own
+ * (issueFindings).
  */
 export function conditionIssueText(
   issue: ConditionIssue,
   key: ConditionKey,
   device?: CharacterizedDevice,
-): Line[] {
+): Said {
   const where = conditionWords(device, key);
+  const said = (lines: Line[]): Said => ({ lines, notes: notesOf(device, [key]) });
   switch (issue.kind) {
     case 'absent-condition':
       return issue.missing === 'device'
-        ? [
-            t`Block ${nm(issue.block ?? '')} names the device ${nm(issue.device)}, which is not loaded, so the engine did not run this condition.`,
-            t`Load a table of ${nm(issue.device)}.`,
-          ]
-        : [
+        ? said([
+            t`Block ${nm(issue.block ?? '')} names the device ${nm(issue.device)}, and no table of ${nm(issue.device)} is loaded.`,
+            t`So the engine did not run this condition.`,
+            t`Load a table of ${nm(issue.device)} at ${where}.`,
+          ])
+        : said([
             t`The device ${nm(issue.device)} has no table at ${where}, so the engine did not run this condition.`,
             t`Load a table of ${nm(issue.device)} at ${where}.`,
-          ];
+          ]);
     case 'ambiguous-condition':
-      return [
+      return said([
         t`Two tables of the device ${nm(issue.device)} claim ${where}, so the engine did not run this condition.`,
         t`Remove one of the two tables.`,
-      ];
+      ]);
     case 'incompatible-table':
-      return [
+      return said([
         t`The tables of the device ${nm(issue.device)} do not sweep the same axes, so the engine runs none of its conditions.`,
         t`Load tables of ${nm(issue.device)} that sweep the same axes.`,
-      ];
+      ]);
     case 'no-design':
       return issue.reason === 'base-not-evaluated'
-        ? [t`The engine did not run ${where}, because the design point has no design.`]
-        : [
-            t`No condition is named for sizing the design, so the engine did not run ${where}.`,
-            t`Name the condition to size the design at.`,
-          ];
+        ? said([t`The engine did not run ${where}, because the design point has no design.`])
+        : said([
+            t`The sheet names no condition to size the design at, so the engine did not run ${where}.`,
+            t`Choose the condition at which the engine sizes the design.`,
+          ]);
     case 'assumed-level': {
-      const names = andLines(issue.names.map((r) => requirementName(r)));
-      return [
+      const names = andLines(issue.names.map(requirementName));
+      return said([
         t`The engine does not hold the design at ${where}, because ${names} ${issue.names.length > 1 ? 'are' : 'is'} marked assumed.`,
-      ];
+      ]);
     }
     case 'runtime-evaluation':
     case 'invalid-sheet-or-ref':
-      return [];
+      return { lines: [], notes: [] };
   }
 }
 
@@ -501,9 +618,7 @@ export function issueFindings(run: ConditionRun): FindingText[] {
  *  items' own text. */
 function issueLines(run: ConditionRun, device?: CharacterizedDevice): Line[] {
   if (run.state !== 'not-evaluated') return [];
-  const own = run.issues.flatMap((i) => conditionIssueText(i, run.key, device));
+  const own = run.issues.flatMap((i) => conditionIssueText(i, run.key, device).lines);
   const items = issueFindings(run).flatMap((f) => f.segments);
-  return [...own, ...items].filter(
-    (l, k, all) => all.findIndex((m) => lineText(m) === lineText(l)) === k,
-  );
+  return distinct([...own, ...items]);
 }
