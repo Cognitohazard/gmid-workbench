@@ -1126,6 +1126,10 @@ export interface SheetBlockReport {
   pinned?: string[];
   /** This block's items with their statuses (SheetResult.items), named within the block. */
   items?: Item[];
+  /** The block's verdict, read from its own items and its own document as the sheet's is
+   *  (designVerdict). Absent where the block was not calculated: its own sheet item is not ok, as
+   *  its parent gives it no value or the block is not read. */
+  verdict?: Verdict;
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element

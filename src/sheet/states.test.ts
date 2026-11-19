@@ -1495,7 +1495,7 @@ group('a range end that is not calculated', () => {
     design: Item[] | undefined,
     want: string[],
   ) => {
-    const said = describe(item, [], name, design);
+    const said = describe(item, [], { end: name, design });
     expect(said.lines).toEqual(want);
     for (const l of said.segments) expect(standardProblems(l)).toEqual([]);
   };
@@ -1543,8 +1543,7 @@ group('a range end that is not calculated', () => {
         { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'cannot-evaluate' },
       ]),
       [],
-      'cm-lo',
-      [searchFailed],
+      { end: 'cm-lo', design: [searchFailed] },
     ).lines;
     expect(said).toEqual([
       'Range end cm-lo is not calculated, because the design point has no design.',
@@ -1649,7 +1648,7 @@ group('why a range end that is not calculated is not complete', () => {
         ],
       },
     ];
-    expect(incompleteMessage(items, 'cm-lo', design).split('\n').slice(1)).toEqual([
+    expect(incompleteMessage(items, { end: 'cm-lo', design }).split('\n').slice(1)).toEqual([
       'Range end cm-lo is not calculated, because the design point has no design.',
       'At the design point, the engine could not calculate V_tail.',
     ]);
