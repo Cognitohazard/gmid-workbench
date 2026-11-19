@@ -1068,6 +1068,41 @@ group('the texts of the data an item now carries', () => {
     check(syntax(), ['y gives no number.', 'y has a syntax error in a +* b.']);
   });
 
+  it('says a syntax error is at the end of the expression where the parser ran out of text', () => {
+    check(
+      failed('value', 'y', {
+        kind: 'cannot-evaluate',
+        data: {
+          why: 'syntax',
+          name: 'y',
+          reason: '',
+          syntax: { expression: '((', at: 2, problem: '' },
+        },
+      }),
+      [
+        'y gives no number.',
+        'y has a syntax error in ((.',
+        'The error is at the end of the expression.',
+      ],
+    );
+    check(
+      failed('sheet', '', {
+        kind: 'cannot-evaluate',
+        data: {
+          why: 'syntax',
+          name: 'V_tail',
+          reason: '',
+          syntax: { expression: '((', at: 2, problem: '' },
+          rangeEnd: { name: 'cm-lo', param: 'V_tail', expression: '((' },
+        },
+      }),
+      [
+        'Range end cm-lo sets V_tail to ((, which has a syntax error.',
+        'The error is at the end of the expression.',
+      ],
+    );
+  });
+
   it('names the input a block is given no value for', () => {
     check(
       failed('sheet', '', {
@@ -1283,12 +1318,14 @@ group('the parser’s reason for a syntax error, where a plain sentence says it'
         },
       }).lines.slice(2);
     };
-    expect(at('a + (b')).toEqual(['A parenthesis is not closed.']);
-    expect(at('f(a')).toEqual(['A parenthesis is not closed.']);
+    // The parser runs out of text in an unclosed parenthesis: the error is at the end.
+    const end = 'The error is at the end of the expression.';
+    expect(at('a + (b')).toEqual([end, 'A parenthesis is not closed.']);
+    expect(at('f(a')).toEqual([end, 'A parenthesis is not closed.']);
     expect(at('(a))')).toEqual(['A closing parenthesis has no parenthesis that it closes.']);
     expect(at('a +* b')).toEqual(['An operator has nothing after it.']);
     expect(at('1a + b')).toEqual(['A name starts with a digit.']);
-    expect(at('a ? b')).toEqual([]);
+    expect(at('a ? b')).toEqual([end]);
   });
 });
 
@@ -1526,7 +1563,7 @@ group('a range end that is not calculated', () => {
     design: Item[] | undefined,
     want: string[],
   ) => {
-    const said = describe(item, [], name, design);
+    const said = describe(item, [], { end: name, design });
     expect(said.lines).toEqual(want);
     for (const l of said.segments) expect(standardProblems(l)).toEqual([]);
   };
@@ -1588,9 +1625,10 @@ group('a range end that is not calculated', () => {
         [head, `At the design point, the level L cannot hold wire out, ${why}.`],
       );
   });
+  // A placement fault of part in, on the sheet that wires it.
   const wiring: Item = {
     kind: 'sheet',
-    path: ['in'],
+    path: [],
     name: '',
     status: 'failed',
     cause: {
@@ -1612,7 +1650,7 @@ group('a range end that is not calculated', () => {
 
   it('names the end, says why from the design point’s items, and gives one line for each', () => {
     check(
-      end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
+      end([{ kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' }]),
       'cm-lo',
       [wiring],
       [
@@ -1628,8 +1666,7 @@ group('a range end that is not calculated', () => {
         { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'cannot-evaluate' },
       ]),
       [],
-      'cm-lo',
-      [searchFailed],
+      { end: 'cm-lo', design: [searchFailed] },
     ).lines;
     expect(said).toEqual([
       'Range end cm-lo is not calculated, because the design point has no design.',
@@ -1734,7 +1771,7 @@ group('why a range end that is not calculated is not complete', () => {
         ],
       },
     ];
-    expect(incompleteMessage(items, 'cm-lo', design).split('\n').slice(1)).toEqual([
+    expect(incompleteMessage(items, { end: 'cm-lo', design }).split('\n').slice(1)).toEqual([
       'Range end cm-lo is not calculated, because the design point has no design.',
       'At the design point, the engine could not calculate V_tail.',
     ]);

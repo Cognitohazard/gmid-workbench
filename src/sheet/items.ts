@@ -16,6 +16,7 @@ import {
   unfoundIn,
   unitOfSides,
   type Region,
+  type SheetBlockReport,
   type SheetDoc,
   type SheetResult,
   type SizingReport,
@@ -631,6 +632,13 @@ function deviceCause(s: SizingReport | undefined, doc: SheetDoc): Cause {
     const setBy = typedSetter(doc, o.quantity);
     return { kind: 'outside-table', data: setBy ? { ...o, setBy } : o };
   }
+  // A table that does not sweep an axis the givens ask for: the refusal is the error, whatever
+  // else the givens still leave to declare.
+  if (s?.unswept?.length)
+    return {
+      kind: 'cannot-evaluate',
+      data: { why: 'no-sweep', name: s.unswept.join(', '), reason: s.error ?? '' },
+    };
   if (s?.needs?.length)
     return {
       kind: 'cannot-evaluate',
@@ -1144,6 +1152,67 @@ export function endVerdict(
   // An end whose own entry is not well formed is not calculated, though the engine ran it.
   if (endEntryNotWellFormed(items)) return undefined;
   return heldVerdictOf(items, unreadValues(doc));
+}
+
+/** The items of the block at `path` in a list, named within the block: the list's items under that
+ *  path, the path taken off them and off what each withheld one waits on. The block's own sheet item
+ *  waits on its parent, named as the parent names it, so its pointers are kept as they are. */
+function itemsWithin(items: readonly Item[], path: readonly string[]): Item[] {
+  const inside = (r: { path: readonly string[] }): boolean =>
+    r.path.length >= path.length && path.every((p, k) => r.path[k] === p);
+  return items.filter(inside).map((i): Item => {
+    const own = { ...i, path: i.path.slice(path.length) };
+    if (own.status !== 'withheld' || ownSheet(own)) return own;
+    return {
+      ...own,
+      on: own.on.map((o) => (inside(o) ? { ...o, path: o.path.slice(path.length) } : o)),
+    };
+  });
+}
+
+/**
+ * Each block report of a run with its own list taken from the run's list (one list: a block's
+ * card, its verdict and the sheet's list say the same), and its verdict formed from that list and
+ * the block's own document. Where the block is designed (`held` false) the verdict is a design
+ * verdict (`verdict`); where its hardware is held (a range end, a run that holds the design) it is
+ * the held design's verdict (`heldVerdict`), formed as a range end's is. Neither where the block
+ * was not calculated: its own sheet item is withheld. Nested blocks the same.
+ */
+export function blockLists(
+  doc: SheetDoc | undefined,
+  items: readonly Item[] | undefined,
+  blocks: readonly SheetBlockReport[] | undefined,
+  held: boolean,
+  path: readonly string[] = [],
+): SheetBlockReport[] | undefined {
+  if (!blocks || !items) return blocks ? [...blocks] : undefined;
+  return blocks.map((b) => {
+    const at = [...path, b.name];
+    // The block's own sheet item where its parent gives it no value: the run's list says so in the
+    // parent's terms; the block's own list keeps the frame that names the inputs it was not given.
+    const before = b.items?.find(ownSheet);
+    const own = itemsWithin(items, at).map((i) =>
+      ownSheet(i) &&
+      i.status === 'withheld' &&
+      before?.status === 'withheld' &&
+      before.on.every((o) => o.frame === 'parent')
+        ? before
+        : i,
+    );
+    const blockDoc = Array.isArray(doc?.blocks)
+      ? doc.blocks.find((x) => x?.name === b.name)?.doc
+      : undefined;
+    const { verdict: _v, heldVerdict: _h, ...rest } = b;
+    const self = own.find(ownSheet);
+    const verdict =
+      !self || self.status === 'withheld'
+        ? {}
+        : held
+          ? { heldVerdict: heldVerdictOf(own, unreadValues(blockDoc)) }
+          : { verdict: designVerdict(blockDoc, own) };
+    const below = blockLists(blockDoc, items, b.blocks, held, at);
+    return { ...rest, items: own, ...verdict, ...(below ? { blocks: below } : {}) };
+  });
 }
 
 /** The verdict of a sheet (sheetVerdictOf) from its document, its design point's list and its range

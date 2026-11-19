@@ -46,6 +46,7 @@ import { ueffAt, demoCsvWith, importOne, withUeff } from '../import/passthrough.
 import type { DeviceTable } from '../types';
 import type { SheetDoc, SheetResult, SheetVar } from './types';
 import { notACircuit, REFS } from './library.fixtures';
+import { describe as describeItem } from './describe';
 
 // The demo device characterized over drain voltage. Every sized device states its drain voltage,
 // so every document here that sizes one does — 0.6 V, unless the test is about another — and
@@ -2435,6 +2436,16 @@ describe('a device is sized only on a table that carries what its givens use', (
   it('says everything the table lacks in one refusal', () => {
     const res = evaluateSheet(given({ vds: '0.6', vsb: '0.3' }), noVds);
     expectRefused(res, /given vds = 0\.6/, /no vds sweep/, /given vsb = 0\.3/, /no vsb sweep/);
+    // The device's item carries the sweeps the table lacks, so its text says so.
+    const device = res.items?.find((i) => i.kind === 'device');
+    expect(device).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'cannot-evaluate', data: { why: 'no-sweep', name: 'vds, vsb' } },
+    });
+    expect(describeItem(device!).lines).toEqual([
+      'The device of this sheet cannot be sized.',
+      'The table holds no sweep of vds and vsb.',
+    ]);
   });
 
   it('keeps an axis that still needs declaring on offer beside a refusal', () => {
@@ -2647,6 +2658,22 @@ describe('a device is sized only on a table that carries what its givens use', (
       expect(lacking.blocks?.map((b) => b.sizing?.ok)).toEqual([false, true]);
       expect(lacking.blocks?.[0].sizing?.unswept).toEqual(['vsb']);
       expect(errorsOf(lacking)).toEqual([`block "pair": ${lacking.blocks?.[0].sizing?.error}`]);
+      // The block's device carries the sweep its own table lacks, and names the part in the
+      // block's own list as in its parent's.
+      const pair = lacking.items?.find((i) => i.kind === 'device' && i.path.join('.') === 'pair');
+      expect(pair).toMatchObject({
+        status: 'failed',
+        cause: { kind: 'cannot-evaluate', data: { why: 'no-sweep', name: 'vsb' } },
+      });
+      const own = lacking.blocks?.[0].items?.find((i) => i.kind === 'device' && !i.path.length);
+      for (const [item, within] of [
+        [pair, []],
+        [own, ['pair']],
+      ] as const)
+        expect(describeItem(item!, within).lines).toEqual([
+          'Part pair cannot be sized.',
+          'The table holds no sweep of vsb.',
+        ]);
       // The other way round, the sheet's table would refuse it and the pair's own answers.
       const carried = runSheet(onItsOwn(composed()), vdsSwept, resolveTo(bothSwept));
       expect(errorsOf(carried)).toEqual([]);

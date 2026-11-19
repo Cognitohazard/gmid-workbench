@@ -1126,6 +1126,15 @@ export interface SheetBlockReport {
   pinned?: string[];
   /** This block's items with their statuses (SheetResult.items), named within the block. */
   items?: Item[];
+  /** The block's verdict where it is designed (the design point of a run that sizes it), read from
+   *  its own items and its own document as the sheet's is (designVerdict). Its items are the run's
+   *  list under the block's path (blockLists). Absent where the block's hardware is held, and where
+   *  it was not calculated: its own sheet item is withheld. */
+  verdict?: Verdict;
+  /** The held design's verdict of the block where its hardware is held (a range end, a run that
+   *  holds the design), formed as a range end's is (heldVerdictOf). Exactly one of `verdict` and
+   *  `heldVerdict` is present on a block that was calculated. */
+  heldVerdict?: Verdict<HeldVerdict>;
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element

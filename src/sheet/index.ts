@@ -37,6 +37,7 @@ import { formatOf } from './nodes';
 import { evaluateSheet, inheritedPolarityWarnings, withVerdict, type DeviceResolver } from './eval';
 import {
   aboutTheSheet,
+  blockLists,
   designVerdict,
   givesValue,
   isNotCalculated,
@@ -231,13 +232,17 @@ export function runSheet(
       'validation',
     );
     const { verdict: _verdict, ...rest } = e;
-    return { ...rest, items: list, ...withVerdict(list, r.doc) };
+    const blocks = blockLists(r.doc, list, e.blocks, true);
+    return { ...rest, items: list, ...(blocks ? { blocks } : {}), ...withVerdict(list, r.doc) };
   });
+  // Each block's own list is the run's list, validation's findings included, under its path.
+  const blocks = blockLists(r.doc, items, res.blocks, false);
   return {
     ...withValidation([...pre, ...bound], res),
     feasible: res.feasible && !pre.some((w) => w.severity === 'error'),
     assumptions,
     ...(rangeEnds ? { rangeEnds } : {}),
+    ...(blocks ? { blocks } : {}),
     items,
     verdict: designVerdict(r.doc, items, rangeEnds),
   };

@@ -1902,6 +1902,18 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
           ? `param "${p.name}" is solved by the engine, so its class is derived — drop class "${String(cls)}"`
           : `param "${p.name}" carries hold, so its class is derived — drop class "${String(cls)}"`,
         location: p.name,
+        // A class on a param the engine solves: the class, and the relation that solves it.
+        ...(engineSolved(p)
+          ? {
+              about: {
+                kind: 'entry',
+                field: 'class',
+                value: cls,
+                problem: 'solved',
+                relation: constrained(p) ? 'designConstraint' : 'solveFor',
+              },
+            }
+          : {}),
       });
     }
     // A param that solves for itself reads zero everywhere in its range, and hides the loop it
