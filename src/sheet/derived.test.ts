@@ -12,6 +12,7 @@ import { FINDING_CAUSES } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  namesOf,
   sweepable,
   type CheckResult,
   type SheetBlockReport,
@@ -529,4 +530,55 @@ describe('the texts of a search that stopped short, and of a block in its own li
       'Block tail is not calculated, because its parent sheet gives it no value.',
     ]);
   });
+});
+
+describe('an item that gives no number while what it reads was withheld', () => {
+  /** The failed items that give no number while a name they read is in the withheld map, and the
+   *  failed items that give no number with no reason at all. */
+  const misread = (doc: SheetDoc, res: SheetResult): string[] => {
+    const exprs = new Map<string, string[]>([
+      ...doc.equations.map((e): [string, string[]] => [`value ${e.name}`, [e.expr]]),
+      ...doc.checks.map((c): [string, string[]] => [`requirement ${c.id}`, [c.lhs, c.rhs]]),
+    ]);
+    const out: string[] = [];
+    for (const i of res.items ?? []) {
+      if (i.path.length || i.status !== 'failed' || i.cause.kind !== 'cannot-evaluate') continue;
+      if (i.cause.data.why !== 'not-finite') continue;
+      const reads = (exprs.get(`${i.kind} ${i.name}`) ?? []).flatMap((x) => [...namesOf(x)]);
+      if (reads.some((n) => n in (res.withheld ?? {})))
+        out.push(`${i.kind} ${i.name} reads withheld`);
+    }
+    return out;
+  };
+
+  it('is withheld on what the withheld map traces the name to, for a part beyond its table', () => {
+    const cases: [string, Record<string, number>][] = [
+      ['applications/sc-settling-to-ota-spec.json', {}],
+      ['otas/inverter-based-ota.json', {}],
+    ];
+    for (const [file, base] of cases) {
+      const doc = sheet(file);
+      const over: Record<string, number> = { ...base };
+      const pick = file.includes('sc-settling') ? 'gm_id_in' : 'VDD';
+      const p = doc.params.find((q) => q.name === pick)!;
+      over[pick] = p.value * 0.2;
+      const d = withParams(doc, over);
+      const res = runSheet(d, table, undefined, REFS);
+      expect({ file, misread: misread(d, res) }).toEqual({ file, misread: [] });
+      expectSame(res);
+    }
+  });
+
+  it('never happens over the library runs', () => {
+    for (const { file, doc } of loadLibrary()) {
+      const cases: Record<string, number>[] = [{}];
+      for (const p of doc.params)
+        if (sweepable(p)) cases.push({ [p.name]: p.min }, { [p.name]: p.max });
+      for (const over of cases) {
+        const d = withParams(doc, over);
+        const res = runSheet(d, table, undefined, REFS);
+        expect({ file, over, misread: misread(d, res) }).toEqual({ file, over, misread: [] });
+      }
+    }
+  }, 600_000);
 });

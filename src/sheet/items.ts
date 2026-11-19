@@ -295,6 +295,21 @@ function readerOf(
     [...own, ...blocks].find(
       (i) => i.kind === ref.kind && i.name === ref.name && i.path.join('.') === ref.path.join('.'),
     );
+  /** The item the withheld map traces a name to: a search of this sheet, its device, or a
+   *  block's device where it failed, else that block's sheet item. */
+  const tracedBy = (n: string): Item | undefined => {
+    const c = res.withheld?.[n];
+    if (c === undefined) return undefined;
+    if (c === OWN_DEVICE) return find({ kind: 'device', path: [], name: OWN_DEVICE });
+    const p = params.get(c);
+    if (p) return find({ kind: engineSolved(p) || p.hold ? 'search' : 'value', path: [], name: c });
+    const path = c.split('.');
+    const at = (i: Item): boolean => i.path.join('.') === path.join('.');
+    return (
+      blocks.find((i) => i.kind === 'device' && at(i) && i.status !== 'ok') ??
+      blocks.find((i) => i.kind === 'sheet' && at(i))
+    );
+  };
   /** The item a name of this sheet's scope is. */
   const itemOfName = (n: string): Item | undefined => {
     const p = params.get(n);
@@ -302,12 +317,19 @@ function readerOf(
     if (equations.has(n)) return find({ kind: 'value', path: [], name: n });
     if (doc.givens !== undefined && DEVICE_NAMES.has(n))
       return find({ kind: 'device', path: [], name: OWN_DEVICE });
+    // A block's output: the item of the block it is, else, for a quantity of the block's device,
+    // that device; else what the withheld map traces it to; else the block's sheet item.
     const parts = n.split(PROVIDE_SEP);
-    if (parts.length === 2 && doc.blocks?.some((b) => b.name === parts[0])) {
-      const [b, key] = parts;
+    if (parts.length >= 2 && doc.blocks?.some((b) => b.name === parts[0])) {
+      const b = parts[0];
+      const key = parts.slice(1).join(PROVIDE_SEP);
+      const inBlock = (pred: (i: Item) => boolean): Item | undefined =>
+        blocks.find((i) => i.path.length === 1 && i.path[0] === b && pred(i));
       return (
-        blocks.find((i) => i.path.length === 1 && i.path[0] === b && i.name === key) ??
-        blocks.find((i) => i.kind === 'sheet' && i.path.length === 1 && i.path[0] === b)
+        inBlock((i) => i.kind !== 'sheet' && i.kind !== 'device' && i.name === key) ??
+        (DEVICE_NAMES.has(key) ? inBlock((i) => i.kind === 'device') : undefined) ??
+        tracedBy(n) ??
+        inBlock((i) => i.kind === 'sheet')
       );
     }
     return undefined;
@@ -328,7 +350,14 @@ function readerOf(
       for (const x of exprs)
         for (const n of namesIn(x)) {
           const i = itemOfName(n);
-          if (i && i.status !== 'ok' && !on.some((o) => o.name === i.name && o.kind === i.kind))
+          if (
+            i &&
+            i.status !== 'ok' &&
+            !on.some(
+              (o) =>
+                o.name === i.name && o.kind === i.kind && o.path.join('.') === i.path.join('.'),
+            )
+          )
             on.push(dependency(i));
         }
       return on.length
