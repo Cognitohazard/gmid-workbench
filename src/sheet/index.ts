@@ -34,6 +34,8 @@ import type {
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
 import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
+import { withFindings } from './items';
+import { verdictOf } from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
@@ -83,6 +85,8 @@ export {
   wiringRefusal,
 } from './nodes';
 export * from './resolve';
+export * from './states';
+export * from './describe';
 export * from './sensitivity';
 export * from './properties';
 export * from './examples';
@@ -154,10 +158,14 @@ export function runSheet(
   // A block sized on a table of the other polarity is a fact of the document and its binding,
   // said once for the run rather than by every evaluation inside it (see inheritedPolarityWarnings).
   const bound = inheritedPolarityWarnings(r.doc, table, resolveDevice);
+  // What validation found is on the items too, each on the entry it names.
+  const items = withFindings(res.items ?? [], pre, r.doc, 'validation');
   return {
     ...withValidation([...pre, ...bound], res),
     feasible: res.feasible && !pre.some((w) => w.severity === 'error'),
     assumptions,
+    items,
+    verdict: verdictOf(items),
   };
 }
 

@@ -7,7 +7,7 @@
 // checked against the finished result (nodes.ts) and never feeds back into it. Pure,
 // deterministic, never throws. Zero DOM.
 
-import { LookupRangeError, outsideTableMessage } from '../types';
+import { LookupRangeError } from '../types';
 import type { DeviceTable, OutsideTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, fallbackMessage, metaScalars, noiseSource, tableFallbacks } from '../derive';
@@ -29,7 +29,6 @@ import {
   MAX_BLOCK_DEPTH,
   balancedBy,
   outsideIn,
-  outsideMessage,
   OWN_DEVICE,
   PATH_SEP,
   pinnedIn,
@@ -50,18 +49,18 @@ import {
   REGION_CHECK_ID,
   lastSolveFailure,
   namesOf,
-  andList,
   DEVICE_NAMES,
   ranged,
   refusedIn,
   failedParams,
   solveFailedIn,
   unfoundIn,
+  declarationWhy,
+  PROVIDE_SEP,
+  unitOfSides,
   stands,
   unfinishedBecause,
   withParams,
-  type NoSolutionWhy,
-  type NotSettledWhy,
   type SolveFailure,
   type SolveRange,
 } from './types';
@@ -80,7 +79,21 @@ import {
 } from './validate';
 import { DEFAULT_SETTINGS, settingsFrom, type Settings } from './settings';
 import {
-  amps,
+  noSolutionCause,
+  verdictOf,
+  type Cause,
+  type Item,
+  type ItemRef,
+  type RelationField,
+  type SearchData,
+  type SearchEnd,
+  type UnevaluableAt,
+  withSet,
+} from './states';
+import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
+import { causeOfFailure, solveFailureOf } from './derived';
+import { itemsOf, resolveWithheld, searchItems, under, withFindings } from './items';
+import {
   axisDirection,
   blockWires,
   flattened,
@@ -1229,6 +1242,22 @@ function evalBlocks(
         feasible: false,
         provides: {},
         checks: [],
+        items: [
+          {
+            kind: 'sheet',
+            path: [],
+            name: '',
+            status: 'failed',
+            cause: {
+              kind: 'not-read',
+              data: {
+                why: block.ref !== undefined && !block.doc ? 'reference' : 'field',
+                where: block.name,
+                message,
+              },
+            },
+          },
+        ],
       });
     };
     if (!block.name.trim()) {
@@ -1301,6 +1330,38 @@ function evalBlocks(
         feasible: false,
         provides: {},
         checks: [],
+        // Not evaluated: what it would have read was withheld, or a value its parent sets for it
+        // gave no number.
+        items: [
+          cause
+            ? {
+                kind: 'sheet',
+                path: [],
+                name: '',
+                status: 'withheld',
+                // In the parent's terms: a block of the parent, or a search of the parent's
+                // that it did not find.
+                on: [
+                  parent.blocks?.some((b) => b.name === cause.split(PATH_SEP)[0])
+                    ? { kind: 'sheet', path: cause.split(PATH_SEP), name: '', frame: 'parent' }
+                    : { kind: 'search', path: [], name: cause, frame: 'parent' },
+                ],
+              }
+            : {
+                kind: 'sheet',
+                path: [],
+                name: '',
+                status: 'failed',
+                cause: {
+                  kind: 'cannot-evaluate',
+                  data: {
+                    why: 'not-defined',
+                    name: block.name,
+                    reason: `block "${block.name}": a value its parent sets for it did not resolve`,
+                  },
+                },
+              },
+        ],
       };
       for (const key of srcDoc.provides ?? []) withhold(key, cause ?? block.name);
       PENDING_WIRING.set(report, { doc: childDoc, res: NOT_EVALUATED, table: childTable, mode });
@@ -1359,6 +1420,7 @@ function evalBlocks(
       ...(res.solve ? { solve: res.solve } : {}),
       ...solvedOf(childDoc, res),
       ...(res.pinned ? { pinned: res.pinned } : {}),
+      ...(res.items ? { items: res.items } : {}),
     };
     PENDING_WIRING.set(report, { doc: childDoc, res, table: childTable, mode });
     reports.push(report);
@@ -1611,6 +1673,8 @@ function finishWiring(
       const below = report.blocks ? visit(report.blocks, [...path, report.name]) : undefined;
       let out: SheetBlockReport = below ? { ...report, blocks: below.blocks } : report;
       let bad = below?.failed ?? false;
+      /** The findings this block's own wiring check raised. */
+      let found: readonly QAWarning[] = [];
       const pending = PENDING_WIRING.get(report);
       // A child whose own solve failed holds its last probe's numbers, which the parent already
       // withholds from its outputs: its point is withheld the same way.
@@ -1630,6 +1694,7 @@ function finishWiring(
         const at = [...path, report.name];
         for (const w of walked.warnings) extra.push(prefixBlockPath(at, w));
         if (walked.warnings.some((w) => w.severity === 'error')) bad = true;
+        found = walked.warnings;
         out = {
           ...out,
           ...(walked.terminals ? { terminals: walked.terminals } : {}),
@@ -1637,6 +1702,23 @@ function finishWiring(
           ...(walked.wiringValues ? { wiringValues: walked.wiringValues } : {}),
         };
       }
+      // The block's items: its own, with what its wiring check found, and each block below it as
+      // that block now reads.
+      if (out.items && (below || found.length))
+        out = {
+          ...out,
+          items: resolveWithheld(
+            withFindings(
+              [
+                ...out.items.filter((i) => i.path.length === 0),
+                ...(out.blocks ?? []).flatMap((b) => under(b.name, b.items ?? [])),
+              ],
+              found,
+              pending?.doc,
+              'evaluation',
+            ),
+          ),
+        };
       if (bad) {
         out = { ...out, feasible: false };
         failed = true;
@@ -1977,15 +2059,15 @@ function withUnfound(
   unfound: ReadonlyMap<string, string>,
   at?: Readonly<Record<string, number>>,
 ): SheetResult {
-  const raise = (res: SheetResult): SheetResult => {
+  const raise = (res: SheetResult, notFound: ReadonlyMap<string, string>): SheetResult => {
     let out = res;
     for (const f of failed)
       out = failedWith(out, f.failure, solveCause(node.doc, f.probe, f.failure));
     const outcome =
       failed.find((f) => designFailure(f.failure))?.failure ?? failed[failed.length - 1].failure;
-    return { ...out, solve: outcome };
+    return { ...out, solve: outcome, items: searchItems(failed, notFound) };
   };
-  if (!unfound.size) return raise(failed[failed.length - 1].probe);
+  if (!unfound.size) return raise(failed[failed.length - 1].probe, unfound);
   const budget: SolveBudget = {
     left: node.settings.solveEvaluations,
     counted: 0,
@@ -2003,7 +2085,7 @@ function withUnfound(
     if (!more.size) break;
     for (const [n, c] of more) all.set(n, c);
   }
-  const res = raise(evaluated);
+  const res = raise(evaluated, all);
   // The findings that follow from the params not found come after the failures they follow from,
   // so the solve's own message stays the first error a reader meets, as on the probe.
   const follows = (w: QAWarning): boolean => w.cause !== undefined && causes.has(w.cause);
@@ -2088,8 +2170,30 @@ export function evaluateSheet(
 ): SheetResult {
   // A document in a format this app does not read is not evaluated: rebuilding its meaning from
   // keys this engine does not know would report on a design nobody wrote.
-  if (formatOf(authored) === 'unknown')
-    return { values: {}, checks: [], feasible: false, warnings: formatProblems(authored) };
+  if (formatOf(authored) === 'unknown') {
+    const warnings = formatProblems(authored);
+    // The version the document declares, beside the finding the format check raised.
+    const items = withFindings(
+      [{ kind: 'sheet', path: [], name: '', status: 'ok' }],
+      warnings,
+      undefined,
+      'evaluation',
+    ).map((i) =>
+      i.status === 'failed' && i.cause.kind === 'not-read' && i.cause.data.why === 'format'
+        ? {
+            ...i,
+            cause: {
+              ...i.cause,
+              data: {
+                ...i.cause.data,
+                declared: (authored as { formatVersion?: unknown }).formatVersion,
+              },
+            },
+          }
+        : i,
+    );
+    return { values: {}, checks: [], feasible: false, warnings, items, verdict: verdictOf(items) };
+  }
   // A device whose wires put its gate on its drain is diode-connected, and is sized on the
   // diode diagonal like one that says so (see structuralDiodes) — stated before anything sizes.
   const doc = structuralDiodes(authored);
@@ -2167,19 +2271,22 @@ function evaluateNode(
   const settings = opts.settings ?? DEFAULT_SETTINGS;
   const found =
     opts.found ?? (depth === 0 ? rangesOfTree(doc, { table, resolveDevice }) : undefined);
-  const solvedRun = withHeld(
+  const solvedRun = withItems(
     doc,
-    solveNode({
+    withHeld(
       doc,
-      table,
-      resolveDevice,
-      depth,
-      budget: opts.budget ?? { left: settings.solveEvaluations, counted: 0, children: new Map() },
-      settings,
-      ...(found ? { found } : {}),
-      ...(opts.pinned ? { pinned: opts.pinned } : {}),
-      ...(opts.perturb ? { perturb: opts.perturb } : {}),
-    }),
+      solveNode({
+        doc,
+        table,
+        resolveDevice,
+        depth,
+        budget: opts.budget ?? { left: settings.solveEvaluations, counted: 0, children: new Map() },
+        settings,
+        ...(found ? { found } : {}),
+        ...(opts.pinned ? { pinned: opts.pinned } : {}),
+        ...(opts.perturb ? { perturb: opts.perturb } : {}),
+      }),
+    ),
   );
   // A solved param held at a given value is named on the result: its relation was not read.
   const held = doc.params
@@ -2201,16 +2308,20 @@ function evaluateNode(
     // selectorsBeyondTable).
     const unwalked = withoutWalk(doc, finishWiring(res, false, settings, keepPoint));
     const selectors = selectorsBeyondTable(doc, res);
-    if (!selectors.length) return { ...unwalked, point };
-    return {
-      ...unwalked,
-      warnings: [...unwalked.warnings, ...selectors],
-      feasible: false,
-      ...(unwalked.nodes
-        ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
-        : {}),
-      point,
-    };
+    if (!selectors.length) return withItems(doc, { ...unwalked, point }, opts.assumed);
+    return withItems(
+      doc,
+      {
+        ...unwalked,
+        warnings: [...unwalked.warnings, ...selectors],
+        feasible: false,
+        ...(unwalked.nodes
+          ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
+          : {}),
+        point,
+      },
+      opts.assumed,
+    );
   }
   const out = withNodes(
     doc,
@@ -2222,14 +2333,51 @@ function evaluateNode(
   // The point was classified before the wiring was read; a selector the table contradicts then
   // leaves the run infeasible, so a centre that complied does not.
   const raised = out.warnings.slice(res.warnings.length).find((w) => w.severity === 'error');
-  return {
-    ...out,
-    point:
-      raised && point.state === 'complies'
-        ? { ...point, state: 'does-not-comply', error: raised.message }
-        : point,
-  };
+  return withItems(
+    doc,
+    {
+      ...out,
+      point:
+        raised && point.state === 'complies'
+          ? { ...point, state: 'does-not-comply', error: raised.message }
+          : point,
+    },
+    opts.assumed,
+  );
 }
+
+/** The evaluation with its item list and the verdict the list gives (SheetResult.items). */
+const withItems = (
+  doc: SheetDoc,
+  res: SheetResult,
+  assumed: readonly string[] = [],
+): SheetResult => {
+  const items = withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation');
+  // A design that rests on a level the sheet marks as assumed is not determined by its sheet: each
+  // assumed value says so, by its path.
+  for (const a of assumed) {
+    const parts = a.split(PATH_SEP);
+    const ref = { kind: 'value' as const, path: parts.slice(0, -1), name: parts[parts.length - 1] };
+    const at = items.findIndex(
+      (i) =>
+        i.kind === 'value' &&
+        i.name === ref.name &&
+        i.path.join(PATH_SEP) === ref.path.join(PATH_SEP),
+    );
+    const failed: Item = {
+      ...ref,
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: { why: 'assumed-level', names: [a], message: assumedLevelRefusal(assumed) },
+      },
+    };
+    if (at < 0) items.push(failed);
+    else if (items[at].status === 'ok') items[at] = failed;
+  }
+  const resolved = resolveWithheld(items);
+  return { ...res, items: resolved, verdict: verdictOf(resolved) };
+};
 
 /**
  * How far from zero a current balance may read where the design is sized, as a fraction of its
@@ -2259,25 +2407,112 @@ function withHeld(doc: SheetDoc, res: SheetResult): SheetResult {
   for (const p of params) {
     if (withheld && unfound?.has(causeIn(withheld, p.hold, res.values) ?? '')) continue;
     const v = evalFinite(p.hold, res.values, scope, NO_WARN, `hold ${p.name}`);
-    const falseHere = (message: string): SheetResult =>
-      solveFailed(out, { kind: 'declaration-false', param: p.name, message });
+    const falseHere = (balance?: { reads: number; tolerance: number }): SheetResult => {
+      const cause: Cause = {
+        kind: 'statement-false',
+        data: { path: [], param: p.name, statement: p.hold, ...(balance ? { balance } : {}) },
+      };
+      const failed = solveFailed(out, solveFailureOf(cause));
+      return {
+        ...failed,
+        items: [
+          ...(failed.items ?? []),
+          { kind: 'search', path: [], name: p.name, status: 'failed', cause },
+        ],
+      };
+    };
     if (v === undefined) {
-      out = falseHere(`param "${p.name}": hold "${p.hold}" did not evaluate to a finite number`);
+      // No number where the design is sized: not a false statement, but one that cannot be read,
+      // and what the engine found giving none.
+      const cause: Cause = {
+        kind: 'cannot-evaluate',
+        data: {
+          why: 'not-finite',
+          name: p.name,
+          reason: '',
+          hold: { path: [], param: p.name, statement: p.hold },
+          ...holdNoNumberBy(doc, out, p.hold),
+        },
+      };
+      const failed = solveFailed(out, solveFailureOf(cause));
+      out = {
+        ...failed,
+        items: [
+          ...(failed.items ?? []),
+          { kind: 'search', path: [], name: p.name, status: 'failed', cause },
+        ],
+      };
       continue;
     }
     const tol = BALANCE_TOL_REL * Math.abs(res.values[p.name] ?? p.value);
     if (balancedBy(doc, p).length && !(Math.abs(v) <= tol)) {
-      out = falseHere(
-        `param "${p.name}": hold "${p.hold}" reads a device's current, so it is a current ` +
-          `balance, and a current balance must be zero where the design is sized — it reads ` +
-          `${amps(v)} here (tolerance ${amps(tol)}, a millionth of ` +
-          `${p.name}). Write it as the param less the current it has to equal`,
-      );
+      out = falseHere({ reads: v, tolerance: tol });
       continue;
     }
     held[p.name] = v;
   }
   return { ...out, held };
+}
+
+/** A search whose relation gives no number across its stretch, at one point only, or across its
+ *  crossing: it cannot be calculated, with where, and what the engine found giving no number. */
+function unevaluableCause(
+  member: SearchData,
+  at: UnevaluableAt,
+  reason: string,
+  outside: OutsideTable | undefined,
+): Cause {
+  const by = 'by' in at ? at.by : undefined;
+  return {
+    kind: 'cannot-evaluate',
+    data: {
+      why: 'not-finite',
+      name: member.unknown,
+      reason,
+      unevaluable: { member, at },
+      ...(by ? { by } : {}),
+      ...(outside ? { outside } : {}),
+    },
+  };
+}
+
+/** Whether an expression reads only values the designer types and constants: it is the same at
+ *  every value of a solved param. */
+const fixedIn = (doc: SheetDoc, expr: string): boolean =>
+  namesOf(expr).every(
+    (n) =>
+      Object.prototype.hasOwnProperty.call(CONSTANTS, n) ||
+      doc.params.some((p) => p.name === n && !engineSolved(p) && !p.hold),
+  );
+
+/** What a hold that gives no number reads that has none: the first name it reads with no value,
+ *  as the item it is, with the record of a device read beyond its table where that is why. */
+function holdNoNumberBy(
+  doc: SheetDoc,
+  res: SheetResult,
+  expr: string,
+): { by?: ItemRef; outside?: OutsideTable } {
+  for (const n of namesOf(expr)) {
+    if (n in res.values || Object.prototype.hasOwnProperty.call(CONSTANTS, n)) continue;
+    const [b, key] = n.split(PROVIDE_SEP);
+    const report = key !== undefined ? res.blocks?.find((r) => r.name === b) : undefined;
+    if (report) {
+      const o = report.sizing?.outside?.[0];
+      return o
+        ? { by: { kind: 'device', path: [b], name: OWN_DEVICE }, outside: o }
+        : { by: { kind: 'sheet', path: [b], name: '' } };
+    }
+    if (doc.givens && DEVICE_NAMES.has(n)) {
+      const o = res.sizing?.outside?.[0];
+      return { by: { kind: 'device', path: [], name: OWN_DEVICE }, ...(o ? { outside: o } : {}) };
+    }
+    const p = doc.params.find((q) => q.name === n);
+    if (p)
+      return { by: { kind: engineSolved(p) || p.hold ? 'search' : 'value', path: [], name: n } };
+    if (doc.equations.some((e) => e.name === n))
+      return { by: { kind: 'value', path: [], name: n } };
+  }
+  return {};
 }
 
 /** One solved param as a search reads it: its relation (`lhs - rhs` reads zero at the answer), the
@@ -2676,48 +2911,6 @@ function searchStaged(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): 
   return over(wlo, whi);
 }
 
-/** Where an unknown's searched stretch came from, as a failure's message says it — nothing for a
- *  param that is no wire's level, whose range can only be its author's. */
-function rangeSource(u: Unknown): string | undefined {
-  const r = u.range;
-  if (r.from === 'author') return r.wires ? `the author's range — ${r.why}` : undefined;
-  if (r.from === 'table')
-    return `the lengths its table holds, from the process's shortest to the longest the table reaches`;
-  const w = r.wiring as NonNullable<SolveRange['wiring']>;
-  const between = `between ${wireName(w.below)} and ${wireName(w.above)}`;
-  const whole = u.lo === w.range[0] && u.hi === w.range[1];
-  if (!whole)
-    return `the author's range, before the wiring's ${rangeOf(u, w.range[0], w.range[1])} ${between}`;
-  const a = r.author;
-  const first =
-    a && (a[0] !== w.range[0] || a[1] !== w.range[1])
-      ? `, after the author's range ${rangeOf(u, a[0], a[1])}`
-      : '';
-  return `the range the wiring puts its wire in, ${between}${first}`;
-}
-
-/** What a search that found no crossing in its stretch tells the author: a range of the author's
- *  own may be in the wrong place; the wiring's range is where the circuit can put the wire, so no
- *  crossing there — read at both ends — is the design not reaching its target. */
-function noCrossingAdvice(u: Unknown, endsRead: boolean): string {
-  if (u.range.from === 'table')
-    return (
-      `No length the table holds reaches the target: none shorter can be built, and past the ` +
-      `longest the table does not reach — re-export the table with longer lengths, or state ` +
-      `min/max`
-    );
-  if (u.range.from !== 'wiring')
-    return (
-      `Move or widen min/max to bracket one, or the relation does not reach its target on ` +
-      `this table`
-    );
-  return endsRead
-    ? `The circuit can put the wire nowhere else, so the design does not reach its target here`
-    : `The circuit can put the wire nowhere else, but an end of the search read a device beyond ` +
-        `its table, had a device refused, or was stepped in past a stretch that does not evaluate ` +
-        `— so this is not shown to be the design's failure`;
-}
-
 /** A solved node's result with the range each of its solved params may be searched in
  *  (SheetResult.ranges), and a `sheet-range` note for each that is a wire's level, saying where its
  *  range came from — and, for one that landed outside its author's range, where it landed. None for
@@ -2787,11 +2980,6 @@ const unitOf = (u: Unknown): string => unitText(u.p.unit);
 const valueOf = (u: Unknown, x: number): string => `${shown(x)}${unitOf(u)}`;
 const rangeOf = (u: Unknown, lo: number, hi: number): string => rangeText(lo, hi, u.p.unit);
 
-/** Unknowns named for a sentence, each with the range it is searched in: `"a" in [0, 1] V`,
- *  `"a" in … and "b" in …`, `"a" in …, "b" in … and "c" in …`. */
-const nameList = (us: readonly Unknown[]): string =>
-  andList(us.map((u) => `"${u.p.name}" in ${rangeOf(u, ...u.range.range)}`));
-
 /** What the search reads at a node: the node, and the current value of every solved param of it,
  *  which each probe evaluates with. */
 /** A node as a search sees it: where each solved param stands (`at`), and the params a failed
@@ -2814,6 +3002,74 @@ function relationAt(
   return l === undefined || r === undefined ? undefined : l - r;
 }
 
+/** What is wrong with the declarations of `names` that cannot be solved as written: a param that
+ *  carries two relations is a decision made twice; anything else (a half-written constraint, a
+ *  range that is missing) is a decision missing. */
+
+/** Each side of an unknown's relation at an evaluated probe, where it gives a finite number. */
+function relationSides(u: Unknown, res: SheetResult): { lhs?: number; rhs?: number } {
+  const scope = scalarScope(res.values);
+  const where = `relation ${u.p.name}`;
+  return {
+    lhs: evalFinite(u.lhs, res.values, scope, NO_WARN, where),
+    rhs: evalFinite(u.rhs, res.values, scope, NO_WARN, where),
+  };
+}
+
+/** A device as an item names it, from the path a finding names it by: `givens` for the sheet's
+ *  own, a block's path for a block's. */
+const deviceRef = (device: string): ItemRef =>
+  device === OWN_DEVICE || device === ''
+    ? { kind: 'device', path: [], name: OWN_DEVICE }
+    : { kind: 'device', path: device.split(PATH_SEP), name: OWN_DEVICE };
+
+/** Which field of its param an unknown's relation is. */
+const fieldOf = (u: Unknown): RelationField =>
+  u.held ? 'hold' : u.p.solveFor !== undefined ? 'solveFor' : 'designConstraint';
+
+/** The unit both sides of a relation are in, where its right side is a param with one. */
+const sidesUnit = (doc: SheetDoc, lhs: string, rhs: string): string | undefined =>
+  unitOfSides(doc, lhs, rhs);
+
+/** Which range a search's stretch is (SearchData.stage). */
+function stageOf(u: Unknown): SearchData['stage'] {
+  if (u.range.from === 'table') return 'table';
+  const w = u.range.wiring?.range;
+  return u.range.from === 'wiring' && w && u.lo === w[0] && u.hi === w[1] ? 'physical' : 'sheet';
+}
+
+/** One unknown as a failed search reports it (SearchData): its relation, its range, the stretch
+ *  searched, and where each other member of its set stood (`also`, at `ctx.at`). */
+function searchDataOf(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): SearchData {
+  const unit = sidesUnit(ctx.doc, u.lhs, u.rhs);
+  return {
+    path: [],
+    unknown: u.p.name,
+    held: u.held,
+    ...(u.p.unit !== undefined ? { unit: u.p.unit } : {}),
+    relation: {
+      lhs: u.lhs,
+      rhs: u.rhs,
+      field: fieldOf(u),
+      reads: { lhs: [...namesOf(u.lhs)], rhs: [...namesOf(u.rhs)] },
+      ...(unit !== undefined ? { unit } : {}),
+      ...(fixedIn(ctx.doc, u.rhs) ? { rhsFixed: true as const } : {}),
+    },
+    range: u.range,
+    searched: [u.lo, u.hi],
+    stage: stageOf(u),
+    ...(also.length
+      ? {
+          given: also.map((o) => ({
+            name: o.p.name,
+            value: ctx.at[o.p.name],
+            ...(o.p.unit !== undefined ? { unit: o.p.unit } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
 /** Why an unknown's relation did not evaluate at a probe, in the words the probe's own evaluation
  *  gives: a device its table cannot answer for first (no range or re-bias changes that), then the
  *  first error the evaluation raised — a device that did not size there, typically. */
@@ -2833,6 +3089,9 @@ interface Probe {
   x: number;
   res: SheetResult;
   g?: number;
+  /** Each side of the relation, where both give a number (`g` is their difference). */
+  lhs?: number;
+  rhs?: number;
   why?: string;
 }
 
@@ -2882,11 +3141,11 @@ const outOfBudget = (f: SolveFailure): boolean => f.kind === 'not-settled' && f.
  */
 function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found {
   const s = searcher(ctx, u, also);
-  const { name, rel, given, tol } = s;
+  const { tol } = s;
 
   const found = ends(s);
   if ('ok' in found) return found;
-  const { lo, hi, moved } = found;
+  const { lo, hi, stretch } = found;
   const gLo = lo.g as number;
   const gHi = hi.g as number;
   // Stepping in from one end can come all the way back to the other: as far as halving can tell,
@@ -2894,23 +3153,16 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
   if (lo.x === hi.x)
     return gLo === 0
       ? { ok: true, res: lo.res, x: lo.x, slope: 0 }
-      : s.unsettled(
-          'unevaluable',
-          `${u.what} in ${rangeOf(u, u.lo, u.hi)} did not settle: nothing of the range but ` +
-            `${name} = ${valueOf(u, lo.x)} could be evaluated, and ${rel} reads ` +
-            `${gLo.toExponential(3)} there — ${moved.join('; ')}${given}`,
+      : s.fail(
+          unevaluableCause(
+            s.data(),
+            { where: 'one-point', end: stretch[0], stepped: stepsOf(stretch) },
+            '',
+            undefined,
+          ),
           lo,
         );
-  const range = moved.length
-    ? `the searched range ${rangeOf(u, lo.x, hi.x)} (${moved.join('; ')})`
-    : rangeOf(u, lo.x, hi.x);
-  // The same, saying where the range came from, for the one failure that can be a finding about
-  // the design (see designFailure).
-  const source = rangeSource(u);
-  const sourced = source
-    ? `${moved.length ? 'the searched range ' : ''}${rangeOf(u, lo.x, hi.x)} (${[source, ...moved].join('; ')})`
-    : range;
-  const unsingled = degenerate(s, lo, hi, range);
+  const unsingled = degenerate(s, lo, hi, stretch);
   if (unsingled) return unsingled;
   // An end that reads exactly zero, or within its tolerance of zero by the slope there, is the
   // root — the second case is a root that sits on the end and lands a rounding error to the wrong
@@ -2936,18 +3188,11 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
     // own end (none stepped past a stretch that was not read), and neither with a device read
     // beyond its table or refused.
     const endsRead =
-      moved.length === 0 &&
+      stepsOf(stretch).length === 0 &&
       [lo, hi].every((e) => !outsideIn(e.res).length && !refusedIn(e.res).length);
-    return s.none(
-      lo,
+    return s.fail(
+      noSolutionCause({ ...s.data(), ends: stretch, ended: { kind: 'sign' } }, endsRead),
       hi,
-      `${u.what} found no solution in ${sourced}: ${rel} does not change sign ` +
-        `across it (${gLo.toExponential(3)} at ${shown(lo.x)}, ${gHi.toExponential(3)} at ` +
-        `${shown(hi.x)}) — none, or an even number, of roots there. ` +
-        `${noCrossingAdvice(u, endsRead)}${given}`,
-      hi,
-      'no-crossing',
-      endsRead,
     );
   }
 
@@ -2988,7 +3233,7 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
       return { ok: true, res: b.res, x: b.x, slope: slope ?? Math.abs((fc - fb) / (c.x - b.x)) };
     }
     if (Math.abs(xm) <= tol1) {
-      const closed = acceptClosed(s, lo, hi, range, b, c, narrowed < NARROW_STEPS);
+      const closed = acceptClosed(s, lo, hi, stretch, b, c, narrowed < NARROW_STEPS);
       if ('ok' in closed) return closed;
       // Narrowed: the bracket is halved once more, and searched again from there.
       narrowed++;
@@ -2997,11 +3242,10 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
       continue;
     }
     if (s.probes() >= SEARCH_MAX_PROBES)
-      return s.unsettled(
-        'probes',
-        `${u.what} did not settle: its search in ${range} did not close in ${SEARCH_MAX_PROBES} ` +
-          `probes${given}`,
-      );
+      return s.fail({
+        kind: 'limit',
+        data: { members: [s.data()], limit: 'probes', count: SEARCH_MAX_PROBES, ends: stretch },
+      });
     if (Math.abs(e) >= tol1 && Math.abs(fa) > Math.abs(fb)) {
       const r0 = fb / fa;
       let p: number;
@@ -3032,7 +3276,7 @@ function search(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Found 
     const next = s.probe(b.x + (Math.abs(d) > tol1 ? d : Math.sign(xm) * tol1));
     if (!next) return s.exhausted();
     if (next.g === undefined) {
-      const around = stepAround(s, range, next, b, c, stuck);
+      const around = stepAround(s, stretch, next, b, c, stuck);
       if ('ok' in around) return around;
       // Start again on the half, as on the whole range.
       stuck = around.stuck;
@@ -3054,9 +3298,9 @@ const NARROW_STEPS = 4;
  *  and the ways a probe is taken and a failure is said. */
 interface Searcher {
   u: Unknown;
+  /** The document the search is of. */
+  doc: SheetDoc;
   name: string;
-  rel: string;
-  given: string;
   tol: number;
   /** The node evaluated with the unknown at `x`; undefined when the budget ran out. */
   probe(x: number): Probe | undefined;
@@ -3068,20 +3312,23 @@ interface Searcher {
   /** The relation's slope at `p`, read from one more probe a tolerance away toward `toward`.
    *  Undefined when that point does not evaluate; null when the budget ran out. */
   slopeAt(p: Probe, toward: number): number | undefined | null;
-  /** This unknown did not settle, for `why`, shown by `at` or else the last evaluation. */
-  unsettled(why: NotSettledWhy, message: string, at?: Probe): Found;
-  /** This unknown has no solution in the stretch from `from` to `to`, shown by `at`, for the reason
-   *  `because` names; `endsRead` says whether both ends read the design (see SolveOutcome). */
-  none(
-    from: Probe,
-    to: Probe,
-    message: string,
-    at: Probe,
-    because: NoSolutionWhy,
-    endsRead?: boolean,
-  ): Found;
+  /** This search failed with `cause`, shown by `at` or else the last evaluation. */
+  fail(cause: Cause, at?: Probe): Found;
+  /** This unknown as a failed search reports it (SearchData). */
+  data(): SearchData;
+  /** A probe as an end of a searched stretch, stepped in for `step` where it was. */
+  endOf(p: Probe, step?: Step): SearchEnd;
   /** The shared budget ran out. */
   exhausted(): Found;
+}
+
+/** Why an end of a search was stepped in from the end of its range: the evaluation's own words,
+ *  and the read beyond a table that stopped it, where one did. */
+interface Step {
+  reason: string;
+  outside?: OutsideTable;
+  /** The first item that failed at the point, where no read beyond a table explains it. */
+  failed?: { ref: ItemRef; cause: Cause };
 }
 
 function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Searcher {
@@ -3091,33 +3338,30 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
   let probes = 0;
   let last: SheetResult | undefined;
   /** A failed search, carrying `at` — the evaluation that shows why — or else the last one. */
-  const failed = (failure: SolveFailure, at?: Probe): Found => {
+  const fail = (cause: Cause, at?: Probe): Found => {
     // Only the budget can stop a search before its first probe; the node is evaluated once even
     // then, so the failure still carries a result to read.
     last ??= evaluateOnce(ctx, ctx.at, ctx.unfound);
-    return { ok: false, res: at?.res ?? last, failure };
+    return { ok: false, res: at?.res ?? last, failure: solveFailureOf(cause) };
   };
+  const data = (): SearchData => searchDataOf(ctx, u, also);
   const probe = (x: number): Probe | undefined => {
     if (ctx.budget.left <= 0) return undefined;
     probes++;
     const res = evaluateOnce(ctx, { ...ctx.at, [name]: x }, ctx.unfound);
     last = res;
-    const g = relationAt(u, res);
+    const { lhs, rhs } = relationSides(u, res);
+    const g = lhs === undefined || rhs === undefined ? undefined : lhs - rhs;
     // A relation that did not evaluate because the budget ran out inside this probe — a child's
     // solve stopping short — says nothing about this point: the search is out of budget, and says
     // so in the budget's words rather than as anything about the relation.
     if (g === undefined && ctx.budget.left <= 0) return undefined;
-    return g === undefined ? { x, res, why: whyNot(u, res) } : { x, res, g };
+    return g === undefined ? { x, res, why: whyNot(u, res) } : { x, res, g, lhs, rhs };
   };
-  const unsettled = (why: NotSettledWhy, message: string, at?: Probe): Found =>
-    failed({ kind: 'not-settled', unknowns: [name], why, message }, at);
   return {
     u,
+    doc: ctx.doc,
     name,
-    rel: `${u.lhs} - (${u.rhs})`,
-    given: also.length
-      ? ` (searched with ${also.map((o) => `${o.p.name} = ${valueOf(o, ctx.at[o.p.name])}`).join(', ')})`
-      : '',
     tol,
     probe,
     probes: () => probes,
@@ -3140,28 +3384,28 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
       if (!q) return null;
       return q.g === undefined ? undefined : Math.abs((q.g - (p.g as number)) / step);
     },
-    unsettled,
-    none: (from, to, message, at, because, endsRead = false) =>
-      failed(
-        {
-          kind: 'no-solution',
-          unknown: name,
-          range: [from.x, to.x],
-          message,
-          from: u.range.from,
-          because,
-          endsRead,
-        },
-        at,
-      ),
+    fail,
+    data,
+    endOf: (p, step) => ({
+      x: p.x,
+      lhs: p.lhs as number,
+      rhs: p.rhs as number,
+      ...(step
+        ? {
+            stepped: step.reason,
+            ...(step.outside
+              ? { steppedOutside: step.outside, steppedBy: deviceRef(step.outside.device) }
+              : step.failed
+                ? { steppedBy: step.failed.ref, steppedCause: step.failed.cause }
+                : {}),
+          }
+        : {}),
+    }),
     exhausted: () =>
-      unsettled(
-        'budget',
-        `${u.what} in ${rangeOf(u, u.lo, u.hi)} stopped before it settled because the design's ` +
-          `shared evaluation budget (${solveEvaluations} evaluations) ran out — spent by the ` +
-          `solves each of its probes re-runs, or by an expensive sibling elsewhere in the tree. ` +
-          `It was not shown to be unsolvable`,
-      ),
+      fail({
+        kind: 'limit',
+        data: { members: [data()], limit: 'evaluations', count: solveEvaluations },
+      }),
   };
 }
 
@@ -3171,13 +3415,36 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
  *  out. A stretch stepped past was not read — a device there was read beyond its table, refused,
  *  or its block's own solve found nothing — so a search whose end moved has not read the range
  *  the circuit allows, and finding no crossing in what is left proves nothing about it. */
-function ends(s: Searcher): { lo: Probe; hi: Probe; moved: string[] } | Found {
-  const { u, name, rel, given } = s;
+function ends(
+  s: Searcher,
+): { lo: Probe; hi: Probe; stretch: readonly [SearchEnd, SearchEnd] } | Found {
+  const { u } = s;
   let lo = s.probe(u.lo);
   if (!lo) return s.exhausted();
   let hi = s.probe(u.hi);
   if (!hi) return s.exhausted();
-  const moved: string[] = [];
+  let loStep: Step | undefined;
+  let hiStep: Step | undefined;
+  /** Why an end was stepped in: the words of the point that failed, and the read beyond a table
+   *  there, where there was one. */
+  const stepOf = (why: string, bad: Probe): Step => {
+    const outside = outsideIn(bad.res)[0];
+    if (outside) return { reason: why, outside };
+    const first = withFindings(itemsOf(s.doc, bad.res), bad.res.warnings, s.doc, 'evaluation').find(
+      (i) => i.status === 'failed',
+    );
+    return {
+      reason: why,
+      ...(first?.status === 'failed'
+        ? {
+            failed: {
+              ref: { kind: first.kind, path: first.path, name: first.name },
+              cause: first.cause,
+            },
+          }
+        : {}),
+    };
+  };
   if (lo.g === undefined || hi.g === undefined) {
     let mid: Probe | undefined;
     if (lo.g === undefined && hi.g === undefined) {
@@ -3185,36 +3452,49 @@ function ends(s: Searcher): { lo: Probe; hi: Probe; moved: string[] } | Found {
       if (!mid) return s.exhausted();
       // Three failed points show nothing about the rest of the range: a stretch that evaluates
       // between them, with a root in it, is not ruled out. So this is not "no solution".
-      if (mid.g === undefined)
-        return s.unsettled(
-          'unevaluable',
-          `${u.what} in ${rangeOf(u, u.lo, u.hi)} did not settle: nothing of the range could be ` +
-            `evaluated: ${rel} does not evaluate at either end of it or at its middle — ` +
-            `${lo.why}${given}`,
+      if (mid.g === undefined) {
+        const outside = outsideIn(lo.res)[0];
+        return s.fail(
+          unevaluableCause(
+            s.data(),
+            {
+              where: 'nowhere',
+              reason: lo.why as string,
+              ...(outside ? { by: deviceRef(outside.device) } : {}),
+            },
+            lo.why as string,
+            outside,
+          ),
           lo,
         );
+      }
     }
     if (lo.g === undefined) {
       const step = s.inward(lo, mid ?? hi);
       if (!step) return s.exhausted();
       lo = step.at;
-      moved.push(`the relation does not evaluate below ${name} = ${valueOf(u, lo.x)}: ${step.why}`);
+      loStep = stepOf(step.why, step.bad);
     }
     if (hi.g === undefined) {
       const step = s.inward(hi, mid ?? lo);
       if (!step) return s.exhausted();
       hi = step.at;
-      moved.push(`the relation does not evaluate above ${name} = ${valueOf(u, hi.x)}: ${step.why}`);
+      hiStep = stepOf(step.why, step.bad);
     }
   }
-  return { lo, hi, moved };
+  return { lo, hi, stretch: [s.endOf(lo, loStep), s.endOf(hi, hiStep)] };
 }
 
 /** A relation that singles out no value of its unknown across `lo`..`hi` (quoted as `range`): a
  *  held expression whose rest cancels its own param's term, or one that reads the same at both
  *  ends and the middle. Undefined when the relation does tell values apart. */
-function degenerate(s: Searcher, lo: Probe, hi: Probe, range: string): Found | undefined {
-  const { u, name, rel, given } = s;
+function degenerate(
+  s: Searcher,
+  lo: Probe,
+  hi: Probe,
+  stretch: readonly [SearchEnd, SearchEnd],
+): Found | undefined {
+  const { u, name } = s;
   const gLo = lo.g as number;
   const gHi = hi.g as number;
   if (u.held) {
@@ -3225,15 +3505,16 @@ function degenerate(s: Searcher, lo: Probe, hi: Probe, range: string): Found | u
     // reads zero-to-rounding everywhere.
     const own = Math.abs(additiveCoefficient(u.lhs, name) ?? 0) * (hi.x - lo.x);
     if (!(Math.abs(gHi - gLo) >= HOLD_SLOPE_MIN * own))
-      return s.none(
-        lo,
+      return s.fail(
+        noSolutionCause(
+          {
+            ...s.data(),
+            ends: stretch,
+            ended: { kind: 'held-flat', moves: Math.abs(gHi - gLo), own },
+          },
+          false,
+        ),
         hi,
-        `${u.what} found no single solution in ${range}: ${u.lhs} moves by ` +
-          `${Math.abs(gHi - gLo).toExponential(3)} across it where ${name} alone accounts for ` +
-          `${own.toExponential(3)} — holding it does not determine ${name} here (numerically ` +
-          `unresolved)${given}`,
-        hi,
-        'undetermined',
       );
   } else if (gLo === gHi) {
     // The same number, to the last bit, at both ends — and at the middle too — is what a relation
@@ -3245,14 +3526,9 @@ function degenerate(s: Searcher, lo: Probe, hi: Probe, range: string): Found | u
     const mid = s.probe((lo.x + hi.x) / 2);
     if (!mid) return s.exhausted();
     if (mid.g === gLo)
-      return s.none(
-        lo,
+      return s.fail(
+        noSolutionCause({ ...s.data(), ends: stretch, ended: { kind: 'flat' } }, false),
         hi,
-        `${u.what} is not determined by its relation: ${rel} reads ${gLo.toExponential(3)} at ` +
-          `both ends of ${range} and at its middle — it does not appear to depend on ${name}, so ` +
-          `no value of it is singled out${given}`,
-        hi,
-        'undetermined',
       );
   }
   return undefined;
@@ -3275,12 +3551,12 @@ function acceptClosed(
   s: Searcher,
   lo: Probe,
   hi: Probe,
-  range: string,
+  stretch: readonly [SearchEnd, SearchEnd],
   b: Probe,
   c: Probe,
   narrow: boolean,
 ): Found | { a: Probe; b: Probe; c: Probe } {
-  const { u, name, rel, given, tol } = s;
+  const { tol } = s;
   const fb = b.g as number;
   const fc = c.g as number;
   const across = Math.abs((fc - fb) / (c.x - b.x));
@@ -3315,16 +3591,16 @@ function acceptClosed(
     if (m.g !== undefined) return { a: b, b: m, c: m.g === 0 || m.g > 0 === fc > 0 ? b : c };
   }
   if (!(Math.abs(fb) <= slope * tol))
-    return s.none(
-      lo,
-      hi,
-      `${u.what} found no solution in ${range}: the search closed on ${name} = ` +
-        `${valueOf(u, b.x)}, but ${rel} still reads ${fb.toExponential(3)} there, where just ` +
-        `beside the crossing it moves by ${(slope * tol).toExponential(3)} over the ` +
-        `tolerance — the relation steps across the target without touching it (a table edge ` +
-        `or a fold)${given}`,
+    return s.fail(
+      noSolutionCause(
+        {
+          ...s.data(),
+          ends: stretch,
+          ended: { kind: 'step', at: s.endOf(b), band: slope * tol },
+        },
+        false,
+      ),
       b,
-      'step',
     );
   return { ok: true, res: b.res, x: b.x, slope };
 }
@@ -3345,13 +3621,12 @@ function acceptClosed(
  */
 function stepAround(
   s: Searcher,
-  range: string,
+  stretch: readonly [SearchEnd, SearchEnd],
   next: Probe,
   b: Probe,
   c: Probe,
   stuck: [number, number] | undefined,
 ): Found | { half: [Probe, Probe]; stuck: [number, number] | undefined } {
-  const { u, name, rel, given } = s;
   const nearB = s.inward(next, b);
   if (!nearB) return s.exhausted();
   const nearC = s.inward(next, c);
@@ -3364,12 +3639,20 @@ function stepAround(
   if (!(stuck && next.x > stuck[0] && next.x < stuck[1]) && (pb !== b || pc !== c))
     // pb keeps b's sign and pc keeps c's, so they still bracket the crossing.
     return { half: [pb, pc], stuck: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)] };
-  return s.unsettled(
-    'unevaluable',
-    `${u.what} in ${rangeOf(u, u.lo, u.hi)} did not settle: ${rel} changes sign across ` +
-      `${range}, but the crossing could not be followed: it lies between ${name} = ` +
-      `${valueOf(u, Math.min(pb.x, pc.x))} and ${valueOf(u, Math.max(pb.x, pc.x))}, where ` +
-      `the points tried do not evaluate — ${nearB.why}${given}`,
+  const outside = outsideIn(nearB.bad.res)[0];
+  return s.fail(
+    unevaluableCause(
+      s.data(),
+      {
+        where: 'crossing',
+        ends: stretch,
+        between: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)],
+        reason: nearB.why,
+        ...(outside ? { by: deviceRef(outside.device) } : {}),
+      },
+      nearB.why,
+      outside,
+    ),
     next,
   );
 }
@@ -3451,17 +3734,24 @@ function settle(
         order.push(i);
         continue;
       }
-      if (!found.ok)
+      if (!found.ok) {
+        const inner = causeOfFailure(found.failure) as Cause;
+        const members = set.map((o) => searchDataOf(ctx, o, []));
         return {
           ok: false,
           res: found.res,
-          failure: {
-            kind: 'not-settled',
-            unknowns: set.map((o) => o.p.name),
-            why: outOfBudget(found.failure) ? 'budget' : 'member',
-            message: `solved params ${nameList(set)} did not settle: ${found.failure.message}`,
-          },
+          // The member that failed keeps its own cause, with the set it was one of; a budget
+          // that ran out is the set's own failure.
+          failure: solveFailureOf(
+            inner.kind === 'limit' && outOfBudget(found.failure)
+              ? { kind: 'limit', data: { ...inner.data, set: members } }
+              : (withSet(inner, members) ?? {
+                  kind: 'did-not-settle',
+                  data: { members, simplifications: [], why: { kind: 'member', failure: inner } },
+                }),
+          ),
         };
+      }
       moves[i] = Math.abs(found.x - ctx.at[u.p.name]);
       ctx.at[u.p.name] = found.x;
       slope[u.p.name] = found.slope;
@@ -3480,17 +3770,19 @@ function settle(
   return {
     ok: false,
     res: res as SheetResult,
-    failure: {
-      kind: 'not-settled',
-      unknowns: set.map((o) => o.p.name),
-      why: 'sweeps',
-      message:
-        `solved params ${nameList(set)} did not settle in ${solveSweeps} ` +
-        `${solveSweeps === 1 ? 'sweep' : 'sweeps'}: in the last ` +
-        `one ${set[worst].p.name} still moved by ${valueOf(set[worst], moves[worst])} — they ` +
-        `depend on each other too strongly for repeated one-unknown searches to settle them in ` +
-        `their stated ranges`,
-    },
+    failure: solveFailureOf({
+      kind: 'did-not-settle',
+      data: {
+        members: set.map((o) => searchDataOf(ctx, o, [])),
+        simplifications: [],
+        why: {
+          kind: 'sweeps',
+          sweeps: solveSweeps,
+          moved: { name: set[worst].p.name, by: moves[worst] },
+          moves: set.map((o, i) => ({ name: o.p.name, by: moves[i] })),
+        },
+      },
+    }),
   };
 }
 
@@ -3544,12 +3836,14 @@ function solveNode(node: NodeRef): SheetResult {
     if (!failed.length)
       failed.push({
         probe: firstProbe(),
-        failure: {
-          kind: 'not-settled',
-          unknowns: issue.params,
-          why: 'malformed',
-          message: issue.message,
-        },
+        failure: solveFailureOf({
+          kind: 'not-determined',
+          data: {
+            why: declarationWhy(doc, issue.params),
+            names: issue.params,
+            message: issue.message,
+          },
+        }),
       });
     const named = new Set(issue.params);
     rest = rest.filter((p) => !named.has(p.name));
@@ -3577,12 +3871,26 @@ function solveNode(node: NodeRef): SheetResult {
     for (const n of refused) unfound.set(n, n);
     failed.push({
       probe: firstProbe(),
-      failure: {
-        kind: 'not-settled',
-        unknowns: refused,
-        why: 'malformed',
-        message: outside.map((o) => o.message).join('; '),
-      },
+      failure: solveFailureOf({
+        kind: 'not-determined',
+        data: {
+          why: 'range-outside',
+          names: refused,
+          message: outside.map((o) => o.message).join('; '),
+          ranges: outside.flatMap((o) =>
+            o.u.range.author && o.u.range.wiring
+              ? [
+                  {
+                    name: o.u.p.name,
+                    ...(o.u.p.unit !== undefined ? { unit: o.u.p.unit } : {}),
+                    search: o.u.range.author,
+                    wires: o.u.range.wiring.range,
+                  },
+                ]
+              : [],
+          ),
+        },
+      }),
     });
   }
 
@@ -3648,23 +3956,26 @@ function solveNode(node: NodeRef): SheetResult {
     .filter((u) => !holdsAt(u, final, slope, solveTolRel))
     .map((u) => ({ u, g: relationAt(u, final), tol: tolOf(u, slope, solveTolRel) }));
   if (off.length) {
-    const failure: SolveFailure = {
-      kind: 'not-settled',
-      unknowns: off.map((o) => o.u.p.name),
-      why: 'verification',
-      message:
-        `${off.length > 1 ? 'solved params' : off[0].u.held ? 'held param' : 'solved param'} ` +
-        `${nameList(off.map((o) => o.u))} did not settle: read from the final evaluation, ` +
-        off
-          .map(
-            ({ u, g, tol }) =>
-              `${u.lhs} - (${u.rhs}) ${g === undefined ? 'does not evaluate' : `reads ${g.toExponential(3)}`}` +
-              ` against a tolerance of ${tol.toExponential(3)} (its slope there times ` +
-              `${solveTolRel} of its range)`,
-          )
-          .join('; ') +
-        ` — the values it was solved with moved after it landed`,
-    };
+    const failure = solveFailureOf({
+      kind: 'did-not-settle',
+      data: {
+        members: off.map((o) => searchDataOf(ctx, o.u, [])),
+        simplifications: [],
+        why: {
+          kind: 'verification',
+          tolRel: solveTolRel,
+          off: off.map(({ u, tol }) => {
+            const { lhs, rhs } = relationSides(u, final);
+            return {
+              name: u.p.name,
+              ...(lhs !== undefined ? { lhs } : {}),
+              ...(rhs !== undefined ? { rhs } : {}),
+              tolerance: tol,
+            };
+          }),
+        },
+      },
+    });
     // Only the params read off their tolerance are not found: every other one verified where it
     // landed, unless it landed by reading one of them (withUnfound).
     const off_ = new Map(off.map((o) => [o.u.p.name, o.u.p.name]));
@@ -3918,6 +4229,7 @@ function runRangeEnd(
     solved,
     ...(res.ranges ? { ranges: res.ranges } : {}),
     warnings: res.warnings,
+    ...(res.items ? { items: res.items } : {}),
     ...(err !== undefined ? { error: err } : {}),
     ...(outside.length ? { outside } : {}),
     ...(res.nodes ? { nodes: res.nodes } : {}),

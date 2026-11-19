@@ -22,7 +22,8 @@ import { sizeDevice } from '../device';
 import { scalarScope } from '../expr';
 import { makeGrid } from '../grid';
 import { fixTable } from '../series';
-import { outsideTableMessage, type DeviceTable } from '../types';
+import type { DeviceTable } from '../types';
+import { outsideTableMessage } from './describe';
 import {
   runSheet,
   evaluateSheet,

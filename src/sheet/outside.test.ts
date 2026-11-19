@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { ekvTable } from '../demo/ekv.fixtures';
-import { outsideTableMessage } from '../types';
+import { outsideTableMessage } from './describe';
 import { runSheet, sheetSensitivities, sweepSheet, withParams } from './index';
 import { sheet, REFS, table as demoTable } from './library.fixtures';
 import { followOnSummary, outsideIn, type SheetDoc } from './types';

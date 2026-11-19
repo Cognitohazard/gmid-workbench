@@ -13,13 +13,13 @@ import type { DeviceTable } from '../types';
 import { evaluateSheet, operatingPointOf, type DeviceResolver } from './eval';
 import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
+import { outsideMessage } from './describe';
 import {
   childPath,
   devicesIn,
   engineSolved,
   OWN_DEVICE,
   outsideIn,
-  outsideMessage,
   solvedValuesIn,
   stands,
   treeCheckResults,

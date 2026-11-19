@@ -5,7 +5,8 @@
 // identities, which the engine checks for DC consistency after sizing and never solves — no
 // level derived from it is fed back into the design. Pure data; zero DOM imports.
 
-import { outsideTableMessage, type OutsideTable, type QAWarning } from '../types';
+import type { OutsideTable, QAWarning } from '../types';
+import type { Item, Verdict } from './states';
 import { compileExpr, metaScalars, type FallbackNote, type NoiseSource } from '../derive';
 import { BASE_KEYS, BASE_QUANTITIES, DERIVED_QUANTITIES, SIZING_SCALARS } from '../namespace';
 import { BINDABLE } from '../device';
@@ -269,11 +270,42 @@ export function constraintProblem(params: readonly SheetVar[], open?: OpenRange)
 export type OpenRange = (p: SheetVar) => { ok: true } | { ok: false; why?: string };
 
 /** Items joined for a sentence: `a`, `a and b`, `a, b and c`. */
+/** The unit of a relation's or a check's two sides: that of the first side that is a single name
+ *  the sheet declares a unit for, a param or an equation. Absent where neither is. */
+export function unitOfSides(
+  doc: Pick<SheetDoc, 'params' | 'equations'>,
+  ...sides: readonly string[]
+): string | undefined {
+  for (const side of sides) {
+    const n = side.trim();
+    const unit =
+      doc.params.find((q) => q.name === n)?.unit ?? doc.equations.find((e) => e.name === n)?.unit;
+    if (unit !== undefined) return unit;
+  }
+  return undefined;
+}
+
 export const andList = (q: readonly string[]): string =>
   q.length > 1 ? `${q.slice(0, -1).join(', ')} and ${q[q.length - 1]}` : (q[0] ?? '');
 
 /** The quoted names of `ps`, joined for a message: `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
 const quotedNames = (ps: readonly SheetVar[]): string => andList(ps.map((p) => `"${p.name}"`));
+
+/** Whether the params a constraint problem names lack a decision or carry two: a param with
+ *  more than one of a design constraint, a solveFor and a hold carries two. */
+export function declarationWhy(
+  doc: SheetDoc,
+  names: readonly string[],
+): 'decision-missing' | 'decision-twice' {
+  const twice = doc.params.some(
+    (p) =>
+      names.includes(p.name) &&
+      [p.designConstraint !== undefined, p.solveFor !== undefined, p.hold !== undefined].filter(
+        Boolean,
+      ).length > 1,
+  );
+  return twice ? 'decision-twice' : 'decision-missing';
+}
 
 /** constraintProblem with the params it is about — what a failed solve names as its unknowns. A
  *  problem that every one of several params shares is said once, naming them all, so an author
@@ -865,7 +897,7 @@ export function prefixBlockWarning(blockName: string, w: QAWarning): QAWarning {
 }
 
 /** A child's message as its parent reports it: attributed to the block. */
-const blockMessage = (blockName: string, message: string): string =>
+export const blockMessage = (blockName: string, message: string): string =>
   `block "${blockName}": ${message}`;
 
 /** A warning raised at the block path `segments` (top first), as the top of the tree reports it:
@@ -1092,6 +1124,8 @@ export interface SheetBlockReport {
   /** The block's own solved params held at given values instead of solved (see
    *  SheetResult.pinned). */
   pinned?: string[];
+  /** This block's items with their statuses (SheetResult.items), named within the block. */
+  items?: Item[];
 }
 
 /** What a sheet whose wiring joins its parent's walk evaluated its own held levels and element
@@ -1265,6 +1299,8 @@ export interface RangeEndReport {
    *  child). Reported rather than warned, like SizingReport.assumed: it is a property of what
    *  the author wrote down, and the fix is to author the current explicitly. */
   assumedSource?: string[];
+  /** The run's items with their statuses (SheetResult.items); absent where nothing was run. */
+  items?: Item[];
 }
 
 /** A range end's outcome — one compliance point's. `not-run` and `no-answer` are first-class
@@ -1531,6 +1567,12 @@ export interface SheetResult {
    *  (see EvaluateOptions.pinned), by name; a block's are on its report. Their relations were not
    *  checked, so the verdict of such a run does not show that they hold. Absent where none was. */
   pinned?: string[];
+  /** Every item of this evaluation with its status — the sheet first, then its values, its
+   *  searches, its device, its equations and checks, and each block's items under its name (see
+   *  states.ts) — and the verdict they give. The fields above are today's readings of the same
+   *  outcome; nothing reads these yet. */
+  items?: Item[];
+  verdict?: Verdict;
 }
 
 /**
@@ -1767,13 +1809,6 @@ export const outsideIn = (
   res.outside
     ? [...res.outside]
     : devicesIn(res, (s, device) => (s.outside ?? []).map((r) => ({ ...r, device })));
-
-/** One read beyond a table as a finding names it: the block it belongs to, then the record's own
- *  words (outsideTableMessage). */
-export const outsideMessage = (r: OutsideTable): string =>
-  r.device === 'givens' || r.device === ''
-    ? outsideTableMessage(r)
-    : blockMessage(r.device, outsideTableMessage(r));
 
 /** One evaluation's tree as the walks over its sizings read it. */
 type TreeSizings = { sizing?: SizingReport; blocks?: readonly SheetBlockReport[] };

@@ -26,7 +26,6 @@ import { NODE_TOL, placementsOf, wiringRefusal } from './nodes';
 import { resolveSheetRefs } from './resolve';
 import {
   outsideIn,
-  outsideMessage,
   docExpressions,
   isHardCheck,
   type SizingReport,
@@ -61,6 +60,7 @@ import { searchable } from '../picker';
 // Test-only reach across to the condition runs: holding one sized design at a second
 // characterization is that module's transition, and one exemplar golden below asks it of a sheet.
 import { groupDevices, runConditions } from '../corners';
+import { outsideMessage } from './describe';
 
 const LIBRARY = loadLibrary();
 

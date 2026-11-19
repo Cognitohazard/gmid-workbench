@@ -97,12 +97,23 @@ const ZERO_INDEX = 5; // position of '' (1e0) in either ladder
 
 /** Shared engineering-notation core: pick a 1e3-group suffix from `suffixes`. */
 function formatLadder(x: number, sig: number, suffixes: readonly string[]): string {
+  const p = ladderParts(x, sig, suffixes);
+  return p.number + p.prefix;
+}
+
+/** formatLadder in two parts: the number, and the prefix that follows it — empty for a value
+ *  that needs none and for one outside the ladder, which reads in scientific notation. */
+function ladderParts(
+  x: number,
+  sig: number,
+  suffixes: readonly string[],
+): { number: string; prefix: string } {
   if (!Number.isFinite(x)) {
     // NaN / ±Infinity have no engineering suffix; render the JS string.
-    return String(x);
+    return { number: String(x), prefix: '' };
   }
   if (x === 0) {
-    return '0';
+    return { number: '0', prefix: '' };
   }
 
   const safeSig = Math.max(1, Math.floor(sig));
@@ -124,11 +135,14 @@ function formatLadder(x: number, sig: number, suffixes: readonly string[]): stri
 
   const idx = ZERO_INDEX + exp3 / 3;
   if (idx >= 0 && idx < suffixes.length) {
-    return sign + trimZeros(mantissa, safeSig) + suffixes[idx];
+    return { number: sign + trimZeros(mantissa, safeSig), prefix: suffixes[idx] };
   }
 
   // Out of suffix range: fall back to scientific notation with the same sig-figs.
-  return sign + trimZeros(abs / 10 ** exp3, safeSig) + 'e' + (exp3 >= 0 ? '+' : '') + exp3;
+  return {
+    number: sign + trimZeros(abs / 10 ** exp3, safeSig) + 'e' + (exp3 >= 0 ? '+' : '') + exp3,
+    prefix: '',
+  };
 }
 
 /**
@@ -149,12 +163,12 @@ export function formatSI(x: number, sig = 4): string {
 }
 
 /** A value with its unit as a reader reads one: the SI prefix joined to the unit and set off from
- *  the number — `900 mV`, `10 µA`. A dimensionless value (no unit, or `1`) is the number alone. */
-export function formatQuantity(x: number, unit?: string): string {
-  const s = formatSI(x);
-  if (!unit || unit === '1') return s;
-  const m = /^(-?[\d.]+(?:e[+-]?\d+)?)(\D*)$/.exec(s);
-  return m ? `${m[1]} ${m[2]}${unit}` : `${s} ${unit}`;
+ *  the number — `900 mV`, `10 µA`. A dimensionless value (no unit, or `1`) is the number alone.
+ *  `sig` significant figures, as formatSI. */
+export function formatQuantity(x: number, unit?: string, sig = 4): string {
+  const p = ladderParts(x, sig, SI_SUFFIXES);
+  if (!unit || unit === '1') return p.number + p.prefix;
+  return `${p.number} ${p.prefix}${unit}`;
 }
 
 /** Round a positive value to `sig` significant figures. */
