@@ -41,6 +41,7 @@ import {
   textOf,
   type Line,
 } from './describe';
+import type { LevelRefusal } from '../types';
 import type { SheetDoc, SolveRange } from './types';
 import type { NetlistAbout, OutsideTable } from '../types';
 
@@ -908,6 +909,68 @@ group('the texts of a finding with no item of its own', () => {
         ],
       ],
       [
+        {
+          problem: 'level-refused',
+          wires: ['out'],
+          level: 'V_out_dc',
+          refused: [
+            { reason: 'class', name: 'V_out_dc', cls: 'assumed' },
+            { reason: 'class', name: 'V_tail', cls: 'solved' },
+            { reason: 'class', name: 'V_s', cls: 'held', device: 'casc' },
+            { reason: 'class', name: 'k', cls: 'unclassified' },
+            { reason: 'unresolved', name: 'nope' },
+            { reason: 'cycle', via: ['qa', 'qb'] },
+            { reason: 'cycle', via: ['qa', 'qb', 'qc'] },
+            { reason: 'device', device: 'in' },
+            { reason: 'equation', name: 'gain' },
+            { reason: 'analysis', name: 'ac' },
+          ],
+        },
+        [
+          'The level V_out_dc cannot hold wire out.',
+          'V_out_dc is marked assumed, and a level that holds a wire cannot read an assumed value.',
+          'The level reads V_tail, which the engine solves, so the level is derived.',
+          'The level reads V_s, which the engine calculates again where the design is held, so the level is derived.',
+          'Hold the gate wire of part casc at the expression of its hold.',
+          'k has no mark, and a level that holds a wire reads only values marked independent.',
+          'nope names nothing on the sheet.',
+          'qa and qb read each other, so the level never gives a number.',
+          'qa, qb and qc read each other in a loop, so the level never gives a number.',
+          'The level reads a quantity of part in, and a level derived from a device is never held.',
+          'The level reads equation gain, and a level cannot read an equation.',
+          'The level reads analysis ac, and a level cannot read an analysis.',
+          'Write the level as a number, or from values marked independent.',
+        ],
+      ],
+      [
+        // A param a hold re-solves at a gate, alone: holding the gate wire is the whole of what to do.
+        {
+          problem: 'level-refused',
+          wires: ['out'],
+          level: 'V_s',
+          refused: [{ reason: 'class', name: 'V_s', cls: 'held', device: 'casc' }],
+        },
+        [
+          'The level V_s cannot hold wire out.',
+          'The level reads V_s, which the engine calculates again where the design is held, so the level is derived.',
+          'Hold the gate wire of part casc at the expression of its hold.',
+        ],
+      ],
+      [
+        // A hold that balances currents keeps no gate: the reason, then what to write.
+        {
+          problem: 'level-refused',
+          wires: ['out'],
+          level: 'I_bias',
+          refused: [{ reason: 'class', name: 'I_bias', cls: 'held' }],
+        },
+        [
+          'The level I_bias cannot hold wire out.',
+          'The level reads I_bias, which the engine calculates again where the design is held, so the level is derived.',
+          'Write the level as a number, or from values marked independent.',
+        ],
+      ],
+      [
         { problem: 'selector', devices: ['givens'], param: 's' },
         ['The axis-sign selector s does not match the table of the device of this sheet.'],
       ],
@@ -1470,6 +1533,60 @@ group('a range end that is not calculated', () => {
   const searchFailed = failed('search', 'V_tail', {
     kind: 'cannot-evaluate',
     data: { why: 'not-finite', name: 'V_tail', reason: '' },
+  });
+  it('carries the reason a level cannot hold a wire, or how many there are', () => {
+    const level = (refused: LevelRefusal[]): Item => ({
+      kind: 'sheet',
+      path: [],
+      name: '',
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          names: ['out'],
+          message: '',
+          netlist: [{ problem: 'level-refused', wires: ['out'], level: 'L', refused }],
+        },
+      },
+    });
+    const on: WithheldOn[] = [
+      { kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' },
+    ];
+    const head =
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.';
+    const cases: [LevelRefusal[], string][] = [
+      [
+        [{ reason: 'class', name: 'V_out_dc', cls: 'assumed' }],
+        'because V_out_dc is marked assumed',
+      ],
+      [[{ reason: 'class', name: 'V_tail', cls: 'solved' }], 'because the engine solves V_tail'],
+      [
+        [{ reason: 'class', name: 'V_s', cls: 'held', device: 'casc' }],
+        'because the engine calculates V_s again',
+      ],
+      [[{ reason: 'class', name: 'k', cls: 'unclassified' }], 'because k has no mark'],
+      [[{ reason: 'unresolved', name: 'nope' }], 'because nope names nothing on the sheet'],
+      [[{ reason: 'cycle', via: ['qa', 'qb'] }], 'because qa and qb read each other'],
+      [[{ reason: 'device', device: 'in' }], 'because it reads a quantity of part in'],
+      [[{ reason: 'equation', name: 'gain' }], 'because it reads equation gain'],
+      [[{ reason: 'analysis', name: 'ac' }], 'because it reads analysis ac'],
+      [
+        [
+          { reason: 'unresolved', name: 'nope' },
+          { reason: 'equation', name: 'gain' },
+          { reason: 'device', device: 'in' },
+        ],
+        'for 3 reasons',
+      ],
+    ];
+    for (const [refused, why] of cases)
+      check(
+        end(on),
+        'cm-lo',
+        [level(refused)],
+        [head, `At the design point, the level L cannot hold wire out, ${why}.`],
+      );
   });
   const wiring: Item = {
     kind: 'sheet',

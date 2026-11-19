@@ -445,11 +445,15 @@ describe('a derived node', () => {
     );
     const verdict = levelEligibility(doc, '', 'V1');
     expect(verdict.kind).toBe('refused');
-    const problems = verdict.kind === 'refused' ? verdict.problems : [];
-    expect(problems).toContain('it reads equation "V1"');
-    expect(problems).toContain(
-      'it reads a quantity of "s2", and a level derived from a device is never held',
-    );
+    // The level reads the equation; what the equation reads under it is not a reason of the level.
+    expect(verdict.kind === 'refused' ? verdict.reasons : []).toEqual([
+      { reason: 'equation', name: 'V1' },
+    ]);
+    // Written as the equation's own expression, the level names the device.
+    const direct = levelEligibility(doc, '', 'VDD - abs(s2__vgs)');
+    expect(direct.kind === 'refused' ? direct.reasons : []).toEqual([
+      { reason: 'device', device: 's2' },
+    ]);
   });
 });
 

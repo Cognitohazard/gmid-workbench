@@ -177,7 +177,30 @@ export interface NetlistAbout {
   readonly where?: string;
   /** For a placement that is not well formed: which fault it is (PlacementFault). */
   readonly placement?: PlacementFault;
+  /** For a level the sheet gives a wire that cannot hold it: why, one entry for each reason. */
+  readonly refused?: readonly LevelRefusal[];
 }
+
+/** Why a level cannot hold a wire (NetlistAbout `refused`), one entry for each name the level's
+ *  expression itself reads and may not: a param marked other than independent (assumed, solved by
+ *  the engine, re-solved where the design is held, or with no mark), with, for one a hold re-solves,
+ *  the device whose gate the hold keeps; a name that names nothing on the sheet; a quantity of a
+ *  device; an equation; an analysis. A name that only stands for another (a block param its parent
+ *  overrides, a scalar a child provides) is followed to what it stands for; a loop of such names is
+ *  `cycle`. */
+export type LevelRefusal =
+  | {
+      readonly reason: 'class';
+      readonly name: string;
+      readonly cls: 'assumed' | 'solved' | 'held' | 'unclassified';
+      /** For a param a hold re-solves: the device whose gate the hold keeps, as findings name it. */
+      readonly device?: string;
+    }
+  | { readonly reason: 'unresolved'; readonly name: string }
+  | { readonly reason: 'cycle'; readonly via: readonly string[] }
+  | { readonly reason: 'device'; readonly device: string }
+  | { readonly reason: 'equation'; readonly name: string }
+  | { readonly reason: 'analysis'; readonly name: string };
 
 /** What is wrong with a device's placements (NetlistAbout `placement`): not one placement or a
  *  list of them; a key a placement does not have; a terminal on no wire; an intent other than

@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { resolvedSheet } from './resolve';
+import { levelEligibility } from './validate';
 import { legacyFeasible, legacyPointState } from './derived';
 import {
   causeFits,
@@ -1291,7 +1292,9 @@ describe('a placement that is not well formed', () => {
       undefined,
       REFS,
     );
-    const own = res.items?.find((i) => i.kind === 'device' && i.path.length === 0);
+    // On the sheet's own item: a finding of its netlist. The device's own item is not failed by it.
+    expect(res.items?.find((i) => i.kind === 'device' && i.path.length === 0)?.status).toBe('ok');
+    const own = res.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
     const netlist =
       own?.status === 'failed' &&
       own.cause.kind === 'not-determined' &&
@@ -1344,9 +1347,7 @@ describe('the list of a range end', () => {
           path: [],
           name: '',
           status: 'withheld',
-          on: [
-            { kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' },
-          ],
+          on: [{ kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' }],
         },
       ]);
     }
@@ -1527,4 +1528,249 @@ describe('a range end whose own entry is not well formed, or gives no number', (
       expect(res.rangeEnds?.[0].verdict).toBeUndefined();
       expectSame(res);
     });
+});
+
+describe('a level that cannot hold a wire', () => {
+  it('says why, as validation found it', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      params: ota.params.map((p) => (p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p)),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const refused = res.warnings.flatMap((w) =>
+      w.about?.kind === 'netlist' && w.about.problem === 'level-refused' ? [w.about] : [],
+    );
+    expect(refused).toEqual([
+      expect.objectContaining({
+        wires: ['out'],
+        level: 'V_out_dc',
+        refused: [{ reason: 'class', name: 'V_out_dc', cls: 'assumed' }],
+      }),
+    ]);
+    expectSame(res);
+  });
+
+  it('gives one reason for each name the level itself reads, and follows only an alias', () => {
+    const base = sheet('otas/five-transistor-ota.json');
+    const ota = resolvedSheet(
+      {
+        ...base,
+        params: base.params.map((p) => (p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p)),
+      } as SheetDoc,
+      REFS,
+    ).doc;
+    const reasons = (doc: SheetDoc, level: string, e: string) => {
+      const v = levelEligibility(doc, level, e);
+      return v.kind === 'refused' ? v.reasons : v.kind;
+    };
+    expect(reasons(ota, '', 'CM_in')).toEqual([{ reason: 'equation', name: 'CM_in' }]);
+    expect(reasons(ota, '', 'in__vgs')).toEqual([{ reason: 'device', device: 'in' }]);
+    expect(reasons(ota, '', 'V_out_dc + V_tail')).toEqual([
+      { reason: 'class', name: 'V_out_dc', cls: 'assumed' },
+      { reason: 'class', name: 'V_tail', cls: 'solved' },
+    ]);
+    expect(reasons(ota, '', 'V_tail')).toEqual([
+      { reason: 'class', name: 'V_tail', cls: 'solved' },
+    ]);
+    expect(reasons(ota, '', 'nope')).toEqual([{ reason: 'unresolved', name: 'nope' }]);
+    expect(reasons(ota, '', 'V_out_dc')).toEqual([
+      { reason: 'class', name: 'V_out_dc', cls: 'assumed' },
+    ]);
+    expect(reasons(ota, '', 'gm_id_in')).toEqual([
+      { reason: 'class', name: 'gm_id_in', cls: 'unclassified' },
+    ]);
+    expect(reasons(ota, '', 'V_out_dc + nope + CM_in + in__vgs + gm_id_in + VDD')).toEqual([
+      { reason: 'class', name: 'V_out_dc', cls: 'assumed' },
+      { reason: 'unresolved', name: 'nope' },
+      { reason: 'equation', name: 'CM_in' },
+      { reason: 'device', device: 'in' },
+      { reason: 'class', name: 'gm_id_in', cls: 'unclassified' },
+    ]);
+    expect(reasons(ota, '', 'VDD')).toBe('held');
+    // A block param its parent overrides from a device's quantity: the device, as the parent
+    // names it.
+    const mirror = resolvedSheet(sheet('mirrors-bias/cascode-current-mirror.json'), REFS).doc;
+    expect(reasons(mirror, 'ref_casc', 'vsb_rc')).toEqual([{ reason: 'device', device: 'ref' }]);
+    // A node a hold re-solves: the device whose gate the hold keeps.
+    const fvf = resolvedSheet(sheet('multistage/flipped-voltage-follower.json'), REFS).doc;
+    expect(reasons(fvf, '', 'V_out')).toEqual([
+      { reason: 'class', name: 'V_out', cls: 'held', device: 'in' },
+    ]);
+  });
+});
+
+describe('a wiring fault of a part', () => {
+  it('is a finding of the netlist of the sheet that wires it, on that sheet’s own item', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      blocks: ota.blocks?.map((b) =>
+        b.name === 'in' ? { ...b, nodes: { ...(b.nodes as object), x: 'gnd' } } : b,
+      ),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const item = (path: string[]): Item | undefined =>
+      res.items?.find((i) => i.kind === 'sheet' && i.path.join('.') === path.join('.'));
+    expect(item([])).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          netlist: [
+            {
+              problem: 'placement',
+              devices: ['in'],
+              placement: { fault: 'unknown-key', key: 'x' },
+            },
+          ],
+        },
+      },
+    });
+    expect(item(['in'])?.status).toBe('ok');
+    for (const e of res.rangeEnds ?? [])
+      expect(e.items).toEqual([
+        {
+          kind: 'sheet',
+          path: [],
+          name: '',
+          status: 'withheld',
+          on: [{ kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' }],
+        },
+      ]);
+    expectSame(res);
+  });
+
+  it('puts a short and a diode flag its wires contradict on the sheet that wires the part', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const run = (doc: SheetDoc) => {
+      const res = runSheet(doc, table, undefined, REFS);
+      const sheets = (res.items ?? []).filter((i) => i.kind === 'sheet' && i.status === 'failed');
+      return { res, sheets };
+    };
+    // Part in with its drain and source on one wire.
+    const short = run({
+      ...ota,
+      blocks: ota.blocks?.map((b) =>
+        b.name === 'in' ? { ...b, nodes: { ...(b.nodes as object), s: 'out' } } : b,
+      ),
+    } as SheetDoc);
+    expect(short.sheets).toEqual([
+      expect.objectContaining({
+        path: [],
+        cause: expect.objectContaining({
+          data: expect.objectContaining({
+            netlist: [{ problem: 'short', wires: ['out'], devices: ['in'] }],
+          }),
+        }),
+      }),
+    ]);
+    expect(describeItem(short.sheets[0]).lines).toEqual([
+      'The statements of the sheet do not determine one design.',
+      'Part in has its drain and its source on wire out, which shorts it.',
+    ]);
+    expectSame(short.res);
+    // The diode side of the load with its diode flag off, its wires a diode connection.
+    const flag = run({
+      ...ota,
+      blocks: ota.blocks?.map((b) =>
+        b.name === 'ldr' && b.doc
+          ? { ...b, doc: { ...b.doc, givens: { ...b.doc.givens, diode: false } } }
+          : b,
+      ),
+    } as SheetDoc);
+    expect(flag.sheets).toEqual([
+      expect.objectContaining({
+        path: [],
+        cause: expect.objectContaining({
+          data: expect.objectContaining({
+            netlist: [{ problem: 'diode-flag', devices: ['ldr'], diodeFlag: false }],
+          }),
+        }),
+      }),
+    ]);
+    expectSame(flag.res);
+  });
+});
+
+describe('a range end behind a level that cannot hold a wire', () => {
+  const endLines = (level: string, assumed = false): readonly string[] => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      levels: { ...(ota as { levels?: object }).levels, out: level },
+      params: ota.params.map((p) =>
+        assumed && p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p,
+      ),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const end = res.rangeEnds?.[0];
+    return end?.items?.[0] ? describeItem(end.items[0], [], end.name, res.items).lines : [];
+  };
+
+  it('carries the reason, or how many there are', () => {
+    expect(endLines('V_tail')).toEqual([
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+      'At the design point, the level V_tail cannot hold wire out, because the engine solves V_tail.',
+    ]);
+    expect(endLines('V_out_dc + nope + CM_in')).toEqual([
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+      'At the design point, the level V_out_dc + nope + CM_in cannot hold wire out, for 2 reasons.',
+    ]);
+    expect(endLines('V_out_dc', true)).toEqual([
+      'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+      'At the design point, the level V_out_dc cannot hold wire out, because V_out_dc is marked assumed.',
+      'At the design point, V_out_dc is an assumed level.',
+    ]);
+  });
+});
+
+describe('a level that reads a param a range end substitutes', () => {
+  it('a level may read a param that a range end substitutes; the substitute is not a reason', () => {
+    // The five-transistor OTA holds wire vdd at VDD. A range end that sets VDD to an expression
+    // is evaluated on the finished design, where its substitute is a number: the level is still
+    // the designer's, whatever the substitute reads (a loop through VDD itself, a solved param,
+    // an equation, a device quantity, or a number).
+    const ota = sheet('otas/five-transistor-ota.json');
+    for (const set of ['VDD*0.9', 'V_tail + 1.2', 'CM_in + 1.0', 'in__vgs', '1.62']) {
+      const doc = {
+        ...ota,
+        operatingRange: [...(ota.operatingRange ?? []), { name: 'vdd-lo', set: { VDD: set } }],
+      } as SheetDoc;
+      expect(levelEligibility(resolvedSheet(doc, REFS).doc, '', 'VDD'), set).toEqual({
+        kind: 'held',
+      });
+      const res = runSheet(doc, table, undefined, REFS);
+      expect(
+        res.warnings.filter(
+          (w) => w.about?.kind === 'netlist' && w.about.problem === 'level-refused',
+        ),
+        set,
+      ).toEqual([]);
+      expect(res.rangeEnds?.find((e) => e.name === 'vdd-lo')?.verdict, set).toBeDefined();
+      expectSame(res);
+    }
+  });
+});
+
+describe('a level that reads a value a hold balancing currents solves', () => {
+  it('gives the reason and what to write, and no gate wire to hold', () => {
+    // The CMOS inverter amplifier's I_bias is held by "I_bias - p__id": a hold that balances two
+    // currents and keeps no gate.
+    const inv = sheet('stages/cmos-inverter-amp.json');
+    const doc = {
+      ...inv,
+      levels: { ...(inv as { levels?: object }).levels, out: 'I_bias' },
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const item = res.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+    expect(item?.status).toBe('failed');
+    expect(describeItem(item as Item).lines).toEqual([
+      'The statements of the sheet do not determine one design.',
+      'The level I_bias cannot hold wire out.',
+      'The level reads I_bias, which the engine calculates again where the design is held, so the level is derived.',
+      'Write the level as a number, or from values marked independent.',
+    ]);
+  });
 });
