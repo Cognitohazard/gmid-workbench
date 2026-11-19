@@ -1867,6 +1867,14 @@ describe('compliance and the wiring check read one classification', () => {
     expect(sized.result.nodes?.state).toBe('checked-clean');
     expect(sized.points[0].state).toBe('no-answer');
     expect(sized.result.point).toMatchObject({ sized: true, state: 'no-answer' });
+    expect(sized.points[0].verdict?.verdict).toBe('undetermined');
+    expect(
+      sized.points[0].verdict?.failed.map((f) => [
+        f.name,
+        f.cause.kind,
+        (f.cause.data as { why?: string }).why,
+      ]),
+    ).toEqual([['V_d', 'not-determined', 'assumed-level']]);
   });
 
   it('reports a condition declined before anything ran as not evaluated, as a declined range end is', () => {
@@ -1875,6 +1883,8 @@ describe('compliance and the wiring check read one classification', () => {
     if (held.state !== 'not-evaluated') return;
     expect(held.points[0].state).toBe('no-answer');
     expect(held.nodes).toMatchObject({ state: 'not-evaluated', notes: [NO_ANSWER_NOTE] });
+    // Declined before anything was calculated, so there is no verdict to give beside it.
+    expect(held.points[0].verdict).toBeUndefined();
   });
 });
 

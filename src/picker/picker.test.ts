@@ -20,6 +20,7 @@ import {
   VGS_GMID10_L05,
 } from '../sheet/library.fixtures';
 import { generateDemoDevice } from '../demo';
+import { isComplete } from '../sheet/states';
 import {
   runSheet,
   bindingCheck,
@@ -908,5 +909,53 @@ describe('reading the results', () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe('a sheet whose only error is on one requirement’s own entry', () => {
+  // The five-transistor OTA with a tolerance that is not a number on its gain check: validation
+  // raises an error on that requirement's entry and on nothing else. The picker does not refuse
+  // the sheet before it searches; every number of the run is there, so the run is complete, and
+  // it is scored by the margins of the requirements that were read. Its verdict is never
+  // feasible, so the picker never reads it closed where the same sheet without the error closes.
+  const doc0 = sheet('otas/five-transistor-ota.json');
+  const doc: SheetDoc = {
+    ...doc0,
+    checks: doc0.checks.map((c) => (c.id === 'gain-spec' ? { ...c, tolPct: -1 } : c)),
+  };
+  const bad = (spec: PickerSpec) =>
+    pickTopology(spec, { path: 'synthetic/bad-tolerance', doc }, table, undefined, { refs: REFS });
+  const plain = (spec: PickerSpec) =>
+    pickTopology(spec, { path: 'otas/five-transistor-ota', doc: doc0 }, table, undefined, {
+      refs: REFS,
+    });
+
+  it('is searched, scored by what was read, and never closed', () => {
+    const at = runSheet(doc, table, undefined, REFS);
+    expect(isComplete(at)).toBe(true);
+    expect(at.verdict?.verdict).not.toBe('feasible');
+    const gain = at.items?.find((i) => i.kind === 'requirement' && i.name === 'gain-spec');
+    expect(gain?.status).toBe('failed');
+
+    // At the relaxed spec the plain sheet closes; this one has nothing failing to descend on.
+    const relaxed: PickerSpec = {
+      VDD: 1.8,
+      CL: 2e-12,
+      Av_target: 10,
+      GBW_target: 5e6,
+      SR_target: 2e6,
+      vn_target: 1e-7,
+      vos_target: 0.04,
+    };
+    expect(plain(relaxed).verdict).toBe('closed');
+    expect(bad(relaxed).verdict).toBe('could-not-be-searched');
+
+    // At the shipped spec the plain sheet is repaired and closes; this one is searched on the
+    // offset check it fails, and does not close.
+    expect(plain({}).verdict).toBe('closed');
+    const searched = bad({});
+    expect(searched.verdict).toBe('did-not-close');
+    expect(searched.bindingCheck?.id).toBe('offset-spec');
+    expect(searched.evals).toBeGreaterThan(1);
   });
 });

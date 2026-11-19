@@ -77,7 +77,7 @@ import {
   validateSheet,
 } from '../sheet';
 import { isHardCheck } from '../sheet/types';
-import { heldVerdictOf, incompleteOn, isComplete } from '../sheet/states';
+import { heldVerdictOf, isComplete, type Item } from '../sheet/states';
 import { unreadValues } from '../sheet/items';
 import {
   assumedLevelRefusal,
@@ -1283,10 +1283,34 @@ function measuredPoints(runs: readonly ConditionRun[]): {
       if (v !== 'feasible' && v !== 'compliant' && v !== 'non-compliant') return;
       // points[0] is the run's own tree; points[i] mirrors result.rangeEnds[i - 1].
       const at = i === 0 ? run.result : run.result?.rangeEnds?.[i - 1];
-      if (!at?.items || incompleteOn(at.items).length) return;
-      out.push({ run, point, at });
+      if (!at?.items || !isComplete(at)) return;
+      out.push({ run, point, at: readChecks(at, at.items) });
     });
   return out;
+}
+
+/** The check outcomes of one complete point whose requirement says what it is there: its item is
+ *  ok or fails. A requirement failed for any other cause (it could not be evaluated, its entry is
+ *  not well formed) gives no margin to read, whatever number its outcome carries. */
+function readChecks(
+  at: { checks: readonly CheckResult[]; blocks?: readonly SheetBlockReport[] },
+  items: readonly Item[],
+  path: readonly string[] = [],
+): { checks: CheckResult[]; blocks?: SheetBlockReport[] } {
+  const said = (id: string): boolean =>
+    items.some(
+      (i) =>
+        i.kind === 'requirement' &&
+        i.name === id &&
+        i.path.join('.') === path.join('.') &&
+        (i.status === 'ok' || (i.status === 'failed' && i.cause.kind === 'fails')),
+    );
+  return {
+    checks: at.checks.filter((c) => said(c.id)),
+    ...(at.blocks
+      ? { blocks: at.blocks.map((b) => ({ ...b, ...readChecks(b, items, [...path, b.name]) })) }
+      : {}),
+  };
 }
 
 /** Where one check comes closest to failing, or fails worst, over every measured point. */

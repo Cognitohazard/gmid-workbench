@@ -22,7 +22,7 @@ import {
   table as libTable,
   notACircuit,
 } from '../sheet/library.fixtures';
-import { incompleteOn, isComplete } from '../sheet/states';
+import { incompleteOn, isComplete, type Item } from '../sheet/states';
 import {
   outsideIn,
   evaluateSheet,
@@ -37,6 +37,7 @@ import type {
   CheckResult,
   DesignVerdict,
   HeldVerdict,
+  SheetBlockReport,
   SheetDoc,
   RangeEndReport,
   SheetResult,
@@ -907,6 +908,17 @@ describe('runCondition', () => {
     expect(ss.result.sizing!.vgs).toBeGreaterThan(tt.result.sizing!.vgs);
     expect(tt.result.values.eff).toBeCloseTo(12, 9);
     expect(ss.result.values.eff).toBeLessThan(12);
+    // The sheet's gain check reads A, which no equation here defines: every number is there, so
+    // each run is complete, and the check that could not be evaluated leaves the verdict
+    // undetermined.
+    expect([tt, ss, resized].map((r) => verdicts(r.points))).toEqual([
+      ['undetermined'],
+      ['undetermined'],
+      ['undetermined'],
+    ]);
+    expect(tt.points[0].verdict?.failed.map((f) => [f.name, f.cause.kind])).toEqual([
+      ['gain', 'cannot-evaluate'],
+    ]);
   });
 
   it('holds a gate on a shared node at another condition, and solves the current it balances', () => {
@@ -1139,6 +1151,17 @@ describe('runCondition', () => {
     const [base, other] = ask('assumed');
     expect(base.state).toBe('evaluated');
     expect(base.result?.assumptions).toEqual(['V_d']);
+    // The run is complete, since an assumed level leaves its number in place; the design it gives
+    // is not determined, so the verdict is undetermined, with the assumed level as its cause.
+    expect(verdicts(base.points)).toEqual(['undetermined']);
+    expect(
+      base.points[0].verdict?.failed.map((f) => [
+        f.name,
+        f.cause.kind,
+        (f.cause.data as { why?: string }).why,
+      ]),
+    ).toEqual([['V_d', 'not-determined', 'assumed-level']]);
+    expect(verdicts(other.points)).toEqual([undefined]);
     expect(other.state === 'not-evaluated' && other.issues.map((i) => i.kind)).toEqual([
       'assumed-level',
     ]);
@@ -1818,6 +1841,25 @@ const verdictIn = (
 });
 const answered = (state: RangeEndReport['state'], error?: string): boolean =>
   error === undefined && state !== 'no-answer';
+/** The requirement items of a complete point, one per check outcome: ok where it holds, failed
+ *  with "fails" where it does not — the two a margin is read from. */
+const requirementItems = (
+  tree: { checks: readonly CheckResult[]; blocks?: readonly SheetBlockReport[] },
+  path: string[] = [],
+): Item[] => [
+  ...tree.checks.map(
+    (c) =>
+      ({
+        kind: 'requirement',
+        path,
+        name: c.id,
+        ...(c.status === 'fail'
+          ? { status: 'failed', cause: { kind: 'fails', data: {} } }
+          : { status: 'ok' }),
+      }) as Item,
+  ),
+  ...(tree.blocks ?? []).flatMap((b) => requirementItems(b, [...path, b.name])),
+];
 
 /** One range end's report: measured (a check at `marginPct`), or — given an `error` — not. */
 const end = (
@@ -1833,7 +1875,9 @@ const end = (
   solved: {},
   warnings: [],
   ...(error === undefined ? {} : { error }),
-  ...(answered(state, error) ? { items: [] } : {}),
+  ...(answered(state, error)
+    ? { items: requirementItems({ checks: [hardCheck(marginPct, 'e')] }) }
+    : {}),
   verdict: verdictIn(state, false) as Verdict<HeldVerdict>,
 });
 
@@ -1871,7 +1915,9 @@ const ran = (
     feasible: marginPct >= 0,
     warnings: [],
     ...(ends.length ? { rangeEnds: ends } : {}),
-    ...(answered(centre, centreError) ? { items: [] } : {}),
+    ...(answered(centre, centreError)
+      ? { items: requirementItems({ checks: [hardCheck(marginPct)] }) }
+      : {}),
   },
 });
 
@@ -2065,6 +2111,18 @@ describe('worstPointByCheck — where each check is tightest', () => {
         blocks: [
           { name: 'tail', title: 't', feasible: true, provides: {}, checks: [hardCheck(0.3, 'h')] },
         ],
+        items: requirementItems({
+          checks: [hardCheck(0.4), advisory],
+          blocks: [
+            {
+              name: 'tail',
+              title: 't',
+              feasible: true,
+              provides: {},
+              checks: [hardCheck(0.3, 'h')],
+            },
+          ],
+        }),
       },
     };
     const worst = worstPointByCheck([withMore]);
@@ -2451,6 +2509,37 @@ describe('the verdict beside the answers the corners module gives today', () => 
     expect(broke.verdict?.verdict).toBe('non-compliant');
     const unanswered = aggregateConditionRuns([ran('tt', 'sized', 'complies', 0.5, [broke])]);
     expect(unanswered.worst).toEqual({ id: 'r', marginPct: 0.5, key: tt });
+  });
+
+  it('reads no margin from a requirement that failed for a cause other than failing', () => {
+    // A complete centre whose one check carries a number, while its requirement item failed
+    // because its entry is not well formed: the number says nothing about the design.
+    const run = ran('tt', 'sized', 'complies', 0.5);
+    const malformed: ConditionRun = {
+      ...run,
+      result: {
+        ...(run.result as SheetResult),
+        items: [
+          {
+            kind: 'requirement',
+            path: [],
+            name: 'r',
+            status: 'failed',
+            cause: {
+              kind: 'not-read',
+              data: { why: 'field', where: 'r', message: 'x', entry: 'tolerance' },
+            },
+          },
+        ],
+      },
+    };
+    expect(isComplete(malformed.result!)).toBe(true);
+    const agg = aggregateConditionRuns([malformed]);
+    expect(agg.worst).toBeNull();
+    expect(agg.onLimit).toEqual([]);
+    expect(worstPointByCheck([malformed]).size).toBe(0);
+    // The same centre with its requirement ok gives the margin.
+    expect(aggregateConditionRuns([run]).worst).toEqual({ id: 'r', marginPct: 0.5, key: tt });
   });
 
   it('gives the sized design’s verdict and counts every other point by its held verdict', () => {
