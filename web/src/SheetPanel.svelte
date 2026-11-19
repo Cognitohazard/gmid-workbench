@@ -546,6 +546,9 @@
     if (!v) return [];
     const lines: Line[] = [...verdictText(v)];
     for (const f of v.failed) {
+      // An item inside a block is told in full in that block's card; here only the verdict line
+      // names it, linked to the card.
+      if (f.path.length) continue;
       const list = f.end === undefined ? items : ends.find((e) => e.name === f.end)?.items;
       const item = itemAt(list, f);
       if (item) lines.push(...describeItem(item, [], { end: f.end }).segments);
@@ -576,7 +579,14 @@
     return item !== undefined && !hasNumber(item);
   };
   /** The key a row on screen is found by, for a name in an item text that names it. */
-  const itemKey = (ref: ItemRef): string => `${ref.kind}:${ref.path.join('/')}:${ref.name}`;
+  const itemKey = (ref: ItemRef): string =>
+    ref.path.length ? `block:${ref.path.join('/')}` : `${ref.kind}::${ref.name}`;
+  /** The path of every block card the panel draws, nested blocks included. */
+  const blockPaths = (
+    blocks: readonly SheetBlockReport[] | undefined,
+    at: string[] = [],
+  ): string[][] =>
+    (blocks ?? []).flatMap((b) => [[...at, b.name], ...blockPaths(b.blocks, [...at, b.name])]);
   /** The items a name in a text can link to: the rows this panel draws for them. */
   const linkable = $derived(
     new Set([
@@ -585,6 +595,7 @@
         itemKey({ kind: engineSolved(p) ? 'search' : 'value', path: [], name: p.name }),
       ),
       ...(result?.checks ?? []).map((c) => itemKey({ kind: 'requirement', path: [], name: c.id })),
+      ...blockPaths(result?.blocks).map((path) => itemKey({ kind: 'sheet', path, name: '' })),
     ]),
   );
   /** Brings the row an item text names into view, and marks it for a moment. */
@@ -2029,7 +2040,12 @@
   {@const bv = c?.verdict?.verdict}
   {@const look = lookOf(bv)}
   {@const why = c ? blockLines(c, within) : []}
-  <div class="suse" data-verdict={bv ?? 'not-calculated'} data-block={within.join('.')}>
+  <div
+    class="suse"
+    data-verdict={bv ?? 'not-calculated'}
+    data-block={within.join('.')}
+    data-item={itemKey({ kind: 'sheet', path: within, name: '' })}
+  >
     <div class="suseh">
       <span class="vbadge {look.cls}">{look.glyph} {VERDICT_WORDS[bv ?? 'not-calculated']}</span>
       <b>{c?.name ?? block?.name}</b><i>{c?.title ?? block?.doc?.title}</i>
@@ -2084,12 +2100,6 @@
             >@ {biasStr(c.sizing.bias, c.sizing.assumed)}</span
           >{/if}
       </div>
-    {:else if c?.sizing?.outside?.length}
-      {#each c.sizing.outside as r}
-        <div class="perr beyond" title={CONTROL_HELP.beyondTable}>
-          beyond the table: {beyondText(r)} — not sized
-        </div>
-      {/each}
     {/if}
     {#if why.length}
       <div class="sblock" data-block-reason>
@@ -2279,12 +2289,6 @@
           {#if biasText}
             <span class="sbias" title={biasHelp(result.sizing?.assumed)}>@ {biasText}</span>
           {/if}
-        {:else if result.sizing.outside?.length}
-          {#each result.sizing.outside as r}
-            <span class="perr beyond" title={CONTROL_HELP.beyondTable}
-              >beyond the table: {beyondText(r)} — not sized</span
-            >
-          {/each}
         {/if}
         {@render biasCtl(cfg.givens, result.sizing, [])}
       {/if}

@@ -365,8 +365,9 @@ test('design sheet: two loaded devices sharing a label are each individually sel
     'data-verdict',
     'undetermined',
   );
+  // The block's card carries its device's own text, which names the sweep the table lacks.
   await expect(sp.locator('.suse', { hasText: 'cs' }).locator('[data-block-reason]')).toContainText(
-    'The table holds no sweep of vds.',
+    'vds',
   );
   await expect(sp.locator('.pwarn', { hasText: 'device "' })).toHaveCount(0);
 
@@ -406,9 +407,7 @@ test('design sheet: a table that lacks a sweep the sheet uses refuses the device
   await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
   await expect(sp.locator('[data-verdict-reason]')).toContainText('cannot be sized');
   await expect(sp.locator('.shead .bind')).toHaveCount(0);
-  await expect(sp.locator('[data-verdict-reason]')).toContainText(
-    'The table holds no sweep of vsb.',
-  );
+  await expect(sp.locator('[data-verdict-reason]')).toContainText('vsb');
   // The block under it has its source at its body, and still sizes.
   await expect(sp.locator('.suse', { hasText: 'cs' })).toHaveAttribute('data-verdict', 'feasible');
 
@@ -2281,10 +2280,10 @@ test('design sheet: a drain voltage beyond the table is not sized, and says what
   await vds.blur();
   await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
   await expect(sp.locator('.shead .bind')).toHaveCount(0);
-  const beyond = sp.locator('.shead .perr.beyond');
-  await expect(beyond).toHaveCount(1);
-  await expect(beyond).toContainText('beyond the table');
-  await expect(beyond).toContainText('1.2');
+  // The reason is the device's own text: what was asked and what the table holds.
+  const reason = sp.locator('[data-verdict-reason]');
+  await expect(reason).toContainText('1.5 V');
+  await expect(reason).toContainText('1.2 V');
   // What reads the device is shown as withheld, not as a number from another bias.
   await expect(sp.locator('.sval.v-none').first()).toBeVisible();
 
@@ -2292,7 +2291,7 @@ test('design sheet: a drain voltage beyond the table is not sized, and says what
   await vds.fill('0.6');
   await vds.blur();
   await expect(sp.locator('.shead .bind')).toContainText('W=');
-  await expect(sp.locator('.perr.beyond')).toHaveCount(0);
+  await expect(sp.locator('[data-verdict-reason]')).not.toContainText('1.5 V');
 
   expect(errors).toEqual([]);
 });

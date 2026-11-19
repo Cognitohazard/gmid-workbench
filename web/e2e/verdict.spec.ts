@@ -91,3 +91,27 @@ test('verdict reason: a name that names a row on the panel brings that row into 
   await link.click();
   await expect(sp.locator('[data-item="requirement::headroom"]')).toHaveClass(/sflash/);
 });
+
+// One place for each fact: an item that failed inside a block is told in full in that block's
+// card. Under the sheet's badge only the verdict line names it, and the name links to the card.
+test('verdict reason: a failed item of a block is told in its card, and the badge links to it', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'SC settling to OTA spec');
+  // A drain voltage the demo table does not hold: block in's device is outside its table.
+  const vds = sp.locator('.svar[data-param="vds_in"] .num');
+  await vds.fill('0.18');
+  await vds.blur();
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'undetermined');
+  await expect(sp.locator('[data-verdict-reason] p')).toHaveCount(1);
+  const card = sp.locator('.suse[data-block="in"]');
+  // The card holds the item's own lines, with what was asked and what the table holds.
+  await expect(card.locator('[data-block-reason]')).toContainText('0.18 V');
+  await expect(sp.locator('[data-verdict-reason]')).not.toContainText('0.18 V');
+  await sp.locator('[data-verdict-reason] [data-ref="block:in"]').first().click();
+  await expect(card).toHaveClass(/sflash/);
+});
