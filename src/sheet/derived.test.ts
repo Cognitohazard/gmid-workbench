@@ -25,6 +25,7 @@ import {
   namesOf,
   sweepable,
   type CheckResult,
+  type SheetBlock,
   type SheetBlockReport,
   type SheetDoc,
   type SheetResult,
@@ -1950,3 +1951,96 @@ describe('a block read in its own list names its part as its parent does', () =>
 function lineTexts(ls: readonly (readonly { text: string }[])[]): string[] {
   return ls.map((l) => l.map((x) => x.text).join(''));
 }
+
+describe('a block’s list is the run’s list under its path, so its verdict says what the sheet’s list says', () => {
+  const blockOf = (res: SheetResult, path: readonly string[]): SheetBlockReport | undefined => {
+    let blocks = res.blocks;
+    let b: SheetBlockReport | undefined;
+    for (const n of path) {
+      b = blocks?.find((x) => x.name === n);
+      blocks = b?.blocks;
+    }
+    return b;
+  };
+  const inBlock = (d: SheetDoc, name: string, f: (b: SheetBlock) => SheetBlock): SheetDoc => ({
+    ...d,
+    blocks: d.blocks?.map((b) => (b.name === name ? f(b) : b)),
+  });
+  const ota = sheet('otas/five-transistor-ota.json');
+  const refs = (res: SheetResult, path: string[]) =>
+    blockOf(res, path)?.verdict?.failed.map((f) => [f.kind, [...f.path, f.name].join('.')]);
+
+  it('a tolerance that is not a number on a block’s requirement', () => {
+    const doc = inBlock(ota, 'in', (b) => ({
+      ...b,
+      doc: {
+        ...b.doc!,
+        checks: b.doc!.checks.map((c) =>
+          c.id === 'feasible-inversion' ? { ...c, tolPct: 'x' as unknown as number } : c,
+        ),
+      },
+    }));
+    const res = runSheet(doc, table, undefined, REFS);
+    expect(
+      res.items?.find((i) => i.name === 'feasible-inversion' && i.path[0] === 'in')?.status,
+    ).toBe('failed');
+    expect(blockOf(res, ['in'])?.verdict?.verdict).toBe('undetermined');
+    expect(refs(res, ['in'])).toEqual([['requirement', 'feasible-inversion']]);
+  });
+
+  it('a block’s param that is not a number', () => {
+    const doc = inBlock(ota, 'in', (b) => ({
+      ...b,
+      doc: {
+        ...b.doc!,
+        params: b.doc!.params.map((p, k) =>
+          k === 0 ? { ...p, value: 'abc' as unknown as number } : p,
+        ),
+      },
+    }));
+    const res = runSheet(doc, table, undefined, REFS);
+    expect(blockOf(res, ['in'])?.verdict?.verdict).toBe('undetermined');
+    expect(refs(res, ['in'])).toEqual([['value', 'I_side']]);
+  });
+
+  it('a short and an unknown key in the placement of a part a block wires', () => {
+    const fd = resolvedSheet(sheet('multistage/fd-telescopic-ota.json'), REFS).doc;
+    for (const nodes of [
+      { d: 'm', g: 'm', s: 'm', b: 'gnd' },
+      { d: 'm', g: 'm', s: 'gnd', b: 'gnd', x: 'gnd' },
+    ]) {
+      const doc = inBlock(fd, 'cbn', (b) => ({
+        ...b,
+        doc: inBlock(b.doc!, 'base', (base) => ({ ...base, nodes })),
+      }));
+      const res = runSheet(doc, table);
+      expect(res.verdict?.failed.map((f) => [f.kind, f.path.join('.')])).toEqual([
+        ['sheet', 'cbn'],
+      ]);
+      const cbn = blockOf(res, ['cbn']);
+      expect(cbn?.items?.find((i) => i.kind === 'sheet' && !i.path.length)?.status).toBe('failed');
+      expect(cbn?.verdict?.verdict).toBe('undetermined');
+      expect(refs(res, ['cbn'])).toEqual([['sheet', '']]);
+    }
+  });
+
+  it('a block at a range end reads the held design’s verdict, never the design word', () => {
+    const runs = [
+      runSheet(sheet('otas/degenerated-differential-pair.json'), table, undefined, REFS),
+      runSheet(sheet('otas/gain-boosted-cascode-ota.json'), table, undefined, REFS),
+    ];
+    const words = new Set<string>();
+    for (const res of runs)
+      for (const e of res.rangeEnds ?? []) {
+        const walk = (bs: readonly SheetBlockReport[] | undefined): void => {
+          for (const b of bs ?? []) {
+            expect(b.verdict, `${e.name} ${b.name}`).toBeUndefined();
+            if (b.heldVerdict) words.add(b.heldVerdict.verdict);
+            walk(b.blocks);
+          }
+        };
+        walk(e.blocks);
+      }
+    expect([...words].sort()).toEqual(['compliant', 'non-compliant']);
+  });
+});

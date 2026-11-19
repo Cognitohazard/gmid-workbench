@@ -94,6 +94,7 @@ import {
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { failOn, solveFailureOf } from './derived';
 import {
+  blockLists,
   designVerdict,
   endVerdict,
   itemsOf,
@@ -1834,7 +1835,7 @@ function finishWiring(
         out = { ...out, feasible: false };
         failed = true;
       }
-      return withBlockVerdict(out, pending?.doc);
+      return out;
     });
     return { blocks, failed };
   };
@@ -1845,15 +1846,6 @@ function finishWiring(
     warnings: [...res.warnings, ...extra],
     ...(failed ? { feasible: false } : {}),
   };
-}
-
-/** A block's report with its verdict, read from its final items and its own document as the
- *  sheet's is; without one where the block was not calculated (its own sheet item is not ok). */
-function withBlockVerdict(report: SheetBlockReport, doc: SheetDoc | undefined): SheetBlockReport {
-  const { verdict: _old, ...rest } = report;
-  const own = report.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
-  if (!doc || !report.items || own?.status !== 'ok') return rest;
-  return { ...rest, verdict: designVerdict(doc, report.items) };
 }
 
 /** One node of a sheet tree as it is evaluated: its document, its table, how its children find
@@ -2423,10 +2415,14 @@ function evaluateNode(
   if (depth > 0) return solved;
   // A held run's result carries its held verdict, written by the function that writes a range
   // end's: a held centre and its ends are separate points, each read from its own list.
+  // Each block's own list is the run's list under its path, and its verdict is read from it: a
+  // design verdict where the run sizes it, the held design's where the run holds the hardware.
   const top = (r: SheetResult): SheetResult => {
-    if (opts.held !== true) return r;
+    const blocks = blockLists(doc, r.items, r.blocks, opts.held === true);
+    const withBlocks = blocks ? { ...r, blocks } : r;
+    if (opts.held !== true) return withBlocks;
     const heldVerdict = endVerdict(r.items, doc);
-    return heldVerdict ? { ...r, heldVerdict } : r;
+    return heldVerdict ? { ...withBlocks, heldVerdict } : withBlocks;
   };
   const heldGates = opts.held ? heldGateWarnings(doc) : [];
   const pinnedNote = pinnedWarnings(solved);

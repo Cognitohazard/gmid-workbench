@@ -431,4 +431,19 @@ group('the result of a held run', () => {
     // A run that is not held carries none.
     expect(base.heldVerdict).toBeUndefined();
   });
+
+  it('gives each block of a held run the held design’s verdict, and the design run the design’s', () => {
+    const doc = withoutRange(resolvedSheet(ota, REFS).doc);
+    const base = evaluateSheet(doc, table, undefined);
+    const res = evaluateSheet(holdHardware(doc, base).doc, table, undefined, { held: true });
+    expect(res.blocks?.length).toBeGreaterThan(0);
+    for (const b of res.blocks ?? []) {
+      expect(b.verdict, b.name).toBeUndefined();
+      expect(b.heldVerdict?.verdict, b.name).toBe('compliant');
+    }
+    for (const b of base.blocks ?? []) {
+      expect(b.heldVerdict, b.name).toBeUndefined();
+      expect(b.verdict?.verdict, b.name).toBe('feasible');
+    }
+  });
 });
