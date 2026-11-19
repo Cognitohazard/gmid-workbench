@@ -697,6 +697,11 @@ function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRe
 function aboutRef(doc: SheetDoc | undefined, w: QAWarning): ItemRef | undefined {
   const a = netlistOf(w);
   if (!a || !doc) return undefined;
+  // A placement that is not well formed is a finding of the netlist of the sheet that writes it: on
+  // that sheet's own item, its location less the last segment (`nodes` for the sheet's own device,
+  // the block's name for a part it composes). The part's own item is not failed by it.
+  if (a.problem === 'placement')
+    return { kind: 'sheet', path: (w.location ?? '').split('.').slice(0, -1), name: '' };
   // A selector the table contradicts is on its own item; where its value is not +1 or -1 that item
   // holds the finding that its entry is not well formed, and the contradiction is on the sheet.
   if (a.param) {

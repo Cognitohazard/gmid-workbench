@@ -748,8 +748,6 @@ export interface EndList {
   readonly items?: readonly Item[];
 }
 
-/** Whether a range end was not calculated because its own entry failed: its list is its one sheet
- *  item, failed. */
 /**
  * The sheet item of a range end's own list where the end's own entry is not well formed: the item
  * of kind sheet with no path, wherever it is in the list, failed with a finding of validation, or

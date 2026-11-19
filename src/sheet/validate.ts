@@ -7,7 +7,7 @@
 // answers need no device table, so they are structural. Resolving identifiers against
 // the live value set stays evaluateSheet's job. DOM-free.
 
-import type { QAWarning } from '../types';
+import type { LevelRefusal, QAWarning } from '../types';
 import { compileExpr } from '../derive';
 import { createEngine } from '../expr';
 import { BINDABLE, bindProblem } from '../device';
@@ -993,7 +993,35 @@ function provenanceProblems(
   admit: readonly RootClass[],
   cross: readonly (keyof ExprProvenance['crossings'])[],
 ): string[] {
-  const out: string[] = [];
+  return provenanceReasons(p, admit, cross).map(refusalText);
+}
+
+/** The reasons behind provenanceProblems, as data, in the order its messages give them. */
+function provenanceReasons(
+  p: ExprProvenance,
+  admit: readonly RootClass[],
+  cross: readonly (keyof ExprProvenance['crossings'])[],
+): LevelRefusal[] {
+  const out: LevelRefusal[] = [];
+  for (const cls of Object.keys(p.roots) as RootClass[])
+    if (!admit.includes(cls))
+      for (const name of p.roots[cls]) out.push({ reason: 'class', name, cls });
+  for (const name of p.unresolved) out.push({ reason: 'unresolved', name });
+  for (const c of p.cycles) out.push({ reason: 'cycle', via: c.via });
+  if (!cross.includes('device'))
+    for (const device of p.crossings.device) out.push({ reason: 'device', device });
+  if (!cross.includes('equation'))
+    for (const name of p.crossings.equation) out.push({ reason: 'equation', name });
+  if (!cross.includes('solved'))
+    for (const name of p.crossings.solved)
+      if (!p.roots.solved.includes(name)) out.push({ reason: 'solved-relation', name });
+  if (!cross.includes('analysis'))
+    for (const name of p.crossings.analysis) out.push({ reason: 'analysis', name });
+  return out;
+}
+
+/** The words of one reason, as the finding's message gives it. */
+function refusalText(r: LevelRefusal): string {
   const why: Record<RootClass, string> = {
     independent: 'is classed independent',
     assumed: 'is classed assumed — a typed guess held fixed becomes a fact',
@@ -1003,24 +1031,22 @@ function provenanceProblems(
       'derived; hold the gate wire at the hold expression instead',
     unclassified: 'carries no class — say whether it is independent',
   };
-  for (const cls of Object.keys(p.roots) as RootClass[])
-    if (!admit.includes(cls))
-      for (const n of p.roots[cls]) out.push(`it reads "${n}", which ${why[cls]}`);
-  for (const n of p.unresolved) out.push(`it reads "${n}", which names nothing on the sheet`);
-  for (const c of p.cycles) out.push(`its dependencies loop (${c.via.join(' → ')})`);
-  if (!cross.includes('device'))
-    for (const d of p.crossings.device)
-      out.push(
-        `it reads a quantity of ${deviceName(d)}, and a level derived from a device is never held`,
-      );
-  if (!cross.includes('equation'))
-    for (const e of p.crossings.equation) out.push(`it reads equation "${e}"`);
-  if (!cross.includes('solved'))
-    for (const q of p.crossings.solved)
-      if (!p.roots.solved.includes(q)) out.push(`it reads through the relation that solves "${q}"`);
-  if (!cross.includes('analysis'))
-    for (const a of p.crossings.analysis) out.push(`it reads analysis "${a}"`);
-  return out;
+  switch (r.reason) {
+    case 'class':
+      return `it reads "${r.name}", which ${why[r.cls]}`;
+    case 'unresolved':
+      return `it reads "${r.name}", which names nothing on the sheet`;
+    case 'cycle':
+      return `its dependencies loop (${r.via.join(' → ')})`;
+    case 'device':
+      return `it reads a quantity of ${deviceName(r.device)}, and a level derived from a device is never held`;
+    case 'equation':
+      return `it reads equation "${r.name}"`;
+    case 'solved-relation':
+      return `it reads through the relation that solves "${r.name}"`;
+    case 'analysis':
+      return `it reads analysis "${r.name}"`;
+  }
 }
 
 /** An expression with its whitespace removed — how a held level is compared with a hold. */
@@ -1050,7 +1076,7 @@ export function levelEligibility(
 ):
   | { kind: 'held' }
   | { kind: 'held-gate'; hold: string; device: string }
-  | { kind: 'refused'; problems: string[] } {
+  | { kind: 'refused'; problems: string[]; reasons: LevelRefusal[] } {
   const lv = levelAt(levelsOf(doc), level);
   // The device whose gate-source voltage the hold reads: a block's (`casc__vgs`), or the sheet's
   // own (`vgs`).
@@ -1059,8 +1085,10 @@ export function levelEligibility(
     const device = heldGateOf((lv as Level).doc, p);
     if (device) return { kind: 'held-gate', hold: p.name, device };
   }
-  const problems = provenanceProblems(exprProvenance(doc, level, expr), ['independent'], []);
-  return problems.length ? { kind: 'refused', problems } : { kind: 'held' };
+  const reasons = provenanceReasons(exprProvenance(doc, level, expr), ['independent'], []);
+  return reasons.length
+    ? { kind: 'refused', problems: reasons.map(refusalText), reasons }
+    : { kind: 'held' };
 }
 
 /**
@@ -1102,7 +1130,13 @@ function treeNodesProblems(doc: SheetDoc): QAWarning[] {
               `levels "${w}": "${e}" cannot hold the wire — ${verdict.problems.join('; ')}. A held ` +
               `level is stated by the designer: a number, or params classed independent`,
             location: 'levels',
-            about: { kind: 'netlist', problem: 'level-refused', wires: [w], level: e },
+            about: {
+              kind: 'netlist',
+              problem: 'level-refused',
+              wires: [w],
+              level: e,
+              refused: verdict.reasons,
+            },
           });
         else if (verdict.kind === 'held-gate') {
           // The hold keeps one device's gates: only that device's gate wires may be held at it —

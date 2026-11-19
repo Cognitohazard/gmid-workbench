@@ -2,7 +2,7 @@
 // code that produces a result writes data, never these sentences, so the app and a script read the
 // same words, and a change of wording is a change here alone.
 
-import type { NetlistAbout, OutsideTable, PlacementFault } from '../types';
+import type { LevelRefusal, NetlistAbout, OutsideTable, PlacementFault } from '../types';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
@@ -1230,9 +1230,14 @@ function netlistLines(n: NetlistAbout): Line[] {
         ? placementLines(n.placement, part)
         : [t`The wiring of ${part} is not well formed.`];
     case 'level-refused':
-      return [
-        t`The sheet gives wire ${wire} the level ${ex(n.level ?? '')}, but a level can read only numbers, specs and knobs.`,
-      ];
+      return n.refused?.length
+        ? [
+            t`The level ${ex(n.level ?? '')} cannot hold wire ${wire}.`,
+            ...n.refused.map(refusalLine),
+          ]
+        : [
+            t`The sheet gives wire ${wire} the level ${ex(n.level ?? '')}, but a level can read only numbers, specs and knobs.`,
+          ];
     case 'level-gate':
       return [
         t`Wire ${wire} cannot be held at ${ex(n.level ?? '')}, because that level holds only the gate of ${part}.`,
@@ -1243,6 +1248,38 @@ function netlistLines(n: NetlistAbout): Line[] {
         : [t`The netlist check reports a problem in the wiring of the sheet.`];
     case 'selector':
       return [t`The axis-sign selector ${nm(n.param ?? '')} does not match the table of ${part}.`];
+  }
+}
+
+/** One reason a level cannot hold a wire, from its data. */
+function refusalLine(r: LevelRefusal): Line {
+  switch (r.reason) {
+    case 'class':
+      switch (r.cls) {
+        case 'assumed':
+          return t`${nm(r.name)} is classed assumed, and a held level does not rest on a typed guess.`;
+        case 'solved':
+          return t`${nm(r.name)} is solved by the engine, so the level it sets is derived.`;
+        case 'held':
+          return t`${nm(r.name)} is the node under a gate that a hold solves again, so its wire is derived.`;
+        case 'unclassified':
+          return t`${nm(r.name)} carries no class, and a held level reads only params classed independent.`;
+        case 'independent':
+          return t`${nm(r.name)} is classed independent.`;
+      }
+      break;
+    case 'unresolved':
+      return t`${nm(r.name)} names nothing on the sheet.`;
+    case 'cycle':
+      return t`The dependencies of the level loop through ${andLines(r.via.map((v) => [nm(v)]))}.`;
+    case 'device':
+      return t`The level reads a quantity of ${partName(r.device)}, and a level derived from a device is never held.`;
+    case 'equation':
+      return t`The level reads equation ${nm(r.name)}, and a held level reads no equation.`;
+    case 'solved-relation':
+      return t`The level reads through the relation that solves ${nm(r.name)}.`;
+    case 'analysis':
+      return t`The level reads analysis ${nm(r.name)}.`;
   }
 }
 

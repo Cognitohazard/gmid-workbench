@@ -1291,7 +1291,9 @@ describe('a placement that is not well formed', () => {
       undefined,
       REFS,
     );
-    const own = res.items?.find((i) => i.kind === 'device' && i.path.length === 0);
+    // On the sheet's own item: a finding of its netlist. The device's own item is not failed by it.
+    expect(res.items?.find((i) => i.kind === 'device' && i.path.length === 0)?.status).toBe('ok');
+    const own = res.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
     const netlist =
       own?.status === 'failed' &&
       own.cause.kind === 'not-determined' &&
@@ -1344,9 +1346,7 @@ describe('the list of a range end', () => {
           path: [],
           name: '',
           status: 'withheld',
-          on: [
-            { kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' },
-          ],
+          on: [{ kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' }],
         },
       ]);
     }
@@ -1527,4 +1527,69 @@ describe('a range end whose own entry is not well formed, or gives no number', (
       expect(res.rangeEnds?.[0].verdict).toBeUndefined();
       expectSame(res);
     });
+});
+
+describe('a level that cannot hold a wire', () => {
+  it('says why, as validation found it', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      params: ota.params.map((p) => (p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p)),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const refused = res.warnings.flatMap((w) =>
+      w.about?.kind === 'netlist' && w.about.problem === 'level-refused' ? [w.about] : [],
+    );
+    expect(refused).toEqual([
+      expect.objectContaining({
+        wires: ['out'],
+        level: 'V_out_dc',
+        refused: [{ reason: 'class', name: 'V_out_dc', cls: 'assumed' }],
+      }),
+    ]);
+    expectSame(res);
+  });
+});
+
+describe('a wiring fault of a part', () => {
+  it('is a finding of the netlist of the sheet that wires it, on that sheet’s own item', () => {
+    const ota = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...ota,
+      blocks: ota.blocks?.map((b) =>
+        b.name === 'in' ? { ...b, nodes: { ...(b.nodes as object), x: 'gnd' } } : b,
+      ),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const item = (path: string[]): Item | undefined =>
+      res.items?.find((i) => i.kind === 'sheet' && i.path.join('.') === path.join('.'));
+    expect(item([])).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          netlist: [
+            {
+              problem: 'placement',
+              devices: ['in'],
+              placement: { fault: 'unknown-key', key: 'x' },
+            },
+          ],
+        },
+      },
+    });
+    expect(item(['in'])?.status).toBe('ok');
+    for (const e of res.rangeEnds ?? [])
+      expect(e.items).toEqual([
+        {
+          kind: 'sheet',
+          path: [],
+          name: '',
+          status: 'withheld',
+          on: [{ kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' }],
+        },
+      ]);
+    expectSame(res);
+  });
 });
