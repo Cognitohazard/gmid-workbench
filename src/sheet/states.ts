@@ -487,8 +487,7 @@ export const OPEN_RULINGS: { readonly equationOnly: DesignVerdict } = { equation
  *
  * "No solution (proved)" needs the relation shown to be monotonic in the unknown across the range,
  * and no check does that yet, so no search maps to it: a search over the circuit's own range with
- * no crossing, both ends read, is "no solution found (not proved)", undetermined. Today's result
- * fields still read it as the design failing, by one stated rule (legacyDesignFailure).
+ * no crossing, both ends read, is "no solution found (not proved)", undetermined.
  */
 export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boolean): Cause {
   // In a stated range, no solution there only where both its ends were read: a search that
@@ -502,25 +501,6 @@ export function noSolutionCause(data: SearchData & NoSolutionRead, endsRead: boo
     data: { ...data, endsRead, notProof: endsRead ? 'not-monotonic' : 'end-not-read' },
   };
 }
-
-/**
- * The one compatibility rule that keeps today's result fields where the cause has changed its
- * reading: a search over the circuit's own range that found no sign change, both ends read, is
- * read by today's fields (the solve outcome's design failure, a point's does-not-comply) as the
- * design failing, though its cause is "not proved".
- *
- * So for these cases one result holds two readings while this rule stands: the old fields say the
- * design does not comply, and the verdict derived from the items (verdictOf) says undetermined. No
- * reader may take the derived verdict until the readers move to it; when they do, this rule and
- * the design-failure test it serves are deleted together, and the tests that force such a search
- * change with them.
- */
-export const legacyDesignFailure = (c: Cause): boolean =>
-  c.kind === 'no-crossing' &&
-  c.data.set === undefined &&
-  c.data.range.from === 'wiring' &&
-  c.data.ended.kind === 'sign' &&
-  c.data.endsRead;
 
 /** The set a failed member of a set of searches was one of, where its cause records one. A limit
  *  of the calculations carries its set too, but as the set's own failure, not a member's. */

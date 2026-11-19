@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { runSheet, validateSheet } from './index';
 import { notACircuit, REFS, sheet, table } from './library.fixtures';
-import { designFailure, type SheetDoc, type SheetResult, type SheetVar } from './types';
+import type { SheetDoc, SheetResult, SheetVar } from './types';
 
 /** `doc` with the named param's min and max removed. */
 const unranged = (doc: SheetDoc, name: string): SheetDoc => ({
@@ -126,7 +126,8 @@ describe('a length that states no range', () => {
     const r = runSheet(bias(0.7), devBias);
     expect(r.feasible).toBe(false);
     expect(r.solve).toMatchObject({ kind: 'no-solution', unknown: 'L_d', from: 'table' });
-    expect(designFailure(r.solve)).toBe(false);
+    expect(r.point?.state).toBe('no-answer');
+    expect(r.verdict?.verdict).toBe('undetermined');
     expect(r.solve && 'message' in r.solve ? r.solve.message : '').toMatch(
       /No length the table holds reaches the target/,
     );

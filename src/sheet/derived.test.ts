@@ -7,7 +7,7 @@ import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { resolvedSheet } from './resolve';
 import { legacyFeasible, legacyPointState } from './derived';
-import { causeFits, legacyDesignFailure, setOf, verdictOf, type Cause, type Item } from './states';
+import { causeFits, setOf, verdictOf, type Cause, type Item } from './states';
 import { describe as describeItem, standardProblems } from './describe';
 import { FINDING_CAUSES } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -383,15 +383,6 @@ describe('today’s fields equal what the items give', () => {
       // Each case is a failure there: the design's, or the held run's at its range end.
       expect(res.feasible === false || res.rangeEnds?.[0]?.state === 'no-answer').toBe(true);
     });
-
-  it('over the tail pair at a common mode its tail node cannot reach', () => {
-    const tail = loadLibrary().find((s) => s.file === 'otas/differential-pair-tail.json')!.doc;
-    const res = runSheet(withParams(tail, { CM_dc: 1.75 }), table, undefined, REFS);
-    expectSame(res);
-    // Today's fields read the design as failing; the items read it as not proved.
-    expect(res.point?.state).toBe('does-not-comply');
-    expect(res.verdict?.verdict).toBe('undetermined');
-  });
 });
 
 describe('an item that gives no number', () => {
@@ -603,7 +594,6 @@ describe('a member of a set whose search failed where the others were held', () 
       data: { ...tail.cause.data, shown: 'monotonic' },
     };
     expect(verdictOf([{ ...tail, cause: proved }]).verdict).toBe('undetermined');
-    expect(legacyDesignFailure(tail.cause)).toBe(false);
   });
 });
 

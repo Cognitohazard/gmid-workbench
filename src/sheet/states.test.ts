@@ -14,7 +14,6 @@ import {
   failsCause,
   heldVerdictOf,
   noSolutionCause,
-  legacyDesignFailure,
   verdictOf,
   type NotReadData,
   type NoCrossingData,
@@ -218,8 +217,6 @@ group('whether a failed search is proved, decided in one place', () => {
   it('takes no crossing over the circuit range, both ends read, as not proved', () => {
     const c = noSolutionCause(over(wiring), true);
     expect(c).toMatchObject({ kind: 'no-crossing', data: { notProof: 'not-monotonic' } });
-    // Today's fields still read it as the design failing, by the one compatibility rule.
-    expect(legacyDesignFailure(c)).toBe(true);
     expect(
       verdictOf([{ kind: 'search', path: [], name: 'x', status: 'failed', cause: c }]).verdict,
     ).toBe('undetermined');
@@ -228,7 +225,6 @@ group('whether a failed search is proved, decided in one place', () => {
   it('takes it as not proved where an end was not read', () => {
     const c = noSolutionCause(over(wiring), false);
     expect(c).toMatchObject({ kind: 'no-crossing', data: { notProof: 'end-not-read' } });
-    expect(legacyDesignFailure(c)).toBe(false);
   });
 
   it('reads a range the author stated as none in that range', () => {

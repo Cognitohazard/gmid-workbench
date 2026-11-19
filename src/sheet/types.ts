@@ -1272,9 +1272,8 @@ export interface RangeEndReport {
    *   table (`outside`). `error` says which; the check outcomes it may carry were taken at a point
    *   that is not the one asked about, so nothing reads them as findings.
    *
-   * `does-not-comply` carries an `error` in one case: a solved wire finds no crossing anywhere the
-   * wiring lets it go, both ends read on the table (designFailure). That is a measured failure of
-   * the design, not a gap in the tool, though it leaves no check outcomes either.
+   * A solved wire that finds no crossing anywhere the wiring lets it go is `no-answer` like any
+   * other search that did not land: finding none is not shown to be no solution.
    */
   state: PointState;
   set: Record<string, number>;
@@ -1584,16 +1583,15 @@ export interface SheetResult {
  * `sheet-solve` error that says the same in words (`message`, verbatim).
  *  - `settled`: every solved param was found, and verified on the evaluation returned;
  *  - `no-solution`: the named unknown has no solution in `range`, the stretch actually searched;
- *    `from` says where its range came from and `because` what the search showed, which together
- *    decide whether the failure is a finding about the design (designFailure);
+ *    `from` says where its range came from and `because` what the search showed;
  *  - `not-settled`: the named unknowns did not settle, for the reason `why` gives;
  *  - `declaration-false`: a `hold` of the sheet does not hold where the design is sized — it does
  *    not evaluate, or it is a current balance that does not read zero — so the run has nothing to
  *    hold it at. No search failed here: the declaration itself is false at the design point.
  * Absent on a run with no solved param to find whose holds, if any, all evaluated. Where several
  * searches fail — a search goes on with the params that read nothing an earlier one did not find —
- * it is the first of them that is a finding about the design (designFailure), and else the last,
- * as the warnings list them; a false `hold`, raised after the searches, is then the last.
+ * it is the last of them, as the warnings list them; a false `hold`, raised after the searches, is
+ * then the last.
  */
 export type SolveOutcome =
   | { kind: 'settled' }
@@ -1667,18 +1665,6 @@ export interface SolveRange {
   /** The same, as one sentence — the `sheet-range` note the result carries for a wire's level. */
   note: string;
 }
-
-/**
- * Whether a solve failure is a finding about the design rather than about the search: a single
- * param found no crossing anywhere in the range the wiring puts its wire in, and both ends of that
- * search read the design (`endsRead`) — the relation does not reach its target anywhere the circuit
- * can put the wire. A design point that ends so is infeasible and does not comply; a held point
- * does not comply. Every other failure — a range that is the author's alone, a step, an
- * undetermined relation, an end read beyond the table or stepped in past a stretch that does not
- * evaluate, a set that did not settle — is no answer.
- */
-export const designFailure = (o: SolveOutcome | undefined): o is SolveFailure =>
-  o?.kind === 'no-solution' && o.from === 'wiring' && o.because === 'no-crossing' && o.endsRead;
 
 /**
  * Why solved params did not settle:
