@@ -133,6 +133,9 @@ export interface EntryAbout {
   readonly value?: unknown;
   readonly key?: string;
   readonly problem: EntryProblem;
+  /** For a field that marks a param the engine solves (problem `solved`): the relation that solves
+   *  it, a design constraint or a solve-for. */
+  readonly relation?: 'designConstraint' | 'solveFor';
 }
 
 /** What is wrong with one field: not a number; a name that is not the entry it must name; a value

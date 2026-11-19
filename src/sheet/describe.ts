@@ -1040,7 +1040,7 @@ function notReadText(d: NotReadData): Line[] {
   // A block that refers to a sheet the library does not hold: the block and the reference.
   if (d.why === 'reference' && where) return [reason];
   if (d.why === 'field' && d.entry && where)
-    return [(d.field && fieldLine(d.entry, where, d.field)) || entryLine(d.entry, where)];
+    return (d.field && fieldLines(d.entry, where, d.field)) || [entryLine(d.entry, where)];
   const reads =
     d.why === 'format'
       ? [t`This app reads format version ${String(FORMAT_VERSION)} and sheets with no version.`]
@@ -1064,6 +1064,28 @@ const PARAM_FIELD: Readonly<Record<string, string>> = {
   min: 'minimum',
   max: 'maximum',
 };
+
+/** The lines of one field of an entry that is not well formed: a class on a param the engine solves
+ *  by its design constraint names the conflict and its fix; any other field gives its one line. */
+function fieldLines(
+  entry: NonNullable<NotReadData['entry']>,
+  where: string,
+  f: NonNullable<NotReadData['field']>,
+): Line[] | undefined {
+  if (
+    entry === 'param' &&
+    f.name === 'class' &&
+    f.problem === 'solved' &&
+    f.relation === 'designConstraint' &&
+    typeof f.value === 'string'
+  )
+    return [
+      t`${nm(where)} is marked ${f.value} and also has a constraint.`,
+      t`Remove the mark or the constraint.`,
+    ];
+  const line = fieldLine(entry, where, f);
+  return line && [line];
+}
 
 /** What is wrong with one field of an entry, where the finding says which field and what it holds;
  *  undefined where no sentence says this field's problem, so the entry's general line stands. */
@@ -1413,6 +1435,11 @@ const SYNTAX_REASONS: readonly (readonly [RegExp, Line])[] = [
   [/^Expected expression after/, t`An operator has nothing after it.`],
   [/^Variable names cannot start with a number/, t`A name starts with a digit.`],
 ];
+/** Whether a syntax error's position is past the expression's last character: the parser ran out
+ *  of text, so no character of it is at fault. */
+const atEnd = (x: { at?: number; expression: string }): boolean =>
+  x.at !== undefined && x.at >= x.expression.trimEnd().length;
+
 const syntaxReason = (problem: string): Line | undefined =>
   SYNTAX_REASONS.find(([re]) => re.test(problem))?.[1];
 
@@ -1490,7 +1517,11 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     return [
       t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}, which has a syntax error.`,
       ...(d.syntax?.at !== undefined
-        ? [t`The error is at character ${String(d.syntax.at + 1)}.`]
+        ? [
+            atEnd(d.syntax)
+              ? t`The error is at the end of the expression.`
+              : t`The error is at character ${String(d.syntax.at + 1)}.`,
+          ]
         : []),
       ...(why ? [why] : []),
     ];
@@ -1541,11 +1572,12 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       const why = d.syntax ? syntaxReason(d.syntax.problem) : undefined;
       return [
         head,
-        d.syntax?.at !== undefined
+        d.syntax?.at !== undefined && !atEnd(d.syntax)
           ? t`${subject} has a syntax error at character ${String(d.syntax.at + 1)} of ${ex(d.syntax.expression)}.`
           : d.syntax
             ? t`${subject} has a syntax error in ${ex(d.syntax.expression)}.`
             : t`${subject} has a syntax error.`,
+        ...(d.syntax && atEnd(d.syntax) ? [t`The error is at the end of the expression.`] : []),
         ...(why ? [why] : []),
       ];
     }
