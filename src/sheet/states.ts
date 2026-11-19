@@ -44,7 +44,7 @@ export interface NotReadData {
  *  it marks as assumed. `names` are the params or wires involved. */
 /** A read beyond a device's table, with the value on the sheet that sets the quantity it asked
  *  for, where that is one value the designer types. */
-export type OutsideTableData = OutsideTable & { readonly set?: string };
+export type OutsideTableData = OutsideTable & { readonly setBy?: string };
 
 export interface NotDeterminedData {
   readonly why:

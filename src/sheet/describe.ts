@@ -1104,7 +1104,7 @@ function outsideTableText(d: OutsideTableData): Line[] {
   return [
     t`${partName(d.device)} asks for a ${w.one} of ${quantityText(d.asked, w.unit)}.`,
     t`The table holds ${w.many} ${spanText(lo, hi, w.unit)}.`,
-    ...(d.set ? [t`Change ${nm(d.set)}, or load a table that holds this ${w.one}.`] : []),
+    ...(d.setBy ? [t`Change ${nm(d.setBy)}, or load a table that holds this ${w.one}.`] : []),
   ];
 }
 

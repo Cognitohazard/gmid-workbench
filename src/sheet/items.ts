@@ -497,8 +497,8 @@ const namesIn = (expr: string): string[] => [...namesOf(expr)];
 function deviceCause(s: SizingReport | undefined, doc: SheetDoc): Cause {
   if (s?.outside?.length) {
     const o = s.outside[0];
-    const set = typedSetter(doc, o.quantity);
-    return { kind: 'outside-table', data: set ? { ...o, set } : o };
+    const setBy = typedSetter(doc, o.quantity);
+    return { kind: 'outside-table', data: setBy ? { ...o, setBy } : o };
   }
   if (s?.needs?.length)
     return {
