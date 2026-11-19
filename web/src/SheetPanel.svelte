@@ -958,13 +958,15 @@
       : undefined,
   );
   const sweepRun = $derived(sweepKey && runs.find((r) => sameCondition(r.key, sweepKey)));
-  /** Whether there is a design to sweep: one sized at the chart's condition that was evaluated
-   *  there, or — when it is held — one sized at the nominal condition that was evaluated, and held
+  /** Whether there is a design to sweep: a run at the chart's condition (refused runs have none),
+   *  or — when it is held — one sized at the nominal condition that was evaluated, and held
    *  here far enough to have run. A held design that fails here still sweeps: along the knob it
    *  may come back. */
   const sweepReady = $derived.by((): boolean => {
     if (!sweepRun) return false;
-    if (!sweepBase) return sweepRun.state === 'evaluated';
+    // Each sample of a sweep sizes its own design, so a run that exists — one whose own search
+    // failed included — can be swept; only a refused run, which has no result, cannot.
+    if (!sweepBase) return sweepRun.result !== undefined;
     const base = sweepBase;
     const sized = runs.find((r) => sameCondition(r.key, base));
     return sized?.state === 'evaluated' && sweepRun.result !== undefined;
@@ -1031,7 +1033,8 @@
   $effect(() => {
     ask(
       'sweep2',
-      twoD && evaluated && refKey
+      // Each cell sizes its own design: the map needs a run that exists, not a complete one.
+      twoD && result !== undefined && refKey
         ? {
             kind: 'sweep2',
             doc: rr.doc,

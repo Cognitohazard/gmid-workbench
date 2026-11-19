@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { loadDemo, loadDemoNoVsb, pickSheet } from './helpers';
 
 const SCREENS = 'e2e/__screens__';
@@ -2057,6 +2057,49 @@ test('copy results: the pasted numbers carry the verdict and what they rest on',
   expect(values.every((l) => l.split('\t').length === 2)).toBe(true);
 });
 
+// `x` is searched in [0, 1] for 2x + 1 to reach 50: there is no crossing. `y` and `z` read it,
+// and so does the check `zcap`; `u` and the check `upos` read neither. `goal` and `Ib` are given
+// ranges so they can be swept: below a goal of 3 the search lands.
+const FAILED_SEARCH = {
+  title: 'Failed search',
+  polarity: 'n',
+  formatVersion: 2,
+  params: [
+    { name: 'L', value: 5e-7 },
+    { name: 'Ib', value: 1e-5, min: 1e-6, max: 1e-4 },
+    { name: 'goal', value: 50, min: 1, max: 60 },
+    { name: 'x', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'y', rhs: 'goal' } },
+  ],
+  givens: { L: 'L', id: 'Ib', gm_id: '10', vds: '0.9' },
+  nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
+  levels: { out: '0.9' },
+  ports: ['in'],
+  equations: [
+    { name: 'y', expr: '2*x + 1' },
+    { name: 'z', expr: 'y*3' },
+    { name: 'u', expr: 'Ib*2' },
+  ],
+  checks: [
+    { id: 'zcap', kind: 'spec', lhs: 'z', op: '<=', rhs: '1000' },
+    { id: 'upos', kind: 'spec', lhs: 'u', op: '>=', rhs: '0' },
+  ],
+};
+
+/** Loads the failed-search sheet into a new panel and returns the panel. */
+async function failedSearchPanel(page: Page) {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.locator('.load input[type=file]').setInputFiles({
+    name: 'failed-search.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(FAILED_SEARCH)),
+  });
+  await page.locator('button.btn', { hasText: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'Failed search');
+  return sp;
+}
+
 test('design sheet: a solved param whose search fails shows no number, nor does what reads it', async ({
   page,
 }) => {
@@ -2067,37 +2110,10 @@ test('design sheet: a solved param whose search fails shows no number, nor does 
   await page.goto('/');
   await loadDemo(page);
 
-  // `x` is searched in [0, 1] for 2x + 1 to reach 50: there is no crossing. `y` and `z` read it,
-  // and so does the check `zcap`; `u` and the check `upos` read neither.
   await page.locator('.load input[type=file]').setInputFiles({
     name: 'failed-search.json',
     mimeType: 'application/json',
-    buffer: Buffer.from(
-      JSON.stringify({
-        title: 'Failed search',
-        polarity: 'n',
-        formatVersion: 2,
-        params: [
-          { name: 'L', value: 5e-7 },
-          { name: 'Ib', value: 1e-5 },
-          { name: 'goal', value: 50 },
-          { name: 'x', value: 0.5, min: 0, max: 1, designConstraint: { lhs: 'y', rhs: 'goal' } },
-        ],
-        givens: { L: 'L', id: 'Ib', gm_id: '10', vds: '0.9' },
-        nodes: { d: 'out', g: 'in', s: 'gnd', b: 'gnd' },
-        levels: { out: '0.9' },
-        ports: ['in'],
-        equations: [
-          { name: 'y', expr: '2*x + 1' },
-          { name: 'z', expr: 'y*3' },
-          { name: 'u', expr: 'Ib*2' },
-        ],
-        checks: [
-          { id: 'zcap', kind: 'spec', lhs: 'z', op: '<=', rhs: '1000' },
-          { id: 'upos', kind: 'spec', lhs: 'u', op: '>=', rhs: '0' },
-        ],
-      }),
-    ),
+    buffer: Buffer.from(JSON.stringify(FAILED_SEARCH)),
   });
 
   await page.locator('button.btn', { hasText: '+ sheet' }).click();
@@ -2115,6 +2131,21 @@ test('design sheet: a solved param whose search fails shows no number, nor does 
   await expect(rows).toHaveText(['withheld', 'withheld', /^\d/]);
 
   expect(errors).toEqual([]);
+});
+
+test('design sheet: a run whose own search failed is still swept and mapped, each sample its own design', async ({
+  page,
+}) => {
+  const sp = await failedSearchPanel(page);
+  await expect(sp.locator('[data-param="x"] input.num')).toHaveValue('—');
+  // Each sample sizes its own design, so the failed search at the design point does not stop
+  // the sweep: the chart is drawn, and nothing says there is nothing to sweep.
+  await sp.locator('.swsel select').selectOption('goal');
+  await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 30_000 });
+  await expect(sp.getByText('nothing to sweep')).toHaveCount(0);
+  // The same for the map of two params.
+  await sp.locator('.swsel2 select').selectOption('Ib');
+  await expect(sp.locator('.smapc')).toBeVisible({ timeout: 30_000 });
 });
 
 test('design sheet: a sweep across the end of the table says where the table ends, on the line and on the map', async ({
