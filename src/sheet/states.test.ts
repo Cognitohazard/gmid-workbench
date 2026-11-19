@@ -1235,7 +1235,7 @@ group('the texts the audit of the item data asked for', () => {
     expect(entry('range-end', 'cm-lo')).toEqual(['Range end cm-lo is not well formed.']);
   });
 
-  it('gives a stepped end the digits that tell it from the end of the range', () => {
+  it('gives an end stepped in by more than a thousandth of the range its own line, and none to a smaller step', () => {
     const d: NoCrossingData = {
       ...search({
         unit: 'V',
@@ -1255,8 +1255,28 @@ group('the texts the audit of the item data asked for', () => {
       endsRead: false,
     };
     const lines = describe(failed('search', 'x', { kind: 'no-crossing', data: d })).lines;
-    expect(lines).toContain('The engine searched it from 0 V to 0.898 V.');
+    // A step of 2 mV in a range of 0.9 V is more than a thousandth of it: its own line, with the
+    // digits that tell it from the range end, and no line of the stretch searched to repeat it.
     expect(lines.some((l) => l.startsWith('Above 0.898 V,'))).toBe(true);
+    expect(lines.some((l) => l.startsWith('The engine searched it'))).toBe(false);
+    // A step of less than a thousandth of the range reads as the range end, with no line.
+    const tiny: NoCrossingData = {
+      ...d,
+      ends: [
+        { x: 4.29e-7, lhs: 1, rhs: 2, stepped: 'gives no number' },
+        { x: 0.8999, lhs: 1.5, rhs: 2, stepped: 'gives no number' },
+      ],
+    };
+    const t2 = describe(failed('search', 'x', { kind: 'no-crossing', data: tiny })).lines;
+    expect(t2.some((l) => /^(Above|Below)/.test(l))).toBe(false);
+    expect(t2).toContain(
+      'The engine searched the full physical range of wire vdd, from 0 V to 0.9 V.'.replace(
+        'wire vdd',
+        'x',
+      ),
+    );
+    for (const l of describe(failed('search', 'x', { kind: 'no-crossing', data: tiny })).segments)
+      expect(standardProblems(l)).toEqual([]);
   });
 
   it('names an operator that no entry lists, and does not stop', () => {
@@ -1294,22 +1314,41 @@ group('the texts that name the value a field holds', () => {
       ],
       [
         field('tolerance', 'eq', { name: 'tolPct', value: 'x', problem: 'not-a-number' }),
-        'The engine cannot read the tolerance of check eq, because x is not a number of zero or more.',
+        'The engine cannot read the tolerance of check eq, because its value x is not a number.',
       ],
       [
         field('range-end', 'cm-lo', { name: 'set', key: 'NOPE', problem: 'unknown-name' }),
-        'Range end cm-lo sets NOPE, which is not a value of this sheet.',
+        'Range end cm-lo sets NOPE, which is not an input of this sheet.',
       ],
       [
         field('block', 'tail', { name: 'params', key: 'nope', problem: 'unknown-name' }),
-        'Block tail sets nope, and its sheet has no value of that name.',
+        'Block tail sets nope, but its sheet has no input of that name.',
       ],
       [
         field('check', 'gain-spec', { name: 'op', value: '>>', problem: 'operator' }),
         'The engine cannot read check gain-spec, because >> is not an operator that it knows.',
       ],
     ];
+    cases.push([
+      field('tolerance', 'eq', { name: 'tolPct', value: -5, problem: 'not-a-number' }),
+      'The tolerance of check eq is −5 %, and a tolerance must be zero or more.',
+    ]);
     for (const [lines, want] of cases) expect(lines).toEqual([want]);
+    // The value as the sheet writes it is a segment of its own, set apart from the words.
+    const seg = describe(
+      failed('value', 'CL', {
+        kind: 'not-read',
+        data: {
+          why: 'field',
+          where: 'CL',
+          message: '',
+          entry: 'param',
+          field: { name: 'value', value: 'text', problem: 'not-a-number' },
+        },
+      }),
+    ).segments[0];
+    expect(seg.find((x) => x.text === 'text')?.kind).toBe('value');
+    for (const [lines] of cases) expect(lines.flatMap((l) => standardProblems(l))).toEqual([]);
     expect(
       field('block', 'bias', { name: 'ref', value: 'nope/nope', problem: 'no-sheet' }, 'reference'),
     ).toContain(
@@ -1326,10 +1365,39 @@ group('the texts that name the value a field holds', () => {
         }),
       ).lines.slice(1);
     expect(net({ problem: 'level-refused', wires: ['vinp'], level: 'CM_dc + V_tail' })).toEqual([
-      'Wire vinp cannot be held at CM_dc + V_tail, because a level reads only numbers and values classed independent.',
+      'The sheet gives wire vinp the level CM_dc + V_tail, but a level can read only numbers, specs and knobs.',
     ]);
     expect(net({ problem: 'level-gate', wires: ['x'], devices: ['ld'], level: 'vg' })).toEqual([
       'Wire x cannot be held at vg, because that level holds only the gate of part ld.',
+    ]);
+  });
+});
+
+group('the message standard reads bracket as the search’s word only', () => {
+  it('flags a bracket, and not a square bracket', () => {
+    expect(standardProblems('The engine widened the bracket.')).toContain('a word of the code');
+    expect(standardProblems('A square bracket is not closed.')).toEqual([]);
+  });
+});
+
+group('findings of the netlist check that say the same thing', () => {
+  it('give their sentence once', () => {
+    const i = failed('sheet', '', {
+      kind: 'not-determined',
+      data: {
+        why: 'netlist',
+        names: ['tail'],
+        message: '',
+        netlist: [
+          { problem: 'placement', devices: ['tail'] },
+          { problem: 'placement', devices: ['tail'] },
+          { problem: 'placement', devices: ['tail'] },
+        ],
+      },
+    });
+    expect(describe(i).lines).toEqual([
+      'The statements of the sheet do not determine one design.',
+      'The wiring of part tail is not well formed.',
     ]);
   });
 });

@@ -22,6 +22,7 @@ import {
 } from './types';
 import { loadLibrary, sheet, table, REFS } from './library.fixtures';
 import { ekvTable } from '../demo/ekv.fixtures';
+import type { DeviceTable } from '../types';
 
 const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
 
@@ -164,6 +165,47 @@ const own = (sign: number, vds: string, vsb: string, rest: Partial<SheetDoc> = {
   equations: [],
   checks: [],
   ...rest,
+});
+
+/** Every line of every item of a run, the blocks' and the range ends' lists included, that breaks
+ *  the message standard, with the line. */
+function textProblems(res: SheetResult): string[] {
+  const all: Item[] = [...(res.items ?? [])];
+  const walk = (bs: readonly SheetBlockReport[] | undefined): void => {
+    for (const b of bs ?? []) {
+      all.push(...(b.items ?? []));
+      walk(b.blocks);
+    }
+  };
+  walk(res.blocks);
+  for (const e of res.rangeEnds ?? []) all.push(...(e.items ?? []));
+  return all.flatMap((i) =>
+    describeItem(i).segments.flatMap((l) =>
+      standardProblems(l).map((p) => `${p}: ${l.map((x) => x.text).join('')}`),
+    ),
+  );
+}
+
+describe('every text the library gives on each device reads to the message standard', () => {
+  // The library table, the EKV table and the simple test device read the sheets differently:
+  // a search steps in at a different edge on each, so each gives texts the others do not.
+  const devices: [string, DeviceTable][] = [
+    ['the EKV table', ekvTable()],
+    ['the simple test device', generateDemoDevice()],
+  ];
+  for (const [name, device] of devices)
+    it(`on ${name}, at the defaults and at each sweepable parameter’s ends`, () => {
+      const found: string[] = [];
+      for (const { file, doc } of loadLibrary()) {
+        const cases: Record<string, number>[] = [{}];
+        for (const p of doc.params)
+          if (sweepable(p)) cases.push({ [p.name]: p.min }, { [p.name]: p.max });
+        for (const over of cases)
+          for (const p of textProblems(runSheet(withParams(doc, over), device, undefined, REFS)))
+            found.push(`${file} ${JSON.stringify(over)} ${p}`);
+      }
+      expect([...new Set(found)]).toEqual([]);
+    }, 600_000);
 });
 
 describe('today’s fields equal what the items give', () => {
@@ -567,10 +609,11 @@ describe('the texts of a search that stopped short, and of a block in its own li
     const s = res.items?.find((i) => i.kind === 'search' && i.status === 'failed');
     const lines = s ? describeItem(s).lines : [];
     expect(lines).toContain('The physical range of wire tail is from 0 V to 0.95 V.');
-    expect(lines).toContain('The engine searched it from 0 V to 0.523 V.');
     expect(lines).toContain('Above 0.523 V, part in is outside its table.');
-    expect(lines).toContain('CM_in is 0.567 V at 0 V and 1.2 V at 0.523 V.');
-    expect(lines.some((l) => /full physical range|the high end/.test(l))).toBe(false);
+    expect(lines).toContain('CM_in is 0.567 V at the low end and 1.2 V at 0.523 V.');
+    expect(lines.some((l) => /full physical range|the high end|engine searched it/.test(l))).toBe(
+      false,
+    );
   });
 
   it('names the block, in its own list, as waiting on its parent sheet', () => {

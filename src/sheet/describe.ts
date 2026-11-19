@@ -373,7 +373,9 @@ export function causeMessage(c: Cause): string {
 /** One piece of a line: the engine's own words, a name the sheet writes, or an expression the
  *  sheet writes. */
 export interface Segment {
-  readonly kind: 'text' | 'name' | 'expr';
+  /** `value`: a value as the sheet writes it (a number, a word, a reference), set apart from the
+   *  words of the sentence. */
+  readonly kind: 'text' | 'name' | 'expr' | 'value';
   readonly text: string;
   /** For a name that names an item of the result: that item, so a reader can link to it. */
   readonly ref?: ItemRef;
@@ -462,8 +464,9 @@ export function standardProblems(line: string | Line): string[] {
   has(/\([^)]*\s[^)]*\)/, 'a bracketed aside');
   has(/\s[—–]\s|\s-\s/, 'a dash clause');
   has(/\w__\w/, 'a name in the code spelling');
+  // "bracket" is the search's word; a square bracket is the reader's.
   has(
-    /\b(lhs|rhs|givens|param|override|probe|bracket|clamp|crossing|finite|resolve)\b/,
+    /\b(lhs|rhs|givens|param|override|probe|clamp|crossing|finite|resolve)\b|(?<!square )\bbracket\b/,
     'a word of the code',
   );
   has(/\[[^\]]*,[^\]]*\]/, 'a range in square brackets');
@@ -533,14 +536,14 @@ const quantityDigits = (x: number, unit: string | undefined, digits: number): st
   return formatQuantity(x, unit, digits);
 };
 
-/** `x` with as many more digits as it takes to read apart from `from`, where the two differ but
- *  round to the same text: an end the search stepped in from by less than the rounding. */
+/** `x` with one more digit where three read it the same as `from`: an end the search stepped in
+ *  from by less than the rounding. Four at most, which the message standard allows. */
 const apartText = (x: number, from: number, unit?: string): string => {
-  for (let digits = 3; digits <= 6; digits++) {
+  for (let digits = 3; digits <= 4; digits++) {
     const a = quantityText(x, unit, digits);
     if (x === from || a !== quantityText(from, unit, digits)) return a;
   }
-  return quantityText(x, unit, 6);
+  return quantityText(x, unit, 4);
 };
 
 /** The SI prefix of each engineering group a range is quoted in. */
@@ -711,7 +714,20 @@ function relationLine(d: SearchData): Line[] {
 }
 
 /** Whether a search stepped in from an end of its range, so it did not read the whole of it. */
-const steppedIn = (d: NoSolutionRead): boolean => d.ends.some((e) => e.stepped !== undefined);
+/** Whether the search stepped end `k` in from the range by more than a thousandth of the range: a
+ *  step that small sits at the numerical edge of the range, says nothing a designer can use, and
+ *  reads as the range end. The data keep the true numbers. */
+const farStep = (d: SearchData & NoSolutionRead, k: 0 | 1): boolean => {
+  const e = d.ends[k];
+  if (e.stepped === undefined) return false;
+  const { span } = rangeGiven(d);
+  return (
+    Math.abs(e.x - span[k]) > 1e-3 * Math.abs(span[1] - span[0]) &&
+    quantityText(e.x, d.unit, 4) !== quantityText(span[k], d.unit, 4)
+  );
+};
+
+const steppedIn = (d: SearchData & NoSolutionRead): boolean => farStep(d, 0) || farStep(d, 1);
 
 /** The range a failed search was given, and how the reader names it. */
 function rangeGiven(d: SearchData): { span: [number, number]; what: Line } {
@@ -743,17 +759,11 @@ function searchedLines(d: SearchData & NoSolutionRead): Line[] {
           : t`The engine searched the full physical range of ${unknownName(d)}, ${range}.`
         : t`The engine searched ${what}, ${range}.`,
     ];
-  const searched = spanText(d.ends[0].x, d.ends[1].x, d.unit);
-  const lines: Line[] = [
-    t`${what} is ${range}.`,
-    // Where the rounding reads the stretch searched as the range itself, each end with the digits
-    // that tell it apart.
-    searched === range
-      ? t`The engine searched it from ${apartText(d.ends[0].x, span[0], d.unit)} to ${apartText(d.ends[1].x, span[1], d.unit)}.`
-      : t`The engine searched it ${searched}.`,
-  ];
+  // Each end stepped in far enough to matter has its own line, which says where the search stopped;
+  // a line of the stretch searched would repeat them.
+  const lines: Line[] = [t`${what} is ${range}.`];
   d.ends.forEach((e, k) => {
-    if (e.stepped === undefined) return;
+    if (!farStep(d, k as 0 | 1)) return;
     const past = `${k === 0 ? 'Below' : 'Above'} ${apartText(e.x, span[k], d.unit)}`;
     lines.push(
       e.steppedOutside
@@ -773,10 +783,15 @@ function endValues(
   b: number,
   unit?: string,
 ): Line {
-  const [lo, hi] = d.ends;
-  return steppedIn(d)
-    ? t`${side} is ${quantityText(a, unit)} at ${quantityText(lo.x, d.unit)} and ${quantityText(b, unit)} at ${quantityText(hi.x, d.unit)}.`
-    : t`${side} is ${quantityText(a, unit)} at the low end and ${quantityText(b, unit)} at the high end.`;
+  const { span } = rangeGiven(d);
+  // An end the search stepped in from far enough to matter, by where it stopped; otherwise by name.
+  const at = (k: 0 | 1): string =>
+    farStep(d, k)
+      ? `at ${apartText(d.ends[k].x, span[k], d.unit)}`
+      : k === 0
+        ? 'at the low end'
+        : 'at the high end';
+  return t`${side} is ${quantityText(a, unit)} ${at(0)} and ${quantityText(b, unit)} ${at(1)}.`;
 }
 
 /** The lines every failed search gives: what has no solution, the relation where its sides are
@@ -993,7 +1008,7 @@ function notReadText(d: NotReadData): Line[] {
         : t`The file is not in a sheet format that this app reads.`
       : d.why === 'reference'
         ? where && d.field?.value !== undefined
-          ? t`Block ${nm(where)} refers to the sheet ${nm(writtenValue(d.field.value))}, and the library holds no sheet of that name.`
+          ? t`Block ${nm(where)} refers to the sheet ${val(d.field.value)}, and the library holds no sheet of that name.`
           : where
             ? t`Block ${nm(where)} refers to a sheet, and the library holds no sheet of that name.`
             : t`The sheet refers to a sheet, and the library holds no sheet of that name.`
@@ -1019,6 +1034,9 @@ function notReadText(d: NotReadData): Line[] {
 const writtenValue = (v: unknown): string =>
   typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v));
 
+/** A value as the sheet writes it, as a segment set apart from the words of the sentence. */
+const val = (v: unknown): Segment => ({ kind: 'value', text: writtenValue(v) });
+
 /** The words for a field a param holds. */
 const PARAM_FIELD: Readonly<Record<string, string>> = {
   value: 'value',
@@ -1035,14 +1053,17 @@ function fieldLine(
 ): Line | undefined {
   const n = nm(where);
   const has = f.value !== undefined;
-  const v = nm(writtenValue(f.value));
+  const v = val(f.value);
   const key = nm(f.key ?? '');
   switch (f.problem) {
     case 'not-a-number':
-      if (entry === 'tolerance')
-        return has
-          ? t`The engine cannot read the tolerance of check ${n}, because ${v} is not a number of zero or more.`
-          : undefined;
+      if (entry === 'tolerance') {
+        if (!has) return undefined;
+        // A number below zero: what it is, and what a tolerance must be. Anything else: not a number.
+        return typeof f.value === 'number' && Number.isFinite(f.value)
+          ? t`The tolerance of check ${n} is ${quantityText(f.value)} %, and a tolerance must be zero or more.`
+          : t`The engine cannot read the tolerance of check ${n}, because its value ${v} is not a number.`;
+      }
       if (entry === 'param')
         return has
           ? t`The engine cannot read ${n}, because its ${PARAM_FIELD[f.name] ?? f.name} ${v} is not a number.`
@@ -1054,9 +1075,9 @@ function fieldLine(
       return t`The sign convention of ${n} is ${v}, and the only one known is axis-sign.`;
     case 'unknown-name':
       if (entry === 'range-end')
-        return t`Range end ${n} sets ${key}, which is not a value of this sheet.`;
+        return t`Range end ${n} sets ${key}, which is not an input of this sheet.`;
       if (entry === 'block')
-        return t`Block ${n} sets ${key}, and its sheet has no value of that name.`;
+        return t`Block ${n} sets ${key}, but its sheet has no input of that name.`;
       return undefined;
     case 'solved':
       return entry === 'range-end'
@@ -1068,7 +1089,7 @@ function fieldLine(
         : undefined;
     case 'operator':
       return entry === 'check' && has
-        ? t`The engine cannot read check ${n}, because ${ex(writtenValue(f.value))} is not an operator that it knows.`
+        ? t`The engine cannot read check ${n}, because ${v} is not an operator that it knows.`
         : undefined;
     case 'no-sheet':
       return undefined;
@@ -1157,7 +1178,7 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
       ];
     case 'netlist':
       // Each finding of the netlist check gives its own lines, in the order raised.
-      if (d.netlist?.length) return [head, ...d.netlist.flatMap(netlistLines)];
+      if (d.netlist?.length) return [head, ...distinctLines(d.netlist.flatMap(netlistLines))];
       return [
         head,
         d.names.length
@@ -1166,6 +1187,10 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
       ];
   }
 }
+
+/** Each line once, in the order given: findings whose data say the same give one sentence. */
+const distinctLines = (ls: readonly Line[]): Line[] =>
+  ls.filter((l, k) => ls.findIndex((m) => lineText(m) === lineText(l)) === k);
 
 /** A problem of the netlist check, with the wires and the devices it is about. */
 function netlistLines(n: NetlistAbout): Line[] {
@@ -1202,7 +1227,7 @@ function netlistLines(n: NetlistAbout): Line[] {
       return [t`The wiring of ${part} is not well formed.`];
     case 'level-refused':
       return [
-        t`Wire ${wire} cannot be held at ${ex(n.level ?? '')}, because a level reads only numbers and values classed independent.`,
+        t`The sheet gives wire ${wire} the level ${ex(n.level ?? '')}, but a level can read only numbers, specs and knobs.`,
       ];
     case 'level-gate':
       return [
@@ -1231,8 +1256,8 @@ const SIZING_WORD = {
  *  entry gives no line. */
 const SYNTAX_REASONS: readonly (readonly [RegExp, Line])[] = [
   [/^Unclosed \(/, t`A parenthesis is not closed.`],
-  [/^Unclosed \[/, t`An opening ${ex('[')} has no ${ex(']')} that closes it.`],
-  [/^Unclosed quote/, t`A quotation is not closed.`],
+  [/^Unclosed \[/, t`A square bracket is not closed.`],
+  [/^Unclosed quote/, t`A quotation mark is not closed.`],
   [/^Expected \)/, t`A parenthesis is not closed.`],
   [/^Unexpected "\)"/, t`A closing parenthesis has no parenthesis that it closes.`],
   [/^Expected expression after/, t`An operator has nothing after it.`],
