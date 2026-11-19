@@ -25,6 +25,7 @@ import type { EntryAbout, FindingAbout, NetlistAbout, QAWarning } from '../types
 import { syntaxAt } from '../expr';
 import {
   failsCause,
+  isHeld,
   type NotReadData,
   type RelationField,
   memberOf,
@@ -525,7 +526,7 @@ function resolveOn(items: readonly Item[], o: WithheldOn, depth = 0): WithheldOn
     if (inside && inside.status === 'failed')
       return { kind: inside.kind, path: inside.path, name: inside.name, cause: inside.cause.kind };
   }
-  return o.frame === 'parent' ? o : { ...ref, cause: o.cause };
+  return o.frame !== undefined ? o : { ...ref, cause: o.cause };
 }
 
 /** A check's two sides as the sheet writes them, read back from its text. */
@@ -1009,4 +1010,28 @@ export function withFindings(
       };
   }
   return out;
+}
+
+/** Whether a validation finding is about the sheet as a whole rather than about an entry a run
+ *  evaluates: a finding of the netlist check, one about a decision, or one that names no entry. A
+ *  range end's list takes the findings about the entries its run evaluates (see runSheet); one
+ *  about the sheet as a whole is read in the design point's list. */
+export function aboutTheSheet(doc: SheetDoc | undefined, w: QAWarning): boolean {
+  if (w.about?.kind === 'netlist' || w.about?.kind === 'decision') return true;
+  const ref = aboutRef(doc, w) ?? locate(doc, w.location);
+  return ref.kind === 'sheet' && ref.path.length === 0;
+}
+
+/** The list of a range end the engine does not calculate, because the design point gives no
+ *  design: its one sheet item, withheld on each item of the design point's list that is failed
+ *  (other than a requirement that fails, which leaves the design standing) or held instead of
+ *  solved. */
+export function notCalculated(design: readonly Item[]): Item[] {
+  const on: WithheldOn[] = design.flatMap((i): WithheldOn[] => {
+    const ref = { kind: i.kind, path: i.path, name: i.name };
+    if (i.status === 'failed' && i.cause.kind !== 'fails')
+      return [{ ...ref, frame: 'design', cause: i.cause.kind }];
+    return isHeld(i) ? [{ ...ref, frame: 'design', held: true }] : [];
+  });
+  return [{ kind: 'sheet', path: [], name: '', status: 'withheld', on }];
 }

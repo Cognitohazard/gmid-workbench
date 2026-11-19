@@ -1444,3 +1444,26 @@ group('findings of the netlist check that say the same thing', () => {
     ]);
   });
 });
+
+group('a range end that is not calculated', () => {
+  it('says so, and gives each item of the design point it waits on', () => {
+    const end: Item = {
+      kind: 'sheet',
+      path: [],
+      name: '',
+      status: 'withheld',
+      on: [
+        { kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' },
+        { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'no-crossing' },
+        { kind: 'search', path: [], name: 'V_x', frame: 'design', held: true },
+      ],
+    };
+    expect(describe(end).lines).toEqual([
+      'This range end is not calculated, because of a problem at the design point.',
+      'At the design point, the statements of block tail do not determine one design.',
+      'At the design point, the engine found no solution for V_tail.',
+      'At the design point, V_x is held and not solved.',
+    ]);
+    for (const l of describe(end).segments) expect(standardProblems(l)).toEqual([]);
+  });
+});

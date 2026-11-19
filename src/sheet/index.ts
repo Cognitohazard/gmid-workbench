@@ -34,7 +34,7 @@ import type {
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
 import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
-import { withFindings } from './items';
+import { aboutTheSheet, notCalculated, withFindings } from './items';
 import { verdictOf } from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
@@ -169,12 +169,22 @@ export function runSheet(
     r.doc,
     'validation',
   );
+  // A range end's run evaluates the entries of the sheet, so its list takes validation's findings
+  // about them the way the design point's list does. A finding about the sheet as a whole is read in
+  // the design point's list; the end is then not calculated, as it is where the design point gives
+  // no design, so an end never reads compliant on a sheet with a validation error.
+  const errors = pre.filter((w) => w.severity === 'error' && !onEnd(w));
+  const entries = errors.filter((w) => !aboutTheSheet(r.doc, w));
+  const wholeSheet = errors.length > entries.length;
   const rangeEnds = res.rangeEnds?.map((e) => {
     const own = pre.filter((w) => w.severity === 'error' && onEnd(w) && w.location === e.name);
-    if (!own.length) return e;
+    const notRun = e.state === 'not-run' || wholeSheet;
+    if (!notRun && !own.length && !entries.length) return e;
     const list = withFindings(
-      e.items ?? [{ kind: 'sheet', path: [], name: '', status: 'ok' }],
-      own,
+      notRun
+        ? notCalculated(items)
+        : (e.items ?? [{ kind: 'sheet', path: [], name: '', status: 'ok' }]),
+      notRun ? own : [...own, ...entries],
       r.doc,
       'validation',
     );

@@ -469,6 +469,14 @@ export type WithheldOn =
       readonly cause?: undefined;
       /** The block's own params whose value from the parent gives no number. */
       readonly inputs?: readonly string[];
+    })
+  /** An item of the design point's list, named as that list names it: a range end that is not
+   *  calculated waits on the design point, which gives no design. The cause of a failed one; a
+   *  solved param the design run held instead of solving is `held`. */
+  | (ItemRef & {
+      readonly frame: 'design';
+      readonly cause?: CauseName;
+      readonly held?: true;
     });
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────

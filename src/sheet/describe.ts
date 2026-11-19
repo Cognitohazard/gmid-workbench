@@ -1564,6 +1564,12 @@ const parentGivesNo = (inputs: readonly string[] | undefined): Line =>
  *  cause, so the not-proved cause never reads as a proof. */
 export function withheldClause(r: WithheldOn): Line {
   if (r.frame === 'parent') return parentGivesNo(r.inputs);
+  if (r.frame === 'design') {
+    const ref = { kind: r.kind, path: r.path, name: r.name };
+    return r.cause === undefined
+      ? t`${itemName(ref)} is held and not solved`
+      : withheldClause({ ...ref, cause: r.cause });
+  }
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':
@@ -1603,6 +1609,21 @@ export function withheldClause(r: WithheldOn): Line {
 export function describe(item: Item, within: readonly string[] = []): FindingText {
   if (item.status === 'ok')
     return item.attributes?.kind === 'held' ? heldText(item, item.attributes) : finding('', []);
+  // A range end the engine does not calculate: the design point gives no design, and its items say
+  // why.
+  if (
+    item.status === 'withheld' &&
+    item.kind === 'sheet' &&
+    !item.path.length &&
+    item.on.some((r) => r.frame === 'design')
+  )
+    return finding(
+      WITHHELD_NAME,
+      distinctLines([
+        t`This range end is not calculated, because of a problem at the design point.`,
+        ...item.on.map((r) => t`At the design point, ${withheldClause(r)}.`),
+      ]),
+    );
   if (item.status === 'withheld' && !item.on.length)
     return finding(WITHHELD_NAME, [upperFirst(t`${itemName(item)} is not calculated.`)]);
   if (item.status === 'withheld')
