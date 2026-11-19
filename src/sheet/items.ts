@@ -631,6 +631,13 @@ function deviceCause(s: SizingReport | undefined, doc: SheetDoc): Cause {
     const setBy = typedSetter(doc, o.quantity);
     return { kind: 'outside-table', data: setBy ? { ...o, setBy } : o };
   }
+  // A table that does not sweep an axis the givens ask for: the refusal is the error, whatever
+  // else the givens still leave to declare.
+  if (s?.unswept?.length)
+    return {
+      kind: 'cannot-evaluate',
+      data: { why: 'no-sweep', name: s.unswept.join(', '), reason: s.error ?? '' },
+    };
   if (s?.needs?.length)
     return {
       kind: 'cannot-evaluate',

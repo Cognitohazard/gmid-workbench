@@ -1882,3 +1882,49 @@ describe('a solved value that is also marked with a class', () => {
     ]);
   });
 });
+
+describe('a block read in its own list names its part as its parent does', () => {
+  it('a cascode on a table with no body-bias sweep: the part, the sweep it lacks, the verdict', () => {
+    const vdsOnly = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
+    const res = runSheet(
+      sheet('mirrors-bias/cascode-current-mirror.json'),
+      vdsOnly,
+      undefined,
+      REFS,
+    );
+    const block = res.blocks?.find((b) => b.name === 'ref_casc');
+    const device = block?.items?.find((i) => i.kind === 'device' && !i.path.length);
+    expect(device).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'cannot-evaluate', data: { why: 'no-sweep', name: 'vsb' } },
+    });
+    expect(describeItem(device as Item, ['ref_casc']).lines).toEqual([
+      'Part ref_casc cannot be sized.',
+      'The table holds no sweep of vsb.',
+    ]);
+    expect(lineTexts(verdictText(block!.verdict!, ['ref_casc']))).toEqual([
+      'The verdict is undetermined, because part ref_casc gives no number.',
+    ]);
+  });
+
+  it('a part outside its table: the verdict of its block names the part', () => {
+    const res = runSheet(
+      withParams(sheet('stages/cmos-inverter-amp.json'), { V_out: 1.5 }),
+      table,
+      undefined,
+      REFS,
+    );
+    const block = res.blocks?.find((b) => b.name === 'n');
+    expect(lineTexts(verdictText(block!.verdict!, ['n']))).toEqual([
+      'The verdict is undetermined, because part n is outside its table.',
+    ]);
+    const device = block?.items?.find((i) => i.kind === 'device' && !i.path.length);
+    expect(describeItem(device as Item, ['n']).lines[0]).toBe(
+      'Part n asks for a drain-source voltage of 1.5 V.',
+    );
+  });
+});
+
+function lineTexts(ls: readonly (readonly { text: string }[])[]): string[] {
+  return ls.map((l) => l.map((x) => x.text).join(''));
+}

@@ -1165,7 +1165,7 @@ function entryLine(entry: NonNullable<NotReadData['entry']>, where: string): Lin
   }
 }
 
-function notDeterminedText(d: NotDeterminedData): Line[] {
+function notDeterminedText(d: NotDeterminedData, ref?: ItemRef): Line[] {
   const head = t`The statements of the sheet do not determine one design.`;
   const each = (f: (n: Segment) => Line): Line[] => d.names.map((n) => f(nm(n)));
   switch (d.why) {
@@ -1221,7 +1221,8 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
       ];
     case 'netlist':
       // Each finding of the netlist check gives its own lines, in the order raised.
-      if (d.netlist?.length) return [head, ...distinctLines(d.netlist.flatMap(netlistLines))];
+      if (d.netlist?.length)
+        return [head, ...distinctLines(d.netlist.flatMap((n) => netlistLines(n, ref?.path ?? [])))];
       return [
         head,
         d.names.length
@@ -1235,10 +1236,14 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
 const distinctLines = (ls: readonly Line[]): Line[] =>
   ls.filter((l, k) => ls.findIndex((m) => lineText(m) === lineText(l)) === k);
 
-/** A problem of the netlist check, with the wires and the devices it is about. */
-function netlistLines(n: NetlistAbout): Line[] {
+/** A problem of the netlist check, with the wires and the devices it is about. Its devices are
+ *  named as the sheet at `at` (the item's path) names them: its own device as `givens`, a part by
+ *  its name there; a reader is given them by their path from the top. */
+function netlistLines(n: NetlistAbout, at: readonly string[] = []): Line[] {
   const wires = (n.wires ?? []).map((w) => [nm(w)]);
-  const parts = (n.devices ?? []).map(partName);
+  const parts = (n.devices ?? []).map((d) =>
+    partName(d === '' || d === 'givens' ? at.join('.') : [...at, d].join('.')),
+  );
   const wire = wires[0] ?? [];
   const part = parts[0] ?? t`a device`;
   switch (n.problem) {
@@ -1462,7 +1467,11 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
   if (ref?.kind === 'device') {
     const sized = t`${subject} cannot be sized.`;
     if (d.why === 'no-column') return [sized, t`The table holds no column for ${nm(d.name)}.`];
-    if (d.why === 'no-sweep') return [sized, t`The table holds no sweep of ${nm(d.name)}.`];
+    if (d.why === 'no-sweep')
+      return [
+        sized,
+        t`The table holds no sweep of ${andLines(d.name.split(', ').map((a) => [nm(a)]))}.`,
+      ];
     if (d.why === 'illegal-pair')
       return [sized, t`The two quantities bound on it do not determine its size.`];
     if (d.sizing) {
@@ -1674,7 +1683,7 @@ function linesOf(c: Cause, ref?: ItemRef): Line[] {
     case 'not-read':
       return notReadText(c.data);
     case 'not-determined':
-      return notDeterminedText(c.data);
+      return notDeterminedText(c.data, ref);
     case 'outside-table':
       return outsideTableText(c.data, ref);
     case 'cannot-evaluate':
@@ -1857,8 +1866,12 @@ export function describe(
     item.on.some((r) => r.frame === 'design')
   )
     return finding(WITHHELD_NAME, notCalculatedText(item.on, end, design));
+  // An item read in a block's own list is named by its path from the top, as the parent's list
+  // names it: the block's own sheet item as the block, its device as the part.
+  const rooted = <R extends ItemRef>(r: R): R =>
+    within.length ? { ...r, path: [...within, ...r.path] } : r;
   if (item.status === 'withheld' && !item.on.length)
-    return finding(WITHHELD_NAME, [upperFirst(t`${itemName(item)} is not calculated.`)]);
+    return finding(WITHHELD_NAME, [upperFirst(t`${itemName(rooted(item))} is not calculated.`)]);
   if (item.status === 'withheld')
     return finding(
       WITHHELD_NAME,
@@ -1869,15 +1882,13 @@ export function describe(
             ? within.length
               ? t`Block ${blockSegment(within)} is not calculated, because ${parentGivesNo(r.inputs)}.`
               : t`This block is not calculated, because ${parentGivesNo(r.inputs)}.`
-            : upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
+            : upperFirst(
+                t`${itemName(rooted(item))} is not calculated, because ${withheldClause(r.frame === 'parent' ? r : rooted(r))}.`,
+              ),
         )
         .filter((l, k, all) => all.findIndex((m) => lineText(m) === lineText(l)) === k),
     );
-  // A block's own sheet item, read in its own list, is named by the block's path there.
-  return textOf(
-    item.cause,
-    item.kind === 'sheet' && !item.path.length && within.length ? { ...item, path: within } : item,
-  );
+  return textOf(item.cause, rooted(item));
 }
 
 /** What an item the run held at a given value instead of solving reads. */
@@ -1894,8 +1905,11 @@ function heldText(r: ItemRef, a: Extract<Attributes, { kind: 'held' }>): Finding
 
 /** Why a verdict is what it is, where a line says more than its word: for each value the run held
  *  instead of solving, that the verdict is undetermined because of it. */
-export function verdictText(v: Verdict<string>): readonly Line[] {
-  const held = v.held ?? [];
+export function verdictText(v: Verdict<string>, within: readonly string[] = []): readonly Line[] {
+  // A block's verdict names what it rests on by its path from the top, as describe does.
+  const rooted = <R extends ItemRef>(r: R): R =>
+    within.length ? { ...r, path: [...within, ...r.path] } : r;
+  const held = (v.held ?? []).map(rooted);
   const lines: Line[] = [];
   if (held.length) {
     const names = andLines(held.map((r) => inBlock(r.name, r.path, r)));
@@ -1906,7 +1920,7 @@ export function verdictText(v: Verdict<string>): readonly Line[] {
   // An undetermined verdict gives one clause for each failed item it rests on: a range end's own
   // item by the end's name.
   if (v.verdict === 'undetermined')
-    for (const f of v.failed)
+    for (const f of v.failed.map(rooted))
       lines.push(
         f.end !== undefined
           ? t`The verdict is ${VERDICT_WORDS.undetermined}, because the entry of range end ${nm(f.end)} is not well formed.`

@@ -1625,9 +1625,10 @@ group('a range end that is not calculated', () => {
         [head, `At the design point, the level L cannot hold wire out, ${why}.`],
       );
   });
+  // A placement fault of part in, on the sheet that wires it.
   const wiring: Item = {
     kind: 'sheet',
-    path: ['in'],
+    path: [],
     name: '',
     status: 'failed',
     cause: {
@@ -1649,7 +1650,7 @@ group('a range end that is not calculated', () => {
 
   it('names the end, says why from the design point’s items, and gives one line for each', () => {
     check(
-      end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
+      end([{ kind: 'sheet', path: [], name: '', frame: 'design', cause: 'not-determined' }]),
       'cm-lo',
       [wiring],
       [
