@@ -17,7 +17,7 @@ import {
   type Cause,
   type Item,
 } from './states';
-import { describe as describeItem, standardProblems } from './describe';
+import { describe as describeItem, standardProblems, VERDICT_WORDS, verdictText } from './describe';
 import { FINDING_CAUSES } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1706,7 +1706,9 @@ describe('a range end behind a level that cannot hold a wire', () => {
     } as SheetDoc;
     const res = runSheet(doc, table, undefined, REFS);
     const end = res.rangeEnds?.[0];
-    return end?.items?.[0] ? describeItem(end.items[0], [], end.name, res.items).lines : [];
+    return end?.items?.[0]
+      ? describeItem(end.items[0], [], { end: end.name, design: res.items }).lines
+      : [];
   };
 
   it('carries the reason, or how many there are', () => {
@@ -1771,6 +1773,80 @@ describe('a level that reads a value a hold balancing currents solves', () => {
       'The level I_bias cannot hold wire out.',
       'The level reads I_bias, which the engine calculates again where the design is held, so the level is derived.',
       'Write the level as a number, or from values marked independent.',
+    ]);
+  });
+});
+
+describe('a block report carries its own verdict, read as the sheet’s is', () => {
+  const blockAt = (res: SheetResult, path: readonly string[]): SheetBlockReport | undefined => {
+    let blocks = res.blocks;
+    let b: SheetBlockReport | undefined;
+    for (const n of path) {
+      b = blocks?.find((x) => x.name === n);
+      blocks = b?.blocks;
+    }
+    return b;
+  };
+  const ownItem = (b: SheetBlockReport | undefined) =>
+    b?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+
+  it('a block that is calculated reads its verdict; one its parent gives no value has none', () => {
+    // The cascode mirror's output at its lowest: the reference side sizes, and the output side is
+    // withheld on what its parent sets for it.
+    const d = sheet('mirrors-bias/cascode-current-mirror.json');
+    const p = d.params.find((q) => q.name === 'V_out') as { min: number };
+    const res = runSheet(withParams(d, { V_out: p.min }), table, undefined, REFS);
+    for (const n of ['ref', 'ref_casc'])
+      expect(blockAt(res, [n])?.verdict).toEqual({ verdict: 'feasible', failed: [] });
+    const out = blockAt(res, ['out']);
+    expect(ownItem(out)?.status).toBe('withheld');
+    expect(out).not.toHaveProperty('verdict');
+  });
+
+  it('a block whose requirement fails is non-compliant, on that requirement', () => {
+    const d = sheet('applications/sc-settling-to-ota-spec.json');
+    const p = d.params.find((q) => q.name === 'vds_in') as { value: number };
+    const res = runSheet(withParams(d, { vds_in: p.value * 0.2 }), table, undefined, REFS);
+    const b = blockAt(res, ['in']);
+    expect(ownItem(b)?.status).toBe('ok');
+    expect(b?.verdict?.verdict).toBe('non-compliant');
+    expect(b?.verdict?.failed).toEqual([
+      expect.objectContaining({ kind: 'requirement', path: [], name: 'region' }),
+    ]);
+  });
+
+  it('a block inside a block reads its own verdict too', () => {
+    const res = runSheet(sheet('multistage/fd-telescopic-ota.json'), table, undefined, REFS);
+    expect(blockAt(res, ['cbn', 'base'])?.verdict).toEqual({ verdict: 'feasible', failed: [] });
+    expect(blockAt(res, ['cbn'])?.verdict?.verdict).toBe('feasible');
+  });
+});
+
+describe('the words of the verdicts, from one table', () => {
+  it('gives every design verdict, every held verdict and a verdict not calculated a word', () => {
+    const keys: string[] = [
+      'feasible',
+      'non-compliant',
+      'infeasible',
+      'undetermined',
+      'compliant',
+      'no-operating-point',
+      'not-calculated',
+    ];
+    expect(Object.keys(VERDICT_WORDS).sort()).toEqual([...keys].sort());
+    for (const k of keys)
+      expect(VERDICT_WORDS[k as keyof typeof VERDICT_WORDS]).toMatch(/^[a-z -]+$/);
+    expect(VERDICT_WORDS['no-operating-point']).toBe('no operating point');
+  });
+
+  it('writes the word of an undetermined verdict from the table', () => {
+    const lines = verdictText({
+      verdict: 'undetermined',
+      failed: [],
+      held: [{ kind: 'search', path: [], name: 'V_tail' }],
+    }).map((l) => l.map((s) => s.text).join(''));
+    expect(lines).toEqual([
+      `The verdict is ${VERDICT_WORDS.undetermined}, because V_tail is held and not solved.`,
     ]);
   });
 });
