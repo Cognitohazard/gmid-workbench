@@ -53,6 +53,9 @@ import type {
   Settings,
   SweepOptions,
   SweepSample,
+  DesignVerdict,
+  HeldVerdict,
+  Verdict,
 } from '../sheet';
 import {
   SWEEP_POINTS,
@@ -64,7 +67,6 @@ import {
   namedBindings,
   outsideIn,
   resolvedSheet,
-  stands,
   sweepOf,
   sweepable,
   treeCheckResults,
@@ -75,6 +77,8 @@ import {
   validateSheet,
 } from '../sheet';
 import { isHardCheck } from '../sheet/types';
+import { heldVerdictOf, incompleteOn, isComplete } from '../sheet/states';
+import { unreadValues } from '../sheet/items';
 import {
   assumedLevelRefusal,
   holdHardware,
@@ -523,6 +527,11 @@ export interface CompliancePoint {
    *  run's result carries, so a reader decides from the fields and never from `error`. Absent
    *  where every device was read on its table. Such a point is `no-answer`. */
   readonly outside?: readonly OutsideTable[];
+  /** What the design is at this point, from the run's items: at the centre of the condition the
+   *  design is sized at, its design verdict; at the centre of a held condition and at every range
+   *  end, the held verdict. Absent where the engine calculated nothing here (a point not run, an
+   *  end the engine did not calculate). `state` is still written beside it. */
+  readonly verdict?: Verdict<DesignVerdict> | Verdict<HeldVerdict>;
 }
 
 export type ConditionRun =
@@ -882,11 +891,14 @@ export function sweepAtCondition(
     );
     const run = runs.find((r) => sameCondition(r.key, key));
     if (!run) return { feasible: false, stands: false };
-    const evaluated = run.state === 'evaluated';
+    // Passing is read from the centre's verdict: feasible where the design is sized here,
+    // compliant where the design sized at `base` is held here.
+    const verdict = run.points[0]?.verdict?.verdict;
     return {
       ...(run.result ? { res: run.result } : {}),
-      feasible: design === 'sized' ? evaluated && run.feasible : run.points[0].state === 'complies',
-      stands: evaluated,
+      feasible: verdict === (design === 'sized' ? 'feasible' : 'compliant'),
+      stands: run.state === 'evaluated',
+      ...(design === 'sized' && verdict !== undefined ? { verdict: verdict as DesignVerdict } : {}),
     };
   };
   // An edge is pinned with the sweep's own sample, less the range ends: passing — feasible where
@@ -974,7 +986,9 @@ function runPrepared(
     ...withValidation([...prepared.warnings, ...bound], evaluated),
     assumptions: [...prepared.assumptions],
   };
-  const completed = stands(result);
+  // Whether every number of the run is there (isComplete): what a condition that was not evaluated
+  // means, apart from what the design is.
+  const completed = isComplete(result);
 
   // The centre, classified once by the engine (pointOutcome): a design resting on an assumed level
   // has no compliance answer anywhere (the engine has already declined its range ends for the same
@@ -982,11 +996,20 @@ function runPrepared(
   // complies where it is feasible.
   const outcome = evaluated.point;
   const outside = outsideIn(evaluated);
+  // The centre's verdict: the design verdict where the design is sized, the held verdict where the
+  // design sized elsewhere is held here.
+  const items = result.items ?? [];
+  const verdict: Verdict<DesignVerdict> | Verdict<HeldVerdict> | undefined = !result.items
+    ? undefined
+    : held
+      ? heldVerdictOf(items, unreadValues(doc))
+      : result.verdict;
   const centre: CompliancePoint = {
     ...(outcome
       ? { state: outcome.state, ...(outcome.error === undefined ? {} : { error: outcome.error }) }
       : { state: 'no-answer' as const, error: runtimeIssues(result)[0].message }),
     ...(outside.length ? { outside } : {}),
+    ...(verdict ? { verdict } : {}),
   };
   const points: CompliancePoint[] = [
     centre,
@@ -995,6 +1018,7 @@ function runPrepared(
       state: e.state,
       ...(e.error === undefined ? {} : { error: e.error }),
       ...(e.outside ? { outside: e.outside } : {}),
+      ...(e.verdict ? { verdict: e.verdict } : {}),
     })),
   ];
 
@@ -1092,6 +1116,20 @@ export interface ConditionAggregate {
   readonly feasibility: 'feasible' | 'infeasible' | 'no-answer' | 'not-run';
   /** The condition feasibility was asked at. Absent when the design was sized nowhere. */
   readonly base?: ConditionKey;
+  /** What the design is where it was sized: the design verdict of the base run's centre, with the
+   *  failed items it rests on. Absent where nothing was sized or the engine calculated nothing. */
+  readonly verdict?: Verdict<DesignVerdict>;
+  /** Every held point — each range end of every condition and the centre of each condition the
+   *  design is held at — counted by its held verdict; a point the engine calculated nothing at is
+   *  `notRun`. `total` is every point but the base condition's centre. */
+  readonly heldPoints: {
+    readonly compliant: number;
+    readonly nonCompliant: number;
+    readonly noOperatingPoint: number;
+    readonly undetermined: number;
+    readonly notRun: number;
+    readonly total: number;
+  };
   /**
    * COMPLIANCE — a count over points, never a single word: `total` is conditions × (the centre
    * + every declared range end), and each point lands in exactly one bucket. Not-run and
@@ -1164,6 +1202,28 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
       compliance[BUCKET[pt.state]]++;
       compliance.total++;
     }
+  const heldPoints = {
+    compliant: 0,
+    nonCompliant: 0,
+    noOperatingPoint: 0,
+    undetermined: 0,
+    notRun: 0,
+    total: 0,
+  };
+  const HELD = {
+    compliant: 'compliant',
+    'non-compliant': 'nonCompliant',
+    'no-operating-point': 'noOperatingPoint',
+    undetermined: 'undetermined',
+  } as const;
+  for (const r of unique)
+    r.points.forEach((pt, i) => {
+      if (r.design === 'sized' && i === 0) return;
+      const v = pt.verdict?.verdict as HeldVerdict | undefined;
+      heldPoints[v === undefined ? 'notRun' : HELD[v]]++;
+      heldPoints.total++;
+    });
+  const verdict = sized?.points[0]?.verdict as Verdict<DesignVerdict> | undefined;
   let worst: ConditionAggregate['worst'] = null;
   const onLimit = new Map<string, { key: ConditionKey; rangeEnd?: string }[]>();
   for (const { run, point, at } of measuredPoints(unique)) {
@@ -1186,6 +1246,8 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
   return {
     feasibility,
     ...(sized ? { base: sized.key } : {}),
+    ...(verdict ? { verdict } : {}),
+    heldPoints,
     compliance,
     worst,
     onLimit: [...onLimit].map(([id, points]) => ({ id, points })),
@@ -1205,9 +1267,10 @@ function uniqueRuns(runs: readonly ConditionRun[]): ConditionRun[] {
 }
 
 /** Every point of `runs` whose checks were measured, in run order, the centre before the range
- *  ends, with the evaluation that measured it — the one walk every margin fold reads. A point with
- *  an `error`, or one that is not a verdict, is left out: its outcomes were read somewhere other
- *  than the point asked about, or not at all. */
+ *  ends, with the evaluation that measured it — the one walk every margin fold reads. A point
+ *  counts where its verdict says what the design is there (feasible, compliant or non-compliant)
+ *  and its run is complete (isComplete, incompleteOn): elsewhere its outcomes were read somewhere
+ *  other than the point asked about, or not at all. */
 function measuredPoints(runs: readonly ConditionRun[]): {
   run: ConditionRun;
   point: CompliancePoint;
@@ -1216,11 +1279,12 @@ function measuredPoints(runs: readonly ConditionRun[]): {
   const out: ReturnType<typeof measuredPoints> = [];
   for (const run of runs)
     run.points.forEach((point, i) => {
-      if (point.error !== undefined) return;
-      if (point.state !== 'complies' && point.state !== 'does-not-comply') return;
+      const v = point.verdict?.verdict;
+      if (v !== 'feasible' && v !== 'compliant' && v !== 'non-compliant') return;
       // points[0] is the run's own tree; points[i] mirrors result.rangeEnds[i - 1].
       const at = i === 0 ? run.result : run.result?.rangeEnds?.[i - 1];
-      if (at) out.push({ run, point, at });
+      if (!at?.items || incompleteOn(at.items).length) return;
+      out.push({ run, point, at });
     });
   return out;
 }

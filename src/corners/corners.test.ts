@@ -6,10 +6,23 @@
 // forms — gm/gds = (gm/ID)·VA with VA = VA_PER_L·L — never read back off the engine.
 
 import { describe, it, expect } from 'vitest';
-import { generateDemoDevice, scaleQuantities, VA_PER_L, withoutColumns } from '../demo';
+import {
+  generateDemoDevice,
+  scaleQuantities,
+  signedMirrorDemo,
+  VA_PER_L,
+  withoutColumns,
+} from '../demo';
 import { makeGrid } from '../grid';
 import { validateDevices, validateDeviceConditions } from '../qa';
-import { loadLibrary, REFS, table as libTable, notACircuit } from '../sheet/library.fixtures';
+import {
+  loadLibrary,
+  REFS,
+  sheet as librarySheet,
+  table as libTable,
+  notACircuit,
+} from '../sheet/library.fixtures';
+import { incompleteOn, isComplete } from '../sheet/states';
 import {
   outsideIn,
   evaluateSheet,
@@ -20,7 +33,15 @@ import {
   withParams,
 } from '../sheet';
 import { EXAMPLES } from '../sheet/examples';
-import type { CheckResult, SheetDoc, RangeEndReport, SheetResult } from '../sheet';
+import type {
+  CheckResult,
+  DesignVerdict,
+  HeldVerdict,
+  SheetDoc,
+  RangeEndReport,
+  SheetResult,
+  Verdict,
+} from '../sheet';
 import type { Axis, DeviceTable, TableMeta } from '../types';
 import {
   aggregateConditionRuns,
@@ -40,6 +61,7 @@ import {
   conditionLabel,
   conditionLabelIn,
   type CharacterizedDevice,
+  type CompliancePoint,
   type ConditionKey,
   type ConditionRun,
 } from './index';
@@ -83,6 +105,14 @@ function soleDevice(tables: DeviceTable[]): CharacterizedDevice {
 }
 
 const key = (corner: string, temp = 27): ConditionKey => ({ corner, temp });
+
+/** The points as the corners module read them before each carried its verdict. */
+const reading = (points: readonly CompliancePoint[]): Omit<CompliancePoint, 'verdict'>[] =>
+  points.map(({ verdict: _verdict, ...p }) => p);
+/** The verdict beside each point: a design verdict at the centre of the condition the design is
+ *  sized at, a held verdict everywhere else. */
+const verdicts = (points: readonly CompliancePoint[]): (string | undefined)[] =>
+  points.map((p) => p.verdict?.verdict);
 
 // The demo device characterized over drain voltage. Every sized device states its drain voltage,
 // so the documents below state one — 0.5 V, unless the test is about another — and the
@@ -643,7 +673,8 @@ describe('runCondition', () => {
     expect(run.design).toBe('sized');
     expect(run.feasible).toBe(true);
     // No operating range declared: the one compliance point is the design's own centre.
-    expect(run.points).toEqual([{ state: 'complies' }]);
+    expect(reading(run.points)).toEqual([{ state: 'complies' }]);
+    expect(verdicts(run.points)).toEqual(['feasible']);
   });
 
   it('reports the two conditions differently when the characterizations differ', () => {
@@ -664,7 +695,11 @@ describe('runCondition', () => {
     if (fast.state !== 'evaluated' || cold.state !== 'evaluated') return;
     expect(fast.feasible).toBe(true);
     expect(cold.feasible).toBe(false);
-    expect(cold.points).toEqual([{ state: 'does-not-comply' }]);
+    expect(reading(cold.points)).toEqual([{ state: 'does-not-comply' }]);
+    expect(verdicts(cold.points)).toEqual(['non-compliant']);
+    expect(cold.points[0].verdict?.failed.map((f) => [f.name, f.cause.kind])).toEqual([
+      ['gain', 'fails'],
+    ]);
     expect(fast.result.values.A / cold.result.values.A).toBeCloseTo(2, 6);
   });
 
@@ -1188,7 +1223,7 @@ describe('runCondition', () => {
     const [tt, ss] = runs;
     expect(tt.state === 'evaluated' && tt.design).toBe('sized');
     expect(tt.result?.warnings).toEqual([]);
-    expect(tt.points).toEqual([{ state: 'complies' }]);
+    expect(reading(tt.points)).toEqual([{ state: 'complies' }]);
 
     expect(ss.state).toBe('not-evaluated');
     expect(ss.design).toBe('held');
@@ -1251,7 +1286,7 @@ describe('runCondition', () => {
     );
     const [tt, ss] = runs;
     expect(tt.state === 'evaluated' && tt.feasible).toBe(true);
-    expect(tt.points).toEqual([{ state: 'complies' }]);
+    expect(reading(tt.points)).toEqual([{ state: 'complies' }]);
 
     expect(ss.state).toBe('not-evaluated');
     expect(ss.points[0].state).toBe('no-answer');
@@ -1380,7 +1415,7 @@ describe('runCondition', () => {
       // design is sized and no answer where it is held. No shipped sheet sits off this table at
       // its own centre, and this is where that would show.
       expect(outsideIn(sized.result), file).toEqual([]);
-      expect(other.points, file).toEqual(sized.points);
+      expect(reading(other.points), file).toEqual(reading(sized.points));
     }
     // Not vacuous: the library does evaluate on this table.
     expect(held).toBeGreaterThan(30);
@@ -1630,7 +1665,7 @@ describe('runCondition', () => {
     expect(run.result?.sizing?.error).toMatch(NO_DRAIN);
     expect(run.result?.sizing?.needs).toEqual(['vds']);
     // Asked, and not answered: neither a design that fails nor one that was never run.
-    expect(run.points).toEqual([{ state: 'no-answer', error: run.issues[0].message }]);
+    expect(reading(run.points)).toEqual([{ state: 'no-answer', error: run.issues[0].message }]);
 
     // The same for a block: its own report carries the axis, under the block's name.
     const tail = withTail('tail-binding');
@@ -1686,10 +1721,12 @@ describe('runCondition', () => {
     if (run.state !== 'evaluated') return;
     expect(run.feasible).toBe(true);
     expect(run.result.feasible).toBe(true);
-    expect(run.points).toEqual([
+    expect(reading(run.points)).toEqual([
       { state: 'complies' },
       { rangeEnd: 'lo', state: 'does-not-comply' },
     ]);
+    // The centre is the sized design; the range end holds it, so its verdict is a held one.
+    expect(verdicts(run.points)).toEqual(['feasible', 'non-compliant']);
   });
 
   it('keeps feasibility when a range end cannot be answered', () => {
@@ -1762,6 +1799,26 @@ const hardCheck = (marginPct: number, id = 'r'): CheckResult => ({
   status: marginPct >= 0 ? 'pass' : 'fail',
 });
 
+/** The verdict a point in `state` carries: a design verdict at the centre of the sized run, a
+ *  held verdict everywhere else. Only a point that was answered is complete, and only a complete
+ *  point carries items, here none. */
+const verdictIn = (
+  state: RangeEndReport['state'],
+  design: boolean,
+): Verdict<DesignVerdict> | Verdict<HeldVerdict> => ({
+  verdict:
+    state === 'complies'
+      ? design
+        ? 'feasible'
+        : 'compliant'
+      : state === 'does-not-comply'
+        ? 'non-compliant'
+        : 'undetermined',
+  failed: [],
+});
+const answered = (state: RangeEndReport['state'], error?: string): boolean =>
+  error === undefined && state !== 'no-answer';
+
 /** One range end's report: measured (a check at `marginPct`), or — given an `error` — not. */
 const end = (
   name: string,
@@ -1776,6 +1833,8 @@ const end = (
   solved: {},
   warnings: [],
   ...(error === undefined ? {} : { error }),
+  ...(answered(state, error) ? { items: [] } : {}),
+  verdict: verdictIn(state, false) as Verdict<HeldVerdict>,
 });
 
 /** A run built the way the runner builds one: the centre first, then a point per range end,
@@ -1794,11 +1853,16 @@ const ran = (
   design,
   feasible: marginPct >= 0,
   points: [
-    { state: centre, ...(centreError === undefined ? {} : { error: centreError }) },
+    {
+      state: centre,
+      ...(centreError === undefined ? {} : { error: centreError }),
+      verdict: verdictIn(centre, design === 'sized'),
+    },
     ...ends.map((e) => ({
       rangeEnd: e.name,
       state: e.state,
       ...(e.error === undefined ? {} : { error: e.error }),
+      ...(e.verdict ? { verdict: e.verdict } : {}),
     })),
   ],
   result: {
@@ -1807,6 +1871,7 @@ const ran = (
     feasible: marginPct >= 0,
     warnings: [],
     ...(ends.length ? { rangeEnds: ends } : {}),
+    ...(answered(centre, centreError) ? { items: [] } : {}),
   },
 });
 
@@ -2109,12 +2174,8 @@ describe('sweepAtCondition — one condition, sized there or held there', () => 
       ...sweep
     } = sweepAtCondition(doc, param, device, tt, noDevices, REFS, { base: tt, points: 4 });
     expect([at, base, design]).toEqual([tt, tt, 'sized']);
-    // The plain sweep also gives each sample's verdict, which the sweep at a condition does not yet:
-    // its verdicts are gaps.
-    const { verdicts: _verdicts, ...today } = plain;
-    const { verdicts: none, ...atCondition } = sweep;
-    expect(none).toEqual(plain.x.map(() => null));
-    expect(atCondition).toEqual(today);
+    expect(sweep).toEqual(plain);
+    expect(plain.verdicts.length).toBe(plain.x.length);
     // Not vacuous: the sweep carries checks, range-end curves and samples that evaluated.
     expect(plain.checks.some((c) => c.rangeEnd !== undefined)).toBe(true);
     expect(plain.stands.some(Boolean)).toBe(true);
@@ -2253,5 +2314,168 @@ describe('device QA: conditions that carry different columns', () => {
     expect(w?.message).toContain('the thermal-noise figures fall back');
     expect(w?.message).toContain('tt: γ from the table');
     expect(w?.message).toContain('ss@-40: measured · no gmb column: gamma, svth_m, vnth_m');
+  });
+});
+
+describe('the verdict beside the answers the corners module gives today', () => {
+  const tt = key('tt');
+  const at = (t: DeviceTable): CharacterizedDevice => soleDevice([retag(t, 'tt', 27)]);
+  const noDevices = (): undefined => undefined;
+
+  it('reads a design that fails a requirement and is not complete as both, and moves nothing', () => {
+    // The matched mirror bank with its output rail at the top of its range: the output device is
+    // asked for 1.6 V across it, above the 1.2 V the table holds, so it is not sized and what reads
+    // it is withheld, while the matching budget, which does not read it, fails outright. The
+    // corners answer is the one it gave before: no answer. The verdict beside it is non-compliant,
+    // since a requirement that fails decides it whatever else is unknown, and completeness says
+    // the run is not complete.
+    const doc0 = librarySheet('mirrors-bias/matched-mirror-bank.json');
+    const max = doc0.params.find((p) => p.name === 'V_out')?.max;
+    expect(max).toBe(1.6);
+    const [run] = runConditions(
+      withParams(doc0, { V_out: 1.6 }),
+      at(libTable),
+      [tt],
+      noDevices,
+      REFS,
+      tt,
+    );
+    expect(run.state).toBe('not-evaluated');
+    expect(run.state === 'not-evaluated' && run.issues.map((i) => i.kind)).toEqual([
+      'runtime-evaluation',
+    ]);
+    expect(reading(run.points).map((p) => p.state)).toEqual(['no-answer']);
+    const v = run.points[0].verdict;
+    expect(v?.verdict).toBe('non-compliant');
+    expect(v?.failed.map((f) => [f.name, f.cause.kind])).toEqual([
+      ['accumulated-matching', 'fails'],
+    ]);
+    expect(isComplete(run.result!)).toBe(false);
+    expect(
+      incompleteOn(run.result!.items!).find((i) => i.status === 'failed' && i.kind === 'device'),
+    ).toMatchObject({
+      name: 'givens',
+      cause: { kind: 'outside-table', data: { quantity: 'vds' } },
+    });
+    const agg = aggregateConditionRuns([run]);
+    expect(agg.feasibility).toBe('no-answer');
+    expect(agg.verdict?.verdict).toBe('non-compliant');
+    // Nothing was measured there, so no margin is read from it.
+    expect(agg.worst).toBeNull();
+  });
+
+  it('keeps a wiring error found after the point is read apart from the failed requirement', () => {
+    // A p cascode on a signed p table whose axis-sign selector reads +1, a value validation
+    // accepts. Its drain expression is written so the device still sizes at -0.5 V; the DC walk
+    // then finds the selector disagrees with the table's negative axis, an error raised after the
+    // operating point was read. One hard check fails outright as well.
+    const p = at(signedMirrorDemo(libTable));
+    const doc: SheetDoc = {
+      title: 'p cascode',
+      polarity: 'n',
+      formatVersion: 2,
+      params: [
+        { name: 'VDD', value: 1.8, unit: 'V', class: 'independent' },
+        { name: 'V_b', value: 1.4, unit: 'V', class: 'independent' },
+        { name: 'V_out', value: 0.9, unit: 'V', class: 'independent' },
+        { name: 'sp', value: 1, convention: 'axis-sign' },
+      ],
+      blocks: [
+        {
+          name: 'c',
+          device: 'p',
+          doc: {
+            title: 'p device',
+            polarity: 'p',
+            params: [
+              { name: 'vd', value: -0.5 },
+              { name: 'vs', value: 0.4 },
+            ],
+            givens: { L: '0.5e-6', id: '10e-6', gm_id: '10', vds: 'vd', vsb: 'vs' },
+            equations: [],
+            checks: [],
+            provides: ['vgs', 'id', 'gm', 'gds', 'W'],
+          },
+          params: { vd: 'sp*(V_out - V_b)', vs: 'VDD - V_b' },
+          nodes: { d: 'out', g: 'g', s: 'b', b: 'vdd' },
+        },
+      ],
+      levels: { vdd: 'VDD', b: 'V_b', out: 'V_out' },
+      ports: ['g'],
+      equations: [],
+      checks: [{ id: 'never', kind: 'physical', lhs: '0', op: '>=', rhs: '1' }],
+    };
+    const [run] = runConditions(
+      doc,
+      at(libTable),
+      [tt],
+      (b) => (b === 'p' ? p : undefined),
+      undefined,
+      tt,
+    );
+    // The corners answer as before: the run did not stand, and feasibility reads infeasible.
+    expect(run.state).toBe('not-evaluated');
+    expect(aggregateConditionRuns([run]).feasibility).toBe('infeasible');
+    expect(run.result?.sizing).toBeUndefined();
+    expect(run.result?.blocks?.[0].sizing?.ok).toBe(true);
+    // The verdict is non-compliant, decided by the failed check alone.
+    const v = run.points[0].verdict;
+    expect(v?.verdict).toBe('non-compliant');
+    expect(v?.failed.map((f) => [f.name, f.cause.kind])).toEqual([['never', 'fails']]);
+    // The wiring error is the completeness answer: the selector, not determined by the netlist.
+    expect(
+      incompleteOn(run.result!.items!).map((i) => [
+        i.name,
+        i.status === 'failed' ? i.cause.kind : i.status,
+        i.status === 'failed' ? i.cause.data : undefined,
+      ]),
+    ).toEqual([
+      [
+        'sp',
+        'not-determined',
+        expect.objectContaining({
+          why: 'netlist',
+          netlist: [{ problem: 'selector', devices: ['c'], param: 'sp' }],
+        }),
+      ],
+    ]);
+  });
+
+  it('reads a margin only where the point is complete, whatever its verdict', () => {
+    // The hi end is held and fails its check by 90 %. Answered, it owns the worst margin; with an
+    // error it is not complete, its verdict alone does not admit it, and the centre owns it.
+    const failing = end('hi', 'does-not-comply', -0.9);
+    const answered = aggregateConditionRuns([ran('tt', 'sized', 'complies', 0.5, [failing])]);
+    expect(answered.worst).toEqual({ id: 'e', marginPct: -0.9, key: tt, rangeEnd: 'hi' });
+    const { items: _items, ...broke } = { ...failing, state: 'no-answer' as const, error: 'x' };
+    expect(broke.verdict?.verdict).toBe('non-compliant');
+    const unanswered = aggregateConditionRuns([ran('tt', 'sized', 'complies', 0.5, [broke])]);
+    expect(unanswered.worst).toEqual({ id: 'r', marginPct: 0.5, key: tt });
+  });
+
+  it('gives the sized design’s verdict and counts every other point by its held verdict', () => {
+    const noOp: RangeEndReport = {
+      ...end('lo', 'no-answer', 0.5, 'no operating point'),
+      verdict: { verdict: 'no-operating-point', failed: [] },
+    };
+    const agg = aggregateConditionRuns([
+      ran('tt', 'sized', 'complies', 0.5, [
+        end('lo', 'complies'),
+        end('hi', 'does-not-comply', -0.1),
+      ]),
+      ran('ss', 'held', 'does-not-comply', -0.2, [noOp, end('hi', 'no-answer', 0.5, 'broke')]),
+      refusedAt('ff', 'not-run', 3),
+    ]);
+    expect(agg.verdict).toEqual({ verdict: 'feasible', failed: [] });
+    expect(agg.heldPoints).toEqual({
+      compliant: 1,
+      nonCompliant: 2,
+      noOperatingPoint: 1,
+      undetermined: 1,
+      notRun: 3,
+      total: 8,
+    });
+    // The old count beside it, over the same points and the sized centre.
+    expect(agg.compliance.total).toBe(agg.heldPoints.total + 1);
   });
 });
