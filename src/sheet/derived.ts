@@ -3,14 +3,7 @@
 // reads them.
 
 import { causeMessage } from './describe';
-import {
-  legacyDesignFailure,
-  setOf,
-  withoutSet,
-  type Cause,
-  type Item,
-  type NoSolutionRead,
-} from './states';
+import { setOf, withoutSet, type Cause, type Item, type NoSolutionRead } from './states';
 import type { NoSolutionWhy, SolveFailure } from './types';
 
 /** How a search that found no solution ended, in today's words (NoSolutionWhy). */
@@ -185,9 +178,8 @@ const netlistFinding = (i: Item): boolean =>
 /**
  * Today's reading of one run as a point of the compliance question (PointOutcome.state), from its
  * items. The point is read from the evaluation alone, so a finding of validation does not enter
- * it. A search over the circuit's own range with no crossing, both ends read, is the design
- * failing (legacyDesignFailure); any other item that failed or was withheld, a requirement that
- * fails aside, leaves no answer; a design that rests on a level the sheet marks as assumed has
+ * it. Any item that failed or was withheld, a requirement that fails aside, leaves no answer — a
+ * search that found no crossing among them, which is not proved to have no solution; a design that rests on a level the sheet marks as assumed has
  * none either; otherwise it complies where it is feasible. The netlist is checked once the point is
  * read, and a finding of it turns a point that complied into one that does not.
  */
@@ -216,8 +208,6 @@ export function legacyPointState(
       i.cause.data.why === 'assumed-level',
   );
   const base = ((): 'complies' | 'does-not-comply' | 'no-answer' => {
-    if (design.some((i) => i.status === 'failed' && legacyDesignFailure(i.cause)))
-      return 'does-not-comply';
     // A requirement that fails or gives no number is read by feasibility, which fails closed.
     const unanswered = design.some(
       (i) => i.status !== 'ok' && i.kind !== 'requirement' && !quietIn(design)(i),

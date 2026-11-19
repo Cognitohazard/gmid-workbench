@@ -1629,11 +1629,11 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
     expect(heldOutcome(solve)).toEqual({ state: 'no-answer', error: quoted });
   });
 
-  it('reads no crossing in a range the wiring sets as the design failing here', () => {
-    // The same failure, over the whole range the wiring puts the node in, with both ends read: the
-    // circuit can put the node nowhere the search did not look, so the point does not comply —
-    // with the solver's message. A range that is the author's alone, a step, an undetermined
-    // relation, or an end the search could not read stays no answer.
+  it('reads no crossing in a range the wiring sets as no answer, not as the design failing', () => {
+    // The same failure, over the whole range the wiring puts the node in, with both ends read: no
+    // crossing there is not shown to be no solution, so the point has no answer — with the solver's
+    // message — like a range that is the author's alone, a step, an undetermined relation, or an
+    // end the search could not read.
     const message = 'solved param "V" found no solution in [0, 0.9] V (the range the wiring …)';
     const failed = (
       from: 'wiring' | 'author',
@@ -1654,7 +1654,7 @@ describe('heldOutcome — what one run of a held design amounts to', () => {
       },
     });
     expect(heldOutcome(failed('wiring', 'no-crossing'))).toEqual({
-      state: 'does-not-comply',
+      state: 'no-answer',
       error: message,
     });
     expect(heldOutcome(failed('wiring', 'no-crossing', false)).state).toBe('no-answer');

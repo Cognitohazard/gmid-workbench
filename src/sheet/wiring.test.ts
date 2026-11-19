@@ -28,6 +28,7 @@ import {
   table as libraryTable,
 } from './library.fixtures';
 import { aggregateConditionRuns, groupDevices, runConditions } from '../corners';
+import { heldVerdictOf } from './states';
 import {
   EXAMPLES,
   NO_ANSWER_NOTE,
@@ -2019,10 +2020,12 @@ describe('the range a solved wire is searched in is the circuit’s own where th
         `holds no root the circuit allows — in the range the wiring puts its wire "x" in, ${W}`,
     ]);
     // At VG = 0.4 V the author's range holds a root below ground, where the wiring cannot put the
-    // node: it is dropped, the wiring's range is searched, and it holds none — the design fails.
+    // node: it is dropped, the wiring's range is searched, and it holds no crossing — not proved
+    // to hold no solution, so the point has no answer.
     const below = runSheet(follower([-0.5, 2.5], { VG: 0.4 }), tw);
     expect(below.solve).toMatchObject({ kind: 'no-solution', range: [0, 1.8], endsRead: true });
-    expect(below.point).toMatchObject({ state: 'does-not-comply' });
+    expect(below.point).toMatchObject({ state: 'no-answer' });
+    expect(below.verdict?.verdict).toBe('undetermined');
   });
 
   it('refuses an author’s range wholly outside the wiring’s, and searches one touching it', () => {
@@ -2066,7 +2069,7 @@ describe('the range a solved wire is searched in is the circuit’s own where th
     expect(r.point).toMatchObject({ sized: false, state: 'no-answer' });
   });
 
-  it('reads no crossing anywhere in the wiring’s range, both ends read, as the design failing', () => {
+  it('reads no crossing anywhere in the wiring’s range, both ends read, as not proved: no answer', () => {
     // At VG = 0.4 V the gate would need the node below ground; the wiring puts it at or above.
     const r = runSheet(follower([-0.5, 0.8], { VG: 0.4 }), tw);
     expect(r.feasible).toBe(false);
@@ -2082,23 +2085,56 @@ describe('the range a solved wire is searched in is the circuit’s own where th
       'found no solution in [0, 1.8] V (the range the wiring puts its wire in, between "gnd" ' +
         'and "vdd", after the author\'s range [-0.5, 0.8] V)',
     );
-    expect(message).toContain('The circuit can put the wire nowhere else, so the design does not');
-    expect(r.point).toEqual({ sized: false, state: 'does-not-comply', error: message });
-    // The condition runs read the same centre, and its feasibility is infeasibility, not a
-    // missing answer.
+    expect(message).toContain(
+      'The circuit can put the wire nowhere else. The engine found no solution there, and this ' +
+        'is not a proof that none exists',
+    );
+    // Finding no crossing is not shown to be no solution: the point has no answer, with the
+    // solver's message, and the verdict is undetermined.
+    expect(r.point).toEqual({ sized: false, state: 'no-answer', error: message });
+    expect(r.verdict?.verdict).toBe('undetermined');
+    // The condition runs read the same centre: no answer, not infeasibility.
     const tt = { corner: 'tt', temp: 27 };
     const [device] = groupDevices([{ ...tw, id: { ...tw.id, ...tt } }]);
     const runs = runConditions(follower([-0.5, 0.8], { VG: 0.4 }), device, [tt], () => undefined);
-    expect(runs[0].points[0]).toEqual({ state: 'does-not-comply', error: message });
-    expect(aggregateConditionRuns(runs).feasibility).toBe('infeasible');
+    expect(runs[0].points[0]).toEqual({ state: 'no-answer', error: message });
+    expect(runs[0].result?.verdict?.verdict).toBe('undetermined');
+    expect(aggregateConditionRuns(runs).feasibility).toBe('no-answer');
     // And at a held point: the range end lowers the gate as far.
     const held = runSheet(
       follower([0.1, 0.8], { ends: [{ name: 'low', set: { VG: '0.4' } }] }),
       tw,
     );
     expect(held.feasible).toBe(true);
-    expect(held.rangeEnds?.[0].state).toBe('does-not-comply');
+    expect(held.rangeEnds?.[0].state).toBe('no-answer');
+    expect(heldVerdictOf(held.rangeEnds?.[0].items ?? []).verdict).toBe('undetermined');
     expect(held.rangeEnds?.[0].error).toContain('found no solution in [0, 1.8] V');
+  });
+
+  it('names the last of two failed searches as the solve outcome, whichever failed first', () => {
+    // V_x finds no crossing over the wiring's range, both ends read; Z, which reads nothing of
+    // V_x, finds none in its author's range. Neither is shown to have no solution, so the point
+    // has no answer and the verdict is undetermined, in either order; the outcome is the last.
+    const base = follower([-0.5, 0.8], { VG: 0.4 });
+    const z = param('Z', 0.5, { min: 0, max: 1, designConstraint: { lhs: 'Z*Z', rhs: '-1' } });
+    for (const [params, last, from] of [
+      [[...base.params, z], 'Z', 'author'],
+      [[z, ...base.params], 'V_x', 'wiring'],
+    ] as const) {
+      const r = runSheet({ ...base, params: [...params] }, tw);
+      expect(r.solve).toMatchObject({ kind: 'no-solution', unknown: last, from, endsRead: true });
+      const failed = (r.items ?? []).filter(
+        (i) => i.kind === 'search' && i.path.length === 0 && i.status === 'failed',
+      );
+      expect(failed.map((i) => [i.name, i.status === 'failed' ? i.cause.kind : '']).sort()).toEqual(
+        [
+          ['V_x', 'no-crossing'],
+          ['Z', 'none-in-range'],
+        ],
+      );
+      expect(r.point?.state).toBe('no-answer');
+      expect(r.verdict?.verdict).toBe('undetermined');
+    }
   });
 
   it('gives no answer where an end of that search reads a device beyond its table', () => {

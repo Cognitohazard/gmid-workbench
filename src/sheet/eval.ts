@@ -40,7 +40,6 @@ import {
   joinProvide,
   constraintIssue,
   constrained,
-  designFailure,
   deviceName,
   drainProblem,
   engineChecks,
@@ -2160,8 +2159,7 @@ interface Failed {
  * block's report withholds what its own failed search did not find, as the top's result does.
  *
  * Each failure is raised as an error, in the order the solve met them. The solve outcome is the
- * first that is a finding about the design (designFailure) where there is one — one unknown with
- * no root anywhere the circuit allows is enough for the design to have none — and else the last.
+ * last of them.
  */
 function withUnfound(
   node: NodeRef,
@@ -2173,8 +2171,7 @@ function withUnfound(
     let out = res;
     for (const f of failed)
       out = failedWith(out, f.failure, solveCause(node.doc, f.probe, f.failure));
-    const outcome =
-      failed.find((f) => designFailure(f.failure))?.failure ?? failed[failed.length - 1].failure;
+    const outcome = failed[failed.length - 1].failure;
     return { ...out, solve: outcome, items: searchItems(failed, notFound) };
   };
   if (!unfound.size) return raise(failed[failed.length - 1].probe, unfound);
@@ -3263,8 +3260,7 @@ const outOfBudget = (f: SolveFailure): boolean => f.kind === 'not-settled' && f.
  *    and neither end is within its tolerance of zero (none, or an even number, of roots:
  *    `no-crossing`), jumps across the target (`step`), does not appear to depend on the param at
  *    all, or (held) does not single the node out (`undetermined`) — the failure carries the
- *    reason and where the range came from, which decide whether it is a finding about the design
- *    (designFailure);
+ *    reason and where the range came from;
  *  - not settled: nothing of the range could be evaluated, the sign changes across a stretch
  *    inside the bracket that does not evaluate, the shared budget ran out (here or in a child a
  *    probe evaluated), or the probe backstop was hit.
@@ -4203,13 +4199,12 @@ const unrunEnd = (
  *
  * - it completed, every device read on its table: `complies` when every hard check holds, else
  *   `does-not-comply` (the failures are in the run's checks);
- * - a solved param found no crossing anywhere the wiring lets its wire go (designFailure):
- *   `does-not-comply`, with the solver's message as `error`;
  * - a device was read beyond its table (outsideIn) — a bias, a length, a gate voltage, or a current
  *   its fixed width would need a gate voltage past the swept range for: `no-answer`, with the
  *   records' own words as `error`;
- * - it did not complete for any other reason: `no-answer`, with `error` — the solver's message
- *   verbatim where there is one.
+ * - it did not complete for any other reason — a solve that did not land, a search that found no
+ *   crossing included, which is not shown to be no solution: `no-answer`, with `error` — the
+ *   solver's message verbatim where there is one.
  *
  * An `error` means the run's check outcomes are not findings about this point.
  */
@@ -4227,14 +4222,6 @@ export function heldOutcome(res: SheetResult): {
   for (let i = res.warnings.length - 1; i >= 0 && lastError === undefined; i--)
     if (res.warnings[i].severity === 'error') lastError = res.warnings[i].message;
   const err = solveErr ?? lastError;
-
-  // A solve of this sheet's own that failed is answered from its own record, which says what the
-  // search read at the ends of the stretch it searched (designFailure, `endsRead`) — never from the
-  // result, where what the failure did not find is withheld (see withUnfound), so a device that
-  // depends on it is no longer there to have been refused or read beyond its table. One that found no
-  // crossing anywhere the wiring lets its wire go, both ends read, is the design failing here;
-  // every other solve failure is no answer, said below in the words that fit it best.
-  if (designFailure(res.solve)) return { state: 'does-not-comply', error: res.solve.message };
 
   // First: did every device have a table that could answer for it? One that was refused leaves
   // the rest of the run evaluating a design with a device missing, so whatever stopped it next —
@@ -4268,12 +4255,9 @@ export function heldOutcome(res: SheetResult): {
  * device beyond its table. A design sized here is sized where it stands (see stands) and read every
  * device on its table, and answers for itself: it complies where it is feasible. One that read a
  * device beyond its table (outsideIn) has no answer, and is never feasible, compliant or failing.
- * One whose sheet found no crossing anywhere the wiring
- * lets a solved wire go (designFailure) is not sized and does not comply — infeasible, with the
- * solver's message. That is read from the solve's own record, whose `endsRead` already says that
- * no end of the search read a device beyond its table or had one refused — never from the result,
- * where what the failure did not find is withheld (see withUnfound). A design resting on an assumed level (`assumed`) is
- * still sized, and gives no answer.
+ * One that did not stand — a solve that did not land, a search that found no crossing included —
+ * has no answer either. A design resting on an assumed level (`assumed`) is still sized, and gives
+ * no answer.
  */
 export function pointOutcome(
   res: SheetResult,
@@ -4294,9 +4278,7 @@ export function pointOutcome(
       ? { state: 'no-answer', error: outside.map(outsideMessage).join('; ') }
       : sized
         ? { state: res.feasible ? 'complies' : 'does-not-comply' }
-        : designFailure(res.solve)
-          ? { state: 'does-not-comply', error: res.solve.message }
-          : { state: 'no-answer', error: unfinishedBecause(res)[0] };
+        : { state: 'no-answer', error: unfinishedBecause(res)[0] };
   }
   if (assumed.length) answer = { state: 'no-answer', error: assumedLevelRefusal(assumed) };
   return { sized, ...answer };
@@ -4345,13 +4327,11 @@ function rangeEndCause(
  *  recurse into range ends), and classify the outcome (see RangeEndReport.state):
  *
  *  - every hard check holds: `complies`. One fails: `does-not-comply`, the failures in `checks`.
- *  - a solved wire finds no crossing anywhere the wiring lets it go, both ends read
- *    (designFailure): `does-not-comply`, with the solver's message in `error`.
  *  - a device was read beyond its table — a bias, a length, a gate voltage, or a current its held
  *    width would need a gate voltage past the swept range for: `no-answer`, the records in
  *    `outside` and their words in `error`.
- *  - the run could not be completed — a `set` that does not resolve, any other solve that does
- *    not land: `no-answer`, the underlying message VERBATIM in `error`, so a shared-budget
+ *  - the run could not be completed — a `set` that does not resolve, a solve that does not land
+ *    (a search that found no crossing included): `no-answer`, the underlying message VERBATIM in `error`, so a shared-budget
  *    starvation stays distinguishable from "nothing in the range reaches it". */
 function runRangeEnd(
   rangeEnd: SheetRangeEnd,

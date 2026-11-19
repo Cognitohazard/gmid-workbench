@@ -306,7 +306,7 @@ needs to know:
   wiring maps every port the child declares through the block's `ports` (an empty map for none).
 - **A solved wire is searched where its wiring allows.** The author's range first, then the range
   the wiring puts the wire in; a solved wire with no crossing anywhere there makes a range end
-  `does-not-comply`, not `no-answer`.
+  `no-answer`: finding none is not shown to be no solution.
 - **A held design keeps a device's gate only when the sheet says so.** A device given a gate voltage
   and a current and no width is held at its width and current unless a `hold` balances its current;
   validation warns (`sheet-held-current`) where nothing says which, except for a diode connection.

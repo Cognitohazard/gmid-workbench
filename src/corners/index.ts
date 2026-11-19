@@ -1137,10 +1137,9 @@ export function aggregateConditionRuns(runs: readonly ConditionRun[]): Condition
   const unique = uniqueRuns(runs);
 
   const sized = unique.find((r) => r.design === 'sized');
-  // A base run that did not complete is no answer — unless the engine classified its centre as
-  // not complying: a solved wire with no crossing anywhere the wiring lets it go is the design
-  // failing where it is sized (see designFailure), which is infeasibility, said with the solver's
-  // message.
+  // A base run that did not complete is no answer, unless the engine read its centre as a design
+  // that does not comply. A search that found no crossing is not that: its centre is no answer
+  // (see pointOutcome).
   const feasibility: ConditionAggregate['feasibility'] = !sized
     ? 'not-run'
     : sized.state === 'evaluated'

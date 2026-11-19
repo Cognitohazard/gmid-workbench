@@ -44,8 +44,8 @@ first answer; `complies` and the per-range-end `state` carry the second.
 | outcome | meaning |
 |---|---|
 | `complies` | the held design was measured at that point and every hard check holds |
-| `does-not-comply` | it was measured there and a hard check fails — or a solved wire finds no crossing anywhere the wiring lets it go (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)) |
-| `no-answer` | the question was asked and could not be answered: a solve did not land in a range that is the author's alone, or with an end it could not read, or did not settle, a device was asked for a point its table does not hold (see [A read beyond the table](#a-read-beyond-the-table)), or the design rests on a voltage classed `assumed` |
+| `does-not-comply` | it was measured there and a hard check fails |
+| `no-answer` | the question was asked and could not be answered: a solve did not land — a search that found no crossing included, wherever its range came from (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)) — or did not settle, a device was asked for a point its table does not hold (see [A read beyond the table](#a-read-beyond-the-table)), or the design rests on a voltage classed `assumed` |
 | `not-run` | the question was never asked: there is no design to hold, or no table loaded at that condition |
 
 `no-answer` and `not-run` are never shown as a pass and never as a failure. A summary over many
@@ -1551,23 +1551,24 @@ still searched where its relations read nothing not found, and where one does, t
 found either, with the parameter it reads as its cause; a parameter found that landed by reading
 one not found is not found either. So the parameters found, and what reads only them, keep their
 values, and what reads none of the parameters not found is evaluated as it would be without them.
-Each failure is its own `sheet-solve` error; `solve` is the first of them that is a finding about
-the design (below) where there is one, and else the last.
+Each failure is its own `sheet-solve` error; `solve` is the last of them.
 
 What a failure means for the point depends on where the range came from:
 
 | outcome | where the design is sized | where the design is held (a range end, another process condition) |
 |-|-|-|
 | settled and verified | the run stands; feasible where every hard check holds | complies where every hard check holds, else does not comply |
-| no crossing anywhere in the range the wiring read, both ends read | infeasible, and the point does not comply, with the solver's message as its error | does not comply, with the solver's message as its error |
+| no crossing anywhere in the range the wiring read, both ends read | infeasible, and the point has no answer, with the solver's message as its error | no answer, with the solver's message as its error |
 | no crossing in a range that is the author's alone, or with an end not read; a step; an undetermined relation | infeasible, and the point has no answer | no answer |
 | did not settle — including a member of a set that found nothing where the others stood | infeasible, and the point has no answer | no answer |
 
-A range the wiring reads holds every level the circuit can put the wire at, so finding no crossing
-anywhere in it, with both ends of the search read, is the design not reaching its target there: a
-finding, said as one. A range of the author's own may simply be in the wrong place, and a set's
-member that found nothing did so where the other members happened to stand, so neither says anything
-about the design. A search with an end that read a device beyond its table, or had a device refused,
+A range the wiring reads holds every level the circuit can put the wire at, but finding no crossing
+anywhere in it, even with both ends of the search read, shows only that the relation does not
+change sign there: a relation not shown to be monotonic in the wire's level may still cross and
+cross back between the points read. So it is "no solution found (not proved)", and the verdict is
+undetermined. A range of the author's own may simply be in the wrong place, and a set's member that
+found nothing did so where the other members happened to stand, so neither says anything about the
+design either. A search with an end that read a device beyond its table, or had a device refused,
 — or stepped in past a stretch that does not evaluate — has no answer whatever the range (see [What no crossing means](#the-range-a-wire-is-searched-in)).
 Validation adds:
 
@@ -1607,8 +1608,8 @@ A solved parameter may therefore state no `min` and `max` where it is one of two
 - **A node's voltage** — the level of a wire, anywhere in the tree, a child sheet's included. It is
   searched in its physical range, between the wires its devices' channels join its wire to, read
   from the wiring of the whole tree as in
-  [The range a wire is searched in](#the-range-a-wire-is-searched-in). No crossing anywhere there,
-  with both ends read, is the design failing, as for any wire.
+  [The range a wire is searched in](#the-range-a-wire-is-searched-in). No crossing anywhere there
+  is no answer, as for any wire.
 - **A device's length** — a parameter that is exactly a device's `L`, read through every override
   above it. It is searched over the lengths its table holds. The shortest is the process's own
   minimum, so nothing below it can be built; the longest is only as far as the table reaches, so no
@@ -1716,8 +1717,7 @@ parameter's own term is there to read. Any other relation is a `designConstraint
 | the expression reads a name nothing on the sheet provides | the design point fails (nothing to hold it at), and validation names the name |
 | the held expression does not evaluate at the design point | infeasible — there is nothing to hold it at |
 | at a range end, the expression barely moves across the range | that end is `no-answer`, "numerically unresolved" — the rest of the expression cancels the node's own term, so no node voltage is singled out |
-| at a range end, the node finds no crossing anywhere in the range the wiring puts it in, both ends read | that end does not comply, with the search's own message |
-| at a range end, the node has no solution in a range that is the author's alone, or with an end not read, or does not settle | that end is `no-answer`, with the search's own message |
+| at a range end, the node has no solution in the range it searched — the wiring's or the author's — or does not settle | that end is `no-answer`, with the search's own message |
 
 A `hold` keeps the **design point's** gate voltage. A gate bias that itself moves with the
 condition — a replica that tracks the device — is a provided bias: write it as an expression and
@@ -1803,15 +1803,12 @@ result (validation refuses them).
 
 - `complies` — the held design was measured there and every hard check holds.
 - `does-not-comply` — it was measured there and a hard check fails; the failing checks are in
-  the end's own `checks`. One failure leaves no check outcomes: a solved wire whose search finds
-  no crossing anywhere in the range the wiring puts it in, with both ends of the search read — no
-  level the circuit can put the node at produces `CM_lo` — with the solver's message in `error`
-  (see [The range a wire is searched in](#the-range-a-wire-is-searched-in)).
+  the end's own `checks`.
 - `no-answer` — the question was asked and could not be answered, and `error` says why:
-  - a solve found no solution in a range that is the author's alone, or with an end it could not
-    read, or did not settle — no tail-node position inside the range its author typed produces
-    `CM_lo`, or the solved params
-    that read each other did not settle. Nothing was measured, so this is not a failure of the
+  - a solve found no solution in the range it searched — the author's or the wiring's (see
+    [The range a wire is searched in](#the-range-a-wire-is-searched-in)) — or did not settle: no
+    tail-node position the search read produces `CM_lo`, or the solved params that read each other
+    did not settle. Nothing was measured, so this is not a failure of the
     design; widen the range, or read it as the tool's limit rather than the circuit's;
   - a `set` expression did not resolve to a number;
   - a device was asked for a point its table does not hold: a `vds`, `vsb`, length or supplied
