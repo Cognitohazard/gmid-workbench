@@ -35,6 +35,9 @@ export interface NotReadData {
   readonly declared?: unknown;
   /** For a finding whose rule the finding table does not list: that rule. */
   readonly rule?: string;
+  /** For a field that is not well formed: the kind of entry it is in, as its rule knows it. */
+  readonly entry?:
+    'param' | 'selector' | 'check' | 'tolerance' | 'device' | 'block' | 'expression' | 'range-end';
   /** Set where the finding came from validating the document before it was evaluated, rather
    *  than from the evaluation. */
   readonly stage?: 'validation';

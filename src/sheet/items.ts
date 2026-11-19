@@ -22,6 +22,7 @@ import {
 import type { QAWarning } from '../types';
 import {
   failsCause,
+  type NotReadData,
   memberOf,
   setOf,
   type Cause,
@@ -554,10 +555,12 @@ type FindingRead =
   | 'covered'
   | 'never-an-error';
 
-/** A field of an entry that is not well formed: the entry's item cannot be read. On the sheet
- *  itself, which is still evaluated, the sheet's statements leave its design undetermined. */
+/** A field of an entry that is not well formed: the entry it names cannot be read, and the rule
+ *  says what kind of entry it is. A finding that names no entry of its own, only a list of the
+ *  sheet (`blocks`, `params`), stays on the sheet item, where the sheet's statements leave its
+ *  design undetermined: the sheet itself was read and evaluated. */
 const entryNotWellFormed =
-  (onSheet: 'entry' | 'operating-range') =>
+  (entry: NonNullable<NotReadData['entry']>, onSheet: 'entry' | 'operating-range' = 'entry') =>
   (w: QAWarning, ref: ItemRef, stage: { stage?: 'validation' }): Cause =>
     ref.kind === 'sheet' && ref.path.length === 0
       ? {
@@ -571,7 +574,7 @@ const entryNotWellFormed =
         }
       : {
           kind: 'not-read',
-          data: { why: 'field', where: w.location ?? '', message: w.message, ...stage },
+          data: { why: 'field', where: w.location ?? '', message: w.message, entry, ...stage },
         };
 
 /** A finding that the sheet's statements leave a value without one decision, or with two. */
@@ -607,9 +610,9 @@ export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
   'sheet-parse': (w, ref, stage) =>
     ref.kind === 'value' || ref.kind === 'requirement'
       ? { kind: 'cannot-evaluate', data: { why: 'syntax', name: ref.name, reason: w.message } }
-      : entryNotWellFormed('entry')(w, ref, stage),
+      : entryNotWellFormed('expression')(w, ref, stage),
   'sheet-param': (w, ref, stage) =>
-    w.decision ? decisionCause(w, w.decision, stage) : entryNotWellFormed('entry')(w, ref, stage),
+    w.decision ? decisionCause(w, w.decision, stage) : entryNotWellFormed('param')(w, ref, stage),
   'sheet-dc-inputs': (w, ref, stage) =>
     w.decision
       ? decisionCause(w, w.decision, stage)
@@ -623,16 +626,26 @@ export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
               ...stage,
             },
           }
-        : entryNotWellFormed('entry')(w, ref, stage),
-  'sheet-nodes': (w, _ref, stage) => ({
-    kind: 'not-determined',
-    data: { why: 'netlist', names: w.location ? [w.location] : [], message: w.message, ...stage },
-  }),
-  'sheet-range': entryNotWellFormed('operating-range'),
-  'sheet-block': entryNotWellFormed('entry'),
-  'sheet-check': entryNotWellFormed('entry'),
-  'sheet-tol': entryNotWellFormed('entry'),
-  'sheet-givens': entryNotWellFormed('entry'),
+        : entryNotWellFormed('param')(w, ref, stage),
+  // A netlist finding located at a param is about the param's own entry: an axis-sign selector
+  // whose value or convention is not one it may take. Any other is about the wiring.
+  'sheet-nodes': (w, ref, stage) =>
+    ref.kind === 'value' || ref.kind === 'search'
+      ? entryNotWellFormed('selector')(w, ref, stage)
+      : {
+          kind: 'not-determined',
+          data: {
+            why: 'netlist',
+            names: w.location ? [w.location] : [],
+            message: w.message,
+            ...stage,
+          },
+        },
+  'sheet-range': entryNotWellFormed('range-end', 'operating-range'),
+  'sheet-block': entryNotWellFormed('block'),
+  'sheet-check': entryNotWellFormed('check'),
+  'sheet-tol': entryNotWellFormed('tolerance'),
+  'sheet-givens': entryNotWellFormed('device'),
   // Errors that already have their item, written where they were raised: a failed search, an
   // equation that gives no number, a block whose values from its parent did not resolve.
   'sheet-solve': 'covered',

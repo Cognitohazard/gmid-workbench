@@ -120,6 +120,28 @@ const expectSame = (res: SheetResult): void => {
     expect(danglingIn(list)).toEqual([]);
 };
 
+const wideDev = generateDemoDevice({
+  vds: { min: 0, max: 1.2, step: 0.05 },
+  vsb: { min: 0, max: 0.4, step: 0.05 },
+});
+/** A sheet's own device in the current format, with an axis-sign selector `s` (its sign is
+ *  wrong for this table at -1), its drain at `vds` and its body at `vsb`. */
+const own = (sign: number, vds: string, vsb: string, rest: Partial<SheetDoc> = {}): SheetDoc => ({
+  title: 'own device',
+  polarity: 'n',
+  formatVersion: 2,
+  nodes: 'none',
+  params: [
+    { name: 's', value: sign, convention: 'axis-sign' },
+    { name: 'I', value: 2e-5 },
+    { name: 'VD', value: 0.6, unit: 'V' },
+  ],
+  givens: { L: '0.5u', gm_id: '12', id: 'I', vds, vsb },
+  equations: [],
+  checks: [],
+  ...rest,
+});
+
 describe('today’s fields equal what the items give', () => {
   it('over every library sheet, at its defaults and at each sweepable parameter’s ends', () => {
     let runs = 0;
@@ -208,28 +230,6 @@ describe('today’s fields equal what the items give', () => {
       expectSame(res);
       expect(res.verdict?.verdict).not.toBe('feasible');
     });
-
-  const wideDev = generateDemoDevice({
-    vds: { min: 0, max: 1.2, step: 0.05 },
-    vsb: { min: 0, max: 0.4, step: 0.05 },
-  });
-  /** A sheet's own device in the current format, with an axis-sign selector `s` (its sign is
-   *  wrong for this table at -1), its drain at `vds` and its body at `vsb`. */
-  const own = (sign: number, vds: string, vsb: string, rest: Partial<SheetDoc> = {}): SheetDoc => ({
-    title: 'own device',
-    polarity: 'n',
-    formatVersion: 2,
-    nodes: 'none',
-    params: [
-      { name: 's', value: sign, convention: 'axis-sign' },
-      { name: 'I', value: 2e-5 },
-      { name: 'VD', value: 0.6, unit: 'V' },
-    ],
-    givens: { L: '0.5u', gm_id: '12', id: 'I', vds, vsb },
-    equations: [],
-    checks: [],
-    ...rest,
-  });
 
   /** Each place that writes today's feasibility, with a case that reaches it. */
   const sites: Record<string, () => SheetResult> = {
@@ -655,5 +655,32 @@ describe('a solved param the run held at a given value', () => {
       failed: [{ kind: 'requirement', name: 'xc', cause: { kind: 'fails' } }],
     });
     expectSame(res);
+  });
+});
+
+describe('an entry that is not well formed', () => {
+  it('fails the entry it names as not read, with the kind of entry, never the evaluated sheet', () => {
+    const dup = runSheet(
+      own(1, '0.6', 's*0', {
+        checks: [
+          { id: 'a', kind: 'spec', lhs: 'I', op: '>=', rhs: '0' },
+          { id: 'a', kind: 'spec', lhs: 'I', op: '>=', rhs: '0' },
+        ],
+      }),
+      wideDev,
+    );
+    expect(dup.items?.find((i) => i.kind === 'requirement' && i.name === 'a')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'not-read', data: { why: 'field', entry: 'check', where: 'a' } },
+    });
+    expect(dup.items?.[0].status).toBe('ok');
+    expectSame(dup);
+
+    const selector = runSheet(own(0.5, '0.6', 's*0'), wideDev);
+    expect(selector.items?.find((i) => i.name === 's')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'not-read', data: { why: 'field', entry: 'selector', where: 's' } },
+    });
+    expectSame(selector);
   });
 });

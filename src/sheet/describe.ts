@@ -950,11 +950,39 @@ function notReadText(d: NotReadData): Line[] {
         : where
           ? t`The entry ${nm(where)} holds a value that is not valid.`
           : t`An entry of the sheet holds a value that is not valid.`;
+  // A field of one entry that is not well formed: the entry, as its rule knows it.
+  if (d.why === 'field' && d.entry && where)
+    return [
+      t`The engine cannot read ${entryName(d.entry, where)}, because it holds a value that is not valid.`,
+    ];
   const reads =
     d.why === 'format'
       ? [t`This app reads format version ${String(FORMAT_VERSION)} and sheets with no version.`]
       : [];
   return [t`The engine cannot read the sheet.`, reason, ...reads];
+}
+
+/** An entry of the sheet as a sentence names it, by the kind its rule knows it as. */
+function entryName(entry: NonNullable<NotReadData['entry']>, where: string): Line {
+  const n = nm(where);
+  switch (entry) {
+    case 'param':
+      return t`param ${n}`;
+    case 'selector':
+      return t`the axis-sign selector ${n}`;
+    case 'check':
+      return t`check ${n}`;
+    case 'tolerance':
+      return t`the tolerance of check ${n}`;
+    case 'device':
+      return t`the device of this sheet`;
+    case 'block':
+      return t`block ${n}`;
+    case 'expression':
+      return t`the expression of ${n}`;
+    case 'range-end':
+      return t`range end ${n}`;
+  }
 }
 
 function notDeterminedText(d: NotDeterminedData): Line[] {
