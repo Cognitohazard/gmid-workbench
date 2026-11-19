@@ -549,6 +549,20 @@ function locate(doc: SheetDoc | undefined, location: string | undefined): ItemRe
   return { kind: 'sheet', path, name: '' };
 }
 
+/** The item a finding of the netlist check names by what it is about: the sheet's own device, or
+ *  a selector param of the sheet. Undefined where it names neither. */
+function aboutRef(doc: SheetDoc | undefined, w: QAWarning): ItemRef | undefined {
+  const a = w.about;
+  if (!a || !doc) return undefined;
+  if (a.param) {
+    const p = Array.isArray(doc.params) ? doc.params.find((q) => q.name === a.param) : undefined;
+    if (p) return { kind: engineSolved(p) ? 'search' : 'value', path: [], name: p.name };
+  }
+  if (a.devices?.length === 1 && a.devices[0] === 'givens' && doc.givens)
+    return { kind: 'device', path: [], name: 'givens' };
+  return undefined;
+}
+
 /** How the table below reads a finding: the cause it gives, or why a rule never reaches it. */
 type FindingRead =
   | ((w: QAWarning, ref: ItemRef, stage: { stage?: 'validation' }) => Cause)
@@ -627,17 +641,26 @@ export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
             },
           }
         : entryNotWellFormed('param')(w, ref, stage),
-  // A netlist finding located at a param is about the param's own entry: an axis-sign selector
-  // whose value or convention is not one it may take. Any other is about the wiring.
+  // A finding of the netlist check about wires or devices is on the device it names, where that
+  // is the sheet's own, or a selector the table contradicts; on the sheet otherwise, with the
+  // wires in `names`. Without them, one located at a param is about the param's own entry: an
+  // axis-sign selector whose value or convention is not one it may take.
   'sheet-nodes': (w, ref, stage) =>
-    ref.kind === 'value' || ref.kind === 'search'
+    !w.about && (ref.kind === 'value' || ref.kind === 'search')
       ? entryNotWellFormed('selector')(w, ref, stage)
       : {
           kind: 'not-determined',
           data: {
             why: 'netlist',
-            names: w.location ? [w.location] : [],
+            names: w.about?.wires?.length
+              ? w.about.wires
+              : w.about?.devices?.length
+                ? w.about.devices
+                : w.location
+                  ? [w.location]
+                  : [],
             message: w.message,
+            ...(w.about ? { netlist: w.about } : {}),
             ...stage,
           },
         },
@@ -699,7 +722,7 @@ export function withFindings(
   for (const w of warnings) {
     if (w.severity !== 'error' || FINDING_CAUSES[w.rule] === 'covered' || w.cause !== undefined)
       continue;
-    const ref = locate(doc, w.location);
+    const ref = aboutRef(doc, w) ?? locate(doc, w.location);
     // A block's own findings are on its own items, under its name.
     if (mode === 'evaluation' && ref.path.length) continue;
     const cause = findingCause(w, ref, mode);

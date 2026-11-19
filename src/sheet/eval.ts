@@ -4208,12 +4208,14 @@ function runRangeEnd(
   const over: Record<string, number> = {};
   /** Asked, and nothing was evaluated that could answer. */
   const unwalked = unwalkedReport(held.doc);
-  const unanswered = (error: string): RangeEndReport =>
+  // The error has no item of its own, so it is the failed sheet item of the end's own list.
+  const unanswered = (error: string, cause: Cause): RangeEndReport =>
     unrunEnd(rangeEnd.name, 'no-answer', {
       set: over,
       error,
       ...(unwalked ? { nodes: unwalked } : {}),
       ...assumed,
+      items: [{ kind: 'sheet', path: [], name: '', status: 'failed', cause }],
     });
   // `?? {}`: a half-written range end (no set) is validation's error to name; evaluate never
   // throws.
@@ -4223,6 +4225,15 @@ function runRangeEnd(
       return unanswered(
         `range end "${rangeEnd.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
           `number against the base result`,
+        {
+          kind: 'cannot-evaluate',
+          data: {
+            why: 'not-finite',
+            name: expr,
+            reason: 'did not evaluate to a finite number against the base result',
+            rangeEnd: { name: rangeEnd.name, param, expression: expr },
+          },
+        },
       );
     over[param] = v;
   }
@@ -4232,6 +4243,15 @@ function runRangeEnd(
     return unanswered(
       `range end "${rangeEnd.name}": no nominal value was recorded for the held expression of ` +
         held.unheld.join(', '),
+      {
+        kind: 'not-determined',
+        data: {
+          why: 'operating-range',
+          names: [rangeEnd.name],
+          unheld: [...held.unheld],
+          message: `no nominal value was recorded for the held expression of ${held.unheld.join(', ')}`,
+        },
+      },
     );
   const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0, {
     held: true,

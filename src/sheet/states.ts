@@ -3,7 +3,7 @@
 // read from the list by four rules. Pure data and pure functions: what a reader sees is built from
 // these in one place (describe.ts), never written by the code that produces them.
 
-import type { OutsideTable } from '../types';
+import type { NetlistAbout, OutsideTable } from '../types';
 import type { CheckKind, CheckOp, SolveRange } from './types';
 
 /** What an item is: the sheet itself (always the first item of a result), a value (a param or an
@@ -68,6 +68,11 @@ export interface NotDeterminedData {
     readonly search: readonly [number, number];
     readonly wires: readonly [number, number];
   }[];
+  /** For a finding of the netlist check: which problem, and the wires and devices it is about
+   *  (devices by block path, `givens` for the sheet's own); for a selector, the param. */
+  readonly netlist?: NetlistAbout;
+  /** For a range end that holds a value the design run did not record: the values. */
+  readonly unheld?: readonly string[];
   /** As NotReadData.stage. */
   readonly stage?: 'validation';
 }
@@ -104,6 +109,13 @@ export interface CannotEvaluateData {
   /** For the check a declared region adds: the device it tests, and what gave no number: the
    *  device, which is not sized, or its drain-source voltage or vdsat. */
   readonly region?: { readonly device: string; readonly missing: 'device' | 'vds' | 'vdsat' };
+  /** For a range end whose `set` gives no number against the design run: the end, the param it
+   *  sets, and the expression, as the sheet writes it. */
+  readonly rangeEnd?: {
+    readonly name: string;
+    readonly param: string;
+    readonly expression: string;
+  };
 }
 
 /** Which field of a param holds the relation a search solves. */
@@ -336,8 +348,9 @@ export const OCCURS_ON: { readonly [C in CauseName]: readonly ItemKind[] } = {
   // A sheet that is not read at all, or one entry whose field is malformed on a sheet that is
   // still read and evaluated (the entry named by the finding).
   'not-read': ['sheet', 'value', 'device', 'search', 'requirement'],
-  // On the sheet, or on a value the sheet marks as assumed that the design rests on.
-  'not-determined': ['sheet', 'value'],
+  // On the sheet, or on a value the sheet marks as assumed that the design rests on; and on the
+  // device or the selector a finding of the netlist check names.
+  'not-determined': ['sheet', 'value', 'device'],
   'outside-table': ['device'],
   // A block's sheet that is not evaluated because a value its parent sets gives no number.
   'cannot-evaluate': ['sheet', 'value', 'device', 'requirement', 'search'],

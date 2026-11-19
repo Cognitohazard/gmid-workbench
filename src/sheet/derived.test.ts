@@ -684,3 +684,74 @@ describe('an entry that is not well formed', () => {
     expectSame(selector);
   });
 });
+
+describe('a finding with no item of its own', () => {
+  const wired = (nodes: unknown, rest: Partial<SheetDoc> = {}): SheetDoc =>
+    own(1, '0.6', '0', { nodes, levels: { vdd: '1.2' }, ...rest } as Partial<SheetDoc>);
+
+  it('fails the sheet item of a range end’s own list where its set gives no number', () => {
+    const res = evaluateSheet(
+      own(1, 'VD', '0', { operatingRange: [{ name: 'lo', set: { VD: 'nonsense_name' } }] }),
+      wideDev,
+    );
+    expect(res.rangeEnds?.[0].items).toEqual([
+      {
+        kind: 'sheet',
+        path: [],
+        name: '',
+        status: 'failed',
+        cause: {
+          kind: 'cannot-evaluate',
+          data: {
+            why: 'not-finite',
+            name: 'nonsense_name',
+            reason: 'did not evaluate to a finite number against the base result',
+            rangeEnd: { name: 'lo', param: 'VD', expression: 'nonsense_name' },
+          },
+        },
+      },
+    ]);
+    expectSame(res);
+  });
+
+  it('puts a netlist finding on the device or selector it names, else on the sheet with its wires', () => {
+    const selector = evaluateSheet(own(-1, '0.6', 's*0'), wideDev);
+    expect(selector.items?.find((i) => i.name === 's')).toMatchObject({
+      kind: 'value',
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          netlist: { problem: 'selector', devices: ['givens'], param: 's' },
+        },
+      },
+    });
+    expectSame(selector);
+
+    const badWire = runSheet(wired({ d: 'vdd', g: 'a.b', s: 'gnd', b: 'gnd' }), wideDev);
+    expect(badWire.items?.find((i) => i.kind === 'device')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          names: ['a.b'],
+          netlist: { problem: 'wire-name', wires: ['a.b'], devices: ['givens'] },
+        },
+      },
+    });
+    expectSame(badWire);
+
+    const lone = runSheet(wired({ d: 'vdd', g: 'lone', s: 'gnd', b: 'gnd' }), wideDev);
+    expect(lone.items?.[0]).toMatchObject({
+      kind: 'sheet',
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: { why: 'netlist', names: ['lone'], netlist: { problem: 'one-terminal' } },
+      },
+    });
+    expectSame(lone);
+  });
+});

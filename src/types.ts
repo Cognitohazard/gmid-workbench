@@ -108,6 +108,30 @@ export interface QAWarning {
     readonly kind: 'missing' | 'twice' | 'loop';
     readonly names: readonly string[];
   };
+  /** For an error of the netlist check that names wires or devices: which problem it is, and the
+   *  wires and devices (by block path, `givens` for the sheet's own) it is about. Absent where the
+   *  finding names neither. */
+  readonly about?: NetlistAbout;
+}
+
+/** The problems of the netlist check that name the wires or devices they are about. */
+export type NetlistProblem =
+  | 'short'
+  | 'wire-name'
+  | 'one-terminal'
+  | 'level-unnamed'
+  | 'unwired'
+  | 'diode-flag'
+  | 'placement'
+  | 'selector';
+
+/** What one finding of the netlist check is about (QAWarning.about). */
+export interface NetlistAbout {
+  readonly problem: NetlistProblem;
+  readonly wires?: readonly string[];
+  readonly devices?: readonly string[];
+  /** For a selector the table contradicts: the param. */
+  readonly param?: string;
 }
 
 export interface ImportError {

@@ -2,7 +2,7 @@
 // code that produces a result writes data, never these sentences, so the app and a script read the
 // same words, and a change of wording is a change here alone.
 
-import type { OutsideTable } from '../types';
+import type { NetlistAbout, OutsideTable } from '../types';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
@@ -1019,6 +1019,12 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
         ]),
       ];
     case 'operating-range':
+      if (d.unheld?.length && d.names.length)
+        return [
+          head,
+          t`Range end ${nm(d.names[0])} holds ${andLines(d.unheld.map((n) => [nm(n)]))} at the value of the design run.`,
+          t`The design run recorded no value for ${d.unheld.length > 1 ? 'them' : 'it'}.`,
+        ];
       return [
         head,
         d.names.length
@@ -1033,12 +1039,45 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
           : t`An entry of the sheet holds a value that is not valid.`,
       ];
     case 'netlist':
+      if (d.netlist) return [head, ...netlistLines(d.netlist)];
       return [
         head,
         d.names.length
           ? t`The netlist check reports a problem at ${andLines(d.names.map((n) => [nm(n.replace(/"/g, ''))]))}.`
           : t`The netlist check reports a problem in the wiring of the sheet.`,
       ];
+  }
+}
+
+/** A problem of the netlist check, with the wires and the devices it is about. */
+function netlistLines(n: NetlistAbout): Line[] {
+  const wires = (n.wires ?? []).map((w) => [nm(w)]);
+  const parts = (n.devices ?? []).map(partName);
+  const wire = wires[0] ?? [];
+  const part = parts[0] ?? t`a device`;
+  switch (n.problem) {
+    case 'short':
+      return [t`${part} has its drain and its source on wire ${wire}, which shorts it.`];
+    case 'wire-name':
+      return [
+        t`The wire name ${wire} is not valid.`,
+        t`A wire name is an identifier of letters, digits and underscores.`,
+      ];
+    case 'one-terminal':
+      return [
+        t`Only one terminal names wire ${wire}.`,
+        t`A wire joins two terminals or more, or the sheet holds it, or it is a port.`,
+      ];
+    case 'level-unnamed':
+      return [t`The sheet holds wire ${wire}, but no terminal, element or port names ${wire}.`];
+    case 'unwired':
+      return [t`The sheet names no wires for ${andLines(parts)}.`];
+    case 'diode-flag':
+      return [t`The wires of ${part} and its diode flag disagree.`];
+    case 'placement':
+      return [t`The wiring of ${part} is not well formed.`];
+    case 'selector':
+      return [t`The axis-sign selector ${nm(n.param ?? '')} does not match the table of ${part}.`];
   }
 }
 
@@ -1082,6 +1121,12 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       t`The sheet sets ${inBlock(d.hold.param, d.hold.path)} by the statement that ${ex(d.hold.statement)} is zero.`,
       t`At the design point, ${ex(d.hold.statement)} gives no number.`,
       ...byLines(d),
+    ];
+  // A range end whose `set` gives no number against the design run.
+  if (d.rangeEnd)
+    return [
+      t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}.`,
+      t`At the design point, ${ex(d.rangeEnd.expression)} gives no number.`,
     ];
   // A region check: the engine wrote its two sides from the region the device declares.
   if (d.region) {

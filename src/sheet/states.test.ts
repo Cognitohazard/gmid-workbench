@@ -36,7 +36,7 @@ import {
   type Line,
 } from './describe';
 import type { SheetDoc, SolveRange } from './types';
-import type { OutsideTable } from '../types';
+import type { NetlistAbout, OutsideTable } from '../types';
 
 const outside: OutsideTable = { device: 'in', quantity: 'l', asked: 5e-6, held: [180e-9, 2e-6] };
 
@@ -779,5 +779,107 @@ group('the message standard, as a test reads it', () => {
     ])
       expect(standardProblems(line)).toContain('opens with a label and a colon');
     expect(standardProblems(Array(21).fill('word').join(' '))).toContain('more than 20 words');
+  });
+});
+
+group('the texts of a finding with no item of its own', () => {
+  const net = (netlist: NetlistAbout): Item => ({
+    kind: 'sheet',
+    path: [],
+    name: '',
+    status: 'failed',
+    cause: {
+      kind: 'not-determined',
+      data: { why: 'netlist', names: [...(netlist.wires ?? [])], message: '', netlist },
+    },
+  });
+  const lines = (i: Item): string[] => describe(i).lines.slice(1);
+  const head = 'The statements of the sheet do not determine one design.';
+
+  it('names the problem of the netlist check and the wires and devices it is about', () => {
+    const cases: [NetlistAbout, string[]][] = [
+      [
+        { problem: 'short', wires: ['vdd'], devices: ['givens'] },
+        ['The device of this sheet has its drain and its source on wire vdd, which shorts it.'],
+      ],
+      [
+        { problem: 'wire-name', wires: ['a.b'], devices: ['givens'] },
+        [
+          'The wire name a.b is not valid.',
+          'A wire name is an identifier of letters, digits and underscores.',
+        ],
+      ],
+      [
+        { problem: 'one-terminal', wires: ['lone'] },
+        [
+          'Only one terminal names wire lone.',
+          'A wire joins two terminals or more, or the sheet holds it, or it is a port.',
+        ],
+      ],
+      [
+        { problem: 'level-unnamed', wires: ['zz'] },
+        ['The sheet holds wire zz, but no terminal, element or port names zz.'],
+      ],
+      [
+        { problem: 'unwired', devices: ['givens', 'tail'] },
+        ['The sheet names no wires for the device of this sheet and part tail.'],
+      ],
+      [
+        { problem: 'diode-flag', devices: ['load'] },
+        ['The wires of part load and its diode flag disagree.'],
+      ],
+      [
+        { problem: 'placement', devices: ['load'] },
+        ['The wiring of part load is not well formed.'],
+      ],
+      [
+        { problem: 'selector', devices: ['givens'], param: 's' },
+        ['The axis-sign selector s does not match the table of the device of this sheet.'],
+      ],
+    ];
+    for (const [about, want] of cases) {
+      const i = net(about);
+      expect(describe(i).lines[0]).toBe(head);
+      expect(lines(i)).toEqual(want);
+      for (const l of describe(i).segments) expect(standardProblems(l)).toEqual([]);
+    }
+  });
+
+  it('says which range end gives no number, and which value it holds that was not recorded', () => {
+    const set: Item = {
+      kind: 'sheet',
+      path: [],
+      name: '',
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: {
+          why: 'not-finite',
+          name: 'nonsense_name',
+          reason: '',
+          rangeEnd: { name: 'lo', param: 'VD', expression: 'nonsense_name' },
+        },
+      },
+    };
+    expect(describe(set).lines).toEqual([
+      'Range end lo sets VD to nonsense_name.',
+      'At the design point, nonsense_name gives no number.',
+    ]);
+    const unheld: Item = {
+      kind: 'sheet',
+      path: [],
+      name: '',
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: { why: 'operating-range', names: ['lo'], unheld: ['I_b'], message: '' },
+      },
+    };
+    expect(lines(unheld)).toEqual([
+      'Range end lo holds I_b at the value of the design run.',
+      'The design run recorded no value for it.',
+    ]);
+    for (const l of [...describe(set).segments, ...describe(unheld).segments])
+      expect(standardProblems(l)).toEqual([]);
   });
 });

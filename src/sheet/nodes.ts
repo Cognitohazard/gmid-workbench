@@ -21,7 +21,7 @@
 // Pure and deterministic; zero DOM. Every verdict is independent of the order relations are
 // declared in: relations are ordered by a total canonical key before anything reads them.
 
-import type { DeviceTable, QAWarning, Scope } from '../types';
+import type { DeviceTable, NetlistAbout, QAWarning, Scope } from '../types';
 import { compileExpr } from '../derive';
 import { scalarScope } from '../expr';
 import { formatQuantity } from '../units';
@@ -492,15 +492,20 @@ export function carriedConvention(
 interface LintContext {
   doc: SheetDoc;
   blocks: SheetBlock[];
-  say: (severity: 'error' | 'warning', message: string, location: string) => void;
-  err: (message: string, location: string) => void;
+  say: (
+    severity: 'error' | 'warning',
+    message: string,
+    location: string,
+    about?: NetlistAbout,
+  ) => void;
+  err: (message: string, location: string, about?: NetlistAbout) => void;
   /** Every wire named at this level, with what names it and how — the incidence rule counts
    *  terminals, element ends and a block's port map, and exempts held wires and ports; the gate
    *  rule asks whether anything but gates touches a wire. */
   touches: Map<string, { by: string; gate: boolean }[]>;
   touch: (w: string, by: string, gate?: boolean) => void;
   /** Reports a misspelt wire and says so; false for a wire spelt as one. */
-  badWire: (w: unknown, where: string, location: string) => boolean;
+  badWire: (w: unknown, where: string, location: string, device?: string) => boolean;
   held: Set<string>;
   ports: Set<string>;
   elementNames: Set<string>;
@@ -524,14 +529,17 @@ function placementProblems(
   who: string,
   location: string,
   givens: SheetGivens | undefined,
+  device: string,
 ): void {
   const { err, say } = ctx;
+  const shape: NetlistAbout = { problem: 'placement', devices: [device] };
   const list = placementsOf(raw);
   if (!list) {
     err(
       `${who}: nodes must be one placement {d, g, s, b} or a non-empty list of them` +
         (location === 'nodes' ? ', or "none"' : ''),
       location,
+      shape,
     );
     return;
   }
@@ -540,16 +548,25 @@ function placementProblems(
     const at = list.length > 1 ? `${who}, placement ${i}` : who;
     for (const k of Object.keys(p))
       if (!NODE_KEYS.has(k))
-        err(`${at}: nodes has unknown key "${k}" — a placement names d, g, s and b`, location);
+        err(
+          `${at}: nodes has unknown key "${k}" — a placement names d, g, s and b`,
+          location,
+          shape,
+        );
     for (const t of TERMINALS) {
       if (p[t] === undefined)
-        err(`${at}: nodes names no ${t} — every terminal sits on a wire`, location);
-      else if (!ctx.badWire(p[t], at, location)) ctx.touch(p[t] as string, `${at} ${t}`, t === 'g');
+        err(`${at}: nodes names no ${t} — every terminal sits on a wire`, location, shape);
+      else if (!ctx.badWire(p[t], at, location, device))
+        ctx.touch(p[t] as string, `${at} ${t}`, t === 'g');
     }
     if (p.intent !== undefined && p.intent !== 'off')
-      err(`${at}: intent may only be "off", got ${JSON.stringify(p.intent)}`, location);
+      err(`${at}: intent may only be "off", got ${JSON.stringify(p.intent)}`, location, shape);
     if (typeof p.d === 'string' && p.d === p.s)
-      err(`${at}: drain and source are both on wire "${p.d}", which shorts the device`, location);
+      err(`${at}: drain and source are both on wire "${p.d}", which shorts the device`, location, {
+        problem: 'short',
+        wires: [p.d],
+        devices: [device],
+      });
     if (typeof p.g === 'string' && p.g === p.s && p.intent !== 'off')
       say(
         'warning',
@@ -564,6 +581,7 @@ function placementProblems(
       `${who}: some placements put the gate on the drain wire and some do not — one sizing is one ` +
         `operating point, so a diode-connected device and a device that is not are separate blocks`,
       location,
+      shape,
     );
   if (!givens) return;
   const diodeFlag: unknown = givens.diode;
@@ -572,6 +590,7 @@ function placementProblems(
       `${who}: the nodes put the gate on the drain wire, which is a diode connection, but the ` +
         `givens say diode: false — drop the flag, or move the gate`,
       location,
+      { problem: 'diode-flag', devices: [device] },
     );
   if (diodes === 0 && diodeFlag === true)
     err(
@@ -579,6 +598,7 @@ function placementProblems(
         `and the drain on "${String(list[0]?.d)}" — a diode connection is the gate on the drain ` +
         `wire. Drop the flag, or wire it`,
       location,
+      { problem: 'diode-flag', devices: [device] },
     );
 }
 
@@ -592,7 +612,7 @@ function blockWiringProblems(ctx: LintContext): void {
           `device — wire a child's device from its block instead`,
         'nodes',
       );
-    placementProblems(ctx, doc.nodes, deviceName('givens'), 'nodes', doc.givens);
+    placementProblems(ctx, doc.nodes, deviceName('givens'), 'nodes', doc.givens, 'givens');
   }
   for (const b of ctx.blocks) {
     if (!b) continue;
@@ -635,7 +655,7 @@ function blockWiringProblems(ctx: LintContext): void {
           `again — connect the child through its ports instead`,
         b.name,
       );
-    placementProblems(ctx, b.nodes, who, b.name, b.doc?.givens);
+    placementProblems(ctx, b.nodes, who, b.name, b.doc?.givens, b.name);
   }
 }
 
@@ -734,6 +754,7 @@ function levelProblems(ctx: LintContext): void {
       err(
         `levels holds wire "${w}", which no terminal, element or port of this sheet names`,
         'levels',
+        { problem: 'level-unnamed', wires: [w] },
       );
   }
 }
@@ -751,6 +772,7 @@ function incidenceProblems(ctx: LintContext): void {
         `wire "${w}" is named by one terminal only (${by[0].by}) — a wire joins two terminals or ` +
           `more, or is held in levels, or is a port; a misspelt name is the usual cause`,
         'nodes',
+        { problem: 'one-terminal', wires: [w] },
       );
   for (const [w, by] of ctx.touches)
     if (open(w) && by.length > 1 && by.every((t) => t.gate))
@@ -895,10 +917,16 @@ function selectorDeclProblems(ctx: LintContext): void {
  */
 export function nodesProblems(doc: SheetDoc): QAWarning[] {
   const out: QAWarning[] = [];
-  const say = (severity: 'error' | 'warning', message: string, location: string): void => {
-    out.push({ rule: 'sheet-nodes', severity, message, location });
+  const say = (
+    severity: 'error' | 'warning',
+    message: string,
+    location: string,
+    about?: NetlistAbout,
+  ): void => {
+    out.push({ rule: 'sheet-nodes', severity, message, location, ...(about ? { about } : {}) });
   };
-  const err = (message: string, location: string): void => say('error', message, location);
+  const err = (message: string, location: string, about?: NetlistAbout): void =>
+    say('error', message, location, about);
   const touches = new Map<string, { by: string; gate: boolean }[]>();
   const ctx: LintContext = {
     doc,
@@ -912,13 +940,18 @@ export function nodesProblems(doc: SheetDoc): QAWarning[] {
       list.push({ by, gate });
       touches.set(w, list);
     },
-    badWire: (w, where, location) => {
+    badWire: (w, where, location, device) => {
       if (wireOk(w)) return false;
       err(
         typeof w === 'string' && w.includes(PROVIDE_SEP)
           ? `${where}: wire "${w}" contains "${PROVIDE_SEP}", which joins a child's names to its block`
           : `${where}: a wire is named by an identifier (letters, digits, _), got ${JSON.stringify(w)}`,
         location,
+        {
+          problem: 'wire-name',
+          wires: [typeof w === 'string' ? w : (JSON.stringify(w) ?? String(w))],
+          ...(device ? { devices: [device] } : {}),
+        },
       );
       return true;
     },
@@ -1022,6 +1055,7 @@ export function wiringRefusal(doc: SheetDoc): QAWarning[] {
         `circuit; ${MIGRATION_HINT}` +
         (formatOf(doc) === 'earlier' ? `; wiring needs "formatVersion": ${FORMAT_VERSION}` : ''),
       location: 'nodes',
+      about: { problem: 'unwired', devices: unwired },
     },
   ];
 }
@@ -1771,6 +1805,11 @@ function selectorProblems(
           `and ${deviceName(dev.name)} is sized on a table whose vgs axis runs ` +
           `${pt.axis === 1 ? 'positive (+1)' : pt.axis === -1 ? 'negative (-1)' : 'both ways'}`,
         location: 'nodes',
+        // A value that is not +1 or -1 is the selector's own entry that is not well formed; only a
+        // value it may take is a mismatch with the table.
+        ...(v === 1 || v === -1
+          ? { about: { problem: 'selector', devices: [dev.name], param: r.name } as const }
+          : {}),
       });
     }
   }
