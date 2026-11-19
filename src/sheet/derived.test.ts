@@ -1667,3 +1667,35 @@ describe('the words of the verdicts, from one table', () => {
     ]);
   });
 });
+
+describe('a solved value that is also marked with a class', () => {
+  it('names the class and the constraint, and how to fix it', () => {
+    const d = sheet('otas/five-transistor-ota.json');
+    const doc = {
+      ...d,
+      params: d.params.map((p) => (p.name === 'V_tail' ? { ...p, class: 'assumed' } : p)),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const item = res.items?.find((i) => i.kind === 'search' && i.name === 'V_tail');
+    expect(item).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: {
+          why: 'field',
+          entry: 'param',
+          field: {
+            name: 'class',
+            value: 'assumed',
+            problem: 'solved',
+            relation: 'designConstraint',
+          },
+        },
+      },
+    });
+    expect(describeItem(item as Item).lines).toEqual([
+      'V_tail is marked assumed and also has a constraint.',
+      'Remove the mark or the constraint.',
+    ]);
+  });
+});
