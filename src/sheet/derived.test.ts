@@ -1881,6 +1881,28 @@ describe('a solved value that is also marked with a class', () => {
       'Remove the mark or the constraint.',
     ]);
   });
+  it('names the solve-for entry where that is what solves it', () => {
+    const d = sheet('mirrors-bias/cascode-current-mirror.json');
+    const doc = {
+      ...d,
+      params: d.params.map((p) => (p.name === 'k_x' ? { ...p, class: 'assumed' } : p)),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    const item = res.items?.find((i) => i.kind === 'search' && i.name === 'k_x');
+    expect(item).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: {
+          field: { name: 'class', value: 'assumed', problem: 'solved', relation: 'solveFor' },
+        },
+      },
+    });
+    expect(describeItem(item as Item).lines).toEqual([
+      'k_x is marked assumed and is also solved by a solve-for entry.',
+      'Remove the mark or the solve-for entry.',
+    ]);
+  });
 });
 
 describe('a block read in its own list names its part as its parent does', () => {

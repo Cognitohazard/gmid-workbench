@@ -1066,7 +1066,8 @@ const PARAM_FIELD: Readonly<Record<string, string>> = {
 };
 
 /** The lines of one field of an entry that is not well formed: a class on a param the engine solves
- *  by its design constraint names the conflict and its fix; any other field gives its one line. */
+ *  names the conflict, with the relation that solves it, and its fix; any other field gives its
+ *  one line. */
 function fieldLines(
   entry: NonNullable<NotReadData['entry']>,
   where: string,
@@ -1076,13 +1077,18 @@ function fieldLines(
     entry === 'param' &&
     f.name === 'class' &&
     f.problem === 'solved' &&
-    f.relation === 'designConstraint' &&
+    f.relation !== undefined &&
     typeof f.value === 'string'
   )
-    return [
-      t`${nm(where)} is marked ${f.value} and also has a constraint.`,
-      t`Remove the mark or the constraint.`,
-    ];
+    return f.relation === 'designConstraint'
+      ? [
+          t`${nm(where)} is marked ${f.value} and also has a constraint.`,
+          t`Remove the mark or the constraint.`,
+        ]
+      : [
+          t`${nm(where)} is marked ${f.value} and is also solved by a solve-for entry.`,
+          t`Remove the mark or the solve-for entry.`,
+        ];
   const line = fieldLine(entry, where, f);
   return line && [line];
 }
