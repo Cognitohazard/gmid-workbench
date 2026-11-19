@@ -127,8 +127,8 @@ export function rangeSource(
 }
 
 /** What a search that found no crossing in its stretch tells the author: a range of the author's
- *  own may be in the wrong place; the wiring's range is where the circuit can put the wire, so no
- *  crossing there — read at both ends — is the design not reaching its target. */
+ *  own may be in the wrong place; the wiring's range is where the circuit can put the wire, and no
+ *  crossing there — even read at both ends — is no solution found, not a proof that none exists. */
 export function noCrossingAdvice(from: SolveRange['from'], endsRead: boolean): string {
   if (from === 'table')
     return (
@@ -142,7 +142,8 @@ export function noCrossingAdvice(from: SolveRange['from'], endsRead: boolean): s
       `this table`
     );
   return endsRead
-    ? `The circuit can put the wire nowhere else, so the design does not reach its target here`
+    ? `The circuit can put the wire nowhere else. The engine found no solution there, and this is ` +
+        `not a proof that none exists`
     : `The circuit can put the wire nowhere else, but an end of the search read a device beyond ` +
         `its table, had a device refused, or was stepped in past a stretch that does not evaluate ` +
         `— so this is not shown to be the design's failure`;

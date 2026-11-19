@@ -2085,7 +2085,10 @@ describe('the range a solved wire is searched in is the circuit’s own where th
       'found no solution in [0, 1.8] V (the range the wiring puts its wire in, between "gnd" ' +
         'and "vdd", after the author\'s range [-0.5, 0.8] V)',
     );
-    expect(message).toContain('The circuit can put the wire nowhere else, so the design does not');
+    expect(message).toContain(
+      'The circuit can put the wire nowhere else. The engine found no solution there, and this ' +
+        'is not a proof that none exists',
+    );
     // Finding no crossing is not shown to be no solution: the point has no answer, with the
     // solver's message, and the verdict is undetermined.
     expect(r.point).toEqual({ sized: false, state: 'no-answer', error: message });
