@@ -1867,6 +1867,14 @@ describe('compliance and the wiring check read one classification', () => {
     expect(sized.result.nodes?.state).toBe('checked-clean');
     expect(sized.points[0].state).toBe('no-answer');
     expect(sized.result.point).toMatchObject({ sized: true, state: 'no-answer' });
+    expect(sized.points[0].verdict?.verdict).toBe('undetermined');
+    expect(
+      sized.points[0].verdict?.failed.map((f) => [
+        f.name,
+        f.cause.kind,
+        (f.cause.data as { why?: string }).why,
+      ]),
+    ).toEqual([['V_d', 'not-determined', 'assumed-level']]);
   });
 
   it('reports a condition declined before anything ran as not evaluated, as a declined range end is', () => {
@@ -1875,6 +1883,8 @@ describe('compliance and the wiring check read one classification', () => {
     if (held.state !== 'not-evaluated') return;
     expect(held.points[0].state).toBe('no-answer');
     expect(held.nodes).toMatchObject({ state: 'not-evaluated', notes: [NO_ANSWER_NOTE] });
+    // Declined before anything was calculated, so there is no verdict to give beside it.
+    expect(held.points[0].verdict).toBeUndefined();
   });
 });
 
@@ -2097,7 +2107,11 @@ describe('the range a solved wire is searched in is the circuit’s own where th
     const tt = { corner: 'tt', temp: 27 };
     const [device] = groupDevices([{ ...tw, id: { ...tw.id, ...tt } }]);
     const runs = runConditions(follower([-0.5, 0.8], { VG: 0.4 }), device, [tt], () => undefined);
-    expect(runs[0].points[0]).toEqual({ state: 'no-answer', error: message });
+    expect(runs[0].points[0]).toEqual({
+      state: 'no-answer',
+      error: message,
+      verdict: runs[0].result?.verdict,
+    });
     expect(runs[0].result?.verdict?.verdict).toBe('undetermined');
     expect(aggregateConditionRuns(runs).feasibility).toBe('no-answer');
     // And at a held point: the range end lowers the gate as far.

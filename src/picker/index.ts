@@ -16,6 +16,7 @@
 import type { DeviceTable } from '../types';
 import { noiseLabel } from '../derive';
 import { blockWires } from '../sheet/nodes';
+import { isComplete } from '../sheet/states';
 import {
   bindingCheck,
   choiceKnobs,
@@ -37,7 +38,6 @@ import {
   resolvedSheet,
   runSheet,
   sheetSensitivities,
-  stands,
   sweepSheet,
   sweepable,
   validateSheet,
@@ -368,9 +368,15 @@ function afford(m: Meter, n: number): boolean {
 function scoreResult(res: SheetResult): number {
   const worst = limitingCheck(res);
   const s =
-    worst === undefined ? (res.feasible ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst.marginPct);
-  return stands(res) ? s : noDesign(s);
+    worst === undefined ? (closes(res) ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst.marginPct);
+  return isComplete(res) ? s : noDesign(s);
 }
+
+/** Whether an evaluation closes the sheet: its verdict is feasible. */
+const closes = (res: SheetResult): boolean => res.verdict?.verdict === 'feasible';
+
+/** Whether one sample of a sweep closes the sheet: its verdict is feasible. */
+const sampleCloses = (sw: SheetSweep, i: number): boolean => sw.verdicts[i] === 'feasible';
 
 /** One score demoted into the no-design band: ordered among its own kind, and below everything
  *  else. `clampMargin` bounds a real score to ±MARGIN_PCT_CAP, so this lands in
@@ -384,7 +390,7 @@ function noDesign(s: number): number {
  * tree, so the minimum over those is the same number `scoreResult` computes from a full result
  * — deliberately, since the search compares the two against each other: an incumbent scored
  * from a full result against a move scored from a sweep. "This sample produced no design" is
- * the sweep's own per-sample `stands`, the same predicate `scoreResult` reads.
+ * the sweep's own per-sample `complete`, the same rule `scoreResult` reads (isComplete).
  *
  * Admissibility is the core's own `measurable`, read off the two fields a sweep row carries: a
  * check parked on its own boundary by construction reads zero forever and would otherwise be the
@@ -398,8 +404,8 @@ function scoreSample(sw: SheetSweep, i: number): number {
     if (m === null || !measurable(r.kind, m)) continue;
     if (m < worst) worst = m;
   }
-  const s = worst === Infinity ? (sw.feasible[i] ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst);
-  return sw.stands[i] ? s : noDesign(s);
+  const s = worst === Infinity ? (sampleCloses(sw, i) ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst);
+  return sw.complete[i] ? s : noDesign(s);
 }
 
 /** Whether `(feasible, score)` beats the incumbent, feasibility first. Strict, so the first
@@ -581,7 +587,7 @@ function rankKnobs(
 function bestSample(sw: SheetSweep): { x: number; feasible: boolean; score: number } | undefined {
   let best: { x: number; feasible: boolean; score: number } | undefined;
   for (let i = 0; i < sw.x.length; i++) {
-    const f = sw.feasible[i];
+    const f = sampleCloses(sw, i);
     const s = scoreSample(sw, i);
     if (!best || beats(f, s, best.feasible, best.score))
       best = { x: sw.x[i], feasible: f, score: s };
@@ -714,7 +720,7 @@ function repair(
       }
     }
 
-    if (!move || !beats(move.feasible, move.score, res.feasible, score)) {
+    if (!move || !beats(move.feasible, move.score, closes(res), score)) {
       if (meter.exhausted) return starved();
       continue; // this knob had nothing; the next round takes the next one down the ranking
     }
@@ -725,7 +731,7 @@ function repair(
     score = scoreResult(res);
     tried.clear();
     ranked = undefined; // the point moved; the ranking was about where it was
-    if (res.feasible) return { doc, res };
+    if (closes(res)) return { doc, res };
   }
   return {
     doc,
@@ -782,7 +788,7 @@ function backOff(
   if (!afford(meter, 1)) return { doc: doc0 };
   const atFloor = runSheet(scaled(floor), table, resolveDevice, refs, { settings });
   meter.evals += 1;
-  if (atFloor.feasible) return { doc: scaled(floor), res: atFloor };
+  if (closes(atFloor)) return { doc: scaled(floor), res: atFloor };
   if (bindingCheck(atFloor) === undefined) return { doc: doc0 };
 
   for (let i = 0; i < PICKER_BISECT_STEPS; i++) {
@@ -790,7 +796,7 @@ function backOff(
     const mid = (lo + hi) / 2;
     const res = runSheet(scaled(mid), table, resolveDevice, refs, { settings });
     meter.evals += 1;
-    if (res.feasible) {
+    if (closes(res)) {
       hi = mid;
       best = { doc: scaled(mid), res };
     } else {
@@ -942,19 +948,23 @@ export function pickTopology(
   // Clone before overriding: a library doc is shared by every candidate in the run, and the
   // search must not leave a mark on it. The operating range is dropped: the picker answers
   // which design types are FEASIBLE on this spec, and whether a chosen design then holds across
-  // its range is a question for that design, on its own sheet. A sheet that does not validate
-  // keeps its range, so that a defect IN the range still stops the candidate the way it stops
-  // the sheet everywhere else, instead of vanishing with the part that carried it.
+  // its range is a question for that design, on its own sheet. The sheet is validated as it will
+  // be searched, with the spec applied, and one that does not validate is refused before any
+  // search, whole range included: a defect IN the range still stops the candidate the way it
+  // stops the sheet everywhere else, instead of vanishing with the part that carried it, and an
+  // entry the spec replaces is not one the search would meet.
   const whole = cloneDoc(sheet.doc);
-  const valid = !validateSheet(resolvedSheet(whole, refs).doc).some((w) => w.severity === 'error');
-  const base = valid ? withoutRange(whole) : whole;
-  const { ignored, over } = applySpec(base, spec);
+  const { ignored, over } = applySpec(whole, spec);
   const applied = Object.keys(over);
   const supplied = SPEC_FIELDS.filter((f) => {
     const v = spec[f.name];
     return v !== undefined && Number.isFinite(v);
   }).length;
-  const start = withParams(base, over);
+  const specified = withParams(whole, over);
+  const invalid = validateSheet(resolvedSheet(specified, refs).doc)
+    .filter((w) => w.severity === 'error')
+    .map((w) => w.message);
+  const start = invalid.length ? specified : withoutRange(specified);
   const defaults = new Map(start.params.map((p) => [p.name, p.value]));
 
   const res0 = runSheet(start, table, resolveDevice, refs, { settings });
@@ -970,9 +980,12 @@ export function pickTopology(
   // A device the table cannot answer for (see SizingReport.unswept). No knob sizes it, and the
   // checks that fail beside it were evaluated on a design with that device missing — so there
   // is nothing to search and no binding check to report: the refusal is the whole answer.
-  const refused = refusedIn(res0);
+  const refused = invalid.length ? invalid : refusedIn(res0);
 
-  if (res0.feasible) {
+  if (invalid.length) {
+    verdict = 'could-not-be-searched';
+    stopNote = invalid.join('; ');
+  } else if (closes(res0)) {
     verdict = 'closed';
   } else if (refused.length) {
     verdict = 'could-not-be-searched';
@@ -990,10 +1003,12 @@ export function pickTopology(
     doc = out.doc;
     res = out.res;
     stopNote = out.stopped;
-    verdict = res.feasible ? 'closed' : 'did-not-close';
+    verdict = closes(res) ? 'closed' : 'did-not-close';
   }
 
-  if (res.feasible && !meter.exhausted) {
+  // A sheet refused for a validation error gets its one screening evaluation and nothing more,
+  // whatever that evaluation reads.
+  if (!invalid.length && closes(res) && !meter.exhausted) {
     const relaxed = backOff(doc, table, resolveDevice, refs, settings, meter);
     if (relaxed.res) {
       doc = relaxed.doc;
@@ -1028,7 +1043,7 @@ export function pickTopology(
   // sheet that was never searched has no "last point searched" to speak of.
   let cause: string | undefined;
   if (refused.length) cause = stopNote;
-  else if (!res.feasible) {
+  else if (!closes(res)) {
     const found = causeOf(res);
     if (stopNote === undefined) cause = found;
     else if (verdict === 'did-not-close')
