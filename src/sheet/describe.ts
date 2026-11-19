@@ -1755,7 +1755,7 @@ export function verdictText(v: Verdict<string>): readonly Line[] {
     for (const f of v.failed)
       lines.push(
         f.end !== undefined
-          ? t`The verdict is undetermined, because range end ${nm(f.end)} cannot be calculated.`
+          ? t`The verdict is undetermined, because the entry of range end ${nm(f.end)} is not well formed.`
           : t`The verdict is undetermined, because ${withheldClause({ kind: f.kind, path: f.path, name: f.name, cause: f.cause.kind })}.`,
       );
   return distinctLines(lines);

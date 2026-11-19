@@ -1649,7 +1649,7 @@ group('the line of an undetermined verdict', () => {
     };
     const lines = verdictText(v);
     expect(lines.map(lineText)).toEqual([
-      'The verdict is undetermined, because range end cm-lo cannot be calculated.',
+      'The verdict is undetermined, because the entry of range end cm-lo is not well formed.',
       'The verdict is undetermined, because the engine could not calculate V_tail.',
     ]);
     expect(lines[0].find((sg) => sg.kind === 'name')).toEqual({ kind: 'name', text: 'cm-lo' });
