@@ -385,6 +385,31 @@ describe('the table from a finding’s rule to its cause', () => {
     expect([...rules].filter((r) => !(r in FINDING_CAUSES)).sort()).toEqual([]);
   });
 
+  it('lists as never an error only rules whose every finding in the source is a warning or a note', () => {
+    const dir = join(__dirname);
+    const raisedAsError = new Set<string>();
+    for (const f of readdirSync(dir))
+      if (f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.endsWith('.fixtures.ts')) {
+        const src = readFileSync(join(dir, f), 'utf8');
+        for (const m of src.matchAll(/rule: '(sheet-[a-z-]+)'/g)) {
+          // The object literal the rule is written in, to its closing brace.
+          const at = m.index ?? 0;
+          const open = src.lastIndexOf('{', at);
+          const close = src.indexOf('}', at);
+          const literal = src.slice(open, close);
+          // A severity written only as literal warnings or notes is never an error; one that
+          // names 'error', or is not written as literals, may be.
+          const value = /severity(?::\s*([^,\n]+))?/.exec(literal)?.[1];
+          if (!value || /'error'/.test(value) || !/'(info|warning)'/.test(value))
+            raisedAsError.add(m[1]);
+        }
+      }
+    const neverAnError = Object.entries(FINDING_CAUSES)
+      .filter(([, read]) => read === 'never-an-error')
+      .map(([rule]) => rule);
+    expect(neverAnError.filter((r) => raisedAsError.has(r)).sort()).toEqual([]);
+  });
+
   it('reads a missing decision as a design not determined, never as an entry not read', () => {
     const d = sheet('otas/five-transistor-ota.json');
     const p = d.params.find((x) => x.name === 'V_tail') as { designConstraint?: unknown };

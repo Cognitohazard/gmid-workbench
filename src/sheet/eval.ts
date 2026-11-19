@@ -91,7 +91,7 @@ import {
   withSet,
 } from './states';
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
-import { causeOfFailure, solveFailureOf } from './derived';
+import { failOn, solveFailureOf } from './derived';
 import { itemsOf, resolveWithheld, searchItems, under, withFindings } from './items';
 import {
   axisDirection,
@@ -2029,6 +2029,8 @@ function solveFailed(res: SheetResult, failure: SolveFailure, doc?: SheetDoc): S
 /** One failure of a node's solve, with the evaluation it stopped on (see withUnfound). */
 interface Failed {
   failure: SolveFailure;
+  /** The cause today's failure record was derived from. */
+  cause: Cause;
   probe: SheetResult;
 }
 
@@ -3098,14 +3100,15 @@ interface Probe {
 /** How a solve ended. `ok` only for an answer that was reached; every failure carries the last
  *  evaluation and the outcome that names it. */
 type Outcome =
-  { ok: true; res: SheetResult } | { ok: false; res: SheetResult; failure: SolveFailure };
+  | { ok: true; res: SheetResult }
+  | { ok: false; res: SheetResult; failure: SolveFailure; cause: Cause };
 
 /** A search's answer: where the unknown landed, the evaluation there, and the relation's slope at
  *  the root — what converts the param's tolerance into the relation's units wherever the relation
  *  is read again (see holdsAt). */
 type Found =
   | { ok: true; res: SheetResult; x: number; slope: number }
-  | { ok: false; res: SheetResult; failure: SolveFailure };
+  | { ok: false; res: SheetResult; failure: SolveFailure; cause: Cause };
 
 /** The budget ran out: nothing the other members of a set do can give it back, so a retry would
  *  only fail the same way. */
@@ -3342,7 +3345,7 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
     // Only the budget can stop a search before its first probe; the node is evaluated once even
     // then, so the failure still carries a result to read.
     last ??= evaluateOnce(ctx, ctx.at, ctx.unfound);
-    return { ok: false, res: at?.res ?? last, failure: solveFailureOf(cause) };
+    return { ok: false, res: at?.res ?? last, ...failOn(cause) };
   };
   const data = (): SearchData => searchDataOf(ctx, u, also);
   const probe = (x: number): Probe | undefined => {
@@ -3735,14 +3738,14 @@ function settle(
         continue;
       }
       if (!found.ok) {
-        const inner = causeOfFailure(found.failure) as Cause;
+        const inner = found.cause;
         const members = set.map((o) => searchDataOf(ctx, o, []));
         return {
           ok: false,
           res: found.res,
           // The member that failed keeps its own cause, with the set it was one of; a budget
           // that ran out is the set's own failure.
-          failure: solveFailureOf(
+          ...failOn(
             inner.kind === 'limit' && outOfBudget(found.failure)
               ? { kind: 'limit', data: { ...inner.data, set: members } }
               : (withSet(inner, members) ?? {
@@ -3770,7 +3773,7 @@ function settle(
   return {
     ok: false,
     res: res as SheetResult,
-    failure: solveFailureOf({
+    ...failOn({
       kind: 'did-not-settle',
       data: {
         members: set.map((o) => searchDataOf(ctx, o, [])),
@@ -3836,7 +3839,7 @@ function solveNode(node: NodeRef): SheetResult {
     if (!failed.length)
       failed.push({
         probe: firstProbe(),
-        failure: solveFailureOf({
+        ...failOn({
           kind: 'not-determined',
           data: {
             why: declarationWhy(doc, issue.params),
@@ -3871,7 +3874,7 @@ function solveNode(node: NodeRef): SheetResult {
     for (const n of refused) unfound.set(n, n);
     failed.push({
       probe: firstProbe(),
-      failure: solveFailureOf({
+      ...failOn({
         kind: 'not-determined',
         data: {
           why: 'range-outside',
@@ -3943,7 +3946,7 @@ function solveNode(node: NodeRef): SheetResult {
     if (!outcome.ok) {
       for (const n of failedParams(outcome.failure)) unfound.set(n, n);
       for (const n of names) if (!unfound.has(n)) unfound.set(n, failedParams(outcome.failure)[0]);
-      failed.push({ probe: outcome.res, failure: outcome.failure });
+      failed.push({ probe: outcome.res, failure: outcome.failure, cause: outcome.cause });
       continue;
     }
     last = outcome.res;
@@ -3956,7 +3959,7 @@ function solveNode(node: NodeRef): SheetResult {
     .filter((u) => !holdsAt(u, final, slope, solveTolRel))
     .map((u) => ({ u, g: relationAt(u, final), tol: tolOf(u, slope, solveTolRel) }));
   if (off.length) {
-    const failure = solveFailureOf({
+    const failed = failOn({
       kind: 'did-not-settle',
       data: {
         members: off.map((o) => searchDataOf(ctx, o.u, [])),
@@ -3979,7 +3982,7 @@ function solveNode(node: NodeRef): SheetResult {
     // Only the params read off their tolerance are not found: every other one verified where it
     // landed, unless it landed by reading one of them (withUnfound).
     const off_ = new Map(off.map((o) => [o.u.p.name, o.u.p.name]));
-    return ranged(withUnfound(node, [{ failure, probe: final }], off_, at));
+    return ranged(withUnfound(node, [{ ...failed, probe: final }], off_, at));
   }
   return ranged({ ...final, solve: { kind: 'settled' } });
 }

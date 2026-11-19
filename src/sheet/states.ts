@@ -33,6 +33,8 @@ export interface NotReadData {
   readonly message: string;
   /** For a format this app does not read: the version the document declares. */
   readonly declared?: unknown;
+  /** For a finding whose rule the finding table does not list: that rule. */
+  readonly rule?: string;
   /** Set where the finding came from validating the document before it was evaluated, rather
    *  than from the evaluation. */
   readonly stage?: 'validation';

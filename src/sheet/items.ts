@@ -20,7 +20,6 @@ import {
   type SolveFailure,
 } from './types';
 import type { QAWarning } from '../types';
-import { causeOfFailure } from './derived';
 import {
   failsCause,
   memberOf,
@@ -51,14 +50,12 @@ const onOf = (items: readonly Item[], ref: ItemRef): WithheldOn => {
  *  for a declaration that cannot be solved as written, withheld on the sheet, whose item carries
  *  the cause — and each other param not found, withheld on the one it traces back to. */
 export function searchItems(
-  failures: readonly { failure: SolveFailure }[],
+  failures: readonly { failure: SolveFailure; cause: Cause }[],
   unfound: ReadonlyMap<string, string>,
 ): Item[] {
   const out: Item[] = [];
   const named = new Set<string>();
-  for (const { failure } of failures) {
-    const cause = causeOfFailure(failure);
-    if (!cause) continue;
+  for (const { failure, cause } of failures) {
     if (cause.kind === 'not-determined') {
       out.push({ kind: 'sheet', path: [], name: '', status: 'failed', cause });
       continue;
@@ -662,8 +659,13 @@ export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
 function findingCause(w: QAWarning, ref: ItemRef, mode: 'evaluation' | 'validation'): Cause {
   const stage = mode === 'validation' ? { stage: 'validation' as const } : {};
   const read = FINDING_CAUSES[w.rule];
+  // A rule the table does not list: the item it names fails, with the rule as data. The test of
+  // the table fails the build before this is reached; the evaluator never throws.
   if (typeof read !== 'function')
-    throw new Error(`an error of rule ${w.rule} has no cause in the finding table`);
+    return {
+      kind: 'not-read',
+      data: { why: 'field', where: w.location ?? '', message: w.message, rule: w.rule, ...stage },
+    };
   return read(w, ref, stage);
 }
 

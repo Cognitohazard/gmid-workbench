@@ -17,19 +17,26 @@ import type { NoSolutionWhy, SolveFailure } from './types';
 const becauseOf = (d: NoSolutionRead): NoSolutionWhy =>
   d.ended.kind === 'sign' ? 'no-crossing' : d.ended.kind === 'step' ? 'step' : 'undetermined';
 
-/** The cause each solve outcome derived here was derived from (solveFailureOf). */
-const CAUSE_OF = new WeakMap<SolveFailure, Cause>();
-
-/** The cause a solve outcome was derived from, where it was derived from one. */
-export const causeOfFailure = (f: SolveFailure): Cause | undefined => CAUSE_OF.get(f);
-
 /** The solve outcome today's fields carry for a failed search, from its cause: the same kind, the
- *  same unknowns and the same message. The cause is kept beside it (causeOfFailure). */
-export function solveFailureOf(c: Cause): SolveFailure {
-  const f = legacyFailure(c);
-  CAUSE_OF.set(f, c);
-  return f;
-}
+ *  same unknowns and the same message. */
+export const solveFailureOf = (c: Cause): SolveFailure => legacyFailure(c);
+
+/** A failed search as the engine carries it: today's failure record, and the cause it was derived
+ *  from, side by side, so a reader of the cause never looks it up from the record. */
+export const failOn = (cause: Cause): { failure: SolveFailure; cause: Cause } => ({
+  failure: legacyFailure(cause),
+  cause,
+});
+
+/** A cause that is not the outcome of a search reaching today's solve record: no search writes
+ *  one, so this is never reached, but the evaluator never throws. It reads as a set that is not
+ *  well formed, with its message. */
+const notASearchOutcome = (c: Cause, message: string): SolveFailure => ({
+  kind: 'not-settled',
+  unknowns: [],
+  why: 'malformed',
+  message: message || c.kind,
+});
 
 function legacyFailure(c: Cause): SolveFailure {
   // A member of a set that failed where the others were held: today, the set did not settle, in
@@ -100,9 +107,9 @@ function legacyFailure(c: Cause): SolveFailure {
           why: 'unevaluable',
           message,
         };
-      throw new Error('a cause that gives no number is not the outcome of a search here');
+      return notASearchOutcome(c, message);
     default:
-      throw new Error(`a ${c.kind} cause is not the outcome of a search`);
+      return notASearchOutcome(c, message);
   }
 }
 
