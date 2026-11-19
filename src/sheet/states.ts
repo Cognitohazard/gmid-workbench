@@ -610,19 +610,41 @@ export interface Verdict<V extends string = DesignVerdict> {
   readonly held?: readonly ItemRef[];
 }
 
-/** The items whose numbers a run does not have: each item withheld, and each failed other than a
- *  requirement that fails, whose two sides are there. Empty where the run is complete. */
+/**
+ * The causes a failed item may carry while its number is still in place, so that a reader may take
+ * it: a design that rests on a level the sheet marks as assumed was calculated on that value. One
+ * table, read by `hasNumber` alone.
+ */
+export const NUMBER_IN_PLACE: readonly { readonly kind: CauseName; readonly why?: string }[] = [
+  { kind: 'not-determined', why: 'assumed-level' },
+];
+
+/** The kinds of item that hold a number another item reads. A requirement holds none: what it
+ *  could not say is the verdict's business, and a reader of its margin reads its own status. */
+const HOLDS_NUMBER: ReadonlySet<ItemKind> = new Set(['value', 'device', 'search', 'sheet']);
+
+/** Whether an item's number is there: it is ok, or failed with a cause that leaves its number in
+ *  place (NUMBER_IN_PLACE). A value that reads a name no entry declares has none. */
+export const hasNumber = (i: Item): boolean =>
+  i.status === 'ok' ||
+  (i.status === 'failed' &&
+    NUMBER_IN_PLACE.some(
+      (c) =>
+        c.kind === i.cause.kind &&
+        (c.why === undefined || (i.cause.data as { why?: string }).why === c.why),
+    ));
+
+/** The items whose number a run does not have: each value, device, search or sheet item that is
+ *  withheld, or failed with a cause that leaves no number (hasNumber). Empty where the run is
+ *  complete. */
 export const incompleteOn = (items: readonly Item[]): Item[] =>
-  items.filter(
-    (i) =>
-      i.status === 'withheld' ||
-      (i.status === 'failed' && !(i.kind === 'requirement' && i.cause.kind === 'fails')),
-  );
+  items.filter((i) => HOLDS_NUMBER.has(i.kind) && !hasNumber(i));
 
 /** Whether every number of a run is there, from its items (incompleteOn). It answers completeness,
  *  not what the design is: a run where a hard requirement fails and a search also fails reads
- *  non-compliant, and is not complete. The sensitivity views difference around a run only where it
- *  is complete. */
+ *  non-compliant, and is not complete; one on an assumed level is complete, and undetermined. A
+ *  reader that takes numbers from a run reads this; one that takes a requirement's margin also reads
+ *  the verdict and that requirement's own status. */
 export const isComplete = (res: { items?: readonly Item[] }): boolean =>
   res.items !== undefined && incompleteOn(res.items).length === 0;
 

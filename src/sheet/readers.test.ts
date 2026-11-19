@@ -111,10 +111,26 @@ group('a design that rests on an assumed level', () => {
     });
   });
 
-  it('stands today and gives no design to read', () => {
+  it('is complete, as it stands today, and its sensitivities are computed', () => {
     const res = evaluated(assumed);
     expect(stands(res)).toBe(true);
-    expect(isComplete(res)).toBe(false);
+    expect(isComplete(res)).toBe(true);
+    expect(
+      sheetSensitivities(assumed, table, undefined, { refs: REFS, params: ['gm_id_in'] })[0].error,
+    ).toBeUndefined();
+    expect(devicePropertySensitivities(assumed, table, undefined, { refs: REFS }).error).toBe(
+      undefined,
+    );
+  });
+
+  it('passes nowhere in a sweep, as its verdict is undetermined, where today it passes', () => {
+    const s = sweepSheet(assumed, 'gm_id_in', table, 3, undefined, REFS, { windows: true });
+    expect(s.feasible).toEqual([true, true, true]);
+    expect(s.verdicts).toEqual(['undetermined', 'undetermined', 'undetermined']);
+    expect(s.windows).toEqual([]);
+    // Its range ends are not calculated, so they chart a gap, as today's no-answer does.
+    for (const c of s.checks.filter((x) => x.rangeEnd !== undefined))
+      expect(c.marginPct).toEqual([null, null, null]);
   });
 });
 
