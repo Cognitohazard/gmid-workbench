@@ -2705,13 +2705,7 @@ describe('one held verdict over points, and what a declined condition says as da
       decidedBy: [{ key: key('tt'), rangeEnd: 'hi' }],
     });
     // Read: tt's three points and ss's centre; not ss lo (an error) nor ff's two (not calculated).
-    expect(agg.marginPoints).toEqual({
-      read: 4,
-      total: 7,
-      notRun: 2,
-      notCalculated: 0,
-      unreadable: 1,
-    });
+    expect(agg.marginPoints).toEqual({ read: 4, unreadable: 1, notCalculated: 2, total: 7 });
     expect(agg.worst).toMatchObject({ id: 'e', marginPct: -0.1, status: 'fail', rangeEnd: 'hi' });
   });
 

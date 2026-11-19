@@ -929,6 +929,22 @@ export const FINDING_CAUSES: Readonly<Record<string, FindingRead>> = {
 };
 
 /** The cause an error finding gives the item it is about, by its rule (FINDING_CAUSES). */
+/** The causes of the findings the table calls covered, for a list no evaluation made (withFindings,
+ *  `uncovered`): a block override of a name its sheet does not have reads as the block entry's
+ *  field, as the evaluation gives it. */
+const UNCOVERED: Readonly<
+  Record<string, (w: QAWarning, ref: ItemRef, stage: { stage?: 'validation' }) => Cause>
+> = {
+  'sheet-block-param': entryNotWellFormed('block'),
+};
+const stageOf = (mode: 'evaluation' | 'validation'): { stage?: 'validation' } =>
+  mode === 'validation' ? { stage: 'validation' } : {};
+/** A finding no rule reads: the item it names fails, with the rule as data. */
+const fallbackCause = (w: QAWarning, _ref: ItemRef, stage: { stage?: 'validation' }): Cause => ({
+  kind: 'not-read',
+  data: { why: 'field', where: w.location ?? '', message: w.message, rule: w.rule, ...stage },
+});
+
 function findingCause(w: QAWarning, ref: ItemRef, mode: 'evaluation' | 'validation'): Cause {
   const stage = mode === 'validation' ? { stage: 'validation' as const } : {};
   const read = FINDING_CAUSES[w.rule];
@@ -1011,15 +1027,28 @@ export function withFindings(
   warnings: readonly QAWarning[],
   doc: SheetDoc | undefined,
   mode: 'evaluation' | 'validation',
+  /** Where no evaluation ran (a condition declined because the sheet does not validate), so no
+   *  item covers a finding the table calls covered: such a finding goes on the item it names too,
+   *  with the cause UNCOVERED gives its rule. */
+  { uncovered = false }: { readonly uncovered?: boolean } = {},
 ): Item[] {
   const out = [...items];
   for (const w of warnings) {
-    if (w.severity !== 'error' || FINDING_CAUSES[w.rule] === 'covered' || w.cause !== undefined)
-      continue;
+    const covered = FINDING_CAUSES[w.rule] === 'covered';
+    if (w.severity !== 'error' || (covered && !uncovered) || w.cause !== undefined) continue;
     const ref = aboutRef(doc, w) ?? locate(doc, w.location);
     // A block's own findings are on its own items, under its name.
     if (mode === 'evaluation' && ref.path.length) continue;
-    const cause = withSyntax(withStatements(findingCause(w, ref, mode), doc), ref, doc);
+    const cause = withSyntax(
+      withStatements(
+        covered
+          ? (UNCOVERED[w.rule] ?? fallbackCause)(w, ref, stageOf(mode))
+          : findingCause(w, ref, mode),
+        doc,
+      ),
+      ref,
+      doc,
+    );
     const at = out.findIndex(
       (i) =>
         i.kind === ref.kind &&

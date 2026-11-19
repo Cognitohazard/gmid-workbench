@@ -2,6 +2,7 @@ import { describe as group, expect, it } from 'vitest';
 import { generateDemoDevice, scaleQuantities } from '../demo';
 import { lineText, standardProblems, type Line } from '../sheet/describe';
 import { runSheet, type SheetDoc } from '../sheet';
+import { REFS, sheet, table } from '../sheet/library.fixtures';
 import type { DeviceTable, TableMeta } from '../types';
 import {
   aggregateConditionRuns,
@@ -46,6 +47,12 @@ const ss = key('ss', 125);
 const noDevices = (): undefined => undefined;
 const sole = (tables: DeviceTable[]): CharacterizedDevice => groupDevices(tables)[0];
 const device = sole([retag(dev, 'tt', 27), retag(scaleQuantities(dev, { gds: 2 }), 'ss', 125)]);
+/** The library's test table at three conditions, for the library sheets. */
+const libraryDevice = sole([
+  retag(table, 'tt', 27),
+  retag(table, 'ss', 125),
+  retag(table, 'ff', -40),
+]);
 
 /** Every line as its plain string, after checking it keeps the message standard. */
 const read = (lines: readonly Line[]): string[] =>
@@ -323,7 +330,7 @@ group('the margins', () => {
   const agg = (over: Partial<ConditionAggregate>): ConditionAggregate => ({
     feasibility: 'feasible',
     heldPoints: counts({ compliant: 4 }),
-    marginPoints: { read: 5, total: 5, notRun: 0, notCalculated: 0, unreadable: 0 },
+    marginPoints: { read: 5, unreadable: 0, notCalculated: 0, total: 5 },
     compliance: { complies: 5, doesNotComply: 0, noAnswer: 0, notRun: 0, total: 5 },
     worst: null,
     onLimit: [],
@@ -404,7 +411,7 @@ group('the margins', () => {
         tightestText(
           agg({
             worst: w(0.042),
-            marginPoints: { read: 6, total: 9, notRun: 0, notCalculated: 0, unreadable: 0, ...m },
+            marginPoints: { read: 6, unreadable: 0, notCalculated: 0, total: 9, ...m },
           }),
           device,
         ),
@@ -413,20 +420,18 @@ group('the margins', () => {
       'The engine read margins at 6 of 9 points.',
       'The other 3 points are not calculated.',
     ]);
-    expect(at({ notRun: 3 })).toEqual([
-      'The engine read margins at 6 of 9 points.',
-      'The engine did not run the other 3 points.',
-    ]);
     expect(at({ unreadable: 3 })).toEqual([
       'The engine read margins at 6 of 9 points.',
       'The engine read no margin at the other 3 points.',
     ]);
-    expect(at({ notRun: 1, notCalculated: 1, unreadable: 1 })).toEqual([
+    expect(at({ notCalculated: 1, unreadable: 2 })).toEqual([
       'The engine read margins at 6 of 9 points.',
-      'The engine did not run 1 of the other points.',
       '1 of the other points is not calculated.',
-      'The engine read no margin at 1 of the other points.',
+      'The engine read no margin at 2 of the other points.',
     ]);
+    expect(at({ notCalculated: 2, unreadable: 1 })[1]).toBe(
+      '2 of the other points are not calculated.',
+    );
   });
 
   it('says why no hard requirement has a margin', () => {
@@ -435,7 +440,7 @@ group('the margins', () => {
         tightestText(
           agg({
             verdict: undefined,
-            marginPoints: { read: 0, total: 5, notRun: 4, notCalculated: 1, unreadable: 0 },
+            marginPoints: { read: 0, unreadable: 0, notCalculated: 5, total: 5 },
           }),
           device,
         ),
@@ -446,7 +451,23 @@ group('the margins', () => {
     expect(
       lines(
         tightestText(
-          agg({ marginPoints: { read: 0, total: 5, notRun: 0, notCalculated: 0, unreadable: 5 } }),
+          agg({ marginPoints: { read: 0, unreadable: 1, notCalculated: 8, total: 9 } }),
+          device,
+        ),
+      ),
+    ).toEqual(['The engine read no margin at any point.', '8 of the 9 points are not calculated.']);
+    expect(
+      lines(
+        tightestText(
+          agg({ marginPoints: { read: 0, unreadable: 5, notCalculated: 0, total: 5 } }),
+          device,
+        ),
+      ),
+    ).toEqual(['The engine read no margin at any point.']);
+    expect(
+      lines(
+        tightestText(
+          agg({ marginPoints: { read: 5, unreadable: 0, notCalculated: 0, total: 5 } }),
           device,
         ),
       ),
@@ -534,6 +555,20 @@ group('why a condition was not run', () => {
     );
   });
 
+  it('puts a finding the sheet shows on another item on the item its place names', () => {
+    // An override of a name the child does not have: the sheet's own run shows it under the
+    // child's input; the condition has no such item, so it goes on the block's own.
+    const doc = sheet('otas/five-transistor-ota.json');
+    doc.blocks![0].params = { ...doc.blocks![0].params, nope: '1' };
+    const run = runCondition(doc, libraryDevice, tt, noDevices, REFS);
+    expect(run.state === 'not-evaluated' && run.issues.map((i) => 'on' in i && i.on)).toEqual([
+      [{ kind: 'sheet', path: ['bias'], name: '' }],
+    ]);
+    expect(issueFindings(run).flatMap((f) => f.lines)).toEqual([
+      'Block bias sets nope, but its sheet has no input of that name.',
+    ]);
+  });
+
   it('gives a run that did not complete its incomplete items’ own text', () => {
     const run = runCondition(unreachable(), device, tt, noDevices);
     expect(issueFindings(run).length).toBeGreaterThan(0);
@@ -546,6 +581,37 @@ group('the aggregate from real runs', () => {
     const agg = aggregateConditionRuns(runs);
     expect(read(heldPointsText(agg.heldPoints).lines)).toEqual([
       'The held design is compliant at 3 of 5 points and non-compliant at 2.',
+    ]);
+  });
+
+  it('gives a range end not calculated at a held condition the held design’s reason', () => {
+    // Drain currents a third of tt's at ff: the held folded cascode is undetermined there, and
+    // its range ends are not calculated.
+    const skewed = sole([
+      retag(table, 'tt', 27),
+      retag(scaleQuantities(table, { id: 0.3 }), 'ff', -40),
+    ]);
+    const doc = sheet('otas/folded-cascode-ota.json');
+    const [, held] = runConditions(doc, skewed, [tt, key('ff', -40)], noDevices, REFS, tt);
+    expect(held.points[0].verdict?.verdict).toBe('undetermined');
+    expect(lines(pointText({ run: held, index: 1, device: skewed, doc }))).toEqual([
+      'The engine did not calculate range end cm-lo at ff −40 °C, because the held design is undetermined there.',
+    ]);
+  });
+
+  it('says no margin was read, not that none is calculated, where the one run point has none', () => {
+    // An equation with no value: the design point is calculated and undetermined, so no margin is
+    // read there, and every other point waits on it.
+    const doc = sheet('otas/five-transistor-ota.json');
+    doc.equations.push({ name: 'y', expr: '1/0' });
+    const keys = [tt, key('ss', 125), key('ff', -40)];
+    const agg = aggregateConditionRuns(
+      runConditions(doc, libraryDevice, keys, noDevices, REFS, tt),
+    );
+    expect(agg.marginPoints).toEqual({ read: 0, unreadable: 1, notCalculated: 8, total: 9 });
+    expect(lines(tightestText(agg, libraryDevice))).toEqual([
+      'The engine read no margin at any point.',
+      '8 of the 9 points are not calculated.',
     ]);
   });
 });

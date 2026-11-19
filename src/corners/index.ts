@@ -722,14 +722,16 @@ function prepareRun(doc: SheetDoc, refs?: SheetRefIndex): PreparedRun {
   // sheet's own run uses for validation's findings, from the findings alone.
   const blockers = errors.map((w): ConditionIssue => ({
     kind: 'invalid-sheet-or-ref',
-    on: withFindings([], [w], resolved.doc, 'validation').map(refOf),
+    on: withFindings([], [w], resolved.doc, 'validation', { uncovered: true }).map(refOf),
     message: w.message,
   }));
   return {
     doc: resolved.doc,
     warnings,
     blockers,
-    ...(errors.length ? { items: withFindings([], errors, resolved.doc, 'validation') } : {}),
+    ...(errors.length
+      ? { items: withFindings([], errors, resolved.doc, 'validation', { uncovered: true }) }
+      : {}),
     assumptions: dcInputs(resolved.doc).assumed,
     // The tree is already resolved, so this walk adds no warnings of its own.
     bindings: blockers.length ? [] : namedBindings(resolved.doc).bindings,
@@ -1279,15 +1281,14 @@ export interface ConditionAggregate {
    *  none of them. */
   readonly heldVerdict?: HeldVerdictOver;
   /** The points the margins below are read at (measuredPoints), and every point, with what the
-   *  others are: never run (`notRun`), run and not calculated (`notCalculated`), or calculated
-   *  with no margin to read, because the verdict there says nothing of the design or the run is
-   *  not complete (`unreadable`). */
+   *  others are: not calculated, a point with no verdict, as in heldPoints (`notCalculated`); or
+   *  calculated with no margin to read, because the verdict there says nothing of the design or the
+   *  run is not complete (`unreadable`). */
   readonly marginPoints: {
     readonly read: number;
-    readonly total: number;
-    readonly notRun: number;
-    readonly notCalculated: number;
     readonly unreadable: number;
+    readonly notCalculated: number;
+    readonly total: number;
   };
   /**
    * COMPLIANCE — a count over points, never a single word: `total` is conditions × (the centre
@@ -1428,13 +1429,12 @@ function unreadPoints(
   measured: readonly { readonly point: CompliancePoint }[],
 ): ConditionAggregate['marginPoints'] {
   const read = new Set(measured.map((m) => m.point));
-  const out = { read: read.size, total: 0, notRun: 0, notCalculated: 0, unreadable: 0 };
+  const out = { read: read.size, unreadable: 0, notCalculated: 0, total: 0 };
   for (const r of runs)
     for (const p of r.points) {
       out.total++;
       if (read.has(p)) continue;
-      if (p.state === 'not-run') out.notRun++;
-      else if (!p.verdict) out.notCalculated++;
+      if (!p.verdict) out.notCalculated++;
       else out.unreadable++;
     }
   return out;

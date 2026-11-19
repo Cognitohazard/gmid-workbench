@@ -20,6 +20,7 @@ import {
   incompleteText,
   lineText,
   nm,
+  quantityText,
   standardProblems,
   t,
   verdictText,
@@ -269,9 +270,7 @@ const asItem = (f: Verdict<string>['failed'][number]): Item => ({
 function setsText(set: Readonly<Record<string, number>>, doc?: SheetDoc): Line {
   const unit = (n: string): string | undefined => doc?.params.find((p) => p.name === n)?.unit;
   const parts = Object.entries(set).map(([n, v]) => {
-    const u = unit(n);
-    const shown = `${String(Number(v.toPrecision(3))).replace('-', '−')}${u ? ` ${u}` : ''}`;
-    return t`${nm(n)} to ${shown}`;
+    return t`${nm(n)} to ${quantityText(v, unit(n))}`;
   });
   return t`sets ${andLines(parts)}`;
 }
@@ -375,6 +374,13 @@ export function pointText(place: PointPlace): Said {
     own?.length === 1 && only.status === 'withheld' && design
       ? designReason(only.on, design)
       : undefined;
+  // At a held condition the end's list points at the held centre's, not the design point's: the
+  // reason is what the held design is there.
+  const centre = run.points[0]?.verdict;
+  if (reason && run.design === 'held' && centre?.verdict === 'undetermined')
+    return said([t`${head}, because the held design is undetermined there.`]);
+  if (reason && run.design === 'held' && centre?.verdict === 'no-operating-point')
+    return said([t`${head}, because the held design has no operating point there.`]);
   if (reason) return said([t`${head}, because ${reason}.`]);
   if (own?.length)
     return said([
@@ -434,33 +440,24 @@ function withMargin(subject: Line, margin: Line): Line[] {
 }
 
 /** What the points the margins were not read at are, after "The engine read margins at 6 of 9
- *  points.": not calculated, never run, or calculated with no margin to read. */
+ *  points.": not calculated, or calculated with no margin to read; one sentence for each kind. */
 function unreadText(m: ConditionAggregate['marginPoints']): Line[] {
   const rest = m.total - m.read;
   if (rest <= 0) return [];
-  const others = rest === 1 ? 'the other point' : `the other ${rest} points`;
-  const kinds = [m.notRun, m.notCalculated, m.unreadable].filter((n) => n > 0).length;
-  // A mix: one sentence for each kind of point.
-  if (kinds > 1)
+  if (m.notCalculated && m.unreadable)
     return [
-      ...(m.notRun ? [t`The engine did not run ${String(m.notRun)} of the other points.`] : []),
-      ...(m.notCalculated
-        ? [
-            t`${String(m.notCalculated)} of the other points ${m.notCalculated === 1 ? 'is' : 'are'} not calculated.`,
-          ]
-        : []),
-      ...(m.unreadable
-        ? [t`The engine read no margin at ${String(m.unreadable)} of the other points.`]
-        : []),
+      t`${String(m.notCalculated)} of the other points ${m.notCalculated === 1 ? 'is' : 'are'} not calculated.`,
+      t`The engine read no margin at ${String(m.unreadable)} of the other points.`,
     ];
-  if (m.notRun) return [t`The engine did not run ${others}.`];
   if (m.notCalculated)
     return [
       rest === 1
         ? t`The other point is not calculated.`
         : t`The other ${String(rest)} points are not calculated.`,
     ];
-  return [t`The engine read no margin at ${others}.`];
+  return [
+    t`The engine read no margin at ${rest === 1 ? 'the other point' : `the other ${rest} points`}.`,
+  ];
 }
 
 /**
@@ -508,12 +505,22 @@ export function tightestText(agg: ConditionAggregate, device?: CharacterizedDevi
   }
   const m = agg.marginPoints;
   if (!w && !agg.onLimit.length) {
-    const calculated = m.total - m.notRun - m.notCalculated;
-    lines.push(
-      calculated === 0
-        ? t`No hard requirement has a margin at any point, because the engine calculated no point.`
-        : t`No hard requirement has a margin at any point, because every hard requirement is not calculated.`,
-    );
+    // No margin anywhere, said by what the points are: none calculated; some calculated and no
+    // margin read at any; or margins read and no hard requirement has one.
+    if (m.read + m.unreadable === 0)
+      lines.push(
+        t`No hard requirement has a margin at any point, because the engine calculated no point.`,
+      );
+    else if (m.read === 0) {
+      lines.push(t`The engine read no margin at any point.`);
+      if (m.notCalculated)
+        lines.push(
+          t`${String(m.notCalculated)} of the ${String(m.total)} points ${m.notCalculated === 1 ? 'is' : 'are'} not calculated.`,
+        );
+    } else
+      lines.push(
+        t`No hard requirement has a margin at any point, because every hard requirement is not calculated.`,
+      );
   } else if (m.read < m.total)
     lines.push(
       t`The engine read margins at ${String(m.read)} of ${String(m.total)} points.`,
