@@ -23,6 +23,7 @@ import {
   type ItemRef,
   type SearchData,
   type NoSolutionRead,
+  type Verdict,
   type WithheldOn,
 } from './states';
 import {
@@ -1492,16 +1493,14 @@ group('a range end that is not calculated', () => {
     },
   };
 
-  it('names the end, says why from the design point’s items, and gives what each one says', () => {
+  it('names the end, says why from the design point’s items, and gives one line for each', () => {
     check(
       end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
       'cm-lo',
       [wiring],
       [
         'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
-        'At the design point, the statements of the sheet do not determine one design.',
-        'The wiring of part in names x, which a placement does not have.',
-        'A placement names only the drain, gate, source and body wires.',
+        'At the design point, the wiring of part in names x, which a placement does not have.',
       ],
     );
   });
@@ -1515,10 +1514,10 @@ group('a range end that is not calculated', () => {
       'cm-lo',
       [searchFailed],
     ).lines;
-    expect(said[0]).toBe(
+    expect(said).toEqual([
       'Range end cm-lo is not calculated, because the design point has no design.',
-    );
-    expect(said[1]).toMatch(/^At the design point, /);
+      'At the design point, the engine could not calculate V_tail.',
+    ]);
   });
 
   it('says the design point rests on an assumed level', () => {
@@ -1526,26 +1525,46 @@ group('a range end that is not calculated', () => {
       kind: 'not-determined',
       data: { why: 'assumed-level', names: ['V_out_dc'], message: '' },
     });
-    expect(
-      describe(
-        end([
-          { kind: 'value', path: [], name: 'V_out_dc', frame: 'design', cause: 'not-determined' },
-        ]),
-        [],
-        'cm-hi',
-        [assumed],
-      ).lines[0],
-    ).toBe(
-      'Range end cm-hi is not calculated, because the design point rests on an assumed level.',
+    check(
+      end([
+        { kind: 'value', path: [], name: 'V_out_dc', frame: 'design', cause: 'not-determined' },
+      ]),
+      'cm-hi',
+      [assumed],
+      [
+        'Range end cm-hi is not calculated, because the design point rests on an assumed level.',
+        'At the design point, V_out_dc is an assumed level.',
+      ],
     );
   });
 
-  it('names the item and states no fault, where the design point’s list is not given', () => {
+  it('names what the engine did for a search that found no solution', () => {
+    const noCrossing = failed('search', 'V_tail', {
+      kind: 'no-crossing',
+      data: {
+        ...search({ unknown: 'V_tail' }),
+        ...read([0, 1, 2], [1, 3, 2]),
+        notProof: 'not-monotonic',
+        endsRead: false,
+      },
+    });
+    check(
+      end([{ kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'no-crossing' }]),
+      'cm-lo',
+      [noCrossing],
+      [
+        'Range end cm-lo is not calculated, because the design point has no design.',
+        'At the design point, the engine found no solution for V_tail.',
+      ],
+    );
+  });
+
+  it('gives one line and no reason, where the design point’s list is not given', () => {
     check(
       end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),
       'cm-lo',
       undefined,
-      ['Range end cm-lo is not calculated.', 'At the design point, block in has a problem.'],
+      ['Range end cm-lo is not calculated.'],
     );
   });
 });
@@ -1561,8 +1580,79 @@ group('why a run is not complete, as one string', () => {
     ];
     const [f] = incompleteText(items);
     expect(incompleteMessage(items)).toBe([f.name, ...f.lines].join('\n'));
-    expect(incompleteMessage([{ kind: 'sheet', path: [], name: '', status: 'ok' }])).toBe(
-      'The evaluation did not complete.',
-    );
+    // Nothing incomplete: nothing to say.
+    expect(incompleteText([{ kind: 'sheet', path: [], name: '', status: 'ok' }])).toEqual([]);
+    expect(incompleteMessage([{ kind: 'sheet', path: [], name: '', status: 'ok' }])).toBe('');
+    // Incomplete, with no failed item to say why.
+    expect(
+      incompleteMessage([
+        {
+          kind: 'value',
+          path: [],
+          name: 'y',
+          status: 'withheld',
+          on: [{ kind: 'value', path: [], name: 'x', cause: 'cannot-evaluate' }],
+        },
+      ]),
+    ).toBe('The evaluation did not complete.');
+  });
+});
+
+group('why a range end that is not calculated is not complete', () => {
+  it('is that end’s own text', () => {
+    const design = [
+      failed('search', 'V_tail', {
+        kind: 'cannot-evaluate',
+        data: { why: 'not-finite', name: 'V_tail', reason: '' },
+      }),
+    ];
+    const items: Item[] = [
+      {
+        kind: 'sheet',
+        path: [],
+        name: '',
+        status: 'withheld',
+        on: [
+          { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'cannot-evaluate' },
+        ],
+      },
+    ];
+    expect(incompleteMessage(items, 'cm-lo', design).split('\n').slice(1)).toEqual([
+      'Range end cm-lo is not calculated, because the design point has no design.',
+      'At the design point, the engine could not calculate V_tail.',
+    ]);
+  });
+});
+
+group('the line of an undetermined verdict', () => {
+  it('names a range end whose own entry failed, and each other failed item', () => {
+    const v: Verdict = {
+      verdict: 'undetermined',
+      failed: [
+        {
+          kind: 'sheet',
+          path: [],
+          name: '',
+          end: 'cm-lo',
+          cause: { kind: 'cannot-evaluate', data: { why: 'syntax', name: '((', reason: '' } },
+        },
+        {
+          kind: 'search',
+          path: [],
+          name: 'V_tail',
+          cause: {
+            kind: 'cannot-evaluate',
+            data: { why: 'not-finite', name: 'V_tail', reason: '' },
+          },
+        },
+      ],
+    };
+    const lines = verdictText(v);
+    expect(lines.map(lineText)).toEqual([
+      'The verdict is undetermined, because range end cm-lo cannot be calculated.',
+      'The verdict is undetermined, because the engine could not calculate V_tail.',
+    ]);
+    expect(lines[0].find((sg) => sg.kind === 'name')).toEqual({ kind: 'name', text: 'cm-lo' });
+    for (const l of lines) expect(standardProblems(l)).toEqual([]);
   });
 });

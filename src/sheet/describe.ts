@@ -1635,19 +1635,36 @@ function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line 
 }
 
 /** A line as the clause after "At the design point,": its first word in lower case where it opens
- *  with plain text. */
+ *  with plain text; a name keeps its case. */
 const lowerFirst = (l: Line): Line => {
   const [first, ...rest] = l;
-  if (first?.kind !== 'text' || !/^(The|Part|Block) /.test(first.text)) return l;
+  if (first?.kind !== 'text' || !first.text) return l;
   return [
     { kind: 'text', text: first.text.charAt(0).toLowerCase() + first.text.slice(1) },
     ...rest,
   ];
 };
 
-/** The lines of a range end the engine does not calculate. With the design point's list, each
- *  pointer gives the sentences the design point's own item gives; without it, the item is named and
- *  no fault is stated. */
+/** The one line a range end that is not calculated gives for a failed item of the design point it
+ *  waits on: that item's first specific sentence, after "At the design point, ". A design on an
+ *  assumed level says the value is one; a finding that the statements do not determine one design
+ *  gives the sentence after its heading; any other cause, the clause that names what failed. The
+ *  details stay on the design point. */
+function designLine(i: Item): Line {
+  const ref = { kind: i.kind, path: i.path, name: i.name };
+  if (i.status === 'failed' && i.cause.kind === 'not-determined') {
+    if (i.cause.data.why === 'assumed-level')
+      return t`At the design point, ${itemName(ref)} is an assumed level.`;
+    const specific = describe(i).segments[1];
+    if (specific) return t`At the design point, ${lowerFirst(specific)}`;
+  }
+  const kind = i.status === 'failed' ? i.cause.kind : 'cannot-evaluate';
+  return t`At the design point, ${withheldClause({ ...ref, cause: kind })}.`;
+}
+
+/** The lines of a range end the engine does not calculate. With the design point's list: the reason,
+ *  then one line for each failed item its pointers name. Without it: one line, with no reason, as
+ *  what the pointer names cannot be told from the pointer alone. */
 function notCalculatedText(
   on: readonly WithheldOn[],
   end: string | undefined,
@@ -1658,12 +1675,10 @@ function notCalculatedText(
   const head = reason
     ? t`${who} is not calculated, because ${reason}.`
     : t`${who} is not calculated.`;
+  if (!design) return [head];
   const clauses = on.flatMap((r): Line[] => {
-    const ref = { kind: r.kind, path: r.path, name: r.name };
-    const own = design ? pointedAt(r, design) : undefined;
-    const said = own ? describe(own).segments : [];
-    if (!said.length) return [t`At the design point, ${itemName(ref)} has a problem.`];
-    return [t`At the design point, ${lowerFirst(said[0])}`, ...said.slice(1)];
+    const own = pointedAt(r, design);
+    return own?.status === 'failed' ? [designLine(own)] : [];
   });
   return distinctLines([head, ...clauses]);
 }
@@ -1727,11 +1742,23 @@ function heldText(r: ItemRef, a: Extract<Attributes, { kind: 'held' }>): Finding
  *  instead of solving, that the verdict is undetermined because of it. */
 export function verdictText(v: Verdict<string>): readonly Line[] {
   const held = v.held ?? [];
-  if (!held.length) return [];
-  const names = andLines(held.map((r) => inBlock(r.name, r.path, r)));
-  return [
-    t`The verdict is undetermined, because ${names} ${held.length > 1 ? 'are' : 'is'} held and not solved.`,
-  ];
+  const lines: Line[] = [];
+  if (held.length) {
+    const names = andLines(held.map((r) => inBlock(r.name, r.path, r)));
+    lines.push(
+      t`The verdict is undetermined, because ${names} ${held.length > 1 ? 'are' : 'is'} held and not solved.`,
+    );
+  }
+  // An undetermined verdict gives one clause for each failed item it rests on: a range end's own
+  // item by the end's name.
+  if (v.verdict === 'undetermined')
+    for (const f of v.failed)
+      lines.push(
+        f.end !== undefined
+          ? t`The verdict is undetermined, because range end ${nm(f.end)} cannot be calculated.`
+          : t`The verdict is undetermined, because ${withheldClause({ kind: f.kind, path: f.path, name: f.name, cause: f.cause.kind })}.`,
+      );
+  return distinctLines(lines);
 }
 
 /** What a held point or range end that was not run is shown: its own word, and why. */
@@ -1743,19 +1770,37 @@ export const notAskedText = (what: 'range end' | 'held point', name: string): Fi
   ]);
 
 /** Why a run is not complete (incompleteOn): the finding of each failed item whose number it does
- *  not have, in the list's order; a withheld item follows from one of them. Never empty: a run
- *  with no such item reads that the evaluation did not complete, as a refusal with no reason is
- *  indistinguishable from a verdict. Each reader renders the findings. */
-export function incompleteText(items: readonly Item[]): FindingText[] {
-  const why = incompleteOn(items)
-    .filter((i) => i.status === 'failed')
-    .map((i) => describe(i));
+ *  not have, in the list's order; a withheld item follows from one of them. The list of a range end
+ *  that is not calculated gives that end's own text (`end`, `design` as describe takes them). A list
+ *  with nothing incomplete gives nothing; one that is incomplete and gives no text reads that the
+ *  evaluation did not complete, as a refusal with no reason is indistinguishable from a verdict.
+ *  Each reader renders the findings. */
+export function incompleteText(
+  items: readonly Item[],
+  end?: string,
+  design?: readonly Item[],
+): FindingText[] {
+  const [only] = items;
+  if (
+    items.length === 1 &&
+    only.kind === 'sheet' &&
+    only.status === 'withheld' &&
+    only.on.some((r) => r.frame === 'design')
+  )
+    return [describe(only, [], end, design)];
+  const missing = incompleteOn(items);
+  if (!missing.length) return [];
+  const why = missing.filter((i) => i.status === 'failed').map((i) => describe(i));
   return why.length ? why : [finding('', [t`The evaluation did not complete.`])];
 }
 
 /** incompleteText as one string, where one is needed (a thrown error, a refusal to a script): each
- *  finding's name, then each of its lines, one to a line. */
-export const incompleteMessage = (items: readonly Item[]): string =>
-  incompleteText(items)
+ *  finding's name, then each of its lines, one to a line; empty where nothing is incomplete. */
+export const incompleteMessage = (
+  items: readonly Item[],
+  end?: string,
+  design?: readonly Item[],
+): string =>
+  incompleteText(items, end, design)
     .flatMap((f) => (f.name ? [f.name, ...f.lines] : f.lines))
     .join('\n');
