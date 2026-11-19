@@ -7,7 +7,14 @@ import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
 import { formatQuantity } from '../units';
-import { andList, blockMessage, FORMAT_VERSION, type CheckOp, type SolveRange } from './types';
+import {
+  andList,
+  blockMessage,
+  FORMAT_VERSION,
+  REGION_CHECK_ID,
+  type CheckOp,
+  type SolveRange,
+} from './types';
 import type {
   CannotEvaluateData,
   Cause,
@@ -649,7 +656,25 @@ function monotonicText(d: SearchData & NoSolutionRead): Line {
 /** The unit the two sides of a relation are quoted in: the relation's own, or, until the relation
  *  carries one, the unknown's where the unknown is a level. */
 const relationUnit = (d: SearchData): string | undefined =>
-  d.relation.unit ?? (d.unit === 'V' ? 'V' : undefined);
+  d.relation.unit ??
+  (d.unit === 'V' ? 'V' : (quantityUnitOf(d.relation.lhs) ?? quantityUnitOf(d.relation.rhs)));
+
+/** The unit a side is in where the side is one device quantity of a part the text names in
+ *  plain words, such as a drain current, which is in A. */
+const quantityUnitOf = (side: string): string | undefined => {
+  const parts = side.trim().split('__');
+  return parts.length >= 2 && isName(side)
+    ? QUANTITY_WORDS[parts[parts.length - 1]]?.unit
+    : undefined;
+};
+
+/** A search's relation as the subject of a sentence: "the constraint of k_x". */
+const relationName = (d: SearchData): Line =>
+  d.relation.field === 'hold'
+    ? t`the hold on ${unknownName(d)}`
+    : d.relation.field === 'solveFor'
+      ? t`the equation of ${unknownName(d)}`
+      : t`the constraint of ${unknownName(d)}`;
 
 /** The line that shows a relation once, where a sentence names its sides by their place. */
 function relationLine(d: SearchData): Line[] {
@@ -664,23 +689,72 @@ function relationLine(d: SearchData): Line[] {
   return [t`${what} is ${ex(`${d.relation.lhs.trim()} = ${d.relation.rhs.trim()}`)}.`];
 }
 
-/** The sentence a failed search gives for where the engine searched. */
-function searchedLine(d: SearchData & NoSolutionRead): Line {
-  // The range searched, not where a search that stopped short ended: that is said after it.
+/** Whether a search stepped in from an end of its range, so it did not read the whole of it. */
+const steppedIn = (d: NoSolutionRead): boolean => d.ends.some((e) => e.stepped !== undefined);
+
+/** The range a failed search was given, and how the reader names it. */
+function rangeGiven(d: SearchData): { span: [number, number]; what: Line } {
   const w = d.range.wiring?.range;
-  const [a, b] = d.stage === 'physical' && w ? w : d.searched;
-  const span = spanText(a, b, d.unit);
   const wire = d.range.wires?.[0];
-  if (d.stage === 'physical')
-    return wire
-      ? t`The engine searched the full physical range of wire ${nm(wire)}, ${span}.`
-      : t`The engine searched the full physical range of ${unknownName(d)}, ${span}.`;
-  if (d.stage === 'table') return t`The engine searched the lengths that the table holds, ${span}.`;
-  return t`The engine searched the search range on the sheet, ${span}.`;
+  if (d.stage === 'physical' && w)
+    return {
+      span: [w[0], w[1]],
+      what: wire
+        ? t`the physical range of wire ${nm(wire)}`
+        : t`the physical range of ${unknownName(d)}`,
+    };
+  if (d.stage === 'table')
+    return { span: [d.searched[0], d.searched[1]], what: t`the lengths that the table holds` };
+  return { span: [d.searched[0], d.searched[1]], what: t`the search range on the sheet` };
 }
 
-/** The lines every failed search gives: what has no solution, where the engine searched, and
- *  what the two sides read at the ends. */
+/** The lines that say where a failed search searched. Where it read its whole range: one
+ *  sentence. Where it stepped in from an end: the range, the stretch it searched, and why each
+ *  end stepped in. */
+function searchedLines(d: SearchData & NoSolutionRead): Line[] {
+  const { span, what } = rangeGiven(d);
+  const range = spanText(span[0], span[1], d.unit);
+  if (!steppedIn(d))
+    return [
+      d.stage === 'physical' && d.range.wiring
+        ? d.range.wires?.[0]
+          ? t`The engine searched the full physical range of wire ${nm(d.range.wires[0])}, ${range}.`
+          : t`The engine searched the full physical range of ${unknownName(d)}, ${range}.`
+        : t`The engine searched ${what}, ${range}.`,
+    ];
+  const lines: Line[] = [
+    t`${what} is ${range}.`,
+    t`The engine searched it ${spanText(d.ends[0].x, d.ends[1].x, d.unit)}.`,
+  ];
+  d.ends.forEach((e, k) => {
+    if (e.stepped === undefined) return;
+    const past = `${k === 0 ? 'Below' : 'Above'} ${quantityText(e.x, d.unit)}`;
+    lines.push(
+      e.steppedOutside
+        ? t`${past}, ${partName(e.steppedOutside.device)} is outside its table.`
+        : t`${past}, ${relationName(d)} gives no number.`,
+    );
+  });
+  return lines;
+}
+
+/** A side's values at the two ends of the stretch searched: named "the low end" and "the high
+ *  end" where the search read its whole range, and by their values where it stepped in. */
+function endValues(
+  d: SearchData & NoSolutionRead,
+  side: Line,
+  a: number,
+  b: number,
+  unit?: string,
+): Line {
+  const [lo, hi] = d.ends;
+  return steppedIn(d)
+    ? t`${side} is ${quantityText(a, unit)} at ${quantityText(lo.x, d.unit)} and ${quantityText(b, unit)} at ${quantityText(hi.x, d.unit)}.`
+    : t`${side} is ${quantityText(a, unit)} at the low end and ${quantityText(b, unit)} at the high end.`;
+}
+
+/** The lines every failed search gives: what has no solution, the relation where its sides are
+ *  expressions, where the engine searched, and what the two sides read at the ends. */
 function searchLines(
   c: Extract<Cause, { kind: 'no-solution' | 'no-crossing' | 'none-in-range' }>,
 ): Line[] {
@@ -693,10 +767,11 @@ function searchLines(
   if (c.kind === 'none-in-range' && d.stage === 'sheet') {
     lines.push(
       t`No value of ${U} ${spanText(d.searched[0], d.searched[1], d.unit)} makes ${lhs} equal to ${rhs}.`,
+      ...relationLine(d),
       t`This range is the search range on the sheet, and the engine did not search outside it.`,
     );
   } else {
-    lines.push(t`No value of ${U} makes ${lhs} equal to ${rhs}.`);
+    lines.push(t`No value of ${U} makes ${lhs} equal to ${rhs}.`, ...relationLine(d));
     const a = d.range.author;
     const w = d.range.wiring?.range;
     if (d.stage === 'physical' && a && w && (a[0] !== w[0] || a[1] !== w[1]))
@@ -704,29 +779,16 @@ function searchLines(
         t`The search range on the sheet, ${spanText(a[0], a[1], d.unit)}, holds no solution.`,
         t`The engine then searched the physical range.`,
       );
-    lines.push(searchedLine(d));
+    lines.push(...searchedLines(d));
   }
-  d.ends.forEach((e, k) => {
-    if (e.stepped === undefined) return;
-    const past = k === 0 ? 'below' : 'above';
-    lines.push(
-      e.steppedOutside
-        ? t`The search stopped at ${quantityText(e.x, d.unit)}, because ${partName(e.steppedOutside.device)} is outside its table ${past} it.`
-        : t`The search stopped at ${quantityText(e.x, d.unit)}, because ${lhs} gives no number ${past} it.`,
-    );
-  });
-  lines.push(...relationLine(d));
   // Where the left side is the unknown itself, its values at the ends are the range again.
-  if (d.relation.lhs.trim() !== d.unknown)
-    lines.push(
-      t`${lhs} is ${quantityText(lo.lhs, unit)} at the low end and ${quantityText(hi.lhs, unit)} at the high end.`,
-    );
+  if (d.relation.lhs.trim() !== d.unknown) lines.push(endValues(d, lhs, lo.lhs, hi.lhs, unit));
   lines.push(
     d.relation.rhsFixed
       ? t`${rhs} is ${quantityText(lo.rhs, unit)}.`
       : lo.rhs === hi.rhs
         ? t`${rhs} is ${quantityText(lo.rhs, unit)} at both ends.`
-        : t`${rhs} is ${quantityText(lo.rhs, unit)} at the low end and ${quantityText(hi.rhs, unit)} at the high end.`,
+        : endValues(d, rhs, lo.rhs, hi.rhs, unit),
   );
   return lines;
 }
@@ -831,19 +893,19 @@ function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
     return [
       t`The engine searched ${unknownName(m)} ${span}.`,
       ...relationLine(m),
-      t`${lhs} gives no number at any value that the engine tried.`,
+      t`${relationName(m)} gives no number at any value that the engine tried.`,
       ...(at.by ? [t`${itemName(at.by)} gives no number there.`] : []),
     ];
   if (at.where === 'one-point')
     return [
+      t`${relationName(m)} gives a number only at ${unknownName(m)} = ${quantityText(at.end.x, m.unit)}.`,
       ...relationLine(m),
-      t`${lhs} gives a number only at ${unknownName(m)} = ${quantityText(at.end.x, m.unit)}.`,
       t`The engine searched ${unknownName(m)} ${span}.`,
     ];
   return [
-    ...relationLine(m),
     t`${lhs} crosses ${rhs} between ${quantityText(at.between[0], m.unit)} and ${quantityText(at.between[1], m.unit)}.`,
-    t`${lhs} gives no number at the values that the engine tried there.`,
+    ...relationLine(m),
+    t`${relationName(m)} gives no number at the values that the engine tried there.`,
   ];
 }
 
@@ -921,16 +983,16 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
     case 'loop':
       return [
         head,
-        ...d.names.map(
-          (n) =>
-            t`The sizing of ${partName(n)} depends on its own operating point, and no statement solves that loop.`,
-        ),
+        ...d.names.flatMap((n) => [
+          t`${partName(n)} depends on its own operating point.`,
+          t`No statement solves this loop.`,
+        ]),
       ];
     case 'operating-range':
       return [
         head,
         d.names.length
-          ? t`The operating range entry ${nm(d.names[0])} holds a value that is not valid.`
+          ? t`Range end ${nm(d.names[0])} holds a value that is not valid.`
           : t`The operating range holds an entry that is not valid.`,
       ];
     case 'entry':
@@ -994,10 +1056,12 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
   // A region check: the engine wrote its two sides from the region the device declares.
   if (d.region) {
     const device = ref?.path.length ? partName(ref.path.join('.')) : partName(d.region.device);
-    const head = t`The engine cannot test the region of ${device}.`;
     return d.region.missing === 'device'
-      ? [head, t`${device} is not sized.`]
-      : [head, t`${deviceQuantity(d.region.missing)} of ${device} gives no number.`];
+      ? [t`The engine cannot test the region of ${device}, because ${device} is not sized.`]
+      : [
+          t`The engine cannot test the region of ${device}.`,
+          t`${deviceQuantity(d.region.missing)} of ${device} gives no number.`,
+        ];
   }
   // A check that reads a name no entry declares: one sentence for each side that does.
   if (d.sides && (d.sides.lhs || d.sides.rhs))
@@ -1051,6 +1115,16 @@ const REQUIRES: Record<CheckOp, string> = {
 };
 
 function failsText(d: FailsData, ref?: ItemRef): Line[] {
+  // The check a declared region adds: its sides are the engine's, from the region, so the text
+  // names the part it tests. Its unit is given only where the data hold it.
+  if (ref?.kind === 'requirement' && ref.name === REGION_CHECK_ID) {
+    const part = ref.path.length ? partName(ref.path.join('.')) : t`the device of this sheet`;
+    return [
+      t`The region check of ${part} fails.`,
+      t`The region check of ${part} reads ${quantityText(d.lhs, d.unit)}, and it needs ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
+      t`The margin is ${d.marginPct >= 0 ? '+' : '−'}${quantityText(Math.abs(d.marginPct) * 100)} %.`,
+    ];
+  }
   const check: Line = ref ? itemName(ref) : t`the check`;
   // marginPct is a fraction of the limit; the reader reads a percentage.
   const sign = d.marginPct >= 0 ? '+' : '−';
@@ -1096,7 +1170,7 @@ function linesOf(c: Cause, ref?: ItemRef): Line[] {
 /** The clause a withheld item's sentence gives for the failed item it depends on: one for each
  *  cause, so the not-proved cause never reads as a proof. */
 export function withheldClause(r: WithheldOn): Line {
-  if (r.frame === 'parent') return t`the sheet that uses it gave it no value`;
+  if (r.frame === 'parent') return t`its parent sheet gives it no value`;
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':
@@ -1108,7 +1182,7 @@ export function withheldClause(r: WithheldOn): Line {
         ? t`the statements of ${n} do not determine one design`
         : t`the statements do not determine ${n}`;
     case 'cannot-evaluate':
-      return t`${n} gives no number`;
+      return r.kind === 'search' ? t`the engine could not calculate ${n}` : t`${n} gives no number`;
     case 'outside-table':
       return t`${n} is outside its table`;
     case 'no-solution':
@@ -1129,14 +1203,20 @@ export function withheldClause(r: WithheldOn): Line {
 }
 
 /** What a reader is shown for one item: nothing for an item that is ok; for a failed one, its
- *  cause's text; for a withheld one, one sentence for each failed item it depends on. */
-export function describe(item: Item): FindingText {
+ *  cause's text; for a withheld one, one sentence for each failed item it depends on. `within`
+ *  is the path of the block whose own list the item is read in, where it is one. */
+export function describe(item: Item, within: readonly string[] = []): FindingText {
   if (item.status === 'ok') return finding('', []);
   if (item.status === 'withheld')
     return finding(
       WITHHELD_NAME,
       item.on.map((r) =>
-        upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
+        // A block's own sheet item, read in the block's own list, waits on its parent.
+        r.frame === 'parent' && item.kind === 'sheet' && item.path.length === 0
+          ? within.length
+            ? t`Block ${blockSegment(within)} is not calculated, because its parent sheet gives it no value.`
+            : t`This block is not calculated, because its parent sheet gives it no value.`
+          : upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
       ),
     );
   return textOf(item.cause, item);

@@ -505,3 +505,28 @@ describe('a search whose relation gives no number where it searched', () => {
     expectSame(res);
   });
 });
+
+describe('the texts of a search that stopped short, and of a block in its own list', () => {
+  it('names the range given and the stretch searched, and each end by its value', () => {
+    const fd = loadLibrary().find((s) => s.file === 'multistage/fd-telescopic-ota.json')!.doc;
+    const res = runSheet(withParams(fd, { CM_dc: 1.3 }), table, undefined, REFS);
+    const s = res.items?.find((i) => i.kind === 'search' && i.status === 'failed');
+    const lines = s ? describeItem(s).lines : [];
+    expect(lines).toContain('The physical range of wire tail is from 0 V to 0.95 V.');
+    expect(lines).toContain('The engine searched it from 0 V to 0.523 V.');
+    expect(lines).toContain('Above 0.523 V, part in is outside its table.');
+    expect(lines).toContain('CM_in is 0.567 V at 0 V and 1.2 V at 0.523 V.');
+    expect(lines.some((l) => /full physical range|the high end/.test(l))).toBe(false);
+  });
+
+  it('names the block, in its own list, as waiting on its parent sheet', () => {
+    const d = withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 });
+    const res = runSheet(d, table, undefined, REFS);
+    const own = res.blocks
+      ?.find((b) => b.name === 'tail')
+      ?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+    expect(own && describeItem(own, ['tail']).lines).toEqual([
+      'Block tail is not calculated, because its parent sheet gives it no value.',
+    ]);
+  });
+});
