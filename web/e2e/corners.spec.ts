@@ -157,7 +157,7 @@ test('device conditions: two tables claiming one condition are an ambiguity noth
   // Removing one settles it, and the design evaluates again.
   await page.locator('.devices .dev').nth(1).locator('.drm').click();
   await expect(sp.locator('[data-blocked="nominal"]')).toHaveCount(0);
-  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveText(/feasible|non-compliant/);
 
   expect(errors).toEqual([]);
 });
@@ -247,7 +247,7 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
 
   // One condition: today's verdict, now saying which condition it belongs to.
-  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveText(/feasible|non-compliant/);
   await expect(sp.locator('.scond')).toHaveText('at tt');
 
   // Every condition: no bare verdict — the header states the aggregate over the set, and each
@@ -296,7 +296,8 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // was never asked.
   await expect(sp.locator('[data-corner-row="tt"] .ccd')).toContainText('block "cs": given vds');
   await expect(sp.locator('[data-corner-row="tt"] .ccd')).toContainText('no vds sweep');
-  await expect(sp.locator('.feasb')).toHaveText('no answer at tt');
+  // The badge carries the sized design's own verdict, from its items: the run did not complete.
+  await expect(sp.locator('.feasb')).toHaveText('undetermined at tt');
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 2 points · 1 no answer · 1 not run',
   );
@@ -313,7 +314,8 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   await expect(sp.locator('.scorntab')).toHaveCount(0);
   await expect(sp.locator('.scond')).toHaveText('at ss@-40');
   // Sized at a corner, the badge says so: this is not the nominal design.
-  await expect(sp.locator('.feasb')).toHaveText(/^infeasible · sized at ss@-40/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
+  await expect(sp.locator('[data-badge-stamp]')).toHaveText('sized at ss@-40');
   await expect(sp.locator('[data-compliance]')).toHaveCount(0);
   await expect(sp.locator('.sensb')).toBeEnabled();
 
@@ -322,7 +324,8 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // design, held, with its answer there.
   await expect(sp.locator('[data-corner-hold]')).toHaveValue('size');
   await sp.locator('[data-corner-hold]').selectOption('hold');
-  await expect(sp.locator('.feasb')).toHaveText(/^nominal design held at ss@-40: does not comply/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
+  await expect(sp.locator('[data-badge-stamp]')).toHaveText('the nominal design held at ss@-40');
   await expect(sp.locator('.scorntab tr')).toHaveCount(2);
   await expect(sp.locator('[data-corner-row="tt"] .cdes')).toHaveText('sized here');
   await expect(sp.locator('[data-corner-row="ss@-40"] .cdes')).toHaveText('held');
@@ -331,10 +334,34 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // A knob ranking is about a design free to choose its widths, which a held one is not.
   await expect(sp.locator('.sensb')).toBeDisabled();
   await sp.locator('[data-corner-hold]').selectOption('size');
-  await expect(sp.locator('.feasb')).toHaveText(/^infeasible · sized at ss@-40/);
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant');
+  await expect(sp.locator('[data-badge-stamp]')).toHaveText('sized at ss@-40');
 
   await page.screenshot({ path: `${SCREENS}/corner-breakdown.png`, fullPage: true });
   expect(errors).toEqual([]);
+});
+
+// The badge over several conditions holds the word of the sized design's verdict
+// (ConditionAggregate.verdict). "infeasible" is kept for a proof: a design that fails a requirement
+// where it is sized is non-compliant there, in the badge as in its row.
+test('sheet panel: the badge over several conditions holds the verdict word of the sized design', async ({
+  page,
+}) => {
+  test.slow();
+  await page.goto('/');
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  await condition(page, 'tt', 'nmos_demo').locator('.dname').click();
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, '5T OTA');
+  await sp.locator('[data-corner-mode]').selectOption('all');
+  await expect(sp.locator('[data-corner-row="tt"] .ccl')).toHaveText('✗ non-compliant', {
+    timeout: 60_000,
+  });
+  const badge = sp.locator('.feasb');
+  await expect(badge).toHaveAttribute('data-verdict', 'non-compliant');
+  await expect(badge).toContainText('non-compliant at tt');
+  await expect(badge).not.toContainText('infeasible');
 });
 
 test('sheet panel: the worker is sent the tables a job evaluates, and the outline of the rest', async ({
@@ -382,7 +409,7 @@ test('sheet panel: the worker is sent the tables a job evaluates, and the outlin
   const sp = page.locator('.grid .panel').last();
   await pickSheet(sp, 'NMOS cascode (gain-boosted output)');
   await expect(sp.locator('.scond')).toHaveText('at tt');
-  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveText(/feasible|non-compliant/);
 
   // One condition asked: the job carries that condition's table, and the other condition only as
   // an outline — what projection reads of it, with no columns.
@@ -455,10 +482,10 @@ test('sheet panel: nominal mode refuses to substitute a condition nobody designa
   // The panel blocks and offers the designation, rather than evaluating at the active table and
   // calling the answer nominal.
   await expect(sp.locator('[data-blocked="nominal"]')).toBeVisible();
-  await expect(sp.locator('.feasb')).toHaveText('not evaluated');
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'not-calculated');
   await sp.locator('.snomctl button', { hasText: 'designate tt' }).click();
   await expect(sp.locator('[data-blocked="nominal"]')).toHaveCount(0);
-  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveText(/feasible|non-compliant/);
 
   expect(errors).toEqual([]);
 });
@@ -639,7 +666,7 @@ test('sheet panel: the sweep chart is drawn at one condition — sized there, or
   await sp.locator('.swsel select').first().selectOption('gm_id');
   await expect(caption).toHaveAttribute('data-sweep-design', 'sized');
   await expect(caption).toContainText('at tt — sized there: each sample re-sizes the design at tt');
-  await expect(sp.locator('.feas')).toContainText('feasible gm_id');
+  await expect(sp.locator('.feas')).toContainText('The sheet is feasible for gm_id');
 
   // Several conditions: still one chart, at the condition picked beside the sweep — the one the
   // design is sized at until another is picked. No curve per condition, no condition legend.
@@ -653,17 +680,17 @@ test('sheet panel: the sweep chart is drawn at one condition — sized there, or
   await expect(caption).toContainText(
     'at ss@-40 — the nominal design held there: each sample sizes the design at tt with gm_id at that value and holds it at ss@-40',
   );
-  await expect(sp.locator('.feas')).toContainText('the held design complies at ss@-40');
+  await expect(sp.locator('.feas')).toContainText('The held design is compliant for');
 
   // One corner asked about alone: sized where asked by default, so the chart re-sizes there too;
   // holding the nominal design there makes it the held chart.
   await sp.locator('[data-corner-mode]').selectOption('active');
   await condition(page, 'ss@-40').locator('.dname').click();
-  await expect(sp.locator('.feasb')).toHaveText(/sized at ss@-40/);
+  await expect(sp.locator('[data-badge-stamp]')).toHaveText('sized at ss@-40');
   await expect(caption).toHaveAttribute('data-sweep-design', 'sized', { timeout: 30_000 });
   await expect(caption).toContainText('each sample re-sizes the design at ss@-40');
   await sp.locator('[data-corner-hold]').selectOption('hold');
-  await expect(sp.locator('.feasb')).toHaveText(/^nominal design held at ss@-40/);
+  await expect(sp.locator('[data-badge-stamp]')).toHaveText('the nominal design held at ss@-40');
   await expect(caption).toHaveAttribute('data-sweep-design', 'held', { timeout: 30_000 });
   await expect(caption).toContainText('holds it at ss@-40');
 
@@ -673,7 +700,7 @@ test('sheet panel: the sweep chart is drawn at one condition — sized there, or
   await condition(page, 'ss@-40').locator('.dname').click();
   const sp2 = page.locator('.grid .panel').last();
   await expect(sp2.locator('[data-corner-hold]')).toHaveValue('hold');
-  await expect(sp2.locator('.feasb')).toHaveText(/^nominal design held at ss@-40/);
+  await expect(sp2.locator('[data-badge-stamp]')).toHaveText('the nominal design held at ss@-40');
 
   await expect(sp2.locator('[data-sweep-caption]')).toHaveAttribute('data-sweep-design', 'held', {
     timeout: 30_000,
@@ -694,7 +721,7 @@ test('solver settings: a changed setting is shown, marked on the panel, kept acr
   await loadDemo(page);
   await page.getByRole('button', { name: '+ sheet' }).click();
   const sp = page.locator('.grid .panel').last();
-  await expect(sp.locator('.feasb')).toHaveText(/feasible|infeasible/);
+  await expect(sp.locator('[data-feasibility]')).toHaveText(/feasible|non-compliant/);
   await expect(sp.locator('[data-solver-nondefault]')).toHaveCount(0);
 
   // The page lists every setting with its default; nothing is changed or stored yet.

@@ -1326,7 +1326,7 @@
         <button
           class="drm"
           onclick={() => removeUserSheet(s.name)}
-          title="remove from the sheet library (designs referencing it read infeasible)"
+          title="Remove this sheet from the library. Designs that refer to it can no longer be calculated."
           aria-label="remove sheet">×</button
         >
       </span>

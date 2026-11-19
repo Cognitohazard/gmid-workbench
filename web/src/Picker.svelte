@@ -27,6 +27,7 @@
     type SheetRefEntry,
     type SpecName,
     type ConditionKey,
+    VERDICT_WORDS,
   } from '@gmid/mostab-core';
   import Help from './Help.svelte';
   import { CONTROL_HELP } from './help';
@@ -282,7 +283,7 @@
   function marginTitle(c: PickerCandidate): string {
     if (!c.worstMargin) return 'no hard check could be measured at this point';
     if (marginSpeaksFor(c)) return `worst hard-check margin at this point: ${c.worstMargin.id}`;
-    return `the checks that could be evaluated read ${pct(c.worstMargin.marginPct)} (${c.worstMargin.id}), but they do not speak for this sheet — it is infeasible for a reason no check measures`;
+    return `The checks that could be evaluated read ${pct(c.worstMargin.marginPct)} at ${c.worstMargin.id}. The search found no ${VERDICT_WORDS.feasible} design, and no check names the reason.`;
   }
 
   /** Quiescent current, qualified when the back-off ended on the author's slider floor: that
@@ -483,7 +484,7 @@ one that stops the search first on a small table"
             ? 'the devices have changed — these rows answer the previous bench; search again'
             : staleCause === 'settings'
               ? 'the solver settings have changed — these rows answer the previous ones; search again'
-              : `feasible first · ${view.supplied} field${view.supplied === 1 ? '' : 's'} supplied`}</span
+              : `designs found first · ${view.supplied} field${view.supplied === 1 ? '' : 's'} supplied`}</span
       >
     </div>
 
