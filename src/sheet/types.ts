@@ -1447,6 +1447,10 @@ export interface SizingReport {
    *  sizing that failed at the operating point — a given that did not resolve, or givens that
    *  do not size at all, is reported alone — so the UI can offer an in-place fix. */
   needs?: string[];
+  /** A sizing that failed because a quantity it derives — gm, gm/ID, the drain current or the
+   *  width — is not a positive finite number at the operating point the table gives: which, and
+   *  the value it came to. */
+  notPositive?: { quantity: 'gm' | 'gm_id' | 'id' | 'W'; value: number };
   /** Bias axes whose coordinate the engine ASSUMED (the namespace default) because the givens
    *  left them undeclared — an authored operating point and a filled-in one must be tellable
    *  apart. Reported rather than warned, so the UI can mark it in place; see

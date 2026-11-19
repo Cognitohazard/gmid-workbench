@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
+import { resolvedSheet } from './resolve';
 import { legacyFeasible, legacyPointState } from './derived';
 import { causeFits, legacyDesignFailure, setOf, verdictOf, type Cause, type Item } from './states';
 import { describe as describeItem, standardProblems } from './describe';
@@ -20,6 +21,8 @@ import {
   type SheetResult,
 } from './types';
 import { loadLibrary, sheet, table, REFS } from './library.fixtures';
+import { ekvTable } from '../demo/ekv.fixtures';
+import type { DeviceTable } from '../types';
 
 const dev = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.3 } });
 
@@ -40,7 +43,15 @@ function readings(res: SheetResult): { at: string; field: unknown; derived: unkn
   const items = res.items ?? [];
   const advisory = advisoryOf(res);
   const out: { at: string; field: unknown; derived: unknown }[] = [
-    { at: 'feasible', field: res.feasible, derived: legacyFeasible(items, advisory) },
+    {
+      at: 'feasible',
+      field: res.feasible,
+      derived: legacyFeasible(
+        items,
+        advisory,
+        (res.rangeEnds ?? []).map((e) => e.items),
+      ),
+    },
   ];
   if (res.point)
     out.push({ at: 'point', field: res.point.state, derived: legacyPointState(items, advisory) });
@@ -80,13 +91,28 @@ function danglingIn(items: readonly Item[]): string[] {
   );
 }
 
+/** The equations whose cause says that every name they read gives a number (`notFinite` empty)
+ *  while one of those names has no finite value. */
+function notFiniteFalse(doc: SheetDoc, res: SheetResult): string[] {
+  return (res.items ?? []).flatMap((i) => {
+    if (i.path.length || i.status !== 'failed' || i.cause.kind !== 'cannot-evaluate') return [];
+    if (!i.cause.data.notFinite || i.cause.data.notFinite.length) return [];
+    const e = doc.equations.find((x) => x.name === i.name);
+    const bad = e
+      ? namesOf(e.expr).filter((n) => n in res.values && !Number.isFinite(res.values[n]))
+      : [];
+    return bad.length ? [`${i.name} reads ${bad.join(', ')}`] : [];
+  });
+}
+
 const expectSame = (res: SheetResult): void => {
+  expect(verdictProblems(res)).toEqual([]);
   expect(res.items?.[0]).toMatchObject({ kind: 'sheet', path: [] });
   for (const i of res.items ?? [])
     if (i.status === 'failed') expect(causeFits(i.kind, i.cause)).toBe(true);
   for (const r of readings(res))
     expect({ at: r.at, value: r.derived }).toEqual({ at: r.at, value: r.field });
-  // Every item reads to the message standard.
+  // Every item reads to the message standard, and the text module gives every item its lines.
   const all: Item[] = [...(res.items ?? [])];
   const walk = (bs: readonly SheetBlockReport[] | undefined): void => {
     for (const b of bs ?? []) {
@@ -96,6 +122,7 @@ const expectSame = (res: SheetResult): void => {
   };
   walk(res.blocks);
   for (const e of res.rangeEnds ?? []) all.push(...(e.items ?? []));
+  for (const i of all) expect(() => describeItem(i)).not.toThrow();
   expect(
     all.flatMap((i) =>
       describeItem(i)
@@ -119,6 +146,94 @@ const expectSame = (res: SheetResult): void => {
     expect(danglingIn(list)).toEqual([]);
 };
 
+const wideDev = generateDemoDevice({
+  vds: { min: 0, max: 1.2, step: 0.05 },
+  vsb: { min: 0, max: 0.4, step: 0.05 },
+});
+/** A sheet's own device in the current format, with an axis-sign selector `s` (its sign is
+ *  wrong for this table at -1), its drain at `vds` and its body at `vsb`. */
+const own = (sign: number, vds: string, vsb: string, rest: Partial<SheetDoc> = {}): SheetDoc => ({
+  title: 'own device',
+  polarity: 'n',
+  formatVersion: 2,
+  nodes: 'none',
+  params: [
+    { name: 's', value: sign, convention: 'axis-sign' },
+    { name: 'I', value: 2e-5 },
+    { name: 'VD', value: 0.6, unit: 'V' },
+  ],
+  givens: { L: '0.5u', gm_id: '12', id: 'I', vds, vsb },
+  equations: [],
+  checks: [],
+  ...rest,
+});
+
+/** What no run may give: an item withheld on a requirement that only fails, which stops nothing
+ *  from evaluating; and an undetermined verdict with neither a failed item nor a held one. */
+function verdictProblems(res: SheetResult): string[] {
+  const out: string[] = [];
+  const failsAt = new Set(
+    (res.items ?? []).flatMap((i) =>
+      i.status === 'failed' && i.cause.kind === 'fails' ? [[...i.path, i.name].join('.')] : [],
+    ),
+  );
+  for (const i of res.items ?? [])
+    if (i.status === 'withheld')
+      for (const o of i.on)
+        if (o.cause === 'fails' || failsAt.has([...o.path, o.name].join('.')))
+          out.push(`${i.kind} ${i.name} withheld on ${o.name}, which fails`);
+  const v = res.verdict;
+  if (v?.verdict === 'undetermined' && !v.failed?.length && !v.held?.length)
+    out.push('undetermined with no failed and no held item');
+  return out;
+}
+
+/** Every line of every item of a run, the blocks' and the range ends' lists included, that breaks
+ *  the message standard, with the line. */
+function textProblems(res: SheetResult): string[] {
+  const all: Item[] = [...(res.items ?? [])];
+  const walk = (bs: readonly SheetBlockReport[] | undefined): void => {
+    for (const b of bs ?? []) {
+      all.push(...(b.items ?? []));
+      walk(b.blocks);
+    }
+  };
+  walk(res.blocks);
+  for (const e of res.rangeEnds ?? []) all.push(...(e.items ?? []));
+  return all.flatMap((i) =>
+    describeItem(i).segments.flatMap((l) =>
+      standardProblems(l).map((p) => `${p}: ${l.map((x) => x.text).join('')}`),
+    ),
+  );
+}
+
+describe('every text the library gives on each device reads to the message standard, and no verdict rests on a requirement that only fails', () => {
+  // The library table, the EKV table and the simple test device read the sheets differently:
+  // a search steps in at a different edge on each, so each gives texts the others do not.
+  const devices: [string, DeviceTable][] = [
+    ['the EKV table', ekvTable()],
+    ['the simple test device', generateDemoDevice()],
+  ];
+  for (const [name, device] of devices)
+    it(`on ${name}, at the defaults and at each sweepable parameter’s ends`, () => {
+      const found: string[] = [];
+      let runs = 0;
+      for (const { file, doc } of loadLibrary()) {
+        const cases: Record<string, number>[] = [{}];
+        for (const p of doc.params)
+          if (sweepable(p)) cases.push({ [p.name]: p.min }, { [p.name]: p.max });
+        for (const over of cases) {
+          const res = runSheet(withParams(doc, over), device, undefined, REFS);
+          for (const p of [...textProblems(res), ...verdictProblems(res)])
+            found.push(`${file} ${JSON.stringify(over)} ${p}`);
+          runs++;
+        }
+      }
+      expect([...new Set(found)]).toEqual([]);
+      expect(runs).toBeGreaterThan(500);
+    }, 600_000);
+});
+
 describe('today’s fields equal what the items give', () => {
   it('over every library sheet, at its defaults and at each sweepable parameter’s ends', () => {
     let runs = 0;
@@ -127,7 +242,9 @@ describe('today’s fields equal what the items give', () => {
       for (const p of doc.params)
         if (sweepable(p)) cases.push({ [p.name]: p.min }, { [p.name]: p.max });
       for (const over of cases) {
-        expectSame(runSheet(withParams(doc, over), table, undefined, REFS));
+        const res = runSheet(withParams(doc, over), table, undefined, REFS);
+        expectSame(res);
+        expect(notFiniteFalse(withParams(doc, over), res)).toEqual([]);
         runs++;
       }
     }
@@ -205,30 +322,9 @@ describe('today’s fields equal what the items give', () => {
     it(`over a sheet made to fail: ${name}`, () => {
       const res = evaluateSheet(d, dev);
       expectSame(res);
+      expect(notFiniteFalse(d, res)).toEqual([]);
       expect(res.verdict?.verdict).not.toBe('feasible');
     });
-
-  const wideDev = generateDemoDevice({
-    vds: { min: 0, max: 1.2, step: 0.05 },
-    vsb: { min: 0, max: 0.4, step: 0.05 },
-  });
-  /** A sheet's own device in the current format, with an axis-sign selector `s` (its sign is
-   *  wrong for this table at -1), its drain at `vds` and its body at `vsb`. */
-  const own = (sign: number, vds: string, vsb: string, rest: Partial<SheetDoc> = {}): SheetDoc => ({
-    title: 'own device',
-    polarity: 'n',
-    formatVersion: 2,
-    nodes: 'none',
-    params: [
-      { name: 's', value: sign, convention: 'axis-sign' },
-      { name: 'I', value: 2e-5 },
-      { name: 'VD', value: 0.6, unit: 'V' },
-    ],
-    givens: { L: '0.5u', gm_id: '12', id: 'I', vds, vsb },
-    equations: [],
-    checks: [],
-    ...rest,
-  });
 
   /** Each place that writes today's feasibility, with a case that reaches it. */
   const sites: Record<string, () => SheetResult> = {
@@ -385,6 +481,31 @@ describe('the table from a finding’s rule to its cause', () => {
     expect([...rules].filter((r) => !(r in FINDING_CAUSES)).sort()).toEqual([]);
   });
 
+  it('lists as never an error only rules whose every finding in the source is a warning or a note', () => {
+    const dir = join(__dirname);
+    const raisedAsError = new Set<string>();
+    for (const f of readdirSync(dir))
+      if (f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.endsWith('.fixtures.ts')) {
+        const src = readFileSync(join(dir, f), 'utf8');
+        for (const m of src.matchAll(/rule: '(sheet-[a-z-]+)'/g)) {
+          // The object literal the rule is written in, to its closing brace.
+          const at = m.index ?? 0;
+          const open = src.lastIndexOf('{', at);
+          const close = src.indexOf('}', at);
+          const literal = src.slice(open, close);
+          // A severity written only as literal warnings or notes is never an error; one that
+          // names 'error', or is not written as literals, may be.
+          const value = /severity(?::\s*([^,\n]+))?/.exec(literal)?.[1];
+          if (!value || /'error'/.test(value) || !/'(info|warning)'/.test(value))
+            raisedAsError.add(m[1]);
+        }
+      }
+    const neverAnError = Object.entries(FINDING_CAUSES)
+      .filter(([, read]) => read === 'never-an-error')
+      .map(([rule]) => rule);
+    expect(neverAnError.filter((r) => raisedAsError.has(r)).sort()).toEqual([]);
+  });
+
   it('reads a missing decision as a design not determined, never as an entry not read', () => {
     const d = sheet('otas/five-transistor-ota.json');
     const p = d.params.find((x) => x.name === 'V_tail') as { designConstraint?: unknown };
@@ -514,10 +635,11 @@ describe('the texts of a search that stopped short, and of a block in its own li
     const s = res.items?.find((i) => i.kind === 'search' && i.status === 'failed');
     const lines = s ? describeItem(s).lines : [];
     expect(lines).toContain('The physical range of wire tail is from 0 V to 0.95 V.');
-    expect(lines).toContain('The engine searched it from 0 V to 0.523 V.');
     expect(lines).toContain('Above 0.523 V, part in is outside its table.');
-    expect(lines).toContain('CM_in is 0.567 V at 0 V and 1.2 V at 0.523 V.');
-    expect(lines.some((l) => /full physical range|the high end/.test(l))).toBe(false);
+    expect(lines).toContain('CM_in is 0.567 V at the low end and 1.2 V at 0.523 V.');
+    expect(lines.some((l) => /full physical range|the high end|engine searched it/.test(l))).toBe(
+      false,
+    );
   });
 
   it('names the block, in its own list, as waiting on its parent sheet', () => {
@@ -527,7 +649,7 @@ describe('the texts of a search that stopped short, and of a block in its own li
       ?.find((b) => b.name === 'tail')
       ?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
     expect(own && describeItem(own, ['tail']).lines).toEqual([
-      'Block tail is not calculated, because its parent sheet gives it no value.',
+      'Block tail is not calculated, because its parent sheet gives it no value for vds_t.',
     ]);
   });
 });
@@ -581,4 +703,512 @@ describe('an item that gives no number while what it reads was withheld', () => 
       }
     }
   }, 600_000);
+});
+
+describe('a solved param the run held at a given value', () => {
+  const heldIn = (res: SheetResult, name: string): Item | undefined =>
+    res.items?.find((i) => i.kind === 'search' && i.path.length === 0 && i.name === name);
+
+  it('is ok, marked held with its value and unchecked relation, and the verdict is undetermined', () => {
+    const doc = resolvedSheet(sheet('otas/five-transistor-ota.json'), REFS).doc;
+    const free = evaluateSheet(doc, table);
+    const res = evaluateSheet(doc, table, undefined, { pinned: { V_tail: 0.4 } });
+    expect(heldIn(res, 'V_tail')).toEqual({
+      kind: 'search',
+      path: [],
+      name: 'V_tail',
+      status: 'ok',
+      attributes: {
+        kind: 'held',
+        value: 0.4,
+        unit: 'V',
+        relation: { lhs: 'CM_in', rhs: 'CM_dc', field: 'designConstraint' },
+      },
+    });
+    expect(res.verdict?.verdict).toBe('undetermined');
+    expect(res.verdict?.held).toEqual([{ kind: 'search', path: [], name: 'V_tail' }]);
+    // The run that solves it reads no held item.
+    expect(free.verdict?.held).toBeUndefined();
+    expectSame(res);
+  });
+
+  it('decides the verdict ahead of a requirement that fails, on a forced sheet', () => {
+    const d: SheetDoc = {
+      title: 'held',
+      polarity: 'n',
+      params: [
+        { name: 'goal', value: 3 },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'x', rhs: 'goal' } },
+      ],
+      equations: [],
+      checks: [{ id: 'xc', kind: 'spec', lhs: 'x', op: '<=', rhs: '0' }],
+    };
+    const res = evaluateSheet(d, dev, undefined, { pinned: { x: 2 } });
+    expect(heldIn(res, 'x')?.status).toBe('ok');
+    expect(res.verdict).toMatchObject({
+      verdict: 'undetermined',
+      held: [{ kind: 'search', name: 'x' }],
+      failed: [{ kind: 'requirement', name: 'xc', cause: { kind: 'fails' } }],
+    });
+    expectSame(res);
+  });
+});
+
+describe('an entry that is not well formed', () => {
+  it('fails the entry it names as not read, with the kind of entry, never the evaluated sheet', () => {
+    const dup = runSheet(
+      own(1, '0.6', 's*0', {
+        checks: [
+          { id: 'a', kind: 'spec', lhs: 'I', op: '>=', rhs: '0' },
+          { id: 'a', kind: 'spec', lhs: 'I', op: '>=', rhs: '0' },
+        ],
+      }),
+      wideDev,
+    );
+    expect(dup.items?.find((i) => i.kind === 'requirement' && i.name === 'a')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'not-read', data: { why: 'field', entry: 'check', where: 'a' } },
+    });
+    expect(dup.items?.[0].status).toBe('ok');
+    expectSame(dup);
+
+    const selector = runSheet(own(0.5, '0.6', 's*0'), wideDev);
+    expect(selector.items?.find((i) => i.name === 's')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'not-read', data: { why: 'field', entry: 'selector', where: 's' } },
+    });
+    expectSame(selector);
+  });
+});
+
+describe('a finding with no item of its own', () => {
+  const wired = (nodes: unknown, rest: Partial<SheetDoc> = {}): SheetDoc =>
+    own(1, '0.6', '0', { nodes, levels: { vdd: '1.2' }, ...rest } as Partial<SheetDoc>);
+
+  it('fails the sheet item of a range end’s own list where its set gives no number', () => {
+    const res = evaluateSheet(
+      own(1, 'VD', '0', { operatingRange: [{ name: 'lo', set: { VD: 'nonsense_name' } }] }),
+      wideDev,
+    );
+    expect(res.rangeEnds?.[0].items).toEqual([
+      {
+        kind: 'sheet',
+        path: [],
+        name: '',
+        status: 'failed',
+        cause: {
+          kind: 'cannot-evaluate',
+          data: {
+            why: 'not-defined',
+            name: 'nonsense_name',
+            reason: 'did not evaluate to a finite number against the base result',
+            rangeEnd: { name: 'lo', param: 'VD', expression: 'nonsense_name' },
+          },
+        },
+      },
+    ]);
+    expectSame(res);
+  });
+
+  it('puts a netlist finding on the device or selector it names, else on the sheet with its wires', () => {
+    const selector = evaluateSheet(own(-1, '0.6', 's*0'), wideDev);
+    expect(selector.items?.find((i) => i.name === 's')).toMatchObject({
+      kind: 'value',
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          netlist: [{ problem: 'selector', devices: ['givens'], param: 's' }],
+        },
+      },
+    });
+    expectSame(selector);
+
+    const badWire = runSheet(wired({ d: 'vdd', g: 'a.b', s: 'gnd', b: 'gnd' }), wideDev);
+    expect(badWire.items?.find((i) => i.kind === 'device')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          names: ['a.b'],
+          netlist: [{ problem: 'wire-name', wires: ['a.b'], devices: ['givens'] }],
+        },
+      },
+    });
+    expectSame(badWire);
+
+    const lone = runSheet(wired({ d: 'vdd', g: 'lone', s: 'gnd', b: 'gnd' }), wideDev);
+    expect(lone.items?.[0]).toMatchObject({
+      kind: 'sheet',
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: { why: 'netlist', names: ['lone'], netlist: [{ problem: 'one-terminal' }] },
+      },
+    });
+    expectSame(lone);
+  });
+});
+
+describe('the data an item carries for its text', () => {
+  const plain = (rest: Partial<SheetDoc>): SheetDoc => ({
+    title: 'forced',
+    polarity: 'n',
+    params: [{ name: 'a', value: 1 }],
+    equations: [],
+    checks: [],
+    ...rest,
+  });
+  const at = (res: SheetResult, kind: Item['kind'], name: string): Item | undefined =>
+    res.items?.find((i) => i.kind === kind && i.name === name && i.path.length === 0);
+
+  it('a syntax error carries its expression and where the parser stops', () => {
+    const res = runSheet(plain({ equations: [{ name: 'y', expr: 'a +* a' }] }), dev);
+    expect(at(res, 'value', 'y')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: { why: 'syntax', syntax: { expression: 'a +* a', at: 3 } },
+      },
+    });
+    expectSame(res);
+  });
+
+  it('a value that more than one statement sets carries the fields that set it', () => {
+    const res = runSheet(
+      plain({
+        params: [
+          { name: 'a', value: 1 },
+          { name: 'goal', value: 2 },
+          {
+            name: 'x',
+            value: 1,
+            min: 0,
+            max: 10,
+            designConstraint: { lhs: 'x', rhs: 'goal' },
+            solveFor: 'goal',
+          },
+        ],
+      }),
+      dev,
+    );
+    const twice = res.items?.find(
+      (i) =>
+        i.status === 'failed' &&
+        i.cause.kind === 'not-determined' &&
+        i.cause.data.why === 'decision-twice',
+    );
+    expect(twice).toMatchObject({
+      cause: { data: { statements: [{ name: 'x', fields: ['designConstraint', 'solveFor'] }] } },
+    });
+    expectSame(res);
+  });
+
+  it('an equation whose own arithmetic gives no number says that each name it reads gives one', () => {
+    const res = runSheet(plain({ equations: [{ name: 'y', expr: 'a / 0' }] }), dev);
+    expect(at(res, 'value', 'y')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'cannot-evaluate', data: { why: 'not-finite', notFinite: [] } },
+    });
+    expectSame(res);
+  });
+
+  it('a failing region check carries its region, in volts', () => {
+    const res = runSheet(
+      own(1, '0.02', '0', {
+        givens: { L: '0.5u', gm_id: '5', id: 'I', vds: '0.02', vsb: '0', region: 'saturation' },
+      }),
+      wideDev,
+    );
+    expect(at(res, 'requirement', 'region')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'fails', data: { region: 'saturation', unit: 'V' } },
+    });
+    expectSame(res);
+  });
+
+  it('a block its parent gives no value names the inputs it waits for', () => {
+    const res = runSheet(
+      withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 }),
+      table,
+      undefined,
+      REFS,
+    );
+    const own = res.blocks
+      ?.find((b) => b.name === 'tail')
+      ?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+    expect(own).toMatchObject({ status: 'withheld', on: [{ frame: 'parent', inputs: ['vds_t'] }] });
+    expectSame(res);
+  });
+});
+
+describe('the items of the second audit', () => {
+  const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+  const lib = (d: SheetDoc): SheetResult => runSheet(d, table, undefined, REFS);
+  const top = (
+    res: SheetResult,
+    kind: Item['kind'],
+    name: string,
+    path: string[] = [],
+  ): Item | undefined =>
+    res.items?.find(
+      (i) => i.kind === kind && i.name === name && i.path.join('/') === path.join('/'),
+    );
+  const tail = sheet('otas/differential-pair-tail.json');
+  const ota = sheet('otas/five-transistor-ota.json');
+
+  it('keeps two netlist findings on one item, in the order raised', () => {
+    const d = clone(tail);
+    (d.blocks![0] as { ports: Record<string, string> }).ports.vdd = 'lonely';
+    const res = lib(d);
+    expect(top(res, 'sheet', '')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-determined',
+        data: {
+          why: 'netlist',
+          names: ['vdd', 'lonely'],
+          netlist: [
+            { problem: 'level-unnamed', wires: ['vdd'] },
+            { problem: 'one-terminal', wires: ['lonely'] },
+          ],
+        },
+      },
+    });
+    expectSame(res);
+  });
+
+  it('gives a check written twice one item, which the finding that its id is doubled takes', () => {
+    const d = clone(tail);
+    d.checks.push(clone(d.checks.find((c) => c.id === 'gain-spec')!));
+    const res = lib(withParams(d, { gm_id_in: 25 }));
+    expect(res.items?.filter((i) => i.kind === 'requirement' && i.name === 'gain-spec')).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        cause: expect.objectContaining({
+          kind: 'not-read',
+          data: expect.objectContaining({ entry: 'check' }),
+        }),
+      }),
+    ]);
+    expectSame(res);
+  });
+
+  it('fails a param that is not a number as the list is built, and withholds what reads it', () => {
+    const d = clone(tail);
+    (d.params.find((p) => p.name === 'CL') as { value: unknown }).value = 'text';
+    const res = lib(d);
+    expect(top(res, 'value', 'CL')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: { field: { name: 'value', value: 'text', problem: 'not-a-number' } },
+      },
+    });
+    for (const n of ['GBW', 'SR'])
+      expect(top(res, 'value', n)).toMatchObject({
+        status: 'withheld',
+        on: [{ kind: 'value', name: 'CL', cause: 'not-read' }],
+      });
+    expectSame(res);
+    expect(notFiniteFalse(d, res)).toEqual([]);
+  });
+
+  it('reads a block override that names no child param as the block entry, naming the key', () => {
+    const d = clone(tail);
+    (d.blocks!.find((b) => b.name === 'tail')!.params as Record<string, string>).nope = '1';
+    const res = lib(d);
+    expect(top(res, 'sheet', '', ['tail'])).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: { entry: 'block', field: { name: 'params', key: 'nope', problem: 'unknown-name' } },
+      },
+    });
+    expectSame(res);
+  });
+
+  it('puts a range end’s validation finding on that end’s own list', () => {
+    const d = clone(tail);
+    d.operatingRange![0].set = { NOPE: '1' };
+    const res = lib(d);
+    expect(top(res, 'sheet', '')?.status).toBe('ok');
+    expect(res.rangeEnds?.[0].items?.[0]).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: { entry: 'range-end', field: { name: 'set', key: 'NOPE', problem: 'unknown-name' } },
+      },
+    });
+    expectSame(res);
+  });
+
+  it('gives a range end one item for an expression that does not parse, and names an undefined name', () => {
+    const d = clone(ota);
+    d.operatingRange![0].set = { CM_dc: '((' };
+    const res = lib(d);
+    expect(res.rangeEnds?.[0].items).toEqual([
+      expect.objectContaining({
+        status: 'failed',
+        cause: expect.objectContaining({
+          kind: 'cannot-evaluate',
+          data: expect.objectContaining({
+            why: 'syntax',
+            syntax: { expression: '((', at: 2, problem: 'Unclosed (' },
+          }),
+        }),
+      }),
+    ]);
+    expectSame(res);
+    const u = clone(ota);
+    u.operatingRange![0].set = { CM_dc: 'nonsense_name' };
+    const r2 = lib(u);
+    expect(r2.rangeEnds?.[0].items?.[0]).toMatchObject({
+      cause: { kind: 'cannot-evaluate', data: { why: 'not-defined', name: 'nonsense_name' } },
+    });
+    expectSame(r2);
+  });
+
+  it('reads a check with an operator the engine does not know as not read, and keeps today’s field', () => {
+    const d = clone(ota);
+    (d.checks[0] as { op: string }).op = '>>';
+    const res = lib(d);
+    expect(top(res, 'requirement', d.checks[0].id)).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: { entry: 'check', field: { name: 'op', value: '>>', problem: 'operator' } },
+      },
+    });
+    expectSame(res);
+    // Its two sides equal: today's result judges it an equality that passes, and the field reads
+    // feasible; the item is not read, and the derivation still gives today's field.
+    const eq = runSheet(
+      {
+        title: 'op',
+        polarity: 'n',
+        params: [{ name: 'a', value: 1 }],
+        equations: [],
+        checks: [{ id: 'c', kind: 'spec', lhs: '1', op: '>>' as never, rhs: '1' }],
+      },
+      dev,
+    );
+    expect(eq.feasible).toBe(true);
+    expect(eq.verdict?.verdict).toBe('undetermined');
+    expectSame(eq);
+  });
+
+  it('reads a tolerance that is not a number on an equality as the tolerance not read', () => {
+    const d = clone(tail);
+    Object.assign(d.checks[0], { op: '==', tolPct: 'x' });
+    const res = lib(d);
+    expect(top(res, 'requirement', d.checks[0].id)).toMatchObject({
+      cause: {
+        kind: 'not-read',
+        data: { entry: 'tolerance', field: { name: 'tolPct', value: 'x' } },
+      },
+    });
+    expectSame(res);
+  });
+
+  it('withholds the blocks downstream of a value that is not read, and of a block not resolved', () => {
+    const a = clone(ota);
+    (a.params.find((p) => p.name === 'I_tail') as { value: unknown }).value = 'abc';
+    const ra = lib(a);
+    expect(top(ra, 'sheet', '', ['bias'])).toMatchObject({
+      status: 'withheld',
+      on: [{ kind: 'value', name: 'I_tail', cause: 'not-read' }],
+    });
+    expect(top(ra, 'search', 'V_tail')).toMatchObject({
+      status: 'withheld',
+      on: [{ name: 'I_tail' }],
+    });
+    expectSame(ra);
+    const b = clone(ota);
+    (b.blocks![0] as { ref?: string }).ref = 'nope/nope';
+    delete (b.blocks![0] as { doc?: unknown }).doc;
+    const rb = lib(b);
+    expect(top(rb, 'sheet', '', ['tail'])).toMatchObject({
+      status: 'withheld',
+      on: [{ kind: 'sheet', path: ['bias'], cause: 'not-read' }],
+    });
+    expectSame(rb);
+  });
+
+  it('withholds a search that nothing evaluates on the item that failed there', () => {
+    const d = clone(ota);
+    d.equations.find((e) => e.name === 'CM_in')!.expr = 'VDD +* 1';
+    const res = lib(d);
+    expect(top(res, 'search', 'V_tail')).toMatchObject({
+      status: 'withheld',
+      on: [{ kind: 'value', name: 'CM_in', cause: 'cannot-evaluate' }],
+    });
+    expect(res.verdict?.failed).toEqual([
+      expect.objectContaining({ kind: 'value', name: 'CM_in' }),
+    ]);
+    expectSame(res);
+    // On the EKV table the first part to fail is the tail, whose sizing derives no transconductance.
+    const ekv = runSheet(withParams(ota, { L_in: 5e-6 }), ekvTable(), undefined, REFS);
+    const v = top(ekv, 'search', 'V_tail');
+    expect(v).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: {
+          unevaluable: {
+            at: {
+              where: 'nowhere',
+              by: { kind: 'device', path: ['tail'], name: 'givens' },
+              byCause: { kind: 'cannot-evaluate', data: { sizing: { quantity: 'gm' } } },
+            },
+          },
+        },
+      },
+    });
+    expectSame(ekv);
+  });
+});
+
+describe('a search that nothing evaluates, beside a requirement that only fails', () => {
+  it('keeps its own cause, and is never withheld on the requirement', () => {
+    const d = sheet('mirrors-bias/wide-swing-cascode-mirror.json');
+    const min = d.params.find((q) => q.name === 'V_out')!.min as number;
+    const res = runSheet(withParams(d, { V_out: min }), ekvTable(), undefined, REFS);
+    expect(res.items?.find((i) => i.name === 'k_x')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: {
+          unevaluable: {
+            at: {
+              by: { kind: 'device', path: ['out'] },
+              byCause: { data: { sizing: { quantity: 'gm' } } },
+            },
+          },
+        },
+      },
+    });
+    expect(res.verdict?.failed).toEqual([expect.objectContaining({ kind: 'search', name: 'k_x' })]);
+    expect(verdictProblems(res)).toEqual([]);
+  });
+
+  it('gives a reference to no sheet the same sentence in the block’s own list', () => {
+    const d = JSON.parse(JSON.stringify(sheet('otas/five-transistor-ota.json'))) as SheetDoc;
+    (d.blocks![0] as { ref?: string }).ref = 'nope/nope';
+    delete (d.blocks![0] as { doc?: unknown }).doc;
+    const res = runSheet(d, table, undefined, REFS);
+    const own = res.blocks?.find((b) => b.name === 'bias')?.items?.[0];
+    expect(own).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: { why: 'reference', field: { name: 'ref', value: 'nope/nope' } },
+      },
+    });
+    expect(describeItem(own!).lines).toEqual(
+      describeItem(res.items!.find((i) => i.kind === 'sheet' && i.path.join() === 'bias')!).lines,
+    );
+  });
 });

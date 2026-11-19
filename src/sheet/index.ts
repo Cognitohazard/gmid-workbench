@@ -2,7 +2,7 @@
 // it validates then evaluates, attaching the validation warnings — mirroring the
 // importMostab discipline so a caller cannot skip validation.
 
-import type { DeviceTable, OutsideTable } from '../types';
+import type { DeviceTable, OutsideTable, QAWarning } from '../types';
 import {
   RANGE_END_SEP,
   engineChecks,
@@ -158,12 +158,33 @@ export function runSheet(
   // A block sized on a table of the other polarity is a fact of the document and its binding,
   // said once for the run rather than by every evaluation inside it (see inheritedPolarityWarnings).
   const bound = inheritedPolarityWarnings(r.doc, table, resolveDevice);
-  // What validation found is on the items too, each on the entry it names.
-  const items = withFindings(res.items ?? [], pre, r.doc, 'validation');
+  // What validation found is on the items too, each on the entry it names: a finding about one
+  // range end on the sheet item of that end's own list, which an end that was not run has too.
+  const endNames = new Set((r.doc.operatingRange ?? []).map((e) => e?.name));
+  const onEnd = (w: QAWarning): boolean =>
+    w.rule === 'sheet-range' && w.location !== undefined && endNames.has(w.location);
+  const items = withFindings(
+    res.items ?? [],
+    pre.filter((w) => !onEnd(w)),
+    r.doc,
+    'validation',
+  );
+  const rangeEnds = res.rangeEnds?.map((e) => {
+    const own = pre.filter((w) => w.severity === 'error' && onEnd(w) && w.location === e.name);
+    if (!own.length) return e;
+    const list = withFindings(
+      e.items ?? [{ kind: 'sheet', path: [], name: '', status: 'ok' }],
+      own,
+      r.doc,
+      'validation',
+    );
+    return { ...e, items: list };
+  });
   return {
     ...withValidation([...pre, ...bound], res),
     feasible: res.feasible && !pre.some((w) => w.severity === 'error'),
     assumptions,
+    ...(rangeEnds ? { rangeEnds } : {}),
     items,
     verdict: verdictOf(items),
   };

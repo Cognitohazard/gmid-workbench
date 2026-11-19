@@ -7,7 +7,7 @@
 // checked against the finished result (nodes.ts) and never feeds back into it. Pure,
 // deterministic, never throws. Zero DOM.
 
-import { LookupRangeError } from '../types';
+import { LookupRangeError, SizingQuantityError } from '../types';
 import type { DeviceTable, OutsideTable, QAWarning, Scope, Value } from '../types';
 import { CONSTANTS } from '../constants';
 import { compileExpr, fallbackMessage, metaScalars, noiseSource, tableFallbacks } from '../derive';
@@ -20,7 +20,7 @@ import {
   passthroughKeys,
   passthroughName,
 } from '../namespace';
-import { additiveCoefficient, createEngine, scalarScope } from '../expr';
+import { additiveCoefficient, createEngine, scalarScope, syntaxAt } from '../expr';
 import { BINDABLE, bindProblem, sizeDevice, type SizeQuery, type SizeResult } from '../device';
 import { fixTable } from '../series';
 import { bracketGrid, diodeGrid, offHull } from '../grid';
@@ -88,11 +88,19 @@ import {
   type SearchData,
   type SearchEnd,
   type UnevaluableAt,
+  type WithheldOn,
   withSet,
 } from './states';
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
-import { causeOfFailure, solveFailureOf } from './derived';
-import { itemsOf, resolveWithheld, searchItems, under, withFindings } from './items';
+import { failOn, solveFailureOf } from './derived';
+import {
+  itemsOf,
+  resolveWithheld,
+  searchItems,
+  under,
+  withFindings,
+  withStatements,
+} from './items';
 import {
   axisDirection,
   blockWires,
@@ -767,7 +775,7 @@ function runSizing(
   // and says so (`from`, the given's source).
   const fail = (
     error: string,
-    why: Pick<SizingReport, 'needs' | 'outside' | 'unswept'> = {},
+    why: Pick<SizingReport, 'needs' | 'outside' | 'unswept' | 'notPositive'> = {},
     from?: unknown,
   ): { report: SizingReport; point: RegionPoint } => {
     const cause = from === undefined ? undefined : causeOf(from);
@@ -788,6 +796,7 @@ function runSizing(
       ...(why.needs?.length ? { needs: why.needs } : {}),
       ...(why.outside?.length ? { outside: why.outside } : {}),
       ...(why.unswept?.length ? { unswept: why.unswept } : {}),
+      ...(why.notPositive ? { notPositive: why.notPositive } : {}),
     };
     return { report, point: {} };
   };
@@ -870,7 +879,12 @@ function runSizing(
     // sheet vocabulary — point the author at the fix.
     if (m.includes('non-degenerate axis'))
       m += ' — declare the operating point in the givens to collapse the axis';
-    return fail(`sizing failed: ${m}`);
+    return fail(
+      `sizing failed: ${m}`,
+      e instanceof SizingQuantityError
+        ? { notPositive: { quantity: e.quantity, value: e.value } }
+        : {},
+    );
   }
   // A gate voltage the givens bind past the table's vgs sweep is read at its edge by the sizer,
   // which says so (SizeResult.outside); the sheet does not keep such a sizing.
@@ -1124,8 +1138,12 @@ function applyBlockParams(
   parentScope: Scope,
   warn: (w: QAWarning) => void,
   withheld: ReadonlyMap<string, string>,
-): { doc: SheetDoc; ok: boolean; cause?: string } {
-  if (!block.params) return { doc: childDoc, ok: true };
+  parent: SheetDoc,
+): { doc: SheetDoc; ok: boolean; cause?: string } & OverrideRead {
+  const read: OverrideRead = { unresolved: [], unknownKeys: [], undeclared: [], sources: [] };
+  if (!block.params) return { doc: childDoc, ok: true, ...read };
+  /** The child's params whose value from the parent gave no number. */
+  const unresolved = read.unresolved;
   const childParams = new Map(childDoc.params.map((p) => [p.name, p]));
   const overrides: Record<string, number> = {};
   let ok = true;
@@ -1140,6 +1158,7 @@ function applyBlockParams(
     if (child === undefined) {
       ok = false;
       cause = null;
+      read.unknownKeys.push(k);
       warn({
         rule: 'sheet-block-param',
         severity: 'error',
@@ -1166,6 +1185,8 @@ function applyBlockParams(
     const v = evalFinite(expr, parentValues, parentScope, warn, `block "${block.name}" param ${k}`);
     if (v === undefined) {
       ok = false;
+      unresolved.push(k);
+      readOverride(read, expr, parentValues, withheld, parent);
       const from = causeIn(withheld, expr, parentValues);
       cause = from === undefined || cause === null ? null : (cause ?? from);
       warn({
@@ -1190,7 +1211,107 @@ function applyBlockParams(
     },
     ok,
     ...(cause ? { cause } : {}),
+    ...read,
   };
+}
+
+/** The block's own sheet item, where what its parent sets for it gives no number (OverrideRead). */
+function overrideItem(name: string, r: OverrideRead): Item {
+  const sheet = { kind: 'sheet', path: [], name: '' } as const;
+  const inputs = r.unresolved.length ? { inputs: r.unresolved } : {};
+  if (r.unknownKeys.length)
+    return {
+      ...sheet,
+      status: 'failed',
+      cause: {
+        kind: 'not-read',
+        data: {
+          why: 'field',
+          where: name,
+          message: `block "${name}": override "${r.unknownKeys[0]}" does not match any child param`,
+          entry: 'block',
+          field: { name: 'params', key: r.unknownKeys[0], problem: 'unknown-name' },
+        },
+      },
+    };
+  if (r.undeclared.length)
+    return {
+      ...sheet,
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: { why: 'not-defined', name: r.undeclared[0], reason: '', ...inputs },
+      },
+    };
+  if (r.sources.length)
+    return {
+      ...sheet,
+      status: 'withheld',
+      on: r.sources.map((o) => ({ ...o, frame: 'parent', ...inputs }) as WithheldOn),
+    };
+  return {
+    ...sheet,
+    status: 'failed',
+    cause: { kind: 'cannot-evaluate', data: { why: 'not-finite', name, reason: '', ...inputs } },
+  };
+}
+
+/** What the expressions a parent sets for a block read, where they give no number, by the
+ *  withholding rule: the child's params they are for; the keys that name no child param; the names
+ *  they read that no entry of the parent declares; and the items of the parent they read that
+ *  have no value (a block, a search, a value). */
+interface OverrideRead {
+  unresolved: string[];
+  unknownKeys: string[];
+  undeclared: string[];
+  sources: ItemRef[];
+}
+
+/** Adds to `read` the names `expr` reads that have no value, as the withholding rule sorts them. */
+function readOverride(
+  read: OverrideRead,
+  expr: string,
+  values: Readonly<Record<string, number>>,
+  withheld: ReadonlyMap<string, string>,
+  parent: SheetDoc,
+): void {
+  const add = (r: ItemRef): void => {
+    if (
+      !read.sources.some(
+        (x) => x.kind === r.kind && x.name === r.name && x.path.join('.') === r.path.join('.'),
+      )
+    )
+      read.sources.push(r);
+  };
+  for (const n of namesOf(expr)) {
+    if (Object.prototype.hasOwnProperty.call(CONSTANTS, n)) continue;
+    if (Object.prototype.hasOwnProperty.call(values, n) && Number.isFinite(values[n])) continue;
+    const from = withheld.get(n);
+    const blockOf = (path: string): ItemRef | undefined =>
+      parent.blocks?.some((b) => b.name === path.split(PATH_SEP)[0])
+        ? { kind: 'sheet', path: path.split(PATH_SEP), name: '' }
+        : undefined;
+    if (from !== undefined) {
+      add(blockOf(from) ?? { kind: 'search', path: [], name: from });
+      continue;
+    }
+    const p = parent.params.find((q) => q.name === n);
+    if (p) {
+      add({ kind: engineSolved(p) || p.hold ? 'search' : 'value', path: [], name: n });
+      continue;
+    }
+    if (parent.equations.some((e) => e.name === n)) {
+      add({ kind: 'value', path: [], name: n });
+      continue;
+    }
+    const [b, key] = n.split(PROVIDE_SEP);
+    const block = key !== undefined ? blockOf(b) : undefined;
+    if (block) {
+      add(block);
+      continue;
+    }
+    if (!read.undeclared.includes(n)) read.undeclared.push(n);
+  }
 }
 
 /** The block a child's withheld output `key` traces back to, in its parent's terms: the block inside
@@ -1234,7 +1355,11 @@ function evalBlocks(
   // the earlier sibling's provides — skip it, fail closed.
   const seenNames = new Set<string>();
   for (const block of parent.blocks ?? []) {
-    const dead = (message: string): void => {
+    // A block that is not evaluated, and why: a reference no sheet answers, a name used twice, a
+    // format this app does not read, composition nested too deep, or a device table that does not
+    // resolve. Its report holds one item, its own sheet item, failed as not read; a reference
+    // carries the sheet it names, so the block's own list and its parent's give one sentence.
+    const notEvaluated = (message: string): void => {
       warn({ rule: 'sheet-block', severity: 'error', message, location: block.name });
       reports.push({
         name: block.name,
@@ -1250,25 +1375,29 @@ function evalBlocks(
             status: 'failed',
             cause: {
               kind: 'not-read',
-              data: {
-                why: block.ref !== undefined && !block.doc ? 'reference' : 'field',
-                where: block.name,
-                message,
-              },
+              data:
+                block.ref !== undefined && !block.doc
+                  ? {
+                      why: 'reference',
+                      where: block.name,
+                      message,
+                      field: { name: 'ref', value: block.ref, problem: 'no-sheet' },
+                    }
+                  : { why: 'field', where: block.name, message, entry: 'block' },
             },
           },
         ],
       });
     };
     if (!block.name.trim()) {
-      dead('a block has an empty name');
+      notEvaluated('a block has an empty name');
       continue;
     }
     // A ref that reached evaluation unmaterialized (the caller skipped resolveSheetRefs,
     // or resolution failed and already named why) must never size on nothing.
     const srcDoc = block.doc;
     if (!srcDoc) {
-      dead(
+      notEvaluated(
         block.ref !== undefined
           ? `block "${block.name}": unresolved reference "${block.ref}" — resolve against a sheet library before evaluation`
           : `block "${block.name}" has neither an embedded doc nor a ref`,
@@ -1276,17 +1405,19 @@ function evalBlocks(
       continue;
     }
     if (seenNames.has(block.name)) {
-      dead(`duplicate block name "${block.name}" — the block was skipped, not silently merged`);
+      notEvaluated(
+        `duplicate block name "${block.name}" — the block was skipped, not silently merged`,
+      );
       continue;
     }
     seenNames.add(block.name);
     // A child document in a format this app does not read is kept as stored, never evaluated.
     if (formatOf(srcDoc) === 'unknown') {
-      dead(`block "${block.name}": ${formatProblems(srcDoc)[0].message}`);
+      notEvaluated(`block "${block.name}": ${formatProblems(srcDoc)[0].message}`);
       continue;
     }
     if (depth >= MAX_BLOCK_DEPTH) {
-      dead(`block "${block.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
+      notEvaluated(`block "${block.name}": composition nested deeper than ${MAX_BLOCK_DEPTH}`);
       continue;
     }
     // A child names its own device id (else it inherits the parent table). A named device that the
@@ -1296,7 +1427,7 @@ function evalBlocks(
     if (block.device !== undefined) {
       childTable = resolveDevice?.(block.device);
       if (childTable === undefined) {
-        dead(`block "${block.name}": device "${block.device}" did not resolve`);
+        notEvaluated(`block "${block.name}": device "${block.device}" did not resolve`);
         continue;
       }
     }
@@ -1305,7 +1436,11 @@ function evalBlocks(
       doc: childDoc,
       ok: paramsOk,
       cause,
-    } = applyBlockParams(block, srcDoc, values, scope, warn, withheld);
+      unresolved,
+      unknownKeys,
+      undeclared,
+      sources,
+    } = applyBlockParams(block, srcDoc, values, scope, warn, withheld, parent);
     /** Withhold `key` of this block's outputs, as following from `from`. */
     const withhold = (key: string, from: string): void =>
       void withheld.set(joinProvide(block.name, key), from);
@@ -1330,38 +1465,11 @@ function evalBlocks(
         feasible: false,
         provides: {},
         checks: [],
-        // Not evaluated: what it would have read was withheld, or a value its parent sets for it
-        // gave no number.
-        items: [
-          cause
-            ? {
-                kind: 'sheet',
-                path: [],
-                name: '',
-                status: 'withheld',
-                // In the parent's terms: a block of the parent, or a search of the parent's
-                // that it did not find.
-                on: [
-                  parent.blocks?.some((b) => b.name === cause.split(PATH_SEP)[0])
-                    ? { kind: 'sheet', path: cause.split(PATH_SEP), name: '', frame: 'parent' }
-                    : { kind: 'search', path: [], name: cause, frame: 'parent' },
-                ],
-              }
-            : {
-                kind: 'sheet',
-                path: [],
-                name: '',
-                status: 'failed',
-                cause: {
-                  kind: 'cannot-evaluate',
-                  data: {
-                    why: 'not-defined',
-                    name: block.name,
-                    reason: `block "${block.name}": a value its parent sets for it did not resolve`,
-                  },
-                },
-              },
-        ],
+        // Not evaluated, by the withholding rule over what its parent sets for it: a key that
+        // names no param of the child is an entry not well formed; a name no entry declares is not
+        // defined; items of the parent that have no value withhold it; else the value its parent
+        // sets gives no number.
+        items: [overrideItem(block.name, { unresolved, unknownKeys, undeclared, sources })],
       };
       for (const key of srcDoc.provides ?? []) withhold(key, cause ?? block.name);
       PENDING_WIRING.set(report, { doc: childDoc, res: NOT_EVALUATED, table: childTable, mode });
@@ -2029,6 +2137,8 @@ function solveFailed(res: SheetResult, failure: SolveFailure, doc?: SheetDoc): S
 /** One failure of a node's solve, with the evaluation it stopped on (see withUnfound). */
 interface Failed {
   failure: SolveFailure;
+  /** The cause today's failure record was derived from. */
+  cause: Cause;
   probe: SheetResult;
 }
 
@@ -2292,7 +2402,7 @@ function evaluateNode(
   const held = doc.params
     .filter((p) => engineSolved(p) && opts.pinned !== undefined && p.name in opts.pinned)
     .map((p) => p.name);
-  const solved = held.length ? { ...solvedRun, pinned: held } : solvedRun;
+  const solved = held.length ? withHeldMarks(doc, { ...solvedRun, pinned: held }, held) : solvedRun;
   if (depth > 0) return solved;
   const heldGates = opts.held ? heldGateWarnings(doc) : [];
   const pinnedNote = pinnedWarnings(solved);
@@ -2378,6 +2488,31 @@ const withItems = (
   const resolved = resolveWithheld(items);
   return { ...res, items: resolved, verdict: verdictOf(resolved) };
 };
+
+/** The items of a run with each solved param it held at a given value marked so: the value it
+ *  was held at, and the relation that was not checked there; and the verdict they give. */
+function withHeldMarks(doc: SheetDoc, res: SheetResult, held: readonly string[]): SheetResult {
+  if (!res.items) return res;
+  const items = res.items.map((i): Item => {
+    if (i.kind !== 'search' || i.path.length || !held.includes(i.name) || i.status !== 'ok')
+      return i;
+    const p = doc.params.find((q) => q.name === i.name) as SheetVar;
+    const { lhs, rhs } = solvedRelation(p) as { lhs: string; rhs: string };
+    return {
+      kind: i.kind,
+      path: i.path,
+      name: i.name,
+      status: 'ok',
+      attributes: {
+        kind: 'held',
+        value: res.values[i.name],
+        ...(p.unit !== undefined ? { unit: p.unit } : {}),
+        relation: { lhs, rhs, field: constrained(p) ? 'designConstraint' : 'solveFor' },
+      },
+    };
+  });
+  return { ...res, items, verdict: verdictOf(items) };
+}
 
 /**
  * How far from zero a current balance may read where the design is sized, as a fraction of its
@@ -3098,14 +3233,15 @@ interface Probe {
 /** How a solve ended. `ok` only for an answer that was reached; every failure carries the last
  *  evaluation and the outcome that names it. */
 type Outcome =
-  { ok: true; res: SheetResult } | { ok: false; res: SheetResult; failure: SolveFailure };
+  | { ok: true; res: SheetResult }
+  | { ok: false; res: SheetResult; failure: SolveFailure; cause: Cause };
 
 /** A search's answer: where the unknown landed, the evaluation there, and the relation's slope at
  *  the root — what converts the param's tolerance into the relation's units wherever the relation
  *  is read again (see holdsAt). */
 type Found =
   | { ok: true; res: SheetResult; x: number; slope: number }
-  | { ok: false; res: SheetResult; failure: SolveFailure };
+  | { ok: false; res: SheetResult; failure: SolveFailure; cause: Cause };
 
 /** The budget ran out: nothing the other members of a set do can give it back, so a retry would
  *  only fail the same way. */
@@ -3342,7 +3478,7 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
     // Only the budget can stop a search before its first probe; the node is evaluated once even
     // then, so the failure still carries a result to read.
     last ??= evaluateOnce(ctx, ctx.at, ctx.unfound);
-    return { ok: false, res: at?.res ?? last, failure: solveFailureOf(cause) };
+    return { ok: false, res: at?.res ?? last, ...failOn(cause) };
   };
   const data = (): SearchData => searchDataOf(ctx, u, also);
   const probe = (x: number): Probe | undefined => {
@@ -3409,6 +3545,30 @@ function searcher(ctx: SolveContext, u: Unknown, also: readonly Unknown[]): Sear
   };
 }
 
+/** The first item that failed in one evaluation of the node, with its cause: what a point that
+ *  does not evaluate was stopped by. A requirement that fails and a statement that is false stop
+ *  nothing from evaluating, so neither is it. */
+function failedAt(doc: SheetDoc, res: SheetResult): { ref: ItemRef; cause: Cause } | undefined {
+  const first = withFindings(itemsOf(doc, res), res.warnings, doc, 'evaluation').find(
+    (i) => i.status === 'failed' && i.cause.kind !== 'fails' && i.cause.kind !== 'statement-false',
+  );
+  return first?.status === 'failed'
+    ? { ref: { kind: first.kind, path: first.path, name: first.name }, cause: first.cause }
+    : undefined;
+}
+
+/** What stopped a point from evaluating, as UnevaluableAt holds it: the part read beyond its
+ *  table, where one was, else the first item that failed there, with its cause. */
+function byAt(
+  doc: SheetDoc,
+  res: SheetResult,
+  outside: OutsideTable | undefined,
+): { by?: ItemRef; byCause?: Cause } {
+  if (outside) return { by: deviceRef(outside.device) };
+  const failed = failedAt(doc, res);
+  return failed ? { by: failed.ref, byCause: failed.cause } : {};
+}
+
 /** The two ends a search brackets between: the ends of the stated range, each stepped inward to
  *  the nearest point that evaluates where the relation does not evaluate there, with what each
  *  inward step found (`moved`). A failure when nothing of the range evaluates, or the budget runs
@@ -3430,20 +3590,8 @@ function ends(
   const stepOf = (why: string, bad: Probe): Step => {
     const outside = outsideIn(bad.res)[0];
     if (outside) return { reason: why, outside };
-    const first = withFindings(itemsOf(s.doc, bad.res), bad.res.warnings, s.doc, 'evaluation').find(
-      (i) => i.status === 'failed',
-    );
-    return {
-      reason: why,
-      ...(first?.status === 'failed'
-        ? {
-            failed: {
-              ref: { kind: first.kind, path: first.path, name: first.name },
-              cause: first.cause,
-            },
-          }
-        : {}),
-    };
+    const failed = failedAt(s.doc, bad.res);
+    return { reason: why, ...(failed ? { failed } : {}) };
   };
   if (lo.g === undefined || hi.g === undefined) {
     let mid: Probe | undefined;
@@ -3460,7 +3608,7 @@ function ends(
             {
               where: 'nowhere',
               reason: lo.why as string,
-              ...(outside ? { by: deviceRef(outside.device) } : {}),
+              ...byAt(s.doc, lo.res, outside),
             },
             lo.why as string,
             outside,
@@ -3648,7 +3796,7 @@ function stepAround(
         ends: stretch,
         between: [Math.min(pb.x, pc.x), Math.max(pb.x, pc.x)],
         reason: nearB.why,
-        ...(outside ? { by: deviceRef(outside.device) } : {}),
+        ...byAt(s.doc, nearB.bad.res, outside),
       },
       nearB.why,
       outside,
@@ -3735,14 +3883,14 @@ function settle(
         continue;
       }
       if (!found.ok) {
-        const inner = causeOfFailure(found.failure) as Cause;
+        const inner = found.cause;
         const members = set.map((o) => searchDataOf(ctx, o, []));
         return {
           ok: false,
           res: found.res,
           // The member that failed keeps its own cause, with the set it was one of; a budget
           // that ran out is the set's own failure.
-          failure: solveFailureOf(
+          ...failOn(
             inner.kind === 'limit' && outOfBudget(found.failure)
               ? { kind: 'limit', data: { ...inner.data, set: members } }
               : (withSet(inner, members) ?? {
@@ -3770,7 +3918,7 @@ function settle(
   return {
     ok: false,
     res: res as SheetResult,
-    failure: solveFailureOf({
+    ...failOn({
       kind: 'did-not-settle',
       data: {
         members: set.map((o) => searchDataOf(ctx, o, [])),
@@ -3836,14 +3984,19 @@ function solveNode(node: NodeRef): SheetResult {
     if (!failed.length)
       failed.push({
         probe: firstProbe(),
-        failure: solveFailureOf({
-          kind: 'not-determined',
-          data: {
-            why: declarationWhy(doc, issue.params),
-            names: issue.params,
-            message: issue.message,
-          },
-        }),
+        ...failOn(
+          withStatements(
+            {
+              kind: 'not-determined',
+              data: {
+                why: declarationWhy(doc, issue.params),
+                names: issue.params,
+                message: issue.message,
+              },
+            },
+            doc,
+          ),
+        ),
       });
     const named = new Set(issue.params);
     rest = rest.filter((p) => !named.has(p.name));
@@ -3871,7 +4024,7 @@ function solveNode(node: NodeRef): SheetResult {
     for (const n of refused) unfound.set(n, n);
     failed.push({
       probe: firstProbe(),
-      failure: solveFailureOf({
+      ...failOn({
         kind: 'not-determined',
         data: {
           why: 'range-outside',
@@ -3943,7 +4096,7 @@ function solveNode(node: NodeRef): SheetResult {
     if (!outcome.ok) {
       for (const n of failedParams(outcome.failure)) unfound.set(n, n);
       for (const n of names) if (!unfound.has(n)) unfound.set(n, failedParams(outcome.failure)[0]);
-      failed.push({ probe: outcome.res, failure: outcome.failure });
+      failed.push({ probe: outcome.res, failure: outcome.failure, cause: outcome.cause });
       continue;
     }
     last = outcome.res;
@@ -3956,7 +4109,7 @@ function solveNode(node: NodeRef): SheetResult {
     .filter((u) => !holdsAt(u, final, slope, solveTolRel))
     .map((u) => ({ u, g: relationAt(u, final), tol: tolOf(u, slope, solveTolRel) }));
   if (off.length) {
-    const failure = solveFailureOf({
+    const failed = failOn({
       kind: 'did-not-settle',
       data: {
         members: off.map((o) => searchDataOf(ctx, o.u, [])),
@@ -3979,7 +4132,7 @@ function solveNode(node: NodeRef): SheetResult {
     // Only the params read off their tolerance are not found: every other one verified where it
     // landed, unless it landed by reading one of them (withUnfound).
     const off_ = new Map(off.map((o) => [o.u.p.name, o.u.p.name]));
-    return ranged(withUnfound(node, [{ failure, probe: final }], off_, at));
+    return ranged(withUnfound(node, [{ ...failed, probe: final }], off_, at));
   }
   return ranged({ ...final, solve: { kind: 'settled' } });
 }
@@ -4149,6 +4302,44 @@ export function pointOutcome(
   return { sized, ...answer };
 }
 
+/** Why a range end's `set` expression gives no number against the design run, by the withholding
+ *  rule: a syntax error, with where the parser stops; a name that no entry declares; else a number
+ *  that is not finite. */
+function rangeEndCause(
+  end: string,
+  param: string,
+  expr: unknown,
+  values: Readonly<Record<string, number>>,
+): Cause {
+  const expression = typeof expr === 'string' ? expr : String(expr);
+  const rangeEnd = { name: end, param, expression };
+  const reason = 'did not evaluate to a finite number against the base result';
+  const syntax = syntaxAt(expression);
+  if (syntax)
+    return {
+      kind: 'cannot-evaluate',
+      data: {
+        why: 'syntax',
+        name: expression,
+        reason,
+        syntax: { expression, ...syntax },
+        rangeEnd,
+      },
+    };
+  const undeclared = namesOf(expression).find(
+    (n) =>
+      !Object.prototype.hasOwnProperty.call(values, n) &&
+      !Object.prototype.hasOwnProperty.call(CONSTANTS, n),
+  );
+  return {
+    kind: 'cannot-evaluate',
+    data:
+      undeclared !== undefined
+        ? { why: 'not-defined', name: undeclared, reason, rangeEnd }
+        : { why: 'not-finite', name: expression, reason, rangeEnd },
+  };
+}
+
 /** One range end: resolve its `set` expressions against the base result, re-evaluate the
  *  FIXED-HARDWARE form of the doc with those values (through evaluateNode, so the run cannot
  *  recurse into range ends), and classify the outcome (see RangeEndReport.state):
@@ -4180,12 +4371,14 @@ function runRangeEnd(
   const over: Record<string, number> = {};
   /** Asked, and nothing was evaluated that could answer. */
   const unwalked = unwalkedReport(held.doc);
-  const unanswered = (error: string): RangeEndReport =>
+  // The error has no item of its own, so it is the failed sheet item of the end's own list.
+  const unanswered = (error: string, cause: Cause): RangeEndReport =>
     unrunEnd(rangeEnd.name, 'no-answer', {
       set: over,
       error,
       ...(unwalked ? { nodes: unwalked } : {}),
       ...assumed,
+      items: [{ kind: 'sheet', path: [], name: '', status: 'failed', cause }],
     });
   // `?? {}`: a half-written range end (no set) is validation's error to name; evaluate never
   // throws.
@@ -4195,6 +4388,7 @@ function runRangeEnd(
       return unanswered(
         `range end "${rangeEnd.name}": set ${param} = "${expr}" did not evaluate to a finite ` +
           `number against the base result`,
+        rangeEndCause(rangeEnd.name, param, expr, base.values),
       );
     over[param] = v;
   }
@@ -4204,6 +4398,15 @@ function runRangeEnd(
     return unanswered(
       `range end "${rangeEnd.name}": no nominal value was recorded for the held expression of ` +
         held.unheld.join(', '),
+      {
+        kind: 'not-determined',
+        data: {
+          why: 'operating-range',
+          names: [rangeEnd.name],
+          unheld: [...held.unheld],
+          message: `no nominal value was recorded for the held expression of ${held.unheld.join(', ')}`,
+        },
+      },
     );
   const res = evaluateNode(withParams(held.doc, over), table, resolveDevice, 0, {
     held: true,

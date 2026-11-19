@@ -1102,6 +1102,7 @@ function treeNodesProblems(doc: SheetDoc): QAWarning[] {
               `levels "${w}": "${e}" cannot hold the wire — ${verdict.problems.join('; ')}. A held ` +
               `level is stated by the designer: a number, or params classed independent`,
             location: 'levels',
+            about: { kind: 'netlist', problem: 'level-refused', wires: [w], level: e },
           });
         else if (verdict.kind === 'held-gate') {
           // The hold keeps one device's gates: only that device's gate wires may be held at it —
@@ -1123,6 +1124,13 @@ function treeNodesProblems(doc: SheetDoc): QAWarning[] {
                   ? `${who} has its gate${gates.length > 1 ? 's' : ''} on ${quoted(gates)}`
                   : `${who} names no wires`),
               location: 'levels',
+              about: {
+                kind: 'netlist',
+                problem: 'level-gate',
+                wires: [w],
+                devices: [verdict.device],
+                level: e,
+              },
             });
         }
       }
@@ -1238,7 +1246,7 @@ function dcInputProblems(doc: SheetDoc): QAWarning[] {
         `sheet's own parts determine it, but it types a value for now instead of deriving it)`,
       location: param,
       symbol: param,
-      decision: { kind: 'missing', names: [param] },
+      about: { kind: 'decision', decision: 'missing', names: [param] },
     })),
     ...cycles.map(({ device, via }): QAWarning => ({
       rule: 'sheet-dc-inputs',
@@ -1248,7 +1256,7 @@ function dcInputProblems(doc: SheetDoc): QAWarning[] {
         `(${via.join(' → ')}) and nothing solves the loop — name the estimate as a param and ` +
         `close it with solveFor`,
       location: device,
-      decision: { kind: 'loop', names: [device] },
+      about: { kind: 'decision', decision: 'loop', names: [device] },
     })),
   ];
 }
@@ -1763,6 +1771,7 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
         severity: 'error',
         message: `param "${p.name}" is not a finite number`,
         location: p.name,
+        about: { kind: 'entry', field: 'value', value: p.value, problem: 'not-a-number' },
       });
     }
     // `class` is the author's word on what kind of DC level the param is. `solved` is not theirs
@@ -1800,7 +1809,7 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
         severity: 'error',
         message: `param "${p.name}" solves for itself — name the value it is an estimate of`,
         location: p.name,
-        decision: { kind: 'missing', names: [p.name] },
+        about: { kind: 'decision', decision: 'missing', names: [p.name] },
       });
     }
     // `held` marks the constraint a held run generates from a hold (holdAsConstraint). Written in
@@ -1822,7 +1831,10 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
     // asserted where the walk could place every name the relation reads — a table column it
     // cannot place might be the param's own device, so an unplaced name is not taken as proof.
     const rel = solvedRelation(p);
-    if (rel && p.solveFor !== p.name) {
+    // An equation that does not parse reads nothing the walk can see, so it is no proof that the
+    // relation does not read its param; its syntax error is reported on its own.
+    const unparsed = doc.equations.some((e) => typeof e.expr !== 'string' || !parses(e.expr));
+    if (rel && p.solveFor !== p.name && !unparsed) {
       const reads = exprRoots(doc, '', `(${rel.lhs}) - (${rel.rhs})`, { residual: p.name });
       if (!reads.selfRead && reads.unresolved.length === 0)
         out.push({
@@ -1832,7 +1844,7 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
             `param "${p.name}": its relation ${rel.lhs} - (${rel.rhs}) does not read ${p.name}, so ` +
             `it cannot single ${p.name} out — write the relation in terms of the param it solves`,
           location: p.name,
-          decision: { kind: 'missing', names: [p.name] },
+          about: { kind: 'decision', decision: 'missing', names: [p.name] },
         });
     }
   }
@@ -1851,8 +1863,9 @@ function paramProblems(doc: SheetDoc, open: OpenRanges | undefined): QAWarning[]
       severity: 'error',
       message: issue.message,
       location: 'params',
-      decision: {
-        kind: declarationWhy(doc, issue.params) === 'decision-twice' ? 'twice' : 'missing',
+      about: {
+        kind: 'decision',
+        decision: declarationWhy(doc, issue.params) === 'decision-twice' ? 'twice' : 'missing',
         names: issue.params,
       },
     });
@@ -2019,6 +2032,7 @@ function checkProblems(doc: SheetDoc): QAWarning[] {
         severity: 'error',
         message: `check "${r.id}" tolPct must be a finite number >= 0, got ${r.tolPct}`,
         location: r.id,
+        about: { kind: 'entry', field: 'tolPct', value: r.tolPct, problem: 'not-a-number' },
       });
     }
   }
@@ -2080,6 +2094,7 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
             severity: 'error',
             message: `range end "${name}" sets "${k}", which is not a param of this sheet`,
             location: name,
+            about: { kind: 'entry', field: 'set', key: k, problem: 'unknown-name' },
           });
         } else if (engineSolved(p) || holds(p)) {
           out.push({
@@ -2089,6 +2104,7 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
               ? `range end "${name}" sets "${k}", which the engine solves — the override would be discarded by the solve`
               : `range end "${name}" sets "${k}", which carries hold — a range end re-solves it, so the override would be discarded`,
             location: name,
+            about: { kind: 'entry', field: 'set', key: k, problem: 'solved' },
           });
         }
         if (typeof expr !== 'string' || !parses(expr)) {
@@ -2097,6 +2113,7 @@ function rangeProblems(doc: SheetDoc): QAWarning[] {
             severity: 'error',
             message: `range end "${name}": the expression for "${k}" does not parse`,
             location: name,
+            about: { kind: 'entry', field: 'set', key: k, value: expr, problem: 'syntax' },
           });
         }
       }

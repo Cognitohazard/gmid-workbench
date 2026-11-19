@@ -17,19 +17,26 @@ import type { NoSolutionWhy, SolveFailure } from './types';
 const becauseOf = (d: NoSolutionRead): NoSolutionWhy =>
   d.ended.kind === 'sign' ? 'no-crossing' : d.ended.kind === 'step' ? 'step' : 'undetermined';
 
-/** The cause each solve outcome derived here was derived from (solveFailureOf). */
-const CAUSE_OF = new WeakMap<SolveFailure, Cause>();
-
-/** The cause a solve outcome was derived from, where it was derived from one. */
-export const causeOfFailure = (f: SolveFailure): Cause | undefined => CAUSE_OF.get(f);
-
 /** The solve outcome today's fields carry for a failed search, from its cause: the same kind, the
- *  same unknowns and the same message. The cause is kept beside it (causeOfFailure). */
-export function solveFailureOf(c: Cause): SolveFailure {
-  const f = legacyFailure(c);
-  CAUSE_OF.set(f, c);
-  return f;
-}
+ *  same unknowns and the same message. */
+export const solveFailureOf = (c: Cause): SolveFailure => legacyFailure(c);
+
+/** A failed search as the engine carries it: today's failure record, and the cause it was derived
+ *  from, side by side, so a reader of the cause never looks it up from the record. */
+export const failOn = (cause: Cause): { failure: SolveFailure; cause: Cause } => ({
+  failure: legacyFailure(cause),
+  cause,
+});
+
+/** A cause that is not the outcome of a search reaching today's solve record: no search writes
+ *  one, so this is never reached, but the evaluator never throws. It reads as a set that is not
+ *  well formed, with its message. */
+const notASearchOutcome = (c: Cause, message: string): SolveFailure => ({
+  kind: 'not-settled',
+  unknowns: [],
+  why: 'malformed',
+  message: message || c.kind,
+});
 
 function legacyFailure(c: Cause): SolveFailure {
   // A member of a set that failed where the others were held: today, the set did not settle, in
@@ -100,9 +107,9 @@ function legacyFailure(c: Cause): SolveFailure {
           why: 'unevaluable',
           message,
         };
-      throw new Error('a cause that gives no number is not the outcome of a search here');
+      return notASearchOutcome(c, message);
     default:
-      throw new Error(`a ${c.kind} cause is not the outcome of a search`);
+      return notASearchOutcome(c, message);
   }
 }
 
@@ -110,10 +117,18 @@ function legacyFailure(c: Cause): SolveFailure {
  * Today's yes-or-no feasibility of one evaluation, from its items: every item ok, except a
  * requirement that is advisory, which gates nothing. A requirement that could not be calculated
  * counts as failing ("fails closed"), as it does today, though its verdict is undetermined.
- * `advisory` names the requirements that are advisory, by their path in the list.
+ * `advisory` names the requirements that are advisory, by their path in the list; `ends` are the
+ * range ends' own lists.
  */
-export function legacyFeasible(items: readonly Item[], advisory: ReadonlySet<string>): boolean {
+export function legacyFeasible(
+  items: readonly Item[],
+  advisory: ReadonlySet<string>,
+  ends: readonly (readonly Item[] | undefined)[] = [],
+): boolean {
   const quiet = quietIn(items);
+  // A finding of validation about one range end is on that end's own list, and blocks today's
+  // feasibility as every validation error does.
+  if (ends.some((list) => (list ?? []).some(fromValidation))) return false;
   return items.every(
     (i) =>
       i.status === 'ok' ||
@@ -128,9 +143,13 @@ export function legacyFeasible(items: readonly Item[], advisory: ReadonlySet<str
  *  marks as assumed (the point has no answer, but feasibility is read on the design as sized). */
 const quietToday = (i: Item): boolean =>
   i.status === 'failed' &&
-  ((i.kind === 'value' &&
-    i.cause.kind === 'cannot-evaluate' &&
-    i.cause.data.why === 'not-defined') ||
+  // A check whose operator is not known, which today's result judged as an equality that passed.
+  ((i.kind === 'requirement' &&
+    i.cause.kind === 'not-read' &&
+    i.cause.data.classified === 'pass') ||
+    (i.kind === 'value' &&
+      i.cause.kind === 'cannot-evaluate' &&
+      i.cause.data.why === 'not-defined') ||
     (i.cause.kind === 'not-determined' &&
       i.cause.data.why === 'assumed-level' &&
       i.cause.data.stage === undefined));
@@ -176,7 +195,19 @@ export function legacyPointState(
   all: readonly Item[],
   advisory: ReadonlySet<string>,
 ): 'complies' | 'does-not-comply' | 'no-answer' {
-  const items = all.filter((i) => !fromValidation(i));
+  // A value that waits only on a finding of validation is left out with it: today it gave no
+  // number, which the requirements that read it are judged on. A search or a block that waits on
+  // one was not found or not evaluated, and leaves no answer.
+  const validated = all.filter(fromValidation);
+  const onValidation = (i: Item): boolean =>
+    i.kind === 'value' &&
+    i.status === 'withheld' &&
+    i.on.every((o) =>
+      validated.some(
+        (v) => v.kind === o.kind && v.name === o.name && v.path.join('.') === o.path.join('.'),
+      ),
+    );
+  const items = all.filter((i) => !fromValidation(i) && !onValidation(i));
   const design = items.filter((i) => !netlistFinding(i));
   const assumed = design.some(
     (i) =>

@@ -2,7 +2,7 @@
 // code that produces a result writes data, never these sentences, so the app and a script read the
 // same words, and a change of wording is a change here alone.
 
-import type { OutsideTable } from '../types';
+import type { NetlistAbout, OutsideTable } from '../types';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
@@ -16,6 +16,7 @@ import {
   type SolveRange,
 } from './types';
 import type {
+  Attributes,
   CannotEvaluateData,
   Cause,
   CauseName,
@@ -33,6 +34,7 @@ import type {
   SearchStep,
   StatementFalseData,
   UnevaluableAt,
+  Verdict,
   WithheldOn,
 } from './states';
 
@@ -371,7 +373,9 @@ export function causeMessage(c: Cause): string {
 /** One piece of a line: the engine's own words, a name the sheet writes, or an expression the
  *  sheet writes. */
 export interface Segment {
-  readonly kind: 'text' | 'name' | 'expr';
+  /** `value`: a value as the sheet writes it (a number, a word, a reference), set apart from the
+   *  words of the sentence. */
+  readonly kind: 'text' | 'name' | 'expr' | 'value';
   readonly text: string;
   /** For a name that names an item of the result: that item, so a reader can link to it. */
   readonly ref?: ItemRef;
@@ -407,7 +411,10 @@ function t(strings: TemplateStringsArray, ...parts: Part[]): Line {
   strings.forEach((str, k) => {
     push({ kind: 'text', text: str });
     if (k < parts.length) {
-      const p = parts[k];
+      const p = parts[k] as Part | undefined | null;
+      // A part the data left out (a word looked up for a value no table lists) adds nothing,
+      // rather than stopping the text.
+      if (p === undefined || p === null) return;
       if (typeof p === 'string') push({ kind: 'text', text: p });
       else if (isSegment(p)) push(p);
       else p.forEach(push);
@@ -457,8 +464,9 @@ export function standardProblems(line: string | Line): string[] {
   has(/\([^)]*\s[^)]*\)/, 'a bracketed aside');
   has(/\s[—–]\s|\s-\s/, 'a dash clause');
   has(/\w__\w/, 'a name in the code spelling');
+  // "bracket" is the search's word; a square bracket is the reader's.
   has(
-    /\b(lhs|rhs|givens|param|override|probe|bracket|clamp|crossing|finite|resolve)\b/,
+    /\b(lhs|rhs|givens|param|override|probe|clamp|crossing|finite|resolve)\b|(?<!square )\bbracket\b/,
     'a word of the code',
   );
   has(/\[[^\]]*,[^\]]*\]/, 'a range in square brackets');
@@ -510,16 +518,32 @@ const finding = (name: string, segments: readonly Line[]): FindingText => ({
  *  joined to the unit. A value from a tenth up to one reads without a prefix (0.45 V, not
  *  450 mV), a ratio of like units takes no prefix, and a pure number from a thousandth up to ten
  *  thousand reads as itself. */
-export const quantityText = (x: number, unit?: string): string => {
-  const a = Math.abs(Number(x.toPrecision(3)));
-  const plain = String(Number(x.toPrecision(3)));
+export const quantityText = (x: number, unit?: string, digits = 3): string =>
+  withMinus(quantityDigits(x, unit, digits));
+
+/** A negative number as text reads it, with the minus sign and not the hyphen. */
+const withMinus = (s: string): string => s.replace(/^-/, '−');
+
+const quantityDigits = (x: number, unit: string | undefined, digits: number): string => {
+  const a = Math.abs(Number(x.toPrecision(digits)));
+  const plain = String(Number(x.toPrecision(digits)));
   if (!unit || unit === '1') {
     if (a === 0 || (a >= 1e-3 && a < 1e4)) return plain;
-    return formatQuantity(x, unit, 3);
+    return formatQuantity(x, unit, digits);
   }
   // A ratio of like units (V/V, A/A) is a pure number with its unit after it: 8090 V/V.
   if ((a >= 0.1 && a < 1) || /^(\w+)\/\1$/.test(unit)) return `${plain} ${unit}`;
-  return formatQuantity(x, unit, 3);
+  return formatQuantity(x, unit, digits);
+};
+
+/** `x` with one more digit where three read it the same as `from`: an end the search stepped in
+ *  from by less than the rounding. Four at most, which the message standard allows. */
+const apartText = (x: number, from: number, unit?: string): string => {
+  for (let digits = 3; digits <= 4; digits++) {
+    const a = quantityText(x, unit, digits);
+    if (x === from || a !== quantityText(from, unit, digits)) return a;
+  }
+  return quantityText(x, unit, 4);
 };
 
 /** The SI prefix of each engineering group a range is quoted in. */
@@ -548,7 +572,7 @@ const spanText = (lo: number, hi: number, unit?: string): string => {
   const decimals = Math.max(0, 2 - Math.floor(Math.log10(shownBig / 10 ** exp3)));
   const num = (x: number): string => {
     const n = Number((x / 10 ** exp3).toFixed(decimals));
-    return String(n === 0 ? 0 : n);
+    return withMinus(String(n === 0 ? 0 : n));
   };
   const prefix = exp3 === 0 ? '' : (SI_PREFIX[exp3] ?? '');
   return `from ${num(lo)} ${prefix}${unit} to ${num(hi)} ${prefix}${unit}`;
@@ -690,7 +714,20 @@ function relationLine(d: SearchData): Line[] {
 }
 
 /** Whether a search stepped in from an end of its range, so it did not read the whole of it. */
-const steppedIn = (d: NoSolutionRead): boolean => d.ends.some((e) => e.stepped !== undefined);
+/** Whether the search stepped end `k` in from the range by more than a thousandth of the range: a
+ *  step that small sits at the numerical edge of the range, says nothing a designer can use, and
+ *  reads as the range end. The data keep the true numbers. */
+const farStep = (d: SearchData & NoSolutionRead, k: 0 | 1): boolean => {
+  const e = d.ends[k];
+  if (e.stepped === undefined) return false;
+  const { span } = rangeGiven(d);
+  return (
+    Math.abs(e.x - span[k]) > 1e-3 * Math.abs(span[1] - span[0]) &&
+    quantityText(e.x, d.unit, 4) !== quantityText(span[k], d.unit, 4)
+  );
+};
+
+const steppedIn = (d: SearchData & NoSolutionRead): boolean => farStep(d, 0) || farStep(d, 1);
 
 /** The range a failed search was given, and how the reader names it. */
 function rangeGiven(d: SearchData): { span: [number, number]; what: Line } {
@@ -722,13 +759,12 @@ function searchedLines(d: SearchData & NoSolutionRead): Line[] {
           : t`The engine searched the full physical range of ${unknownName(d)}, ${range}.`
         : t`The engine searched ${what}, ${range}.`,
     ];
-  const lines: Line[] = [
-    t`${what} is ${range}.`,
-    t`The engine searched it ${spanText(d.ends[0].x, d.ends[1].x, d.unit)}.`,
-  ];
+  // Each end stepped in far enough to matter has its own line, which says where the search stopped;
+  // a line of the stretch searched would repeat them.
+  const lines: Line[] = [t`${what} is ${range}.`];
   d.ends.forEach((e, k) => {
-    if (e.stepped === undefined) return;
-    const past = `${k === 0 ? 'Below' : 'Above'} ${quantityText(e.x, d.unit)}`;
+    if (!farStep(d, k as 0 | 1)) return;
+    const past = `${k === 0 ? 'Below' : 'Above'} ${apartText(e.x, span[k], d.unit)}`;
     lines.push(
       e.steppedOutside
         ? t`${past}, ${partName(e.steppedOutside.device)} is outside its table.`
@@ -747,10 +783,15 @@ function endValues(
   b: number,
   unit?: string,
 ): Line {
-  const [lo, hi] = d.ends;
-  return steppedIn(d)
-    ? t`${side} is ${quantityText(a, unit)} at ${quantityText(lo.x, d.unit)} and ${quantityText(b, unit)} at ${quantityText(hi.x, d.unit)}.`
-    : t`${side} is ${quantityText(a, unit)} at the low end and ${quantityText(b, unit)} at the high end.`;
+  const { span } = rangeGiven(d);
+  // An end the search stepped in from far enough to matter, by where it stopped; otherwise by name.
+  const at = (k: 0 | 1): string =>
+    farStep(d, k)
+      ? `at ${apartText(d.ends[k].x, span[k], d.unit)}`
+      : k === 0
+        ? 'at the low end'
+        : 'at the high end';
+  return t`${side} is ${quantityText(a, unit)} ${at(0)} and ${quantityText(b, unit)} ${at(1)}.`;
 }
 
 /** The lines every failed search gives: what has no solution, the relation where its sides are
@@ -852,12 +893,17 @@ function didNotSettleText(d: DidNotSettleData): Line[] {
   const names = andLines(d.members.map(unknownName));
   const why = d.why;
   const pair = d.members.length > 1 ? [t`${names} depend on each other.`] : [];
+  // A member the data name, or the name alone where the list does not hold it.
+  const member = (name: string): Line => {
+    const m = d.members.find((x) => x.unknown === name);
+    return m ? unknownName(m) : [nm(name)];
+  };
   if (why.kind === 'sweeps') {
-    const m = d.members.find((x) => x.unknown === why.moved.name) as SearchData;
+    const m = d.members.find((x) => x.unknown === why.moved.name);
     return [
       ...pair,
       t`The engine searched them in turn ${String(why.sweeps)} times, and they still moved.`,
-      t`In the last pass, ${unknownName(m)} moved by ${quantityText(why.moved.by, m.unit)}.`,
+      t`In the last pass, ${member(why.moved.name)} moved by ${quantityText(why.moved.by, m?.unit)}.`,
       ...simplificationLines(d),
     ];
   }
@@ -870,19 +916,31 @@ function didNotSettleText(d: DidNotSettleData): Line[] {
       ...simplificationLines(d),
     ];
   }
-  if (why.kind === 'verification')
+  if (why.kind === 'verification') {
+    const off = why.off.map((o) => {
+      const m = d.members.find((x) => x.unknown === o.name);
+      const gap =
+        o.lhs !== undefined && o.rhs !== undefined
+          ? ` by ${quantityText(Math.abs(o.lhs - o.rhs), m ? relationUnit(m) : undefined)}`
+          : '';
+      return t`When the engine checked the solution, the two sides for ${member(o.name)} differed${gap}.`;
+    });
     return [
       ...pair,
-      ...why.off.map((o) => {
-        const m = d.members.find((x) => x.unknown === o.name) as SearchData;
-        const gap =
-          o.lhs !== undefined && o.rhs !== undefined
-            ? ` by ${quantityText(Math.abs(o.lhs - o.rhs), relationUnit(m))}`
-            : '';
-        return t`When the engine checked the solution, the two sides for ${unknownName(m)} differed${gap}.`;
-      }),
+      ...(off.length ? off : [t`When the engine checked the solution, its two sides differed.`]),
     ];
-  return unevaluableLines(d.members[0], why.at);
+  }
+  return d.members[0]
+    ? unevaluableLines(d.members[0], why.at)
+    : [t`A relation of the search gives no number where the engine tried it.`];
+}
+
+/** What stopped the points a search tried: the first item that failed there, in its cause's own
+ *  first lines, or by name where the data hold no cause. */
+function stoppedBy(at: { by?: ItemRef; byCause?: Cause }): Line[] {
+  if (!at.by) return [];
+  if (at.byCause) return linesOf(at.byCause, at.by).slice(0, 2).map(upperFirst);
+  return [t`${itemName(at.by)} gives no number there.`];
 }
 
 /** Where a search found its relation giving no number, and what it searched. */
@@ -894,7 +952,7 @@ function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
       t`The engine searched ${unknownName(m)} ${span}.`,
       ...relationLine(m),
       t`${relationName(m)} gives no number at any value that the engine tried.`,
-      ...(at.by ? [t`${itemName(at.by)} gives no number there.`] : []),
+      ...stoppedBy(at),
     ];
   if (at.where === 'one-point')
     return [
@@ -906,11 +964,18 @@ function unevaluableLines(m: SearchData, at: UnevaluableAt): Line[] {
     t`${lhs} crosses ${rhs} between ${quantityText(at.between[0], m.unit)} and ${quantityText(at.between[1], m.unit)}.`,
     ...relationLine(m),
     t`${relationName(m)} gives no number at the values that the engine tried there.`,
+    ...stoppedBy(at),
   ];
 }
 
 function limitText(d: LimitData): Line[] {
   const m = d.members[0];
+  if (!m)
+    return [
+      d.limit === 'evaluations'
+        ? t`The engine stopped after ${String(d.count)} calculations, because it reached its limit.`
+        : t`A search stopped after ${String(d.count)} trial values, because it reached its limit.`,
+    ];
   return d.limit === 'evaluations'
     ? [
         t`The engine stopped after ${String(d.count)} calculations, because it reached its limit.`,
@@ -942,17 +1007,119 @@ function notReadText(d: NotReadData): Line[] {
         ? t`The sheet declares format version ${JSON.stringify(d.declared)}.`
         : t`The file is not in a sheet format that this app reads.`
       : d.why === 'reference'
-        ? where
-          ? t`Block ${nm(where)} refers to a sheet, and the library holds no sheet of that name.`
-          : t`The sheet refers to a sheet, and the library holds no sheet of that name.`
+        ? where && d.field?.value !== undefined
+          ? t`Block ${nm(where)} refers to the sheet ${val(d.field.value)}, and the library holds no sheet of that name.`
+          : where
+            ? t`Block ${nm(where)} refers to a sheet, and the library holds no sheet of that name.`
+            : t`The sheet refers to a sheet, and the library holds no sheet of that name.`
         : where
           ? t`The entry ${nm(where)} holds a value that is not valid.`
           : t`An entry of the sheet holds a value that is not valid.`;
+  // A field of one entry that is not well formed: the entry, as its rule knows it.
+  // A block that refers to a sheet the library does not hold: the block and the reference.
+  if (d.why === 'reference' && where) return [reason];
+  if (d.why === 'field' && d.entry && where)
+    return [(d.field && fieldLine(d.entry, where, d.field)) || entryLine(d.entry, where)];
   const reads =
     d.why === 'format'
       ? [t`This app reads format version ${String(FORMAT_VERSION)} and sheets with no version.`]
       : [];
   return [t`The engine cannot read the sheet.`, reason, ...reads];
+}
+
+/** What is wrong with one entry of the sheet, as far as its rule's finding says. The finding does
+ *  not hold the value it refused, so the line says what kind of entry is not well formed; the one
+ *  rule that refuses only a value (a tolerance that is not a number of zero or more) says that. */
+/** A value the sheet wrote, as a sentence quotes it. */
+const writtenValue = (v: unknown): string =>
+  typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v));
+
+/** A value as the sheet writes it, as a segment set apart from the words of the sentence. */
+const val = (v: unknown): Segment => ({ kind: 'value', text: writtenValue(v) });
+
+/** The words for a field a param holds. */
+const PARAM_FIELD: Readonly<Record<string, string>> = {
+  value: 'value',
+  min: 'minimum',
+  max: 'maximum',
+};
+
+/** What is wrong with one field of an entry, where the finding says which field and what it holds;
+ *  undefined where no sentence says this field's problem, so the entry's general line stands. */
+function fieldLine(
+  entry: NonNullable<NotReadData['entry']>,
+  where: string,
+  f: NonNullable<NotReadData['field']>,
+): Line | undefined {
+  const n = nm(where);
+  const has = f.value !== undefined;
+  const v = val(f.value);
+  const key = nm(f.key ?? '');
+  switch (f.problem) {
+    case 'not-a-number':
+      if (entry === 'tolerance') {
+        if (!has) return undefined;
+        // A number below zero: what it is, and what a tolerance must be. Anything else: not a number.
+        return typeof f.value === 'number' && Number.isFinite(f.value)
+          ? t`The tolerance of check ${n} is ${quantityText(f.value)} %, and a tolerance must be zero or more.`
+          : t`The engine cannot read the tolerance of check ${n}, because its value ${v} is not a number.`;
+      }
+      if (entry === 'param')
+        return has
+          ? t`The engine cannot read ${n}, because its ${PARAM_FIELD[f.name] ?? f.name} ${v} is not a number.`
+          : t`The engine cannot read ${n}, because it has no ${PARAM_FIELD[f.name] ?? f.name}.`;
+      return undefined;
+    case 'sign':
+      return t`${n} is ${v}, and a sign convention must be +1 or −1.`;
+    case 'convention':
+      return t`The sign convention of ${n} is ${v}, and the only one known is axis-sign.`;
+    case 'unknown-name':
+      if (entry === 'range-end')
+        return t`Range end ${n} sets ${key}, which is not an input of this sheet.`;
+      if (entry === 'block')
+        return t`Block ${n} sets ${key}, but its sheet has no input of that name.`;
+      return undefined;
+    case 'solved':
+      return entry === 'range-end'
+        ? t`Range end ${n} sets ${key}, which the engine solves.`
+        : undefined;
+    case 'syntax':
+      return entry === 'range-end' && has
+        ? t`Range end ${n} sets ${key} to ${ex(writtenValue(f.value))}, which has a syntax error.`
+        : undefined;
+    case 'operator':
+      return entry === 'check' && has
+        ? t`The engine cannot read check ${n}, because ${v} is not an operator that it knows.`
+        : undefined;
+    case 'no-sheet':
+      return undefined;
+  }
+}
+
+function entryLine(entry: NonNullable<NotReadData['entry']>, where: string): Line {
+  const n = nm(where);
+  switch (entry) {
+    case 'param':
+      return t`The entry of ${n} is not well formed.`;
+    case 'selector':
+      return t`The axis-sign selector ${n} is not well formed.`;
+    case 'check':
+      return t`The entry of check ${n} is not well formed.`;
+    case 'tolerance':
+      return t`The tolerance of check ${n} is not a number of zero or more.`;
+    case 'device':
+      return t`The device of this sheet is not well formed.`;
+    case 'block':
+      return where.trim() && where !== 'blocks'
+        ? t`The entry of block ${n} is not well formed.`
+        : t`A block of the sheet has no name.`;
+    case 'expression':
+      return t`The expression of ${n} is not well formed.`;
+    case 'range-end':
+      return where === 'operatingRange'
+        ? t`A range end of the operating range is not well formed.`
+        : t`Range end ${n} is not well formed.`;
+  }
 }
 
 function notDeterminedText(d: NotDeterminedData): Line[] {
@@ -962,7 +1129,15 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
     case 'decision-missing':
       return [head, ...each((n) => t`No statement sets ${n}.`)];
     case 'decision-twice':
-      return [head, ...each((n) => t`More than one statement sets ${n}.`)];
+      return [
+        head,
+        ...d.names.map((n) => {
+          const fields = d.statements?.find((x) => x.name === n)?.fields;
+          return fields?.length
+            ? t`${nm(n)} has ${andLines(fields.map((f) => [{ kind: 'text', text: FIELD_WORD[f] }]))}, and only one may set it.`
+            : t`More than one statement sets ${nm(n)}.`;
+        }),
+      ];
     case 'assumed-level':
       return [
         head,
@@ -989,20 +1164,21 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
         ]),
       ];
     case 'operating-range':
+      if (d.unheld?.length && d.names.length)
+        return [
+          head,
+          t`Range end ${nm(d.names[0])} holds ${andLines(d.unheld.map((n) => [nm(n)]))} at the value of the design run.`,
+          t`The design run recorded no value for ${d.unheld.length > 1 ? 'them' : 'it'}.`,
+        ];
       return [
         head,
         d.names.length
           ? t`Range end ${nm(d.names[0])} holds a value that is not valid.`
           : t`The operating range holds an entry that is not valid.`,
       ];
-    case 'entry':
-      return [
-        head,
-        d.names.length
-          ? t`The entry ${nm(d.names[0].replace(/"/g, ''))} holds a value that is not valid.`
-          : t`An entry of the sheet holds a value that is not valid.`,
-      ];
     case 'netlist':
+      // Each finding of the netlist check gives its own lines, in the order raised.
+      if (d.netlist?.length) return [head, ...distinctLines(d.netlist.flatMap(netlistLines))];
       return [
         head,
         d.names.length
@@ -1012,7 +1188,90 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
   }
 }
 
+/** Each line once, in the order given: findings whose data say the same give one sentence. */
+const distinctLines = (ls: readonly Line[]): Line[] =>
+  ls.filter((l, k) => ls.findIndex((m) => lineText(m) === lineText(l)) === k);
+
+/** A problem of the netlist check, with the wires and the devices it is about. */
+function netlistLines(n: NetlistAbout): Line[] {
+  const wires = (n.wires ?? []).map((w) => [nm(w)]);
+  const parts = (n.devices ?? []).map(partName);
+  const wire = wires[0] ?? [];
+  const part = parts[0] ?? t`a device`;
+  switch (n.problem) {
+    case 'short':
+      return [t`${part} has its drain and its source on wire ${wire}, which shorts it.`];
+    case 'wire-name':
+      return [
+        t`The wire name ${wire} is not valid.`,
+        t`A wire name is an identifier of letters, digits and underscores.`,
+      ];
+    case 'one-terminal':
+      return [
+        t`Only one terminal names wire ${wire}.`,
+        t`A wire joins two terminals or more, or the sheet gives it a level, or it is a port.`,
+      ];
+    case 'level-unnamed':
+      return [
+        t`The sheet gives wire ${wire} a level, but no terminal, element or port names ${wire}.`,
+      ];
+    case 'unwired':
+      return [t`The sheet names no wires for ${andLines(parts)}.`];
+    case 'diode-flag':
+      return n.diodeFlag === false
+        ? [t`The wires of ${part} put its gate on its drain, but its diode flag is off.`]
+        : n.diodeFlag === true
+          ? [t`The diode flag of ${part} is on, but its wires do not put its gate on its drain.`]
+          : [t`The wires of ${part} and its diode flag disagree.`];
+    case 'placement':
+      return [t`The wiring of ${part} is not well formed.`];
+    case 'level-refused':
+      return [
+        t`The sheet gives wire ${wire} the level ${ex(n.level ?? '')}, but a level can read only numbers, specs and knobs.`,
+      ];
+    case 'level-gate':
+      return [
+        t`Wire ${wire} cannot be held at ${ex(n.level ?? '')}, because that level holds only the gate of ${part}.`,
+      ];
+    case 'other':
+      return n.where
+        ? [t`The netlist check reports a problem at ${nm(n.where.replace(/"/g, ''))}.`]
+        : [t`The netlist check reports a problem in the wiring of the sheet.`];
+    case 'selector':
+      return [t`The axis-sign selector ${nm(n.param ?? '')} does not match the table of ${part}.`];
+  }
+}
+
 const SIDE_WORD = { lhs: 'left', rhs: 'right' } as const;
+
+/** Each quantity a sizing derives, as a sentence names it. */
+const SIZING_WORD = {
+  gm: 'transconductance',
+  gm_id: 'gm/ID',
+  id: 'drain current',
+  W: 'width',
+} as const;
+
+/** The parser's reasons that a plain sentence says, by the start of its words. A reason with no
+ *  entry gives no line. */
+const SYNTAX_REASONS: readonly (readonly [RegExp, Line])[] = [
+  [/^Unclosed \(/, t`A parenthesis is not closed.`],
+  [/^Unclosed \[/, t`A square bracket is not closed.`],
+  [/^Unclosed quote/, t`A quotation mark is not closed.`],
+  [/^Expected \)/, t`A parenthesis is not closed.`],
+  [/^Unexpected "\)"/, t`A closing parenthesis has no parenthesis that it closes.`],
+  [/^Expected expression after/, t`An operator has nothing after it.`],
+  [/^Variable names cannot start with a number/, t`A name starts with a digit.`],
+];
+const syntaxReason = (problem: string): Line | undefined =>
+  SYNTAX_REASONS.find(([re]) => re.test(problem))?.[1];
+
+/** Each field that states a relation, as a sentence names it. */
+const FIELD_WORD = {
+  designConstraint: 'a constraint',
+  solveFor: 'a solve-for entry',
+  hold: 'a hold',
+} as const;
 
 /** What gave no number where the engine read it: a part read beyond its table, with the record,
  *  or another item. */
@@ -1029,6 +1288,14 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     if (d.why === 'no-sweep') return [sized, t`The table holds no sweep of ${nm(d.name)}.`];
     if (d.why === 'illegal-pair')
       return [sized, t`The two quantities bound on it do not determine its size.`];
+    if (d.sizing) {
+      const word = SIZING_WORD[d.sizing.quantity];
+      return [
+        Number.isFinite(d.sizing.value)
+          ? t`${subject} cannot be sized, because the ${word} its table gives there is not positive.`
+          : t`${subject} cannot be sized, because its table gives no ${word} there.`,
+      ];
+    }
     return [sized];
   }
   // A search whose relation gives no number where it searched, and what gave none there.
@@ -1052,6 +1319,41 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       t`The sheet sets ${inBlock(d.hold.param, d.hold.path)} by the statement that ${ex(d.hold.statement)} is zero.`,
       t`At the design point, ${ex(d.hold.statement)} gives no number.`,
       ...byLines(d),
+    ];
+  // A block that is not evaluated, because a value its parent sets for it gives no number.
+  if (d.inputs?.length) {
+    // The block, by its path where the item has one, else by the name the data hold.
+    const block: Line =
+      ref?.kind === 'sheet' && ref.path.length
+        ? t`Block ${blockSegment(ref.path)}`
+        : d.why === 'not-finite'
+          ? t`Block ${nm(d.name)}`
+          : t`This block`;
+    return [
+      t`${block} is not calculated, because ${parentGivesNo(d.inputs)}.`,
+      ...(d.why === 'not-defined' ? [t`The parent sheet does not define ${nm(d.name)}.`] : []),
+    ];
+  }
+  // A range end whose `set` gives no number against the design run.
+  if (d.rangeEnd && d.why === 'syntax') {
+    const why = d.syntax ? syntaxReason(d.syntax.problem) : undefined;
+    return [
+      t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}, which has a syntax error.`,
+      ...(d.syntax?.at !== undefined
+        ? [t`The error is at character ${String(d.syntax.at + 1)}.`]
+        : []),
+      ...(why ? [why] : []),
+    ];
+  }
+  if (d.rangeEnd && d.why === 'not-defined')
+    return [
+      t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}.`,
+      t`The sheet does not define ${nm(d.name)}.`,
+    ];
+  if (d.rangeEnd)
+    return [
+      t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}.`,
+      t`At the design point, ${ex(d.rangeEnd.expression)} gives no number.`,
     ];
   // A region check: the engine wrote its two sides from the region the device declares.
   if (d.region) {
@@ -1085,8 +1387,18 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       return ref && ref.name !== d.name
         ? [t`${subject} reads ${nm(d.name)}, and the sheet does not define ${nm(d.name)}.`]
         : [head, t`The sheet does not define ${nm(d.name)}.`];
-    case 'syntax':
-      return [head, t`${subject} has a syntax error.`];
+    case 'syntax': {
+      const why = d.syntax ? syntaxReason(d.syntax.problem) : undefined;
+      return [
+        head,
+        d.syntax?.at !== undefined
+          ? t`${subject} has a syntax error at character ${String(d.syntax.at + 1)} of ${ex(d.syntax.expression)}.`
+          : d.syntax
+            ? t`${subject} has a syntax error in ${ex(d.syntax.expression)}.`
+            : t`${subject} has a syntax error.`,
+        ...(why ? [why] : []),
+      ];
+    }
     case 'no-column':
       return [head, t`The table holds no column for ${nm(d.name)}.`];
     case 'no-sweep':
@@ -1094,19 +1406,37 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     case 'illegal-pair':
       return [head, t`The two quantities bound on the device do not determine its size.`];
     case 'not-finite':
-      return [head];
+      if (!d.notFinite) return [head];
+      return [
+        head,
+        d.notFinite.length
+          ? t`${subject} reads ${andLines(d.notFinite.map((n) => [nm(n)]))}, which ${d.notFinite.length > 1 ? 'give' : 'gives'} no number.`
+          : t`Every name that ${subject} reads gives a number, but the expression of ${subject} gives none.`,
+      ];
   }
 }
 
-function outsideTableText(d: OutsideTableData): Line[] {
+/** A part read beyond its table. The record names the device as its own sheet does (`givens`);
+ *  a device item of a block, read in its parent's list, names that block, and so does a param
+ *  of the block that sets the reading. */
+function outsideTableText(d: OutsideTableData, ref?: ItemRef): Line[] {
   const w = quantityWords(d.quantity);
   const [lo, hi] = d.held;
+  const path = ref?.kind === 'device' ? ref.path : [];
+  const own = d.device === '' || d.device === 'givens';
+  const part = path.length && own ? partName(path.join('.')) : partName(d.device);
   return [
-    t`${partName(d.device)} asks for a ${w.one} of ${quantityText(d.asked, w.unit)}.`,
+    t`${part} asks for a ${w.one} of ${quantityText(d.asked, w.unit)}.`,
     t`The table holds ${w.many} ${spanText(lo, hi, w.unit)}.`,
-    ...(d.set ? [t`Change ${nm(d.set)}, or load a table that holds this ${w.one}.`] : []),
+    ...(d.setBy
+      ? [t`Change ${inBlock(d.setBy, path)}, or load a table that holds this ${w.one}.`]
+      : []),
   ];
 }
+
+/** What a check requires, by its operator; an operator no entry lists is quoted as written. */
+const requires = (op: string): Line =>
+  op in REQUIRES ? t`${REQUIRES[op as CheckOp]}` : t`a value related by ${ex(op)} to`;
 
 const REQUIRES: Record<CheckOp, string> = {
   '>=': 'at least',
@@ -1114,25 +1444,40 @@ const REQUIRES: Record<CheckOp, string> = {
   '==': 'a value equal to',
 };
 
+/** A failed check's margin: a signed percentage of its limit, or, for a limit of zero, of which
+ *  no percentage can be taken, the margin itself in the check's unit. */
+/** The margin as a percentage of the limit; none against a limit of zero, where it would only
+ *  repeat the value the line before gives. */
+function marginLine(d: FailsData): Line[] {
+  const sign = d.margin >= 0 ? '+' : '−';
+  return Math.abs(d.rhs) > 0
+    ? [t`The margin is ${sign}${quantityText(Math.abs(d.marginPct) * 100)} %.`]
+    : [];
+}
+
 function failsText(d: FailsData, ref?: ItemRef): Line[] {
   // The check a declared region adds: its sides are the engine's, from the region, so the text
   // names the part it tests. Its unit is given only where the data hold it.
   if (ref?.kind === 'requirement' && ref.name === REGION_CHECK_ID) {
     const part = ref.path.length ? partName(ref.path.join('.')) : t`the device of this sheet`;
+    if (d.region)
+      return [
+        t`The region check of ${part} fails.`,
+        t`The drain-source voltage of ${part} is ${quantityText(d.lhs, d.unit)}, and ${d.region === 'triode' ? 'the triode region' : 'saturation'} needs ${requires(d.text.op)} ${quantityText(d.rhs, d.unit)}.`,
+        ...marginLine(d),
+      ];
     return [
       t`The region check of ${part} fails.`,
-      t`The region check of ${part} reads ${quantityText(d.lhs, d.unit)}, and it needs ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
-      t`The margin is ${d.marginPct >= 0 ? '+' : '−'}${quantityText(Math.abs(d.marginPct) * 100)} %.`,
+      t`The region check of ${part} reads ${quantityText(d.lhs, d.unit)}, and it needs ${requires(d.text.op)} ${quantityText(d.rhs, d.unit)}.`,
+      ...marginLine(d),
     ];
   }
   const check: Line = ref ? itemName(ref) : t`the check`;
-  // marginPct is a fraction of the limit; the reader reads a percentage.
-  const sign = d.marginPct >= 0 ? '+' : '−';
   const left = isName(d.text.lhs) ? nameText(d.text.lhs) : t`the left side of ${check}`;
   return [
     t`${check} fails.`,
-    t`${left} is ${quantityText(d.lhs, d.unit)}, and ${check} requires ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
-    t`The margin is ${sign}${quantityText(Math.abs(d.marginPct) * 100)} %.`,
+    t`${left} is ${quantityText(d.lhs, d.unit)}, and ${check} requires ${requires(d.text.op)} ${quantityText(d.rhs, d.unit)}.`,
+    ...marginLine(d),
   ];
 }
 
@@ -1149,7 +1494,7 @@ function linesOf(c: Cause, ref?: ItemRef): Line[] {
     case 'not-determined':
       return notDeterminedText(c.data);
     case 'outside-table':
-      return outsideTableText(c.data);
+      return outsideTableText(c.data, ref);
     case 'cannot-evaluate':
       return cannotEvaluateText(c.data, ref);
     case 'no-solution':
@@ -1167,16 +1512,25 @@ function linesOf(c: Cause, ref?: ItemRef): Line[] {
   }
 }
 
+/** The clause of a block that waits on its parent: the inputs it is given no value for, where
+ *  they are known. */
+const parentGivesNo = (inputs: readonly string[] | undefined): Line =>
+  inputs?.length
+    ? t`its parent sheet gives it no value for ${andLines(inputs.map((n) => [nm(n)]))}`
+    : t`its parent sheet gives it no value`;
+
 /** The clause a withheld item's sentence gives for the failed item it depends on: one for each
  *  cause, so the not-proved cause never reads as a proof. */
 export function withheldClause(r: WithheldOn): Line {
-  if (r.frame === 'parent') return t`its parent sheet gives it no value`;
+  if (r.frame === 'parent') return parentGivesNo(r.inputs);
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':
-      return r.path.length
-        ? t`the engine cannot read block ${nm(r.path.join('.'))}`
-        : t`the engine cannot read the sheet`;
+      return r.kind !== 'sheet'
+        ? t`the engine cannot read ${n}`
+        : r.path.length
+          ? t`the engine cannot read block ${nm(r.path.join('.'))}`
+          : t`the engine cannot read the sheet`;
     case 'not-determined':
       return r.kind === 'sheet'
         ? t`the statements of ${n} do not determine one design`
@@ -1206,20 +1560,52 @@ export function withheldClause(r: WithheldOn): Line {
  *  cause's text; for a withheld one, one sentence for each failed item it depends on. `within`
  *  is the path of the block whose own list the item is read in, where it is one. */
 export function describe(item: Item, within: readonly string[] = []): FindingText {
-  if (item.status === 'ok') return finding('', []);
+  if (item.status === 'ok')
+    return item.attributes?.kind === 'held' ? heldText(item, item.attributes) : finding('', []);
+  if (item.status === 'withheld' && !item.on.length)
+    return finding(WITHHELD_NAME, [upperFirst(t`${itemName(item)} is not calculated.`)]);
   if (item.status === 'withheld')
     return finding(
       WITHHELD_NAME,
-      item.on.map((r) =>
-        // A block's own sheet item, read in the block's own list, waits on its parent.
-        r.frame === 'parent' && item.kind === 'sheet' && item.path.length === 0
-          ? within.length
-            ? t`Block ${blockSegment(within)} is not calculated, because its parent sheet gives it no value.`
-            : t`This block is not calculated, because its parent sheet gives it no value.`
-          : upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
-      ),
+      item.on
+        .map((r) =>
+          // A block's own sheet item, read in the block's own list, waits on its parent.
+          r.frame === 'parent' && item.kind === 'sheet' && item.path.length === 0
+            ? within.length
+              ? t`Block ${blockSegment(within)} is not calculated, because ${parentGivesNo(r.inputs)}.`
+              : t`This block is not calculated, because ${parentGivesNo(r.inputs)}.`
+            : upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
+        )
+        .filter((l, k, all) => all.findIndex((m) => lineText(m) === lineText(l)) === k),
     );
-  return textOf(item.cause, item);
+  // A block's own sheet item, read in its own list, is named by the block's path there.
+  return textOf(
+    item.cause,
+    item.kind === 'sheet' && !item.path.length && within.length ? { ...item, path: within } : item,
+  );
+}
+
+/** What an item the run held at a given value instead of solving reads. */
+export const HELD_NAME = 'held';
+
+function heldText(r: ItemRef, a: Extract<Attributes, { kind: 'held' }>): FindingText {
+  const n = inBlock(r.name, r.path, { kind: r.kind, path: r.path, name: r.name });
+  const relation = a.relation.field === 'solveFor' ? 'the equation' : 'the constraint';
+  return finding(HELD_NAME, [
+    t`${n} is held at ${quantityText(a.value, a.unit)}.`,
+    t`The engine did not check ${relation} of ${n} at this value.`,
+  ]);
+}
+
+/** Why a verdict is what it is, where a line says more than its word: for each value the run held
+ *  instead of solving, that the verdict is undetermined because of it. */
+export function verdictText(v: Verdict<string>): readonly Line[] {
+  const held = v.held ?? [];
+  if (!held.length) return [];
+  const names = andLines(held.map((r) => inBlock(r.name, r.path, r)));
+  return [
+    t`The verdict is undetermined, because ${names} ${held.length > 1 ? 'are' : 'is'} held and not solved.`,
+  ];
 }
 
 /** What a held point or range end that was not run is shown: its own word, and why. */

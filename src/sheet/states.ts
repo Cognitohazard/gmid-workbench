@@ -3,8 +3,8 @@
 // read from the list by four rules. Pure data and pure functions: what a reader sees is built from
 // these in one place (describe.ts), never written by the code that produces them.
 
-import type { OutsideTable } from '../types';
-import type { CheckKind, CheckOp, SolveRange } from './types';
+import type { EntryProblem, NetlistAbout, OutsideTable } from '../types';
+import type { CheckKind, CheckOp, Region, SolveRange } from './types';
 
 /** What an item is: the sheet itself (always the first item of a result), a value (a param or an
  *  equation), a device, a search (one solved param), or a requirement (a check). */
@@ -33,6 +33,22 @@ export interface NotReadData {
   readonly message: string;
   /** For a format this app does not read: the version the document declares. */
   readonly declared?: unknown;
+  /** For a finding whose rule the finding table does not list: that rule. */
+  readonly rule?: string;
+  /** For a field that is not well formed: the kind of entry it is in, as its rule knows it. */
+  readonly entry?:
+    'param' | 'selector' | 'check' | 'tolerance' | 'device' | 'block' | 'expression' | 'range-end';
+  /** For a field that is not well formed: the field, its value as the sheet writes it (absent
+   *  where the field is missing), and for a field that maps names, the key. */
+  readonly field?: {
+    readonly name: string;
+    readonly value?: unknown;
+    readonly key?: string;
+    readonly problem: EntryProblem;
+  };
+  /** For a check whose operator the engine does not know: how the evaluation classified it all
+   *  the same, judged as an equality, which today's feasibility reads (legacyFeasible). */
+  readonly classified?: 'pass' | 'fail';
   /** Set where the finding came from validating the document before it was evaluated, rather
    *  than from the evaluation. */
   readonly stage?: 'validation';
@@ -42,7 +58,7 @@ export interface NotReadData {
  *  it marks as assumed. `names` are the params or wires involved. */
 /** A read beyond a device's table, with the value on the sheet that sets the quantity it asked
  *  for, where that is one value the designer types. */
-export type OutsideTableData = OutsideTable & { readonly set?: string };
+export type OutsideTableData = OutsideTable & { readonly setBy?: string };
 
 export interface NotDeterminedData {
   readonly why:
@@ -52,8 +68,7 @@ export interface NotDeterminedData {
     | 'range-outside'
     | 'netlist'
     | 'loop'
-    | 'operating-range'
-    | 'entry';
+    | 'operating-range';
   readonly names: readonly string[];
   readonly message: string;
   /** For a search range outside the range its wires permit: each range, and the wires'. */
@@ -63,6 +78,17 @@ export interface NotDeterminedData {
     readonly search: readonly [number, number];
     readonly wires: readonly [number, number];
   }[];
+  /** For a value that more than one statement sets: each value, and the fields that set it. */
+  readonly statements?: readonly {
+    readonly name: string;
+    readonly fields: readonly RelationField[];
+  }[];
+  /** For findings of the netlist check: each finding, in the order raised, with its problem and
+   *  the wires and devices it is about (devices by block path, `givens` for the sheet's own); for
+   *  a selector, the param. */
+  readonly netlist?: readonly NetlistAbout[];
+  /** For a range end that holds a value the design run did not record: the values. */
+  readonly unheld?: readonly string[];
   /** As NotReadData.stage. */
   readonly stage?: 'validation';
 }
@@ -99,6 +125,25 @@ export interface CannotEvaluateData {
   /** For the check a declared region adds: the device it tests, and what gave no number: the
    *  device, which is not sized, or its drain-source voltage or vdsat. */
   readonly region?: { readonly device: string; readonly missing: 'device' | 'vds' | 'vdsat' };
+  /** For an equation that gives no number: the names it reads, among the sheet's values, that
+   *  give no number themselves. Empty where each gives one, so its own arithmetic gives none. */
+  readonly notFinite?: readonly string[];
+  /** For a block that is not evaluated because a value its parent sets for it gives no number:
+   *  the block's own params that value is for. */
+  readonly inputs?: readonly string[];
+  /** For a device whose sizing derives a quantity that is not a positive finite number: which
+   *  quantity, and the value it came to. */
+  readonly sizing?: { readonly quantity: 'gm' | 'gm_id' | 'id' | 'W'; readonly value: number };
+  /** For a syntax error: the expression as the sheet writes it, the character position (from 0)
+   *  where the parser refuses it, where that is known, and the parser's words for why. */
+  readonly syntax?: { readonly expression: string; readonly at?: number; readonly problem: string };
+  /** For a range end whose `set` gives no number against the design run: the end, the param it
+   *  sets, and the expression, as the sheet writes it. */
+  readonly rangeEnd?: {
+    readonly name: string;
+    readonly param: string;
+    readonly expression: string;
+  };
 }
 
 /** Which field of a param holds the relation a search solves. */
@@ -197,7 +242,12 @@ export interface NoneInRangeData extends SearchData, NoSolutionRead {
  *  its low end); at one point only (with the ends stepped in from); or across the crossing, which
  *  lies `between` two points where the points tried do not evaluate. */
 export type UnevaluableAt =
-  | { readonly where: 'nowhere'; readonly reason: string; readonly by?: ItemRef }
+  | {
+      readonly where: 'nowhere';
+      readonly reason: string;
+      readonly by?: ItemRef;
+      readonly byCause?: Cause;
+    }
   | {
       readonly where: 'one-point';
       readonly end: SearchEnd;
@@ -209,6 +259,7 @@ export type UnevaluableAt =
       readonly between: readonly [number, number];
       readonly reason: string;
       readonly by?: ItemRef;
+      readonly byCause?: Cause;
     };
 
 /**
@@ -292,6 +343,9 @@ export interface FailsData {
   readonly hard: boolean;
   /** The unit of the two sides, where the sheet declares one for a name either side is. */
   readonly unit?: string;
+  /** For the check a declared region adds: the region. Its left side is the magnitude of the
+   *  device's drain-source voltage, its right side the device's vdsat, both in volts. */
+  readonly region?: Region;
 }
 
 /** The closed list of causes, each with its data. */
@@ -331,8 +385,9 @@ export const OCCURS_ON: { readonly [C in CauseName]: readonly ItemKind[] } = {
   // A sheet that is not read at all, or one entry whose field is malformed on a sheet that is
   // still read and evaluated (the entry named by the finding).
   'not-read': ['sheet', 'value', 'device', 'search', 'requirement'],
-  // On the sheet, or on a value the sheet marks as assumed that the design rests on.
-  'not-determined': ['sheet', 'value'],
+  // On the sheet, or on a value the sheet marks as assumed that the design rests on; and on the
+  // device or the selector a finding of the netlist check names.
+  'not-determined': ['sheet', 'value', 'device'],
   'outside-table': ['device'],
   // A block's sheet that is not evaluated because a value its parent sets gives no number.
   'cannot-evaluate': ['sheet', 'value', 'device', 'requirement', 'search'],
@@ -366,6 +421,18 @@ export type Attributes =
   | { readonly kind: 'sheet' }
   | { readonly kind: 'value' | 'device'; readonly fallbacks?: readonly Fallback[] }
   | {
+      /** A solved param the run held at a given value instead of solving: the value, and the
+       *  relation that was not checked there. The point evaluated is not a solution of the sheet. */
+      readonly kind: 'held';
+      readonly value: number;
+      readonly unit?: string;
+      readonly relation: {
+        readonly lhs: string;
+        readonly rhs: string;
+        readonly field: RelationField;
+      };
+    }
+  | {
       readonly kind: 'search';
       readonly value: number;
       readonly range: SolveRange;
@@ -397,7 +464,12 @@ export type WithheldOn =
   /** An item of the parent sheet, named as the parent names it: a block that is not evaluated
    *  waits on what its parent did not give it. Its cause is read in the parent's list, which
    *  resolves the reference; the block's own list carries none. */
-  | (ItemRef & { readonly frame: 'parent'; readonly cause?: undefined });
+  | (ItemRef & {
+      readonly frame: 'parent';
+      readonly cause?: undefined;
+      /** The block's own params whose value from the parent gives no number. */
+      readonly inputs?: readonly string[];
+    });
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
 
@@ -539,7 +611,13 @@ export type HeldVerdict = 'no-operating-point' | 'non-compliant' | 'compliant' |
 export interface Verdict<V extends string = DesignVerdict> {
   readonly verdict: V;
   readonly failed: readonly (ItemRef & { readonly cause: Cause })[];
+  /** The solved params the run held instead of solving, where any was: the reason the verdict is
+   *  undetermined. */
+  readonly held?: readonly ItemRef[];
 }
+
+/** Whether an item is a solved param the run held at a given value instead of solving. */
+export const isHeld = (i: Item): boolean => i.status === 'ok' && i.attributes?.kind === 'held';
 
 const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
   items.flatMap((i) =>
@@ -547,7 +625,9 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
   );
 
 /**
- * The verdict of one result, by four rules, the first that applies:
+ * The verdict of one result, by four rules, the first that applies, after one rule ahead of them:
+ * an item the run held at a given value instead of solving gives undetermined, and the verdict
+ * names it in `held`, since the point evaluated is not a solution of the sheet:
  *  1. a search failed with "no solution (proved)": infeasible (at a held point, no operating point);
  *  2. a hard requirement failed with "fails": non-compliant;
  *  3. every item is ok: feasible (at a held point, compliant) — an advisory requirement that does
@@ -560,23 +640,54 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
  */
 export function verdictOf(items: readonly Item[]): Verdict {
   const failed = failedItems(items);
-  // A search with the others of its set held where they stood says nothing about the set, even
-  // proved.
-  const proved = failed.filter((f) => f.cause.kind === 'no-solution' && !setOf(f.cause));
-  if (proved.length) return { verdict: 'infeasible', failed: proved };
-  const fails = failed.filter((f) => f.cause.kind === 'fails' && f.cause.data.hard);
-  if (fails.length) return { verdict: 'non-compliant', failed: fails };
+  for (const rule of VERDICT_RULES) {
+    const v = rule(items, failed);
+    if (v) return v;
+  }
   // An advisory requirement that does not hold decides nothing (see failsCause).
-  const blocking = failed.filter((f) => !(f.cause.kind === 'fails' && !f.cause.data.hard));
-  if (blocking.length === 0 && items.every((i) => i.status !== 'withheld'))
-    return {
-      verdict: items.some((i) => i.kind === 'device' || i.kind === 'search')
-        ? 'feasible'
-        : OPEN_RULINGS.equationOnly,
-      failed: [],
-    };
-  return { verdict: 'undetermined', failed: blocking };
+  return { verdict: 'undetermined', failed: blocking(failed) };
 }
+
+type Failed = (ItemRef & { cause: Cause })[];
+type VerdictRule = (items: readonly Item[], failed: Failed) => Verdict | undefined;
+
+const blocking = (failed: Failed): Failed =>
+  failed.filter((f) => !(f.cause.kind === 'fails' && !f.cause.data.hard));
+
+/** A solved param held instead of solved: the point evaluated is not a solution of the sheet. */
+const heldRule: VerdictRule = (items, failed) => {
+  const held = items.filter(isHeld).map((i) => ({ kind: i.kind, path: i.path, name: i.name }));
+  return held.length ? { verdict: 'undetermined', failed: blocking(failed), held } : undefined;
+};
+
+/** Rule 1. A search with the others of its set held where they stood says nothing about the set,
+ *  even proved. */
+const provedRule: VerdictRule = (_items, failed) => {
+  const proved = failed.filter((f) => f.cause.kind === 'no-solution' && !setOf(f.cause));
+  return proved.length ? { verdict: 'infeasible', failed: proved } : undefined;
+};
+
+/** Rule 2. */
+const failsRule: VerdictRule = (_items, failed) => {
+  const fails = failed.filter((f) => f.cause.kind === 'fails' && f.cause.data.hard);
+  return fails.length ? { verdict: 'non-compliant', failed: fails } : undefined;
+};
+
+/** Rule 3. */
+const okRule: VerdictRule = (items, failed) =>
+  blocking(failed).length === 0 && items.every((i) => i.status !== 'withheld')
+    ? {
+        verdict: items.some((i) => i.kind === 'device' || i.kind === 'search')
+          ? 'feasible'
+          : OPEN_RULINGS.equationOnly,
+        failed: [],
+      }
+    : undefined;
+
+/** The rules in the order they apply; rule 4, undetermined, is what none of them decides. The
+ *  held rule comes first: whether a held value or a failing hard requirement decides first is an
+ *  open ruling, and this order is the one line that holds it. */
+const VERDICT_RULES: readonly VerdictRule[] = [heldRule, provedRule, failsRule, okRule];
 
 /** The verdict of a held point: verdictOf, in the words a held design is asked in. */
 export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
@@ -587,7 +698,7 @@ export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
     feasible: 'compliant',
     undetermined: 'undetermined',
   };
-  return { verdict: word[v.verdict], failed: v.failed };
+  return { verdict: word[v.verdict], failed: v.failed, ...(v.held ? { held: v.held } : {}) };
 }
 
 /** A hard requirement's cause, where it does not hold. A requirement that is advisory and does not
@@ -600,11 +711,13 @@ export const failsCause = (r: {
   margin: number;
   marginPct: number;
   unit?: string;
+  region?: Region;
 }): Cause => ({
   kind: 'fails',
   data: {
     text: r.text,
     ...(r.unit !== undefined ? { unit: r.unit } : {}),
+    ...(r.region !== undefined ? { region: r.region } : {}),
     lhs: r.lhsValue,
     rhs: r.rhsValue,
     margin: r.margin,
