@@ -1049,3 +1049,57 @@ export function givesValue(
   if (own) return own.status === 'ok' && res.values[name] !== undefined;
   return res.withheld?.[name] === undefined && res.values[name] !== undefined;
 }
+
+/** Every string a part of an entry holds, at any depth. */
+const stringsIn = (x: unknown): string[] =>
+  typeof x === 'string'
+    ? [x]
+    : Array.isArray(x)
+      ? x.flatMap(stringsIn)
+      : x !== null && typeof x === 'object'
+        ? Object.values(x).flatMap(stringsIn)
+        : [];
+
+/** The names an expression reads, or none where it does not parse. */
+const readsOf = (expr: string): readonly string[] => {
+  try {
+    return namesOf(expr);
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * The equations of a sheet that no requirement and no output reads, directly or through other
+ * equations: no check, no value it provides, no relation it solves or holds, no device, block,
+ * level, element, analysis or range end reads them. Whether such a value, where it fails or is
+ * withheld, makes the verdict undetermined or only shows as not calculated is not yet ruled
+ * (OPEN_RULINGS.unreadValue); this is the one place that says which values it is about.
+ */
+export function unreadValues(doc: SheetDoc | undefined): ReadonlySet<string> {
+  if (!doc || !Array.isArray(doc.equations)) return new Set();
+  const read = new Set<string>(doc.provides ?? []);
+  const sources: unknown[] = [
+    (doc.checks ?? []).map((c) => [c?.lhs, c?.rhs]),
+    (doc.params ?? []).map((p) => [p?.designConstraint, p?.solveFor, p?.hold]),
+    doc.givens,
+    (doc.blocks ?? []).map((b) => b?.params),
+    doc.levels,
+    doc.elements,
+    doc.analyses,
+    (doc.operatingRange ?? []).map((e) => e?.set),
+  ];
+  for (const text of stringsIn(sources)) for (const n of readsOf(text)) read.add(n);
+  // What a read equation reads is read too, as far as the equations go.
+  const byName = new Map(doc.equations.map((e) => [e?.name, e?.expr]));
+  const queue = [...read].filter((n) => byName.has(n));
+  while (queue.length) {
+    const expr = byName.get(queue.pop() as string);
+    for (const n of typeof expr === 'string' ? readsOf(expr) : [])
+      if (!read.has(n)) {
+        read.add(n);
+        if (byName.has(n)) queue.push(n);
+      }
+  }
+  return new Set(doc.equations.map((e) => e?.name).filter((n) => !read.has(n)));
+}

@@ -485,8 +485,14 @@ export type WithheldOn =
  * The choices not yet ruled on, in one place, so that each is a change here alone:
  *  - `equationOnly`: the verdict of a sheet that sizes no device and solves nothing, where every
  *    item is ok. It has no design to be feasible; "feasible" stands until its word is ruled.
+ *  - `unreadValue`: what a failed or withheld value that no requirement and no output reads
+ *    (unreadValues) does to the verdict: it makes it undetermined, as every failed item does, or
+ *    it only shows as not calculated and decides nothing. Undetermined stands until it is ruled.
  */
-export const OPEN_RULINGS: { readonly equationOnly: DesignVerdict } = { equationOnly: 'feasible' };
+export const OPEN_RULINGS: {
+  readonly equationOnly: DesignVerdict;
+  readonly unreadValue: 'undetermined' | 'not-calculated';
+} = { equationOnly: 'feasible', unreadValue: 'undetermined' };
 
 /**
  * The cause of a search that found no solution in what it searched, from its data — where its
@@ -637,15 +643,28 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
  * not known. The sheet is an item, so a sheet that was not read cannot reach rule 3. Withheld items
  * follow from failed ones, which the list already holds.
  */
-export function verdictOf(items: readonly Item[]): Verdict {
-  const failed = failedItems(items);
+export function verdictOf(items: readonly Item[], unread: ReadonlySet<string> = NONE): Verdict {
+  const counted = items.filter((i) => !onlyNotCalculated(i, unread));
+  const failed = failedItems(counted);
   for (const rule of VERDICT_RULES) {
-    const v = rule(items, failed);
+    const v = rule(counted, failed);
     if (v) return v;
   }
   // An advisory requirement that does not hold decides nothing (see failsCause).
   return { verdict: 'undetermined', failed: blocking(failed) };
 }
+
+const NONE: ReadonlySet<string> = new Set();
+
+/** Whether an item only shows as not calculated and decides nothing (OPEN_RULINGS.unreadValue): a
+ *  value of the sheet's own that is not ok and that no requirement and no output reads (`unread`,
+ *  see unreadValues). Never, until that is ruled. */
+const onlyNotCalculated = (i: Item, unread: ReadonlySet<string>): boolean =>
+  OPEN_RULINGS.unreadValue === 'not-calculated' &&
+  i.kind === 'value' &&
+  i.path.length === 0 &&
+  i.status !== 'ok' &&
+  unread.has(i.name);
 
 type Failed = (ItemRef & { cause: Cause })[];
 type VerdictRule = (items: readonly Item[], failed: Failed) => Verdict | undefined;
@@ -689,8 +708,11 @@ const okRule: VerdictRule = (items, failed) =>
 const VERDICT_RULES: readonly VerdictRule[] = [heldRule, provedRule, failsRule, okRule];
 
 /** The verdict of a held point: verdictOf, in the words a held design is asked in. */
-export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
-  const v = verdictOf(items);
+export function heldVerdictOf(
+  items: readonly Item[],
+  unread: ReadonlySet<string> = NONE,
+): Verdict<HeldVerdict> {
+  const v = verdictOf(items, unread);
   const word: Record<DesignVerdict, HeldVerdict> = {
     infeasible: 'no-operating-point',
     'non-compliant': 'non-compliant',

@@ -97,6 +97,7 @@ import {
   resolveWithheld,
   searchItems,
   under,
+  unreadValues,
   withFindings,
   withStatements,
 } from './items';
@@ -2483,7 +2484,7 @@ const withItems = (
     else if (items[at].status === 'ok') items[at] = failed;
   }
   const resolved = resolveWithheld(items);
-  return { ...res, items: resolved, verdict: verdictOf(resolved) };
+  return { ...res, items: resolved, verdict: verdictOf(resolved, unreadValues(doc)) };
 };
 
 /** The items of a run with each solved param it held at a given value marked so: the value it
@@ -2508,7 +2509,7 @@ function withHeldMarks(doc: SheetDoc, res: SheetResult, held: readonly string[])
       },
     };
   });
-  return { ...res, items, verdict: verdictOf(items) };
+  return { ...res, items, verdict: verdictOf(items, unreadValues(doc)) };
 }
 
 /**

@@ -34,7 +34,7 @@ import type {
 import { dcInputs, validateSheet } from './validate';
 import { formatOf } from './nodes';
 import { evaluateSheet, inheritedPolarityWarnings, type DeviceResolver } from './eval';
-import { aboutTheSheet, givesValue, notCalculated, withFindings } from './items';
+import { aboutTheSheet, givesValue, notCalculated, unreadValues, withFindings } from './items';
 import { verdictOf, type DesignVerdict } from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
@@ -144,7 +144,8 @@ const sampleVerdict = (
   res: SheetResult,
   findings: readonly QAWarning[],
   doc: SheetDoc,
-): DesignVerdict => verdictOf(withFindings(res.items ?? [], findings, doc, 'validation')).verdict;
+): DesignVerdict =>
+  verdictOf(withFindings(res.items ?? [], findings, doc, 'validation'), unreadValues(doc)).verdict;
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a block's
@@ -208,7 +209,7 @@ export function runSheet(
     assumptions,
     ...(rangeEnds ? { rangeEnds } : {}),
     items,
-    verdict: verdictOf(items),
+    verdict: verdictOf(items, unreadValues(r.doc)),
   };
 }
 

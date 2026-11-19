@@ -8,8 +8,8 @@ import { evaluateSheet, runSheet, sweepOf, sweepSheet, sweepSheet2 } from './ind
 import { resolvedSheet } from './resolve';
 import { sheetSensitivities } from './sensitivity';
 import { devicePropertySensitivities } from './properties';
-import { givesValue } from './items';
-import { givesDesign, verdictOf } from './states';
+import { givesValue, unreadValues } from './items';
+import { OPEN_RULINGS, givesDesign, verdictOf } from './states';
 import { noDesignText, standardProblems } from './describe';
 import { stands, unfinishedBecause, withoutRange, type SheetDoc, type SheetResult } from './types';
 import { sheet, table, REFS } from './library.fixtures';
@@ -71,6 +71,16 @@ group('an equation that reads a name no entry declares', () => {
     expect(
       devicePropertySensitivities(soft(ota), table, undefined, { refs: REFS }).error,
     ).toBeUndefined();
+  });
+
+  it('is a value no requirement and no output reads, which still makes the verdict undetermined', () => {
+    const unread = unreadValues(ghost);
+    expect(unread.has('ghost')).toBe(true);
+    expect(unread.has('ghost_twice')).toBe(true);
+    // Read by a requirement, directly or through another equation.
+    expect(unread.has('Av')).toBe(false);
+    expect(OPEN_RULINGS.unreadValue).toBe('undetermined');
+    expect(verdictOf(evaluated(ghost).items ?? [], unread).verdict).toBe('undetermined');
   });
 
   it('says why there is no design, from the text module', () => {
