@@ -20,10 +20,8 @@ import type {
   CannotEvaluateData,
   Cause,
   CauseName,
-  DesignVerdict,
   DidNotSettleData,
   FailsData,
-  HeldVerdict,
   Item,
   ItemRef,
   LimitData,
@@ -495,26 +493,9 @@ export const CAUSE_NAMES: { readonly [C in CauseName]: string } = {
   fails: 'fails',
 };
 
-/** The word each verdict reads, in lower case as the item texts are: every design verdict, every
- *  verdict at a held point, and `not-calculated` for a range end or a block that has no verdict, as
- *  the engine did not calculate it. A design and a held point share the words `non-compliant` and
- *  `undetermined`. Every reader takes a verdict's word from here, and the words still open are
- *  changed here alone. */
-export const VERDICT_WORDS: Readonly<
-  Record<DesignVerdict | HeldVerdict | 'not-calculated', string>
-> = {
-  feasible: 'feasible',
-  'non-compliant': 'non-compliant',
-  infeasible: 'infeasible',
-  undetermined: 'undetermined',
-  compliant: 'compliant',
-  'no-operating-point': 'no operating point',
-  'not-calculated': 'not calculated',
-};
-
-/** What an item that is withheld reads (the word of a verdict not calculated, VERDICT_WORDS), and
- *  what a held point or range end that was not run reads. */
-export const WITHHELD_NAME = VERDICT_WORDS['not-calculated'];
+/** What an item that is withheld reads, and what a held point or range end that was not run
+ *  reads. The first is not yet ruled: it is kept here alone. */
+export const WITHHELD_NAME = 'not calculated';
 export const NOT_ASKED_NAME = 'not run';
 
 /** A finding as this module reads it: a kind and its data. The causes are the first family; a
@@ -1040,7 +1021,7 @@ function notReadText(d: NotReadData): Line[] {
   // A block that refers to a sheet the library does not hold: the block and the reference.
   if (d.why === 'reference' && where) return [reason];
   if (d.why === 'field' && d.entry && where)
-    return (d.field && fieldLines(d.entry, where, d.field)) || [entryLine(d.entry, where)];
+    return [(d.field && fieldLine(d.entry, where, d.field)) || entryLine(d.entry, where)];
   const reads =
     d.why === 'format'
       ? [t`This app reads format version ${String(FORMAT_VERSION)} and sheets with no version.`]
@@ -1064,28 +1045,6 @@ const PARAM_FIELD: Readonly<Record<string, string>> = {
   min: 'minimum',
   max: 'maximum',
 };
-
-/** The lines of one field of an entry that is not well formed: a class on a param the engine solves
- *  by its design constraint names the conflict and its fix; any other field gives its one line. */
-function fieldLines(
-  entry: NonNullable<NotReadData['entry']>,
-  where: string,
-  f: NonNullable<NotReadData['field']>,
-): Line[] | undefined {
-  if (
-    entry === 'param' &&
-    f.name === 'class' &&
-    f.problem === 'solved' &&
-    f.relation === 'designConstraint' &&
-    typeof f.value === 'string'
-  )
-    return [
-      t`${nm(where)} is marked ${f.value} and also has a constraint.`,
-      t`Remove the mark or the constraint.`,
-    ];
-  const line = fieldLine(entry, where, f);
-  return line && [line];
-}
 
 /** What is wrong with one field of an entry, where the finding says which field and what it holds;
  *  undefined where no sentence says this field's problem, so the entry's general line stands. */
@@ -1383,11 +1342,6 @@ const SYNTAX_REASONS: readonly (readonly [RegExp, Line])[] = [
   [/^Expected expression after/, t`An operator has nothing after it.`],
   [/^Variable names cannot start with a number/, t`A name starts with a digit.`],
 ];
-/** Whether a syntax error's position is past the expression's last character: the parser ran out
- *  of text, so no character of it is at fault. */
-const atEnd = (x: { at?: number; expression: string }): boolean =>
-  x.at !== undefined && x.at >= x.expression.trimEnd().length;
-
 const syntaxReason = (problem: string): Line | undefined =>
   SYNTAX_REASONS.find(([re]) => re.test(problem))?.[1];
 
@@ -1465,11 +1419,7 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     return [
       t`Range end ${nm(d.rangeEnd.name)} sets ${nm(d.rangeEnd.param)} to ${ex(d.rangeEnd.expression)}, which has a syntax error.`,
       ...(d.syntax?.at !== undefined
-        ? [
-            atEnd(d.syntax)
-              ? t`The error is at the end of the expression.`
-              : t`The error is at character ${String(d.syntax.at + 1)}.`,
-          ]
+        ? [t`The error is at character ${String(d.syntax.at + 1)}.`]
         : []),
       ...(why ? [why] : []),
     ];
@@ -1520,12 +1470,11 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       const why = d.syntax ? syntaxReason(d.syntax.problem) : undefined;
       return [
         head,
-        d.syntax?.at !== undefined && !atEnd(d.syntax)
+        d.syntax?.at !== undefined
           ? t`${subject} has a syntax error at character ${String(d.syntax.at + 1)} of ${ex(d.syntax.expression)}.`
           : d.syntax
             ? t`${subject} has a syntax error in ${ex(d.syntax.expression)}.`
             : t`${subject} has a syntax error.`,
-        ...(d.syntax && atEnd(d.syntax) ? [t`The error is at the end of the expression.`] : []),
         ...(why ? [why] : []),
       ];
     }
@@ -1771,20 +1720,14 @@ function notCalculatedText(
   return distinctLines([head, ...clauses]);
 }
 
-/** What describe is told of a range end that is not calculated: the end's name, and the design
- *  point's list its pointers name items of. */
-export interface DescribeOptions {
-  readonly end?: string;
-  readonly design?: readonly Item[];
-}
-
 /** What a reader is shown for one item: nothing for an item that is ok; for a failed one, its
  *  cause's text; for a withheld one, one sentence for each failed item it depends on. `within`
  *  is the path of the block whose own list the item is read in, where it is one. */
 export function describe(
   item: Item,
   within: readonly string[] = [],
-  { end, design }: DescribeOptions = {},
+  end?: string,
+  design?: readonly Item[],
 ): FindingText {
   if (item.status === 'ok')
     return item.attributes?.kind === 'held' ? heldText(item, item.attributes) : finding('', []);
@@ -1840,7 +1783,7 @@ export function verdictText(v: Verdict<string>): readonly Line[] {
   if (held.length) {
     const names = andLines(held.map((r) => inBlock(r.name, r.path, r)));
     lines.push(
-      t`The verdict is ${VERDICT_WORDS.undetermined}, because ${names} ${held.length > 1 ? 'are' : 'is'} held and not solved.`,
+      t`The verdict is undetermined, because ${names} ${held.length > 1 ? 'are' : 'is'} held and not solved.`,
     );
   }
   // An undetermined verdict gives one clause for each failed item it rests on: a range end's own
@@ -1849,8 +1792,8 @@ export function verdictText(v: Verdict<string>): readonly Line[] {
     for (const f of v.failed)
       lines.push(
         f.end !== undefined
-          ? t`The verdict is ${VERDICT_WORDS.undetermined}, because the entry of range end ${nm(f.end)} is not well formed.`
-          : t`The verdict is ${VERDICT_WORDS.undetermined}, because ${withheldClause({ kind: f.kind, path: f.path, name: f.name, cause: f.cause.kind })}.`,
+          ? t`The verdict is undetermined, because the entry of range end ${nm(f.end)} is not well formed.`
+          : t`The verdict is undetermined, because ${withheldClause({ kind: f.kind, path: f.path, name: f.name, cause: f.cause.kind })}.`,
       );
   return distinctLines(lines);
 }
@@ -1865,13 +1808,14 @@ export const notAskedText = (what: 'range end' | 'held point', name: string): Fi
 
 /** Why a run is not complete (incompleteOn): the finding of each failed item whose number it does
  *  not have, in the list's order; a withheld item follows from one of them. The list of a range end
- *  that is not calculated gives that end's own text (`options` as describe takes them). A list
+ *  that is not calculated gives that end's own text (`end`, `design` as describe takes them). A list
  *  with nothing incomplete gives nothing; one that is incomplete and gives no text reads that the
  *  evaluation did not complete, as a refusal with no reason is indistinguishable from a verdict.
  *  Each reader renders the findings. */
 export function incompleteText(
   items: readonly Item[],
-  options: DescribeOptions = {},
+  end?: string,
+  design?: readonly Item[],
 ): FindingText[] {
   const [only] = items;
   if (
@@ -1880,7 +1824,7 @@ export function incompleteText(
     only.status === 'withheld' &&
     only.on.some((r) => r.frame === 'design')
   )
-    return [describe(only, [], options)];
+    return [describe(only, [], end, design)];
   const missing = incompleteOn(items);
   if (!missing.length) return [];
   const why = missing.filter((i) => i.status === 'failed').map((i) => describe(i));
@@ -1889,7 +1833,11 @@ export function incompleteText(
 
 /** incompleteText as one string, where one is needed (a thrown error, a refusal to a script): each
  *  finding's name, then each of its lines, one to a line; empty where nothing is incomplete. */
-export const incompleteMessage = (items: readonly Item[], options: DescribeOptions = {}): string =>
-  incompleteText(items, options)
+export const incompleteMessage = (
+  items: readonly Item[],
+  end?: string,
+  design?: readonly Item[],
+): string =>
+  incompleteText(items, end, design)
     .flatMap((f) => (f.name ? [f.name, ...f.lines] : f.lines))
     .join('\n');

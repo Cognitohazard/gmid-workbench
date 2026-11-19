@@ -1037,41 +1037,6 @@ group('the texts of the data an item now carries', () => {
     check(syntax(), ['y gives no number.', 'y has a syntax error in a +* b.']);
   });
 
-  it('says a syntax error is at the end of the expression where the parser ran out of text', () => {
-    check(
-      failed('value', 'y', {
-        kind: 'cannot-evaluate',
-        data: {
-          why: 'syntax',
-          name: 'y',
-          reason: '',
-          syntax: { expression: '((', at: 2, problem: '' },
-        },
-      }),
-      [
-        'y gives no number.',
-        'y has a syntax error in ((.',
-        'The error is at the end of the expression.',
-      ],
-    );
-    check(
-      failed('sheet', '', {
-        kind: 'cannot-evaluate',
-        data: {
-          why: 'syntax',
-          name: 'V_tail',
-          reason: '',
-          syntax: { expression: '((', at: 2, problem: '' },
-          rangeEnd: { name: 'cm-lo', param: 'V_tail', expression: '((' },
-        },
-      }),
-      [
-        'Range end cm-lo sets V_tail to ((, which has a syntax error.',
-        'The error is at the end of the expression.',
-      ],
-    );
-  });
-
   it('names the input a block is given no value for', () => {
     check(
       failed('sheet', '', {
@@ -1287,14 +1252,12 @@ group('the parser’s reason for a syntax error, where a plain sentence says it'
         },
       }).lines.slice(2);
     };
-    // The parser runs out of text in an unclosed parenthesis: the error is at the end.
-    const end = 'The error is at the end of the expression.';
-    expect(at('a + (b')).toEqual([end, 'A parenthesis is not closed.']);
-    expect(at('f(a')).toEqual([end, 'A parenthesis is not closed.']);
+    expect(at('a + (b')).toEqual(['A parenthesis is not closed.']);
+    expect(at('f(a')).toEqual(['A parenthesis is not closed.']);
     expect(at('(a))')).toEqual(['A closing parenthesis has no parenthesis that it closes.']);
     expect(at('a +* b')).toEqual(['An operator has nothing after it.']);
     expect(at('1a + b')).toEqual(['A name starts with a digit.']);
-    expect(at('a ? b')).toEqual([end]);
+    expect(at('a ? b')).toEqual([]);
   });
 });
 
@@ -1532,7 +1495,7 @@ group('a range end that is not calculated', () => {
     design: Item[] | undefined,
     want: string[],
   ) => {
-    const said = describe(item, [], { end: name, design });
+    const said = describe(item, [], name, design);
     expect(said.lines).toEqual(want);
     for (const l of said.segments) expect(standardProblems(l)).toEqual([]);
   };
@@ -1580,7 +1543,8 @@ group('a range end that is not calculated', () => {
         { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'cannot-evaluate' },
       ]),
       [],
-      { end: 'cm-lo', design: [searchFailed] },
+      'cm-lo',
+      [searchFailed],
     ).lines;
     expect(said).toEqual([
       'Range end cm-lo is not calculated, because the design point has no design.',
@@ -1685,7 +1649,7 @@ group('why a range end that is not calculated is not complete', () => {
         ],
       },
     ];
-    expect(incompleteMessage(items, { end: 'cm-lo', design }).split('\n').slice(1)).toEqual([
+    expect(incompleteMessage(items, 'cm-lo', design).split('\n').slice(1)).toEqual([
       'Range end cm-lo is not calculated, because the design point has no design.',
       'At the design point, the engine could not calculate V_tail.',
     ]);

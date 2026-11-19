@@ -45,7 +45,6 @@ export interface NotReadData {
     readonly value?: unknown;
     readonly key?: string;
     readonly problem: EntryProblem;
-    readonly relation?: 'designConstraint' | 'solveFor';
   };
   /** For a check whose operator the engine does not know: how the evaluation classified it all
    *  the same, judged as an equality, which today's feasibility reads (legacyFeasible). */

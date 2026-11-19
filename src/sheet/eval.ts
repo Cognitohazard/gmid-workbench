@@ -1834,7 +1834,7 @@ function finishWiring(
         out = { ...out, feasible: false };
         failed = true;
       }
-      return withBlockVerdict(out, pending?.doc);
+      return out;
     });
     return { blocks, failed };
   };
@@ -1845,15 +1845,6 @@ function finishWiring(
     warnings: [...res.warnings, ...extra],
     ...(failed ? { feasible: false } : {}),
   };
-}
-
-/** A block's report with its verdict, read from its final items and its own document as the
- *  sheet's is; without one where the block was not calculated (its own sheet item is not ok). */
-function withBlockVerdict(report: SheetBlockReport, doc: SheetDoc | undefined): SheetBlockReport {
-  const { verdict: _old, ...rest } = report;
-  const own = report.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
-  if (!doc || !report.items || own?.status !== 'ok') return rest;
-  return { ...rest, verdict: designVerdict(doc, report.items) };
 }
 
 /** One node of a sheet tree as it is evaluated: its document, its table, how its children find
