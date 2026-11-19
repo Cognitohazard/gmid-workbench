@@ -604,6 +604,17 @@ export interface Verdict<V extends string = DesignVerdict> {
   readonly held?: readonly ItemRef[];
 }
 
+/** The items that leave a run with no design to read: each failed item other than a requirement,
+ *  since a requirement that fails or gives no number is a finding about a design, not the want of
+ *  one. Empty where the run gives a design. */
+export const noDesignOn = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
+  failedItems(items).filter((f) => f.kind !== 'requirement');
+
+/** Whether a run gives a design to read, from its items (noDesignOn): the reading the sensitivity
+ *  views take where they ask whether a point is one to differentiate around. */
+export const givesDesign = (res: { items?: readonly Item[] }): boolean =>
+  res.items !== undefined && noDesignOn(res.items).length === 0;
+
 /** Whether an item is a solved param the run held at a given value instead of solving. */
 export const isHeld = (i: Item): boolean => i.status === 'ok' && i.attributes?.kind === 'held';
 

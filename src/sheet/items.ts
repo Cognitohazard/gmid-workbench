@@ -1035,3 +1035,17 @@ export function notCalculated(design: readonly Item[]): Item[] {
   });
   return [{ kind: 'sheet', path: [], name: '', status: 'withheld', on }];
 }
+
+/** Whether a run gives a number for one of its named results: the item of that name at the top of
+ *  the list is ok. A name with no item of its own, as a value a composed block provides is read by
+ *  its parent (`amp__gain`), is read from the run's withheld record. */
+export function givesValue(
+  res: Pick<SheetResult, 'items' | 'values' | 'withheld'>,
+  name: string,
+): boolean {
+  const own = res.items?.find(
+    (i) => i.path.length === 0 && i.name === name && (i.kind === 'value' || i.kind === 'search'),
+  );
+  if (own) return own.status === 'ok' && res.values[name] !== undefined;
+  return res.withheld?.[name] === undefined && res.values[name] !== undefined;
+}
