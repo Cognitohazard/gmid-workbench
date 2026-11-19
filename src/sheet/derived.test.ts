@@ -553,7 +553,7 @@ describe('the texts of a search that stopped short, and of a block in its own li
       ?.find((b) => b.name === 'tail')
       ?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
     expect(own && describeItem(own, ['tail']).lines).toEqual([
-      'Block tail is not calculated, because its parent sheet gives it no value.',
+      'Block tail is not calculated, because its parent sheet gives it no value for vds_t.',
     ]);
   });
 });
@@ -753,5 +753,97 @@ describe('a finding with no item of its own', () => {
       },
     });
     expectSame(lone);
+  });
+});
+
+describe('the data an item carries for its text', () => {
+  const plain = (rest: Partial<SheetDoc>): SheetDoc => ({
+    title: 'forced',
+    polarity: 'n',
+    params: [{ name: 'a', value: 1 }],
+    equations: [],
+    checks: [],
+    ...rest,
+  });
+  const at = (res: SheetResult, kind: Item['kind'], name: string): Item | undefined =>
+    res.items?.find((i) => i.kind === kind && i.name === name && i.path.length === 0);
+
+  it('a syntax error carries its expression and where the parser stops', () => {
+    const res = runSheet(plain({ equations: [{ name: 'y', expr: 'a +* a' }] }), dev);
+    expect(at(res, 'value', 'y')).toMatchObject({
+      status: 'failed',
+      cause: {
+        kind: 'cannot-evaluate',
+        data: { why: 'syntax', syntax: { expression: 'a +* a', at: 3 } },
+      },
+    });
+    expectSame(res);
+  });
+
+  it('a value that more than one statement sets carries the fields that set it', () => {
+    const res = runSheet(
+      plain({
+        params: [
+          { name: 'a', value: 1 },
+          { name: 'goal', value: 2 },
+          {
+            name: 'x',
+            value: 1,
+            min: 0,
+            max: 10,
+            designConstraint: { lhs: 'x', rhs: 'goal' },
+            solveFor: 'goal',
+          },
+        ],
+      }),
+      dev,
+    );
+    const twice = res.items?.find(
+      (i) =>
+        i.status === 'failed' &&
+        i.cause.kind === 'not-determined' &&
+        i.cause.data.why === 'decision-twice',
+    );
+    expect(twice).toMatchObject({
+      cause: { data: { statements: [{ name: 'x', fields: ['designConstraint', 'solveFor'] }] } },
+    });
+    expectSame(res);
+  });
+
+  it('an equation whose own arithmetic gives no number says that each name it reads gives one', () => {
+    const res = runSheet(plain({ equations: [{ name: 'y', expr: 'a / 0' }] }), dev);
+    expect(at(res, 'value', 'y')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'cannot-evaluate', data: { why: 'not-finite', notFinite: [] } },
+    });
+    expectSame(res);
+  });
+
+  it('a failing region check carries its region, in volts', () => {
+    const res = runSheet(
+      own(1, '0.02', '0', {
+        givens: { L: '0.5u', gm_id: '5', id: 'I', vds: '0.02', vsb: '0', region: 'saturation' },
+      }),
+      wideDev,
+    );
+    expect(at(res, 'requirement', 'region')).toMatchObject({
+      status: 'failed',
+      cause: { kind: 'fails', data: { region: 'saturation', unit: 'V' } },
+    });
+    expectSame(res);
+  });
+
+  it('a block its parent gives no value names the inputs it waits for', () => {
+    const res = runSheet(
+      withParams(sheet('otas/five-transistor-ota.json'), { CM_dc: 1.75 }),
+      table,
+      undefined,
+      REFS,
+    );
+    const own = res.blocks
+      ?.find((b) => b.name === 'tail')
+      ?.items?.find((i) => i.kind === 'sheet' && i.path.length === 0);
+    expect(own).toMatchObject({ status: 'withheld', on: [{ frame: 'parent', inputs: ['vds_t'] }] });
+    expectSame(res);
   });
 });

@@ -14,15 +14,18 @@ import {
   REGION_CHECK_ID,
   unfoundIn,
   unitOfSides,
+  type Region,
   type SheetDoc,
   type SheetResult,
   type SizingReport,
   type SolveFailure,
 } from './types';
 import type { QAWarning } from '../types';
+import { syntaxAt } from '../expr';
 import {
   failsCause,
   type NotReadData,
+  type RelationField,
   memberOf,
   setOf,
   type Cause,
@@ -211,7 +214,14 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
     }
     out.push(
       reading.noNumber({ kind: 'value', path: [], name: e.name }, [e.expr], () =>
-        equationCause(e.name, res.warnings, reading.undeclared(e.expr)),
+        withSyntax(
+          equationCause(e.name, res.warnings, reading.undeclared(e.expr), {
+            expr: e.expr,
+            values: res.values,
+          }),
+          { kind: 'value', path: [], name: e.name },
+          doc,
+        ),
       ),
     );
   }
@@ -244,7 +254,14 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
         path: [],
         name: r.id,
         status: 'failed',
-        cause: failsCause({ ...r, text: { lhs, op, rhs }, unit: unitOfSides(doc, lhs, rhs) }),
+        cause: failsCause({
+          ...r,
+          text: { lhs, op, rhs },
+          // The check a declared region adds compares two voltages of the device.
+          ...(r.id === REGION_CHECK_ID && isRegion(doc.givens?.region)
+            ? { unit: 'V', region: doc.givens.region }
+            : { unit: unitOfSides(doc, lhs, rhs) }),
+        }),
       });
       continue;
     }
@@ -264,6 +281,8 @@ export function itemsOf(doc: SheetDoc, res: SheetResult): Item[] {
   out.push(...blockItems);
   return out;
 }
+
+const isRegion = (r: unknown): r is Region => r === 'saturation' || r === 'triode';
 
 /**
  * The rule for an item that gives no number, over the names its expressions read: failed as not
@@ -431,16 +450,32 @@ function splitCheckText(
 
 /** Why an equation gives no number, from what its evaluation found: a syntax error, a name it
  *  reads that no entry declares (that name, as data), or a number that is not finite. */
-function equationCause(name: string, warnings: readonly QAWarning[], undeclared?: string): Cause {
+function equationCause(
+  name: string,
+  warnings: readonly QAWarning[],
+  undeclared?: string,
+  read?: { expr: string; values: Readonly<Record<string, number>> },
+): Cause {
   const parse = warnings.find((w) => w.severity === 'error' && w.location === `equation "${name}"`);
   if (parse)
     return { kind: 'cannot-evaluate', data: { why: 'syntax', name, reason: parse.message } };
   if (undeclared !== undefined)
     return { kind: 'cannot-evaluate', data: { why: 'not-defined', name: undeclared, reason: '' } };
   const nonFinite = warnings.find((w) => w.rule === 'sheet-nonfinite' && w.location === name);
+  const notFinite = read
+    ? namesOf(read.expr).filter(
+        (n) =>
+          Object.prototype.hasOwnProperty.call(read.values, n) && !Number.isFinite(read.values[n]),
+      )
+    : undefined;
   return {
     kind: 'cannot-evaluate',
-    data: { why: 'not-finite', name, reason: nonFinite?.message ?? '' },
+    data: {
+      why: 'not-finite',
+      name,
+      reason: nonFinite?.message ?? '',
+      ...(notFinite ? { notFinite } : {}),
+    },
   };
 }
 
@@ -591,6 +626,47 @@ const entryNotWellFormed =
           data: { why: 'field', where: w.location ?? '', message: w.message, entry, ...stage },
         };
 
+/** For each of `names` that more than one statement sets in `doc`: the fields that set it. */
+export function twiceStatements(
+  doc: SheetDoc | undefined,
+  names: readonly string[],
+): { name: string; fields: RelationField[] }[] {
+  const params = Array.isArray(doc?.params) ? doc.params : [];
+  return names.flatMap((name) => {
+    const p = params.find((q) => q?.name === name);
+    if (!p) return [];
+    const fields = (['designConstraint', 'solveFor', 'hold'] as const).filter(
+      (f) => p[f] !== undefined,
+    );
+    return fields.length > 1 ? [{ name, fields }] : [];
+  });
+}
+
+/** A syntax error's cause with the expression and where the parser refuses it, read from the
+ *  entry of `doc` the item names. Any other cause as it is. */
+export function withSyntax(cause: Cause, ref: ItemRef, doc: SheetDoc | undefined): Cause {
+  if (cause.kind !== 'cannot-evaluate' || cause.data.why !== 'syntax' || ref.path.length)
+    return cause;
+  const sources =
+    ref.kind === 'requirement'
+      ? (doc?.checks ?? []).filter((c) => c.id === ref.name).flatMap((c) => [c.lhs, c.rhs])
+      : (doc?.equations ?? []).filter((e) => e.name === ref.name).map((e) => e.expr);
+  for (const expression of sources) {
+    if (typeof expression !== 'string') continue;
+    const at = syntaxAt(expression);
+    if (at) return { ...cause, data: { ...cause.data, syntax: { expression, ...at } } };
+  }
+  return cause;
+}
+
+/** A cause with the statements of a value that more than one statement sets, where the sheet
+ *  shows them. Any other cause as it is. */
+export function withStatements(cause: Cause, doc: SheetDoc | undefined): Cause {
+  if (cause.kind !== 'not-determined' || cause.data.why !== 'decision-twice') return cause;
+  const statements = twiceStatements(doc, cause.data.names);
+  return statements.length ? { ...cause, data: { ...cause.data, statements } } : cause;
+}
+
 /** A finding that the sheet's statements leave a value without one decision, or with two. */
 const decisionCause = (
   w: QAWarning,
@@ -725,7 +801,7 @@ export function withFindings(
     const ref = aboutRef(doc, w) ?? locate(doc, w.location);
     // A block's own findings are on its own items, under its name.
     if (mode === 'evaluation' && ref.path.length) continue;
-    const cause = findingCause(w, ref, mode);
+    const cause = withSyntax(withStatements(findingCause(w, ref, mode), doc), ref, doc);
     const at = out.findIndex(
       (i) => i.kind === ref.kind && i.name === ref.name && i.path.join('.') === ref.path.join('.'),
     );

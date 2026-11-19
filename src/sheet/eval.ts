@@ -88,11 +88,19 @@ import {
   type SearchData,
   type SearchEnd,
   type UnevaluableAt,
+  type WithheldOn,
   withSet,
 } from './states';
 import { outsideMessage, outsideTableMessage, stepsOf } from './describe';
 import { failOn, solveFailureOf } from './derived';
-import { itemsOf, resolveWithheld, searchItems, under, withFindings } from './items';
+import {
+  itemsOf,
+  resolveWithheld,
+  searchItems,
+  under,
+  withFindings,
+  withStatements,
+} from './items';
 import {
   axisDirection,
   blockWires,
@@ -1124,8 +1132,10 @@ function applyBlockParams(
   parentScope: Scope,
   warn: (w: QAWarning) => void,
   withheld: ReadonlyMap<string, string>,
-): { doc: SheetDoc; ok: boolean; cause?: string } {
-  if (!block.params) return { doc: childDoc, ok: true };
+): { doc: SheetDoc; ok: boolean; cause?: string; unresolved: string[] } {
+  if (!block.params) return { doc: childDoc, ok: true, unresolved: [] };
+  /** The child's params whose value from the parent gave no number. */
+  const unresolved: string[] = [];
   const childParams = new Map(childDoc.params.map((p) => [p.name, p]));
   const overrides: Record<string, number> = {};
   let ok = true;
@@ -1166,6 +1176,7 @@ function applyBlockParams(
     const v = evalFinite(expr, parentValues, parentScope, warn, `block "${block.name}" param ${k}`);
     if (v === undefined) {
       ok = false;
+      unresolved.push(k);
       const from = causeIn(withheld, expr, parentValues);
       cause = from === undefined || cause === null ? null : (cause ?? from);
       warn({
@@ -1190,6 +1201,7 @@ function applyBlockParams(
     },
     ok,
     ...(cause ? { cause } : {}),
+    unresolved,
   };
 }
 
@@ -1305,6 +1317,7 @@ function evalBlocks(
       doc: childDoc,
       ok: paramsOk,
       cause,
+      unresolved,
     } = applyBlockParams(block, srcDoc, values, scope, warn, withheld);
     /** Withhold `key` of this block's outputs, as following from `from`. */
     const withhold = (key: string, from: string): void =>
@@ -1342,9 +1355,13 @@ function evalBlocks(
                 // In the parent's terms: a block of the parent, or a search of the parent's
                 // that it did not find.
                 on: [
-                  parent.blocks?.some((b) => b.name === cause.split(PATH_SEP)[0])
-                    ? { kind: 'sheet', path: cause.split(PATH_SEP), name: '', frame: 'parent' }
-                    : { kind: 'search', path: [], name: cause, frame: 'parent' },
+                  {
+                    ...(parent.blocks?.some((b) => b.name === cause.split(PATH_SEP)[0])
+                      ? { kind: 'sheet', path: cause.split(PATH_SEP), name: '' }
+                      : { kind: 'search', path: [], name: cause }),
+                    frame: 'parent',
+                    ...(unresolved.length ? { inputs: unresolved } : {}),
+                  } as WithheldOn,
                 ],
               }
             : {
@@ -1358,6 +1375,7 @@ function evalBlocks(
                     why: 'not-defined',
                     name: block.name,
                     reason: `block "${block.name}": a value its parent sets for it did not resolve`,
+                    ...(unresolved.length ? { inputs: unresolved } : {}),
                   },
                 },
               },
@@ -3864,14 +3882,19 @@ function solveNode(node: NodeRef): SheetResult {
     if (!failed.length)
       failed.push({
         probe: firstProbe(),
-        ...failOn({
-          kind: 'not-determined',
-          data: {
-            why: declarationWhy(doc, issue.params),
-            names: issue.params,
-            message: issue.message,
-          },
-        }),
+        ...failOn(
+          withStatements(
+            {
+              kind: 'not-determined',
+              data: {
+                why: declarationWhy(doc, issue.params),
+                names: issue.params,
+                message: issue.message,
+              },
+            },
+            doc,
+          ),
+        ),
       });
     const named = new Set(issue.params);
     rest = rest.filter((p) => !named.has(p.name));

@@ -883,3 +883,118 @@ group('the texts of a finding with no item of its own', () => {
       expect(standardProblems(l)).toEqual([]);
   });
 });
+
+group('the texts of the data an item now carries', () => {
+  const failed = (kind: Item['kind'], name: string, cause: Cause): Item => ({
+    kind,
+    path: [],
+    name,
+    status: 'failed',
+    cause,
+  });
+  const check = (i: Item, want: string[]): void => {
+    expect(describe(i).lines).toEqual(want);
+    for (const l of describe(i).segments) expect(standardProblems(l)).toEqual([]);
+  };
+
+  it('names the statements of a value that more than one statement sets', () => {
+    check(
+      failed('sheet', '', {
+        kind: 'not-determined',
+        data: {
+          why: 'decision-twice',
+          names: ['V_out'],
+          message: '',
+          statements: [{ name: 'V_out', fields: ['designConstraint', 'hold'] }],
+        },
+      }),
+      [
+        'The statements of the sheet do not determine one design.',
+        'V_out has a design constraint and a hold, and only one statement may set it.',
+      ],
+    );
+  });
+
+  it('gives where the parser stops in an expression with a syntax error', () => {
+    const syntax = (at?: number): Item =>
+      failed('value', 'y', {
+        kind: 'cannot-evaluate',
+        data: {
+          why: 'syntax',
+          name: 'y',
+          reason: '',
+          syntax: { expression: 'a +* b', ...(at !== undefined ? { at } : {}), problem: '' },
+        },
+      });
+    check(syntax(3), ['y gives no number.', 'y has a syntax error at character 4 of a +* b.']);
+    check(syntax(), ['y gives no number.', 'y has a syntax error in a +* b.']);
+  });
+
+  it('names the input a block is given no value for', () => {
+    check(
+      failed('sheet', '', {
+        kind: 'cannot-evaluate',
+        data: { why: 'not-defined', name: 'tail', reason: '', inputs: ['vds_t'] },
+      }),
+      ['This block is not calculated, because its parent sheet gives it no value for vds_t.'],
+    );
+  });
+
+  it('names the quantity on each side of a region check', () => {
+    const region: Item = {
+      kind: 'requirement',
+      path: [],
+      name: 'region',
+      status: 'failed',
+      cause: failsCause({
+        kind: 'physical',
+        text: { lhs: 'abs(vds)', op: '>=', rhs: 'vdsat' },
+        lhsValue: 0.25,
+        rhsValue: 0.551,
+        margin: -0.301,
+        marginPct: -54.6,
+        unit: 'V',
+        region: 'saturation',
+      }),
+    };
+    expect(describe(region).lines.slice(0, 2)).toEqual([
+      'The region check of the device of this sheet fails.',
+      'The drain-source voltage of the device of this sheet is 0.25 V, and saturation needs at least 0.551 V.',
+    ]);
+    for (const l of describe(region).segments) expect(standardProblems(l)).toEqual([]);
+  });
+
+  it('says which names a value reads give no number, or that its own arithmetic gives none', () => {
+    const nf = (notFinite: string[]): Item =>
+      failed('value', 'y', {
+        kind: 'cannot-evaluate',
+        data: { why: 'not-finite', name: 'y', reason: '', notFinite },
+      });
+    check(nf(['a']), ['y gives no number.', 'y reads a, which gives no number.']);
+    check(nf([]), [
+      'y gives no number.',
+      'Each name that y reads gives a number, so its own arithmetic gives none.',
+    ]);
+  });
+});
+
+group('the text of a block’s part read beyond its table, in its parent’s list', () => {
+  it('names the block’s part, and the block’s param that sets the reading', () => {
+    const i: Item = {
+      kind: 'device',
+      path: ['ref_casc'],
+      name: 'givens',
+      status: 'failed',
+      cause: {
+        kind: 'outside-table',
+        data: { device: 'givens', quantity: 'vsb', asked: 0.937, held: [0, 0.9], setBy: 'vsb_rc' },
+      },
+    };
+    expect(describe(i).lines).toEqual([
+      'Part ref_casc asks for a source-body voltage of 0.937 V.',
+      'The table holds source-body voltages from 0 V to 0.9 V.',
+      'Change vsb_rc in block ref_casc, or load a table that holds this source-body voltage.',
+    ]);
+    for (const l of describe(i).segments) expect(standardProblems(l)).toEqual([]);
+  });
+});

@@ -135,6 +135,25 @@ export function parse(src: string): ExprNode {
   }
 }
 
+/**
+ * Where the parser refuses `src`, and why in its words: the character position (from 0) where the
+ * expression is written as the sheet writes it, and the parser's description. The position is
+ * absent where rewriting an engineering-notation literal moved the characters, so it would not
+ * point into `src`. Undefined for an expression that parses.
+ */
+export function syntaxAt(src: string): { at?: number; problem: string } | undefined {
+  const pre = preprocess(src);
+  try {
+    jsep(pre);
+    return undefined;
+  } catch (e) {
+    const err = e as { index?: unknown; description?: unknown; message?: unknown };
+    const problem =
+      typeof err.description === 'string' ? err.description : String(err.message ?? e);
+    return pre === src && typeof err.index === 'number' ? { at: err.index, problem } : { problem };
+  }
+}
+
 // --- value helpers -----------------------------------------------------------
 
 function isArray(v: Value): v is Float64Array {

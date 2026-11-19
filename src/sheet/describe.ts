@@ -992,7 +992,15 @@ function notDeterminedText(d: NotDeterminedData): Line[] {
     case 'decision-missing':
       return [head, ...each((n) => t`No statement sets ${n}.`)];
     case 'decision-twice':
-      return [head, ...each((n) => t`More than one statement sets ${n}.`)];
+      return [
+        head,
+        ...d.names.map((n) => {
+          const fields = d.statements?.find((x) => x.name === n)?.fields;
+          return fields?.length
+            ? t`${nm(n)} has ${andLines(fields.map((f) => [{ kind: 'text', text: FIELD_WORD[f] }]))}, and only one statement may set it.`
+            : t`More than one statement sets ${nm(n)}.`;
+        }),
+      ];
     case 'assumed-level':
       return [
         head,
@@ -1083,6 +1091,13 @@ function netlistLines(n: NetlistAbout): Line[] {
 
 const SIDE_WORD = { lhs: 'left', rhs: 'right' } as const;
 
+/** Each field that states a relation, as a sentence names it. */
+const FIELD_WORD = {
+  designConstraint: 'a design constraint',
+  solveFor: 'a solve-for statement',
+  hold: 'a hold',
+} as const;
+
 /** What gave no number where the engine read it: a part read beyond its table, with the record,
  *  or another item. */
 function byLines(d: CannotEvaluateData): Line[] {
@@ -1122,6 +1137,9 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
       t`At the design point, ${ex(d.hold.statement)} gives no number.`,
       ...byLines(d),
     ];
+  // A block that is not evaluated, because a value its parent sets for it gives no number.
+  if (d.inputs?.length)
+    return [t`This block is not calculated, because ${parentGivesNo(d.inputs)}.`];
   // A range end whose `set` gives no number against the design run.
   if (d.rangeEnd)
     return [
@@ -1161,7 +1179,14 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
         ? [t`${subject} reads ${nm(d.name)}, and the sheet does not define ${nm(d.name)}.`]
         : [head, t`The sheet does not define ${nm(d.name)}.`];
     case 'syntax':
-      return [head, t`${subject} has a syntax error.`];
+      return [
+        head,
+        d.syntax?.at !== undefined
+          ? t`${subject} has a syntax error at character ${String(d.syntax.at + 1)} of ${ex(d.syntax.expression)}.`
+          : d.syntax
+            ? t`${subject} has a syntax error in ${ex(d.syntax.expression)}.`
+            : t`${subject} has a syntax error.`,
+      ];
     case 'no-column':
       return [head, t`The table holds no column for ${nm(d.name)}.`];
     case 'no-sweep':
@@ -1169,17 +1194,31 @@ function cannotEvaluateText(d: CannotEvaluateData, ref?: ItemRef): Line[] {
     case 'illegal-pair':
       return [head, t`The two quantities bound on the device do not determine its size.`];
     case 'not-finite':
-      return [head];
+      if (!d.notFinite) return [head];
+      return [
+        head,
+        d.notFinite.length
+          ? t`${subject} reads ${andLines(d.notFinite.map((n) => [nm(n)]))}, which ${d.notFinite.length > 1 ? 'give' : 'gives'} no number.`
+          : t`Each name that ${subject} reads gives a number, so its own arithmetic gives none.`,
+      ];
   }
 }
 
-function outsideTableText(d: OutsideTableData): Line[] {
+/** A part read beyond its table. The record names the device as its own sheet does (`givens`);
+ *  a device item of a block, read in its parent's list, names that block, and so does a param
+ *  of the block that sets the reading. */
+function outsideTableText(d: OutsideTableData, ref?: ItemRef): Line[] {
   const w = quantityWords(d.quantity);
   const [lo, hi] = d.held;
+  const path = ref?.kind === 'device' ? ref.path : [];
+  const own = d.device === '' || d.device === 'givens';
+  const part = path.length && own ? partName(path.join('.')) : partName(d.device);
   return [
-    t`${partName(d.device)} asks for a ${w.one} of ${quantityText(d.asked, w.unit)}.`,
+    t`${part} asks for a ${w.one} of ${quantityText(d.asked, w.unit)}.`,
     t`The table holds ${w.many} ${spanText(lo, hi, w.unit)}.`,
-    ...(d.setBy ? [t`Change ${nm(d.setBy)}, or load a table that holds this ${w.one}.`] : []),
+    ...(d.setBy
+      ? [t`Change ${inBlock(d.setBy, path)}, or load a table that holds this ${w.one}.`]
+      : []),
   ];
 }
 
@@ -1203,6 +1242,12 @@ function failsText(d: FailsData, ref?: ItemRef): Line[] {
   // names the part it tests. Its unit is given only where the data hold it.
   if (ref?.kind === 'requirement' && ref.name === REGION_CHECK_ID) {
     const part = ref.path.length ? partName(ref.path.join('.')) : t`the device of this sheet`;
+    if (d.region)
+      return [
+        t`The region check of ${part} fails.`,
+        t`The drain-source voltage of ${part} is ${quantityText(d.lhs, d.unit)}, and ${d.region === 'triode' ? 'the triode region' : 'saturation'} needs ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
+        marginLine(d),
+      ];
     return [
       t`The region check of ${part} fails.`,
       t`The region check of ${part} reads ${quantityText(d.lhs, d.unit)}, and it needs ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
@@ -1231,7 +1276,7 @@ function linesOf(c: Cause, ref?: ItemRef): Line[] {
     case 'not-determined':
       return notDeterminedText(c.data);
     case 'outside-table':
-      return outsideTableText(c.data);
+      return outsideTableText(c.data, ref);
     case 'cannot-evaluate':
       return cannotEvaluateText(c.data, ref);
     case 'no-solution':
@@ -1249,10 +1294,17 @@ function linesOf(c: Cause, ref?: ItemRef): Line[] {
   }
 }
 
+/** The clause of a block that waits on its parent: the inputs it is given no value for, where
+ *  they are known. */
+const parentGivesNo = (inputs: readonly string[] | undefined): Line =>
+  inputs?.length
+    ? t`its parent sheet gives it no value for ${andLines(inputs.map((n) => [nm(n)]))}`
+    : t`its parent sheet gives it no value`;
+
 /** The clause a withheld item's sentence gives for the failed item it depends on: one for each
  *  cause, so the not-proved cause never reads as a proof. */
 export function withheldClause(r: WithheldOn): Line {
-  if (r.frame === 'parent') return t`its parent sheet gives it no value`;
+  if (r.frame === 'parent') return parentGivesNo(r.inputs);
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':
@@ -1297,8 +1349,8 @@ export function describe(item: Item, within: readonly string[] = []): FindingTex
         // A block's own sheet item, read in the block's own list, waits on its parent.
         r.frame === 'parent' && item.kind === 'sheet' && item.path.length === 0
           ? within.length
-            ? t`Block ${blockSegment(within)} is not calculated, because its parent sheet gives it no value.`
-            : t`This block is not calculated, because its parent sheet gives it no value.`
+            ? t`Block ${blockSegment(within)} is not calculated, because ${parentGivesNo(r.inputs)}.`
+            : t`This block is not calculated, because ${parentGivesNo(r.inputs)}.`
           : upperFirst(t`${itemName(item)} is not calculated, because ${withheldClause(r)}.`),
       ),
     );

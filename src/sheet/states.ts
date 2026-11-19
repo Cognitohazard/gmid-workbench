@@ -4,7 +4,7 @@
 // these in one place (describe.ts), never written by the code that produces them.
 
 import type { NetlistAbout, OutsideTable } from '../types';
-import type { CheckKind, CheckOp, SolveRange } from './types';
+import type { CheckKind, CheckOp, Region, SolveRange } from './types';
 
 /** What an item is: the sheet itself (always the first item of a result), a value (a param or an
  *  equation), a device, a search (one solved param), or a requirement (a check). */
@@ -68,6 +68,11 @@ export interface NotDeterminedData {
     readonly search: readonly [number, number];
     readonly wires: readonly [number, number];
   }[];
+  /** For a value that more than one statement sets: each value, and the fields that set it. */
+  readonly statements?: readonly {
+    readonly name: string;
+    readonly fields: readonly RelationField[];
+  }[];
   /** For a finding of the netlist check: which problem, and the wires and devices it is about
    *  (devices by block path, `givens` for the sheet's own); for a selector, the param. */
   readonly netlist?: NetlistAbout;
@@ -109,6 +114,15 @@ export interface CannotEvaluateData {
   /** For the check a declared region adds: the device it tests, and what gave no number: the
    *  device, which is not sized, or its drain-source voltage or vdsat. */
   readonly region?: { readonly device: string; readonly missing: 'device' | 'vds' | 'vdsat' };
+  /** For an equation that gives no number: the names it reads, among the sheet's values, that
+   *  give no number themselves. Empty where each gives one, so its own arithmetic gives none. */
+  readonly notFinite?: readonly string[];
+  /** For a block that is not evaluated because a value its parent sets for it gives no number:
+   *  the block's own params that value is for. */
+  readonly inputs?: readonly string[];
+  /** For a syntax error: the expression as the sheet writes it, the character position (from 0)
+   *  where the parser refuses it, where that is known, and the parser's words for why. */
+  readonly syntax?: { readonly expression: string; readonly at?: number; readonly problem: string };
   /** For a range end whose `set` gives no number against the design run: the end, the param it
    *  sets, and the expression, as the sheet writes it. */
   readonly rangeEnd?: {
@@ -309,6 +323,9 @@ export interface FailsData {
   readonly hard: boolean;
   /** The unit of the two sides, where the sheet declares one for a name either side is. */
   readonly unit?: string;
+  /** For the check a declared region adds: the region. Its left side is the magnitude of the
+   *  device's drain-source voltage, its right side the device's vdsat, both in volts. */
+  readonly region?: Region;
 }
 
 /** The closed list of causes, each with its data. */
@@ -427,7 +444,12 @@ export type WithheldOn =
   /** An item of the parent sheet, named as the parent names it: a block that is not evaluated
    *  waits on what its parent did not give it. Its cause is read in the parent's list, which
    *  resolves the reference; the block's own list carries none. */
-  | (ItemRef & { readonly frame: 'parent'; readonly cause?: undefined });
+  | (ItemRef & {
+      readonly frame: 'parent';
+      readonly cause?: undefined;
+      /** The block's own params whose value from the parent gives no number. */
+      readonly inputs?: readonly string[];
+    });
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────
 
@@ -669,11 +691,13 @@ export const failsCause = (r: {
   margin: number;
   marginPct: number;
   unit?: string;
+  region?: Region;
 }): Cause => ({
   kind: 'fails',
   data: {
     text: r.text,
     ...(r.unit !== undefined ? { unit: r.unit } : {}),
+    ...(r.region !== undefined ? { region: r.region } : {}),
     lhs: r.lhsValue,
     rhs: r.rhsValue,
     margin: r.margin,
