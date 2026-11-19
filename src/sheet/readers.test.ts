@@ -234,3 +234,74 @@ group('a range end', () => {
       expect(isComplete(e)).toBe(true);
   });
 });
+
+group('a requirement that cannot be evaluated', () => {
+  // A requirement that reads a name no entry declares gives no number, beside one that fails.
+  const na: SheetDoc = {
+    ...ota,
+    checks: [
+      ...ota.checks,
+      { id: 'reads-nothing', kind: 'spec', lhs: 'undeclared_name', op: '>=', rhs: '0' },
+    ],
+  };
+
+  it('leaves the run complete, and its sensitivities are computed, as today', () => {
+    const res = evaluated(na);
+    expect(stands(res)).toBe(true);
+    expect(isComplete(res)).toBe(true);
+    expect(
+      sheetSensitivities(na, table, undefined, { refs: REFS, params: ['gm_id_in'] })[0].error,
+    ).toBeUndefined();
+    expect(devicePropertySensitivities(na, table, undefined, { refs: REFS }).error).toBe(undefined);
+  });
+
+  it('beside one that fails, reads non-compliant: the failing one is charted, it leaves a gap', () => {
+    const res = runSheet(na, table, undefined, REFS);
+    expect(res.verdict?.verdict).toBe('non-compliant');
+    const s = sweepSheet(na, 'gm_id_in', table, 3, undefined, REFS);
+    const curve = (id: string) => s.checks.find((c) => c.id === id)?.marginPct;
+    expect(curve('reads-nothing')).toEqual([null, null, null]);
+    expect(curve('offset-spec')?.every((m) => typeof m === 'number')).toBe(true);
+    // Each range end is non-compliant and complete, and charts the margin that fails there. At the
+    // last sample offset-spec passes, the requirement that gives no number is all that is left, and
+    // the end is undetermined: a gap.
+    for (const e of res.rangeEnds ?? []) {
+      expect(e.verdict?.verdict).toBe('non-compliant');
+      expect(isComplete(e)).toBe(true);
+    }
+    expect(s.verdicts).toEqual(['non-compliant', 'non-compliant', 'undetermined']);
+    for (const c of s.checks.filter((x) => x.rangeEnd !== undefined)) {
+      expect(c.marginPct.slice(0, 2).every((m) => typeof m === 'number' && m < 0)).toBe(true);
+      expect(c.marginPct[2]).toBeNull();
+    }
+  });
+});
+
+group('a validation error on a requirement’s own entry only', () => {
+  const badTolerance: SheetDoc = {
+    ...ota,
+    checks: ota.checks.map((c) => (c.id === 'gain-spec' ? { ...c, op: '==', tolPct: -1 } : c)),
+  };
+
+  it('does not stand today, and is complete, with a verdict that is not feasible', () => {
+    const res = runSheet(badTolerance, table, undefined, REFS);
+    expect(stands(res)).toBe(false);
+    expect(isComplete(res)).toBe(true);
+    expect(res.verdict?.verdict).not.toBe('feasible');
+  });
+
+  it('is refused by both sensitivity views and passes nowhere in a sweep, as today', () => {
+    expect(
+      sheetSensitivities(badTolerance, table, undefined, { refs: REFS, params: ['gm_id_in'] })[0]
+        .error,
+    ).toBeDefined();
+    expect(devicePropertySensitivities(badTolerance, table, undefined, { refs: REFS }).error).toBe(
+      'The sheet does not validate, so it has no formulas to read.',
+    );
+    const s = sweepSheet(soft(badTolerance), 'gm_id_in', table, 3, undefined, REFS, {
+      windows: true,
+    });
+    expect(s.feasible).toEqual([false, false, false]);
+    expect(s.windows).toEqual([]);
+  });
+});
