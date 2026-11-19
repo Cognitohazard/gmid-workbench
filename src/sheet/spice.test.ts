@@ -107,3 +107,22 @@ describe('sizedNetlist', () => {
     expect(net.devices[0].error).toBeTruthy();
   });
 });
+
+describe('the header of a sized netlist', () => {
+  it('gives the verdict of the run it is written from', () => {
+    const doc = sheet('otas/five-transistor-ota.json');
+    const soft = { ...doc, checks: doc.checks.map((c) => ({ ...c, kind: 'advisory' as const })) };
+    const ghost = {
+      ...soft,
+      equations: [...soft.equations, { name: 'ghost', expr: 'undeclared_name * 2' }],
+    };
+    const header = (d: SheetDoc): [boolean, string] => {
+      const res = runSheet(d, table, undefined, REFS);
+      return [res.feasible, sizedNetlist(d, res).verdict];
+    };
+    expect(header(doc)).toEqual([false, 'non-compliant']);
+    expect(header(soft)).toEqual([true, 'feasible']);
+    // Feasible today, undetermined by its verdict: an equation reads a name no entry declares.
+    expect(header(ghost)).toEqual([true, 'undetermined']);
+  });
+});
