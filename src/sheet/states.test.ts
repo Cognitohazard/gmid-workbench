@@ -857,6 +857,53 @@ group('the texts of a finding with no item of its own', () => {
         ['The wiring of part load is not well formed.'],
       ],
       [
+        { problem: 'placement', devices: ['load'], placement: { fault: 'shape' } },
+        [
+          'The wiring of part load is not well formed.',
+          'It is one placement of drain, gate, source and body wires, or a list of them.',
+        ],
+      ],
+      [
+        { problem: 'placement', devices: ['givens'], placement: { fault: 'shape', none: true } },
+        [
+          'The wiring of the device of this sheet is not well formed.',
+          'It is one placement of drain, gate, source and body wires, a list of them, or none.',
+        ],
+      ],
+      [
+        {
+          problem: 'placement',
+          devices: ['load'],
+          placement: { fault: 'unknown-key', key: 'bulk' },
+        },
+        [
+          'The wiring of part load names bulk, which a placement does not have.',
+          'A placement names the drain, gate, source and body wires.',
+        ],
+      ],
+      [
+        {
+          problem: 'placement',
+          devices: ['load'],
+          placement: { fault: 'no-wire', terminal: 'g', index: 1 },
+        },
+        ['Placement 2 of part load puts the gate on no wire.', 'Every terminal sits on a wire.'],
+      ],
+      [
+        { problem: 'placement', devices: ['load'], placement: { fault: 'intent', value: 'on' } },
+        [
+          'The wiring of part load gives the intent on.',
+          'The only intent a placement takes is off.',
+        ],
+      ],
+      [
+        { problem: 'placement', devices: ['load'], placement: { fault: 'mixed-diode' } },
+        [
+          'Some placements of part load put the gate on the drain wire and some do not.',
+          'A diode-connected device and one that is not are separate blocks.',
+        ],
+      ],
+      [
         { problem: 'selector', devices: ['givens'], param: 's' },
         ['The axis-sign selector s does not match the table of the device of this sheet.'],
       ],

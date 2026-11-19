@@ -1202,3 +1202,28 @@ describe('a search that nothing evaluates, beside a requirement that only fails'
     );
   });
 });
+
+describe('a placement that is not well formed', () => {
+  it('says which fault it is, as validation found it', () => {
+    const doc = sheet('mirrors-bias/matched-mirror-bank.json');
+    const res = runSheet(
+      { ...doc, nodes: { d: 'out', g: 'nref', s: 'gnd', bulk: 'gnd', intent: 'on' } } as SheetDoc,
+      table,
+      undefined,
+      REFS,
+    );
+    const own = res.items?.find((i) => i.kind === 'device' && i.path.length === 0);
+    const netlist =
+      own?.status === 'failed' &&
+      own.cause.kind === 'not-determined' &&
+      own.cause.data.why === 'netlist'
+        ? own.cause.data.netlist
+        : undefined;
+    expect(netlist?.filter((n) => n.problem === 'placement').map((n) => n.placement)).toEqual([
+      { fault: 'unknown-key', key: 'bulk' },
+      { fault: 'no-wire', terminal: 'b' },
+      { fault: 'intent', value: 'on' },
+    ]);
+    expectSame(res);
+  });
+});

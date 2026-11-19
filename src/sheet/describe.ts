@@ -2,7 +2,7 @@
 // code that produces a result writes data, never these sentences, so the app and a script read the
 // same words, and a change of wording is a change here alone.
 
-import type { NetlistAbout, OutsideTable } from '../types';
+import type { NetlistAbout, OutsideTable, PlacementFault } from '../types';
 import { BASE_QUANTITIES, DERIVED_QUANTITIES } from '../namespace';
 import { amps } from './nodes';
 import { shown } from './linear';
@@ -1225,7 +1225,9 @@ function netlistLines(n: NetlistAbout): Line[] {
           ? [t`The diode flag of ${part} is on, but its wires do not put its gate on its drain.`]
           : [t`The wires of ${part} and its diode flag disagree.`];
     case 'placement':
-      return [t`The wiring of ${part} is not well formed.`];
+      return n.placement
+        ? placementLines(n.placement, part)
+        : [t`The wiring of ${part} is not well formed.`];
     case 'level-refused':
       return [
         t`The sheet gives wire ${wire} the level ${ex(n.level ?? '')}, but a level can read only numbers, specs and knobs.`,
@@ -1240,6 +1242,44 @@ function netlistLines(n: NetlistAbout): Line[] {
         : [t`The netlist check reports a problem in the wiring of the sheet.`];
     case 'selector':
       return [t`The axis-sign selector ${nm(n.param ?? '')} does not match the table of ${part}.`];
+  }
+}
+
+/** Each terminal, as a sentence names it. */
+const TERMINAL_WORD = { d: 'drain', g: 'gate', s: 'source', b: 'body' } as const;
+
+/** A placement that is not well formed, by its fault. */
+function placementLines(f: PlacementFault, part: Line): Line[] {
+  const which = (index: number | undefined): Line =>
+    index === undefined ? t`The wiring of ${part}` : t`Placement ${String(index + 1)} of ${part}`;
+  switch (f.fault) {
+    case 'shape':
+      return [
+        t`The wiring of ${part} is not well formed.`,
+        f.none
+          ? t`It is one placement of drain, gate, source and body wires, a list of them, or none.`
+          : t`It is one placement of drain, gate, source and body wires, or a list of them.`,
+      ];
+    case 'unknown-key':
+      return [
+        t`${which(f.index)} names ${nm(f.key)}, which a placement does not have.`,
+        t`A placement names the drain, gate, source and body wires.`,
+      ];
+    case 'no-wire':
+      return [
+        t`${which(f.index)} puts the ${TERMINAL_WORD[f.terminal]} on no wire.`,
+        t`Every terminal sits on a wire.`,
+      ];
+    case 'intent':
+      return [
+        t`${which(f.index)} gives the intent ${val(f.value)}.`,
+        t`The only intent a placement takes is off.`,
+      ];
+    case 'mixed-diode':
+      return [
+        t`Some placements of ${part} put the gate on the drain wire and some do not.`,
+        t`A diode-connected device and one that is not are separate blocks.`,
+      ];
   }
 }
 
