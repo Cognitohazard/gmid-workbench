@@ -464,6 +464,9 @@ test('design sheet: a second sweep param renders a 2-D feasibility heatmap, pers
   const box = await canvas.boundingBox();
   expect(box!.width).toBeGreaterThan(0);
   expect(box!.height).toBeGreaterThan(0);
+  // The canvas stays inside its box, so it never covers the axis label and caption below it.
+  const frame = await sp.locator('.smap').boundingBox();
+  expect(box!.y + box!.height).toBeLessThanOrEqual(frame!.y + frame!.height);
 
   // The second param survives a reload through the dashboard sanitizer.
   await page.reload();
@@ -2145,7 +2148,11 @@ test('design sheet: a run whose own search failed is still swept and mapped, eac
   await expect(sp.getByText('nothing to sweep')).toHaveCount(0);
   // The same for the map of two params.
   await sp.locator('.swsel2 select').selectOption('Ib');
-  await expect(sp.locator('.smapc')).toBeVisible({ timeout: 30_000 });
+  const map = sp.locator('.smapc');
+  await expect(map).toBeVisible({ timeout: 30_000 });
+  // Beyond a goal of 3 the search finds no root: those cells have no answer, so they read
+  // undetermined, never as a failed requirement; below it every requirement holds.
+  await expect(map).toHaveAttribute('data-map-verdicts', /^feasible:\d+ undetermined:\d+$/);
 });
 
 test('design sheet: a sweep across the end of the table says where the table ends, on the line and on the map', async ({

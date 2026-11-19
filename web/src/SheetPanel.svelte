@@ -73,6 +73,7 @@
     type ConditionRun,
     type ConditionSweep,
     type CompliancePoint,
+    type DesignVerdict,
   } from '@gmid/mostab-core';
   import { describeBinding, deviceLabel, type Bench } from './families';
   import { tableUid, verdictLoss, type SheetCornerMode } from './dashboard';
@@ -80,6 +81,7 @@
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
   import { CONTROL_HELP, SOLVER_HELP } from './help';
+  import { LOOK, drawPattern } from './verdict';
   import DecisionsView from './DecisionsView.svelte';
   import PropertiesView from './PropertiesView.svelte';
   import { changedSolverSettings, settingText, solverSettings } from './solver.svelte';
@@ -1573,6 +1575,24 @@
     return lo <= hi ? [lo, hi] : null;
   }
   const mapSpan = $derived(swept2?.value ? valueSpan(swept2.value.z) : null);
+  /** How many cells of a map read each verdict, as "verdict:count" pairs in a fixed order, for
+   *  a test to read what the canvas paints. */
+  const mapCounts = (s: SheetSweep2): string => {
+    const n: Record<string, number> = {};
+    for (const row of s.verdicts) for (const v of row) n[v] = (n[v] ?? 0) + 1;
+    return (['feasible', 'non-compliant', 'infeasible', 'undetermined'] as const)
+      .filter((v) => n[v])
+      .map((v) => `${v}:${n[v]}`)
+      .join(' ');
+  };
+  /** The fill under each verdict's pattern on the map: a status token or a colour, and how
+   *  strongly it is laid down. */
+  const MAP_FILL: Readonly<Record<DesignVerdict, { colour: string; alpha: number }>> = {
+    feasible: { colour: 'ok', alpha: 0.55 },
+    'non-compliant': { colour: 'err', alpha: 0.4 },
+    infeasible: { colour: '#7a1f2c', alpha: 0.75 },
+    undetermined: { colour: 'grid', alpha: 0.12 },
+  };
   function drawMap(canvas: HTMLCanvasElement, s: SheetSweep2): void {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1607,19 +1627,37 @@
           ctx.fillRect(xi * cw, py, cw + 1, ch + 1);
         }
       }
-    // Feasible = green-ish, infeasible = red-ish (the status tokens, softened). paramY min sits at
-    // the BOTTOM (yi = 0 → last drawn row), the usual design-plane orientation.
+    // Each cell takes its verdict's look: a fill (the status tokens, softened) and a pattern, so
+    // the four verdicts read apart without colour too. A cell read beyond a device's table is
+    // undetermined, like any cell with no answer. paramY min sits at the BOTTOM (yi = 0 → last
+    // drawn row), the usual design-plane orientation.
     else
       for (let yi = 0; yi < ny; yi++) {
         const py = (ny - 1 - yi) * ch;
         for (let xi = 0; xi < nx; xi++) {
-          const feas = s.feasible[yi][xi];
-          // A cell read beyond a device's table has no answer: neither colour, the grid's own.
-          const beyond = (s.outside[yi]?.[xi]?.length ?? 0) > 0;
-          ctx.fillStyle = beyond ? grid : feas ? ok : err;
-          ctx.globalAlpha = beyond ? 0.12 : feas ? 0.55 : 0.4;
+          const v = s.verdicts[yi]?.[xi] ?? 'undetermined';
+          const fill = MAP_FILL[v];
+          ctx.fillStyle =
+            fill.colour === 'ok'
+              ? ok
+              : fill.colour === 'err'
+                ? err
+                : fill.colour === 'grid'
+                  ? grid
+                  : fill.colour;
+          ctx.globalAlpha = fill.alpha;
           // +1 hides the seam between adjacent same-colour cells under sub-pixel rounding.
           ctx.fillRect(xi * cw, py, cw + 1, ch + 1);
+          ctx.globalAlpha = 0.45;
+          drawPattern(
+            ctx,
+            LOOK[v].pattern,
+            xi * cw,
+            py,
+            cw + 1,
+            ch + 1,
+            v === 'infeasible' ? '#fff' : grid,
+          );
         }
       }
     // A faint reference grid (quintiles) + border, light enough that the cells stay dominant.
@@ -2491,6 +2529,7 @@
         <canvas
           class="smapc"
           bind:this={mapEl}
+          data-map-verdicts={mapCounts(swept2)}
           title={mapTip}
           onmousemove={(e) => (mapTip = cellTip(e))}
           onmouseleave={() => (mapTip = '')}
@@ -2877,7 +2916,9 @@
   .smap {
     display: grid;
     grid-template-columns: auto 1fr;
-    grid-template-rows: 1fr auto;
+    /* minmax(0, …): the canvas's own pixel size must not grow its row past the box, or it
+       covers the axis label and the caption below it. */
+    grid-template-rows: minmax(0, 1fr) auto;
     gap: 0.2rem;
     height: 220px;
     min-width: 0;
