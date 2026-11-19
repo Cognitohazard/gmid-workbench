@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
 import { resolvedSheet } from './resolve';
+import { levelEligibility } from './validate';
 import { legacyFeasible, legacyPointState } from './derived';
 import {
   causeFits,
@@ -1548,6 +1549,54 @@ describe('a level that cannot hold a wire', () => {
       }),
     ]);
     expectSame(res);
+  });
+
+  it('gives one reason for each name the level itself reads, and follows only an alias', () => {
+    const base = sheet('otas/five-transistor-ota.json');
+    const ota = resolvedSheet(
+      {
+        ...base,
+        params: base.params.map((p) => (p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p)),
+      } as SheetDoc,
+      REFS,
+    ).doc;
+    const reasons = (doc: SheetDoc, level: string, e: string) => {
+      const v = levelEligibility(doc, level, e);
+      return v.kind === 'refused' ? v.reasons : v.kind;
+    };
+    expect(reasons(ota, '', 'CM_in')).toEqual([{ reason: 'equation', name: 'CM_in' }]);
+    expect(reasons(ota, '', 'in__vgs')).toEqual([{ reason: 'device', device: 'in' }]);
+    expect(reasons(ota, '', 'V_out_dc + V_tail')).toEqual([
+      { reason: 'class', name: 'V_out_dc', cls: 'assumed' },
+      { reason: 'class', name: 'V_tail', cls: 'solved' },
+    ]);
+    expect(reasons(ota, '', 'V_tail')).toEqual([
+      { reason: 'class', name: 'V_tail', cls: 'solved' },
+    ]);
+    expect(reasons(ota, '', 'nope')).toEqual([{ reason: 'unresolved', name: 'nope' }]);
+    expect(reasons(ota, '', 'V_out_dc')).toEqual([
+      { reason: 'class', name: 'V_out_dc', cls: 'assumed' },
+    ]);
+    expect(reasons(ota, '', 'gm_id_in')).toEqual([
+      { reason: 'class', name: 'gm_id_in', cls: 'unclassified' },
+    ]);
+    expect(reasons(ota, '', 'V_out_dc + nope + CM_in + in__vgs + gm_id_in + VDD')).toEqual([
+      { reason: 'class', name: 'V_out_dc', cls: 'assumed' },
+      { reason: 'unresolved', name: 'nope' },
+      { reason: 'equation', name: 'CM_in' },
+      { reason: 'device', device: 'in' },
+      { reason: 'class', name: 'gm_id_in', cls: 'unclassified' },
+    ]);
+    expect(reasons(ota, '', 'VDD')).toBe('held');
+    // A block param its parent overrides from a device's quantity: the device, as the parent
+    // names it.
+    const mirror = resolvedSheet(sheet('mirrors-bias/cascode-current-mirror.json'), REFS).doc;
+    expect(reasons(mirror, 'ref_casc', 'vsb_rc')).toEqual([{ reason: 'device', device: 'ref' }]);
+    // A node a hold re-solves: the device whose gate the hold keeps.
+    const fvf = resolvedSheet(sheet('multistage/flipped-voltage-follower.json'), REFS).doc;
+    expect(reasons(fvf, '', 'V_out')).toEqual([
+      { reason: 'class', name: 'V_out', cls: 'held', device: 'in' },
+    ]);
   });
 });
 

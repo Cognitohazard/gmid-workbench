@@ -1231,10 +1231,7 @@ function netlistLines(n: NetlistAbout): Line[] {
         : [t`The wiring of ${part} is not well formed.`];
     case 'level-refused':
       return n.refused?.length
-        ? [
-            t`The level ${ex(n.level ?? '')} cannot hold wire ${wire}.`,
-            ...n.refused.map(refusalLine),
-          ]
+        ? [t`The level ${ex(n.level ?? '')} cannot hold wire ${wire}.`, ...refusedLines(n.refused)]
         : [
             t`The sheet gives wire ${wire} the level ${ex(n.level ?? '')}, but a level can read only numbers, specs and knobs.`,
           ];
@@ -1251,35 +1248,61 @@ function netlistLines(n: NetlistAbout): Line[] {
   }
 }
 
-/** One reason a level cannot hold a wire, from its data. */
-function refusalLine(r: LevelRefusal): Line {
+/** Why a level cannot hold a wire, from its data: one line for each reason, then what to do. A
+ *  param a hold re-solves is followed by its own action, holding the gate wire the hold keeps;
+ *  where that is the only kind of reason, it is the whole of what to do. */
+function refusedLines(rs: readonly LevelRefusal[]): Line[] {
+  const lines = rs.flatMap(refusalLines);
+  const onlyHeld = rs.every((r) => r.reason === 'class' && r.cls === 'held');
+  return onlyHeld
+    ? lines
+    : [...lines, t`Write the level as a number, or from values marked independent.`];
+}
+
+/** The lines of one reason a level cannot hold a wire. */
+function refusalLines(r: LevelRefusal): Line[] {
   switch (r.reason) {
     case 'class':
       switch (r.cls) {
         case 'assumed':
-          return t`${nm(r.name)} is classed assumed, and a held level does not rest on a typed guess.`;
+          return [
+            t`${nm(r.name)} is marked assumed, and a level that holds a wire cannot read an assumed value.`,
+          ];
         case 'solved':
-          return t`${nm(r.name)} is solved by the engine, so the level it sets is derived.`;
+          return [
+            t`The level reads ${nm(r.name)}, which the engine solves, so the level is derived.`,
+          ];
         case 'held':
-          return t`${nm(r.name)} is the node under a gate that a hold solves again, so its wire is derived.`;
+          return [
+            t`The level reads ${nm(r.name)}, which the engine calculates again where the design is held, so the level is derived.`,
+            r.device !== undefined
+              ? t`Hold the gate wire of ${partName(r.device)} at the expression of its hold.`
+              : t`Hold the gate wire of that device at the expression of its hold.`,
+          ];
         case 'unclassified':
-          return t`${nm(r.name)} carries no class, and a held level reads only params classed independent.`;
-        case 'independent':
-          return t`${nm(r.name)} is classed independent.`;
+          return [
+            t`${nm(r.name)} has no mark, and a level that holds a wire reads only values marked independent.`,
+          ];
       }
       break;
     case 'unresolved':
-      return t`${nm(r.name)} names nothing on the sheet.`;
-    case 'cycle':
-      return t`The dependencies of the level loop through ${andLines(r.via.map((v) => [nm(v)]))}.`;
+      return [t`${nm(r.name)} names nothing on the sheet.`];
+    case 'cycle': {
+      const names = andLines(r.via.map((v) => [nm(v)]));
+      return [
+        r.via.length > 2
+          ? t`${names} read each other in a loop, so the level never gives a number.`
+          : t`${names} read each other, so the level never gives a number.`,
+      ];
+    }
     case 'device':
-      return t`The level reads a quantity of ${partName(r.device)}, and a level derived from a device is never held.`;
+      return [
+        t`The level reads a quantity of ${partName(r.device)}, and a level derived from a device is never held.`,
+      ];
     case 'equation':
-      return t`The level reads equation ${nm(r.name)}, and a held level reads no equation.`;
-    case 'solved-relation':
-      return t`The level reads through the relation that solves ${nm(r.name)}.`;
+      return [t`The level reads equation ${nm(r.name)}, and a level cannot read an equation.`];
     case 'analysis':
-      return t`The level reads analysis ${nm(r.name)}.`;
+      return [t`The level reads analysis ${nm(r.name)}, and a level cannot read an analysis.`];
   }
 }
 

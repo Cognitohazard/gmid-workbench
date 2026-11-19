@@ -996,13 +996,20 @@ function provenanceProblems(
   return provenanceReasons(p, admit, cross).map(refusalText);
 }
 
-/** The reasons behind provenanceProblems, as data, in the order its messages give them. */
+/** One reason an expression's provenance keeps it out of a place (provenanceReasons). */
+type ProvenanceReason =
+  | { reason: 'class'; name: string; cls: RootClass }
+  | { reason: 'unresolved' | 'equation' | 'solved-relation' | 'analysis'; name: string }
+  | { reason: 'cycle'; via: string[] }
+  | { reason: 'device'; device: string };
+
+/** The reasons behind provenanceProblems, in the order its messages give them. */
 function provenanceReasons(
   p: ExprProvenance,
   admit: readonly RootClass[],
   cross: readonly (keyof ExprProvenance['crossings'])[],
-): LevelRefusal[] {
-  const out: LevelRefusal[] = [];
+): ProvenanceReason[] {
+  const out: ProvenanceReason[] = [];
   for (const cls of Object.keys(p.roots) as RootClass[])
     if (!admit.includes(cls))
       for (const name of p.roots[cls]) out.push({ reason: 'class', name, cls });
@@ -1021,7 +1028,7 @@ function provenanceReasons(
 }
 
 /** The words of one reason, as the finding's message gives it. */
-function refusalText(r: LevelRefusal): string {
+function refusalText(r: ProvenanceReason | LevelRefusal): string {
   const why: Record<RootClass, string> = {
     independent: 'is classed independent',
     assumed: 'is classed assumed — a typed guess held fixed becomes a fact',
@@ -1054,12 +1061,11 @@ export const spelled = (e: string): string => e.replace(/\s+/g, '');
 
 /**
  * Whether `expr` may hold a wire in the `levels` of the sheet at `level` — the HOLD filter. A held
- * level is one the designer states: its roots are independent params only (an unclassified root
- * is refused by name), it names nothing unresolved, it reaches no cycle, and its paths cross
- * nothing — no device, equation, solved relation or analysis. So a solved node (`V_tail`), an
- * assumed param, a param a parent overrides from a device's quantity, and an equation are each
- * refused by name, and a wire whose level a device sets is never held. `class: "assumed"` alone
- * never creates a hold.
+ * level is one the designer states: every name it reads is a param marked independent, or stands
+ * for one through a parent's override or a child's provide (levelReasons, which gives one reason
+ * for each name that is not). So a solved node (`V_tail`), an assumed param, a param a parent
+ * overrides from a device's quantity, and an equation are each refused by name, and a wire whose
+ * level a device sets is never held. `class: "assumed"` alone never creates a hold.
  *
  * One exception, which is exactly what `hold` does today: the gate of a device whose source node
  * carries a `hold` is held, where the design is held, at the value its hold expression took at the
@@ -1085,10 +1091,74 @@ export function levelEligibility(
     const device = heldGateOf((lv as Level).doc, p);
     if (device) return { kind: 'held-gate', hold: p.name, device };
   }
-  const reasons = provenanceReasons(exprProvenance(doc, level, expr), ['independent'], []);
+  const reasons = levelReasons(doc, level, expr);
   return reasons.length
     ? { kind: 'refused', problems: reasons.map(refusalText), reasons }
     : { kind: 'held' };
+}
+
+/**
+ * Why a level may not hold a wire: one reason for each name the level's expression itself reads
+ * and may not, and nothing read under that name. A param marked independent gives none; a param of
+ * any other class gives its class (with, for one a hold re-solves, the device whose gate the hold
+ * keeps); an equation, a quantity of a device and an analysis each give themselves; a name that
+ * resolves to nothing is unresolved. A name that only stands for another is followed to what it
+ * stands for, as the designer cannot act on the alias: a block param its parent overrides (into
+ * the override, read in the parent) and a scalar a child provides (into the child). A loop of such
+ * names is a cycle. What a name is comes from edgesOf, the one definition the walks read.
+ */
+function levelReasons(doc: SheetDoc, level: string, expr: string): LevelRefusal[] {
+  const levels = levelsOf(doc);
+  const at = levelAt(levels, level);
+  const analyses = new Set(
+    levels.flatMap((lv) =>
+      (Array.isArray(lv.doc.analyses) ? lv.doc.analyses : []).flatMap((a) =>
+        typeof a?.name === 'string' ? [`${lv.path}${a.name}`] : [],
+      ),
+    ),
+  );
+  const out: LevelRefusal[] = [];
+  const said = new Set<string>();
+  const add = (r: LevelRefusal): void => {
+    const key = JSON.stringify(r);
+    if (said.has(key)) return;
+    said.add(key);
+    out.push(r);
+  };
+  // `chain` is the aliases followed to reach `name`, by qualified name.
+  const step = (lv: Level, name: string, chain: readonly string[]): void => {
+    const q = `${lv.path}${name}`;
+    const loop = chain.indexOf(q);
+    if (loop >= 0) return add({ reason: 'cycle', via: chain.slice(loop) });
+    const edges = edgesOf(lv, name, false, PROVENANCE);
+    if (!edges.length)
+      return add(
+        analyses.has(q) ? { reason: 'analysis', name: q } : { reason: 'unresolved', name: q },
+      );
+    for (const e of edges) {
+      if (e.kind === 'override' || e.kind === 'provide')
+        for (const n of e.names) step(e.lv, n, [...chain, q]);
+      else if (e.kind === 'equation') add({ reason: 'equation', name: q });
+      else if (e.kind === 'device') add({ reason: 'device', device: blockPath(e.lv.path) });
+      else if (e.kind === 'root') {
+        const cls = classOf(e.p);
+        if (cls === 'independent') continue;
+        const gate = cls === 'held' ? heldGateOf(lv.doc, e.p) : undefined;
+        const device =
+          gate === undefined
+            ? undefined
+            : blockPath(gate === 'givens' ? lv.path : `${lv.path}${gate}${PATH_SEP}`);
+        add({ reason: 'class', name: q, cls, ...(device !== undefined ? { device } : {}) });
+      }
+      // A solved param's relation, a range end's substitute and a table metadata scalar are read
+      // under the name, not by the level: the param's class already says what it is.
+    }
+  };
+  for (const n of namesOf(expr)) {
+    if (at) step(at, n, []);
+    else add({ reason: 'unresolved', name: `${levelPrefix(level)}${n}` });
+  }
+  return out;
 }
 
 /**
