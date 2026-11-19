@@ -389,7 +389,7 @@ export interface Segment {
 export type Line = readonly Segment[];
 
 /** A name from the sheet, as a segment. */
-const nm = (text: string, ref?: ItemRef): Segment => ({
+export const nm = (text: string, ref?: ItemRef): Segment => ({
   kind: 'name',
   text,
   ...(ref ? { ref } : {}),
@@ -403,7 +403,7 @@ const isSegment = (p: Part): p is Segment => typeof p === 'object' && !Array.isA
 
 /** Builds a line: the template's own text is text, an interpolated string is text, and a segment
  *  or a line is spliced in as it is. Neighbouring text segments are joined. */
-function t(strings: TemplateStringsArray, ...parts: Part[]): Line {
+export function t(strings: TemplateStringsArray, ...parts: Part[]): Line {
   const out: Segment[] = [];
   const push = (s: Segment): void => {
     if (!s.text) return;
@@ -431,7 +431,7 @@ function t(strings: TemplateStringsArray, ...parts: Part[]): Line {
 export const lineText = (line: Line): string => line.map((s) => s.text).join('');
 
 /** Lines joined as a list reads: "a, b and c". */
-const andLines = (ls: readonly Line[]): Line =>
+export const andLines = (ls: readonly Line[]): Line =>
   ls.reduce<Line>(
     (acc, l, k) => (k === 0 ? l : t`${acc}${k === ls.length - 1 ? ' and ' : ', '}${l}`),
     [],

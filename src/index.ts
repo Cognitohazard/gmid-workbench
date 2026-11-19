@@ -17,3 +17,4 @@ export * from './device';
 export * from './sheet';
 export * from './picker';
 export * from './corners';
+export * from './corners/describe';
