@@ -9,9 +9,16 @@ import { resolvedSheet } from './resolve';
 import { sheetSensitivities } from './sensitivity';
 import { devicePropertySensitivities } from './properties';
 import { givesValue, unreadValues } from './items';
-import { OPEN_RULINGS, isComplete, verdictOf } from './states';
+import { OPEN_RULINGS, isComplete, marginReadable, verdictOf } from './states';
 import { incompleteText, standardProblems } from './describe';
-import { stands, unfinishedBecause, withoutRange, type SheetDoc, type SheetResult } from './types';
+import {
+  stands,
+  unfinishedBecause,
+  withoutRange,
+  type CheckResult,
+  type SheetDoc,
+  type SheetResult,
+} from './types';
 import { sheet, table, REFS } from './library.fixtures';
 
 const ota = sheet('otas/five-transistor-ota.json');
@@ -303,5 +310,111 @@ group('a validation error on a requirement’s own entry only', () => {
     });
     expect(s.feasible).toEqual([false, false, false]);
     expect(s.windows).toEqual([]);
+  });
+});
+
+group('each sample of a sweep', () => {
+  it('says whether its numbers are all there, beside today’s flag', () => {
+    const s = sweepSheet(ghost, 'gm_id_in', table, 3, undefined, REFS);
+    expect(s.stands).toEqual([true, true, true]);
+    expect(s.complete).toEqual([false, false, false]);
+    expect(sweepSheet(soft(ota), 'gm_id_in', table, 3, undefined, REFS).complete).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  // A one-param sheet whose sampler is the test's: the verdict and the items are what it says.
+  const doc: SheetDoc = {
+    title: 't',
+    params: [{ name: 'k', value: 1, min: 0, max: 2 }],
+    equations: [],
+    checks: [
+      { id: 'holds', kind: 'spec', lhs: 'k', op: '>=', rhs: '0' },
+      { id: 'stale', kind: 'spec', lhs: 'k', op: '>=', rhs: '9' },
+    ],
+    operatingRange: [{ name: 'hi', set: { k: '2' } }],
+  };
+  const check = (id: string, marginPct: number): CheckResult => ({
+    id,
+    kind: 'spec',
+    op: '>=',
+    text: `${id} >= 0`,
+    lhsValue: 0,
+    rhsValue: 0,
+    margin: marginPct,
+    marginPct,
+    rawMargin: marginPct,
+    status: marginPct < 0 ? 'fail' : 'pass',
+  });
+
+  it('carries a held design’s verdict, passes where it is compliant, and gaps where none is given', () => {
+    const verdicts = ['compliant', undefined, 'non-compliant'] as const;
+    let i = 0;
+    const s = sweepOf(
+      doc,
+      'k',
+      3,
+      undefined,
+      () => ({
+        res: { values: {}, checks: [], feasible: true, warnings: [], items: [] },
+        feasible: true,
+        stands: true,
+        ...(verdicts[i] ? { verdict: verdicts[i] } : {}),
+        complete: (i++, true),
+      }),
+      () => ({ feasible: false, stands: true, verdict: 'non-compliant', complete: true }),
+    );
+    expect(s.verdicts).toEqual(['compliant', null, 'non-compliant']);
+    // The middle sample has no verdict and is read by its flag, as today.
+    expect(s.windows?.map((w) => [w.lo, w.hi])).toEqual([[0, expect.any(Number)]]);
+  });
+
+  it('charts a range end from the requirements whose own margin may be read', () => {
+    const end = {
+      name: 'hi',
+      state: 'does-not-comply' as const,
+      set: {},
+      checks: [check('holds', -0.5), check('stale', -0.9)],
+      solved: {},
+      warnings: [],
+      verdict: { verdict: 'non-compliant' as const, failed: [] },
+      items: [
+        { kind: 'sheet' as const, path: [], name: '', status: 'ok' as const },
+        {
+          kind: 'requirement' as const,
+          path: [],
+          name: 'holds',
+          status: 'failed' as const,
+          cause: {
+            kind: 'fails' as const,
+            data: {
+              text: { lhs: 'k', op: '>=' as const, rhs: '0' },
+              lhs: 0,
+              rhs: 0,
+              margin: -0.5,
+              marginPct: -0.5,
+              hard: true,
+            },
+          },
+        },
+        {
+          kind: 'requirement' as const,
+          path: [],
+          name: 'stale',
+          status: 'withheld' as const,
+          on: [{ kind: 'sheet' as const, path: [], name: '', cause: 'not-read' as const }],
+        },
+      ],
+    };
+    expect(marginReadable(end.items[1])).toBe(true);
+    expect(marginReadable(end.items[2])).toBe(false);
+    const s = sweepOf(doc, 'k', 2, undefined, () => ({
+      res: { values: {}, checks: [], feasible: true, warnings: [], items: [], rangeEnds: [end] },
+      feasible: true,
+      stands: true,
+    }));
+    expect(s.checks.find((c) => c.rangeEnd === 'hi')?.marginPct).toEqual([-0.5, -0.5]);
   });
 });

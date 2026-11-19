@@ -2154,9 +2154,13 @@ export interface SheetSweep {
    * consumer comparing samples never mistakes that for a design that merely misses a spec.
    */
   stands: boolean[];
-  /** Each sample's verdict, parallel to `x`, where the sweep's sampler gives one (sweepSheet): the
-   *  verdict a run of the sheet at that value reads. A pass window is where it is feasible. */
-  verdicts?: DesignVerdict[];
+  /** Whether every number of each sample is there (isComplete), parallel to `x`. `stands` is still
+   *  written beside it. */
+  complete: boolean[];
+  /** Each sample's verdict, parallel to `x`: a design's where the design is sized at the sample, a
+   *  held design's where it is held there; null where the sampler gives none. A pass window is where
+   *  it is feasible or compliant and the sample is complete. */
+  verdicts: (DesignVerdict | HeldVerdict | null)[];
   /** Each sample's reads beyond a table (see OutsideTable, outsideIn), parallel to `x`: empty where
    *  every device was read on its table. A sample with any is the mark of a point the table does
    *  not answer for — its device is not sized, the margins that read it are null, and it is never

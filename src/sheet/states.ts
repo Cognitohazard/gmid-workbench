@@ -642,6 +642,13 @@ export const hasNumber = (i: Item): boolean =>
 export const incompleteOn = (items: readonly Item[]): Item[] =>
   items.filter((i) => HOLDS_NUMBER.has(i.kind) && !hasNumber(i));
 
+/** Whether a requirement's own margin may be read: it holds, or it fails on the numbers it has. A
+ *  requirement that gives no number, is not read or is withheld has no margin to show. The one rule
+ *  every reader of a requirement's margin applies, beside the point's verdict and its completeness. */
+export const marginReadable = (i: Item): boolean =>
+  i.kind === 'requirement' &&
+  (i.status === 'ok' || (i.status === 'failed' && i.cause.kind === 'fails'));
+
 /** Whether every number of a run is there, from its items (incompleteOn). It answers completeness,
  *  not what the design is: a run where a hard requirement fails and a search also fails reads
  *  non-compliant, and is not complete; one on an assumed level is complete, and undetermined. A

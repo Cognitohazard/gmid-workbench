@@ -4,6 +4,7 @@
 
 import type { DeviceTable, OutsideTable, QAWarning } from '../types';
 import {
+  PATH_SEP,
   RANGE_END_SEP,
   engineChecks,
   indexTreeResults,
@@ -42,7 +43,14 @@ import {
   unreadValues,
   withFindings,
 } from './items';
-import { isComplete, verdictOf, type DesignVerdict } from './states';
+import {
+  isComplete,
+  marginReadable,
+  verdictOf,
+  type DesignVerdict,
+  type HeldVerdict,
+  type Item,
+} from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
@@ -142,8 +150,23 @@ const sampleVerdict = (
   res: SheetResult,
   findings: readonly QAWarning[],
   doc: SheetDoc,
-): DesignVerdict =>
-  verdictOf(withFindings(res.items ?? [], findings, doc, 'validation'), unreadValues(doc)).verdict;
+): DesignVerdict => verdictOf(sampleItems(res, findings, doc), unreadValues(doc)).verdict;
+
+/** One sample's items with validation's findings on them, as runSheet puts them. */
+const sampleItems = (res: SheetResult, findings: readonly QAWarning[], doc: SheetDoc): Item[] =>
+  withFindings(res.items ?? [], findings, doc, 'validation');
+
+/** Which of a run's requirements, by the key its tree of check outcomes gives them (`cs.headroom`),
+ *  have a margin a reader may take (marginReadable). A run with no items reads every one. */
+const readableIn =
+  (items: readonly Item[] | undefined) =>
+  (key: string): boolean => {
+    if (!items) return true;
+    const own = items.find(
+      (i) => i.kind === 'requirement' && [...i.path, i.name].join(PATH_SEP) === key,
+    );
+    return own === undefined || marginReadable(own);
+  };
 
 /** Validate + evaluate a sheet, merging validation warnings ahead of eval warnings. A
  *  validation error (e.g. a non-finite param, which eval silently skips, or a block's
@@ -278,11 +301,11 @@ const isMeasurable = (rr: CheckResult): boolean => measurable(rr.kind, rr.margin
  *  about how the minimum is taken. */
 function worstBy(
   checks: Iterable<[string, CheckResult]>,
-  keep: (rr: CheckResult) => boolean,
+  keep: (rr: CheckResult, id: string) => boolean,
 ): { id: string; marginPct: number } | undefined {
   let worst: { id: string; marginPct: number } | undefined;
   for (const [id, rr] of checks) {
-    if (!keep(rr)) continue;
+    if (!keep(rr, id)) continue;
     if (!worst || rr.marginPct < worst.marginPct) worst = { id, marginPct: rr.marginPct };
   }
   return worst;
@@ -303,7 +326,10 @@ function rangeEndMargin(e: RangeEndReport): number | null {
   // of the end's run is there; elsewhere its checks were read where the run stopped.
   const verdict = e.verdict?.verdict;
   if ((verdict !== 'compliant' && verdict !== 'non-compliant') || !isComplete(e)) return null;
-  const found = worstBy(treeCheckResults(e), isMeasurable);
+  // The three conditions every reader of a requirement's margin applies: the verdict says what the
+  // design is, the run is complete, and the requirement itself holds or fails (marginReadable).
+  const readable = readableIn(e.items);
+  const found = worstBy(treeCheckResults(e), (rr, id) => isMeasurable(rr) && readable(id));
   const worst = found === undefined ? null : clampMargin(found.marginPct);
   // An end that DOES NOT COMPLY must never chart non-negative: hard `na` fails the run closed
   // while contributing no margin, so without this floor a passing sibling check could paint a
@@ -381,9 +407,13 @@ export interface SweepSample {
   readonly res?: SheetResult;
   readonly feasible: boolean;
   readonly stands: boolean;
-  /** The sample's verdict (sampleVerdict), where the caller gives one: a pass window is where it
-   *  is feasible. A caller that gives none is read by `feasible`. */
-  readonly verdict?: DesignVerdict;
+  /** The sample's verdict, where the caller gives one: a design's (sampleVerdict) where the design is
+   *  sized at the sample, a held design's where it is held there. A pass window is where it is
+   *  feasible or compliant. A caller that gives none is read by `feasible`. */
+  readonly verdict?: DesignVerdict | HeldVerdict;
+  /** Whether every number of the sample is there (isComplete), where the caller says; else it is
+   *  read from the sample's result. */
+  readonly complete?: boolean;
 }
 
 /**
@@ -414,6 +444,8 @@ export function sweepOf(
       checks: [],
       feasible: [],
       stands: [],
+      complete: [],
+      verdicts: [],
       outside: [],
       values: [],
     };
@@ -430,9 +462,15 @@ export function sweepOf(
   const pre = [...r.warnings, ...validateSheet(withParams(r.doc, { [param]: v.min }))];
   const blocked = pre.some((w) => w.severity === 'error');
   const findings = pre;
-  /** Whether a sample passes: its verdict is feasible, where the caller gives one. */
+  /** Whether a sample's numbers are all there: as the caller says, else from its result. */
+  const completeAt = (s: SweepSample): boolean =>
+    s.complete ?? (s.res !== undefined && isComplete(s.res));
+  /** Whether a sample passes: its verdict is feasible or compliant and it is complete, where the
+   *  caller gives a verdict. */
   const passes = (s: SweepSample): boolean =>
-    s.verdict !== undefined ? s.verdict === 'feasible' : !blocked && s.feasible;
+    s.verdict !== undefined
+      ? (s.verdict === 'feasible' || s.verdict === 'compliant') && completeAt(s)
+      : !blocked && s.feasible;
   const checks: SheetSweepCheck[] = [];
   collectTreeChecks(r.doc, '', checks);
   // Each range end rides the sweep as ONE aggregate curve: the held design's worst hard-check
@@ -453,7 +491,8 @@ export function sweepOf(
   const x: number[] = [];
   const feasible: boolean[] = [];
   const passed: boolean[] = [];
-  const verdicts: DesignVerdict[] = [];
+  const verdicts: (DesignVerdict | HeldVerdict | null)[] = [];
+  const complete: boolean[] = [];
   const stood: boolean[] = [];
   const beyond: OutsideTable[][] = [];
   // One curve per named result (namedResults): the sheet's equations and solved values from the
@@ -465,12 +504,18 @@ export function sweepOf(
         curves.set(name, { name, unit: unit ?? '', y: Array<number | null>(filled).fill(null) });
   };
   addNamed(NO_VALUES, 0);
-  /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry. */
-  const failingIn = (byPath: ReadonlyMap<string, CheckResult>): string[] =>
-    checks.flatMap((c) => {
+  /** The hard checks failing in one run's own outcomes, by the ids the sweep's curves carry: each one
+   *  whose margin may be read (marginReadable). */
+  const failingIn = (
+    byPath: ReadonlyMap<string, CheckResult>,
+    items: readonly Item[] | undefined,
+  ): string[] => {
+    const readable = readableIn(items);
+    return checks.flatMap((c) => {
       const rr = byPath.get(c.id);
-      return rr && isFailing(rr) ? [c.id] : [];
+      return rr && isFailing(rr) && readable(c.id) ? [c.id] : [];
     });
+  };
   /** Each sample's failing hard checks, kept where windows are asked for (see windowsOf). */
   const failedAt: string[][] = [];
 
@@ -481,13 +526,14 @@ export function sweepOf(
     const { res, feasible: ok, stands: done } = s;
     feasible.push(!blocked && ok);
     passed.push(passes(s));
-    if (s.verdict !== undefined) verdicts.push(s.verdict);
+    verdicts.push(s.verdict ?? null);
+    complete.push(completeAt(s));
     beyond.push(res ? outsideIn(res) : []);
     if (res) addNamed(res, i);
     for (const c of curves.values()) c.y.push(sampleValue(res, c.name));
     const byPath = new Map<string, CheckResult>();
     if (res) indexTreeResults(res.checks, res.blocks, '', byPath);
-    if (probe) failedAt.push(failingIn(byPath));
+    if (probe) failedAt.push(failingIn(byPath, res?.items));
     for (const rl of checks) {
       const rr = byPath.get(rl.id);
       rl.marginPct.push(
@@ -509,9 +555,10 @@ export function sweepOf(
     checks: [...checks, ...rangeEndChecks],
     feasible,
     stands: stood,
+    complete,
+    verdicts,
     outside: beyond,
     values: [...curves.values()],
-    ...(verdicts.length === pts ? { verdicts } : {}),
   };
   if (!probe) return out;
   const at = (t: number): { ok: boolean; failing: string[]; outside: OutsideTable[] } => {
@@ -519,7 +566,7 @@ export function sweepOf(
     if (s.verdict === undefined && blocked) return { ok: false, failing: [], outside: [] };
     return {
       ok: passes(s),
-      failing: s.res ? failingIn(ownChecks(s.res)) : [],
+      failing: s.res ? failingIn(ownChecks(s.res), s.res.items) : [],
       outside: s.res ? outsideIn(s.res) : [],
     };
   };
@@ -598,11 +645,13 @@ export function sweepSheet(
 ): SheetSweep {
   const sample = (d: SheetDoc, findings: readonly QAWarning[]): SweepSample => {
     const res = evaluateSheet(d, table, resolveDevice, { settings: opts.settings });
+    const items = sampleItems(res, findings, d);
     return {
       res,
       feasible: res.feasible,
       stands: stands(res),
-      verdict: sampleVerdict(res, findings, d),
+      verdict: verdictOf(items, unreadValues(d)).verdict,
+      complete: isComplete({ items }),
     };
   };
   // Feasibility never reads a range end, so an edge is pinned without them: one evaluation a probe.
