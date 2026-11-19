@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateDemoDevice } from '../demo';
 import { evaluateSheet, runSheet, withParams } from './index';
+import { resolvedSheet } from './resolve';
 import { legacyFeasible, legacyPointState } from './derived';
 import { causeFits, legacyDesignFailure, setOf, verdictOf, type Cause, type Item } from './states';
 import { describe as describeItem, standardProblems } from './describe';
@@ -606,4 +607,53 @@ describe('an item that gives no number while what it reads was withheld', () => 
       }
     }
   }, 600_000);
+});
+
+describe('a solved param the run held at a given value', () => {
+  const heldIn = (res: SheetResult, name: string): Item | undefined =>
+    res.items?.find((i) => i.kind === 'search' && i.path.length === 0 && i.name === name);
+
+  it('is ok, marked held with its value and unchecked relation, and the verdict is undetermined', () => {
+    const doc = resolvedSheet(sheet('otas/five-transistor-ota.json'), REFS).doc;
+    const free = evaluateSheet(doc, table);
+    const res = evaluateSheet(doc, table, undefined, { pinned: { V_tail: 0.4 } });
+    expect(heldIn(res, 'V_tail')).toEqual({
+      kind: 'search',
+      path: [],
+      name: 'V_tail',
+      status: 'ok',
+      attributes: {
+        kind: 'held',
+        value: 0.4,
+        unit: 'V',
+        relation: { lhs: 'CM_in', rhs: 'CM_dc', field: 'designConstraint' },
+      },
+    });
+    expect(res.verdict?.verdict).toBe('undetermined');
+    expect(res.verdict?.held).toEqual([{ kind: 'search', path: [], name: 'V_tail' }]);
+    // The run that solves it reads no held item.
+    expect(free.verdict?.held).toBeUndefined();
+    expectSame(res);
+  });
+
+  it('decides the verdict ahead of a requirement that fails, on a forced sheet', () => {
+    const d: SheetDoc = {
+      title: 'held',
+      polarity: 'n',
+      params: [
+        { name: 'goal', value: 3 },
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'x', rhs: 'goal' } },
+      ],
+      equations: [],
+      checks: [{ id: 'xc', kind: 'spec', lhs: 'x', op: '<=', rhs: '0' }],
+    };
+    const res = evaluateSheet(d, dev, undefined, { pinned: { x: 2 } });
+    expect(heldIn(res, 'x')?.status).toBe('ok');
+    expect(res.verdict).toMatchObject({
+      verdict: 'undetermined',
+      held: [{ kind: 'search', name: 'x' }],
+      failed: [{ kind: 'requirement', name: 'xc', cause: { kind: 'fails' } }],
+    });
+    expectSame(res);
+  });
 });

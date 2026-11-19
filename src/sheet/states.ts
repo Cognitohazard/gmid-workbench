@@ -368,6 +368,18 @@ export type Attributes =
   | { readonly kind: 'sheet' }
   | { readonly kind: 'value' | 'device'; readonly fallbacks?: readonly Fallback[] }
   | {
+      /** A solved param the run held at a given value instead of solving: the value, and the
+       *  relation that was not checked there. The point evaluated is not a solution of the sheet. */
+      readonly kind: 'held';
+      readonly value: number;
+      readonly unit?: string;
+      readonly relation: {
+        readonly lhs: string;
+        readonly rhs: string;
+        readonly field: RelationField;
+      };
+    }
+  | {
       readonly kind: 'search';
       readonly value: number;
       readonly range: SolveRange;
@@ -541,7 +553,13 @@ export type HeldVerdict = 'no-operating-point' | 'non-compliant' | 'compliant' |
 export interface Verdict<V extends string = DesignVerdict> {
   readonly verdict: V;
   readonly failed: readonly (ItemRef & { readonly cause: Cause })[];
+  /** The solved params the run held instead of solving, where any was: the reason the verdict is
+   *  undetermined. */
+  readonly held?: readonly ItemRef[];
 }
+
+/** Whether an item is a solved param the run held at a given value instead of solving. */
+export const isHeld = (i: Item): boolean => i.status === 'ok' && i.attributes?.kind === 'held';
 
 const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
   items.flatMap((i) =>
@@ -549,7 +567,9 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
   );
 
 /**
- * The verdict of one result, by four rules, the first that applies:
+ * The verdict of one result, by four rules, the first that applies, after one rule ahead of them:
+ * an item the run held at a given value instead of solving gives undetermined, and the verdict
+ * names it in `held`, since the point evaluated is not a solution of the sheet:
  *  1. a search failed with "no solution (proved)": infeasible (at a held point, no operating point);
  *  2. a hard requirement failed with "fails": non-compliant;
  *  3. every item is ok: feasible (at a held point, compliant) — an advisory requirement that does
@@ -562,23 +582,54 @@ const failedItems = (items: readonly Item[]): (ItemRef & { cause: Cause })[] =>
  */
 export function verdictOf(items: readonly Item[]): Verdict {
   const failed = failedItems(items);
-  // A search with the others of its set held where they stood says nothing about the set, even
-  // proved.
-  const proved = failed.filter((f) => f.cause.kind === 'no-solution' && !setOf(f.cause));
-  if (proved.length) return { verdict: 'infeasible', failed: proved };
-  const fails = failed.filter((f) => f.cause.kind === 'fails' && f.cause.data.hard);
-  if (fails.length) return { verdict: 'non-compliant', failed: fails };
+  for (const rule of VERDICT_RULES) {
+    const v = rule(items, failed);
+    if (v) return v;
+  }
   // An advisory requirement that does not hold decides nothing (see failsCause).
-  const blocking = failed.filter((f) => !(f.cause.kind === 'fails' && !f.cause.data.hard));
-  if (blocking.length === 0 && items.every((i) => i.status !== 'withheld'))
-    return {
-      verdict: items.some((i) => i.kind === 'device' || i.kind === 'search')
-        ? 'feasible'
-        : OPEN_RULINGS.equationOnly,
-      failed: [],
-    };
-  return { verdict: 'undetermined', failed: blocking };
+  return { verdict: 'undetermined', failed: blocking(failed) };
 }
+
+type Failed = (ItemRef & { cause: Cause })[];
+type VerdictRule = (items: readonly Item[], failed: Failed) => Verdict | undefined;
+
+const blocking = (failed: Failed): Failed =>
+  failed.filter((f) => !(f.cause.kind === 'fails' && !f.cause.data.hard));
+
+/** A solved param held instead of solved: the point evaluated is not a solution of the sheet. */
+const heldRule: VerdictRule = (items, failed) => {
+  const held = items.filter(isHeld).map((i) => ({ kind: i.kind, path: i.path, name: i.name }));
+  return held.length ? { verdict: 'undetermined', failed: blocking(failed), held } : undefined;
+};
+
+/** Rule 1. A search with the others of its set held where they stood says nothing about the set,
+ *  even proved. */
+const provedRule: VerdictRule = (_items, failed) => {
+  const proved = failed.filter((f) => f.cause.kind === 'no-solution' && !setOf(f.cause));
+  return proved.length ? { verdict: 'infeasible', failed: proved } : undefined;
+};
+
+/** Rule 2. */
+const failsRule: VerdictRule = (_items, failed) => {
+  const fails = failed.filter((f) => f.cause.kind === 'fails' && f.cause.data.hard);
+  return fails.length ? { verdict: 'non-compliant', failed: fails } : undefined;
+};
+
+/** Rule 3. */
+const okRule: VerdictRule = (items, failed) =>
+  blocking(failed).length === 0 && items.every((i) => i.status !== 'withheld')
+    ? {
+        verdict: items.some((i) => i.kind === 'device' || i.kind === 'search')
+          ? 'feasible'
+          : OPEN_RULINGS.equationOnly,
+        failed: [],
+      }
+    : undefined;
+
+/** The rules in the order they apply; rule 4, undetermined, is what none of them decides. The
+ *  held rule comes first: whether a held value or a failing hard requirement decides first is an
+ *  open ruling, and this order is the one line that holds it. */
+const VERDICT_RULES: readonly VerdictRule[] = [heldRule, provedRule, failsRule, okRule];
 
 /** The verdict of a held point: verdictOf, in the words a held design is asked in. */
 export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
@@ -589,7 +640,7 @@ export function heldVerdictOf(items: readonly Item[]): Verdict<HeldVerdict> {
     feasible: 'compliant',
     undetermined: 'undetermined',
   };
-  return { verdict: word[v.verdict], failed: v.failed };
+  return { verdict: word[v.verdict], failed: v.failed, ...(v.held ? { held: v.held } : {}) };
 }
 
 /** A hard requirement's cause, where it does not hold. A requirement that is advisory and does not

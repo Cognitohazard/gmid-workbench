@@ -31,6 +31,7 @@ import {
   withheldClause,
   lineText,
   standardProblems,
+  verdictText,
   textOf,
   type Line,
 } from './describe';
@@ -709,6 +710,48 @@ group('the texts a reader sees, by the message standard', () => {
     }
     for (const l of texts)
       expect(lineText(l)).not.toMatch(/\de[+-]?\d|"|\blhs\b|\brhs\b|\bparam\b/);
+  });
+
+  it('says what a value the run held reads, and why the verdict is undetermined', () => {
+    const held: Item = {
+      kind: 'search',
+      path: [],
+      name: 'V_out',
+      status: 'ok',
+      attributes: {
+        kind: 'held',
+        value: 0.6,
+        unit: 'V',
+        relation: { lhs: 'V_out', rhs: 'V_ref', field: 'designConstraint' },
+      },
+    };
+    expect(describe(held)).toMatchObject({
+      name: 'held',
+      lines: [
+        'V_out is held at 0.6 V.',
+        'The engine did not check the constraint of V_out at this value.',
+      ],
+    });
+    const v = verdictOf([held]);
+    expect(v.verdict).toBe('undetermined');
+    expect(verdictText(v).map(lineText)).toEqual([
+      'The verdict is undetermined, because V_out is held and not solved.',
+    ]);
+    for (const l of [...describe(held).segments, ...verdictText(v)])
+      expect(standardProblems(l)).toEqual([]);
+  });
+
+  it('gives the margin of a check whose limit is zero in its own unit, not as a percentage', () => {
+    const zero = failsCause({
+      kind: 'spec',
+      text: { lhs: 'x', op: '<=', rhs: '0' },
+      lhsValue: 2,
+      rhsValue: 0,
+      margin: -2,
+      marginPct: -2e300,
+      unit: 'V',
+    });
+    expect(textOf(zero).lines).toContain('The margin is −2 V.');
   });
 
   it('says what a held point that was not run reads', () => {

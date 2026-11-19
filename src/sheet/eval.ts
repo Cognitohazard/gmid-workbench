@@ -2294,7 +2294,7 @@ function evaluateNode(
   const held = doc.params
     .filter((p) => engineSolved(p) && opts.pinned !== undefined && p.name in opts.pinned)
     .map((p) => p.name);
-  const solved = held.length ? { ...solvedRun, pinned: held } : solvedRun;
+  const solved = held.length ? withHeldMarks(doc, { ...solvedRun, pinned: held }, held) : solvedRun;
   if (depth > 0) return solved;
   const heldGates = opts.held ? heldGateWarnings(doc) : [];
   const pinnedNote = pinnedWarnings(solved);
@@ -2380,6 +2380,31 @@ const withItems = (
   const resolved = resolveWithheld(items);
   return { ...res, items: resolved, verdict: verdictOf(resolved) };
 };
+
+/** The items of a run with each solved param it held at a given value marked so: the value it
+ *  was held at, and the relation that was not checked there; and the verdict they give. */
+function withHeldMarks(doc: SheetDoc, res: SheetResult, held: readonly string[]): SheetResult {
+  if (!res.items) return res;
+  const items = res.items.map((i): Item => {
+    if (i.kind !== 'search' || i.path.length || !held.includes(i.name) || i.status !== 'ok')
+      return i;
+    const p = doc.params.find((q) => q.name === i.name) as SheetVar;
+    const { lhs, rhs } = solvedRelation(p) as { lhs: string; rhs: string };
+    return {
+      kind: i.kind,
+      path: i.path,
+      name: i.name,
+      status: 'ok',
+      attributes: {
+        kind: 'held',
+        value: res.values[i.name],
+        ...(p.unit !== undefined ? { unit: p.unit } : {}),
+        relation: { lhs, rhs, field: constrained(p) ? 'designConstraint' : 'solveFor' },
+      },
+    };
+  });
+  return { ...res, items, verdict: verdictOf(items) };
+}
 
 /**
  * How far from zero a current balance may read where the design is sized, as a fraction of its

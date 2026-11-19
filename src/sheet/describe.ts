@@ -16,6 +16,7 @@ import {
   type SolveRange,
 } from './types';
 import type {
+  Attributes,
   CannotEvaluateData,
   Cause,
   CauseName,
@@ -33,6 +34,7 @@ import type {
   SearchStep,
   StatementFalseData,
   UnevaluableAt,
+  Verdict,
   WithheldOn,
 } from './states';
 
@@ -1114,6 +1116,15 @@ const REQUIRES: Record<CheckOp, string> = {
   '==': 'a value equal to',
 };
 
+/** A failed check's margin: a signed percentage of its limit, or, for a limit of zero, of which
+ *  no percentage can be taken, the margin itself in the check's unit. */
+function marginLine(d: FailsData): Line {
+  const sign = d.margin >= 0 ? '+' : '−';
+  return Math.abs(d.rhs) > 0
+    ? t`The margin is ${sign}${quantityText(Math.abs(d.marginPct) * 100)} %.`
+    : t`The margin is ${sign}${quantityText(Math.abs(d.margin), d.unit)}.`;
+}
+
 function failsText(d: FailsData, ref?: ItemRef): Line[] {
   // The check a declared region adds: its sides are the engine's, from the region, so the text
   // names the part it tests. Its unit is given only where the data hold it.
@@ -1122,17 +1133,15 @@ function failsText(d: FailsData, ref?: ItemRef): Line[] {
     return [
       t`The region check of ${part} fails.`,
       t`The region check of ${part} reads ${quantityText(d.lhs, d.unit)}, and it needs ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
-      t`The margin is ${d.marginPct >= 0 ? '+' : '−'}${quantityText(Math.abs(d.marginPct) * 100)} %.`,
+      marginLine(d),
     ];
   }
   const check: Line = ref ? itemName(ref) : t`the check`;
-  // marginPct is a fraction of the limit; the reader reads a percentage.
-  const sign = d.marginPct >= 0 ? '+' : '−';
   const left = isName(d.text.lhs) ? nameText(d.text.lhs) : t`the left side of ${check}`;
   return [
     t`${check} fails.`,
     t`${left} is ${quantityText(d.lhs, d.unit)}, and ${check} requires ${REQUIRES[d.text.op]} ${quantityText(d.rhs, d.unit)}.`,
-    t`The margin is ${sign}${quantityText(Math.abs(d.marginPct) * 100)} %.`,
+    marginLine(d),
   ];
 }
 
@@ -1206,7 +1215,8 @@ export function withheldClause(r: WithheldOn): Line {
  *  cause's text; for a withheld one, one sentence for each failed item it depends on. `within`
  *  is the path of the block whose own list the item is read in, where it is one. */
 export function describe(item: Item, within: readonly string[] = []): FindingText {
-  if (item.status === 'ok') return finding('', []);
+  if (item.status === 'ok')
+    return item.attributes?.kind === 'held' ? heldText(item, item.attributes) : finding('', []);
   if (item.status === 'withheld')
     return finding(
       WITHHELD_NAME,
@@ -1220,6 +1230,27 @@ export function describe(item: Item, within: readonly string[] = []): FindingTex
       ),
     );
   return textOf(item.cause, item);
+}
+
+/** What an item the run held at a given value instead of solving reads. */
+export const HELD_NAME = 'held';
+
+function heldText(r: ItemRef, a: Extract<Attributes, { kind: 'held' }>): FindingText {
+  const n = inBlock(r.name, r.path, { kind: r.kind, path: r.path, name: r.name });
+  const relation = a.relation.field === 'solveFor' ? 'the equation' : 'the constraint';
+  return finding(HELD_NAME, [
+    t`${n} is held at ${quantityText(a.value, a.unit)}.`,
+    t`The engine did not check ${relation} of ${n} at this value.`,
+  ]);
+}
+
+/** Why a verdict is what it is, where a line says more than its word: for each value the run held
+ *  instead of solving, that the verdict is undetermined because of it. */
+export function verdictText(v: Verdict<string>): readonly Line[] {
+  return (v.held ?? []).map(
+    (r) =>
+      t`The verdict is undetermined, because ${inBlock(r.name, r.path, r)} is held and not solved.`,
+  );
 }
 
 /** What a held point or range end that was not run is shown: its own word, and why. */
