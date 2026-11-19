@@ -77,7 +77,7 @@ import {
   validateSheet,
 } from '../sheet';
 import { isHardCheck } from '../sheet/types';
-import { heldVerdictOf, isComplete, type Item } from '../sheet/states';
+import { heldVerdictOf, isComplete, marginReadable, type Item } from '../sheet/states';
 import { unreadValues } from '../sheet/items';
 import {
   assumedLevelRefusal,
@@ -892,13 +892,14 @@ export function sweepAtCondition(
     const run = runs.find((r) => sameCondition(r.key, key));
     if (!run) return { feasible: false, stands: false };
     // Passing is read from the centre's verdict: feasible where the design is sized here,
-    // compliant where the design sized at `base` is held here.
+    // compliant where the design sized at `base` is held here. Completeness is the run's state.
     const verdict = run.points[0]?.verdict?.verdict;
     return {
       ...(run.result ? { res: run.result } : {}),
       feasible: verdict === (design === 'sized' ? 'feasible' : 'compliant'),
       stands: run.state === 'evaluated',
-      ...(design === 'sized' && verdict !== undefined ? { verdict: verdict as DesignVerdict } : {}),
+      complete: run.state === 'evaluated',
+      ...(verdict !== undefined ? { verdict } : {}),
     };
   };
   // An edge is pinned with the sweep's own sample, less the range ends: passing — feasible where
@@ -1289,9 +1290,9 @@ function measuredPoints(runs: readonly ConditionRun[]): {
   return out;
 }
 
-/** The check outcomes of one complete point whose requirement says what it is there: its item is
- *  ok or fails. A requirement failed for any other cause (it could not be evaluated, its entry is
- *  not well formed) gives no margin to read, whatever number its outcome carries. */
+/** The check outcomes of one complete point whose requirement's margin can be read there
+ *  (marginReadable): a requirement failed for any other cause than failing gives no margin, whatever
+ *  number its outcome carries. */
 function readChecks(
   at: { checks: readonly CheckResult[]; blocks?: readonly SheetBlockReport[] },
   items: readonly Item[],
@@ -1303,7 +1304,7 @@ function readChecks(
         i.kind === 'requirement' &&
         i.name === id &&
         i.path.join('.') === path.join('.') &&
-        (i.status === 'ok' || (i.status === 'failed' && i.cause.kind === 'fails')),
+        marginReadable(i),
     );
   return {
     checks: at.checks.filter((c) => said(c.id)),

@@ -376,7 +376,7 @@ function scoreResult(res: SheetResult): number {
 const closes = (res: SheetResult): boolean => res.verdict?.verdict === 'feasible';
 
 /** Whether one sample of a sweep closes the sheet: its verdict is feasible. */
-const sampleCloses = (sw: SheetSweep, i: number): boolean => sw.verdicts?.[i] === 'feasible';
+const sampleCloses = (sw: SheetSweep, i: number): boolean => sw.verdicts[i] === 'feasible';
 
 /** One score demoted into the no-design band: ordered among its own kind, and below everything
  *  else. `clampMargin` bounds a real score to ±MARGIN_PCT_CAP, so this lands in
@@ -390,7 +390,7 @@ function noDesign(s: number): number {
  * tree, so the minimum over those is the same number `scoreResult` computes from a full result
  * — deliberately, since the search compares the two against each other: an incumbent scored
  * from a full result against a move scored from a sweep. "This sample produced no design" is
- * the sweep's own per-sample `stands`, the same predicate `scoreResult` reads.
+ * the sweep's own per-sample `complete`, the same rule `scoreResult` reads (isComplete).
  *
  * Admissibility is the core's own `measurable`, read off the two fields a sweep row carries: a
  * check parked on its own boundary by construction reads zero forever and would otherwise be the
@@ -405,7 +405,7 @@ function scoreSample(sw: SheetSweep, i: number): number {
     if (m < worst) worst = m;
   }
   const s = worst === Infinity ? (sampleCloses(sw, i) ? 0 : -MARGIN_PCT_CAP) : clampMargin(worst);
-  return sw.stands[i] ? s : noDesign(s);
+  return sw.complete[i] ? s : noDesign(s);
 }
 
 /** Whether `(feasible, score)` beats the incumbent, feasibility first. Strict, so the first

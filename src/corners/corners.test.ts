@@ -2263,7 +2263,18 @@ describe('sweepAtCondition — one condition, sized there or held there', () => 
       }
       expect(swept.feasible[i]).toBe(held.points[0].state === 'complies');
       expect(swept.stands[i]).toBe(held.state === 'evaluated');
+      // The held sweep gives each sample the held verdict of the centre, and its completeness.
+      expect(swept.verdicts[i]).toBe(held.points[0].verdict?.verdict ?? null);
+      expect(swept.complete[i]).toBe(held.state === 'evaluated');
     });
+    expect(
+      swept.verdicts.every(
+        (v) =>
+          v === null ||
+          ['compliant', 'non-compliant', 'no-operating-point', 'undetermined'].includes(v),
+      ),
+    ).toBe(true);
+    expect(swept.verdicts.some((v) => v !== null)).toBe(true);
     // The held design is not the design sized at ss: the two sweeps differ.
     const sizedThere = sweepAtCondition(doc, param, device, ss, noDevices, REFS, { points: 3 });
     expect(sizedThere.design).toBe('sized');

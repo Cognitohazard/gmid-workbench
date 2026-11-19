@@ -950,12 +950,15 @@ describe('a sheet whose only error is on one requirement’s own entry', () => {
     expect(plain(relaxed).verdict).toBe('closed');
     expect(bad(relaxed).verdict).toBe('could-not-be-searched');
 
-    // At the shipped spec the plain sheet is repaired and closes; this one is searched on the
-    // offset check it fails, and does not close.
+    // At the shipped spec the plain sheet is repaired and closes. This one fails its offset check
+    // at the start; every sample of the search is complete and scored by the margins read, so the
+    // search moves the knobs until no hard check fails, and the sheet still does not close.
     expect(plain({}).verdict).toBe('closed');
+    expect(bindingCheck(at)?.id).toBe('offset-spec');
     const searched = bad({});
     expect(searched.verdict).toBe('did-not-close');
-    expect(searched.bindingCheck?.id).toBe('offset-spec');
     expect(searched.evals).toBeGreaterThan(1);
+    expect(Object.keys(searched.knobs).length).toBeGreaterThan(0);
+    expect(searched.bindingCheck).toBeUndefined();
   });
 });
