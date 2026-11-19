@@ -115,3 +115,26 @@ test('verdict reason: a failed item of a block is told in its card, and the badg
   await sp.locator('[data-verdict-reason] [data-ref="block:in"]').first().click();
   await expect(card).toHaveClass(/sflash/);
 });
+
+// A requirement that fails inside a block decides a non-compliant verdict, and the verdict line
+// does not name it: the badge's reason is the first line of its own text, linked to the card.
+test('verdict reason: a requirement that fails inside a block is named under the badge', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await loadDemo(page);
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, 'Gain-boosted cascode OTA');
+  const vdd = sp.locator('.svar[data-param="VDD"] .num');
+  await vdd.fill('1.0');
+  await vdd.blur();
+  await expect(sp.locator('[data-feasibility]')).toHaveAttribute('data-verdict', 'non-compliant', {
+    timeout: 30_000,
+  });
+  const reason = sp.locator('[data-verdict-reason]');
+  await expect(reason).toContainText('cbn');
+  const link = reason.locator('[data-ref="block:cbn"]').first();
+  await link.click();
+  await expect(sp.locator('.suse[data-block="cbn"]')).toHaveClass(/sflash/);
+});

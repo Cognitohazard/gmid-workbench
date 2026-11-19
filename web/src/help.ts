@@ -157,7 +157,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Solved, not set. This is an internal bias node the engine chooses so a sheet output equals a spec you typed (e.g. the tail node placed so the common mode lands exactly on CM_dc). Found by a search between the parameter\u2019s min and max — the range it is searched in first, not slider bounds — and, where the node is a wire\u2019s level and nothing is found there, over the rest of the range its wiring puts it in. Sweep the spec on the other side of the design constraint instead; the shown value is where the node landed.',
   constraintNotMet:
     'This design constraint was not solved, so there is no solved value to show: its search inside the parameter’s [min, max] either found no solution there, did not settle, or ran out of the evaluation budget — the warnings below say which, and why. Move or widen min/max, relax the spec the constraint chases, or simplify the solves it depends on.',
-  operatingRange: `Each chip checks this fixed design at one end of the claimed operating range. A ${VERDICT_WORDS.compliant} end meets every hard requirement, and a ${VERDICT_WORDS['non-compliant']} end fails one, which the chip names. An ${VERDICT_WORDS.undetermined} end has no verdict, and a ${VERDICT_WORDS['not-calculated']} end had no design to hold.`,
+  operatingRange: `Each chip checks this fixed design at one end of the operating range. A ${VERDICT_WORDS.compliant} end meets every hard requirement. A ${VERDICT_WORDS['non-compliant']} end fails one, and the chip names it. An ${VERDICT_WORDS.undetermined} or ${VERDICT_WORDS['not-calculated']} end has no verdict, and its line says why.`,
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   exampleSpec:
@@ -246,8 +246,7 @@ export const SOLVER_HELP: Readonly<
 
 /** The title of a verdict that only a proof gives. */
 export const VERDICT_TITLE = {
-  infeasible:
-    'The engine proved that no design exists. It gives this verdict only with a proof, and it has no such proof yet.',
+  infeasible: 'The engine proved that no design exists.',
   'no-operating-point': `The held hardware has ${VERDICT_WORDS['no-operating-point']} at this condition.`,
 } as const;
 
@@ -255,5 +254,4 @@ export const VERDICT_TITLE = {
 export const NOT_YET = 'The engine has not calculated this sheet yet.';
 
 /** What the panel says under a run that did not complete, above the values it calculated. */
-export const PARTIAL_VALUES =
-  'The values below are what the run calculated before it stopped. They are not a design.';
+export const PARTIAL_VALUES = `The run is not complete. Some values below are ${VERDICT_WORDS['not-calculated']}.`;

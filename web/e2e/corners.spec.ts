@@ -296,7 +296,8 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
   // was never asked.
   await expect(sp.locator('[data-corner-row="tt"] .ccd')).toContainText('block "cs": given vds');
   await expect(sp.locator('[data-corner-row="tt"] .ccd')).toContainText('no vds sweep');
-  await expect(sp.locator('.feasb')).toHaveText('no answer at tt');
+  // The badge carries the sized design's own verdict, from its items: the run did not complete.
+  await expect(sp.locator('.feasb')).toHaveText('undetermined at tt');
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 2 points · 1 no answer · 1 not run',
   );
@@ -338,6 +339,29 @@ test('sheet panel: corner mode stamps every verdict and names what it could not 
 
   await page.screenshot({ path: `${SCREENS}/corner-breakdown.png`, fullPage: true });
   expect(errors).toEqual([]);
+});
+
+// The badge over several conditions holds the word of the sized design's verdict
+// (ConditionAggregate.verdict). "infeasible" is kept for a proof: a design that fails a requirement
+// where it is sized is non-compliant there, in the badge as in its row.
+test('sheet panel: the badge over several conditions holds the verdict word of the sized design', async ({
+  page,
+}) => {
+  test.slow();
+  await page.goto('/');
+  await load(page, 'demo.mostab.csv', 'demo-ss.mostab.csv');
+  await condition(page, 'tt', 'nmos_demo').locator('.dname').click();
+  await page.getByRole('button', { name: '+ sheet' }).click();
+  const sp = page.locator('.grid .panel').last();
+  await pickSheet(sp, '5T OTA');
+  await sp.locator('[data-corner-mode]').selectOption('all');
+  await expect(sp.locator('[data-corner-row="tt"] .ccl')).toHaveText('✗ non-compliant', {
+    timeout: 60_000,
+  });
+  const badge = sp.locator('.feasb');
+  await expect(badge).toHaveAttribute('data-verdict', 'non-compliant');
+  await expect(badge).toContainText('non-compliant at tt');
+  await expect(badge).not.toContainText('infeasible');
 });
 
 test('sheet panel: the worker is sent the tables a job evaluates, and the outline of the rest', async ({

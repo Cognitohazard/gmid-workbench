@@ -1635,7 +1635,7 @@ test('operating range: a range end that was not run reads as a question nobody a
   await expect(sp.locator('[data-compliance]')).toHaveText(
     'complies at 0 of 3 points · 1 no answer · 2 not run',
   );
-  await expect(sp.locator('[data-not-evaluated]')).toContainText('before it stopped');
+  await expect(sp.locator('[data-not-evaluated]')).toContainText('The run is not complete.');
 
   // Recentre: the same two ends go back to being answerable, so the neutral state is a
   // property of the point and not a latch.

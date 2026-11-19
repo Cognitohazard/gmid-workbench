@@ -545,13 +545,24 @@
   ): readonly Line[] => {
     if (!v) return [];
     const lines: Line[] = [...verdictText(v)];
+    /** Whether a line already names this item. */
+    const names = (f: ItemRef) =>
+      lines.some((l) =>
+        l.some((seg) => seg.ref && itemKey(seg.ref) === itemKey(f) && seg.ref.name === f.name),
+      );
     for (const f of v.failed) {
-      // An item inside a block is told in full in that block's card; here only the verdict line
-      // names it, linked to the card.
-      if (f.path.length) continue;
       const list = f.end === undefined ? items : ends.find((e) => e.name === f.end)?.items;
       const item = itemAt(list, f);
-      if (item) lines.push(...describeItem(item, [], { end: f.end }).segments);
+      if (!item) continue;
+      const text = describeItem(item, [], { end: f.end }).segments;
+      // An item inside a block is told in full in that block's card. Here it is named once: by
+      // the verdict line where that line names it, else by the first line of its own text, whose
+      // name links to the card.
+      if (f.path.length) {
+        if (!names(f) && text.length) lines.push(text[0]);
+        continue;
+      }
+      lines.push(...text);
     }
     return distinct(lines);
   };
@@ -633,12 +644,6 @@
     'no-answer': 'skip',
     'not-run': 'skip',
   };
-  const FEAS_TEXT: Record<ConditionAggregate['feasibility'], string> = {
-    feasible: 'feasible',
-    infeasible: 'infeasible',
-    'no-answer': 'no answer',
-    'not-run': 'not evaluated',
-  };
   const FEAS_CLASS: Record<ConditionAggregate['feasibility'], string> = {
     feasible: 'ok',
     infeasible: 'no',
@@ -658,7 +663,8 @@
         `nominal design held at ${condLabel(single)}` +
         (heldCentre ? `: ${POINT_TEXT[heldCentre.state]}` : '')
       );
-    const verdict = FEAS_TEXT[agg.feasibility];
+    // The word of the sized design's verdict (ConditionAggregate.verdict), never another.
+    const verdict = VERDICT_WORDS[agg.verdict?.verdict ?? 'not-calculated'];
     if (!agg.base) return verdict;
     if (multi) return `${verdict} at ${condLabel(agg.base)}`;
     return nominalKey && sameCondition(agg.base, nominalKey)
@@ -2182,6 +2188,7 @@
           class="feasb {feasClass}"
           title={holding ? CONTROL_HELP.cornerHold : CONTROL_HELP.feasBadge}
           data-feasibility
+          data-verdict={agg.verdict?.verdict ?? 'not-calculated'}
         >
           {feasText}{#if binding && namesBinding}<i>{binding.id} {pct(binding.marginPct)}</i>{/if}
         </span>
