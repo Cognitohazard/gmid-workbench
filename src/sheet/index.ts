@@ -42,7 +42,7 @@ import {
   unreadValues,
   withFindings,
 } from './items';
-import { verdictOf, type DesignVerdict } from './states';
+import { isComplete, verdictOf, type DesignVerdict } from './states';
 import { resolvedSheet, type SheetRefIndex } from './resolve';
 import { namedResults } from './sensitivity';
 import type { Settings } from './settings';
@@ -291,19 +291,18 @@ function worstBy(
 /**
  * One number for "how much room does the held design have at this range end": the WORST
  * measurable hard-check margin anywhere in the range-end run's tree, clamped to the informative
- * range (see `clampMargin`). An end the design measurably fails without leaving check outcomes —
- * a held device that cannot carry its current there — reads -MARGIN_PCT_CAP, which the chart
- * clips at the bottom. An end with nothing left to measure reads its verdict as
- * 0 / -MARGIN_PCT_CAP.
+ * range (see `clampMargin`). An end that does not comply with nothing left to measure reads
+ * -MARGIN_PCT_CAP, which the chart clips at the bottom; a compliant one with nothing to measure, 0.
  *
- * An end that was NOT RUN, or that returned NO ANSWER, reads null — a gap in the curve, the same
- * shape a check that could not be computed takes. Nothing about the range was measured there, and
- * a bottom clip would put a failure on the chart that the engine never established.
+ * Only where the end's verdict is compliant or non-compliant and its run is complete (isComplete):
+ * an end that was not calculated, is undetermined, or whose run stopped short reads null — a gap
+ * in the curve, the same shape a check that could not be computed takes.
  */
 function rangeEndMargin(e: RangeEndReport): number | null {
+  // A margin is charted where the end's verdict says what the held design is there and every number
+  // of the end's run is there; elsewhere its checks were read where the run stopped.
   const verdict = e.verdict?.verdict;
-  if (verdict === undefined || verdict === 'undetermined') return null;
-  if (verdict === 'no-operating-point') return -MARGIN_PCT_CAP;
+  if ((verdict !== 'compliant' && verdict !== 'non-compliant') || !isComplete(e)) return null;
   const found = worstBy(treeCheckResults(e), isMeasurable);
   const worst = found === undefined ? null : clampMargin(found.marginPct);
   // An end that DOES NOT COMPLY must never chart non-negative: hard `na` fails the run closed
