@@ -172,7 +172,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   solverNonDefault:
     'At least one solver setting differs from its default, so these numbers can differ from the same sheet evaluated with the defaults. The settings page (the header’s solver button) lists which.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
-  size: `Sizing: bind an operating point (gm/ID, f_T, or gm/g_ds) and a size (I_D, gm, or W) at a chosen L → width, V_GS, the remaining figures of merit, and whether gm/ID is below the table's ceiling.`,
+  size: "Bind an operating point (gm/ID, f_T or gm/g_ds) and a size (I_D, gm or W) at a chosen L. The sizer gives the width, V_GS and the other figures of merit, and says whether gm/ID is below the table's ceiling.",
   bind: 'Enter exactly two of gm/ID, f_T, gm/g_ds, I_D, gm, W; everything else — including the geometry — is solved at this L.',
   bindPoint:
     'Where on the curve the device sits. Each of these is width-independent, so any ONE of them pins the operating point (and the other two follow) without saying how big the device is. Enter the spec you actually have: f_T for a speed target, gm/g_ds for a gain target, gm/ID to work the efficiency axis directly. If the target is out of reach at this L, the lengths that do reach it are listed.',
