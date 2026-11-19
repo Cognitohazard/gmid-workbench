@@ -26,6 +26,7 @@ import { incompleteOn, isComplete, type Item } from '../sheet/states';
 import {
   outsideIn,
   evaluateSheet,
+  runSheet,
   namedBindings,
   buildSheetRefIndex,
   sweepable,
@@ -46,6 +47,8 @@ import type {
 import type { Axis, DeviceTable, TableMeta } from '../types';
 import {
   aggregateConditionRuns,
+  HELD_PRECEDENCE,
+  heldVerdictOver,
   deviceIdentityOf,
   deviceUidOf,
   groupDevices,
@@ -780,8 +783,12 @@ describe('runCondition', () => {
     expect(mixed.state).toBe('not-evaluated');
     if (mixed.state !== 'not-evaluated') return;
     expect(mixed.issues).toHaveLength(1);
-    expect(mixed.issues[0].kind).toBe('absent-condition');
-    expect(mixed.issues[0].device).toBe('nch_tail');
+    expect(mixed.issues[0]).toMatchObject({
+      kind: 'absent-condition',
+      device: 'nch_tail',
+      missing: 'condition',
+      block: 'tailblk',
+    });
     expect(mixed.issues[0].message).toContain('tailblk');
 
     // At the condition both are characterized at, the same sheet runs.
@@ -805,7 +812,7 @@ describe('runCondition', () => {
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
     expect(run.issues.map((i) => i.kind)).toEqual(['absent-condition', 'absent-condition']);
-    expect(new Set(run.issues.map((i) => i.device)).size).toBe(2);
+    expect(new Set(run.issues.map((i) => ('device' in i ? i.device : undefined))).size).toBe(2);
   });
 
   it('refuses a device whose members do not sweep the same axes, at every condition', () => {
@@ -1633,7 +1640,7 @@ describe('runCondition', () => {
     const run = runCondition(doc, primary, key('tt'), noDevices);
     expect(run.state).toBe('not-evaluated');
     if (run.state !== 'not-evaluated') return;
-    expect(run.issues[0].device).toBe('nothing-loaded');
+    expect(run.issues[0]).toMatchObject({ device: 'nothing-loaded', missing: 'device' });
   });
 
   it('never consults the resolver for a child that inherits its parent’s device', () => {
@@ -1932,7 +1939,14 @@ const refusedAt = (
   state: 'not-evaluated',
   key: key(corner),
   design,
-  issues: [{ kind: 'absent-condition', message: 'not characterized' }],
+  issues: [
+    {
+      kind: 'absent-condition',
+      device: 'demo',
+      missing: 'condition',
+      message: 'not characterized',
+    },
+  ],
   points: Array.from({ length: points }, () => ({ state, error: 'not characterized' })),
   ...(result ? { result } : {}),
 });
@@ -2018,7 +2032,13 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
       ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.05)]),
       ran('ss', 'held', 'complies', 0.12, [end('lo', 'does-not-comply', -0.1)]),
     ]);
-    expect(agg.worst).toEqual({ id: 'e', marginPct: -0.1, key: key('ss'), rangeEnd: 'lo' });
+    expect(agg.worst).toEqual({
+      id: 'e',
+      marginPct: -0.1,
+      status: 'fail',
+      key: key('ss'),
+      rangeEnd: 'lo',
+    });
   });
 
   it('names no range end when the centre owns it', () => {
@@ -2026,7 +2046,7 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
       ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.3)]),
       ran('ss', 'held', 'complies', 0.12, [end('lo', 'complies', 0.3)]),
     ]);
-    expect(agg.worst).toEqual({ id: 'r', marginPct: 0.12, key: key('ss') });
+    expect(agg.worst).toEqual({ id: 'r', marginPct: 0.12, status: 'pass', key: key('ss') });
   });
 
   it('reads no margin from a point whose checks were not measured there', () => {
@@ -2043,7 +2063,7 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
         'off-hull',
       ),
     ]);
-    expect(agg.worst).toEqual({ id: 'r', marginPct: 0.4, key: key('tt') });
+    expect(agg.worst).toEqual({ id: 'r', marginPct: 0.4, status: 'pass', key: key('tt') });
   });
 
   it('is null when nothing was measured anywhere', () => {
@@ -2058,7 +2078,13 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
       ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.3)]),
       ran('ss', 'held', 'complies', 0, [end('lo', 'complies', 0.25)]),
     ]);
-    expect(agg.worst).toEqual({ id: 'e', marginPct: 0.25, key: key('ss'), rangeEnd: 'lo' });
+    expect(agg.worst).toEqual({
+      id: 'e',
+      marginPct: 0.25,
+      status: 'pass',
+      key: key('ss'),
+      rangeEnd: 'lo',
+    });
     expect(agg.onLimit).toEqual([{ id: 'r', points: [{ key: key('ss') }] }]);
   });
 
@@ -2067,7 +2093,13 @@ describe('aggregateVariantRuns — the worst margin, and where', () => {
       ran('tt', 'sized', 'complies', 0.4, [end('lo', 'complies', 0.05)]),
       ran('ss', 'held', 'complies', 0.12, [end('lo', 'does-not-comply', -0.1)]),
     ]);
-    expect(agg.worst).toEqual({ id: 'e', marginPct: -0.1, key: key('ss'), rangeEnd: 'lo' });
+    expect(agg.worst).toEqual({
+      id: 'e',
+      marginPct: -0.1,
+      status: 'fail',
+      key: key('ss'),
+      rangeEnd: 'lo',
+    });
     expect(agg.onLimit).toEqual([]);
   });
 });
@@ -2515,11 +2547,17 @@ describe('the verdict beside the answers the corners module gives today', () => 
     // error it is not complete, its verdict alone does not admit it, and the centre owns it.
     const failing = end('hi', 'does-not-comply', -0.9);
     const answered = aggregateConditionRuns([ran('tt', 'sized', 'complies', 0.5, [failing])]);
-    expect(answered.worst).toEqual({ id: 'e', marginPct: -0.9, key: tt, rangeEnd: 'hi' });
+    expect(answered.worst).toEqual({
+      id: 'e',
+      marginPct: -0.9,
+      status: 'fail',
+      key: tt,
+      rangeEnd: 'hi',
+    });
     const { items: _items, ...broke } = { ...failing, state: 'no-answer' as const, error: 'x' };
     expect(broke.verdict?.verdict).toBe('non-compliant');
     const unanswered = aggregateConditionRuns([ran('tt', 'sized', 'complies', 0.5, [broke])]);
-    expect(unanswered.worst).toEqual({ id: 'r', marginPct: 0.5, key: tt });
+    expect(unanswered.worst).toEqual({ id: 'r', marginPct: 0.5, status: 'pass', key: tt });
   });
 
   it('reads no margin from a requirement that failed for a cause other than failing', () => {
@@ -2550,7 +2588,12 @@ describe('the verdict beside the answers the corners module gives today', () => 
     expect(agg.onLimit).toEqual([]);
     expect(worstPointByCheck([malformed]).size).toBe(0);
     // The same centre with its requirement ok gives the margin.
-    expect(aggregateConditionRuns([run]).worst).toEqual({ id: 'r', marginPct: 0.5, key: tt });
+    expect(aggregateConditionRuns([run]).worst).toEqual({
+      id: 'r',
+      marginPct: 0.5,
+      status: 'pass',
+      key: tt,
+    });
   });
 
   it('gives the sized design’s verdict and counts every other point by its held verdict', () => {
@@ -2572,10 +2615,173 @@ describe('the verdict beside the answers the corners module gives today', () => 
       nonCompliant: 2,
       noOperatingPoint: 1,
       undetermined: 1,
-      notRun: 3,
+      notCalculated: 3,
       total: 8,
     });
     // The old count beside it, over the same points and the sized centre.
     expect(agg.compliance.total).toBe(agg.heldPoints.total + 1);
+  });
+});
+
+describe('one held verdict over points, and what a declined condition says as data', () => {
+  const noDevices = (): undefined => undefined;
+  const primary = soleDevice([retag(dev, 'tt', 27), retag(dev, 'ss', 125)]);
+  const tt = key('tt');
+  const ss = key('ss', 125);
+  const at = (v: HeldVerdict | undefined, rangeEnd?: string) => ({
+    key: ss,
+    point: {
+      state: 'complies' as const,
+      ...(rangeEnd === undefined ? {} : { rangeEnd }),
+      ...(v ? { verdict: { verdict: v, failed: [] } } : {}),
+    },
+  });
+
+  it('decides by the first word any point has, a point not calculated counting as undetermined', () => {
+    expect(heldVerdictOver([])).toBeUndefined();
+    expect(heldVerdictOver([at(undefined), at(undefined, 'lo')])).toBeUndefined();
+    expect(heldVerdictOver([at('compliant'), at('compliant', 'lo')])).toEqual({
+      verdict: 'compliant',
+      decidedBy: [],
+    });
+    expect(
+      heldVerdictOver([
+        at('undetermined'),
+        at('non-compliant', 'lo'),
+        at('no-operating-point', 'hi'),
+      ]),
+    ).toEqual({ verdict: 'non-compliant', decidedBy: [{ key: ss, rangeEnd: 'lo' }] });
+    expect(heldVerdictOver([at('undetermined'), at('no-operating-point', 'hi')])).toEqual({
+      verdict: 'no-operating-point',
+      decidedBy: [{ key: ss, rangeEnd: 'hi' }],
+    });
+    expect(
+      heldVerdictOver([at('compliant'), at('undetermined', 'lo'), at(undefined, 'hi')]),
+    ).toEqual({
+      verdict: 'undetermined',
+      decidedBy: [
+        { key: ss, rangeEnd: 'lo' },
+        { key: ss, rangeEnd: 'hi' },
+      ],
+    });
+    expect(HELD_PRECEDENCE).toEqual(['non-compliant', 'no-operating-point', 'undetermined']);
+  });
+
+  it('gives a run the held verdict over its range ends', () => {
+    // Base T = 5 lands x = 2 and clears a 1.6 floor; the lo end, T = 3, lands x = 1, which does not.
+    const doc = constrainedDoc({
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
+        { name: 'T', value: 5 },
+        { name: 'T_lo', value: 3 },
+        { name: 'T_hi', value: 7 },
+        { name: 'x_floor', value: 1.6 },
+      ],
+      operatingRange: [
+        { name: 'lo', set: { T: 'T_lo' } },
+        { name: 'hi', set: { T: 'T_hi' } },
+      ],
+    });
+    const run = runCondition(doc, primary, tt, noDevices);
+    expect(run.endsVerdict).toEqual({
+      verdict: 'non-compliant',
+      decidedBy: [{ key: tt, rangeEnd: 'lo' }],
+    });
+    // No range end, no verdict over them.
+    expect(runCondition(constrainedDoc(), primary, tt, noDevices).endsVerdict).toBeUndefined();
+  });
+
+  it('gives the aggregate the held verdict, the points its margins read and the status of the worst', () => {
+    const agg = aggregateConditionRuns([
+      ran('tt', 'sized', 'complies', 0.4, [
+        end('lo', 'complies'),
+        end('hi', 'does-not-comply', -0.1),
+      ]),
+      ran('ss', 'held', 'complies', 0.2, [end('lo', 'no-answer', 0.5, 'broke')]),
+      refusedAt('ff', 'not-run', 2),
+    ]);
+    expect(agg.heldVerdict).toEqual({
+      verdict: 'non-compliant',
+      decidedBy: [{ key: key('tt'), rangeEnd: 'hi' }],
+    });
+    // Read: tt's three points and ss's centre; not ss lo (an error) nor ff's two (not calculated).
+    expect(agg.marginPoints).toEqual({ read: 4, total: 7 });
+    expect(agg.worst).toMatchObject({ id: 'e', marginPct: -0.1, status: 'fail', rangeEnd: 'hi' });
+  });
+
+  it('says why a set of conditions was declined, as data', () => {
+    // Several conditions and no base.
+    const [none] = runConditions(constrainedDoc(), primary, [tt, ss], noDevices);
+    expect(none.state === 'not-evaluated' && none.issues).toEqual([
+      expect.objectContaining({ kind: 'no-design', reason: 'no-base' }),
+    ]);
+    // The base was not evaluated: T = 0.5 cannot be reached, so nothing is held at ss.
+    const unreachable = constrainedDoc({
+      params: [
+        { name: 'x', value: 1, min: 0, max: 10, designConstraint: { lhs: 'y', rhs: 'T' } },
+        { name: 'T', value: 0.5 },
+      ],
+      checks: [],
+    });
+    const [base, other] = runConditions(unreachable, primary, [tt, ss], noDevices, undefined, tt);
+    expect(other.state === 'not-evaluated' && other.issues).toEqual([
+      expect.objectContaining({ kind: 'no-design', reason: 'base-not-evaluated', base: tt }),
+    ]);
+    // The base itself did not complete: its issue points at the failed items, and nothing else.
+    expect(base.state).toBe('not-evaluated');
+    if (base.state !== 'not-evaluated') return;
+    const on = base.issues[0].kind === 'runtime-evaluation' ? base.issues[0].on : [];
+    expect(on.length).toBeGreaterThan(0);
+    const failed = incompleteOn(base.result!.items!).filter((i) => i.status === 'failed');
+    expect(on).toEqual(failed.map((i) => ({ kind: i.kind, path: i.path, name: i.name })));
+  });
+
+  it('names the assumed levels a held design is declined for, as item references', () => {
+    const withDrain = generateDemoDevice({ vds: { min: 0, max: 1.2, step: 0.05 } });
+    const device = soleDevice([retag(withDrain, 'tt', 27), retag(withDrain, 'tt', 85)]);
+    const doc = notACircuit({
+      title: 'assumed drain',
+      polarity: 'n',
+      params: [
+        { name: 'L', value: 0.5e-6 },
+        { name: 'V_d', value: 0.6, unit: 'V', class: 'assumed' },
+      ],
+      givens: { L: 'L', gm_id: '12', id: '2e-5', vds: 'V_d' },
+      equations: [],
+      checks: [],
+    });
+    const [, held] = runConditions(
+      doc,
+      device,
+      [key('tt'), key('tt', 85)],
+      noDevices,
+      undefined,
+      key('tt'),
+    );
+    expect(held.state === 'not-evaluated' && held.issues).toEqual([
+      expect.objectContaining({
+        kind: 'assumed-level',
+        names: [{ kind: 'value', path: [], name: 'V_d' }],
+      }),
+    ]);
+  });
+
+  it('points a sheet that does not validate at the item the sheet itself shows, with its cause', () => {
+    const doc = constrainedDoc({
+      checks: [{ id: 'floor', kind: 'physical', lhs: 'x', op: '>=', rhs: 'x_floor', tolPct: -1 }],
+    });
+    const run = runCondition(doc, primary, tt, noDevices);
+    expect(run.state).toBe('not-evaluated');
+    if (run.state !== 'not-evaluated') return;
+    expect(run.issues.map((i) => i.kind)).toEqual(['invalid-sheet-or-ref']);
+    const on = run.issues[0].kind === 'invalid-sheet-or-ref' ? run.issues[0].on : [];
+    expect(on).toEqual([{ kind: 'requirement', path: [], name: 'floor' }]);
+    // The same item, failed with the same cause, as in the list the sheet's own run gives.
+    const mine = run.items?.find((i) => i.kind === 'requirement' && i.name === 'floor');
+    const sheets = runSheet(doc, tableAt(primary, tt)).items?.find(
+      (i) => i.kind === 'requirement' && i.name === 'floor',
+    );
+    expect(mine?.status).toBe('failed');
+    expect(mine).toEqual(sheets);
   });
 });
