@@ -1500,3 +1500,31 @@ describe('a part whose placement is not well formed', () => {
     expectSame(res);
   });
 });
+
+describe('a range end whose own entry is not well formed, or gives no number', () => {
+  const ota = sheet('otas/five-transistor-ota.json');
+  // Every requirement advisory, so that none fails and decides the verdict.
+  const soft: SheetDoc = { ...ota, checks: ota.checks.map((c) => ({ ...c, kind: 'advisory' })) };
+  const withSet = (set: Record<string, string>): SheetDoc => ({
+    ...soft,
+    operatingRange: soft.operatingRange?.map((e, k) => (k ? e : { ...e, set })),
+  });
+  const cases: [string, Record<string, string>, boolean, string][] = [
+    ['a set that does not parse', { CM_dc: '((' }, false, 'undetermined'],
+    ['a set of a name that is not an input', { NOPE: '1' }, false, 'undetermined'],
+    ['a set that gives no number at this design', { CM_dc: 'sqrt(0-1)' }, true, 'feasible'],
+    ['a set that reads a name no entry declares', { CM_dc: 'nothing_here' }, true, 'feasible'],
+  ];
+  for (const [what, set, feasible, verdict] of cases)
+    it(`reads ${verdict} where ${what}, with today's feasibility the same`, () => {
+      const res = runSheet(withSet(set), table, undefined, REFS);
+      expect({ feasible: res.feasible, verdict: res.verdict?.verdict }).toEqual({
+        feasible,
+        verdict,
+      });
+      expect(res.feasible).toBe(res.verdict?.verdict === 'feasible');
+      // The end is not answered, whatever the verdict of the sheet.
+      expect(res.rangeEnds?.[0].verdict).toBeUndefined();
+      expectSame(res);
+    });
+});

@@ -25,6 +25,7 @@ import type { EntryAbout, FindingAbout, NetlistAbout, QAWarning } from '../types
 import { syntaxAt } from '../expr';
 import {
   failsCause,
+  endEntryNotWellFormed,
   heldVerdictOf,
   sheetVerdictOf,
   type EndList,
@@ -1118,14 +1119,16 @@ export const isNotCalculated = (items: readonly Item[]): boolean =>
 
 /** The verdict of a range end, from its list, held design's words (heldVerdictOf). Absent where the
  *  engine did not calculate the end: its list is one sheet item that is not ok, withheld on the
- *  design point (notCalculated) or failed because the end's own entry is not well formed or does
- *  not resolve. */
+ *  design point (notCalculated) or failed because its `set` does not resolve; or its own entry is
+ *  not well formed (endEntryNotWellFormed), wherever its sheet item is in the list. */
 export function endVerdict(
   items: readonly Item[] | undefined,
   doc: SheetDoc | undefined,
 ): Verdict<HeldVerdict> | undefined {
   if (!items?.length) return undefined;
   if (items.length === 1 && items[0].kind === 'sheet' && items[0].status !== 'ok') return undefined;
+  // An end whose own entry is not well formed is not calculated, though the engine ran it.
+  if (endEntryNotWellFormed(items)) return undefined;
   return heldVerdictOf(items, unreadValues(doc));
 }
 

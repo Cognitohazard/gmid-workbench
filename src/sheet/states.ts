@@ -750,13 +750,33 @@ export interface EndList {
 
 /** Whether a range end was not calculated because its own entry failed: its list is its one sheet
  *  item, failed. */
-const ownEntryFailed = (items: readonly Item[] | undefined): boolean =>
-  items?.length === 1 && items[0].kind === 'sheet' && items[0].status === 'failed';
+/**
+ * The sheet item of a range end's own list where the end's own entry is not well formed: the item
+ * of kind sheet with no path, wherever it is in the list, failed with a finding of validation, or
+ * with a `set` expression that does not parse (cannot-evaluate, `syntax`, with `rangeEnd`), the one
+ * case where the evaluation's more specific cause replaces validation's. Undefined where the entry
+ * is well formed: a `set` that gives no number at this design is the end's own business, as when it
+ * reads a device beyond its table. The one rule the sheet's verdict and its feasibility both read.
+ */
+export function endEntryNotWellFormed(
+  items: readonly Item[] | undefined,
+): (Item & { status: 'failed' }) | undefined {
+  for (const i of items ?? []) {
+    if (i.kind !== 'sheet' || i.path.length || i.status !== 'failed') continue;
+    const c = i.cause;
+    const validated =
+      (c.kind === 'not-read' || c.kind === 'not-determined') && c.data.stage === 'validation';
+    const syntax =
+      c.kind === 'cannot-evaluate' && c.data.why === 'syntax' && c.data.rangeEnd !== undefined;
+    if (validated || syntax) return i;
+  }
+  return undefined;
+}
 
 /**
  * The verdict of a sheet, from the design point's list and its range ends' lists: verdictOf of the
- * design point, then one rule after "a requirement fails": a range end whose own entry failed
- * leaves the verdict undetermined, and `failed` names that end's sheet item with the end's name.
+ * design point, then one rule after "a requirement fails": a range end whose own entry is not well
+ * formed (endEntryNotWellFormed) leaves the verdict undetermined, and `failed` names that end's sheet item with the end's name.
  * The sheet carries the end, so it is not feasible while the end's entry is not well formed; the
  * design point itself was calculated, so its list holds no copy of the finding.
  */
@@ -767,11 +787,10 @@ export function sheetVerdictOf(
 ): Verdict {
   const v = verdictOf(design, unread);
   if (v.verdict === 'infeasible' || v.verdict === 'non-compliant') return v;
-  const own = ends.flatMap((e) =>
-    ownEntryFailed(e.items) && e.items?.[0].status === 'failed'
-      ? [{ kind: 'sheet' as const, path: [], name: '', cause: e.items[0].cause, end: e.name }]
-      : [],
-  );
+  const own = ends.flatMap((e) => {
+    const i = endEntryNotWellFormed(e.items);
+    return i ? [{ kind: 'sheet' as const, path: [], name: '', cause: i.cause, end: e.name }] : [];
+  });
   if (!own.length) return v;
   return { ...v, verdict: 'undetermined', failed: [...v.failed, ...own] };
 }
