@@ -1581,6 +1581,10 @@ export interface SheetResult {
    *  outcome; nothing reads these yet. */
   items?: Item[];
   verdict?: Verdict;
+  /** The held verdict of a held run (EvaluateOptions.held), from its own list, in a held design's
+   *  words, written as a range end's is (endVerdict). Absent on any other run, and where the run's
+   *  list is one sheet item that is not ok. `verdict` is still written beside it. */
+  heldVerdict?: Verdict<HeldVerdict>;
 }
 
 /**

@@ -1540,31 +1540,6 @@ group('a range end that is not calculated', () => {
     );
   });
 
-  it('says the design point holds a solved value', () => {
-    const held: Item = {
-      kind: 'search',
-      path: [],
-      name: 'V_x',
-      status: 'ok',
-      attributes: {
-        kind: 'held',
-        value: 0.4,
-        unit: 'V',
-        relation: { lhs: 'y', rhs: 'goal', field: 'designConstraint' },
-      },
-    };
-    check(
-      end([{ kind: 'search', path: [], name: 'V_x', frame: 'design', held: true }]),
-      undefined,
-      [held],
-      [
-        'This range end is not calculated, because the design point holds a solved value instead of solving it.',
-        'At the design point, V_x is held at 0.4 V.',
-        'The engine did not check the constraint of V_x at this value.',
-      ],
-    );
-  });
-
   it('names the item and states no fault, where the design point’s list is not given', () => {
     check(
       end([{ kind: 'sheet', path: ['in'], name: '', frame: 'design', cause: 'not-determined' }]),

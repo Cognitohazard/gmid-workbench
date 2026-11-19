@@ -17,7 +17,7 @@ import {
   type Item,
 } from './states';
 import { describe as describeItem, standardProblems } from './describe';
-import { FINDING_CAUSES, notCalculated } from './items';
+import { FINDING_CAUSES } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -202,7 +202,7 @@ const expectSame = (res: SheetResult): void => {
   for (const list of [res.items ?? [], ...(res.rangeEnds ?? []).map((e) => e.items ?? [])])
     expect(danglingIn(list)).toEqual([]);
   // An end that is not calculated waits on items of the design point's list, each failed with the
-  // cause it names or held instead of solved.
+  // cause it names.
   for (const e of res.rangeEnds ?? [])
     for (const i of e.items ?? [])
       if (i.status === 'withheld')
@@ -214,8 +214,8 @@ const expectSame = (res: SheetResult): void => {
             );
             expect({
               on: o.name,
-              cause: hit?.status === 'failed' ? hit.cause.kind : 'held',
-            }).toEqual({ on: o.name, cause: o.cause ?? 'held' });
+              cause: hit?.status === 'failed' ? hit.cause.kind : undefined,
+            }).toEqual({ on: o.name, cause: o.cause });
           }
 };
 
@@ -1454,23 +1454,6 @@ describe('a range end that is not calculated, in the design point’s terms', ()
       ]);
     }
     expectSame(res);
-  });
-
-  it('waits on a solved value the design point holds instead of solving it', () => {
-    // A design held at a value stands, so its range ends are run; the list an end would have is
-    // read from that design point's own items.
-    const doc = resolvedSheet(ota, REFS).doc;
-    const res = evaluateSheet(doc, table, undefined, { pinned: { V_tail: 0.4 } });
-    expect(res.verdict?.held).toEqual([{ kind: 'search', path: [], name: 'V_tail' }]);
-    expect(notCalculated(res.items ?? [])).toEqual([
-      {
-        kind: 'sheet',
-        path: [],
-        name: '',
-        status: 'withheld',
-        on: [{ kind: 'search', path: [], name: 'V_tail', frame: 'design', held: true }],
-      },
-    ]);
   });
 });
 

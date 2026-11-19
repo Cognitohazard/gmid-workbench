@@ -2412,6 +2412,13 @@ function evaluateNode(
     .map((p) => p.name);
   const solved = held.length ? withHeldMarks(doc, { ...solvedRun, pinned: held }, held) : solvedRun;
   if (depth > 0) return solved;
+  // A held run's result carries its held verdict, written by the function that writes a range
+  // end's: a held centre and its ends are separate points, each read from its own list.
+  const top = (r: SheetResult): SheetResult => {
+    if (opts.held !== true) return r;
+    const heldVerdict = endVerdict(r.items, doc);
+    return heldVerdict ? { ...r, heldVerdict } : r;
+  };
   const heldGates = opts.held ? heldGateWarnings(doc) : [];
   const pinnedNote = pinnedWarnings(solved);
   const res =
@@ -2426,19 +2433,21 @@ function evaluateNode(
     // selectorsBeyondTable).
     const unwalked = withoutWalk(doc, finishWiring(res, false, settings, keepPoint));
     const selectors = selectorsBeyondTable(doc, res);
-    if (!selectors.length) return withItems(doc, { ...unwalked, point }, opts.assumed);
-    return withItems(
-      doc,
-      {
-        ...unwalked,
-        warnings: [...unwalked.warnings, ...selectors],
-        feasible: false,
-        ...(unwalked.nodes
-          ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
-          : {}),
-        point,
-      },
-      opts.assumed,
+    if (!selectors.length) return top(withItems(doc, { ...unwalked, point }, opts.assumed));
+    return top(
+      withItems(
+        doc,
+        {
+          ...unwalked,
+          warnings: [...unwalked.warnings, ...selectors],
+          feasible: false,
+          ...(unwalked.nodes
+            ? { nodes: { ...unwalked.nodes, findings: unwalked.nodes.findings + selectors.length } }
+            : {}),
+          point,
+        },
+        opts.assumed,
+      ),
     );
   }
   const out = withNodes(
@@ -2451,16 +2460,18 @@ function evaluateNode(
   // The point was classified before the wiring was read; a selector the table contradicts then
   // leaves the run infeasible, so a centre that complied does not.
   const raised = out.warnings.slice(res.warnings.length).find((w) => w.severity === 'error');
-  return withItems(
-    doc,
-    {
-      ...out,
-      point:
-        raised && point.state === 'complies'
-          ? { ...point, state: 'does-not-comply', error: raised.message }
-          : point,
-    },
-    opts.assumed,
+  return top(
+    withItems(
+      doc,
+      {
+        ...out,
+        point:
+          raised && point.state === 'complies'
+            ? { ...point, state: 'does-not-comply', error: raised.message }
+            : point,
+      },
+      opts.assumed,
+    ),
   );
 }
 

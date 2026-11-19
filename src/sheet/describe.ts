@@ -37,7 +37,7 @@ import type {
   Verdict,
   WithheldOn,
 } from './states';
-import { incompleteOn, isHeld } from './states';
+import { incompleteOn } from './states';
 
 // ── Numbers, units and names as a message quotes them ────────────────────────────────────────
 
@@ -1565,11 +1565,8 @@ const parentGivesNo = (inputs: readonly string[] | undefined): Line =>
  *  cause, so the not-proved cause never reads as a proof. */
 export function withheldClause(r: WithheldOn): Line {
   if (r.frame === 'parent') return parentGivesNo(r.inputs);
-  if (r.frame === 'design') {
-    const ref = { kind: r.kind, path: r.path, name: r.name };
-    if (r.cause === undefined) return t`${itemName(ref)} is held and not solved`;
-    return withheldClause({ ...ref, cause: r.cause });
-  }
+  if (r.frame === 'design')
+    return withheldClause({ kind: r.kind, path: r.path, name: r.name, cause: r.cause });
   const n = itemName(r);
   switch (r.cause) {
     case 'not-read':
@@ -1614,9 +1611,9 @@ const pointedAt = (r: WithheldOn, design: readonly Item[]): Item | undefined =>
   );
 
 /** Why a range end is not calculated, from the design point's items its pointers name: the design
- *  point has no design where one of them failed; else its statements do not determine one design;
- *  else it rests on an assumed level; else it holds a solved value instead of solving it. Undefined
- *  where no pointer names an item of the list. */
+ *  point has no design where one of them is not complete (incompleteOn) for a reason other than
+ *  the statements; else its statements do not determine one design; else it rests on an assumed
+ *  level. Undefined where none of these is what the items say. */
 function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line | undefined {
   const items = on.flatMap((r) => {
     const i = r.frame === 'design' ? pointedAt(r, design) : undefined;
@@ -1629,12 +1626,11 @@ function designReason(on: readonly WithheldOn[], design: readonly Item[]): Line 
     i.status === 'failed' &&
     i.cause.kind === 'not-determined' &&
     i.cause.data.why === 'assumed-level';
-  if (items.some((i) => i.status === 'failed' && !determined(i)))
+  if (items.some((i) => incompleteOn([i]).length > 0 && !determined(i)))
     return t`the design point has no design`;
   if (items.some((i) => determined(i) && !assumed(i)))
     return t`the statements of the sheet do not determine one design`;
   if (items.some(assumed)) return t`the design point rests on an assumed level`;
-  if (items.some(isHeld)) return t`the design point holds a solved value instead of solving it`;
   return undefined;
 }
 

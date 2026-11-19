@@ -9,7 +9,8 @@ import { resolvedSheet } from './resolve';
 import { sheetSensitivities } from './sensitivity';
 import { devicePropertySensitivities } from './properties';
 import { givesValue, unreadValues } from './items';
-import { OPEN_RULINGS, isComplete, marginReadable, verdictOf } from './states';
+import { OPEN_RULINGS, heldVerdictOf, isComplete, marginReadable, verdictOf } from './states';
+import { holdHardware } from './coverage';
 import { incompleteText, standardProblems } from './describe';
 import {
   stands,
@@ -416,5 +417,18 @@ group('each sample of a sweep', () => {
       stands: true,
     }));
     expect(s.checks.find((c) => c.rangeEnd === 'hi')?.marginPct).toEqual([-0.5, -0.5]);
+  });
+});
+
+group('the result of a held run', () => {
+  it('carries the held verdict its own list gives, as the corners module computes it today', () => {
+    const doc = withoutRange(resolvedSheet(ota, REFS).doc);
+    const base = evaluateSheet(doc, table, undefined);
+    const held = holdHardware(doc, base);
+    const res = evaluateSheet(held.doc, table, undefined, { held: true });
+    expect(res.heldVerdict).toBeDefined();
+    expect(res.heldVerdict).toEqual(heldVerdictOf(res.items ?? [], unreadValues(held.doc)));
+    // A run that is not held carries none.
+    expect(base.heldVerdict).toBeUndefined();
   });
 });

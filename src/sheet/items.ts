@@ -26,7 +26,6 @@ import { syntaxAt } from '../expr';
 import {
   failsCause,
   heldVerdictOf,
-  isHeld,
   sheetVerdictOf,
   type EndList,
   type HeldVerdict,
@@ -1034,9 +1033,9 @@ export function aboutTheSheet(doc: SheetDoc | undefined, w: QAWarning): boolean 
 export function notCalculated(design: readonly Item[]): Item[] {
   const on: WithheldOn[] = design.flatMap((i): WithheldOn[] => {
     const ref = { kind: i.kind, path: i.path, name: i.name };
-    if (i.status === 'failed' && i.cause.kind !== 'fails')
-      return [{ ...ref, frame: 'design', cause: i.cause.kind }];
-    return isHeld(i) ? [{ ...ref, frame: 'design', held: true }] : [];
+    return i.status === 'failed' && i.cause.kind !== 'fails'
+      ? [{ ...ref, frame: 'design', cause: i.cause.kind }]
+      : [];
   });
   return [{ kind: 'sheet', path: [], name: '', status: 'withheld', on }];
 }
