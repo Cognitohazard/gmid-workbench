@@ -477,6 +477,8 @@ export type WithheldOn =
       readonly frame: 'design';
       readonly cause?: CauseName;
       readonly held?: true;
+      /** A value the design rests on as an assumed level (not-determined, `assumed-level`). */
+      readonly assumed?: true;
     });
 
 // ── Mapping today's search outcomes to causes, in one place ───────────────────────────────────

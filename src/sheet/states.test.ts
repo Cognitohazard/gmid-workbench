@@ -23,11 +23,14 @@ import {
   type ItemRef,
   type SearchData,
   type NoSolutionRead,
+  type WithheldOn,
 } from './states';
 import {
   CAUSE_NAMES,
   causeMessage,
   describe,
+  incompleteMessage,
+  incompleteText,
   notAskedText,
   rangeSource,
   withheldClause,
@@ -860,14 +863,14 @@ group('the texts of a finding with no item of its own', () => {
         { problem: 'placement', devices: ['load'], placement: { fault: 'shape' } },
         [
           'The wiring of part load is not well formed.',
-          'It is one placement of drain, gate, source and body wires, or a list of them.',
+          "A part's wiring is one placement of drain, gate, source and body wires, or a list of placements.",
         ],
       ],
       [
         { problem: 'placement', devices: ['givens'], placement: { fault: 'shape', none: true } },
         [
           'The wiring of the device of this sheet is not well formed.',
-          'It is one placement of drain, gate, source and body wires, a list of them, or none.',
+          "A part's wiring is one placement of drain, gate, source and body wires, a list of placements, or none.",
         ],
       ],
       [
@@ -878,7 +881,7 @@ group('the texts of a finding with no item of its own', () => {
         },
         [
           'The wiring of part load names bulk, which a placement does not have.',
-          'A placement names the drain, gate, source and body wires.',
+          'A placement names only the drain, gate, source and body wires.',
         ],
       ],
       [
@@ -887,20 +890,20 @@ group('the texts of a finding with no item of its own', () => {
           devices: ['load'],
           placement: { fault: 'no-wire', terminal: 'g', index: 1 },
         },
-        ['Placement 2 of part load puts the gate on no wire.', 'Every terminal sits on a wire.'],
+        ['Placement 2 of part load names no wire for the gate.', 'Each terminal needs a wire.'],
       ],
       [
         { problem: 'placement', devices: ['load'], placement: { fault: 'intent', value: 'on' } },
         [
-          'The wiring of part load gives the intent on.',
-          'The only intent a placement takes is off.',
+          'The wiring of part load sets its intent to on.',
+          'The only intent that a placement can set is off, for a device meant to be off.',
         ],
       ],
       [
         { problem: 'placement', devices: ['load'], placement: { fault: 'mixed-diode' } },
         [
           'Some placements of part load put the gate on the drain wire and some do not.',
-          'A diode-connected device and one that is not are separate blocks.',
+          'Put the diode-connected placements and the others in separate blocks.',
         ],
       ],
       [
@@ -1446,24 +1449,89 @@ group('findings of the netlist check that say the same thing', () => {
 });
 
 group('a range end that is not calculated', () => {
-  it('says so, and gives each item of the design point it waits on', () => {
-    const end: Item = {
-      kind: 'sheet',
-      path: [],
-      name: '',
-      status: 'withheld',
-      on: [
+  const end = (on: WithheldOn[]): Item => ({
+    kind: 'sheet',
+    path: [],
+    name: '',
+    status: 'withheld',
+    on,
+  });
+  const check = (item: Item, name: string | undefined, want: string[]): void => {
+    expect(describe(item, [], name).lines).toEqual(want);
+    for (const l of describe(item, [], name).segments) expect(standardProblems(l)).toEqual([]);
+  };
+
+  it('names the end and says why, then gives each item of the design point it waits on', () => {
+    check(
+      end([
         { kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' },
         { kind: 'search', path: [], name: 'V_tail', frame: 'design', cause: 'no-crossing' },
-        { kind: 'search', path: [], name: 'V_x', frame: 'design', held: true },
+      ]),
+      'cm-lo',
+      [
+        'Range end cm-lo is not calculated, because the design point has no design.',
+        'At the design point, the statements of block tail do not determine one design.',
+        'At the design point, the engine found no solution for V_tail.',
       ],
-    };
-    expect(describe(end).lines).toEqual([
-      'This range end is not calculated, because of a problem at the design point.',
-      'At the design point, the statements of block tail do not determine one design.',
-      'At the design point, the engine found no solution for V_tail.',
-      'At the design point, V_x is held and not solved.',
-    ]);
-    for (const l of describe(end).segments) expect(standardProblems(l)).toEqual([]);
+    );
+  });
+
+  it('says the statements do not determine one design, where that is all that is wrong', () => {
+    check(
+      end([{ kind: 'sheet', path: ['tail'], name: '', frame: 'design', cause: 'not-determined' }]),
+      'cm-lo',
+      [
+        'Range end cm-lo is not calculated, because the statements of the sheet do not determine one design.',
+        'At the design point, the statements of block tail do not determine one design.',
+      ],
+    );
+  });
+
+  it('says the design point rests on an assumed level', () => {
+    check(
+      end([
+        {
+          kind: 'value',
+          path: [],
+          name: 'V_out_dc',
+          frame: 'design',
+          cause: 'not-determined',
+          assumed: true,
+        },
+      ]),
+      'cm-hi',
+      [
+        'Range end cm-hi is not calculated, because the design point rests on an assumed level.',
+        'At the design point, V_out_dc is an assumed level.',
+      ],
+    );
+  });
+
+  it('says the design point holds a solved value, and names this end where no name is given', () => {
+    check(
+      end([{ kind: 'search', path: [], name: 'V_x', frame: 'design', held: true }]),
+      undefined,
+      [
+        'This range end is not calculated, because the design point holds a solved value instead of solving it.',
+        'At the design point, V_x is held and not solved.',
+      ],
+    );
+  });
+});
+
+group('why a run is not complete, as one string', () => {
+  it('gives each finding’s name, then its lines, one to a line', () => {
+    const items: Item[] = [
+      { kind: 'sheet', path: [], name: '', status: 'ok' },
+      failed('device', 'givens', {
+        kind: 'outside-table',
+        data: { device: 'givens', quantity: 'l', asked: 5e-6, held: [180e-9, 2e-6] },
+      }),
+    ];
+    const [f] = incompleteText(items);
+    expect(incompleteMessage(items)).toBe([f.name, ...f.lines].join('\n'));
+    expect(incompleteMessage([{ kind: 'sheet', path: [], name: '', status: 'ok' }])).toBe(
+      'The evaluation did not complete.',
+    );
   });
 });

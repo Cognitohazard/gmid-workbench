@@ -88,7 +88,7 @@ group('an equation that reads a name no entry declares', () => {
     expect(unfinishedBecause(res)).toEqual(['the evaluation did not complete']);
     const why = incompleteText(res.items ?? []);
     expect(why).toHaveLength(1);
-    for (const l of why) expect(standardProblems(l)).toEqual([]);
+    for (const f of why) for (const l of f.segments) expect(standardProblems(l)).toEqual([]);
   });
 });
 

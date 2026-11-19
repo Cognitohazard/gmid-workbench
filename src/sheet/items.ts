@@ -1032,8 +1032,10 @@ export function aboutTheSheet(doc: SheetDoc | undefined, w: QAWarning): boolean 
 export function notCalculated(design: readonly Item[]): Item[] {
   const on: WithheldOn[] = design.flatMap((i): WithheldOn[] => {
     const ref = { kind: i.kind, path: i.path, name: i.name };
-    if (i.status === 'failed' && i.cause.kind !== 'fails')
-      return [{ ...ref, frame: 'design', cause: i.cause.kind }];
+    if (i.status === 'failed' && i.cause.kind !== 'fails') {
+      const assumed = i.cause.kind === 'not-determined' && i.cause.data.why === 'assumed-level';
+      return [{ ...ref, frame: 'design', cause: i.cause.kind, ...(assumed ? { assumed } : {}) }];
+    }
     return isHeld(i) ? [{ ...ref, frame: 'design', held: true }] : [];
   });
   return [{ kind: 'sheet', path: [], name: '', status: 'withheld', on }];

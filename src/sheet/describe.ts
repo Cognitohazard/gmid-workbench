@@ -1258,28 +1258,28 @@ function placementLines(f: PlacementFault, part: Line): Line[] {
       return [
         t`The wiring of ${part} is not well formed.`,
         f.none
-          ? t`It is one placement of drain, gate, source and body wires, a list of them, or none.`
-          : t`It is one placement of drain, gate, source and body wires, or a list of them.`,
+          ? t`A part's wiring is one placement of drain, gate, source and body wires, a list of placements, or none.`
+          : t`A part's wiring is one placement of drain, gate, source and body wires, or a list of placements.`,
       ];
     case 'unknown-key':
       return [
         t`${which(f.index)} names ${nm(f.key)}, which a placement does not have.`,
-        t`A placement names the drain, gate, source and body wires.`,
+        t`A placement names only the drain, gate, source and body wires.`,
       ];
     case 'no-wire':
       return [
-        t`${which(f.index)} puts the ${TERMINAL_WORD[f.terminal]} on no wire.`,
-        t`Every terminal sits on a wire.`,
+        t`${which(f.index)} names no wire for the ${TERMINAL_WORD[f.terminal]}.`,
+        t`Each terminal needs a wire.`,
       ];
     case 'intent':
       return [
-        t`${which(f.index)} gives the intent ${val(f.value)}.`,
-        t`The only intent a placement takes is off.`,
+        t`${which(f.index)} sets its intent to ${val(f.value)}.`,
+        t`The only intent that a placement can set is off, for a device meant to be off.`,
       ];
     case 'mixed-diode':
       return [
         t`Some placements of ${part} put the gate on the drain wire and some do not.`,
-        t`A diode-connected device and one that is not are separate blocks.`,
+        t`Put the diode-connected placements and the others in separate blocks.`,
       ];
   }
 }
@@ -1567,9 +1567,9 @@ export function withheldClause(r: WithheldOn): Line {
   if (r.frame === 'parent') return parentGivesNo(r.inputs);
   if (r.frame === 'design') {
     const ref = { kind: r.kind, path: r.path, name: r.name };
-    return r.cause === undefined
-      ? t`${itemName(ref)} is held and not solved`
-      : withheldClause({ ...ref, cause: r.cause });
+    if (r.cause === undefined) return t`${itemName(ref)} is held and not solved`;
+    if (r.assumed) return t`${itemName(ref)} is an assumed level`;
+    return withheldClause({ ...ref, cause: r.cause });
   }
   const n = itemName(r);
   switch (r.cause) {
@@ -1604,10 +1604,23 @@ export function withheldClause(r: WithheldOn): Line {
   }
 }
 
+/** Why a range end is not calculated, from the design point's items it waits on: the design point
+ *  has no design where one of them failed; else its statements do not determine one design; else
+ *  it rests on an assumed level; else it holds a solved value instead of solving it. */
+function designReason(on: readonly WithheldOn[]): Line {
+  const design = on.filter((r) => r.frame === 'design');
+  if (design.some((r) => r.cause !== undefined && r.cause !== 'not-determined'))
+    return t`the design point has no design`;
+  if (design.some((r) => r.cause === 'not-determined' && !r.assumed))
+    return t`the statements of the sheet do not determine one design`;
+  if (design.some((r) => r.assumed)) return t`the design point rests on an assumed level`;
+  return t`the design point holds a solved value instead of solving it`;
+}
+
 /** What a reader is shown for one item: nothing for an item that is ok; for a failed one, its
  *  cause's text; for a withheld one, one sentence for each failed item it depends on. `within`
  *  is the path of the block whose own list the item is read in, where it is one. */
-export function describe(item: Item, within: readonly string[] = []): FindingText {
+export function describe(item: Item, within: readonly string[] = [], end?: string): FindingText {
   if (item.status === 'ok')
     return item.attributes?.kind === 'held' ? heldText(item, item.attributes) : finding('', []);
   // A range end the engine does not calculate: the design point gives no design, and its items say
@@ -1621,7 +1634,7 @@ export function describe(item: Item, within: readonly string[] = []): FindingTex
     return finding(
       WITHHELD_NAME,
       distinctLines([
-        t`This range end is not calculated, because of a problem at the design point.`,
+        t`${end === undefined ? t`This range end` : t`Range end ${nm(end)}`} is not calculated, because ${designReason(item.on)}.`,
         ...item.on.map((r) => t`At the design point, ${withheldClause(r)}.`),
       ]),
     );
@@ -1679,13 +1692,20 @@ export const notAskedText = (what: 'range end' | 'held point', name: string): Fi
       : t`The engine did not run the condition ${nm(name)}, because the design point has no design.`,
   ]);
 
-/** Why a run is not complete (incompleteOn): the text of each failed item whose numbers it does not
- *  have, in the list's order; a withheld item follows from one of them. Never empty: a run with no
- *  such item reads that the evaluation did not complete, as a refusal with no reason is
- *  indistinguishable from a verdict. */
-export function incompleteText(items: readonly Item[]): string[] {
+/** Why a run is not complete (incompleteOn): the finding of each failed item whose number it does
+ *  not have, in the list's order; a withheld item follows from one of them. Never empty: a run
+ *  with no such item reads that the evaluation did not complete, as a refusal with no reason is
+ *  indistinguishable from a verdict. Each reader renders the findings. */
+export function incompleteText(items: readonly Item[]): FindingText[] {
   const why = incompleteOn(items)
     .filter((i) => i.status === 'failed')
-    .map((i) => describe(i).lines.join(' '));
-  return why.length ? why : ['The evaluation did not complete.'];
+    .map((i) => describe(i));
+  return why.length ? why : [finding('', [t`The evaluation did not complete.`])];
 }
+
+/** incompleteText as one string, where one is needed (a thrown error, a refusal to a script): each
+ *  finding's name, then each of its lines, one to a line. */
+export const incompleteMessage = (items: readonly Item[]): string =>
+  incompleteText(items)
+    .flatMap((f) => (f.name ? [f.name, ...f.lines] : f.lines))
+    .join('\n');

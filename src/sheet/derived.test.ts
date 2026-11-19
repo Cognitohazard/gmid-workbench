@@ -9,7 +9,7 @@ import { resolvedSheet } from './resolve';
 import { legacyFeasible, legacyPointState } from './derived';
 import { causeFits, heldVerdictOf, setOf, verdictOf, type Cause, type Item } from './states';
 import { describe as describeItem, standardProblems } from './describe';
-import { FINDING_CAUSES } from './items';
+import { FINDING_CAUSES, notCalculated } from './items';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -74,7 +74,7 @@ function readings(res: SheetResult): { at: string; field: unknown; derived: unkn
         // An end that is not calculated was not run today, or ran on a sheet whose validation
         // found an error about the sheet as a whole (see the suite of a range end's list).
         derived: notCalculatedList(e.items)
-          ? e.state === 'not-run' || wholeSheetError(res)
+          ? e.state === 'not-run' || wholeSheetError(res) || restsOnAssumed(e.items)
             ? e.state
             : 'calculated'
           : legacyPointState(e.items, advisoryOf({ checks: e.checks, blocks: e.blocks })),
@@ -90,6 +90,13 @@ const notCalculatedList = (items: readonly Item[]): boolean =>
       i.path.length === 0 &&
       i.status === 'withheld' &&
       i.on.some((o) => o.frame === 'design'),
+  );
+
+/** Whether an end is not calculated because the design point rests on an assumed level, which
+ *  today's state reads as no answer. */
+const restsOnAssumed = (items: readonly Item[]): boolean =>
+  items.every(
+    (i) => i.status === 'withheld' && i.on.every((o) => o.frame === 'design' && o.assumed),
   );
 
 /** Whether validation found an error about the sheet as a whole: the design point's list holds a
@@ -1393,4 +1400,57 @@ describe('the list of a range end', () => {
     ]);
     expect(top(res.items)?.status).toBe('ok');
   }, 60_000);
+});
+
+describe('a range end that is not calculated, in the design point’s terms', () => {
+  const ota = sheet('otas/five-transistor-ota.json');
+
+  it('waits on a level the design point rests on as assumed', () => {
+    const { out: _out, ...levels } = (ota as unknown as { levels: Record<string, string> }).levels;
+    const doc = {
+      ...ota,
+      levels,
+      params: ota.params.map((p) => (p.name === 'V_out_dc' ? { ...p, class: 'assumed' } : p)),
+    } as SheetDoc;
+    const res = runSheet(doc, table, undefined, REFS);
+    for (const e of res.rangeEnds ?? []) {
+      expect(e.verdict).toBeUndefined();
+      expect(e.items).toEqual([
+        {
+          kind: 'sheet',
+          path: [],
+          name: '',
+          status: 'withheld',
+          on: [
+            {
+              kind: 'value',
+              path: [],
+              name: 'V_out_dc',
+              frame: 'design',
+              cause: 'not-determined',
+              assumed: true,
+            },
+          ],
+        },
+      ]);
+    }
+    expectSame(res);
+  });
+
+  it('waits on a solved value the design point holds instead of solving it', () => {
+    // A design held at a value stands, so its range ends are run; the list an end would have is
+    // read from that design point's own items.
+    const doc = resolvedSheet(ota, REFS).doc;
+    const res = evaluateSheet(doc, table, undefined, { pinned: { V_tail: 0.4 } });
+    expect(res.verdict?.held).toEqual([{ kind: 'search', path: [], name: 'V_tail' }]);
+    expect(notCalculated(res.items ?? [])).toEqual([
+      {
+        kind: 'sheet',
+        path: [],
+        name: '',
+        status: 'withheld',
+        on: [{ kind: 'search', path: [], name: 'V_tail', frame: 'design', held: true }],
+      },
+    ]);
+  });
 });
