@@ -77,8 +77,7 @@ import {
   validateSheet,
 } from '../sheet';
 import { isHardCheck } from '../sheet/types';
-import { heldVerdictOf, isComplete, marginReadable, type Item } from '../sheet/states';
-import { unreadValues } from '../sheet/items';
+import { isComplete, marginReadable, type Item } from '../sheet/states';
 import {
   assumedLevelRefusal,
   holdHardware,
@@ -997,13 +996,12 @@ function runPrepared(
   // complies where it is feasible.
   const outcome = evaluated.point;
   const outside = outsideIn(evaluated);
-  // The centre's verdict: the design verdict where the design is sized, the held verdict where the
-  // design sized elsewhere is held here.
-  const items = result.items ?? [];
+  // The centre's verdict, as the engine wrote it: the design verdict where the design is sized, the
+  // held verdict where the design sized elsewhere is held here.
   const verdict: Verdict<DesignVerdict> | Verdict<HeldVerdict> | undefined = !result.items
     ? undefined
     : held
-      ? heldVerdictOf(items, unreadValues(doc))
+      ? result.heldVerdict
       : result.verdict;
   const centre: CompliancePoint = {
     ...(outcome
