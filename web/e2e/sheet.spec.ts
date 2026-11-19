@@ -2145,7 +2145,7 @@ test('design sheet: a run whose own search failed is still swept and mapped, eac
   // the sweep: the chart is drawn, and nothing says there is nothing to sweep.
   await sp.locator('.swsel select').selectOption('goal');
   await expect(sp.locator('.pchart canvas')).toBeVisible({ timeout: 30_000 });
-  await expect(sp.getByText('nothing to sweep')).toHaveCount(0);
+  await expect(sp.getByText('no design to sweep')).toHaveCount(0);
   // The same for the map of two params.
   await sp.locator('.swsel2 select').selectOption('Ib');
   const map = sp.locator('.smapc');

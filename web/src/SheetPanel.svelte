@@ -16,7 +16,6 @@
     torn,
     constrained as isConstrained,
     engineSolved,
-    withheldIn,
     bindingCheck,
     limitingCheck,
     rangeEndCheck,
@@ -74,14 +73,25 @@
     type ConditionSweep,
     type CompliancePoint,
     type DesignVerdict,
+    type HeldVerdict,
+    type Item,
+    type ItemRef,
+    type Line,
+    type Verdict,
+    VERDICT_WORDS,
+    verdictText,
+    describe as describeItem,
+    hasNumber,
+    lineText,
+    incompleteText,
   } from '@gmid/mostab-core';
   import { describeBinding, deviceLabel, type Bench } from './families';
   import { tableUid, verdictLoss, type SheetCornerMode } from './dashboard';
   import { PALETTE, type ChartData } from './chart';
   import { chartHost } from './chartHost.svelte';
   import { axisUnit, qFormula, qLabel, mathText, mathPlain } from './labels';
-  import { CONTROL_HELP, SOLVER_HELP } from './help';
-  import { LOOK, drawPattern } from './verdict';
+  import { CONTROL_HELP, SOLVER_HELP, VERDICT_TITLE, NOT_YET, PARTIAL_VALUES } from './help';
+  import { LOOK, lookOf, drawPattern, type AnyVerdict } from './verdict';
   import DecisionsView from './DecisionsView.svelte';
   import PropertiesView from './PropertiesView.svelte';
   import { changedSolverSettings, settingText, solverSettings } from './solver.svelte';
@@ -506,6 +516,90 @@
    *  function, so nothing on the panel can mix conditions the verdict above it did not. */
   const resolveDevice = $derived(refKey ? projectingResolver(bench.deviceOf, refKey) : undefined);
 
+  // ── The verdict on screen, as the core gives it. On one condition the badge reads the reference
+  // run's own verdict: the design's where it is sized, the held design's where it is held. The
+  // word, the reason under it and every item text are the core's (VERDICT_WORDS, verdictText,
+  // describe); the panel only lays them out.
+  const shownVerdict = $derived.by((): Verdict<DesignVerdict | HeldVerdict> | undefined =>
+    multi || !result ? undefined : holding ? result.heldVerdict : result.verdict,
+  );
+  /** An item of a list by its reference. */
+  const itemAt = (items: readonly Item[] | undefined, ref: ItemRef): Item | undefined =>
+    items?.find(
+      (i) =>
+        i.kind === ref.kind &&
+        i.name === ref.name &&
+        i.path.length === ref.path.length &&
+        i.path.every((x, k) => x === ref.path[k]),
+    );
+  /** Only the first of lines that read the same. */
+  const distinct = (lines: readonly Line[]): Line[] =>
+    lines.filter((l, k, all) => all.findIndex((m) => lineText(m) === lineText(l)) === k);
+  /** Why a verdict is what it is: the core's lines for it, then, for a verdict a failed
+   *  requirement decides, that requirement's own text — read at the range end it failed at, where
+   *  it failed at one. */
+  const reasonOf = (
+    v: Verdict<AnyVerdict> | undefined,
+    items: readonly Item[] | undefined,
+    ends: readonly RangeEndReport[] = [],
+  ): readonly Line[] => {
+    if (!v) return [];
+    const lines: Line[] = [...verdictText(v)];
+    if (v.verdict !== 'undetermined')
+      for (const f of v.failed) {
+        const list = f.end === undefined ? items : ends.find((e) => e.name === f.end)?.items;
+        const item = itemAt(list, f);
+        if (item) lines.push(...describeItem(item, [], { end: f.end }).segments);
+      }
+    return distinct(lines);
+  };
+  const reasonLines = $derived(reasonOf(shownVerdict, result?.items, result?.rangeEnds));
+  /** The values the run held instead of solving, each in the core's words. */
+  const heldLines = $derived(
+    distinct(
+      (shownVerdict?.held ?? []).flatMap((ref) => {
+        const item = itemAt(result?.items, ref);
+        return item ? describeItem(item).segments : [];
+      }),
+    ),
+  );
+  /** An item's own text, as one string: a title for the place that shows the item. */
+  const itemTitle = (item: Item | undefined): string | undefined =>
+    item && item.status !== 'ok' ? describeItem(item).lines.join(' ') : undefined;
+  /** A top-level value of the result by its name: an equation's value, or a solved param's. */
+  const valueItem = (name: string): Item | undefined =>
+    result?.items?.find(
+      (i) => !i.path.length && i.name === name && (i.kind === 'value' || i.kind === 'search'),
+    );
+  /** Whether a value has no number to show: its item is withheld, or failed with no number. */
+  const noNumber = (name: string): boolean => {
+    const item = valueItem(name);
+    return item !== undefined && !hasNumber(item);
+  };
+  /** The key a row on screen is found by, for a name in an item text that names it. */
+  const itemKey = (ref: ItemRef): string => `${ref.kind}:${ref.path.join('/')}:${ref.name}`;
+  /** The items a name in a text can link to: the rows this panel draws for them. */
+  const linkable = $derived(
+    new Set([
+      ...cfg.equations.map((e) => itemKey({ kind: 'value', path: [], name: e.name })),
+      ...cfg.params.map((p) =>
+        itemKey({ kind: engineSolved(p) ? 'search' : 'value', path: [], name: p.name }),
+      ),
+      ...(result?.checks ?? []).map((c) => itemKey({ kind: 'requirement', path: [], name: c.id })),
+    ]),
+  );
+  /** Brings the row an item text names into view, and marks it for a moment. */
+  function goToItem(e: MouseEvent, ref: ItemRef): void {
+    const row = (e.currentTarget as HTMLElement)
+      .closest('.sheet')
+      ?.querySelector<HTMLElement>(`[data-item="${CSS.escape(itemKey(ref))}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    row.classList.remove('sflash');
+    void row.offsetWidth;
+    row.classList.add('sflash');
+  }
+
   // ── What the header may say. FEASIBILITY is one answer about the design where it was sized;
   // COMPLIANCE is a count of points. Neither is inferred from the other, and a point that was
   // not run or could not be answered is counted as exactly that — never as a pass, never as a
@@ -549,7 +643,6 @@
    *  never reads as the nominal one; and, while the nominal design is held at one condition,
    *  saying so with the compliance answer there in place of a feasibility it was not asked. */
   const feasText = $derived.by((): string => {
-    if (firstRun) return 'evaluating…';
     if (holding && single)
       return (
         `nominal design held at ${condLabel(single)}` +
@@ -575,10 +668,10 @@
   const wiring = $derived.by((): { text: string; cls: string } | null => {
     const n = result?.nodes;
     if (!n || n.state === 'not-applicable') return null;
-    if (n.state === 'not-evaluated') return { text: 'wiring: not evaluated', cls: 'skip' };
-    if (n.state === 'checked-clean') return { text: 'wiring: clean', cls: 'ok' };
+    if (n.state === 'not-evaluated') return { text: 'wiring not checked', cls: 'skip' };
+    if (n.state === 'checked-clean') return { text: 'wiring clean', cls: 'ok' };
     return {
-      text: `wiring: ${n.findings} ${n.findings === 1 ? 'finding' : 'findings'}`,
+      text: `${n.findings} wiring ${n.findings === 1 ? 'finding' : 'findings'}`,
       cls: 'warn',
     };
   });
@@ -1096,9 +1189,15 @@
   // The core pins each window's edges between samples and names the checks that close them
   // (SheetSweep.windows), which the panel's sweeps always ask for.
   const feasWindow = $derived.by(() => {
-    if (!swept || swept.feasible.length === 0) return null;
-    // A sweep that carries no pinned windows still says where its samples pass, to the spacing.
-    const windows = swept.windows ?? sampledWindows(swept.x, swept.feasible);
+    if (!swept || swept.x.length === 0) return null;
+    // A sweep that carries no pinned windows still says where its samples pass, to the spacing:
+    // where the sample's verdict is feasible, or compliant for a held design.
+    const windows =
+      swept.windows ??
+      sampledWindows(
+        swept.x,
+        swept.verdicts.map((v) => v === 'feasible' || v === 'compliant'),
+      );
     return windows.length ? { none: false as const, windows } : { none: true as const };
   });
   /** Each run of passing samples as a window, its edges at the samples themselves. */
@@ -1113,26 +1212,60 @@
     }
     return out;
   };
-  /** One pinned window as the line under the chart reads it: its span, and what fails just past
-   *  each edge that lies inside the range. */
-  const windowText = (w: SweepWindow): string => {
-    const past = (side: string, ids: readonly string[] | undefined): string[] =>
+  /** A window's span, as the caption reads it: "from a to b". */
+  const spanText = (w: SweepWindow): string =>
+    `from ${fmt(w.lo)}${sweptUnit} to ${fmt(w.hi)}${sweptUnit}`;
+  /** Spans as a list reads: "from a to b and from c to d". */
+  const spansText = (ws: readonly SweepWindow[]): string =>
+    ws.length > 1
+      ? `${ws.slice(0, -1).map(spanText).join(', ')} and ${spanText(ws[ws.length - 1])}`
+      : spanText(ws[0]);
+  /** What happens just past each edge of a window that lies inside the range, one sentence for
+   *  each: the requirements that fail there, that the table ends there, or that the engine could
+   *  not calculate the design there. */
+  const edgeSentences = (w: SweepWindow): string[] => {
+    const past = (side: 'Below' | 'Above', at: number, ids: readonly string[] | undefined) =>
       ids === undefined
         ? []
         : [
             ids.length
-              ? `${side} it ${ids.join(', ')} ${ids.length > 1 ? 'fail' : 'fails'}`
-              : `${side} it the design does not stand`,
+              ? `${side} ${fmt(at)}${sweptUnit}, ${ids.join(' and ')} ${ids.length > 1 ? 'fail' : 'fails'}.`
+              : `${side} ${fmt(at)}${sweptUnit}, the engine could not calculate the design.`,
           ];
     // An edge past which a device was read beyond its table ends where the table ends, not where a
     // requirement fails (SweepWindow.belowOutside/aboveOutside).
-    const tableEnds = (side: string, r: readonly OutsideTable[] | undefined): string[] =>
-      r?.length ? [`${side} it ends where the table ends (${r.map(beyondText).join('; ')})`] : [];
-    const closers = [
-      ...(w.belowOutside?.length ? tableEnds('below', w.belowOutside) : past('below', w.below)),
-      ...(w.aboveOutside?.length ? tableEnds('above', w.aboveOutside) : past('above', w.above)),
+    const tableEnds = (side: 'Below' | 'Above', at: number, r: readonly OutsideTable[]) => [
+      `${side} ${fmt(at)}${sweptUnit}, the table ends: ${r.map(beyondText).join('; ')}.`,
     ];
-    return `${fmt(w.lo)}…${fmt(w.hi)}${sweptUnit}${closers.length ? ` (${closers.join('; ')})` : ''}`;
+    return [
+      ...(w.belowOutside?.length
+        ? tableEnds('Below', w.lo, w.belowOutside)
+        : past('Below', w.lo, w.below)),
+      ...(w.aboveOutside?.length
+        ? tableEnds('Above', w.hi, w.aboveOutside)
+        : past('Above', w.hi, w.above)),
+    ];
+  };
+  /** The sentence under a 1-D sweep: where the sheet is feasible, or the held design compliant,
+   *  and what closes each window. */
+  const windowSentences = (
+    win: { none: true } | { none: false; windows: readonly SweepWindow[] },
+    held: boolean,
+    x: readonly number[],
+  ): string[] => {
+    const range = `from ${fmt(x[0])}${sweptUnit} to ${fmt(x[x.length - 1])}${sweptUnit}`;
+    if (win.none)
+      return [
+        held
+          ? `No value of ${active} ${range} gives a ${VERDICT_WORDS.compliant} held design.`
+          : `No value of ${active} ${range} gives a ${VERDICT_WORDS.feasible} design.`,
+      ];
+    return [
+      held
+        ? `The held design is ${VERDICT_WORDS.compliant} for ${active} ${spansText(win.windows)}.`
+        : `The sheet is ${VERDICT_WORDS.feasible} for ${active} ${spansText(win.windows)}.`,
+      ...win.windows.flatMap(edgeSentences),
+    ];
   };
 
   // The embedded uPlot chart, owned outside Svelte via the shared host: destroyed on
@@ -1349,9 +1482,6 @@
   /** The bias axes a device's givens asked beyond its table, which its bias fields mark. */
   const beyondAxes = (report: SizingReport | undefined): Set<string> =>
     new Set((report?.outside ?? []).map((r) => r.quantity));
-  /** What a withheld value follows from, in words: the sheet's own device, or a block's path. */
-  const withheldFrom = (cause: string): string =>
-    cause === OWN_DEVICE ? 'this sheet’s device' : `"${cause}"`;
 
   // ── What the engine computed beside the verdict: each device's operating point, the current
   // delivered at each held wire, the voltage of each wire, and where each solved value was searched.
@@ -1425,21 +1555,16 @@
     Object.entries(e.solved)
       .map(([k, v]) => `${k} ${fmt(v)}`)
       .join(' · ');
-  /** The one-line detail beside a range-end chip, one wording per outcome. An end the held
-   *  design complies at shows where its bias landed; one it does not shows why — its worst
-   *  failing hard check (the same definition the badge uses, asked of that end's own run), or the
-   *  reason a held device cannot work there. An end with NO ANSWER says what stopped the
-   *  question, and one that was NOT RUN says what is missing: neither is a verdict about the
-   *  range, and neither may borrow one's words. */
-  const rangeEndDetail = (e: RangeEndReport): string => {
-    if (e.state === 'not-run') return 'not run — these settings produce no design';
-    if (e.state === 'complies') return rangeEndSolved(e);
-    if (e.error) {
-      const error = namingRangeEnds(e.error, endNames);
-      return e.state === 'no-answer' ? `no answer — ${error}` : error;
-    }
-    const b = bindingCheck(e);
-    return b ? `${b.id} ${pct(b.marginPct)}` : POINT_TEXT[e.state];
+  /** What a range-end chip says beside its verdict: where the held design's bias landed, where it
+   *  is compliant there; otherwise why, in the core's words — the reason for its verdict, or, at an
+   *  end the engine did not calculate, the end's own text. */
+  const rangeEndLines = (e: RangeEndReport): readonly Line[] => {
+    if (!e.verdict)
+      return incompleteText(e.items ?? [], { end: e.name, design: result?.items }).flatMap(
+        (f) => f.segments,
+      );
+    if (e.verdict.verdict === 'compliant') return [];
+    return reasonOf(e.verdict, e.items);
   };
   const rangeEndNote = $derived(new Map((cfg.operatingRange ?? []).map((e) => [e.name, e.note])));
   /** The run's own non-info diagnostics — a device read beyond its table is not sized there, and
@@ -1450,7 +1575,7 @@
   // any run diagnostics, and — whenever the held design does not comply there — the full detail, because
   // the chip clamps long solver messages with an ellipsis. The concept-level help lives on the
   // group label.
-  const rangeEndTitle = (e: RangeEndReport, detail: string): string => {
+  const rangeEndTitle = (e: RangeEndReport, lines: readonly Line[]): string => {
     const warns = rangeEndWarns(e)
       .map((w) => `⚠ ${namingRangeEnds(w.message, endNames)}`)
       .join('\n');
@@ -1461,16 +1586,16 @@
       rangeEndNote.get(e.name),
       warns,
       ...assumedSourceNotes(e.assumedSource),
-      e.state === 'complies' ? '' : detail,
+      lines.map(lineText).join(' '),
     ]
       .filter(Boolean)
       .join('\n\n');
   };
   /** One label for a range end's aggregate sweep curve, shared by the legend and the chart
    *  series — consumers read the field, never parse the id's trailing separator. The words are
-   *  the reading: above zero the held design complies at that range end, below zero it does not. */
+   *  the reading: the held design's tightest margin at that range end. */
   const checkLabel = (r: { id: string; rangeEnd?: string }): string =>
-    r.rangeEnd ? `complies at ${endName(r.rangeEnd)}` : r.id;
+    r.rangeEnd ? `margin at ${endName(r.rangeEnd)}` : r.id;
   const CHIP: Record<CheckStatus, string> = { pass: '✓', amber: '≈', fail: '✗', na: '—' };
 
   // Author check notes by id (a CheckResult carries no note — the physical-meaning note lives on
@@ -1512,18 +1637,29 @@
   const biasHelp = (assumed: string[] | undefined): string =>
     CONTROL_HELP.givensBias + (assumed?.length ? `\n\n${CONTROL_HELP.givensAssumed}` : '');
 
-  // An infeasible child's failing HARD checks (advisory ones excluded) — so the cause of a
-  // red block is on screen, not just its ✗.
-  const childFails = (c: SheetBlockReport | undefined): CheckResult[] =>
-    c && !c.feasible ? c.checks.filter((r) => r.kind !== 'advisory' && r.status === 'fail') : [];
+  /** Why a block's verdict is what it is, in the core's words, read in the block's own list; for a
+   *  block that was not calculated, its own sheet item's text. */
+  const blockLines = (c: SheetBlockReport, within: readonly string[]): readonly Line[] => {
+    if (!c.verdict) {
+      const own = c.items?.find((i) => i.kind === 'sheet' && !i.path.length);
+      return own && own.status !== 'ok' ? describeItem(own, within).segments : [];
+    }
+    if (c.verdict.verdict === 'feasible') return [];
+    const lines: Line[] = [...verdictText(c.verdict)];
+    if (c.verdict.verdict !== 'undetermined')
+      for (const f of c.verdict.failed) {
+        const item = itemAt(c.items, f);
+        if (item) lines.push(...describeItem(item, within).segments);
+      }
+    return distinct(lines);
+  };
 
-  // A solved param whose search did not land has no value: the core withholds it, and everything
-  // that reads it, from the result (SheetResult.withheld). The field shows none, as a value
-  // withheld because of a block does — decided from the result, never from a message's wording.
-  const notFound = (p: SheetVar): boolean => engineSolved(p) && withheldIn(result, p.name);
+  // A solved param whose search did not land has no value: its item says so, and the field shows
+  // none, with the item's own text as its title.
+  const notFound = (p: SheetVar): boolean => engineSolved(p) && noNumber(p.name);
   // The read-only field's tooltip: which mechanism owns the number, or that there is none.
   const solvedHelp = (p: SheetVar): string | undefined => {
-    if (notFound(p)) return CONTROL_HELP.constraintNotMet;
+    if (notFound(p)) return itemTitle(valueItem(p.name)) ?? CONTROL_HELP.constraintNotMet;
     if (torn(p)) return CONTROL_HELP.solvedParam;
     if (!isConstrained(p)) return undefined;
     return CONTROL_HELP.constrainedParam;
@@ -1558,9 +1694,15 @@
     const v = s.value?.z[yi]?.[xi];
     if (s.value && v != null && !beyond.length)
       return `${s.value.name} is ${formatQuantity(v, s.value.unit)} here.`;
-    return beyond.length
-      ? `no answer: beyond the table: ${beyond.map((r) => `${r.device === OWN_DEVICE ? '' : `"${r.device}": `}${beyondText(r)}`).join('; ')}`
-      : '';
+    // The cell's verdict, then the point as data, then any read beyond a table there.
+    const verdict = s.verdicts[yi]?.[xi];
+    return [
+      verdict ? VERDICT_WORDS[verdict] : '',
+      `${active} = ${fmt(s.x[xi])}${s.unitX}, ${active2} = ${fmt(s.y[yi])}${s.unitY}`,
+      ...beyond.map((r) => `${r.device === OWN_DEVICE ? '' : `"${r.device}": `}${beyondText(r)}`),
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
   /** The lowest and highest determined value of a map's named result; null where it has none. */
   function valueSpan(z: readonly (readonly (number | null)[])[]): [number, number] | null {
@@ -1585,6 +1727,46 @@
       .map((v) => `${v}:${n[v]}`)
       .join(' ');
   };
+  /** The order the map's legend lists the verdicts in. */
+  const MAP_ORDER: readonly DesignVerdict[] = [
+    'feasible',
+    'non-compliant',
+    'undetermined',
+    'infeasible',
+  ];
+  /** Paints a legend swatch as the map paints a cell of that verdict. */
+  function swatch(canvas: HTMLCanvasElement, v: DesignVerdict) {
+    const paint = () => {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const cs = getComputedStyle(canvas);
+      const fill = MAP_FILL[v];
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle =
+        fill.colour === 'ok'
+          ? cs.getPropertyValue('--ok').trim() || '#3a9e5c'
+          : fill.colour === 'err'
+            ? cs.getPropertyValue('--err').trim() || '#d2596a'
+            : fill.colour === 'grid'
+              ? cs.color
+              : fill.colour;
+      ctx.globalAlpha = fill.alpha;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = 0.45;
+      drawPattern(
+        ctx,
+        LOOK[v].pattern,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+        v === 'infeasible' ? '#fff' : cs.color,
+      );
+      ctx.globalAlpha = 1;
+    };
+    paint();
+    return { update: paint };
+  }
   /** The fill under each verdict's pattern on the map: a status token or a colour, and how
    *  strongly it is laid down. */
   const MAP_FILL: Readonly<Record<DesignVerdict, { colour: string; alpha: number }>> = {
@@ -1700,7 +1882,12 @@
 </script>
 
 {#snippet paramRow(p: SheetVar)}
-  <label class="svar" title={p.note && mathPlain(p.note)} data-param={p.name}>
+  <label
+    class="svar"
+    title={p.note && mathPlain(p.note)}
+    data-param={p.name}
+    data-item={itemKey({ kind: engineSolved(p) ? 'search' : 'value', path: [], name: p.name })}
+  >
     <span class="vn"
       >{@html qLabel(p.name)}{#if p.unit}<i>{p.unit}</i>{/if}</span
     >
@@ -1744,6 +1931,17 @@
       {/if}
     {/if}
   </label>
+{/snippet}
+
+<!-- One line of an item text: its words as text; names, expressions and values in code font; a
+     name that names a row this panel draws, a link to that row. -->
+{#snippet line(l: Line)}
+  {#each l as seg, k (k)}{#if seg.kind === 'text'}{seg.text}{:else if seg.ref && linkable.has(itemKey(seg.ref))}<button
+        type="button"
+        class="iref"
+        data-ref={itemKey(seg.ref)}
+        onclick={(e) => goToItem(e, seg.ref!)}><code>{seg.text}</code></button
+      >{:else}<code class="seg">{seg.text}</code>{/if}{/each}
 {/snippet}
 
 <!-- A sized device's full operating point, collapsed: every table quantity at its point. -->
@@ -1816,6 +2014,7 @@
   block: SheetBlock | undefined,
   path: number[],
   inRef: boolean = false,
+  names: string[] = [],
 )}
   <!-- An authored ref+doc pair is a PINNED snapshot: the embedded copy wins (core rule),
        so the block is local and editable — only its badge differs. A ref WITHOUT a local
@@ -1823,12 +2022,16 @@
   {@const authored = inRef ? undefined : cfgBlockAt(path)}
   {@const pinned = authored?.ref !== undefined && authored?.doc !== undefined}
   {@const isRef = inRef || (block?.ref !== undefined && !pinned)}
-  <!-- Three states, not two: a block whose condition was never evaluated has no verdict, and a
-       ✗ would report one. It still renders — its device control is how the refusal is fixed. -->
-  {@const state = c === undefined ? 'skip' : c.feasible ? 'pass' : 'fail'}
-  <div class="suse st-{state}">
+  <!-- The block's verdict is the core's (SheetBlockReport.verdict). A block with none was not
+       calculated, and says why in its own item's words. It still renders — its device control is
+       how a refusal is fixed. -->
+  {@const within = [...names, c?.name ?? block?.name ?? '']}
+  {@const bv = c?.verdict?.verdict}
+  {@const look = lookOf(bv)}
+  {@const why = c ? blockLines(c, within) : []}
+  <div class="suse" data-verdict={bv ?? 'not-calculated'} data-block={within.join('.')}>
     <div class="suseh">
-      <span class="chip">{state === 'skip' ? '–' : state === 'pass' ? '✓' : '✗'}</span>
+      <span class="vbadge {look.cls}">{look.glyph} {VERDICT_WORDS[bv ?? 'not-calculated']}</span>
       <b>{c?.name ?? block?.name}</b><i>{c?.title ?? block?.doc?.title}</i>
       {#if block?.ref}
         {#if pinned}
@@ -1887,8 +2090,11 @@
           beyond the table: {beyondText(r)} — not sized
         </div>
       {/each}
-    {:else if c?.sizing}
-      <div class="perr" title={c.sizing.error}>sizing: {c.sizing.error}</div>
+    {/if}
+    {#if why.length}
+      <div class="sblock" data-block-reason>
+        {#each why as l, k (k)}<p>{@render line(l)}</p>{/each}
+      </div>
     {/if}
     {#if c?.point}{@render opPoint(c.point, c.name)}{/if}
     <!-- A referenced block's givens belong to the library sheet — no in-place bias editor
@@ -1902,14 +2108,6 @@
           >{/each}
       </div>
     {/if}
-    {#if childFails(c).length}
-      <div class="cfails">
-        {#each childFails(c) as r}<span
-            class="cfail"
-            title={checkTitle(r, block?.doc?.checks ?? [])}>✗ {r.id} {pct(r.marginPct)}</span
-          >{/each}
-      </div>
-    {/if}
     {#if c?.blocks?.length}
       <div class="skids">
         {#each c.blocks as gc, k}{@render childCard(
@@ -1917,6 +2115,7 @@
             block?.doc?.blocks?.[k],
             [...path, k],
             isRef,
+            within,
           )}{/each}
       </div>
     {/if}
@@ -1963,13 +2162,37 @@
          condition whenever more than one is on the page. COMPLIANCE: how many of the points the
          design is promised to work at it was found to comply at, with the ones that failed, the
          ones that could not be answered and the ones never run each counted apart. -->
-      <span
-        class="feasb {feasClass}"
-        title={holding ? CONTROL_HELP.cornerHold : CONTROL_HELP.feasBadge}
-        data-feasibility
-      >
-        {feasText}{#if binding && namesBinding}<i>{binding.id} {pct(binding.marginPct)}</i>{/if}
-      </span>
+      {#if firstRun}
+        <span class="sbusy" data-feasibility data-verdict="none">{NOT_YET}</span>
+      {:else if multi}
+        <span
+          class="feasb {feasClass}"
+          title={holding ? CONTROL_HELP.cornerHold : CONTROL_HELP.feasBadge}
+          data-feasibility
+        >
+          {feasText}{#if binding && namesBinding}<i>{binding.id} {pct(binding.marginPct)}</i>{/if}
+        </span>
+      {:else}
+        {@const v = shownVerdict?.verdict}
+        {@const look = lookOf(v)}
+        {#if holding && single}
+          <span class="sheldat">the nominal design held at {condLabel(single)}</span>
+        {/if}
+        <span
+          class="vbadge {look.cls}"
+          title={v === 'infeasible' || v === 'no-operating-point'
+            ? VERDICT_TITLE[v]
+            : holding
+              ? CONTROL_HELP.cornerHold
+              : CONTROL_HELP.feasBadge}
+          data-feasibility
+          data-verdict={v ?? 'not-calculated'}
+          >{look.glyph} {VERDICT_WORDS[v ?? 'not-calculated']}</span
+        >
+        {#if !holding && agg.base && nominalKey && !sameCondition(agg.base, nominalKey)}
+          <span class="sheldat">sized at {condLabel(agg.base)}</span>
+        {/if}
+      {/if}
       {#if hasCompliance}
         <span class="compb {complianceClass}" title={complianceTitle} data-compliance
           >{complianceText}</span
@@ -2060,8 +2283,6 @@
               >beyond the table: {beyondText(r)} — not sized</span
             >
           {/each}
-        {:else}
-          <span class="perr" title={result.sizing.error}>sizing: {result.sizing.error}</span>
         {/if}
         {@render biasCtl(cfg.givens, result.sizing, [])}
       {/if}
@@ -2253,24 +2474,30 @@
       </table>
     {/if}
 
-    <!-- A condition with no verdict — refused before the engine ran, or started and not completed:
-       only the named reason, which is a different thing from a design that is infeasible. The
-       words match the badge: "no answer" when a run started, "not evaluated" when none did. -->
-    {#if refRun && refRun.state === 'not-evaluated'}
+    <!-- Why the verdict is what it is, in the core's words (verdictText, describe). -->
+    {#if reasonLines.length}
+      <div class="sreason" data-verdict-reason>
+        {#each reasonLines as l, k (k)}<p>{@render line(l)}</p>{/each}
+      </div>
+    {/if}
+    <!-- The values the run held instead of solving. A held value is not a fault. -->
+    {#if heldLines.length}
+      <div class="sheld" data-held>
+        <span class="glabel">held</span>
+        {#each heldLines as l, k (k)}<p>{@render line(l)}</p>{/each}
+      </div>
+    {/if}
+    <!-- A condition refused before the engine ran has no items to read: its refusal is said in the
+       words the run gives for it. A run that started and did not complete shows what it
+       calculated before it stopped, said as such. -->
+    {#if refRun && refRun.state === 'not-evaluated' && !refRun.result}
       <div class="snotev" data-not-evaluated={condLabel(refRun.key)}>
-        <p>
-          <b>{refRun.result ? 'no answer' : 'not evaluated'} at {condLabel(refRun.key)}</b>
-        </p>
         {#each refRun.issues as issue}
           <p class="sissue">{explainRef(issue.message)}</p>
         {/each}
-        {#if refRun.result}
-          <p class="sissue">
-            The numbers below are what the run produced before it stopped — diagnostics, not a
-            verdict.
-          </p>
-        {/if}
       </div>
+    {:else if refRun && refRun.state === 'not-evaluated'}
+      <p class="snotev sissue" data-not-evaluated={condLabel(refRun.key)}>{PARTIAL_VALUES}</p>
     {/if}
 
     {#if multi && result && refKey}
@@ -2381,14 +2608,12 @@
       {#if cfg.equations.length}
         <div class="srows">
           {#each cfg.equations as eq}
-            <div class="srow">
+            <div class="srow" data-item={itemKey({ kind: 'value', path: [], name: eq.name })}>
               <span class="seq"
                 ><b>{@html qLabel(eq.name)}</b> = {@html qFormula(eq.expr)} =
-                {#if withheldIn(res, eq.name)}
-                  <span
-                    class="sval withheld"
-                    title={`withheld: it follows from ${withheldFrom(res.withheld?.[eq.name] ?? '')}, which did not give an answer`}
-                    >withheld</span
+                {#if noNumber(eq.name)}
+                  <span class="sval v-none" title={itemTitle(valueItem(eq.name))}
+                    >— {VERDICT_WORDS['not-calculated']}</span
                   >
                 {:else}
                   <span class="sval">{fmt(res.values[eq.name])}{eq.unit ?? ''}</span>
@@ -2403,7 +2628,12 @@
       <table class="srules" class:worsted={worstByCheck !== null}>
         <tbody>
           {#each res.checks as r}
-            <tr class="st-{r.status}" class:advisory={r.kind === 'advisory'} title={checkTitle(r)}>
+            <tr
+              class="st-{r.status}"
+              class:advisory={r.kind === 'advisory'}
+              title={checkTitle(r)}
+              data-item={itemKey({ kind: 'requirement', path: [], name: r.id })}
+            >
               <td
                 class="chip"
                 title={r.status === 'amber'
@@ -2444,15 +2674,22 @@
         <div class="sedges">
           <span class="glabel" title={CONTROL_HELP.operatingRange}>operating range</span>
           {#each res.rangeEnds as e (e.name)}
-            {@const detail = rangeEndDetail(e)}
+            {@const lines = rangeEndLines(e)}
+            {@const v = e.verdict?.verdict}
+            {@const look = lookOf(v)}
             <span
-              class="sedge {POINT_CLASS[e.state]}"
-              title={rangeEndTitle(e, detail)}
+              class="sedge"
+              title={rangeEndTitle(e, lines)}
               data-range-end={e.name}
+              data-verdict={v ?? 'not-calculated'}
             >
-              {POINT_MARK[e.state]}
+              <span class="vbadge {look.cls}"
+                >{look.glyph} {VERDICT_WORDS[v ?? 'not-calculated']}</span
+              >
               {endName(e.name)}{#if rangeEndWarns(e).length || e.assumedSource?.length}&nbsp;⚠{/if}
-              {#if detail}<i>{detail}</i>{/if}
+              {#if v === 'compliant'}<i>{rangeEndSolved(e)}</i>{:else if lines.length}<i
+                  >{@render line(lines[0])}</i
+                >{/if}
             </span>
           {/each}
         </div>
@@ -2516,9 +2753,8 @@
         </div>
       {:else}
         <div class="scap">
-          feasibility · <b>{active}</b> × <b>{active2}</b> — green is feasible, red fails a hard
-          check{#if swept2.outside.some((row) => row.some((c) => c.length))}, grey has no answer (a
-            device read beyond its table){/if} (X → right, Y ↑)
+          <b>{active}</b> × <b>{active2}</b>: each cell is one design, sized at its own values ({active}
+          to the right, {active2} up).
         </div>
       {/if}
       <div class="smap">
@@ -2539,13 +2775,24 @@
           {fmt(swept2.x[0])}…{fmt(swept2.x[swept2.x.length - 1])}{swept2.unitX}
         </div>
       </div>
-      <p class="feas">
-        {#if bindingIds.length}
-          region bounded by: {bindingIds.join(', ')}
-        {:else}
-          no hard check fails across this plane
-        {/if}
-      </p>
+      {#if !swept2.value}
+        <div class="slegend" data-map-legend>
+          {#each MAP_ORDER as v (v)}
+            <span class="litem" data-legend={v}
+              ><canvas class="lswatch" use:swatch={v} width="28" height="20"></canvas>{LOOK[v]
+                .glyph}
+              {VERDICT_WORDS[v]}</span
+            >
+          {/each}
+        </div>
+        <p class="feas" data-map-caption>
+          {#if bindingIds.length}
+            The requirements that fail on this plane are {bindingIds.join(' and ')}.
+          {:else}
+            No hard requirement fails on this plane.
+          {/if}
+        </p>
+      {/if}
     {:else if active && chartData && !twoD && swept}
       {@const at = condLabel(swept.key)}
       <!-- Which of the two curves this is: the design sized at the chart's condition at every
@@ -2599,19 +2846,7 @@
       </div>
       {#if feasWindow}
         <p class="feas" data-sweep-window>
-          {#if swept.design === 'held'}
-            {#if feasWindow.none}
-              the held design complies at {at} nowhere in this range of {active}
-            {:else}
-              the held design complies at {at} for {active}
-              {feasWindow.windows.map(windowText).join(' · ')}
-            {/if}
-          {:else if feasWindow.none}
-            no feasible {active} in this range
-          {:else}
-            feasible {active}
-            {feasWindow.windows.map(windowText).join(' · ')}
-          {/if}
+          {windowSentences(feasWindow, swept.design === 'held', swept.x).join(' ')}
         </p>
       {/if}
     {:else if active && sweeping}
@@ -2620,9 +2855,9 @@
     {:else if active && sweepKey && sweepRun && !sweepReady}
       <!-- The sweep is a statement about a design, and there is no design here yet. -->
       <p class="feas">
-        nothing to sweep at {condLabel(sweepKey)} — {sweepBase
+        There is no design to sweep at {condLabel(sweepKey)}, because {sweepBase
           ? 'the nominal design could not be held there'
-          : 'this condition was not evaluated'}
+          : 'the engine did not run this condition'}.
       </p>
     {/if}
 
@@ -2668,6 +2903,50 @@
      check below them is never mistaken for the whole design failing. */
   /* One pill shell for the badges and the range-end chips; each keeps only its own text
      treatment. */
+  /* The verdict badge: its look comes from verdict.ts and app.css; here only its size. */
+  .vbadge {
+    font-size: calc(0.72rem * var(--text-scale));
+  }
+  .sheldat {
+    font-size: calc(0.72rem * var(--text-scale));
+    opacity: 0.75;
+  }
+  .sreason,
+  .sheld {
+    font-size: calc(0.8rem * var(--text-scale));
+    line-height: 1.4;
+  }
+  .sreason p,
+  .sheld p {
+    margin: 0.1rem 0;
+  }
+  .sreason :global(code),
+  .sheld :global(code),
+  .sedge :global(code),
+  .sblock :global(code) {
+    font-family: ui-monospace, monospace;
+    font-size: 0.95em;
+  }
+  .iref {
+    font: inherit;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    text-decoration: underline dotted;
+  }
+  :global(.sflash) {
+    animation: sflash 1.2s ease-out;
+  }
+  @keyframes sflash {
+    from {
+      background: color-mix(in srgb, currentColor 18%, transparent);
+    }
+    to {
+      background: transparent;
+    }
+  }
   .feasb,
   .compb,
   .wireb,
@@ -2913,6 +3192,22 @@
     opacity: 0.5;
   }
   /* 2-D feasibility heatmap: axis labels frame an imperative canvas painted from the status tokens. */
+  .slegend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem 0.8rem;
+    font-size: calc(0.72rem * var(--text-scale));
+  }
+  .litem {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .lswatch {
+    width: 14px;
+    height: 10px;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  }
   .smap {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -3168,17 +3463,24 @@
     border-radius: 4px;
     font-size: calc(0.8rem * var(--text-scale));
   }
-  /* the left rail tints to the block's verdict — green is feasible, red is not, and neither
-     colour is borrowed by a block whose condition was never evaluated */
-  .suse.st-pass {
+  /* the left rail follows the block's verdict look: solid for a verdict, dashed where the block
+     was not calculated or is undetermined */
+  .suse[data-verdict='feasible'] {
     border-left-color: var(--ok);
   }
-  .suse.st-fail {
+  .suse[data-verdict='non-compliant'],
+  .suse[data-verdict='infeasible'] {
     border-left-color: var(--err);
   }
-  .suse.st-skip {
+  .suse[data-verdict='undetermined'],
+  .suse[data-verdict='not-calculated'] {
     border-left-style: dashed;
-    opacity: 0.8;
+  }
+  .sblock {
+    font-size: calc(0.76rem * var(--text-scale));
+  }
+  .sblock p {
+    margin: 0.05rem 0;
   }
   .suseh {
     display: flex;
@@ -3345,16 +3647,6 @@
     margin-top: 0.15rem;
     padding-left: 0.5rem;
     border-left: 1px dashed color-mix(in srgb, currentColor 20%, transparent);
-  }
-  /* An infeasible child's failing hard checks — one compact line inside its card. */
-  .cfails {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.1rem 0.6rem;
-    font-family: ui-monospace, monospace;
-    font-size: calc(0.72rem * var(--text-scale));
-    color: var(--err);
-    opacity: 0.9;
   }
   .rtext {
     width: 99%;

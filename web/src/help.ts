@@ -3,7 +3,7 @@
 // by the same canonical quantity keys as labels.ts / namespace.ts. Surfaced via <Help> (a small
 // "?" with a native title tooltip), so any key missing here simply shows no icon.
 
-import type { Settings } from '@gmid/mostab-core';
+import { VERDICT_WORDS, type Settings } from '@gmid/mostab-core';
 
 /** Design + measured quantities, keyed by canonical quantity key. */
 export const QUANTITY_HELP: Readonly<Record<string, string>> = {
@@ -95,8 +95,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Where the engine looked for this solved value, and why there: the range the wiring allows its wire, between the wires on either side of it; the lengths the device’s table holds; or the range you gave. Your range is searched first where you gave one; a value found outside it is marked.',
   sweepPlot:
     'What the sweep draws. “margins” draws every check’s margin against the swept value. A named result (one of the sheet’s equations, a value it solves for, or a value one of its blocks provides) is drawn against it, or, on the two-parameter map, colours each cell. The curve has a gap, and a cell is grey, where the result reads a device that is read beyond its table or a value the solve did not find. A result that reads neither keeps its value there.',
-  wiringState:
-    'The DC wiring check of the run shown: whether the voltages and currents the sheet’s netlist states agree with the sized design — every loop of gate, drain and body voltages closes within the loop-closure tolerance (10 mV unless the solver settings say otherwise), every wire a held level or a device reaches, every current sum balances. “clean”: nothing to report. “N findings”: the warnings below say what, and the netlist’s own structural problems are counted too. “not evaluated”: the point has no sized design to check — a solve that did not land, a device that did not size, data read off the table — or the document carries wiring in a format that does not read it. No chip: the sheet says it is not a circuit (nodes: "none"), or names no wiring.',
+  wiringState: `This checks that the run's voltages close around every loop and its currents balance at every wire. “wiring clean” has nothing to report, and the findings behind “3 wiring findings” are listed below. “wiring not checked” means the run had no sized design to check.`,
   cornerOneAtATime:
     'Only where a single condition is asked about and the design is sized there. A design plane and a knob ranking are statements about one operating point the design was sized at: there is no single such point while several conditions are on screen, and a held design was not free to choose its widths.',
   sheet:
@@ -104,10 +103,8 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   assumptions:
     'Voltages this design was sized under rather than solved for: the ones the sheet marks “assumed” — an internal stack node, a guessed gate-source drop — that feed at least one device’s sizing. The sheet’s own parts determine each of them, but the sheet types a value for now instead of deriving it. The verdict holds only while those typed values are right, so they are listed with it. A voltage nothing on the sheet determines — a supply, an input level, an output held by a feedback loop outside the sheet, a voltage across a device whose surroundings are not on the sheet — is one you state, and is not listed here.',
   held: 'What this design keeps where it is held fixed and re-checked — at a range end or another condition. For a node under a transistor’s gate (a cascode’s source, a pair’s tail) it is the gate voltage that puts the node where the sheet states it, and the node is re-solved under it. For a current the design point types (an inverter’s bias), it is the balance of the two currents it sets, zero here, and the current is re-solved to keep it. A gate held this way stands in for a bias line that never moves, where a real bias branch would move it with the corner, so every held run says its figures are approximate there (the ⚠ on a range-end chip or a held condition’s row).',
-  feasBadge:
-    'Can this design type meet the spec — on the device and at the condition the design is sized at, with the current variables? A design sized at a condition other than the nominal one says so (“sized at ss@125”), since it is not the design the nominal condition would build. Feasible = every hard check (physical + spec) passes there; advisory checks never gate it. When it is not, the badge names the binding check: the failing hard check with the worst margin, anywhere in the composition (a child’s check is shown by path). Nothing that happens at another condition or at an end of the operating range moves this badge — that is compliance, counted beside it. “No answer” means the evaluation started and did not complete; “not evaluated” means it never started.',
-  sensitivity:
-    'Which knob to turn. For the check the badge names (or, on a feasible design, the check failing at a range end if one is, else the one with the least room left), this ranks the design choices by how far each moves that check’s margin over one small step of its own value — up and down shown separately, since a knob is rarely symmetric and an equality check genuinely differs on the two sides. It is a snapshot: each knob costs two full re-evaluations of the whole sheet, so it is taken when you ask and retired as soon as you change the design.',
+  feasBadge: `A ${VERDICT_WORDS.feasible} design meets every hard requirement at the design point. A ${VERDICT_WORDS['non-compliant']} design fails at least one hard requirement, and the failed requirement shows its margin. An ${VERDICT_WORDS.undetermined} design has no verdict yet, and the lines under the badge say why.`,
+  sensitivity: `This ranks the design choices by how far one small step of each moves the tightest requirement's margin. It is taken when you ask, and cleared when you change the design.`,
   decisionsView:
     'How each result of the sheet moves with each decision you made. Each cell is the percent change of the result for a 1 % larger decision, from evaluations of the whole design sized and solved again, so it is what the circuit as the sheet describes it does. A result that is zero at the design has no percent change, and its cell is empty with the reason under the pointer.',
   propertiesView:
@@ -116,15 +113,12 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Read which device property each formula leans on: two evaluations of the held design for each property of each device, taken when you ask and retired when the design changes.',
   evaluating:
     'This sheet is evaluated in the background, so the page stays responsive while it runs. The numbers on screen are the last finished answer and update when the next one arrives; an edit made in the meantime cancels the run it makes out of date.',
-  sheetSweep:
-    'Sweep one variable across its range and chart every check’s margin at one condition — the region where the design is feasible, or, at a condition the design is held at, where that one design still complies.',
-  sheetSweep2:
-    'Add a second variable to sweep the design plane: a feasibility heatmap (green = feasible, red = a hard check fails) instead of the 1-D margin chart.',
+  sheetSweep: `This sweeps one value across its range and plots each requirement's margin at one condition. The sentence under the chart says where the sheet is ${VERDICT_WORDS.feasible}, or where the held design is ${VERDICT_WORDS.compliant}.`,
+  sheetSweep2: `This adds a second value and maps the design plane, one design to each cell. Each cell shows its verdict by fill and pattern, and the legend names each one.`,
   blockDevice:
     'Size this block against a specific loaded device — load the other table first (devices accumulate in the bar below the toolbar), then pick it here (e.g. the PMOS table for a mirror load). Left unset, a block inherits its parent’s device: the active device for a block on the sheet itself, the enclosing block’s for one nested inside another. A block inside a referenced sheet belongs to that sheet and cannot be rebound here — detach the reference to make it local.',
   // design-sheet vocabulary (check kinds, statuses, composition, bias, param roles)
-  checkKind:
-    'physical = a hard physical floor; spec = a hard application spec — both must hold for a feasible design. advisory = shown, never blocks.',
+  checkKind: `A physical or spec requirement is hard, and a ${VERDICT_WORDS.feasible} design meets every hard requirement. An advisory requirement is shown and never decides the verdict.`,
   amber:
     'The check holds but by less than the near-miss margin (5 % unless the solver settings say otherwise) — a near-miss worth a look. A spec set by its own givens snaps to amber instead of coin-flipping pass/fail on rounding.',
   checkNa:
@@ -153,10 +147,8 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'The operating point (vds/vsb, signed) this block is sized at. gds shifts ~4–5× across vds, so each device states its own; body bias (vsb) defaults to 0. Edit to override. Clearing the body bias reverts it to 0; the drain bias cannot be left empty.',
   givensAssumed:
     'A coordinate marked ? was not declared by this block — the engine filled it in. That is right for a common-source device or a rail-referenced mirror, and wrong for a differential pair, cascode or source follower, where the source floats above the bulk. Declare vsb in the givens if this device is one of those.',
-  givensBeyond:
-    'This bias lies beyond what the device’s table holds, so the device is not sized: no data answers for that point, and a value read at the table’s edge would come from a different bias. Everything that reads the device is withheld, and the point has no answer. Set a value the table holds, or load a table that reaches it.',
-  beyondTable:
-    'The design asks this device for a point its table does not hold — a bias, a length, a gate voltage, or a current or gm/ID the table does not reach at this point. The device is not sized there, everything that reads it is withheld, and the point has no answer: never feasible, never compliant, never a failure. The numbers are what was asked and the two ends of what the table holds.',
+  givensBeyond: `This bias lies beyond the device's table, so the device is not sized. Everything that reads the device is ${VERDICT_WORDS['not-calculated']}. Set a value the table holds, or load a table that reaches it.`,
+  beyondTable: `The design asks this device for a point its table does not hold, so the device is not sized. Everything that reads it is ${VERDICT_WORDS['not-calculated']}, and the verdict is ${VERDICT_WORDS.undetermined}, not ${VERDICT_WORDS['non-compliant']}. The numbers show what was asked and what the table holds.`,
   givensNeeds:
     'This block must state this bias but hasn’t, so sizing fails closed. A drain bias (vds) has no default on any table: every sized device states one, or declares a diode connection. A body bias (vsb) left out means 0, and the table was not taken there. Set a value here; the table has to sweep that bias, or have been taken at exactly that value.',
   solvedParam:
@@ -165,14 +157,12 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
     'Solved, not set. This is an internal bias node the engine chooses so a sheet output equals a spec you typed (e.g. the tail node placed so the common mode lands exactly on CM_dc). Found by a search between the parameter\u2019s min and max — the range it is searched in first, not slider bounds — and, where the node is a wire\u2019s level and nothing is found there, over the rest of the range its wiring puts it in. Sweep the spec on the other side of the design constraint instead; the shown value is where the node landed.',
   constraintNotMet:
     'This design constraint was not solved, so there is no solved value to show: its search inside the parameter’s [min, max] either found no solution there, did not settle, or ran out of the evaluation budget — the warnings below say which, and why. Move or widen min/max, relax the spec the constraint chases, or simplify the solves it depends on.',
-  operatingRange:
-    'Two different questions get asked of a sheet, and this strip answers the second one. Is the design FEASIBLE — can this design type meet the spec at all? The sweeps and the picker’s search work that way, free to re-size the devices while they look. Does it COMPLY — does the design you have right now still work at the ends of the range it claims (e.g. CM_dc = CM_lo, then CM_hi)? Every transistor is held exactly as this run sized it and only the bias re-settles, so a chip describes THIS instance and moves as you turn the knobs. Every hard check must hold at each end. The two answers are never folded: a range end that does not comply leaves the feasibility badge green and is counted in the compliance badge beside it. A ✓ chip shows where the bias landed; a ✗ chip names the check that fails there — and that often yields to re-centering rather than to a bigger device, so read the sensitivity ranking before spending area. A ? chip is no answer: the question was asked and could not be answered — a solve did not land, even one that found no level anywhere the wiring lets the node go, which is not a proof that none exists, or did not settle, the table does not reach that bias, or the design rests on an assumed voltage — and it says which. A – chip was not run: the current settings produce no design to hold.',
+  operatingRange: `Each chip checks this fixed design at one end of the claimed operating range. A ${VERDICT_WORDS.compliant} end meets every hard requirement, and a ${VERDICT_WORDS['non-compliant']} end fails one, which the chip names. An ${VERDICT_WORDS.undetermined} end has no verdict, and a ${VERDICT_WORDS['not-calculated']} end had no design to hold.`,
   paramRole:
     'spec = the requirement (supply, load, targets) an adopter retargets freely; choice = the author’s knobs (gm/ID, L, bias current) tuned to meet it.',
   exampleSpec:
     'The specification this sheet opens with — supply, load and the targets it is checked against. Each target is a plausible number for a circuit of this class, chosen so the example evaluates; it is not a requirement of the circuit or of any application. Replace every one with your design’s own before reading a verdict as yours.',
-  worstAt:
-    'Where this check comes closest to failing, or fails worst, over every point the design was measured at: each condition on the page, at the design’s own operating point and at each end of the operating range. Points that were not run or could not be answered are not read.',
+  worstAt: `This is where the requirement comes closest to failing, or fails worst, over every point measured. Points without a verdict are not read.`,
   sweepAt:
     'The condition the chart is drawn at. At the condition the design is sized at, each sample re-sizes the design with the knob at that value. At another condition, each sample sizes the design at the nominal condition with the knob at that value and holds it here — widths, lengths, currents and gate biases fixed — so the curves are that one design’s margins here.',
   cornerHold:
@@ -182,7 +172,7 @@ export const CONTROL_HELP: Readonly<Record<string, string>> = {
   solverNonDefault:
     'At least one solver setting differs from its default, so these numbers can differ from the same sheet evaluated with the defaults. The settings page (the header’s solver button) lists which.',
   custom: 'Type any expression over the device quantities and constants (e.g. gm/(2*pi*cgg)).',
-  size: 'Sizing: bind an operating point (gm/ID, f_T, or gm/g_ds) and a size (I_D, gm, or W) at a chosen L → width, V_GS, the remaining figures of merit, and feasibility.',
+  size: `Sizing: bind an operating point (gm/ID, f_T, or gm/g_ds) and a size (I_D, gm, or W) at a chosen L → width, V_GS, the remaining figures of merit, and whether gm/ID is below the table's ceiling.`,
   bind: 'Enter exactly two of gm/ID, f_T, gm/g_ds, I_D, gm, W; everything else — including the geometry — is solved at this L.',
   bindPoint:
     'Where on the curve the device sits. Each of these is width-independent, so any ONE of them pins the operating point (and the other two follow) without saying how big the device is. Enter the spec you actually have: f_T for a speed target, gm/g_ds for a gain target, gm/ID to work the efficiency axis directly. If the target is out of reach at this L, the lengths that do reach it are listed.',
@@ -253,3 +243,17 @@ export const SOLVER_HELP: Readonly<
     text: 'A check that passes by less than this fraction of its limit is marked as a near miss (amber).',
   },
 };
+
+/** The title of a verdict that only a proof gives. */
+export const VERDICT_TITLE = {
+  infeasible:
+    'The engine proved that no design exists. It gives this verdict only with a proof, and it has no such proof yet.',
+  'no-operating-point': 'The held hardware has no operating point at this condition.',
+} as const;
+
+/** What the panel says before the engine has given a verdict for the sheet. */
+export const NOT_YET = 'The engine has not calculated this sheet yet.';
+
+/** What the panel says under a run that did not complete, above the values it calculated. */
+export const PARTIAL_VALUES =
+  'The values below are what the run calculated before it stopped. They are not a design.';
